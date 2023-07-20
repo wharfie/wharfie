@@ -1,0 +1,23 @@
+{
+    "name": "@wharfie/wharfie-client",
+    "version": "0.0.0",
+    "description": "",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/wharfie/wharfie.git"
+    },
+    "author": "",
+    "license": "ISC",
+    "bugs": {
+        "url": "https://github.com/wharfie/wharfie/issues"
+    },
+    "homepage": "https://github.com/wharfie/wharfie#readme",
+    "engineStrict": true,
+    "engines": {
+        "node": ">=14",
+        "npm": ">=6.13"
+    },
+    "main": "./",
+    "dependencies": {
+    }
+}

@@ -1,0 +1,42 @@
+#!/usr/bin/env node
+'use strict';
+
+const fs = require('fs');
+const yargs = require('yargs');
+const path = require('path');
+const HOME = require('os').homedir();
+const CONFIG_DIR = process.env.XDG_CONFIG_HOME || path.join(HOME, '.config');
+process.env.CONFIG_PATH = `${CONFIG_DIR}/wharfie.config`;
+
+require('yargonaut').style('cyan');
+
+const config = require('../cli/config');
+if (fs.existsSync(process.env.CONFIG_PATH)) {
+  try {
+    config.setConfig(
+      JSON.parse(fs.readFileSync(process.env.CONFIG_PATH).toString())
+    );
+  } catch (err) {
+    console.error(err);
+    console.error('Failed to load config. Run "load config" to resolve.');
+  }
+}
+
+const cli = () =>
+  yargs.commandDir('../cli/cmds').demandCommand().help().alias('h', 'help')
+    .argv;
+
+if (!process.stdin.isTTY) {
+  process.env.stdin = '';
+  process.stdin.on('readable', function () {
+    const chunk = this.read();
+    if (chunk !== null) {
+      process.env.stdin += chunk;
+    }
+  });
+  process.stdin.on('end', () => {
+    cli();
+  });
+} else {
+  cli();
+}

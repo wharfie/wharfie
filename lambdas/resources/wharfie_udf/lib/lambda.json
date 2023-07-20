@@ -1,0 +1,960 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Metadata": {},
+  "Parameters": {
+    "GitSha": {
+      "Type": "String",
+      "Default": "695c74fb3d6d0488ba6509353f2332893ab72753"
+    },
+    "SNSAlarmTopicARN": {
+      "Type": "String",
+      "Description": "SNS topic to send alarms to"
+    },
+    "Deployment": {
+      "Type": "String",
+      "Description": "What wharfie environment to deploy into",
+      "Default": "wharfie-testing-2"
+    },
+    "ExamplesBucket": {
+      "Type": "String",
+      "Description": "S3 bucket to store examples in",
+      "Default": "wharfie-testing-2-examples-bucket-079185815456-us-west-2"
+    }
+  },
+  "Rules": {},
+  "Mappings": {},
+  "Conditions": {},
+  "Resources": {
+    "Database": {
+      "Type": "AWS::Glue::Database",
+      "Properties": {
+        "CatalogId": { "Ref": "AWS::AccountId" },
+        "DatabaseInput": {
+          "Name": {
+            "Fn::Join": [
+              "_",
+              { "Fn::Split": ["-", { "Fn::Sub": "${AWS::StackName}" }] }
+            ]
+          }
+        }
+      }
+    },
+    "WharfieExamplesRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::ImportValue": {
+                    "Fn::Join": ["-", [{ "Ref": "Deployment" }, "role"]]
+                  }
+                }
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::ImportValue": {
+              "Fn::Join": ["-", [{ "Ref": "Deployment" }, "base-policy"]]
+            }
+          }
+        ],
+        "Policies": [
+          {
+            "PolicyName": "main",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Sid": "Bucket",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetBucketLocation",
+                    "s3:GetBucketAcl",
+                    "s3:ListBucket",
+                    "s3:ListBucketMultipartUploads",
+                    "s3:AbortMultipartUpload"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          "arn:",
+                          { "Ref": "AWS::Partition" },
+                          ":s3:::",
+                          {
+                            "Fn::Select": [
+                              "0",
+                              {
+                                "Fn::Split": [
+                                  "/",
+                                  "amazon-berkeley-objects/listings/metadata/"
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      ]
+                    },
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          "arn:",
+                          { "Ref": "AWS::Partition" },
+                          ":s3:::",
+                          {
+                            "Fn::Select": [
+                              "0",
+                              {
+                                "Fn::Split": [
+                                  "/",
+                                  { "Fn::Sub": "${ExamplesBucket}/" }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      ]
+                    },
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          "arn:",
+                          { "Ref": "AWS::Partition" },
+                          ":s3:::",
+                          {
+                            "Fn::Select": [
+                              "0",
+                              {
+                                "Fn::Split": [
+                                  "/",
+                                  { "Fn::Sub": "${ExamplesBucket}/" }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Sid": "OutputWrite",
+                  "Effect": "Allow",
+                  "Action": ["s3:*"],
+                  "Resource": [
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          "arn:",
+                          { "Ref": "AWS::Partition" },
+                          ":s3:::",
+                          { "Fn::Sub": "${ExamplesBucket}/" },
+                          "*"
+                        ]
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Sid": "InputRead",
+                  "Effect": "Allow",
+                  "Action": ["s3:GetObject"],
+                  "Resource": [
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          "arn:",
+                          { "Ref": "AWS::Partition" },
+                          ":s3:::",
+                          "amazon-berkeley-objects/listings/metadata/",
+                          "*"
+                        ]
+                      ]
+                    },
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          "arn:",
+                          { "Ref": "AWS::Partition" },
+                          ":s3:::",
+                          { "Fn::Sub": "${ExamplesBucket}/" },
+                          "*"
+                        ]
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "AmazonBerkeleyObjects": {
+      "Type": "Custom::Wharfie",
+      "Properties": {
+        "ServiceToken": { "Fn::ImportValue": { "Ref": "Deployment" } },
+        "CatalogId": { "Ref": "AWS::AccountId" },
+        "DatabaseName": { "Ref": "Database" },
+        "CompactedConfig": {
+          "Location": {
+            "Fn::Sub": "s3://${ExamplesBucket}/AmazonBerkelyObjects/"
+          }
+        },
+        "DaemonConfig": {
+          "Role": { "Fn::GetAtt": ["WharfieExamplesRole", "Arn"] },
+          "Schedule": 4320
+        },
+        "TableInput": {
+          "Name": "amazon_berkeley_objects",
+          "Description": "Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html",
+          "TableType": "EXTERNAL_TABLE",
+          "Parameters": { "EXTERNAL": "true" },
+          "PartitionKeys": [],
+          "StorageDescriptor": {
+            "Location": "s3://amazon-berkeley-objects/listings/metadata/",
+            "Columns": [
+              {
+                "Name": "brand",
+                "Type": "array<struct<language_tag:string,value:string>>"
+              },
+              {
+                "Name": "bullet_point",
+                "Type": "array<struct<language_tag:string,value:string>>"
+              },
+              {
+                "Name": "color",
+                "Type": "array<struct<language_tag:string,value:string>>"
+              },
+              { "Name": "color_code", "Type": "array<string>" },
+              { "Name": "country", "Type": "string" },
+              { "Name": "domain_name", "Type": "string" },
+              {
+                "Name": "fabric_type",
+                "Type": "array<struct<language_tag:string,value:string>>"
+              },
+              {
+                "Name": "finish_type",
+                "Type": "array<struct<language_tag:string,value:string>>"
+              },
+              {
+                "Name": "item_dimensions",
+                "Type": "struct<height:struct<normalized_value:struct<unit:string,value:float>,value:float,unit:string>,length:struct<normalized_value:struct<unit:string,value:float>,value:float,unit:string>,width:struct<normalized_value:struct<unit:string,value:float>,value:float,unit:string>>"
+              },
+              { "Name": "item_id", "Type": "string" },
+              {
+                "Name": "item_keywords",
+                "Type": "array<struct<language_tag:string,value:string>>"
+              },
+              {
+                "Name": "item_name",
+                "Type": "array<struct<language_tag:string,value:string>>"
+              },
+              {
+                "Name": "item_shape",
+                "Type": "array<struct<language_tag:string,value:string>>"
+              },
+              {
+                "Name": "item_weight",
+                "Type": "array<struct<normalized_value:struct<unit:string,value:float>,value:float,unit:string>>"
+              },
+              { "Name": "main_image_id", "Type": "string" },
+              { "Name": "marketplace", "Type": "string" },
+              {
+                "Name": "material",
+                "Type": "array<struct<language_tag:string,value:string>>"
+              },
+              {
+                "Name": "model_name",
+                "Type": "array<struct<language_tag:string,value:string>>"
+              },
+              {
+                "Name": "model_number",
+                "Type": "array<struct<language_tag:string,value:string>>"
+              },
+              {
+                "Name": "model_year",
+                "Type": "array<struct<language_tag:string,value:string>>"
+              },
+              {
+                "Name": "node",
+                "Type": "array<struct<node_id:bigint,path:string>>"
+              },
+              { "Name": "other_image_id", "Type": "array<string>" },
+              {
+                "Name": "pattern",
+                "Type": "array<struct<language_tag:string,value:string>>"
+              },
+              {
+                "Name": "product_description",
+                "Type": "array<struct<language_tag:string,value:string>>"
+              },
+              { "Name": "product_type", "Type": "array<struct<value:string>>" },
+              { "Name": "spin_id", "Type": "string" },
+              {
+                "Name": "style",
+                "Type": "array<struct<language_tag:string,value:string>>"
+              },
+              { "Name": "3dmodel_id", "Type": "string" }
+            ],
+            "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+            "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+            "SerdeInfo": {
+              "SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe",
+              "Parameters": { "ignore.malformed.json": "true" }
+            },
+            "StoredAsSubDirectories": true,
+            "NumberOfBuckets": 0
+          }
+        }
+      }
+    },
+    "AmazonBerkeleyObjectsAggregated": {
+      "Type": "Custom::Wharfie",
+      "Properties": {
+        "ServiceToken": { "Fn::ImportValue": { "Ref": "Deployment" } },
+        "CatalogId": { "Ref": "AWS::AccountId" },
+        "DatabaseName": { "Ref": "Database" },
+        "CompactedConfig": {
+          "Location": {
+            "Fn::Sub": "s3://${ExamplesBucket}/AmazonBerkelyObjectsAggregated/"
+          }
+        },
+        "DaemonConfig": {
+          "Role": { "Fn::GetAtt": ["WharfieExamplesRole", "Arn"] },
+          "Interval": 3600
+        },
+        "Backfill": { "Version": 1, "Duration": 1440 },
+        "TableInput": {
+          "Name": "amazon_berkeley_objects_aggregated",
+          "Description": "Materialized Table",
+          "TableType": "VIRTUAL_VIEW",
+          "Parameters": { "comment": "Presto View", "presto_view": "true" },
+          "PartitionKeys": [],
+          "StorageDescriptor": {
+            "Columns": [
+              { "Name": "country", "Type": "string" },
+              { "Name": "brand", "Type": "string" },
+              { "Name": "count", "Type": "bigint" }
+            ],
+            "Location": {
+              "Fn::Sub": "s3://${ExamplesBucket}/AmazonBerkelyObjects/references/"
+            },
+            "NumberOfBuckets": 0,
+            "StoredAsSubDirectories": false,
+            "SerdeInfo": {},
+            "Compressed": false
+          },
+          "ViewOriginalText": {
+            "Fn::Sub": [
+              "/* Presto View: ${view} */",
+              {
+                "view": {
+                  "Fn::Base64": {
+                    "Fn::Sub": [
+                      "{\"originalSql\":\"WITH unnested_table AS (\\n  SELECT country, brand_element.value AS brand\\n  FROM ${wharfie_db}.amazon_berkeley_objects,\\n  UNNEST(brand) AS t(brand_element)\\n)\\nSELECT country, brand, COUNT(*) AS count\\nFROM unnested_table\\nGROUP BY country, brand\\nORDER BY count DESC\\n\",\"catalog\":\"awsdatacatalog\",\"columns\":[{\"name\":\"country\",\"type\":\"varchar\"},{\"name\":\"brand\",\"type\":\"varchar\"},{\"name\":\"count\",\"type\":\"bigint\"}]}",
+                      { "wharfie_db": { "Ref": "Database" } }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "ViewExpandedText": "/* Presto View */"
+        }
+      }
+    },
+    "FirehoseExampleTestDataLambdaSchedule": {
+      "Type": "AWS::Events::Rule",
+      "Properties": {
+        "Name": "FirehoseExampleTestDataLambda",
+        "Description": {
+          "Fn::Sub": "Schedule for FirehoseExampleTestDataLambda in ${AWS::StackName} stack"
+        },
+        "State": "ENABLED",
+        "ScheduleExpression": "rate(1 minute)",
+        "Targets": [
+          {
+            "Id": "FirehoseExampleTestDataLambda",
+            "Arn": { "Fn::GetAtt": ["FirehoseExampleTestDataLambda", "Arn"] }
+          }
+        ]
+      }
+    },
+    "FirehoseExampleTestDataLambdaPermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": ["FirehoseExampleTestDataLambda", "Arn"]
+        },
+        "Principal": { "Fn::Sub": "events.${AWS::URLSuffix}" },
+        "SourceArn": {
+          "Fn::GetAtt": ["FirehoseExampleTestDataLambdaSchedule", "Arn"]
+        }
+      }
+    },
+    "FirehoseExample": {
+      "Type": "Custom::Wharfie",
+      "Properties": {
+        "ServiceToken": { "Fn::ImportValue": { "Ref": "Deployment" } },
+        "CatalogId": { "Ref": "AWS::AccountId" },
+        "DatabaseName": { "Ref": "Database" },
+        "CompactedConfig": {
+          "Location": {
+            "Fn::Join": [
+              "",
+              [
+                "s3://",
+                { "Ref": "ExamplesBucket" },
+                "/",
+                "firehose_example/",
+                "processed/"
+              ]
+            ]
+          }
+        },
+        "DaemonConfig": {
+          "Privileged": true,
+          "Role": { "Fn::GetAtt": ["FirehoseExampleWharfieRole", "Arn"] },
+          "Schedule": 60,
+          "SLA": {
+            "MaxDelay": 60,
+            "ColumnExpression": "date_parse(concat(year, month, day, hr), '%Y%m%d%H')"
+          }
+        },
+        "TableInput": {
+          "Name": "firehose_table",
+          "Description": "firehose example",
+          "TableType": "EXTERNAL_TABLE",
+          "Parameters": { "EXTERNAL": "true" },
+          "PartitionKeys": [
+            { "Name": "year", "Type": "string" },
+            { "Name": "month", "Type": "string" },
+            { "Name": "day", "Type": "string" },
+            { "Name": "hr", "Type": "string" }
+          ],
+          "StorageDescriptor": {
+            "Location": {
+              "Fn::Join": [
+                "",
+                [
+                  "s3://",
+                  { "Ref": "ExamplesBucket" },
+                  "/",
+                  "firehose_example/",
+                  "raw/"
+                ]
+              ]
+            },
+            "Columns": [
+              { "Name": "name", "Type": "string" },
+              { "Name": "time", "Type": "string" }
+            ],
+            "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+            "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+            "SerdeInfo": {
+              "SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe",
+              "Parameters": { "ignore.malformed.json": "true" }
+            }
+          }
+        }
+      }
+    },
+    "FirehoseExampleFirehose": {
+      "Type": "AWS::KinesisFirehose::DeliveryStream",
+      "Properties": {
+        "DeliveryStreamName": {
+          "Fn::Sub": "${AWS::StackName}_FirehoseExampleFirehose"
+        },
+        "DeliveryStreamType": "DirectPut",
+        "S3DestinationConfiguration": {
+          "BucketARN": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                { "Ref": "AWS::Partition" },
+                ":s3:::",
+                { "Ref": "ExamplesBucket" }
+              ]
+            ]
+          },
+          "Prefix": { "Fn::Join": ["", ["firehose_example/", "raw/"]] },
+          "BufferingHints": { "IntervalInSeconds": 60, "SizeInMBs": 128 },
+          "CloudWatchLoggingOptions": {
+            "Enabled": true,
+            "LogGroupName": { "Ref": "FirehoseExampleLogGroup" },
+            "LogStreamName": "firehose"
+          },
+          "CompressionFormat": "GZIP",
+          "RoleARN": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                { "Ref": "AWS::Partition" },
+                ":iam::",
+                { "Ref": "AWS::AccountId" },
+                ":role/",
+                { "Ref": "FirehoseExampleFirehoseRole" }
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "FirehoseExampleFirehoseRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "Service": ["firehose.amazonaws.com"] },
+              "Action": ["sts:AssumeRole"]
+            }
+          ]
+        },
+        "Path": "/",
+        "Policies": [
+          {
+            "PolicyName": "ecs-service",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": ["s3:PutObject", "s3:GetObject"],
+                  "Resource": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        "arn:",
+                        { "Ref": "AWS::Partition" },
+                        ":s3:::",
+                        { "Ref": "ExamplesBucket" },
+                        "/",
+                        "firehose_example/",
+                        "raw/*"
+                      ]
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:AbortMultipartUpload",
+                    "s3:GetBucketLocation",
+                    "s3:ListBucket",
+                    "s3:ListBucketMultipartUploads"
+                  ],
+                  "Resource": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        "arn:",
+                        { "Ref": "AWS::Partition" },
+                        ":s3:::",
+                        { "Ref": "ExamplesBucket" }
+                      ]
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": ["logs:*"],
+                  "Resource": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        "arn:",
+                        { "Ref": "AWS::Partition" },
+                        ":logs:::log-group:",
+                        { "Ref": "FirehoseExampleLogGroup" },
+                        ":log-stream:",
+                        "firehose"
+                      ]
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "FirehoseExampleWharfieRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::ImportValue": {
+                    "Fn::Join": ["-", [{ "Ref": "Deployment" }, "role"]]
+                  }
+                }
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::ImportValue": {
+              "Fn::Join": ["-", [{ "Ref": "Deployment" }, "base-policy"]]
+            }
+          }
+        ],
+        "Policies": [
+          {
+            "PolicyName": "main",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Sid": "Bucket",
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetBucketLocation",
+                    "s3:GetBucketAcl",
+                    "s3:ListBucket",
+                    "s3:ListBucketMultipartUploads",
+                    "s3:AbortMultipartUpload"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          "arn:",
+                          { "Ref": "AWS::Partition" },
+                          ":s3:::",
+                          { "Ref": "ExamplesBucket" }
+                        ]
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Sid": "OutputWrite",
+                  "Effect": "Allow",
+                  "Action": ["s3:*"],
+                  "Resource": [
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          "arn:",
+                          { "Ref": "AWS::Partition" },
+                          ":s3:::",
+                          { "Ref": "ExamplesBucket" },
+                          "/",
+                          "firehose_example/",
+                          "processed/*"
+                        ]
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Sid": "InputRead",
+                  "Effect": "Allow",
+                  "Action": ["s3:GetObject"],
+                  "Resource": [
+                    {
+                      "Fn::Join": [
+                        "",
+                        [
+                          "arn:",
+                          { "Ref": "AWS::Partition" },
+                          ":s3:::",
+                          { "Ref": "ExamplesBucket" },
+                          "/",
+                          "firehose_example/",
+                          "raw/*"
+                        ]
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "FirehoseExampleLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": { "Ref": "AWS::StackName" },
+        "RetentionInDays": 14
+      }
+    },
+    "FirehoseExampleLogStream": {
+      "Type": "AWS::Logs::LogStream",
+      "Properties": {
+        "LogGroupName": { "Ref": "FirehoseExampleLogGroup" },
+        "LogStreamName": "firehose"
+      }
+    },
+    "FirehoseExampleTestDataLambdaLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": [
+            "/aws/lambda/${name}",
+            {
+              "name": {
+                "Fn::Sub": "${AWS::StackName}-FirehoseExampleDataGeneratorLambda"
+              }
+            }
+          ]
+        },
+        "RetentionInDays": 14
+      }
+    },
+    "FirehoseExampleTestDataLambda": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Architectures": ["arm64"],
+        "Code": {
+          "ZipFile": {
+            "Fn::Sub": "/* eslint-disable */\n'use strict';\nconst {\n  FirehoseClient,\n  PutRecordBatchCommand,\n} = require('@aws-sdk/client-firehose');\nexports.handler = async function (event, context) {\n  const client = new FirehoseClient();\n  const input = {\n    // PutRecordBatchInput\n    DeliveryStreamName: '${AWS::StackName}_FirehoseExampleFirehose',\n    Records: [\n      {\n        Data: Buffer.from(\n          JSON.stringify({\n            name: 'test-event',\n            time: new Date().toISOString(),\n          })\n        ),\n      },\n    ],\n  };\n  const command = new PutRecordBatchCommand(input);\n  await client.send(command);\n};\n"
+          }
+        },
+        "Description": {
+          "Fn::Sub": "FirehoseExampleTestDataLambda in the ${AWS::StackName} stack"
+        },
+        "FunctionName": {
+          "Fn::Sub": "${AWS::StackName}-FirehoseExampleDataGeneratorLambda"
+        },
+        "Handler": "index.handler",
+        "Layers": [
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:580247275435:layer:LambdaInsightsExtension-Arm64:2"
+          }
+        ],
+        "MemorySize": 128,
+        "Runtime": "nodejs18.x",
+        "Timeout": 20,
+        "Role": { "Fn::GetAtt": ["FirehoseExampleTestDataLambdaRole", "Arn"] }
+      }
+    },
+    "FirehoseExampleTestDataLambdaErrorAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": {
+          "Fn::Sub": "${AWS::StackName}-FirehoseExampleTestDataLambda-Errors-${AWS::Region}"
+        },
+        "AlarmDescription": {
+          "Fn::Sub": [
+            "Error alarm for ${name} lambda function in ${AWS::StackName} stack",
+            {
+              "name": {
+                "Fn::Sub": "${AWS::StackName}-FirehoseExampleDataGeneratorLambda"
+              }
+            }
+          ]
+        },
+        "AlarmActions": [],
+        "Period": 60,
+        "EvaluationPeriods": 1,
+        "DatapointsToAlarm": 1,
+        "Statistic": "Sum",
+        "Threshold": 0,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "notBreaching",
+        "Namespace": "AWS/Lambda",
+        "Dimensions": [
+          {
+            "Name": "FunctionName",
+            "Value": { "Ref": "FirehoseExampleTestDataLambda" }
+          }
+        ],
+        "MetricName": "Errors"
+      }
+    },
+    "FirehoseExampleTestDataLambdaLogPolicy": {
+      "Type": "AWS::IAM::Policy",
+      "DependsOn": "FirehoseExampleTestDataLambdaRole",
+      "Properties": {
+        "PolicyName": "lambda-log-access",
+        "Roles": [{ "Ref": "FirehoseExampleTestDataLambdaRole" }],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "logs:*",
+              "Resource": {
+                "Fn::GetAtt": ["FirehoseExampleTestDataLambdaLogs", "Arn"]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "FirehoseExampleTestDataLambdaRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "sts:AssumeRole",
+              "Principal": { "Service": { "Fn::Sub": "lambda.amazonaws.com" } }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "main",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": ["firehose:PutRecordBatch"],
+                  "Resource": [
+                    { "Fn::GetAtt": ["FirehoseExampleFirehose", "Arn"] }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "UDFLambdaLogs": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": [
+            "/aws/lambda/${name}",
+            { "name": { "Fn::Sub": "${AWS::StackName}-UDF-Lambda" } }
+          ]
+        },
+        "RetentionInDays": 14
+      }
+    },
+    "UDFLambda": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Architectures": ["arm64"],
+        "Code": {
+          "S3Bucket": { "Fn::Sub": "utility-${AWS::AccountId}-${AWS::Region}" },
+          "S3Key": { "Fn::Sub": "wharfie/${GitSha}/udf.zip" }
+        },
+        "Description": {
+          "Fn::Sub": "UDFLambda in the ${AWS::StackName} stack"
+        },
+        "FunctionName": { "Fn::Sub": "${AWS::StackName}-UDF-Lambda" },
+        "Handler": "index.handler",
+        "Layers": [
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:580247275435:layer:LambdaInsightsExtension-Arm64:2"
+          }
+        ],
+        "MemorySize": 256,
+        "Runtime": "nodejs18.x",
+        "Timeout": 20,
+        "Role": { "Fn::GetAtt": ["UDFLambdaRole", "Arn"] }
+      }
+    },
+    "UDFLambdaErrorAlarm": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": {
+          "Fn::Sub": "${AWS::StackName}-UDFLambda-Errors-${AWS::Region}"
+        },
+        "AlarmDescription": {
+          "Fn::Sub": [
+            "Error alarm for ${name} lambda function in ${AWS::StackName} stack",
+            { "name": { "Fn::Sub": "${AWS::StackName}-UDF-Lambda" } }
+          ]
+        },
+        "AlarmActions": [],
+        "Period": 60,
+        "EvaluationPeriods": 1,
+        "DatapointsToAlarm": 1,
+        "Statistic": "Sum",
+        "Threshold": 0,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "notBreaching",
+        "Namespace": "AWS/Lambda",
+        "Dimensions": [
+          { "Name": "FunctionName", "Value": { "Ref": "UDFLambda" } }
+        ],
+        "MetricName": "Errors"
+      }
+    },
+    "UDFLambdaLogPolicy": {
+      "Type": "AWS::IAM::Policy",
+      "DependsOn": "UDFLambdaRole",
+      "Properties": {
+        "PolicyName": "lambda-log-access",
+        "Roles": [{ "Ref": "UDFLambdaRole" }],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "logs:*",
+              "Resource": { "Fn::GetAtt": ["UDFLambdaLogs", "Arn"] }
+            }
+          ]
+        }
+      }
+    },
+    "UDFLambdaRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "sts:AssumeRole",
+              "Principal": { "Service": { "Fn::Sub": "lambda.amazonaws.com" } }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "AmazonBerkeleyObjects": {
+      "Description": "Wharfie resource ID",
+      "Value": {
+        "Fn::Join": ["-", ["wharfie", { "Ref": "AmazonBerkeleyObjects" }]]
+      }
+    },
+    "AmazonBerkeleyObjectsAggregated": {
+      "Description": "Wharfie resource ID",
+      "Value": {
+        "Fn::Join": [
+          "-",
+          ["wharfie", { "Ref": "AmazonBerkeleyObjectsAggregated" }]
+        ]
+      }
+    },
+    "FirehoseExample": {
+      "Description": "Wharfie resource ID",
+      "Value": { "Fn::Join": ["-", ["Wharfie", { "Ref": "FirehoseExample" }]] }
+    }
+  }
+}

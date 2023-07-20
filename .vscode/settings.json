@@ -1,0 +1,6 @@
+{
+  "antlr4.generation": {
+    "mode": "external"
+  },
+  "editor.formatOnSave": true
+}

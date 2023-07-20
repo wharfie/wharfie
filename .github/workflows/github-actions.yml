@@ -1,0 +1,48 @@
+name: Wharfie CI
+
+on:
+  push:
+    branches: ['main']
+  pull_request:
+    branches: ['main']
+
+env:
+  WHARFIE_REGION: us-west-2
+  WHARFIE_DEPLOYMENT_NAME: wharfie-testing
+  WHARFIE_ARTIFACT_BUCKET: utility-079185815456-us-west-2
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18.x]
+        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+      # node 14 doesn't use npm 7 without this
+      - name: install latest npm
+        run: |
+          npm install -g npm &&
+          npm --version &&
+          npm list -g --depth 0
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run typecheck
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_TESTING_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_TESTING_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+      - run: npm link
+      - run: wharfie build ${{ github.event.pull_request.head.sha }}
+      - run: wharfie udf build udf_test cloudformation/examples/udf_function.js ${{ github.event.pull_request.head.sha }}

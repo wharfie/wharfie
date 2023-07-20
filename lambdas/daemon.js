@@ -1,0 +1,334 @@
+'use strict';
+
+require('./config');
+const { parse } = require('@sandfox/arn');
+const uuid = require('uuid');
+const bluebirdPromise = require('bluebird');
+
+const logging = require('./lib/logging');
+const daemon_log = logging.getDaemonLogger();
+
+const maintain = require('./operations/maintain/');
+const backfill = require('./operations/backfill/');
+const s3_event = require('./operations/s3_event/');
+const query = require('./operations/query/');
+const SQS = require('./lib/sqs');
+const SNS = require('./lib/sns');
+const STS = require('./lib/sts');
+const resource_db = require('./lib/dynamo/resource');
+const { getResource } = require('./migrations/');
+
+const sqs = new SQS({ region: process.env.AWS_REGION });
+
+const QUEUE_URL = process.env.DAEMON_QUEUE_URL || '';
+const DLQ_URL = process.env.DLQ_URL || '';
+const MAX_RETRIES = Number(process.env.MAX_RETRIES || 7);
+
+/**
+ * @param {import('./typedefs').WharfieEvent} event -
+ * @param {import('aws-lambda').Context} context -
+ * @param {import('./typedefs').ResourceRecord} resource -
+ * @param {import('./typedefs').OperationRecord?} operation -
+ * @returns {Promise<import('./typedefs').ActionProcessingOutput>} -
+ */
+async function daemonRouter(event, context, resource, operation) {
+  // START SPECIAL CASE
+  if (event.action_type === 'START') {
+    switch (event.operation_type) {
+      case 'MAINTAIN':
+        return await maintain.start(event, context, resource);
+      case 'BACKFILL':
+        return await backfill.start(event, context, resource);
+      case 'S3_EVENT':
+        return await s3_event.start(event, context, resource);
+      default:
+        throw new Error(
+          "Invalid Operation, must be one of ['MAINTAIN', 'BACKFILL', 'S3_EVENT']"
+        );
+    }
+  }
+  if (!operation)
+    throw new Error(`No operation found for event: ${JSON.stringify(event)}`);
+  // FINISH SPECIAL CASE
+  if (event.action_type === 'FINISH') {
+    switch (event.operation_type) {
+      case 'MAINTAIN':
+        return await maintain.finish(event, context, resource, operation);
+      case 'BACKFILL':
+        return await backfill.finish(event, context, resource, operation);
+      case 'S3_EVENT':
+        return await s3_event.finish(event, context, resource, operation);
+      default:
+        throw new Error(
+          "Invalid Operation, must be one of ['MAINTAIN', 'BACKFILL', 'S3_EVENT']"
+        );
+    }
+  }
+
+  // OPERATION:ACTION ROUTING
+  switch (event.operation_type) {
+    case 'MAINTAIN':
+      return await maintain.route(event, context, resource, operation);
+    case 'BACKFILL':
+      return await backfill.route(event, context, resource, operation);
+    case 'S3_EVENT':
+      return await s3_event.route(event, context, resource, operation);
+    default:
+      throw new Error(
+        "Invalid Operation, must be one of ['MAINTAIN', 'BACKFILL', 'S3_EVENT']"
+      );
+  }
+}
+
+/**
+ * @param {import('./typedefs').WharfieEvent} event -
+ * @param {import('aws-lambda').Context} context -
+ */
+async function daemon(event, context) {
+  const resource = await getResource(event, context);
+  if (!resource) {
+    daemon_log.warn('resource unexpectedly missing, maybe it was deleted?');
+    return;
+  }
+
+  if (!event.operation_id) event.operation_id = uuid.v4();
+  if (!event.action_id) event.action_id = uuid.v4();
+  const event_log = logging.getEventLogger(event, context);
+  // _operation will be null when the action is START
+  const _operation = await resource_db.getOperation(
+    resource.resource_id,
+    event.operation_id
+  );
+
+  // CHECK THAT ACTION DEPENDENCIES ARE MET
+  // START action has no prerequisites and will not have _operation defined
+  if (_operation && event.action_type !== 'START') {
+    event_log.debug('checking action prerequisites...');
+    if (
+      !(await resource_db.checkActionPrerequisites(
+        _operation,
+        event.action_type,
+        event_log
+      ))
+    ) {
+      event_log.info(
+        `action ${event.operation_type}:${event.action_type} prerequisites not met, reenqueueing`
+      );
+      await sqs.reenqueue(event, QUEUE_URL);
+      return;
+    }
+  }
+  event_log.info(
+    `running action ${event.operation_type}:${event.action_type}....`
+  );
+
+  const action_output = await daemonRouter(
+    event,
+    context,
+    resource,
+    _operation
+  );
+
+  const action = await resource_db.getAction(
+    resource.resource_id,
+    event.operation_id,
+    event.action_id
+  );
+  if (!action) throw new Error('action missing unexpectedly');
+  const operation = await resource_db.getOperation(
+    resource.resource_id,
+    event.operation_id
+  );
+  if (!operation) throw new Error('operation missing unexpectedly');
+
+  await resource_db.putAction(resource.resource_id, event.operation_id, {
+    action_id: action.action_id,
+    action_type: action.action_type,
+    action_status: action_output.status,
+  });
+
+  if (action_output.status === 'COMPLETED') {
+    event_log.info(
+      `action ${event.operation_type}:${event.action_type} completed, equeueing next actions`
+    );
+    // START NEXT ACTIONS
+    const next_actions =
+      operation.action_graph.successors(event.action_type) || [];
+    await Promise.all(
+      next_actions.map(async (action_type) => {
+        if (
+          !(await resource_db.checkActionPrerequisites(
+            operation,
+            action_type,
+            null,
+            false
+          ))
+        )
+          return Promise.resolve();
+
+        await resource_db.putAction(
+          resource.resource_id,
+          operation.operation_id,
+          {
+            action_id: operation.action_graph.node(action_type),
+            action_type,
+            action_status: 'RUNNING',
+          }
+        );
+        await sqs.enqueue(
+          {
+            operation_id: operation.operation_id,
+            operation_type: operation.operation_type,
+            action_id: operation.action_graph.node(action_type),
+            action_type,
+            resource_id: resource.resource_id,
+            retries: 0,
+            action_inputs: action_output.nextActionInputs || {},
+          },
+          QUEUE_URL
+        );
+      })
+    );
+    if (
+      next_actions.length === 0 &&
+      operation.operation_status === 'COMPLETED'
+    ) {
+      event_log.info(
+        `operation ${event.operation_type} completed, cleaning up...`
+      );
+      await resource_db.deleteOperation(
+        resource.resource_id,
+        operation.operation_id
+      );
+    }
+  }
+}
+
+/**
+ * @param {import('./typedefs').WharfieEvent} event -
+ * @param {import('aws-lambda').Context} context -
+ * @param {any} err -
+ */
+async function DLQ(event, context, err) {
+  const operation = await resource_db.getOperation(
+    event.resource_id,
+    event.operation_id || ''
+  );
+  if (!operation) return;
+  const event_log = logging.getEventLogger(event, context);
+  event_log.error(`Record has expended its retries, sending to DLQ`, {
+    ...event,
+  });
+
+  const resource = await getResource(event, context);
+  if (!resource || !event.action_id) {
+    daemon_log.warn(
+      'properties unexpectedly missing, maybe the resource was deleted?'
+    );
+    return;
+  }
+
+  await sqs.sendMessage({
+    MessageBody: JSON.stringify(event),
+    QueueUrl: DLQ_URL,
+  });
+  await resource_db.putAction(resource.resource_id, operation.operation_id, {
+    action_id: event.action_id,
+    action_type: event.action_type,
+    action_status: 'FAILED',
+  });
+
+  if (
+    !resource.daemon_config.AlarmActions ||
+    resource.daemon_config.AlarmActions.length === 0
+  )
+    return;
+
+  const { region } = parse(resource.resource_arn);
+  const sts = new STS({ region });
+  const credentials = await sts.getCredentials(resource.daemon_config.Role);
+  const sns = new SNS({ region, credentials });
+  await Promise.all(
+    resource.daemon_config.AlarmActions.map((action) =>
+      sns.publish({
+        TopicArn: action,
+        Message: JSON.stringify({
+          AlarmName: 'Wharfie Failure',
+          AlarmDescription: `Processing Failed with error: ${err}`,
+        }),
+      })
+    )
+  );
+}
+
+/**
+ * @param {import('./typedefs').WharfieEvent} event -
+ * @param {import('aws-lambda').Context} context -
+ * @param {any} err -
+ */
+async function retry(event, context, err) {
+  if ((event.retries || 0) >= MAX_RETRIES) {
+    try {
+      await DLQ(event, context, err);
+    } catch (err) {
+      // @ts-ignore
+      daemon_log.error(`Failed to DLQ event ${err.stack || err}`, { ...event });
+    }
+    return;
+  }
+  await sqs.sendMessage({
+    MessageBody: JSON.stringify(
+      Object.assign(event, {
+        retries: (event.retries || 0) + 1,
+      })
+    ),
+    // full-jitter exp backoff (0 - 180 seconds)
+    DelaySeconds: Math.floor(
+      Math.random() * Math.min(180, 1 * Math.pow(2, event.retries || 0))
+    ),
+    QueueUrl: QUEUE_URL,
+  });
+}
+
+/**
+ * @param {import('aws-lambda').SQSRecord} record -
+ * @param {import('aws-lambda').Context} context -
+ */
+async function processRecord(record, context) {
+  /** @type {import('./typedefs').WharfieEvent} */
+  const event = JSON.parse(record.body);
+
+  try {
+    if (event.query_id) {
+      await query.run(event, context);
+    } else {
+      await daemon(event, context);
+    }
+  } catch (err) {
+    const event_log = logging.getEventLogger(event, context);
+    event_log.error(
+      `daemon caught error ${
+        // @ts-ignore
+        err.stack || err
+      }, retrying Record: ${JSON.stringify(event)}`
+    );
+    await retry(event, context, err);
+  }
+}
+
+/**
+ * @param {import('aws-lambda').SQSEvent} event -
+ * @param {import('aws-lambda').Context} context -
+ */
+module.exports.handler = async (event, context) => {
+  daemon_log.debug(`processing ${event.Records.length} records....`);
+  await bluebirdPromise.map(
+    event.Records,
+    (/** @type {import('aws-lambda').SQSRecord} */ record) => {
+      return processRecord(record, context);
+    },
+    { concurrency: 4 }
+  );
+  daemon_log.info(`MEMORY USAGE: `, process.memoryUsage());
+  await logging.flush(context);
+};

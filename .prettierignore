@@ -1,0 +1,4 @@
+package*.json
+coverage/
+antlr-lib/
+dist/

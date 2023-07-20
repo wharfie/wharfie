@@ -1,0 +1,24 @@
+{
+  "RequestType": "Delete",
+  "ServiceToken": "arn:aws:lambda:us-east-1:123456789012:function:wharfie-staging-bootstrap",
+  "ResponseURL": "https://cloudformation-custom-resource-response-useast1.s3.amazonaws.com/arn%3Aaws%3Acloudformation%3Aus-east-1%3A123456789012%3Astack/wharfie-staging/3a62f040-5743-11eb-b528-0ebb325b25bf%7CStackMappings%7Cd6713fab-cc44-490b-a44f-a0560ee41d99?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20210927T225554Z&X-Amz-SignedHeaders=host&X-Amz-Expires=7200&X-Amz-Credential=AKIA6L7Q4OWT7F4FZRHE%2F20210927%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Signature=0edfec42f11921d746190e9e4b1895552e62a44db3ddb1e0207177b391c606ca",
+  "StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/wharfie-staging/123121-5743-11eb-b528-0ebb325b25bf",
+  "RequestId": "d6713fab-cc44-490b-a44f-a0560ee41d99",
+  "LogicalResourceId": "StackMappings",
+  "PhysicalResourceId": "24ee32ff5aa9a2f6126123a536951620",
+  "ResourceType": "Custom::WharfieUDF",
+  "ResourceProperties": {
+    "ServiceToken": "arn:aws:lambda:us-east-1:123456789012:function:wharfie-staging-bootstrap",
+    "Tags": [
+      {
+        "Value": "wharfie-staging",
+        "Key": "CloudFormationStackName"
+      }
+    ],
+    "Handler": "index.handler",
+    "Code": {
+      "S3Bucket": "wharfie",
+      "S3Key": "stack-mappings/staging/wharfie.zip"
+    }
+  }
+}
