@@ -213,7 +213,7 @@ describe('backfill tests', () => {
                 },
               },
             },
-            "wharfie_version": "0.0.0",
+            "wharfie_version": "0.0.1",
           },
         },
       }
