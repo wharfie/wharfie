@@ -33,7 +33,7 @@ const zip = async (dir) => {
   });
 };
 
-const build = async (label) => {
+const build = async (label, publish) => {
   // esbuild lambdas
   displayInfo('Building lambdas...');
   if (!label) {
@@ -84,6 +84,7 @@ const build = async (label) => {
         Body: await fs.promises.readFile(
           path.join(__dirname, `../../dist/${label}/${lambda}/ouput.zip`)
         ),
+        ACL: publish ? 'public-read' : 'private',
       });
     })
   );
@@ -94,15 +95,21 @@ const build = async (label) => {
 exports.command = 'build [label]';
 exports.desc = 'build wharfie lambda artifacts';
 exports.builder = (yargs) => {
-  yargs.positional('label', {
-    type: 'string',
-    describe: 'build artifact prefix',
-    optional: true,
-  });
+  yargs
+    .positional('label', {
+      type: 'string',
+      describe: 'build artifact prefix',
+      optional: true,
+    })
+    .option('publish', {
+      type: 'boolean',
+      describe: 'make build artifacts public',
+      default: false,
+    });
 };
-exports.handler = async function ({ label }) {
+exports.handler = async function ({ label, publish }) {
   try {
-    await build(label);
+    await build(label, publish);
   } catch (err) {
     displayFailure(err);
   }
