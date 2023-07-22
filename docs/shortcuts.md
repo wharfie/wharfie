@@ -82,7 +82,7 @@ const wharfieResource = new wharfie.Resource({
 
 ....
 
-module.exports = wharfie.util.merge({...}, loadingDockResource, ...)
+module.exports = wharfie.util.merge({...}, wharfieResource, ...)
 
 ```
 
@@ -116,7 +116,7 @@ const wharfieResource = new wharfie.Resource({
     ...
 })
 
-module.exports = wharfie.util.merge({...}, loadingDockRole, loadingDockResource,  ...)
+module.exports = wharfie.util.merge({...}, wharfieRole, wharfieResource,  ...)
 
 ```
 
@@ -198,7 +198,7 @@ const wharfieResource = new wharfie.MaterializedView({
 
 ...
 
-module.exports = wharfie.util.merge({...}, loadingDockResource, ...)
+module.exports = wharfie.util.merge({...}, wharfieResource, ...)
 
 ```
 
