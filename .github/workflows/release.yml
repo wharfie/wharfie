@@ -11,8 +11,6 @@ jobs:
   latest_publish:
     if: github.event.release.prerelease == false
     runs-on: ubuntu-latest
-    env:
-      WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
     steps:
       - uses: actions/checkout@v3
       - name: Use Node.js 18.x
@@ -40,31 +38,37 @@ jobs:
         env:
           WHARFIE_REGION: us-east-1
           WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-east-1
+          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
       - name: release to us-east-2
         run: wharfie build ${{ github.event.release.tag_name }}
         env:
           WHARFIE_REGION: us-east-2
           WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-east-2
+          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
       - name: release to us-west-1
         run: wharfie build ${{ github.event.release.tag_name }}
         env:
           WHARFIE_REGION: us-west-1
           WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-west-1
+          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
       - name: release to us-west-2
         run: wharfie build ${{ github.event.release.tag_name }}
         env:
           WHARFIE_REGION: us-west-2
           WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-west-2
+          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
       - name: release to  eu-central-1
         run: wharfie build ${{ github.event.release.tag_name }}
         env:
           WHARFIE_REGION: eu-central-1
           WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-eu-central-1
+          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
       - name: release to eu-west-1
         run: wharfie build ${{ github.event.release.tag_name }}
         env:
           WHARFIE_REGION: eu-west-1
           WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-eu-west-1
+          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
   prerelease_publish:
     if: github.event.release.prerelease == true
     runs-on: ubuntu-latest
@@ -95,28 +99,34 @@ jobs:
         env:
           WHARFIE_REGION: us-east-1
           WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-east-1
+          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
       - name: release to us-east-2
         run: wharfie build ${{ github.event.release.tag_name }}
         env:
           WHARFIE_REGION: us-east-2
           WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-east-2
+          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
       - name: release to us-west-1
         run: wharfie build ${{ github.event.release.tag_name }}
         env:
           WHARFIE_REGION: us-west-1
           WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-west-1
+          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
       - name: release to us-west-2
         run: wharfie build ${{ github.event.release.tag_name }}
         env:
           WHARFIE_REGION: us-west-2
           WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-west-2
+          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
       - name: release to  eu-central-1
         run: wharfie build ${{ github.event.release.tag_name }}
         env:
           WHARFIE_REGION: eu-central-1
           WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-eu-central-1
+          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
       - name: release to eu-west-1
         run: wharfie build ${{ github.event.release.tag_name }}
         env:
           WHARFIE_REGION: eu-west-1
           WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-eu-west-1
+          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
