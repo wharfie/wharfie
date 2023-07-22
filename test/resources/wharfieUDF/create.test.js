@@ -13,6 +13,8 @@ process.env.TEMPLATE_BUCKET = 'template-bucket';
 process.env.AWS_REGION = 'us-east-1';
 
 jest.useFakeTimers();
+// eslint-disable-next-line jest/no-untyped-mock-factory
+jest.mock('../../../package.json', () => ({ version: '0.0.1' }));
 
 const mockMath = Object.create(global.Math);
 mockMath.random = () => 0.5;
