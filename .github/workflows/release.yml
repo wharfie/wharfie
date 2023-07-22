@@ -11,6 +11,8 @@ jobs:
   latest_publish:
     if: github.event.release.prerelease == false
     runs-on: ubuntu-latest
+    env:
+      WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
     steps:
       - uses: actions/checkout@v3
       - name: Use Node.js 18.x
