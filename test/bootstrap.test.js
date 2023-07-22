@@ -19,6 +19,8 @@ jest.mock('../lambdas/lib/sqs');
 jest.mock('../lambdas/lib/s3');
 jest.mock('../lambdas/lib/sts');
 jest.mock('../lambdas/lib/glue');
+// eslint-disable-next-line jest/no-untyped-mock-factory
+jest.mock('../package.json', () => ({ version: '0.0.1' }));
 
 const mockMath = Object.create(global.Math);
 mockMath.random = () => 0.5;
