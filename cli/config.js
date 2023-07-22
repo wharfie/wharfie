@@ -6,7 +6,7 @@ const configuration = {
   artifact_bucket: process.env.WHARFIE_ARTIFACT_BUCKET,
 };
 
-const check = ({ region, deployment_name, artifact_bucket }) => {
+const check = ({ region, deployment_name }) => {
   if (!region) {
     throw new Error(
       'wharfie region not found. Please make sure you set up the cli config correctly (run wharfie config)'
@@ -15,11 +15,6 @@ const check = ({ region, deployment_name, artifact_bucket }) => {
   if (!deployment_name) {
     throw new Error(
       'wharfie service name not found. Please make sure you set up the cli config correctly (run wharfie config)'
-    );
-  }
-  if (!artifact_bucket) {
-    throw new Error(
-      'artifact bucket not found. Please make sure you set up config the cli correctly (run wharfie config)'
     );
   }
 };

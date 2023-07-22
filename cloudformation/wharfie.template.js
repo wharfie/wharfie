@@ -67,6 +67,11 @@ const Parameters = {
     Description: 'Maximum number of queries that a single action can submit',
     Default: 10000,
   },
+  IsDevelopment: {
+    Type: 'Boolean',
+    Description: 'Is this a development deployment?',
+    Default: false,
+  },
 };
 
 const Conditions = {
@@ -74,6 +79,7 @@ const Conditions = {
     wharfie.util.ref('SNSAlarmTopicARN'),
     ''
   ),
+  IsDevelopment: wharfie.util.equals(wharfie.util.ref('IsDevelopment'), true),
 };
 
 const Resources = {

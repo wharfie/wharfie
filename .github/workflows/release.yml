@@ -1,0 +1,120 @@
+name: Wharfie Release
+
+on:
+  release:
+    types: [published]
+
+env:
+  WHARFIE_ARTIFACTS_BUCKET_PREFIX: wharfie-artifacts
+
+jobs:
+  latest_publish:
+    if: github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Use Node.js 18.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18.x
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run typecheck
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_PUBLISH_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_PUBLISH_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+      # enables wharfie cli
+      - run: npm link
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+      - name: release to us-east-1
+        run: wharfie build ${{ github.event.release.tag_name }}
+        env:
+          WHARFIE_REGION: us-east-1
+          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-east-1
+      - name: release to us-east-2
+        run: wharfie build ${{ github.event.release.tag_name }}
+        env:
+          WHARFIE_REGION: us-east-2
+          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-east-2
+      - name: release to us-west-1
+        run: wharfie build ${{ github.event.release.tag_name }}
+        env:
+          WHARFIE_REGION: us-west-1
+          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-west-1
+      - name: release to us-west-2
+        run: wharfie build ${{ github.event.release.tag_name }}
+        env:
+          WHARFIE_REGION: us-west-2
+          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-west-2
+      - name: release to  eu-central-1
+        run: wharfie build ${{ github.event.release.tag_name }}
+        env:
+          WHARFIE_REGION: eu-central-1
+          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-eu-central-1
+      - name: release to eu-west-1
+        run: wharfie build ${{ github.event.release.tag_name }}
+        env:
+          WHARFIE_REGION: eu-west-1
+          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-eu-west-1
+  prerelease_publish:
+    if: github.event.release.prerelease == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Use Node.js 18.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run typecheck
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_PUBLISH_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_PUBLISH_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+      # enables wharfie cli
+      - run: npm link
+      - run: npm publish --tag next
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+      - name: release to us-east-1
+        run: wharfie build ${{ github.event.release.tag_name }}
+        env:
+          WHARFIE_REGION: us-east-1
+          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-east-1
+      - name: release to us-east-2
+        run: wharfie build ${{ github.event.release.tag_name }}
+        env:
+          WHARFIE_REGION: us-east-2
+          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-east-2
+      - name: release to us-west-1
+        run: wharfie build ${{ github.event.release.tag_name }}
+        env:
+          WHARFIE_REGION: us-west-1
+          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-west-1
+      - name: release to us-west-2
+        run: wharfie build ${{ github.event.release.tag_name }}
+        env:
+          WHARFIE_REGION: us-west-2
+          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-west-2
+      - name: release to  eu-central-1
+        run: wharfie build ${{ github.event.release.tag_name }}
+        env:
+          WHARFIE_REGION: eu-central-1
+          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-eu-central-1
+      - name: release to eu-west-1
+        run: wharfie build ${{ github.event.release.tag_name }}
+        env:
+          WHARFIE_REGION: eu-west-1
+          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-eu-west-1

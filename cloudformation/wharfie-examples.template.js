@@ -23,6 +23,11 @@ const Parameters = {
     Type: 'String',
     Description: 'S3 bucket to store examples in',
   },
+  IsDevelopment: {
+    Type: 'Boolean',
+    Description: 'Is this a development deployment?',
+    Default: false,
+  },
 };
 
 const Resources = {

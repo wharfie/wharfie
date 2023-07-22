@@ -16,20 +16,20 @@
 
 Wharfie is an experimental table-oriented data application framework built ontop of [AWS Athena](https://aws.amazon.com/athena/). Designed to be fast to develop, confident to modify and cheap to run.
 
-Unlike with most data tools Wharfie has ZERO fixed infrastructure costs. Money is only spent when data is processed. Costs are also proportional to the size of the data processed ~5$ per Terrabyte.
+Unlike most data tools, Wharfie has ZERO fixed infrastructure costs. Money is only spent when data is processed. Costs are also proportional to the size of the data processed, averaging around $5 per terabyte.
 
-Wharfie can work with data in the size of bytes to petabtyes. There is no looming performance cliffs that require a switch of platform.
+Wharfie can work with data sizes ranging from bytes to petabytes. There are no looming performance cliffs that require a platform switch.
 
-Wharfie is serverless and relies entirely on managed AWS services. There is no performance tuning or need to maintain a on-call rotation to keep Wharfie running. When Wharfie breaks it is because of upstream outages which when resolved will unblock Wharfie from reprocessing and catching up to a working state.
+Wharfie is serverless and relies entirely on managed AWS services. There's no need for performance tuning or an on-call rotation to keep Wharfie running. When Wharfie breaks, it's usually because of upstream outages, which when resolved, unblock Wharfie from reprocessing and catching up to a functional state.
 
-When defining tables with Wharfie you only need to statically define your table structure or the query used to materialize and Wharfie takes care of The Rest.
+When defining tables with Wharfie, you only need to statically define your table structure or the query used to materialize, and Wharfie takes care of the rest.
 
 "The Rest" includes:
 
-- registing new partitions
-- converting compression and data formats
-- repartitioning
-- schema changes
+- Registering new partitions
+- Converting compression and data formats
+- Repartitioning
+- Managing schema changes
 
 ### ⚡️ Quickstart
 
