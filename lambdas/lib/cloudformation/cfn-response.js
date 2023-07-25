@@ -75,14 +75,13 @@ const response = async (err, event, data = {}) => {
   const options = {
     hostname: parsed.hostname,
     port: 443,
-    path: parsed.pathname,
+    path: `${parsed.pathname}?${parsed.searchParams}`,
     method: 'PUT',
     headers: {
       'content-type': '',
       'content-length': JSON.stringify(body).length,
     },
   };
-  console.log('Sending response to CloudFormation: ', options, body);
   await new Promise((resolve, reject) => {
     const req = https.request(options, (res) => {
       res.on('error', (err) => {
