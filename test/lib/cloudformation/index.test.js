@@ -52,7 +52,7 @@ describe('tests for CloudFormation', () => {
       Array [
         Object {
           "headers": Object {
-            "content-length": 115,
+            "content-length": 130,
             "content-type": "",
           },
           "hostname": "cloudformation-custom-resource-response-uswest2.s3-us-west-2.amazonaws.com",
@@ -100,7 +100,7 @@ describe('tests for CloudFormation', () => {
       Array [
         Object {
           "headers": Object {
-            "content-length": 134,
+            "content-length": 149,
             "content-type": "",
           },
           "hostname": "www.cloudformation.com",
