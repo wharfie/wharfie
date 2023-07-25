@@ -5,20 +5,12 @@ const {
   displayFailure,
   displayInstruction,
 } = require('../output');
-const config = require('../config');
 const SQS = require('../../lambdas/lib/sqs');
 const STS = require('../../lambdas/lib/sts');
 const uuid = require('uuid');
-const { region, deployment_name } = config.getConfig();
-process.env.AWS_REGION = region;
-process.env.RESOURCE_TABLE = deployment_name;
 const { getAllResources } = require('../../lambdas/lib/dynamo/resource');
-const sqs = new SQS({
-  region,
-});
-const sts = new STS({
-  region,
-});
+const sqs = new SQS();
+const sts = new STS();
 
 const backfill = async (resource_id, start, end) => {
   const { Account } = await sts.getCallerIdentity();
@@ -39,7 +31,7 @@ const backfill = async (resource_id, start, end) => {
       operation_started_at: new Date(operation_start).toISOString(),
     },
     0,
-    `https://sqs.${region}.amazonaws.com/${Account}/${deployment_name}-Daemon-queue`
+    `https://sqs.${process.env.WHARFIE_REGION}.amazonaws.com/${Account}/${process.env.WHARFIE_DEPLOYMENT_NAME}-Daemon-queue`
   );
 
   displaySuccess(`backfill started for ${resource_id}`);

@@ -56,11 +56,29 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").HeadObjectRequest} params - params for HeadObject request
+   * @param {import("@aws-sdk/client-s3").HeadObjectCommandInput} params - params for HeadObject request
    * @returns {Promise<import("@aws-sdk/client-s3").HeadObjectOutput>} -
    */
   async headObject(params) {
     const command = new AWS.HeadObjectCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").CreateBucketCommandInput} params - params for createBucket request
+   * @returns {Promise<import("@aws-sdk/client-s3").CreateBucketCommandOutput>} -
+   */
+  async createBucket(params) {
+    const command = new AWS.CreateBucketCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").ListBucketsCommandInput} params - params for listBuckets request
+   * @returns {Promise<import("@aws-sdk/client-s3").ListBucketsCommandOutput>} -
+   */
+  async listBuckets(params) {
+    const command = new AWS.ListBucketsCommand(params);
     return await this.s3.send(command);
   }
 

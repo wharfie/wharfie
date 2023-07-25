@@ -6,10 +6,6 @@ const {
   displayInfo,
   displayInstruction,
 } = require('../output');
-const config = require('../config');
-const { region, deployment_name } = config.getConfig();
-process.env.AWS_REGION = region;
-process.env.RESOURCE_TABLE = deployment_name;
 const {
   getAllResources,
   getResource,
@@ -17,12 +13,8 @@ const {
 const Glue = require('../../lambdas/lib/glue');
 const S3 = require('../../lambdas/lib/s3');
 const Clean = require('../../lambdas/operations/actions/lib/clean');
-const glue = new Glue({
-  region,
-});
-const s3 = new S3({
-  region,
-});
+const glue = new Glue();
+const s3 = new S3();
 const clean = new Clean({
   s3,
   glue,
@@ -34,7 +26,7 @@ const cleanup_s3 = async (resource_id) => {
     const resource = await getResource(resource_id);
     if (!resource)
       throw new Error(
-        `Resource with ID, ${resource_id} , does not exist in wharfie deployment, ${deployment_name}`
+        `Resource with ID, ${resource_id} , does not exist in wharfie deployment, ${process.env.WHARFIE_DEPLOYMENT_NAME}`
       );
     resources = [resource];
   } else {

@@ -5,16 +5,10 @@ const {
   displayFailure,
   displayInstruction,
 } = require('../output');
-const config = require('../config');
 const SQS = require('../../lambdas/lib/sqs');
 const STS = require('../../lambdas/lib/sts');
-const { region, deployment_name } = config.getConfig();
-const sqs = new SQS({
-  region,
-});
-const sts = new STS({
-  region,
-});
+const sqs = new SQS();
+const sts = new STS();
 
 const queues = (queue, region, deployment_name, account_id) => {
   switch (queue) {
@@ -56,7 +50,12 @@ const queues = (queue, region, deployment_name, account_id) => {
 const replay = async (queue, purge) => {
   const { Account } = await sts.getCallerIdentity();
 
-  const { dlqURL, queueURL } = queues(queue, region, deployment_name, Account);
+  const { dlqURL, queueURL } = queues(
+    queue,
+    process.env.WHARFIE_REGION,
+    process.env.WHARFIE_DEPLOYMENT_NAME,
+    Account
+  );
 
   let message_send_count = 0;
   let messages_purged_count = 0;

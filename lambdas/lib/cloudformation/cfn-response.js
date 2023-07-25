@@ -82,14 +82,21 @@ const response = async (err, event, data = {}) => {
     },
   };
 
-  await new Promise((resolve) => {
-    const req = https.request(options, () => {
+  console.log('making request:', options);
+  await new Promise((resolve, reject) => {
+    const req = https.request(options, (res) => {
+      console.log('Status code: ' + res.statusCode);
+
+      res.on('error', (err) => {
+        console.error(err);
+        reject(err);
+      });
       return resolve();
     });
 
     req.on('error', (err) => {
       console.error(err);
-      resolve();
+      reject(err);
     });
 
     req.write(JSON.stringify(body));

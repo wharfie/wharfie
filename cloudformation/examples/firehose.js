@@ -1,7 +1,6 @@
 'use strict';
 
-const wharfie = require('../../client/');
-const Lambda = require('../resources/lib/lambda');
+const wharfie = require('../../client');
 const fs = require('fs');
 const path = require('path');
 
@@ -55,7 +54,7 @@ Resources.FirehoseExampleTestDataLambdaPermission = {
   },
 };
 
-const firehoseExampleDataGeneratorLambda = new Lambda({
+const firehoseExampleDataGeneratorLambda = new wharfie.util.shortcuts.Lambda({
   LogicalName: 'FirehoseExampleTestDataLambda',
   FunctionName: wharfie.util.sub(
     '${AWS::StackName}-FirehoseExampleDataGeneratorLambda'
@@ -83,7 +82,7 @@ const firehose = new wharfie.Firehose({
   TableName: 'firehose_table',
   Description: 'firehose example',
   Columns,
-  DestinationBucket: wharfie.util.ref('ExamplesBucket'),
+  DestinationBucket: wharfie.util.ref('Bucket'),
   DestinationPrefix: 'firehose_example/',
   FirehoseLoggingEnabled: true,
   WharfieDeployment: wharfie.util.ref('Deployment'),

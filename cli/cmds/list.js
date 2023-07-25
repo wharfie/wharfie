@@ -5,11 +5,7 @@ const {
   displayInstruction,
   displaySuccess,
 } = require('../output');
-const config = require('../config');
 const graphlib = require('graphlib');
-const { region, deployment_name } = config.getConfig();
-process.env.AWS_REGION = region;
-process.env.RESOURCE_TABLE = deployment_name;
 const { getRecords } = require('../../lambdas/lib/dynamo/resource');
 
 const list = async (resource_id, operation_id) => {

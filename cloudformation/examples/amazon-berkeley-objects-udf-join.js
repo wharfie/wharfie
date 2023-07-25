@@ -20,12 +20,10 @@ const AmazonBerkeleyObjectsUDFJoin = new wharfie.MaterializedView({
   OriginalSql: readFileSync(path.join(__dirname, 'abo-udf-join.sql'), 'utf8'),
   SqlVariables: { wharfie_db: wharfie.util.ref('Database') },
   InputLocation: wharfie.util.sub(
-    's3://${ExamplesBucket}/AmazonBerkelyObjects/references/'
+    's3://${Bucket}/AmazonBerkelyObjects/references/'
   ),
   CompactedConfig: {
-    Location: wharfie.util.sub(
-      's3://${ExamplesBucket}/AmazonBerkelyObjectsUDFJoin/'
-    ),
+    Location: wharfie.util.sub('s3://${Bucket}/AmazonBerkelyObjectsUDFJoin/'),
   },
   Backfill: {
     Version: 1,

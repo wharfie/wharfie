@@ -1,16 +1,12 @@
 'use strict';
 
 const { displayFailure, displayInstruction } = require('../output');
-const config = require('../config');
 const CloudFormation = require('../../lambdas/lib/cloudformation');
 
 const open = require('open');
 
 const monitor = async (resource_id) => {
-  const { region } = config.getConfig();
-  const cloudformation = new CloudFormation({
-    region,
-  });
+  const cloudformation = new CloudFormation();
   const { StackResources } = await cloudformation.describeStackResources({
     StackName: resource_id,
   });
@@ -18,7 +14,7 @@ const monitor = async (resource_id) => {
     (resource) => resource.ResourceType === 'AWS::CloudWatch::Dashboard'
   ).PhysicalResourceId;
   await open(
-    `https://console.aws.amazon.com/cloudwatch/home?region=${region}#dashboards:name=${name}`
+    `https://console.aws.amazon.com/cloudwatch/home?region=${process.env.WHARFIE_REGION}#dashboards:name=${name}`
   );
 };
 

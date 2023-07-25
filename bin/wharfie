@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('fs');
+const { hideBin } = require('yargs/helpers');
 const yargs = require('yargs');
 const path = require('path');
 const HOME = require('os').homedir();
@@ -12,19 +13,26 @@ require('yargonaut').style('cyan');
 
 const config = require('../cli/config');
 if (fs.existsSync(process.env.CONFIG_PATH)) {
-  try {
-    config.setConfig(
-      JSON.parse(fs.readFileSync(process.env.CONFIG_PATH).toString())
-    );
-  } catch (err) {
-    console.error(err);
-    console.error('Failed to load config. Run "load config" to resolve.');
+  if (process.argv[process.argv.length - 1] !== 'config') {
+    try {
+      config.setConfig(
+        JSON.parse(fs.readFileSync(process.env.CONFIG_PATH).toString())
+      );
+    } catch (err) {
+      console.error('Failed to load config. Run "load config" to resolve.');
+    }
+    config.setEnvironment();
   }
 }
 
-const cli = () =>
-  yargs.commandDir('../cli/cmds').demandCommand().help().alias('h', 'help')
-    .argv;
+const cli = () => {
+  return yargs(hideBin(process.argv))
+    .commandDir('../cli/cmds')
+    .demandCommand()
+    .wrap(100)
+    .alias('h', 'help')
+    .help().argv;
+};
 
 if (!process.stdin.isTTY) {
   process.env.stdin = '';
