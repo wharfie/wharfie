@@ -10,7 +10,7 @@ const deployment_template = require('../../../cloudformation/deployment/wharfie.
 
 const cloudformation = new CloudFormation();
 
-const update = async (development) => {
+const upgrade = async (development) => {
   const template = deployment_template;
   const stackName = process.env.WHARFIE_DEPLOYMENT_NAME;
   const answers = await new Promise((resolve, reject) => {
@@ -49,7 +49,7 @@ const update = async (development) => {
       .then(resolve)
       .catch(reject);
   });
-  displayInfo(`Updating wharfie deployment...`);
+  displayInfo(`Upgrading wharfie deployment to ${version}...`);
   await cloudformation.updateStack({
     StackName: stackName,
     Tags: [],
@@ -79,11 +79,11 @@ const update = async (development) => {
     Capabilities: ['CAPABILITY_IAM'],
     TemplateBody: JSON.stringify(template),
   });
-  displaySuccess(`Updated wharfie deployment`);
+  displaySuccess(`Wharfie deployment successfully upgraded to ${version}`);
 };
 
-exports.command = 'update [resourceType]';
-exports.desc = 'update wharfie resources';
+exports.command = 'upgrade [resourceType]';
+exports.desc = 'upgrade wharfie resources';
 exports.builder = (yargs) => {
   yargs.option('development', {
     type: 'boolean',
@@ -93,7 +93,7 @@ exports.builder = (yargs) => {
 };
 exports.handler = async function ({ development }) {
   try {
-    await update(development);
+    await upgrade(development);
   } catch (err) {
     console.trace(err);
     displayFailure(err);
