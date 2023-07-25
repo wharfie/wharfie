@@ -74,7 +74,7 @@ const response = async (err, event, data = {}) => {
   const options = {
     hostname: parsed.hostname,
     port: 443,
-    path: parsed.path,
+    path: parsed.pathname,
     method: 'PUT',
     headers: {
       'content-type': '',
@@ -82,20 +82,15 @@ const response = async (err, event, data = {}) => {
     },
   };
 
-  console.log('making request:', options);
   await new Promise((resolve, reject) => {
     const req = https.request(options, (res) => {
-      console.log('Status code: ' + res.statusCode);
-
       res.on('error', (err) => {
-        console.error(err);
         reject(err);
       });
       return resolve();
     });
 
     req.on('error', (err) => {
-      console.error(err);
       reject(err);
     });
 
