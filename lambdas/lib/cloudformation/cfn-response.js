@@ -53,6 +53,7 @@ const response = async (err, event, data = {}) => {
     LogicalResourceId,
     PhysicalResourceId,
     Data,
+    NoEcho: false,
   };
 
   if (err) {
@@ -81,7 +82,7 @@ const response = async (err, event, data = {}) => {
       'content-length': JSON.stringify(body).length,
     },
   };
-
+  console.log('Sending response to CloudFormation: ', options, body);
   await new Promise((resolve, reject) => {
     const req = https.request(options, (res) => {
       res.on('error', (err) => {
