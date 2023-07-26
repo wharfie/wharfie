@@ -82,7 +82,7 @@ const upgrade = async (development) => {
   displaySuccess(`Wharfie deployment successfully upgraded to ${version}`);
 };
 
-exports.command = 'upgrade [resourceType]';
+exports.command = 'upgrade';
 exports.desc = 'upgrade wharfie resources';
 exports.builder = (yargs) => {
   yargs.option('development', {
