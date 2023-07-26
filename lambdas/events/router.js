@@ -22,7 +22,7 @@ async function router(event, context) {
         }
       })
     );
-  } else {
+  } else if (event.Event !== 's3:TestEvent') {
     throw new Error('Event not recognized');
   }
 }

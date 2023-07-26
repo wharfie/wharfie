@@ -399,6 +399,19 @@ async function update_table(event, context, resource, query_execution_id) {
       QueueUrl: CLEANUP_QUEUE_URL,
     });
 
+  try {
+    await s3.headObject({
+      Bucket: sourceBucket,
+      Key: `${sourcePrefix}query_metadata/${query_execution_id}-manifest.csv`,
+    });
+  } catch (error) {
+    // @ts-ignore
+    if (error && error.name === 'NotFound') return;
+    // @ts-ignore
+    else if (error && error.name === 'NoSuchKey') return;
+    else throw error;
+  }
+
   await s3.copyObjectWithMultiPartFallback({
     Bucket: bucket,
     Key: `${prefix}files`,
