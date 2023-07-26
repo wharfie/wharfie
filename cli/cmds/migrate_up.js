@@ -7,23 +7,12 @@ const {
 } = require('../output');
 const cuid = require('cuid');
 const uuid = require('uuid');
-const config = require('../config');
-const { region, deployment_name } = config.getConfig();
-process.env.AWS_REGION = region;
-process.env.RESOURCE_TABLE = deployment_name;
 process.env.DAEMON_LOGGING_LEVEL = 'debug';
 process.env.RESOURCE_LOGGING_LEVEL = 'debug';
 const { getResource } = require('../../lambdas/lib/dynamo/resource');
 const migration = require('../../lambdas/migrations/');
-const STS = require('../../lambdas/lib/sts');
-const sts = new STS({
-  region,
-});
 
 const migrate_up = async (resource_id) => {
-  const { Account } = await sts.getCallerIdentity();
-  process.env.TEMPLATE_BUCKET = `utility-${Account}-${region}`;
-
   const resource = await getResource(resource_id);
 
   const operation_id = `cli-migration-${cuid()}`;

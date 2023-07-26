@@ -41,7 +41,8 @@ describe('tests for CloudFormation', () => {
         StackId: 'id',
         RequestId: 'id',
         LogicalResourceId: 'id',
-        ResponseURL: 'http://www.cloudformation.com',
+        ResponseURL:
+          'https://cloudformation-custom-resource-response-uswest2.s3-us-west-2.amazonaws.com/arn%3Aaws%3Acloudformation%3Aus-west-2%3A079185815456%3Astack/example-project-4/70987040-2b3a-11ee-9d20-02a0467734b5%7CAmazonBerkeleyObjects%7C21eed148-9aea-4e00-a25e-ac66671e813b?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20230725T222813Z&X-Amz-SignedHeaders=host&X-Amz-Expires=7200&X-Amz-Credential=AKIA54RCMT6SB3PZZFYK%2F20230725%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Signature=a1fa7446a2e0a92aa54d47b1e90a462a716d4c0af4dab2a01b51be060742c1ba',
       },
       {
         id: 'test',
@@ -51,12 +52,12 @@ describe('tests for CloudFormation', () => {
       Array [
         Object {
           "headers": Object {
-            "content-length": 115,
+            "content-length": 130,
             "content-type": "",
           },
-          "hostname": "www.cloudformation.com",
+          "hostname": "cloudformation-custom-resource-response-uswest2.s3-us-west-2.amazonaws.com",
           "method": "PUT",
-          "path": undefined,
+          "path": "/arn%3Aaws%3Acloudformation%3Aus-west-2%3A079185815456%3Astack/example-project-4/70987040-2b3a-11ee-9d20-02a0467734b5%7CAmazonBerkeleyObjects%7C21eed148-9aea-4e00-a25e-ac66671e813b?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20230725T222813Z&X-Amz-SignedHeaders=host&X-Amz-Expires=7200&X-Amz-Credential=AKIA54RCMT6SB3PZZFYK%2F20230725%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Signature=a1fa7446a2e0a92aa54d47b1e90a462a716d4c0af4dab2a01b51be060742c1ba",
           "port": 443,
         },
         [Function],
@@ -99,12 +100,12 @@ describe('tests for CloudFormation', () => {
       Array [
         Object {
           "headers": Object {
-            "content-length": 134,
+            "content-length": 149,
             "content-type": "",
           },
           "hostname": "www.cloudformation.com",
           "method": "PUT",
-          "path": undefined,
+          "path": "/?",
           "port": 443,
         },
         [Function],

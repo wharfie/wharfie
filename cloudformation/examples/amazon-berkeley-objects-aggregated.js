@@ -20,11 +20,11 @@ const AmazonBerkeleyObjectsAggregated = new wharfie.MaterializedView({
   OriginalSql: readFileSync(path.join(__dirname, 'abo-aggregated.sql'), 'utf8'),
   SqlVariables: { wharfie_db: wharfie.util.ref('Database') },
   InputLocation: wharfie.util.sub(
-    's3://${ExamplesBucket}/AmazonBerkelyObjects/references/'
+    's3://${Bucket}/AmazonBerkelyObjects/references/'
   ),
   CompactedConfig: {
     Location: wharfie.util.sub(
-      's3://${ExamplesBucket}/AmazonBerkelyObjectsAggregated/'
+      's3://${Bucket}/AmazonBerkelyObjectsAggregated/'
     ),
   },
   Backfill: {
