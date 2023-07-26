@@ -407,6 +407,8 @@ async function update_table(event, context, resource, query_execution_id) {
   } catch (error) {
     // @ts-ignore
     if (error && error.name === 'NotFound') return;
+    // @ts-ignore
+    else if (error && error.name === 'NoSuchKey') return;
     else throw error;
   }
 
