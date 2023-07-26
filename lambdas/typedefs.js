@@ -282,6 +282,7 @@
  * @typedef S3Event
  * @property {number} [retries] -
  * @property {S3EventRecord[]} Records -
+ * @property {string} Event -
  */
 
 /**
