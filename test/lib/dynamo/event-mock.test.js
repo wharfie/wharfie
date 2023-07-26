@@ -4,7 +4,7 @@ jest.mock('../../../lambdas/lib/dynamo/event');
 
 const event = require('../../../lambdas/lib/dynamo/event');
 
-describe('dynamo counter db', () => {
+describe('dynamo event db', () => {
   afterEach(() => {
     event.__setMockState();
   });

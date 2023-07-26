@@ -20,7 +20,7 @@ const SEMAPHORE_TABLE = process.env.SEMAPHORE_TABLE || '';
 
 /**
  * @param {string} semaphore - name of dynamo sempahore record
- * @param {number} threshold - threshold that the counter needs to be <= in order to increment
+ * @param {number} threshold - threshold that the semaphore needs to be <= in order to increment
  * @returns {Promise<boolean>} - if the semaphore was successfully entered
  */
 async function increase(semaphore, threshold) {

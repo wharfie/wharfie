@@ -2,7 +2,6 @@
 'use strict';
 const AWS = require('@aws-sdk/lib-dynamodb');
 
-process.env.COUNTER_TABLE = 'counter_table';
 process.env.QUERY_TABLE = 'query_table';
 
 const semaphore = require('../../../lambdas/lib/dynamo/semaphore');

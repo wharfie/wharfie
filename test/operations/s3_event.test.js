@@ -19,7 +19,6 @@ const {
 const { version } = require('../../package.json');
 
 jest.mock('../../lambdas/lib/dynamo/resource');
-jest.mock('../../lambdas/lib/dynamo/counter');
 jest.mock('../../lambdas/lib/dynamo/event');
 jest.mock('../../lambdas/lib/dynamo/location');
 jest.mock('../../lambdas/lib/dynamo/semaphore');
@@ -37,7 +36,6 @@ const resource = require('../../lambdas/lib/dynamo/resource');
 const logging = require('../../lambdas/lib/logging');
 
 const dynamo_resource = require('../../lambdas/lib/dynamo/resource');
-const dynamo_counter = require('../../lambdas/lib/dynamo/counter');
 const semaphore = require('../../lambdas/lib/dynamo/semaphore');
 
 const glue = new Glue();
@@ -95,7 +93,7 @@ describe('s3 event tests', () => {
   });
 
   it('end to end', async () => {
-    expect.assertions(7);
+    expect.assertions(6);
 
     await resource.putResource({
       resource_id: 'resource_id',
@@ -236,14 +234,6 @@ describe('s3 event tests', () => {
           "limit": Infinity,
           "value": 0,
         },
-      }
-    `);
-
-    // eslint-disable-next-line jest/no-large-snapshots
-    expect(dynamo_counter.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "Wharfie:StackName-workgroup:QUEUED-statementType:MockedQuery": -1,
-        "Wharfie:StackName-workgroup:RUNNING-statementType:MockedQuery": 0,
       }
     `);
 
