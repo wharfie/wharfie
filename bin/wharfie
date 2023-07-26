@@ -29,6 +29,7 @@ const cli = () => {
   return yargs(hideBin(process.argv))
     .commandDir('../cli/cmds')
     .demandCommand()
+    .showHelpOnFail(true)
     .wrap(100)
     .alias('h', 'help')
     .help().argv;
