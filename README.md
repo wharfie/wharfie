@@ -38,8 +38,8 @@ When defining tables with Wharfie, you only need to statically define your table
 ```bash
 npm i -g @wharfie/wharfie
 wharfie config
-wharfie deploy create deployment
-wharfie deploy create examples
+wharfie deployment create
+wharfie examples create
 ```
 
 ### Reference

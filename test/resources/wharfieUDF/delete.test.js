@@ -52,6 +52,7 @@ describe('tests for wharfieUDF resource delete handler', () => {
           Object {
             "Data": Object {},
             "LogicalResourceId": "StackMappings",
+            "NoEcho": false,
             "PhysicalResourceId": "8a20992363488c7290d6cbc4e39f7712",
             "RequestId": "d6713fab-cc44-490b-a44f-a0560ee41d99",
             "StackId": "arn:aws:cloudformation:us-east-1:123456789012:stack/wharfie-staging/123121-5743-11eb-b528-0ebb325b25bf",

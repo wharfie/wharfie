@@ -36,6 +36,7 @@ const handler = async (event) => {
       id: getImmutableID(event),
     });
   } catch (err) {
+    console.error(err);
     // @ts-ignore
     await response(err, event, {
       id: getImmutableID(event),

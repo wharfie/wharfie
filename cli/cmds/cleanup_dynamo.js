@@ -4,10 +4,6 @@ const cliProgress = require('cli-progress');
 const progressBar = new cliProgress.Bar();
 
 const { displaySuccess, displayFailure, displayInfo } = require('../output');
-const config = require('../config');
-const { region, deployment_name } = config.getConfig();
-process.env.AWS_REGION = region;
-process.env.RESOURCE_TABLE = deployment_name;
 const {
   getAllOperations,
   deleteOperation,

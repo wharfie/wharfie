@@ -4,15 +4,11 @@ const cliProgress = require('cli-progress');
 const progressBar = new cliProgress.Bar();
 
 const { displaySuccess, displayFailure, displayInfo } = require('../output');
-const config = require('../config');
 const Glue = require('../../lambdas/lib/glue');
 
 const cleanupTemporaryDB = async () => {
-  const { region, deployment_name } = config.getConfig();
-  const DatabaseName = `${deployment_name}_temporary_store`;
-  const glue = new Glue({
-    region,
-  });
+  const DatabaseName = `${process.env.WHARFIE_DEPLOYMENT_NAME}_temporary_store`;
+  const glue = new Glue();
   displayInfo('fetching tables...');
   const { TableList } = await glue.getTables({
     DatabaseName,

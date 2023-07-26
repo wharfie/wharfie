@@ -9,14 +9,9 @@ const {
   displayInfo,
   displaySuccess,
 } = require('../../output');
-const config = require('../../config');
-const { region, artifact_bucket } = config.getConfig();
-process.env.AWS_REGION = region;
 const path = require('path');
 const S3 = require('../../../lambdas/lib/s3');
-const s3 = new S3({
-  region,
-});
+const s3 = new S3();
 const child_process = require('child_process');
 
 const zip = async (dir) => {
@@ -89,7 +84,7 @@ const build = async (udf_name, entrypoint, label) => {
   displayInfo('Uploading udf bundle to S3...');
 
   await s3.putObject({
-    Bucket: artifact_bucket,
+    Bucket: process.env.WHARFIE_ARTIFACT_BUCKET,
     Key: `wharfie/udf/${udf_name}/${label}.zip`,
     Body: await fs.promises.readFile(
       path.join(__dirname, `../../../dist/udf/${udf_name}/${label}/ouput.zip`)

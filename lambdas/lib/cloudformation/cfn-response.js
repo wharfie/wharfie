@@ -53,6 +53,7 @@ const response = async (err, event, data = {}) => {
     LogicalResourceId,
     PhysicalResourceId,
     Data,
+    NoEcho: false,
   };
 
   if (err) {
@@ -74,22 +75,23 @@ const response = async (err, event, data = {}) => {
   const options = {
     hostname: parsed.hostname,
     port: 443,
-    path: parsed.path,
+    path: `${parsed.pathname}?${parsed.searchParams}`,
     method: 'PUT',
     headers: {
       'content-type': '',
       'content-length': JSON.stringify(body).length,
     },
   };
-
-  await new Promise((resolve) => {
-    const req = https.request(options, () => {
+  await new Promise((resolve, reject) => {
+    const req = https.request(options, (res) => {
+      res.on('error', (err) => {
+        reject(err);
+      });
       return resolve();
     });
 
     req.on('error', (err) => {
-      console.error(err);
-      resolve();
+      reject(err);
     });
 
     req.write(JSON.stringify(body));

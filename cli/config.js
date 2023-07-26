@@ -35,4 +35,13 @@ module.exports = {
     check(configuration);
     return Object.assign({}, configuration);
   },
+  setEnvironment: () => {
+    check(configuration);
+    process.env.WHARFIE_REGION = configuration.region;
+    process.env.WHARFIE_DEPLOYMENT_NAME = configuration.deployment_name;
+    process.env.WHARFIE_ARTIFACT_BUCKET = configuration.artifact_bucket;
+    process.env.AWS_REGION = configuration.region;
+    process.env.RESOURCE_TABLE = configuration.deployment_name;
+    process.env.TEMPLATE_BUCKET = configuration.artifact_bucket;
+  },
 };

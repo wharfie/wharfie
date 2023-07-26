@@ -60,14 +60,22 @@ class CloudFormation {
       events.push(...(response.StackEvents || []));
     }
 
-    const failureEvent = events
+    /** @type {import("@aws-sdk/client-cloudformation").StackEvent | undefined} */
+    let failureEvent;
+    events
       .filter(({ ResourceStatus }) => (ResourceStatus || '').match(/FAILED/))
-      .reduce((a, b) => {
-        if ((a.Timestamp || 0) <= (b.Timestamp || 0)) {
-          return a;
+      .forEach((event) => {
+        if (
+          (event.Timestamp || new Date()) <=
+          ((failureEvent || {}).Timestamp || new Date())
+        ) {
+          failureEvent = event;
         }
-        return b;
       });
+    if (!failureEvent)
+      throw Error(
+        'unable to find failure reason for stack ' + params.StackName
+      );
     return failureEvent.ResourceStatusReason;
   }
 
