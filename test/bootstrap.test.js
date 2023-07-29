@@ -4,14 +4,12 @@ const { handler } = require('../lambdas/bootstrap');
 const CloudFormation = require('../lambdas/lib/cloudformation/');
 const response = require('../lambdas/lib/cloudformation/cfn-response');
 const resource_db = require('../lambdas/lib/dynamo/resource');
-const counter_db = require('../lambdas/lib/dynamo/counter');
 const sempahore_db = require('../lambdas/lib/dynamo/semaphore');
 const location_db = require('../lambdas/lib/dynamo/location');
 const event_db = require('../lambdas/lib/dynamo/event');
 jest.mock('../lambdas/lib/cloudformation/');
 jest.mock('../lambdas/lib/cloudformation/cfn-response');
 jest.mock('../lambdas/lib/dynamo/resource');
-jest.mock('../lambdas/lib/dynamo/counter');
 jest.mock('../lambdas/lib/dynamo/semaphore');
 jest.mock('../lambdas/lib/dynamo/location');
 jest.mock('../lambdas/lib/dynamo/event');
@@ -124,13 +122,10 @@ const event = {
 
 describe('tests for bootstrap lambda', () => {
   it('delete', async () => {
-    expect.assertions(8);
+    expect.assertions(7);
     response.mockImplementation(() => {});
     jest.spyOn(resource_db, 'deleteResource').mockImplementation();
     jest.spyOn(sempahore_db, 'deleteSemaphore').mockImplementation(() => {});
-    jest
-      .spyOn(counter_db, 'deleteCountersByPrefix')
-      .mockImplementation(() => {});
     jest.spyOn(location_db, 'deleteLocation').mockImplementation();
     jest.spyOn(event_db, 'delete_records').mockImplementation();
     const deleteStack = jest.fn().mockImplementation(() => {});
@@ -143,7 +138,6 @@ describe('tests for bootstrap lambda', () => {
 
     expect(resource_db.deleteResource).toHaveBeenCalledTimes(1);
     expect(sempahore_db.deleteSemaphore).toHaveBeenCalledTimes(2);
-    expect(counter_db.deleteCountersByPrefix).toHaveBeenCalledTimes(1);
     expect(location_db.deleteLocation).toHaveBeenCalledTimes(1);
     expect(event_db.delete_records).toHaveBeenCalledTimes(1);
     expect(deleteStack).toHaveBeenCalledTimes(1);
@@ -159,7 +153,6 @@ describe('tests for bootstrap lambda', () => {
     CloudFormation.mockClear();
     resource_db.deleteResource.mockClear();
     sempahore_db.deleteSemaphore.mockClear();
-    counter_db.deleteCountersByPrefix.mockClear();
     location_db.deleteLocation.mockClear();
     event_db.delete_records.mockClear();
     response.mockClear();

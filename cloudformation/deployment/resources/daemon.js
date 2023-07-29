@@ -30,7 +30,6 @@ const Daemon = new wharfie.util.shortcuts.QueueLambda({
       DAEMON_LOGGING_LEVEL: wharfie.util.ref('DaemonLoggingLevel'),
       RESOURCE_LOGGING_LEVEL: wharfie.util.ref('ResourceLoggingLevel'),
       TEMPORARY_GLUE_DATABASE: wharfie.util.ref('TemporaryDatabase'),
-      COUNTER_TABLE: wharfie.util.ref('CounterTable'),
       RESOURCE_TABLE: wharfie.util.ref('ResourceTable'),
       SEMAPHORE_TABLE: wharfie.util.ref('SemaphoreTable'),
       MONITOR_QUEUE_URL: wharfie.util.ref('MonitorQueue'),

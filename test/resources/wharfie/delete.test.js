@@ -1,7 +1,7 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
 
-let lambda, location_db, resource_db, semaphore_db, counter_db, event_db;
+let lambda, location_db, resource_db, semaphore_db, event_db;
 
 const AWSCloudFormation = require('@aws-sdk/client-cloudformation');
 const delete_event = require('../../fixtures/wharfie-delete.json');
@@ -28,17 +28,14 @@ describe('tests for wharfie resource delete handler', () => {
     location_db = require('../../../lambdas/lib/dynamo/location');
     resource_db = require('../../../lambdas/lib/dynamo/resource');
     semaphore_db = require('../../../lambdas/lib/dynamo/semaphore');
-    counter_db = require('../../../lambdas/lib/dynamo/counter');
     event_db = require('../../../lambdas/lib/dynamo/event');
     jest.mock('../../../lambdas/lib/dynamo/location');
     jest.mock('../../../lambdas/lib/dynamo/resource');
     jest.mock('../../../lambdas/lib/dynamo/semaphore');
-    jest.mock('../../../lambdas/lib/dynamo/counter');
     jest.mock('../../../lambdas/lib/dynamo/event');
     jest.spyOn(location_db, 'deleteLocation').mockImplementation();
     jest.spyOn(resource_db, 'deleteResource').mockImplementation();
     jest.spyOn(semaphore_db, 'deleteSemaphore').mockImplementation();
-    jest.spyOn(counter_db, 'deleteCountersByPrefix').mockImplementation();
     jest.spyOn(event_db, 'delete_records').mockImplementation();
     lambda = require('../../../lambdas/bootstrap');
   });
@@ -47,14 +44,13 @@ describe('tests for wharfie resource delete handler', () => {
     location_db.deleteLocation.mockClear();
     resource_db.deleteResource.mockClear();
     semaphore_db.deleteSemaphore.mockClear();
-    counter_db.deleteCountersByPrefix.mockClear();
     event_db.delete_records.mockClear();
     AWSCloudFormation.CloudFormationMock.reset();
     nock.cleanAll();
   });
 
   it('basic', async () => {
-    expect.assertions(9);
+    expect.assertions(8);
 
     AWSCloudFormation.CloudFormationMock.on(
       AWSCloudFormation.DeleteStackCommand
@@ -99,12 +95,6 @@ describe('tests for wharfie resource delete handler', () => {
     expect(semaphore_db.deleteSemaphore.mock.calls[1]).toMatchInlineSnapshot(`
       Array [
         "wharfie:BACKFILL:Wharfie-8a20992363488c7290d6cbc4e39f7712",
-      ]
-    `);
-    expect(counter_db.deleteCountersByPrefix.mock.calls[0])
-      .toMatchInlineSnapshot(`
-      Array [
-        "wharfie-testing:Wharfie-8a20992363488c7290d6cbc4e39f7712",
       ]
     `);
     expect(location_db.deleteLocation.mock.calls[0]).toMatchInlineSnapshot(`
