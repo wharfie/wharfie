@@ -30,7 +30,6 @@ const Events = new wharfie.util.shortcuts.QueueLambda({
       DAEMON_LOGGING_LEVEL: wharfie.util.ref('DaemonLoggingLevel'),
       RESOURCE_LOGGING_LEVEL: wharfie.util.ref('ResourceLoggingLevel'),
       TEMPORARY_GLUE_DATABASE: wharfie.util.ref('TemporaryDatabase'),
-      COUNTER_TABLE: wharfie.util.ref('CounterTable'),
       RESOURCE_TABLE: wharfie.util.ref('ResourceTable'),
       SEMAPHORE_TABLE: wharfie.util.ref('SemaphoreTable'),
       LOCATION_TABLE: wharfie.util.ref('LocationTable'),

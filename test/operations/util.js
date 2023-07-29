@@ -3,7 +3,6 @@ process.env.STACK_NAME = 'test-stack';
 process.env.DAEMON_LOGGING_LEVEL = 'warn';
 process.env.RESOURCE_LOGGING_LEVEL = 'warn';
 process.env.TEMPORARY_GLUE_DATABASE = 'temp-glue-database';
-process.env.COUNTER_TABLE = 'counter-table';
 process.env.RESOURCE_TABLE = 'resource-table';
 process.env.SEMAPHORE_TABLE = 'semaphore-table';
 process.env.MONITOR_QUEUE_URL = 'monitor-queue';
@@ -25,7 +24,6 @@ const cleanup_lambda = require('../../lambdas/cleanup');
 const events_lambda = require('../../lambdas/events');
 
 jest.mock('../../lambdas/lib/dynamo/resource');
-jest.mock('../../lambdas/lib/dynamo/counter');
 jest.mock('../../lambdas/lib/dynamo/event');
 jest.mock('../../lambdas/lib/dynamo/location');
 jest.mock('../../lambdas/lib/dynamo/semaphore');

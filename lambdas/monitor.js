@@ -3,7 +3,6 @@ require('./config');
 const { parse } = require('@sandfox/arn');
 const bluebirdPromise = require('bluebird');
 
-const counter_db = require('./lib/dynamo/counter');
 const semaphore_db = require('./lib/dynamo/semaphore');
 const resource_db = require('./lib/dynamo/resource');
 const { getResource } = require('./migrations/');
@@ -273,34 +272,6 @@ async function createMetrics(cloudwatchEvent) {
   const query = cloudwatchEvent.detail;
   const metricData = [];
 
-  // handle previous state
-  if (query.previousState !== undefined) {
-    // all previous states are non-terminal
-    const count = await counter_db.incrementReturnUpdated(
-      `${query.workgroupName}-workgroup:${query.previousState}-statementType:${query.statementType}`,
-      -1
-    );
-    metricData.push({
-      MetricName: `${query.previousState}-queries`,
-      Dimensions: [
-        {
-          Name: 'Stack',
-          Value: STACK_NAME,
-        },
-        {
-          Name: 'WorkGroup',
-          Value: query.workgroupName,
-        },
-        {
-          Name: 'StatementType',
-          Value: query.statementType,
-        },
-      ],
-      Unit: 'Count',
-      Value: count,
-    });
-  }
-
   // handle terminal current state
   if (TERMINAL_STATE.has(query.currentState)) {
     const athenaMetrics = await athena.getQueryMetrics(
@@ -390,32 +361,6 @@ async function createMetrics(cloudwatchEvent) {
         Unit: 'Bytes',
         Value: (athenaMetrics.Statistics || {}).DataScannedInBytes || 0,
       });
-    });
-
-    // handle non-terminal current state
-  } else {
-    const count = await counter_db.incrementReturnUpdated(
-      `${query.workgroupName}-workgroup:${query.currentState}-statementType:${query.statementType}`,
-      1
-    );
-    metricData.push({
-      MetricName: `${query.currentState}-queries`,
-      Dimensions: [
-        {
-          Name: 'Stack',
-          Value: STACK_NAME,
-        },
-        {
-          Name: 'WorkGroup',
-          Value: query.workgroupName,
-        },
-        {
-          Name: 'StatementType',
-          Value: query.statementType,
-        },
-      ],
-      Unit: 'Count',
-      Value: count,
     });
   }
 

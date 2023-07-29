@@ -5,7 +5,6 @@ const AWSAthena = require('@aws-sdk/client-athena');
 const { Graph, json } = require('graphlib');
 const winston = require('winston');
 
-process.env.COUNTER_TABLE = 'counter_table';
 process.env.QUERY_TABLE = 'query_table';
 
 const resource = jest.requireActual('../../../lambdas/lib/dynamo/resource');
