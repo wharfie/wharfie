@@ -13,6 +13,8 @@ const register_missing_partitions = require('../actions/register_missing_partiti
 const find_compaction_partitions = require('../actions/find_compaction_partitions');
 const run_compaction = require('../actions/run_compaction');
 const update_symlinks = require('../actions/update_symlinks');
+const swap_resource = require('./swap_resource');
+const respond_to_cloudformation = require('./respond_to_cloudformation');
 
 const STACK_NAME = process.env.STACK_NAME || '';
 
@@ -35,7 +37,10 @@ async function start(event, context, resource) {
   const action_graph = new Graph();
   action_graph.setNode('START', event.action_id);
   action_graph.setNode('REGISTER_MISSING_PARTITIONS', uuid.v4());
-  action_graph.setEdge('START', 'REGISTER_MISSING_PARTITIONS');
+  action_graph.setEdge(
+    'CREATE_TEMPORARY_RESOURCE',
+    'REGISTER_MISSING_PARTITIONS'
+  );
 
   action_graph.setNode('FIND_COMPACTION_PARTITIONS', uuid.v4());
   action_graph.setEdge(
@@ -49,8 +54,14 @@ async function start(event, context, resource) {
   action_graph.setNode('UPDATE_SYMLINKS', uuid.v4());
   action_graph.setEdge('RUN_COMPACTION', 'UPDATE_SYMLINKS');
 
+  action_graph.setNode('SWAP_RESOURCE', uuid.v4());
+  action_graph.setEdge('UPDATE_SYMLINKS', 'SWAP_RESOURCE');
+
+  action_graph.setNode('RESPOND_TO_CLOUDFORMATION', uuid.v4());
+  action_graph.setEdge('SWAP_RESOURCE', 'RESPOND_TO_CLOUDFORMATION');
+
   action_graph.setNode('FINISH', uuid.v4());
-  action_graph.setEdge('UPDATE_SYMLINKS', 'FINISH');
+  action_graph.setEdge('RESPOND_TO_CLOUDFORMATION', 'FINISH');
 
   if (!action_graph.isDirected() || !alg.isAcyclic(action_graph))
     throw Error('Invalid action_graph');
@@ -170,25 +181,49 @@ async function finish(event, context, resource, operation) {
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function route(event, context, resource, operation) {
+  const migration_resource = event.operation_inputs.migration_resource;
   switch (event.action_type) {
     case 'REGISTER_MISSING_PARTITIONS':
-      return await register_missing_partitions.run(event, context, resource);
+      return await register_missing_partitions.run(
+        event,
+        context,
+        migration_resource
+      );
     case 'FIND_COMPACTION_PARTITIONS':
       return await find_compaction_partitions.run(
+        event,
+        context,
+        migration_resource,
+        operation
+      );
+    case 'RUN_COMPACTION':
+      return await run_compaction.run(
+        event,
+        context,
+        migration_resource,
+        operation
+      );
+    case 'UPDATE_SYMLINKS':
+      return await update_symlinks.run(
+        event,
+        context,
+        migration_resource,
+        operation
+      );
+    case 'SWAP_RESOURCE':
+      return await swap_resource.run(
+        event,
+        context,
+        migration_resource,
+        operation
+      );
+    case 'RESPOND_TO_CLOUDFORMATION':
+      return await respond_to_cloudformation.run(
         event,
         context,
         resource,
         operation
       );
-    case 'RUN_COMPACTION':
-      return await run_compaction.run(event, context, resource, operation);
-    case 'UPDATE_SYMLINKS':
-      return await update_symlinks.run(event, context, resource, operation);
-    // no-op
-    case 'CLEANUP':
-      return {
-        status: 'COMPLETED',
-      };
     default:
       throw new Error('Invalid Action, must be valid MAINTAIN action');
   }

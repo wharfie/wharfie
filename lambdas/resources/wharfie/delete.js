@@ -10,6 +10,7 @@ const event_db = require('../../lib/dynamo/event');
 
 /**
  * @param {import('../../typedefs').CloudformationEvent} event -
+ * @returns {Promise<import('../../typedefs').ResourceRouterResponse>} -
  */
 async function _delete(event) {
   const { StackId } = event;
@@ -45,6 +46,9 @@ async function _delete(event) {
       throw new Error(`failed to delete resource: ${result.reason}`);
     }
   });
+  return {
+    respond: true,
+  };
 }
 
 module.exports = _delete;

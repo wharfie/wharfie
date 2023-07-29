@@ -11,12 +11,16 @@ const daemon_log = logging.getDaemonLogger();
 const maintain = require('./operations/maintain/');
 const backfill = require('./operations/backfill/');
 const s3_event = require('./operations/s3_event/');
+const migrate = require('./operations/migrate/');
 const query = require('./operations/query/');
 const SQS = require('./lib/sqs');
 const SNS = require('./lib/sns');
 const STS = require('./lib/sts');
 const resource_db = require('./lib/dynamo/resource');
 const { getResource } = require('./migrations/');
+
+const response = require('./lib/cloudformation/cfn-response');
+const { getImmutableID } = require('./lib/cloudformation/id');
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
 
@@ -41,6 +45,8 @@ async function daemonRouter(event, context, resource, operation) {
         return await backfill.start(event, context, resource);
       case 'S3_EVENT':
         return await s3_event.start(event, context, resource);
+      case 'MIGRATE':
+        return await migrate.start(event, context, resource);
       default:
         throw new Error(
           "Invalid Operation, must be one of ['MAINTAIN', 'BACKFILL', 'S3_EVENT']"
@@ -214,11 +220,12 @@ async function DLQ(event, context, err) {
     event.resource_id,
     event.operation_id || ''
   );
-  if (!operation) return;
-  const event_log = logging.getEventLogger(event, context);
-  event_log.error(`Record has expended its retries, sending to DLQ`, {
-    ...event,
-  });
+  if (!operation) {
+    daemon_log.warn(
+      'properties unexpectedly missing, maybe the operation was deleted?'
+    );
+    return;
+  }
 
   const resource = await getResource(event, context);
   if (!resource || !event.action_id) {
@@ -227,6 +234,24 @@ async function DLQ(event, context, err) {
     );
     return;
   }
+
+  const event_log = logging.getEventLogger(event, context);
+
+  if (operation.operation_type === 'MIGRATE') {
+    event_log.error(
+      `Migration action has expended its retries, marking update as failure and rolling back`,
+      {
+        ...event,
+      }
+    );
+    await response(err, operation.operation_inputs.cloudformation_event, {
+      id: getImmutableID(operation.operation_inputs.cloudformation_event),
+    });
+    return;
+  }
+  event_log.error(`Record has expended its retries, sending to DLQ`, {
+    ...event,
+  });
 
   await sqs.sendMessage({
     MessageBody: JSON.stringify(event),

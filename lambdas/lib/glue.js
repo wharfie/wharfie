@@ -323,7 +323,7 @@ class Glue {
 
   /**
    * @param {import('../typedefs').ResourceRecord} resource - database to clone table into
-   * @param {import("@aws-sdk/client-glue").GetTableRequest} params - params for getPartitions request
+   * @param {import("@aws-sdk/client-glue").GetTableRequest} params - params for getTable request
    * @param {string} databaseName - database to clone table into
    * @param {string} tableName - name of cloned table
    * @param {string} storage_id - unique suffix to use for the cloned storage path

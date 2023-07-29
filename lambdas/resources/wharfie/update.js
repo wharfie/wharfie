@@ -14,6 +14,7 @@ const location_db = require('../../lib/dynamo/location');
 const DAEMON_QUEUE_URL = process.env.DAEMON_QUEUE_URL || '';
 /**
  * @param {import('../../typedefs').CloudformationUpdateEvent} event -
+ * @returns {Promise<import('../../typedefs').ResourceRouterResponse>} -
  */
 async function update(event) {
   const {
@@ -45,6 +46,39 @@ async function update(event) {
     destination_properties: template.Resources.Compacted.Properties,
     wharfie_version: version,
   };
+  const migration = false;
+  if (migration) {
+    const migrate_stackname = `migrate-${StackName}`;
+    await cloudformation.createStack({
+      StackName: migrate_stackname,
+      Tags,
+      TemplateBody: JSON.stringify(template),
+    });
+    await sqs.enqueue(
+      {
+        operation_type: 'MIGRATE',
+        action_type: 'START',
+        resource_id: StackName,
+        operation_inputs: {
+          cloudformation_event: event,
+          migration_resource: {
+            resource_id: migrate_stackname,
+            resource_arn: StackId,
+            athena_workgroup: migrate_stackname,
+            daemon_config: event.ResourceProperties.DaemonConfig,
+            source_properties: template.Resources.Source.Properties,
+            destination_properties: template.Resources.Compacted.Properties,
+            wharfie_version: version,
+          },
+        },
+        operation_started_at: new Date().toISOString(),
+      },
+      DAEMON_QUEUE_URL
+    );
+    return {
+      respond: false,
+    };
+  }
 
   await resource_db.putResource(resource);
   const oldLocation =
@@ -66,7 +100,6 @@ async function update(event) {
       });
     }
   }
-
   await cloudformation.updateStack({
     StackName,
     Tags,
@@ -95,6 +128,9 @@ async function update(event) {
       DAEMON_QUEUE_URL
     );
   }
+  return {
+    respond: true,
+  };
 }
 
 module.exports = update;

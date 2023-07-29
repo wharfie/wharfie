@@ -336,4 +336,9 @@
  * @property {string} manifest_uri -
  */
 
+/**
+ * @typedef ResourceRouterResponse
+ * @property {boolean} respond - whether the router should respond to the cloudformation api, defaults to true
+ */
+
 exports.unused = {};

@@ -9,6 +9,7 @@ const validation = require('./lib/validation');
 
 /**
  * @param {import('../../typedefs').CloudformationUpdateEvent} event -
+ * @returns {Promise<import('../../typedefs').ResourceRouterResponse>} -
  */
 async function update(event) {
   const {
@@ -28,6 +29,9 @@ async function update(event) {
     TemplateBody: JSON.stringify(template),
     Capabilities: ['CAPABILITY_IAM'],
   });
+  return {
+    respond: true,
+  };
 }
 
 module.exports = update;

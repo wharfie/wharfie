@@ -15,6 +15,7 @@ const DAEMON_QUEUE_URL = process.env.DAEMON_QUEUE_URL || '';
 
 /**
  * @param {import('../../typedefs').CloudformationEvent} event -
+ * @returns {Promise<import('../../typedefs').ResourceRouterResponse>} -
  */
 async function create(event) {
   const {
@@ -80,6 +81,9 @@ async function create(event) {
       DAEMON_QUEUE_URL
     );
   }
+  return {
+    respond: true,
+  };
 }
 
 module.exports = create;
