@@ -354,7 +354,7 @@ class Glue {
       resource.destination_properties.TableInput.StorageDescriptor.Location.replace(
         '/references/',
         '/'
-      );
+      ).replace('/migrate-references/', '/');
     await this.createTable({
       DatabaseName: databaseName,
       TableInput: {

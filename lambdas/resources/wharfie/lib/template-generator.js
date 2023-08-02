@@ -51,9 +51,19 @@ function Wharfie(event) {
   const template = {
     AWSTemplateFormatVersion: '2010-09-09',
     Metadata,
-    Parameters: {},
+    Parameters: {
+      MigrationResource: {
+        Type: 'String',
+        Default: 'false',
+        AllowedValues: ['true', 'false'],
+      },
+    },
     Mappings: {},
-    Conditions: {},
+    Conditions: {
+      isMigrationResource: {
+        'Fn::Equals': [{ Ref: 'isMigrationResource' }, 'true'],
+      },
+    },
     Resources: {
       Workgroup: {
         Type: 'AWS::Athena::WorkGroup',
@@ -116,7 +126,13 @@ function Wharfie(event) {
             Parameters: { 'parquet.compress': 'GZIP', EXTERNAL: 'TRUE' },
             PartitionKeys: TableInput.PartitionKeys || [],
             StorageDescriptor: {
-              Location: `${Location}references/`,
+              Location: {
+                'Fn::If': [
+                  'isMigrationResource',
+                  `${Location}migrate-references/`,
+                  `${Location}references/`,
+                ],
+              },
               Columns: TableInput.StorageDescriptor.Columns,
               InputFormat:
                 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat',

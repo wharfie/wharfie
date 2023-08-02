@@ -112,17 +112,9 @@ describe('tests for S3', () => {
       Bucket: 'example-bucket',
       Prefix: 'test/prefix/',
     };
-    const sourceTableName = 'source_table';
-    const sourceDatabaseName = 'source_database';
     const destinationBucket = 'destination_bucket';
     const destinationPrefix = 'prefix';
-    await s3.copyPath(
-      params,
-      sourceTableName,
-      sourceDatabaseName,
-      destinationBucket,
-      destinationPrefix
-    );
+    await s3.copyPath(params, destinationBucket, destinationPrefix);
     expect(AWS.S3Mock).toHaveReceivedCommandTimes(AWS.ListObjectsV2Command, 2);
     expect(AWS.S3Mock).toHaveReceivedNthCommandWith(
       1,

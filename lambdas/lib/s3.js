@@ -257,18 +257,10 @@ class S3 {
 
   /**
    * @param {import("@aws-sdk/client-s3").ListObjectsV2Request} SourceParams -
-   * @param {string} SourceTableName -
-   * @param {string} SourceDatabaseName -
    * @param {string} DestinationBucket -
    * @param {string} DestinationPrefix -
    */
-  async copyPath(
-    SourceParams,
-    SourceTableName,
-    SourceDatabaseName,
-    DestinationBucket,
-    DestinationPrefix
-  ) {
+  async copyPath(SourceParams, DestinationBucket, DestinationPrefix) {
     const response = await this.s3.send(
       new AWS.ListObjectsV2Command(SourceParams)
     );
@@ -281,10 +273,7 @@ class S3 {
       promises.push(
         this.copyObjectWithMultiPartFallback({
           Bucket: DestinationBucket,
-          Key: `${DestinationPrefix}${object.Key.replace(
-            `${SourceTableName}/`,
-            ''
-          ).replace(`${SourceDatabaseName}/`, '')}`,
+          Key: `${DestinationPrefix}${object.Key}`,
           CopySource: `${SourceParams.Bucket}/${object.Key}`,
         })
       );
@@ -297,8 +286,6 @@ class S3 {
           ...SourceParams,
           ContinuationToken: response.NextContinuationToken,
         },
-        SourceTableName,
-        SourceDatabaseName,
         DestinationBucket,
         DestinationPrefix
       );

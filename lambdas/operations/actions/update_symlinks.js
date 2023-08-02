@@ -375,7 +375,7 @@ async function update_table(event, context, resource, query_execution_id) {
     resource.destination_properties.TableInput.StorageDescriptor.Location.replace(
       '/references/',
       '/'
-    )
+    ).replace('/migrate-refrences/', '/')
   );
   const manifestCopyKey = `${prefix}files-${cuid()}`;
   let runCleanup = true;
