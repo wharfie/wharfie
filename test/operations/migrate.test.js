@@ -23,7 +23,6 @@ const { version } = require('../../package.json');
 const daemon_lambda = require('../../lambdas/daemon');
 
 jest.mock('../../lambdas/lib/dynamo/resource');
-jest.mock('../../lambdas/lib/dynamo/counter');
 jest.mock('../../lambdas/lib/dynamo/event');
 jest.mock('../../lambdas/lib/dynamo/location');
 jest.mock('../../lambdas/lib/dynamo/semaphore');
