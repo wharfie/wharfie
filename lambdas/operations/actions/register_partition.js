@@ -39,11 +39,6 @@ async function run(event, context, resource, operation) {
     resource.destination_properties.TableInput.PartitionKeys &&
     resource.destination_properties.TableInput.PartitionKeys.length > 0;
   if (!isView && isPartitioned) {
-    event_log.warn(
-      `registering partition ${JSON.stringify(
-        operation.operation_inputs.partition
-      )}`
-    );
     event_log.debug(
       `registering partition in location ${operation.operation_inputs.partition.location}`
     );

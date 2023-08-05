@@ -113,7 +113,7 @@ describe('tests for S3', () => {
       Prefix: 'test/prefix/',
     };
     const destinationBucket = 'destination_bucket';
-    const destinationPrefix = 'prefix';
+    const destinationPrefix = 'prefix/';
     await s3.copyPath(params, destinationBucket, destinationPrefix);
     expect(AWS.S3Mock).toHaveReceivedCommandTimes(AWS.ListObjectsV2Command, 2);
     expect(AWS.S3Mock).toHaveReceivedNthCommandWith(
@@ -136,7 +136,7 @@ describe('tests for S3', () => {
     expect(AWS.S3Mock).toHaveReceivedCommandTimes(AWS.CopyObjectCommand, 3);
     expect(AWS.S3Mock).toHaveReceivedNthCommandWith(2, AWS.CopyObjectCommand, {
       Bucket: destinationBucket,
-      Key: 'prefix123.json',
+      Key: 'prefix/source_database/source_table/123.json',
       CopySource: `example-bucket/source_database/source_table/123.json`,
     });
   });

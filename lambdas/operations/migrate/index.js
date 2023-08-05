@@ -37,10 +37,7 @@ async function start(event, context, resource) {
   const action_graph = new Graph();
   action_graph.setNode('START', event.action_id);
   action_graph.setNode('REGISTER_MISSING_PARTITIONS', uuid.v4());
-  action_graph.setEdge(
-    'CREATE_TEMPORARY_RESOURCE',
-    'REGISTER_MISSING_PARTITIONS'
-  );
+  action_graph.setEdge('START', 'REGISTER_MISSING_PARTITIONS');
 
   action_graph.setNode('FIND_COMPACTION_PARTITIONS', uuid.v4());
   action_graph.setEdge(
@@ -79,7 +76,7 @@ async function start(event, context, resource) {
     };
   });
 
-  event_log.info('creating BACKFILL operation and actions...');
+  event_log.info('creating MIGRATE operation and actions...');
   /** @type {import('../../typedefs').OperationRecord} */
   const operation = {
     resource_id: resource.resource_id,
@@ -88,12 +85,12 @@ async function start(event, context, resource) {
     operation_status: 'RUNNING',
     started_at: Date.parse(event.operation_started_at) / 1000,
     last_updated_at: Date.parse(event.operation_started_at) / 1000,
-    operation_config: event.action_inputs,
+    operation_inputs: event.operation_inputs,
     action_graph,
     actions,
   };
   await resource_db.createOperation(operation);
-  event_log.info('BACKFILL started.');
+  event_log.info('MIGRATE started.');
 
   return {
     status: 'COMPLETED',
@@ -109,7 +106,7 @@ async function start(event, context, resource) {
  */
 async function finish(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
-  event_log.info(`marking as complete`);
+  event_log.info(`marking MIGRATE as complete`);
   const completed_at = Math.floor(Date.now() / 1000);
   await resource_db.createOperation({
     ...operation,
@@ -181,7 +178,7 @@ async function finish(event, context, resource, operation) {
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function route(event, context, resource, operation) {
-  const migration_resource = event.operation_inputs.migration_resource;
+  const migration_resource = operation.operation_inputs.migration_resource;
   switch (event.action_type) {
     case 'REGISTER_MISSING_PARTITIONS':
       return await register_missing_partitions.run(

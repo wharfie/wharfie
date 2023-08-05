@@ -242,6 +242,7 @@ describe('s3 event tests', () => {
       Object {
         "_tables": Object {
           "table_name": Object {
+            "DatabaseName": "test_db",
             "Name": "table_name",
             "PartitionKeys": Array [
               Object {
@@ -265,6 +266,7 @@ describe('s3 event tests', () => {
             },
           },
           "table_name_raw": Object {
+            "DatabaseName": "test_db",
             "Name": "table_name_raw",
             "PartitionKeys": Array [
               Object {
@@ -305,6 +307,7 @@ describe('s3 event tests', () => {
     expect(glue.__getMockState().test_db._tables.table_name)
       .toMatchInlineSnapshot(`
       Object {
+        "DatabaseName": "test_db",
         "Name": "table_name",
         "PartitionKeys": Array [
           Object {
@@ -332,6 +335,7 @@ describe('s3 event tests', () => {
     expect(glue.__getMockState().test_db._tables.table_name_raw)
       .toMatchInlineSnapshot(`
       Object {
+        "DatabaseName": "test_db",
         "Name": "table_name_raw",
         "PartitionKeys": Array [
           Object {

@@ -3,6 +3,7 @@ const AWS = require('@aws-sdk/client-s3');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 const { Readable } = require('stream');
 const BaseAWS = require('./base');
+const bluebirdPromise = require('bluebird');
 
 class S3 {
   /**
@@ -253,6 +254,15 @@ class S3 {
         throw err;
       await this.multiPartCopyObject(params);
     }
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").CopyObjectRequest[]} params -
+   */
+  async copyObjectsWithMultiPartFallback(params) {
+    await bluebirdPromise.map(params, this.copyObjectWithMultiPartFallback, {
+      concurrency: 10,
+    });
   }
 
   /**

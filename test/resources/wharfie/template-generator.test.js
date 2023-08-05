@@ -193,7 +193,13 @@ describe('tests for template-generator', () => {
               ],
               "Compressed": true,
               "InputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-              "Location": "s3://wharfie-logs/cloudtrail/compacted/references/",
+              "Location": Object {
+                "Fn::If": Array [
+                  "isMigrationResource",
+                  "s3://wharfie-logs/cloudtrail/compacted/migrate-references/",
+                  "s3://wharfie-logs/cloudtrail/compacted/references/",
+                ],
+              },
               "NumberOfBuckets": 0,
               "OutputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
               "SerdeInfo": Object {

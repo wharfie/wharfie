@@ -233,6 +233,7 @@ describe('maintain tests', () => {
       Object {
         "_tables": Object {
           "table_name": Object {
+            "DatabaseName": "test_db",
             "Name": "table_name",
             "PartitionKeys": Array [
               Object {
@@ -243,6 +244,7 @@ describe('maintain tests', () => {
             "_partitions": Object {},
           },
           "table_name_raw": Object {
+            "DatabaseName": "test_db",
             "Name": "table_name_raw",
             "PartitionKeys": Array [
               Object {

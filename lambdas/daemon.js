@@ -49,7 +49,7 @@ async function daemonRouter(event, context, resource, operation) {
         return await migrate.start(event, context, resource);
       default:
         throw new Error(
-          "Invalid Operation, must be one of ['MAINTAIN', 'BACKFILL', 'S3_EVENT']"
+          "Invalid Operation, must be one of ['MAINTAIN', 'BACKFILL', 'S3_EVENT', 'MIGRATE]"
         );
     }
   }
@@ -64,9 +64,11 @@ async function daemonRouter(event, context, resource, operation) {
         return await backfill.finish(event, context, resource, operation);
       case 'S3_EVENT':
         return await s3_event.finish(event, context, resource, operation);
+      case 'MIGRATE':
+        return await migrate.finish(event, context, resource, operation);
       default:
         throw new Error(
-          "Invalid Operation, must be one of ['MAINTAIN', 'BACKFILL', 'S3_EVENT']"
+          "Invalid Operation, must be one of ['MAINTAIN', 'BACKFILL', 'S3_EVENT', 'MIGRATE]"
         );
     }
   }
@@ -79,9 +81,11 @@ async function daemonRouter(event, context, resource, operation) {
       return await backfill.route(event, context, resource, operation);
     case 'S3_EVENT':
       return await s3_event.route(event, context, resource, operation);
+    case 'MIGRATE':
+      return await migrate.route(event, context, resource, operation);
     default:
       throw new Error(
-        "Invalid Operation, must be one of ['MAINTAIN', 'BACKFILL', 'S3_EVENT']"
+        "Invalid Operation, must be one of ['MAINTAIN', 'BACKFILL', 'S3_EVENT', 'MIGRATE]"
       );
   }
 }

@@ -35,6 +35,7 @@ async function update(event) {
 
   event = validation.update(event);
   const template = templateGenerator.Wharfie(event);
+  let respondToCloudformation = true;
 
   // defining the resouce object that is being created
   const resource = {
@@ -49,6 +50,24 @@ async function update(event) {
   const migration = false;
   if (migration) {
     const migrate_stackname = `migrate-${StackName}`;
+
+    const migrationTemplate = templateGenerator.Wharfie({
+      ...event,
+      ResourceProperties: {
+        ...event.ResourceProperties,
+        DatabaseName: `migrate_${event.ResourceProperties}`,
+      },
+    });
+    const resource = {
+      resource_id: migrate_stackname,
+      resource_arn: StackId,
+      athena_workgroup: migrate_stackname,
+      daemon_config: event.ResourceProperties.DaemonConfig,
+      source_properties: migrationTemplate.Resources.Source.Properties,
+      destination_properties: migrationTemplate.Resources.Compacted.Properties,
+      wharfie_version: version,
+    };
+    await resource_db.putResource(resource);
     await cloudformation.createStack({
       StackName: migrate_stackname,
       Tags,
@@ -58,7 +77,7 @@ async function update(event) {
           ParameterValue: 'true',
         },
       ],
-      TemplateBody: JSON.stringify(template),
+      TemplateBody: JSON.stringify(migrationTemplate),
     });
     await sqs.enqueue(
       {
@@ -81,9 +100,7 @@ async function update(event) {
       },
       DAEMON_QUEUE_URL
     );
-    return {
-      respond: false,
-    };
+    respondToCloudformation = false;
   }
 
   await resource_db.putResource(resource);
@@ -135,7 +152,7 @@ async function update(event) {
     );
   }
   return {
-    respond: true,
+    respond: respondToCloudformation,
   };
 }
 
