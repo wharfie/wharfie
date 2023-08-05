@@ -269,7 +269,6 @@ const Resources = {
                   'dynamodb:DeleteItem',
                 ],
                 Resource: [
-                  wharfie.util.getAtt('CounterTable', 'Arn'),
                   wharfie.util.getAtt('SemaphoreTable', 'Arn'),
                   wharfie.util.getAtt('ResourceTable', 'Arn'),
                   wharfie.util.getAtt('LocationTable', 'Arn'),

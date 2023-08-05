@@ -12,6 +12,16 @@ const resource_db = require('../../lib/dynamo/resource');
 const location_db = require('../../lib/dynamo/location');
 
 const DAEMON_QUEUE_URL = process.env.DAEMON_QUEUE_URL || '';
+
+/**
+ *
+ * @param {any} newResource -
+ * @param {any} oldResource -
+ * @returns {boolean} -
+ */
+function needsMigration(newResource, oldResource) {
+  return true;
+}
 /**
  * @param {import('../../typedefs').CloudformationUpdateEvent} event -
  * @returns {Promise<import('../../typedefs').ResourceRouterResponse>} -
@@ -47,7 +57,7 @@ async function update(event) {
     destination_properties: template.Resources.Compacted.Properties,
     wharfie_version: version,
   };
-  const migration = false;
+  const migration = needsMigration(resourceProperties, oldResourceProperties);
   if (migration) {
     const migrate_stackname = `migrate-${StackName}`;
 
