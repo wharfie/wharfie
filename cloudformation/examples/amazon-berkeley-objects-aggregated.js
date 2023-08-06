@@ -6,7 +6,7 @@ const wharfie = require('../../client');
 
 const Columns = [
   { Name: 'country', Type: 'string' },
-  { Name: 'brand', Type: 'string' },
+  { Name: 'brands', Type: 'string' },
   { Name: 'count', Type: 'bigint' },
 ];
 

@@ -1,9 +1,9 @@
 WITH unnested_table AS (
-  SELECT country, brand_element.value AS brand
+  SELECT country, brand_element.value AS brands
   FROM ${wharfie_db}.amazon_berkeley_objects,
   UNNEST(brand) AS t(brand_element)
 )
-SELECT country, brand, COUNT(*) AS count
+SELECT country, brands, COUNT(*) AS count
 FROM unnested_table
-GROUP BY country, brand
+GROUP BY country, brands
 ORDER BY count DESC

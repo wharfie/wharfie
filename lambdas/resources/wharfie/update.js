@@ -15,12 +15,18 @@ const DAEMON_QUEUE_URL = process.env.DAEMON_QUEUE_URL || '';
 
 /**
  *
- * @param {any} newResource -
- * @param {any} oldResource -
+ * @param {any} newResourceProperties -
+ * @param {any} oldResourceProperties -
  * @returns {boolean} -
  */
-function needsMigration(newResource, oldResource) {
-  return true;
+function needsMigration(newResourceProperties, oldResourceProperties) {
+  if (
+    JSON.stringify(newResourceProperties.TableInput) !==
+    JSON.stringify(oldResourceProperties.TableInput)
+  ) {
+    return true;
+  }
+  return false;
 }
 /**
  * @param {import('../../typedefs').CloudformationUpdateEvent} event -
@@ -57,7 +63,10 @@ async function update(event) {
     destination_properties: template.Resources.Compacted.Properties,
     wharfie_version: version,
   };
-  const migration = needsMigration(resourceProperties, oldResourceProperties);
+  const migration = needsMigration(
+    event.ResourceProperties,
+    event.OldResourceProperties
+  );
   if (migration) {
     const migrate_stackname = `migrate-${StackName}`;
 
@@ -113,7 +122,6 @@ async function update(event) {
     respondToCloudformation = false;
   }
 
-  await resource_db.putResource(resource);
   const oldLocation =
     oldTableInput &&
     oldTableInput.StorageDescriptor &&
@@ -133,6 +141,8 @@ async function update(event) {
       });
     }
   }
+
+  await resource_db.putResource(resource);
   await cloudformation.updateStack({
     StackName,
     Tags,
