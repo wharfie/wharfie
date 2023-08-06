@@ -4,16 +4,14 @@ const child_process = require('child_process');
 const inquirer = require('inquirer');
 const CloudFormation = require('../../../lambdas/lib/cloudformation');
 const { displayFailure, displayInfo, displaySuccess } = require('../../output');
-const { version } = require('../../../package.json');
 
 const deployment_template = require('../../../cloudformation/deployment/wharfie.template.js');
 
 const cloudformation = new CloudFormation();
 
-const upgrade = async (development) => {
+const config = async (development) => {
   const template = deployment_template;
   const stackName = process.env.WHARFIE_DEPLOYMENT_NAME;
-  const defaultParams = [];
   const answers = await new Promise((resolve, reject) => {
     inquirer
       .prompt(
@@ -22,13 +20,6 @@ const upgrade = async (development) => {
             return acc;
           }
           const p = template.Parameters[key];
-          if (p.Default) {
-            defaultParams.push({
-              ParameterKey: key,
-              ParameterValue: String(p.Default),
-            });
-            return acc;
-          }
           let type = 'input';
           if (p.Type === 'Number') {
             type = 'number';
@@ -48,6 +39,7 @@ const upgrade = async (development) => {
           return acc.concat({
             name: key,
             message: p.Description,
+            default: p.Default,
             type,
             choices: p.AllowedValues,
           });
@@ -56,7 +48,13 @@ const upgrade = async (development) => {
       .then(resolve)
       .catch(reject);
   });
-  displayInfo(`Upgrading wharfie deployment to ${version}...`);
+  const { Stacks } = await cloudformation.describeStacks({
+    StackName: stackName,
+  });
+  const version = Stacks[0].Parameters.find(
+    (p) => p.ParameterKey === 'Version'
+  ).ParameterValue;
+  displayInfo(`updating wharfie deployment configuration...`);
   await cloudformation.updateStack({
     StackName: stackName,
     Tags: [],
@@ -79,7 +77,6 @@ const upgrade = async (development) => {
         ParameterKey: 'IsDevelopment',
         ParameterValue: String(development),
       },
-      ...defaultParams,
       ...(development
         ? []
         : [{ ParameterKey: 'GitSha', ParameterValue: version }]),
@@ -87,11 +84,11 @@ const upgrade = async (development) => {
     Capabilities: ['CAPABILITY_IAM'],
     TemplateBody: JSON.stringify(template),
   });
-  displaySuccess(`Wharfie deployment successfully upgraded to ${version}`);
+  displaySuccess(`Wharfie deployment configuration successfully updated`);
 };
 
-exports.command = 'upgrade';
-exports.desc = 'upgrade wharfie deployment';
+exports.command = 'config';
+exports.desc = 'modify wharfie deployment settings';
 exports.builder = (yargs) => {
   yargs.option('development', {
     type: 'boolean',
@@ -101,7 +98,7 @@ exports.builder = (yargs) => {
 };
 exports.handler = async function ({ development }) {
   try {
-    await upgrade(development);
+    await config(development);
   } catch (err) {
     console.trace(err);
     displayFailure(err);

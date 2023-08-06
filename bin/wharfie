@@ -13,7 +13,12 @@ require('yargonaut').style('cyan');
 
 const config = require('../cli/config');
 if (fs.existsSync(process.env.CONFIG_PATH)) {
-  if (process.argv[process.argv.length - 1] !== 'config') {
+  if (
+    !(
+      process.argv[process.argv.length - 1] === 'config' &&
+      process.argv[process.argv.length - 2] === 'wharfie'
+    )
+  ) {
     try {
       config.setConfig(
         JSON.parse(fs.readFileSync(process.env.CONFIG_PATH).toString())
