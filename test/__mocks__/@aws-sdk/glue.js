@@ -153,6 +153,7 @@ class GlueMock {
       throw new Error('db does not exist');
     GlueMock.__state[params.DatabaseName]._tables[params.TableInput.Name] = {
       ...params.TableInput,
+      DatabaseName: params.DatabaseName,
       _partitions: {},
     };
   }

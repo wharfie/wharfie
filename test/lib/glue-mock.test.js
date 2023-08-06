@@ -37,6 +37,7 @@ describe('tests for Glue', () => {
     expect(result).toMatchInlineSnapshot(`
       Object {
         "Table": Object {
+          "DatabaseName": "database_name",
           "Description": "some description",
           "Name": "table_name",
           "PartitionKeys": Array [
@@ -98,6 +99,7 @@ describe('tests for Glue', () => {
     expect(result).toMatchInlineSnapshot(`
       Object {
         "Table": Object {
+          "DatabaseName": "database_name",
           "Description": "some description",
           "Name": "table_name_cloned",
           "PartitionKeys": Array [

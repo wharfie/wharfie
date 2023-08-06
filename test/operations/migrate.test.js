@@ -1,8 +1,10 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
 const bluebird = require('bluebird');
+const nock = require('nock');
 
 process.env.AWS_MOCKS = true;
+process.env.TEMP_FILES_BUCKET = 'wharfie-tests-temp-files';
 jest.requireMock('@aws-sdk/client-s3');
 jest.requireMock('@aws-sdk/client-sns');
 jest.requireMock('@aws-sdk/client-glue');
@@ -10,6 +12,7 @@ jest.requireMock('@aws-sdk/client-athena');
 jest.requireMock('@aws-sdk/client-sqs');
 jest.requireMock('@aws-sdk/client-sts');
 jest.requireMock('@aws-sdk/client-cloudwatch');
+jest.requireMock('@aws-sdk/client-cloudformation');
 const {
   createLambdaQueues,
   setLambdaTriggers,
@@ -17,6 +20,7 @@ const {
 } = require('./util');
 
 const { version } = require('../../package.json');
+const daemon_lambda = require('../../lambdas/daemon');
 
 jest.mock('../../lambdas/lib/dynamo/resource');
 jest.mock('../../lambdas/lib/dynamo/event');
@@ -26,11 +30,11 @@ jest.mock('../../lambdas/lib/logging');
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 
-const daemon_lambda = require('../../lambdas/daemon');
-
 const { Athena } = require('@aws-sdk/client-athena');
 const { Glue } = require('@aws-sdk/client-glue');
 const { SQS } = require('@aws-sdk/client-sqs');
+const { S3 } = require('@aws-sdk/client-s3');
+const { CloudFormation } = require('@aws-sdk/client-cloudformation');
 
 const resource = require('../../lambdas/lib/dynamo/resource');
 const logging = require('../../lambdas/lib/logging');
@@ -40,16 +44,32 @@ const semaphore = require('../../lambdas/lib/dynamo/semaphore');
 
 const glue = new Glue();
 const athena = new Athena();
+const s3 = new S3();
+const cloudformation = new CloudFormation();
 
 const CONTEXT = {
   awsRequestId: 'test-request-id',
 };
 
-describe('s3 event tests', () => {
+describe('migrate tests', () => {
   beforeAll(async () => {
     bluebird.Promise.config({ cancellation: true });
+    s3.__setMockState({
+      's3://test-bucket/raw/dt=2021-01-18/data.json': '',
+      's3://test-bucket/raw/dt=2021-01-19/data.json': '',
+      's3://test-bucket/raw/dt=2021-01-20/data.json': '',
+      's3://test-bucket/raw/foo=2022-01-18/data.json': '',
+      's3://test-bucket/raw/foo=2022-01-19/data.json': '',
+      's3://test-bucket/raw/foo=2022-01-20/data.json': '',
+    });
+    await cloudformation.createStack({
+      StackName: 'migrate-resource_id',
+    });
     await athena.createWorkGroup({
       Name: 'Wharfie:StackName',
+    });
+    await athena.createWorkGroup({
+      Name: 'migrate-Wharfie:StackName',
     });
     await glue.createDatabase({
       DatabaseInput: {
@@ -81,6 +101,56 @@ describe('s3 event tests', () => {
         },
       },
     });
+    await glue.batchCreatePartition({
+      DatabaseName: 'test_db',
+      TableName: 'table_name_raw',
+      PartitionInputList: [
+        {
+          Values: ['2021-01-18'],
+          StorageDescriptor: {
+            Location: 's3://test-bucket/raw/dt=2021-01-18/',
+          },
+        },
+        {
+          Values: ['2021-01-19'],
+          StorageDescriptor: {
+            Location: 's3://test-bucket/raw/dt=2021-01-19/',
+          },
+        },
+        {
+          Values: ['2021-01-20'],
+          StorageDescriptor: {
+            Location: 's3://test-bucket/raw/dt=2021-01-20/',
+          },
+        },
+      ],
+    });
+
+    await glue.createDatabase({
+      DatabaseInput: {
+        Name: 'migrate_test_db',
+      },
+    });
+    await glue.createTable({
+      DatabaseName: 'migrate_test_db',
+      TableInput: {
+        Name: 'table_name',
+        PartitionKeys: [{ Name: 'foo', Type: 'string' }],
+        StorageDescriptor: {
+          Location: 's3://test-bucket/migrate-compacted/',
+        },
+      },
+    });
+    await glue.createTable({
+      DatabaseName: 'migrate_test_db',
+      TableInput: {
+        Name: 'table_name_raw',
+        PartitionKeys: [{ Name: 'foo', Type: 'string' }],
+        StorageDescriptor: {
+          Location: 's3://test-bucket/raw/',
+        },
+      },
+    });
     createLambdaQueues();
   });
   beforeEach(() => {
@@ -93,8 +163,20 @@ describe('s3 event tests', () => {
   });
 
   it('end to end', async () => {
-    expect.assertions(6);
-
+    expect.assertions(5);
+    nock(
+      'https://cloudformation-custom-resource-response-useast1.s3.amazonaws.com'
+    )
+      .filteringPath(() => {
+        return '/';
+      })
+      .put('/')
+      .reply(200, (uri, body) => {
+        expect(body).toMatchInlineSnapshot(
+          `"{\\"Status\\":\\"SUCCESS\\",\\"StackId\\":\\"arn:aws:cloudformation:us-east-1:123456789012:stack/wharfie-staging/3a62f040-5743-11eb-b528-0ebb325b25bf\\",\\"RequestId\\":\\"6bb77cd5-bbcc-40d0-9902-66ac98eb4817\\",\\"LogicalResourceId\\":\\"Something\\",\\"PhysicalResourceId\\":\\"f468f16c65d74a87ef52c42b2907832c\\",\\"Data\\":{},\\"NoEcho\\":false}"`
+        );
+        return '';
+      });
     await resource.putResource({
       resource_id: 'resource_id',
       resource_arn: 'arn:aws:custom:us-east-1:123456789012:wharfie',
@@ -125,21 +207,93 @@ describe('s3 event tests', () => {
       wharfie_version: version,
     });
 
+    await resource.putResource({
+      resource_id: 'migrate-resource_id',
+      resource_arn: 'arn:aws:custom:us-east-1:123456789012:wharfie',
+      athena_workgroup: 'migrate-Wharfie:StackName',
+      daemon_config: {
+        Role: 'test-role',
+      },
+      source_properties: {
+        DatabaseName: 'migrate_test_db',
+        TableInput: {
+          Name: 'table_name_raw',
+          PartitionKeys: [{ Type: 'string', Name: 'dt' }],
+          StorageDescriptor: {
+            Location: 's3://test-bucket/raw/',
+          },
+        },
+      },
+      destination_properties: {
+        DatabaseName: 'migrate_test_db',
+        TableInput: {
+          Name: 'table_name',
+          PartitionKeys: [{ Type: 'string', Name: 'dt' }],
+          StorageDescriptor: {
+            Location: 's3://test-bucket/compacted/',
+          },
+        },
+      },
+      wharfie_version: version,
+    });
+
     await daemon_lambda.handler(
       {
         Records: [
           {
             body: JSON.stringify({
-              operation_type: 'S3_EVENT',
+              operation_type: 'MIGRATE',
               operation_started_at: '2016-06-20T12:08:10.000Z',
               action_type: 'START',
               resource_id: 'resource_id',
+              action_inputs: {
+                Version: `cli`,
+                Duration: Infinity,
+              },
               operation_inputs: {
-                partition: {
-                  location: 's3://test-bucket/raw/dt=2016-06-20/',
-                  partitionValues: {
-                    dt: '2016-06-20',
+                migration_resource: {
+                  resource_id: 'migrate-resource_id',
+                  resource_arn: 'arn:aws:custom:us-east-1:123456789012:wharfie',
+                  athena_workgroup: 'migrate-Wharfie:StackName',
+                  daemon_config: {
+                    Role: 'test-role',
                   },
+                  source_properties: {
+                    DatabaseName: 'migrate_test_db',
+                    TableInput: {
+                      Name: 'table_name_raw',
+                      PartitionKeys: [{ Type: 'string', Name: 'foo' }],
+                      StorageDescriptor: {
+                        Location: 's3://test-bucket/raw/',
+                      },
+                    },
+                  },
+                  destination_properties: {
+                    DatabaseName: 'migrate_test_db',
+                    TableInput: {
+                      Name: 'table_name',
+                      PartitionKeys: [{ Type: 'string', Name: 'foo' }],
+                      StorageDescriptor: {
+                        Location: 's3://test-bucket/compacted/',
+                      },
+                    },
+                  },
+                  wharfie_version: version,
+                },
+                cloudformation_event: {
+                  RequestType: 'Update',
+                  ServiceToken:
+                    'arn:aws:lambda:us-east-1:123456789012:function:wharfie-staging-bootstrap',
+                  ResponseURL:
+                    'https://cloudformation-custom-resource-response-useast1.s3.amazonaws.com/arn%3Aaws%3Acloudformation%3Aus-east-1%3A123456789012%3Astack/wharfie-staging/3a62f040-5743-11eb-b528-0ebb325b25bf%7CStackMappings%7C6bb77cd5-bbcc-40d0-9902-66ac98eb4817?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=20210927T221309Z&X-Amz-SignedHeaders=host&X-Amz-Expires=7199&X-Amz-Credential=AKIA6L7Q4OWT7F4FZRHE%2F20210927%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Signature=6b459ba50fa40b6447a8d99f019218dec5e5255ce2a961f6ede9128cbc5eebce',
+                  StackId:
+                    'arn:aws:cloudformation:us-east-1:123456789012:stack/wharfie-staging/3a62f040-5743-11eb-b528-0ebb325b25bf',
+                  RequestId: '6bb77cd5-bbcc-40d0-9902-66ac98eb4817',
+                  LogicalResourceId: 'Something',
+                  PhysicalResourceId: '24ee32ff5aa9a2f6126123a536951620',
+                  ResourceType: 'Custom::Wharfie',
+                  ResourceProperties: {},
+                  OldResourceProperties: {},
                 },
               },
             }),
@@ -230,7 +384,7 @@ describe('s3 event tests', () => {
           "limit": Infinity,
           "value": 0,
         },
-        "wharfie:S3_EVENT:resource_id": Object {
+        "wharfie:MIGRATE:resource_id": Object {
           "limit": Infinity,
           "value": 0,
         },
@@ -253,17 +407,7 @@ describe('s3 event tests', () => {
             "StorageDescriptor": Object {
               "Location": "s3://test-bucket/compacted/",
             },
-            "_partitions": Object {
-              "2016-06-20": Object {
-                "Parameters": undefined,
-                "StorageDescriptor": Object {
-                  "Location": "s3://test-bucket/compacted/dt=2016-06-20/",
-                },
-                "Values": Array [
-                  "2016-06-20",
-                ],
-              },
-            },
+            "_partitions": Object {},
           },
           "table_name_raw": Object {
             "DatabaseName": "test_db",
@@ -278,13 +422,28 @@ describe('s3 event tests', () => {
               "Location": "s3://test-bucket/raw/",
             },
             "_partitions": Object {
-              "2016-06-20": Object {
-                "Parameters": undefined,
+              "2021-01-18": Object {
                 "StorageDescriptor": Object {
-                  "Location": "s3://test-bucket/raw/dt=2016-06-20/",
+                  "Location": "s3://test-bucket/raw/dt=2021-01-18/",
                 },
                 "Values": Array [
-                  "2016-06-20",
+                  "2021-01-18",
+                ],
+              },
+              "2021-01-19": Object {
+                "StorageDescriptor": Object {
+                  "Location": "s3://test-bucket/raw/dt=2021-01-19/",
+                },
+                "Values": Array [
+                  "2021-01-19",
+                ],
+              },
+              "2021-01-20": Object {
+                "StorageDescriptor": Object {
+                  "Location": "s3://test-bucket/raw/dt=2021-01-20/",
+                },
+                "Values": Array [
+                  "2021-01-20",
                 ],
               },
             },
@@ -300,62 +459,6 @@ describe('s3 event tests', () => {
           "daemon-queue": Array [],
           "events-queue": Array [],
           "monitor-queue": Array [],
-        },
-      }
-    `);
-    // eslint-disable-next-line jest/no-large-snapshots
-    expect(glue.__getMockState().test_db._tables.table_name)
-      .toMatchInlineSnapshot(`
-      Object {
-        "DatabaseName": "test_db",
-        "Name": "table_name",
-        "PartitionKeys": Array [
-          Object {
-            "Name": "dt",
-            "Type": "string",
-          },
-        ],
-        "StorageDescriptor": Object {
-          "Location": "s3://test-bucket/compacted/",
-        },
-        "_partitions": Object {
-          "2016-06-20": Object {
-            "Parameters": undefined,
-            "StorageDescriptor": Object {
-              "Location": "s3://test-bucket/compacted/dt=2016-06-20/",
-            },
-            "Values": Array [
-              "2016-06-20",
-            ],
-          },
-        },
-      }
-    `);
-    // eslint-disable-next-line jest/no-large-snapshots
-    expect(glue.__getMockState().test_db._tables.table_name_raw)
-      .toMatchInlineSnapshot(`
-      Object {
-        "DatabaseName": "test_db",
-        "Name": "table_name_raw",
-        "PartitionKeys": Array [
-          Object {
-            "Name": "dt",
-            "Type": "string",
-          },
-        ],
-        "StorageDescriptor": Object {
-          "Location": "s3://test-bucket/raw/",
-        },
-        "_partitions": Object {
-          "2016-06-20": Object {
-            "Parameters": undefined,
-            "StorageDescriptor": Object {
-              "Location": "s3://test-bucket/raw/dt=2016-06-20/",
-            },
-            "Values": Array [
-              "2016-06-20",
-            ],
-          },
         },
       }
     `);

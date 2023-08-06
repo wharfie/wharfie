@@ -15,8 +15,6 @@ process.env.RESOURCE_QUERY_CONCURRENCY = 2;
 process.env.MAX_QUERIES_PER_ACTION = 100;
 process.env.TEMPLATE_BUCKET = 'template-bucket';
 process.env.LOGGING_FORMAT = 'cli';
-process.env.DAEMON_LOGGING_LEVEL = 'error';
-process.env.RESOURCE_LOGGING_LEVEL = 'debug';
 
 const daemon_lambda = require('../../lambdas/daemon');
 const monitor_lambda = require('../../lambdas/monitor');

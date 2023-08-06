@@ -71,6 +71,7 @@ async function release(semaphore) {
  * @param {string} semaphore - name of semaphore record
  */
 async function deleteSemaphore(semaphore) {
+  if (!__state[semaphore]) return;
   // remove value from top-level `wharfie` semaphore
   let value = await __state[semaphore].value;
   while (value > 0) {
