@@ -250,7 +250,6 @@ class Clean {
     /** @type {Object<string,Array<any>>} */
     const delete_ops = {};
     references.forEach((reference) => {
-      console.log(reference);
       if (!reference) return;
       const { bucket, prefix } = this.s3.parseS3Uri(reference);
       if (!delete_ops[bucket]) {

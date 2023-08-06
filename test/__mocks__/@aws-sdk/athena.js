@@ -57,7 +57,7 @@ class AthenaMock {
 
   async getWorkGroup(params) {
     if (!AthenaMock.__state.workgroups[params.WorkGroup])
-      throw new Error('workgroup does not exist');
+      throw new Error(`workgroup: ${params.WorkGroup} does not exist`);
     return AthenaMock.__state.workgroups[params.WorkGroup];
   }
 
