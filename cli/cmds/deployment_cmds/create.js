@@ -12,6 +12,7 @@ const deployment_template = require('../../../cloudformation/deployment/wharfie.
 const create = async (development) => {
   const template = deployment_template;
   const stackName = process.env.WHARFIE_DEPLOYMENT_NAME;
+  const defaultParams = [];
 
   const answers = await new Promise((resolve, reject) => {
     inquirer
@@ -21,6 +22,13 @@ const create = async (development) => {
             return acc;
           }
           const p = template.Parameters[key];
+          if (p.Default) {
+            defaultParams.push({
+              ParameterKey: key,
+              ParameterValue: String(p.Default),
+            });
+            return acc;
+          }
           let type = 'input';
           if (p.Type === 'Number') {
             type = 'number';
@@ -72,6 +80,7 @@ const create = async (development) => {
         ParameterKey: 'IsDevelopment',
         ParameterValue: String(development),
       },
+      ...defaultParams,
       ...(development
         ? []
         : [{ ParameterKey: 'GitSha', ParameterValue: version }]),

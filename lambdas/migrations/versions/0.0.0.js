@@ -18,7 +18,7 @@ async function up(_resource, event, context) {
   if (!resource) throw new Error('resource does not exist');
   const cloudformation = new CloudFormation({ region: process.env.AWS_REGION });
 
-  const t = await cloudformation.DescribeStacks({
+  const t = await cloudformation.describeStacks({
     StackName: resource.resource_id,
   });
   if (!t || !t.Stacks)
