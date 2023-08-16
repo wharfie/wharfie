@@ -200,7 +200,7 @@ class CloudFormation {
    * @param {import("@aws-sdk/client-cloudformation").DescribeStacksInput} params - CloudFormation getTemplate params
    * @returns {Promise<import("@aws-sdk/client-cloudformation").DescribeStacksOutput>} -
    */
-  async DescribeStacks(params) {
+  async describeStacks(params) {
     return await this.cloudformation.send(
       new AWS.DescribeStacksCommand(params)
     );

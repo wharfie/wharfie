@@ -1,6 +1,6 @@
 'use strict';
 
-exports.command = 'deployment <create|upgrade|delete>';
+exports.command = 'deployment <create|upgrade|delete|config>';
 exports.desc = 'manage the wharfie service deployment';
 exports.builder = function (yargs) {
   return yargs
