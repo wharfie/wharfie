@@ -10,11 +10,15 @@ const https = require('https');
 
 describe('tests for CloudFormation', () => {
   beforeAll(() => {
+    process.env.TEMPLATE_BUCKET = 'utility-079185815456-us-west-2';
     require('aws-sdk-client-mock-jest');
   });
   afterEach(() => {
     AWSCloudformation.CloudFormationMock.reset();
     AWSS3.S3Mock.reset();
+  });
+  afterAll(() => {
+    process.env.TEMPLATE_BUCKET = undefined;
   });
   it('cfn-response', async () => {
     expect.assertions(1);
@@ -160,7 +164,7 @@ describe('tests for CloudFormation', () => {
       1,
       AWSS3.PutObjectCommand,
       {
-        Bucket: '',
+        Bucket: process.env.TEMPLATE_BUCKET,
         Key: expect.any(String),
         Body: params.TemplateBody,
       }
@@ -268,7 +272,7 @@ describe('tests for CloudFormation', () => {
       1,
       AWSS3.PutObjectCommand,
       {
-        Bucket: '',
+        Bucket: process.env.TEMPLATE_BUCKET,
         Key: expect.any(String),
         Body: params.TemplateBody,
       }
