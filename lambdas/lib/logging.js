@@ -48,9 +48,9 @@ function getEventLogger(event, context) {
       new S3LogTransport({
         level: process.env.RESOURCE_LOGGING_LEVEL,
       }),
-      // new winston.transports.Console({
-      //   level: process.env.RESOURCE_LOGGING_LEVEL,
-      // }),
+      new winston.transports.Console({
+        level: process.env.RESOURCE_LOGGING_LEVEL,
+      }),
     ],
   });
   const logger = winston.loggers.get(key);
@@ -78,9 +78,9 @@ function getDaemonLogger() {
       new S3LogTransport({
         level: process.env.DAEMON_LOGGING_LEVEL,
       }),
-      // new winston.transports.Console({
-      //   level: process.env.DAEMON_LOGGING_LEVEL,
-      // }),
+      new winston.transports.Console({
+        level: process.env.DAEMON_LOGGING_LEVEL,
+      }),
     ],
   });
   const logger = winston.loggers.get(key);

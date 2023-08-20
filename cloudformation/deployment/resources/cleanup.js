@@ -27,6 +27,7 @@ const Cleanup = new wharfie.util.shortcuts.QueueLambda({
       NODE_OPTIONS: '--enable-source-maps',
       AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1,
       STACK_NAME: wharfie.util.stackName,
+      LOGGING_TRANSPORT: wharfie.util.ref('LoggingTransport'),
       DAEMON_LOGGING_LEVEL: wharfie.util.ref('DaemonLoggingLevel'),
       RESOURCE_LOGGING_LEVEL: wharfie.util.ref('ResourceLoggingLevel'),
       TEMPORARY_GLUE_DATABASE: wharfie.util.ref('TemporaryDatabase'),

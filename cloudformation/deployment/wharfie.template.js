@@ -39,6 +39,12 @@ const Parameters = {
     Type: 'String',
     Description: 'SNS topic to send alarms to',
   },
+  LoggingTransport: {
+    Type: 'String',
+    Description: 'Which logging transport to use',
+    AllowedValues: ['S3', 'CLOUDWATCH'],
+    Default: 'S3',
+  },
   DaemonLoggingLevel: {
     Type: 'String',
     Description: 'Which logging level to use for daemon',

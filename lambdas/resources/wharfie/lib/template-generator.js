@@ -57,11 +57,19 @@ function Wharfie(event) {
         Default: 'false',
         AllowedValues: ['true', 'false'],
       },
+      CreateDashboard: {
+        Type: 'String',
+        Default: 'false',
+        AllowedValues: ['true', 'false'],
+      },
     },
     Mappings: {},
     Conditions: {
       isMigrationResource: {
         'Fn::Equals': [{ Ref: 'isMigrationResource' }, 'true'],
+      },
+      createDashboard: {
+        'Fn::Equals': [{ Ref: 'CreateDashboard' }, 'true'],
       },
     },
     Resources: {
@@ -152,6 +160,7 @@ function Wharfie(event) {
       },
       Dashboard: {
         Type: 'AWS::CloudWatch::Dashboard',
+        Condition: 'createDashboard',
         Properties: {
           DashboardName: {
             'Fn::Sub': [
