@@ -15,7 +15,7 @@ jest.createMockFromModule('graphlib');
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../../package.json', () => ({ version: '0.0.1' }));
 
-process.env.TEMPLATE_BUCKET = 'template-bucket';
+process.env.WHARFIE_ARTIFACT_BUCKET = 'template-bucket';
 process.env.AWS_REGION = 'us-east-1';
 
 const mockMath = Object.create(global.Math);

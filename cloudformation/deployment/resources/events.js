@@ -41,7 +41,7 @@ const Events = new wharfie.util.shortcuts.QueueLambda({
       GLOBAL_QUERY_CONCURRENCY: wharfie.util.ref('GlobalQueryConcurrency'),
       RESOURCE_QUERY_CONCURRENCY: wharfie.util.ref('ResourceQueryConcurrency'),
       MAX_QUERIES_PER_ACTION: wharfie.util.ref('MaxQueriesPerAction'),
-      TEMPLATE_BUCKET: wharfie.util.ref('ArtifactBucket'),
+      WHARFIE_ARTIFACT_BUCKET: wharfie.util.ref('ArtifactBucket'),
     },
   },
 });

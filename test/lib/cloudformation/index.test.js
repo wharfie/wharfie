@@ -10,7 +10,7 @@ const https = require('https');
 
 describe('tests for CloudFormation', () => {
   beforeAll(() => {
-    process.env.TEMPLATE_BUCKET = 'utility-079185815456-us-west-2';
+    process.env.WHARFIE_ARTIFACT_BUCKET = 'utility-079185815456-us-west-2';
     require('aws-sdk-client-mock-jest');
   });
   afterEach(() => {
@@ -18,7 +18,7 @@ describe('tests for CloudFormation', () => {
     AWSS3.S3Mock.reset();
   });
   afterAll(() => {
-    process.env.TEMPLATE_BUCKET = undefined;
+    process.env.WHARFIE_ARTIFACT_BUCKET = undefined;
   });
   it('cfn-response', async () => {
     expect.assertions(1);
@@ -164,7 +164,7 @@ describe('tests for CloudFormation', () => {
       1,
       AWSS3.PutObjectCommand,
       {
-        Bucket: process.env.TEMPLATE_BUCKET,
+        Bucket: process.env.WHARFIE_ARTIFACT_BUCKET,
         Key: expect.any(String),
         Body: params.TemplateBody,
       }
@@ -272,7 +272,7 @@ describe('tests for CloudFormation', () => {
       1,
       AWSS3.PutObjectCommand,
       {
-        Bucket: process.env.TEMPLATE_BUCKET,
+        Bucket: process.env.WHARFIE_ARTIFACT_BUCKET,
         Key: expect.any(String),
         Body: params.TemplateBody,
       }

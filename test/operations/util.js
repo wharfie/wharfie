@@ -13,7 +13,7 @@ process.env.DLQ_URL = 'deadletter-queue';
 process.env.GLOBAL_QUERY_CONCURRENCY = 3;
 process.env.RESOURCE_QUERY_CONCURRENCY = 2;
 process.env.MAX_QUERIES_PER_ACTION = 100;
-process.env.TEMPLATE_BUCKET = 'template-bucket';
+process.env.WHARFIE_ARTIFACT_BUCKET = 'template-bucket';
 process.env.LOGGING_FORMAT = 'cli';
 
 const daemon_lambda = require('../../lambdas/daemon');

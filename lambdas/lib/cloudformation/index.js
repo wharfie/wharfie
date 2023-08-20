@@ -26,7 +26,7 @@ class CloudFormation {
       ...options,
     });
     this.s3 = new S3(options);
-    this.TEMPLATE_BUCKET = process.env.TEMPLATE_BUCKET || '';
+    this.WHARFIE_ARTIFACT_BUCKET = process.env.WHARFIE_ARTIFACT_BUCKET || '';
     this.WAITER_MAX_WAIT_TIME_CONFIG = 600;
   }
 
@@ -87,7 +87,7 @@ class CloudFormation {
       .toString(36)
       .substring(2, 15)}.json`;
     await this.s3.putObject({
-      Bucket: this.TEMPLATE_BUCKET,
+      Bucket: this.WHARFIE_ARTIFACT_BUCKET,
       Key: key,
       Body: params.TemplateBody,
     });
@@ -96,7 +96,7 @@ class CloudFormation {
     const result = await this.cloudformation.send(
       new AWS.CreateStackCommand({
         ..._params,
-        TemplateURL: `https://${this.TEMPLATE_BUCKET}.s3.amazonaws.com/${key}`,
+        TemplateURL: `https://${this.WHARFIE_ARTIFACT_BUCKET}.s3.amazonaws.com/${key}`,
       })
     );
     const StackId = result.StackId;
@@ -126,7 +126,7 @@ class CloudFormation {
       .toString(36)
       .substring(2, 15)}.json`;
     await this.s3.putObject({
-      Bucket: this.TEMPLATE_BUCKET,
+      Bucket: this.WHARFIE_ARTIFACT_BUCKET,
       Key: key,
       Body: params.TemplateBody,
     });
@@ -137,7 +137,7 @@ class CloudFormation {
       const result = await this.cloudformation.send(
         new AWS.UpdateStackCommand({
           ..._params,
-          TemplateURL: `https://${this.TEMPLATE_BUCKET}.s3.amazonaws.com/${key}`,
+          TemplateURL: `https://${this.WHARFIE_ARTIFACT_BUCKET}.s3.amazonaws.com/${key}`,
         })
       );
       StackId = result.StackId;

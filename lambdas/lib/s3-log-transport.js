@@ -3,7 +3,7 @@ const AWS = require('@aws-sdk/client-s3');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 
 const FUNCTION_NAME = process.env.AWS_LAMBDA_FUNCTION_NAME;
-const BUCKET = process.env.TEMPLATE_BUCKET;
+const BUCKET = process.env.WHARFIE_ARTIFACT_BUCKET;
 
 module.exports = class S3LogTransport extends Transport {
   /**

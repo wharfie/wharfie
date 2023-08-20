@@ -10,7 +10,6 @@ env:
   WHARFIE_REGION: us-west-2
   WHARFIE_DEPLOYMENT_NAME: wharfie-testing
   WHARFIE_ARTIFACT_BUCKET: utility-079185815456-us-west-2
-  TEMPLATE_BUCKET: utility-079185815456-us-west-2
 
 jobs:
   build:

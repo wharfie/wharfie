@@ -42,6 +42,5 @@ module.exports = {
     process.env.WHARFIE_ARTIFACT_BUCKET = configuration.artifact_bucket;
     process.env.AWS_REGION = configuration.region;
     process.env.RESOURCE_TABLE = configuration.deployment_name;
-    process.env.TEMPLATE_BUCKET = configuration.artifact_bucket;
   },
 };
