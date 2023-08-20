@@ -30,9 +30,7 @@ const Bootstrap = new wharfie.util.shortcuts.Lambda({
       EVENT_TABLE: wharfie.util.ref('EventTable'),
       DAEMON_QUEUE_ARN: wharfie.util.getAtt('DaemonQueue', 'Arn'),
       DAEMON_EVENT_ROLE: wharfie.util.getAtt('DaemonEventRole', 'Arn'),
-      TEMPLATE_BUCKET: wharfie.util.sub(
-        'utility-${AWS::AccountId}-${AWS::Region}'
-      ),
+      TEMPLATE_BUCKET: wharfie.util.ref('ArtifactBucket'),
       DAEMON_QUEUE_URL: wharfie.util.ref('DaemonQueue'),
     },
   },

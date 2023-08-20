@@ -7,7 +7,7 @@ const udf = new wharfie.UDF({
   WharfieDeployment: wharfie.util.ref('Deployment'),
   Handler: 'udf_function.handler',
   Code: {
-    S3Bucket: wharfie.util.sub('utility-${AWS::AccountId}-${AWS::Region}'),
+    S3Bucket: wharfie.util.ref('ArtifactBucket'),
     S3Key: wharfie.util.sub('wharfie/udf/udf_test/${GitSha}.zip'),
   },
 });
