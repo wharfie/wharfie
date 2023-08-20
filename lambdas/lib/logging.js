@@ -44,14 +44,21 @@ function getEventLogger(event, context) {
       query_id: event.query_id,
       request_id: context.awsRequestId,
     },
-    transports: [
-      new S3LogTransport({
-        level: process.env.RESOURCE_LOGGING_LEVEL,
-      }),
-      new winston.transports.Console({
-        level: process.env.RESOURCE_LOGGING_LEVEL,
-      }),
-    ],
+    transports:
+      process.env.LOGGING_FORMAT === 'json'
+        ? [
+            new S3LogTransport({
+              level: process.env.RESOURCE_LOGGING_LEVEL,
+            }),
+            new winston.transports.Console({
+              level: process.env.RESOURCE_LOGGING_LEVEL,
+            }),
+          ]
+        : [
+            new winston.transports.Console({
+              level: process.env.RESOURCE_LOGGING_LEVEL,
+            }),
+          ],
   });
   const logger = winston.loggers.get(key);
   loggers[context.awsRequestId] = {
@@ -74,14 +81,21 @@ function getDaemonLogger() {
       service: name,
       version,
     },
-    transports: [
-      new S3LogTransport({
-        level: process.env.DAEMON_LOGGING_LEVEL,
-      }),
-      new winston.transports.Console({
-        level: process.env.DAEMON_LOGGING_LEVEL,
-      }),
-    ],
+    transports:
+      process.env.LOGGING_FORMAT === 'json'
+        ? [
+            new S3LogTransport({
+              level: process.env.DAEMON_LOGGING_LEVEL,
+            }),
+            new winston.transports.Console({
+              level: process.env.DAEMON_LOGGING_LEVEL,
+            }),
+          ]
+        : [
+            new winston.transports.Console({
+              level: process.env.DAEMON_LOGGING_LEVEL,
+            }),
+          ],
   });
   const logger = winston.loggers.get(key);
   loggers[key] = {
