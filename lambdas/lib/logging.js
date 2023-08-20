@@ -1,5 +1,6 @@
 'use strict';
 const winston = require('winston');
+const S3LogTransport = require('./s3-log-transport');
 
 const { name, version } = require('../../package.json');
 
@@ -44,6 +45,9 @@ function getEventLogger(event, context) {
       request_id: context.awsRequestId,
     },
     transports: [
+      new S3LogTransport({
+        level: process.env.RESOURCE_LOGGING_LEVEL,
+      }),
       new winston.transports.Console({
         level: process.env.RESOURCE_LOGGING_LEVEL,
       }),
@@ -71,9 +75,12 @@ function getDaemonLogger() {
       version,
     },
     transports: [
-      new winston.transports.Console({
-        level: process.env.DAEMON_LOGGING_LEVEL,
+      new S3LogTransport({
+        level: process.env.RESOURCE_LOGGING_LEVEL,
       }),
+      // new winston.transports.Console({
+      //   level: process.env.DAEMON_LOGGING_LEVEL,
+      // }),
     ],
   });
   const logger = winston.loggers.get(key);

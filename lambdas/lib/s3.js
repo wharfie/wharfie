@@ -455,7 +455,8 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").CreateMultipartUploadCommandOutput>} -
    */
   async createMultipartUpload(params) {
-    return await this.s3.createMultipartUpload(params);
+    const command = new AWS.CreateMultipartUploadCommand(params);
+    return await this.s3.send(command);
   }
 
   /**
@@ -463,7 +464,8 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").CompleteMultipartUploadCommandOutput>} -
    */
   async completeMultipartUpload(params) {
-    return await this.s3.completeMultipartUpload(params);
+    const command = new AWS.CompleteMultipartUploadCommand(params);
+    return await this.s3.send(command);
   }
 
   /**
@@ -471,7 +473,8 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCopyCommandOutput>} -
    */
   async uploadPartCopy(params) {
-    return await this.s3.uploadPartCopy(params);
+    const command = new AWS.UploadPartCopyCommand(params);
+    return await this.s3.send(command);
   }
 
   /**
@@ -479,14 +482,15 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCommandOutput>} -
    */
   async uploadPart(params) {
-    return await this.s3.uploadPart(params);
+    const command = new AWS.UploadPartCommand(params);
+    return await this.s3.send(command);
   }
 
   /**
    * @param {import("@aws-sdk/client-s3").PutObjectCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").PutObjectAclCommandOutput>} -
+   * @param {Buffer} data -
    */
-  async createAppendableOrAppendToObject(params) {
+  async createAppendableOrAppendToObject(params, data) {
     let existingObject;
     try {
       existingObject = await this.headObject({
@@ -563,14 +567,26 @@ class S3 {
         PartNumber: partNumber,
       });
     }
-    let startOffset = 0;
-    if (
-      existingObject &&
-      existingObject.ContentLength &&
-      existingObject.ContentLength > this._LEFT_PAD_SIZE
-    ) {
-      startOffset = existingObject.ContentLength - this._LEFT_PAD_SIZE;
-    }
+    const { ETag } = await this.uploadPart({
+      Bucket: params.Bucket,
+      Key: params.Key,
+      Body: data,
+      PartNumber: partNumber,
+      UploadId,
+    });
+    if (!ETag)
+      throw new Error('No ETag for uploadPart result. Something went wrong');
+    partNumber++;
+    parts.push({
+      ETag,
+      PartNumber: partNumber,
+    });
+    await this.completeMultipartUpload({
+      Bucket: params.Bucket,
+      Key: params.Key,
+      MultipartUpload: { Parts: parts },
+      UploadId,
+    });
   }
 }
 

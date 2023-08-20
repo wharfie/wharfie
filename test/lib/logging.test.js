@@ -1,6 +1,7 @@
 /* eslint-disable jest/no-large-snapshots */
 'use strict';
 
+jest.requireMock('@aws-sdk/client-s3');
 const {
   getEventLogger,
   getDaemonLogger,

@@ -1,5 +1,7 @@
 'use strict';
 
+const cuid = require('cuid');
+
 class S3Mock {
   __setMockState(s3ObjectMap) {
     S3Mock.__state = {};
@@ -42,6 +44,14 @@ class S3Mock {
         return await this.copyObject(command.input);
       case 'ListObjectsV2Command':
         return await this.listObjectsV2(command.input);
+      case 'CreateMultipartUploadCommand':
+        return await this.createMultiPartUpload(command.input);
+      case 'CompleteMultipartUploadCommand':
+        return await this.completeMultiPartUpload(command.input);
+      case 'UploadPartCommand':
+        return await this.uploadPart(command.input);
+      case 'UploadPartCopyCommand':
+        return await this.uploadPartCopy(command.input);
     }
   }
 
@@ -66,10 +76,15 @@ class S3Mock {
   }
 
   async headObject(params) {
-    if (!S3Mock.__state[params.Bucket][params.Key])
-      throw new Error(`object does not exist: ${params.Bucket}/${params.Key}`);
+    if (!S3Mock.__state[params.Bucket][params.Key]) {
+      const err = new Error(
+        `object does not exist: ${params.Bucket}/${params.Key}`
+      );
+      err.name = 'NotFound';
+      throw err;
+    }
     return {
-      ContentLength: 100,
+      ContentLength: S3Mock.__state[params.Bucket][params.Key].length,
     };
   }
 
@@ -83,7 +98,7 @@ class S3Mock {
   }
 
   async copyObject(params) {
-    const { bucket, prefix } = this._parseS3Uri(params.CopySource);
+    const { bucket, prefix } = this._parseS3Uri(`s3://${params.CopySource}`);
     if (!S3Mock.__state[bucket][prefix])
       throw new Error('copy source does not exist');
     S3Mock.__state[params.Bucket][params.Key] = S3Mock.__state[bucket][prefix];
@@ -122,6 +137,69 @@ class S3Mock {
         })),
       };
     }
+  }
+
+  async createMultiPartUpload(params) {
+    if (!S3Mock.__state.__MULTIPART_UPLOADS__) {
+      S3Mock.__state.__MULTIPART_UPLOADS__ = {};
+    }
+    const uploadId = cuid();
+
+    S3Mock.__state.__MULTIPART_UPLOADS__[uploadId] = {
+      Bucket: params.Bucket,
+      Key: params.Key,
+      Parts: [],
+    };
+
+    return {
+      UploadId: uploadId,
+    };
+  }
+
+  async completeMultiPartUpload(params) {
+    const upload = S3Mock.__state.__MULTIPART_UPLOADS__[params.UploadId];
+    const body = upload.Parts.sort((a, b) => a.PartNumber - b.PartNumber)
+      .map((part) => {
+        if (part.Body) return part.Body;
+        const { bucket, prefix } = this._parseS3Uri(`s3://${part.CopySource}`);
+        return S3Mock.__state[bucket][prefix];
+      })
+      .join('');
+
+    await this.putObject({
+      Bucket: upload.Bucket,
+      Key: upload.Key,
+      Body: body,
+    });
+
+    delete S3Mock.__state.__MULTIPART_UPLOADS__[params.UploadId];
+  }
+
+  async uploadPart(params) {
+    const upload = S3Mock.__state.__MULTIPART_UPLOADS__[params.UploadId];
+    upload.Parts.push({
+      PartNumber: params.PartNumber,
+      Body: params.Body,
+    });
+    return {
+      ETag: 'etag',
+    };
+  }
+
+  async uploadPartCopy(params) {
+    const { bucket, prefix } = this._parseS3Uri(`s3://${params.CopySource}`);
+    if (!S3Mock.__state[bucket][prefix])
+      throw new Error('copy source does not exist');
+    const upload = S3Mock.__state.__MULTIPART_UPLOADS__[params.UploadId];
+    upload.Parts.push({
+      PartNumber: params.PartNumber,
+      CopySource: params.CopySource,
+    });
+    return {
+      CopyPartResult: {
+        ETag: 'etag',
+      },
+    };
   }
 }
 

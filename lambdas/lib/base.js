@@ -1,12 +1,12 @@
 'use strict';
-const logging = require('./logging');
-const daemon_log = logging.getDaemonLogger();
 class BaseAWS {
   /**
    *
    * @returns {import("@aws-sdk/client-sts").STSClientConfig} - sdk options
    */
   static config() {
+    const logging = require('./logging');
+    const daemon_log = logging.getDaemonLogger();
     // const backoff = (
     //   /** @type {number} */ retryCount,
     //   /** @type {any} */ error
