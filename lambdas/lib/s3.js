@@ -7,9 +7,9 @@ const bluebirdPromise = require('bluebird');
 
 class S3 {
   /**
-   * @param {import("@aws-sdk/client-s3").S3ClientConfig} options - S3 client configuration
+   * @param {import("@aws-sdk/client-s3").S3ClientConfig} [options] - S3 client configuration
    */
-  constructor(options) {
+  constructor(options = {}) {
     const credentials = fromNodeProviderChain();
     this.s3 = new AWS.S3({
       ...BaseAWS.config(),
@@ -19,6 +19,9 @@ class S3 {
     });
     this.COPY_PART_SIZE_BYTES = 500000000; // ~500 MB
     this.COPY_PART_SIZE_MINIMUM_BYTES = 5242880; // 5 MB
+    this._LEFT_PAD_OBJECT_NAME = '5MB_file.txt';
+    this._LEFT_PAD_SIZE = 5 * 1024 * 1024;
+    this._left_pad_object_checked = false;
   }
 
   /**
@@ -445,6 +448,129 @@ class S3 {
     await Promise.all(promises);
 
     return partitions;
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").CreateMultipartUploadCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").CreateMultipartUploadCommandOutput>} -
+   */
+  async createMultipartUpload(params) {
+    return await this.s3.createMultipartUpload(params);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").CompleteMultipartUploadCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").CompleteMultipartUploadCommandOutput>} -
+   */
+  async completeMultipartUpload(params) {
+    return await this.s3.completeMultipartUpload(params);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").UploadPartCopyCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCopyCommandOutput>} -
+   */
+  async uploadPartCopy(params) {
+    return await this.s3.uploadPartCopy(params);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").UploadPartCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCommandOutput>} -
+   */
+  async uploadPart(params) {
+    return await this.s3.uploadPart(params);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").PutObjectCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").PutObjectAclCommandOutput>} -
+   */
+  async createAppendableOrAppendToObject(params) {
+    let existingObject;
+    try {
+      existingObject = await this.headObject({
+        Bucket: params.Bucket,
+        Key: params.Key,
+      });
+    } catch (err) {
+      // @ts-ignore
+      if (err.name === 'NotFound') {
+        existingObject = null;
+      } else {
+        throw err;
+      }
+    }
+    const { UploadId } = await this.createMultipartUpload({
+      Bucket: params.Bucket,
+      Key: params.Key,
+    });
+    let partNumber = 1;
+    const parts = [];
+
+    if (
+      (existingObject && existingObject.ContentLength) ||
+      5 * 1024 * 1024 < 0
+    ) {
+      const { CopyPartResult } = await this.uploadPartCopy({
+        Bucket: params.Bucket,
+        Key: params.Key,
+        CopySource: `${params.Bucket}/${params.Key}`,
+        PartNumber: partNumber,
+        UploadId,
+      });
+      if (!CopyPartResult || !CopyPartResult.ETag)
+        throw new Error('No ETag for CopyPartResult');
+      partNumber++;
+      parts.push({
+        ETag: CopyPartResult.ETag,
+        PartNumber: partNumber,
+      });
+    }
+    if (existingObject === null) {
+      if (!this._left_pad_object_checked) {
+        try {
+          await this.headObject({
+            Bucket: params.Bucket,
+            Key: this._LEFT_PAD_OBJECT_NAME,
+          });
+        } catch (err) {
+          // @ts-ignore
+          if (err.name === 'NotFound') {
+            await this.putObject({
+              Bucket: params.Bucket,
+              Key: this._LEFT_PAD_OBJECT_NAME,
+              Body: ' '.repeat(this._LEFT_PAD_SIZE),
+            });
+          } else {
+            throw err;
+          }
+        }
+        this._left_pad_object_checked = true;
+      }
+      const { CopyPartResult } = await this.uploadPartCopy({
+        Bucket: params.Bucket,
+        Key: params.Key,
+        CopySource: `${params.Bucket}/${this._LEFT_PAD_OBJECT_NAME}`,
+        PartNumber: partNumber,
+        UploadId,
+      });
+      if (!CopyPartResult || !CopyPartResult.ETag)
+        throw new Error('No ETag for CopyPartResult');
+      partNumber++;
+      parts.push({
+        ETag: CopyPartResult.ETag,
+        PartNumber: partNumber,
+      });
+    }
+    let startOffset = 0;
+    if (
+      existingObject &&
+      existingObject.ContentLength &&
+      existingObject.ContentLength > this._LEFT_PAD_SIZE
+    ) {
+      startOffset = existingObject.ContentLength - this._LEFT_PAD_SIZE;
+    }
   }
 }
 
