@@ -40,9 +40,16 @@ describe('tests for wharfieUDF resource create handler', () => {
     AWSCloudFormation.CloudFormationMock.on(
       AWSCloudFormation.CreateStackCommand
     ).resolves({});
-    const waitUntilStackCreateComplete = jest
-      .spyOn(AWSCloudFormation, 'waitUntilStackCreateComplete')
-      .mockResolvedValue({});
+
+    AWSCloudFormation.CloudFormationMock.on(
+      AWSCloudFormation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'CREATE_COMPLETE',
+        },
+      ],
+    });
 
     nock(
       'https://cloudformation-custom-resource-response-useast1.s3.amazonaws.com'
@@ -87,6 +94,9 @@ describe('tests for wharfieUDF resource create handler', () => {
         "TemplateURL": "https://template-bucket.s3.amazonaws.com/wharfie-templates/WharfieUDF-6afd22c8fb977fe4b9df55ed495499f3-i.json",
       }
     `);
-    expect(waitUntilStackCreateComplete).toHaveBeenCalledTimes(1);
+    expect(AWSCloudFormation.CloudFormationMock).toHaveReceivedCommandTimes(
+      AWSCloudFormation.DescribeStacksCommand,
+      1
+    );
   });
 });

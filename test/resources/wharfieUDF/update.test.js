@@ -43,9 +43,15 @@ describe('tests for wharfieUDF resource update handler', () => {
     ).resolves({
       StackId: 'stack_id',
     });
-    const waitUntilStackUpdateComplete = jest
-      .spyOn(AWSCloudFormation, 'waitUntilStackUpdateComplete')
-      .mockResolvedValue({});
+    AWSCloudFormation.CloudFormationMock.on(
+      AWSCloudFormation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'UPDATE_COMPLETE',
+        },
+      ],
+    });
     nock(
       'https://cloudformation-custom-resource-response-useast1.s3.amazonaws.com'
     )
@@ -87,15 +93,15 @@ describe('tests for wharfieUDF resource update handler', () => {
         "TemplateURL": "https://template-bucket.s3.amazonaws.com/wharfie-templates/WharfieUDF-260ca406900a3f747e42cd69c3591fd9-i.json",
       }
     `);
-    expect(waitUntilStackUpdateComplete).toHaveBeenCalledWith(
-      {
-        client: expect.anything(),
-        maxWaitTime: 600,
-      },
-      {
-        StackName: 'stack_id',
+    expect(
+      AWSCloudFormation.CloudFormationMock.commandCalls(
+        AWSCloudFormation.DescribeStacksCommand
+      )[0].args[0].input
+    ).toMatchInlineSnapshot(`
+      Object {
+        "StackName": "stack_id",
       }
-    );
+    `);
   });
 
   it('handle failure', async () => {
@@ -106,9 +112,16 @@ describe('tests for wharfieUDF resource update handler', () => {
     ).resolves({
       StackId: 'stack_id',
     });
-    const waitUntilStackUpdateComplete = jest
-      .spyOn(AWSCloudFormation, 'waitUntilStackUpdateComplete')
-      .mockRejectedValue(new Error());
+
+    AWSCloudFormation.CloudFormationMock.on(
+      AWSCloudFormation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'ROLLBACK_COMPLETE',
+        },
+      ],
+    });
 
     AWSCloudFormation.CloudFormationMock.on(
       AWSCloudFormation.DescribeStackEventsCommand
@@ -117,6 +130,7 @@ describe('tests for wharfieUDF resource update handler', () => {
         {
           ResourceStatus: 'UPDATE_FAILED',
           ResourceStatusReason: 'some error occured',
+          Timestamp: new Date('2021-01-19T20:00:00.000Z'),
         },
       ],
     });
@@ -139,7 +153,10 @@ describe('tests for wharfieUDF resource update handler', () => {
       AWSCloudFormation.DescribeStackEventsCommand,
       1
     );
-    expect(waitUntilStackUpdateComplete).toHaveBeenCalledTimes(2);
+    expect(AWSCloudFormation.CloudFormationMock).toHaveReceivedCommandTimes(
+      AWSCloudFormation.DescribeStacksCommand,
+      1
+    );
   });
 
   it('basic', async () => {
@@ -150,9 +167,16 @@ describe('tests for wharfieUDF resource update handler', () => {
     ).resolves({
       StackId: 'stack_id',
     });
-    const waitUntilStackUpdateComplete = jest
-      .spyOn(AWSCloudFormation, 'waitUntilStackUpdateComplete')
-      .mockResolvedValue({});
+
+    AWSCloudFormation.CloudFormationMock.on(
+      AWSCloudFormation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'UPDATE_COMPLETE',
+        },
+      ],
+    });
     update_event.OldResourceProperties.Tags[0].Value = 'wharfie-testing';
     nock(
       'https://cloudformation-custom-resource-response-useast1.s3.amazonaws.com'
@@ -197,14 +221,10 @@ describe('tests for wharfieUDF resource update handler', () => {
         "TemplateURL": "https://template-bucket.s3.amazonaws.com/wharfie-templates/WharfieUDF-260ca406900a3f747e42cd69c3591fd9-i.json",
       }
     `);
-    expect(waitUntilStackUpdateComplete).toHaveBeenCalledWith(
-      {
-        client: expect.anything(),
-        maxWaitTime: 600,
-      },
-      {
-        StackName: 'stack_id',
-      }
+
+    expect(AWSCloudFormation.CloudFormationMock).toHaveReceivedCommandTimes(
+      AWSCloudFormation.DescribeStacksCommand,
+      1
     );
   });
 });

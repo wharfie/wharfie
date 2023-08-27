@@ -72,10 +72,7 @@ class CloudFormation {
           failureEvent = event;
         }
       });
-    if (!failureEvent)
-      throw Error(
-        'unable to find failure reason for stack ' + params.StackName
-      );
+    if (!failureEvent) return undefined;
     return failureEvent.ResourceStatusReason;
   }
 
@@ -100,21 +97,12 @@ class CloudFormation {
       })
     );
     const StackId = result.StackId;
-    try {
-      await AWS.waitUntilStackCreateComplete(
-        {
-          client: this.cloudformation,
-          maxWaitTime: this.WAITER_MAX_WAIT_TIME_CONFIG,
-        },
-        {
-          StackName: StackId,
-        }
-      );
-    } catch (err) {
-      const reason = await this.getFailureReason({
-        StackName: StackId,
-      });
-      throw new Error(reason);
+    const { StackError } = await this.waitForStackStatus({
+      StackName: StackId || '',
+      StackStatus: 'CREATE_COMPLETE',
+    });
+    if (StackError) {
+      throw new Error(StackError);
     }
   }
 
@@ -147,21 +135,12 @@ class CloudFormation {
         return;
       throw err;
     }
-    try {
-      await AWS.waitUntilStackUpdateComplete(
-        {
-          client: this.cloudformation,
-          maxWaitTime: this.WAITER_MAX_WAIT_TIME_CONFIG,
-        },
-        {
-          StackName: StackId,
-        }
-      );
-    } catch (err) {
-      const reason = await this.getFailureReason({
-        StackName: StackId,
-      });
-      throw new Error(reason);
+    const { StackError } = await this.waitForStackStatus({
+      StackName: StackId || '',
+      StackStatus: 'UPDATE_COMPLETE',
+    });
+    if (StackError) {
+      throw new Error(StackError);
     }
   }
 
@@ -170,21 +149,98 @@ class CloudFormation {
    */
   async deleteStack(params) {
     await this.cloudformation.send(new AWS.DeleteStackCommand(params));
-    try {
-      await AWS.waitUntilStackDeleteComplete(
-        {
-          client: this.cloudformation,
-          maxWaitTime: this.WAITER_MAX_WAIT_TIME_CONFIG,
-        },
-        {
-          StackName: params.StackName,
-        }
-      );
-    } catch (err) {
-      const reason = await this.getFailureReason({
+
+    const { StackError } = await this.waitForStackStatus({
+      StackName: params.StackName || '',
+      StackStatus: 'DELETE_COMPLETE',
+    });
+    if (StackError) {
+      throw new Error(StackError);
+    }
+  }
+
+  /**
+   * @typedef waitForStackStatusInput
+   * @property {string} StackName -
+   * @property {string} StackStatus -
+   */
+
+  /**
+   * @typedef waitForStackStatusOuput
+   * @property {string} [StackError] -
+   */
+
+  /**
+   * @param {waitForStackStatusInput} params - name of the stack to wait for
+   * @returns {Promise<waitForStackStatusOuput>} -
+   */
+  async waitForStackStatus(params) {
+    while (true) {
+      const { Stacks } = await this.describeStacks({
         StackName: params.StackName,
       });
-      throw new Error(reason);
+      const Stack = Stacks?.[0];
+      if (!Stack && params.StackStatus !== 'DELETE_COMPLETE') {
+        throw Error(`Stack (${params.StackName}) doesn't exist`);
+      } else if (!Stack && params.StackStatus === 'DELETE_COMPLETE') {
+        // cloudformation eventually expires deleted stacks so missing stacks can count as deleted
+        return {};
+      }
+      if (Stack?.StackStatus === params.StackStatus) {
+        return {};
+      }
+
+      switch (Stack?.StackStatus) {
+        case 'CREATE_IN_PROGRESS':
+        case 'UPDATE_IN_PROGRESS':
+        case 'UPDATE_COMPLETE_CLEANUP_IN_PROGRESS':
+        case 'UPDATE_ROLLBACK_IN_PROGRESS':
+        case 'ROLLBACK_IN_PROGRESS':
+        case 'UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS':
+        case 'REVIEW_IN_PROGRESS':
+        case 'IMPORT_IN_PROGRESS':
+        case 'IMPORT_ROLLBACK_IN_PROGRESS':
+        case 'DELETE_IN_PROGRESS':
+          break;
+        case 'CREATE_COMPLETE':
+        case 'UPDATE_COMPLETE':
+        case 'UPDATE_ROLLBACK_COMPLETE':
+        case 'IMPORT_ROLLBACK_COMPLETE':
+        case 'DELETE_COMPLETE':
+        case 'ROLLBACK_COMPLETE':
+        case 'IMPORT_COMPLETE': {
+          const failureReason = await this.getFailureReason({
+            StackName: params.StackName,
+          });
+          if (failureReason) {
+            return {
+              StackError: failureReason,
+            };
+          }
+          return {
+            StackError: Stack?.StackStatusReason,
+          };
+        }
+        case 'CREATE_FAILED':
+        case 'ROLLBACK_FAILED':
+        case 'DELETE_FAILED':
+        case 'UPDATE_ROLLBACK_FAILED':
+        case 'IMPORT_ROLLBACK_FAILED': {
+          const failureReason = await this.getFailureReason({
+            StackName: params.StackName,
+          });
+          if (failureReason) {
+            return {
+              StackError: failureReason,
+            };
+          }
+          return {
+            StackError: Stack?.StackStatusReason,
+          };
+        }
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   }
 

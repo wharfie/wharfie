@@ -66,7 +66,7 @@ function Wharfie(event) {
     Mappings: {},
     Conditions: {
       isMigrationResource: {
-        'Fn::Equals': [{ Ref: 'isMigrationResource' }, 'true'],
+        'Fn::Equals': [{ Ref: 'MigrationResource' }, 'true'],
       },
       createDashboard: {
         'Fn::Equals': [{ Ref: 'CreateDashboard' }, 'true'],

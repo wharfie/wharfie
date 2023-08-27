@@ -55,9 +55,15 @@ describe('tests for wharfie resource delete handler', () => {
     AWSCloudFormation.CloudFormationMock.on(
       AWSCloudFormation.DeleteStackCommand
     ).resolves({});
-    const waitUntilStackDeleteComplete = jest
-      .spyOn(AWSCloudFormation, 'waitUntilStackDeleteComplete')
-      .mockResolvedValue({});
+    AWSCloudFormation.CloudFormationMock.on(
+      AWSCloudFormation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'DELETE_COMPLETE',
+        },
+      ],
+    });
 
     nock(
       'https://cloudformation-custom-resource-response-useast1.s3.amazonaws.com'
@@ -120,6 +126,9 @@ describe('tests for wharfie resource delete handler', () => {
         "StackName": "Wharfie-8a20992363488c7290d6cbc4e39f7712",
       }
     `);
-    expect(waitUntilStackDeleteComplete).toHaveBeenCalledTimes(1);
+    expect(AWSCloudFormation.CloudFormationMock).toHaveReceivedCommandTimes(
+      AWSCloudFormation.DescribeStacksCommand,
+      1
+    );
   });
 });

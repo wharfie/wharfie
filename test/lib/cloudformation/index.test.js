@@ -136,9 +136,15 @@ describe('tests for CloudFormation', () => {
     ).resolves({
       StackId: 'stack_id',
     });
-    const waitUntilStackCreateComplete = jest
-      .spyOn(AWSCloudformation, 'waitUntilStackCreateComplete')
-      .mockResolvedValue(undefined);
+    AWSCloudformation.CloudFormationMock.on(
+      AWSCloudformation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'CREATE_COMPLETE',
+        },
+      ],
+    });
     const cloudformation = new CloudFormation();
     const params = {
       StackName: 'test',
@@ -169,14 +175,9 @@ describe('tests for CloudFormation', () => {
         Body: params.TemplateBody,
       }
     );
-    expect(waitUntilStackCreateComplete).toHaveBeenCalledWith(
-      {
-        client: expect.anything(),
-        maxWaitTime: 600,
-      },
-      {
-        StackName: 'stack_id',
-      }
+    expect(AWSCloudformation.CloudFormationMock).toHaveReceivedCommandTimes(
+      AWSCloudformation.DescribeStacksCommand,
+      1
     );
   });
 
@@ -198,9 +199,15 @@ describe('tests for CloudFormation', () => {
         },
       ],
     });
-    jest
-      .spyOn(AWSCloudformation, 'waitUntilStackCreateComplete')
-      .mockRejectedValue(undefined);
+    AWSCloudformation.CloudFormationMock.on(
+      AWSCloudformation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'CREATE_FAILED',
+        },
+      ],
+    });
 
     const cloudformation = new CloudFormation();
     const params = {
@@ -243,9 +250,15 @@ describe('tests for CloudFormation', () => {
     ).resolves({
       StackId: 'stack_id',
     });
-    const waitUntilStackUpdateComplete = jest
-      .spyOn(AWSCloudformation, 'waitUntilStackUpdateComplete')
-      .mockResolvedValue(undefined);
+    AWSCloudformation.CloudFormationMock.on(
+      AWSCloudformation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'UPDATE_COMPLETE',
+        },
+      ],
+    });
 
     const cloudformation = new CloudFormation();
     const params = {
@@ -277,14 +290,9 @@ describe('tests for CloudFormation', () => {
         Body: params.TemplateBody,
       }
     );
-    expect(waitUntilStackUpdateComplete).toHaveBeenCalledWith(
-      {
-        client: expect.anything(),
-        maxWaitTime: 600,
-      },
-      {
-        StackName: 'stack_id',
-      }
+    expect(AWSCloudformation.CloudFormationMock).toHaveReceivedCommandTimes(
+      AWSCloudformation.DescribeStacksCommand,
+      1
     );
   });
 
@@ -296,9 +304,15 @@ describe('tests for CloudFormation', () => {
     ).resolves({
       StackId: 'stack_id',
     });
-    jest
-      .spyOn(AWSCloudformation, 'waitUntilStackUpdateComplete')
-      .mockRejectedValue(undefined);
+    AWSCloudformation.CloudFormationMock.on(
+      AWSCloudformation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'ROLLBACK_COMPLETE',
+        },
+      ],
+    });
     AWSCloudformation.CloudFormationMock.on(
       AWSCloudformation.DescribeStackEventsCommand
     ).resolves({
@@ -348,9 +362,15 @@ describe('tests for CloudFormation', () => {
     AWSCloudformation.CloudFormationMock.on(
       AWSCloudformation.DeleteStackCommand
     ).resolves(undefined);
-    const waitUntilStackDeleteComplete = jest
-      .spyOn(AWSCloudformation, 'waitUntilStackDeleteComplete')
-      .mockResolvedValue(undefined);
+    AWSCloudformation.CloudFormationMock.on(
+      AWSCloudformation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'DELETE_COMPLETE',
+        },
+      ],
+    });
 
     const cloudformation = new CloudFormation();
 
@@ -367,14 +387,9 @@ describe('tests for CloudFormation', () => {
       AWSCloudformation.DeleteStackCommand,
       params
     );
-    expect(waitUntilStackDeleteComplete).toHaveBeenCalledWith(
-      {
-        client: expect.anything(),
-        maxWaitTime: 600,
-      },
-      {
-        StackName: 'stack_id',
-      }
+    expect(AWSCloudformation.CloudFormationMock).toHaveReceivedCommandTimes(
+      AWSCloudformation.DescribeStacksCommand,
+      1
     );
   });
 
@@ -383,9 +398,15 @@ describe('tests for CloudFormation', () => {
     AWSCloudformation.CloudFormationMock.on(
       AWSCloudformation.DeleteStackCommand
     ).resolves(undefined);
-    jest
-      .spyOn(AWSCloudformation, 'waitUntilStackDeleteComplete')
-      .mockRejectedValue(undefined);
+    AWSCloudformation.CloudFormationMock.on(
+      AWSCloudformation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'DELETE_FAILED',
+        },
+      ],
+    });
     AWSCloudformation.CloudFormationMock.on(
       AWSCloudformation.DescribeStackEventsCommand
     ).resolves({
