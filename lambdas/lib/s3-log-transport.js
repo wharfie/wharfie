@@ -4,6 +4,7 @@ const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 
 const FUNCTION_NAME = process.env.AWS_LAMBDA_FUNCTION_NAME;
 const BUCKET = process.env.WHARFIE_ARTIFACT_BUCKET;
+const DEPLOYMENT_NAME = process.env.STACK_NAME;
 
 module.exports = class S3LogTransport extends Transport {
   /**
@@ -204,7 +205,7 @@ module.exports = class S3LogTransport extends Transport {
     await this.createAppendableOrAppendToObject(
       {
         Bucket: BUCKET,
-        Key: `dt=${this.dt}/hr=${this.hr}/lambda=${FUNCTION_NAME}/lambda.log`,
+        Key: `${DEPLOYMENT_NAME}/dt=${this.dt}/hr=${this.hr}/lambda=${FUNCTION_NAME}/lambda.log`,
       },
       info
     );

@@ -341,6 +341,16 @@ const Resources = {
                 ],
               },
               {
+                Sid: 'Logging',
+                Effect: 'Allow',
+                Action: ['s3:GetObject', 's3:PutObject'],
+                Resource: [
+                  wharfie.util.sub(
+                    'arn:${AWS::Partition}:s3:::${ArtifactBucket}/${AWS::StackName}/*'
+                  ),
+                ],
+              },
+              {
                 Effect: 'Allow',
                 Action: ['athena:GetQueryExecution'],
                 Resource: '*',
