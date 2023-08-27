@@ -176,15 +176,22 @@ class CloudFormation {
    */
   async waitForStackStatus(params) {
     while (true) {
-      const { Stacks } = await this.describeStacks({
-        StackName: params.StackName,
-      });
-      const Stack = Stacks?.[0];
-      if (!Stack && params.StackStatus !== 'DELETE_COMPLETE') {
-        throw Error(`Stack (${params.StackName}) doesn't exist`);
-      } else if (!Stack && params.StackStatus === 'DELETE_COMPLETE') {
-        // cloudformation eventually expires deleted stacks so missing stacks can count as deleted
-        return {};
+      let Stack;
+      try {
+        const { Stacks } = await this.describeStacks({
+          StackName: params.StackName,
+        });
+        Stack = Stacks?.[0];
+      } catch (err) {
+        if (
+          // @ts-ignore
+          err.message.includes('does not exist') &&
+          params.StackStatus === 'DELETE_COMPLETE'
+        ) {
+          // cloudformation eventually expires deleted stacks so missing stacks can count as deleted
+          return {};
+        }
+        throw err;
       }
       if (Stack?.StackStatus === params.StackStatus) {
         return {};

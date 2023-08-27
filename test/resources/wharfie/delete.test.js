@@ -57,12 +57,8 @@ describe('tests for wharfie resource delete handler', () => {
     ).resolves({});
     AWSCloudFormation.CloudFormationMock.on(
       AWSCloudFormation.DescribeStacksCommand
-    ).resolves({
-      Stacks: [
-        {
-          StackStatus: 'DELETE_COMPLETE',
-        },
-      ],
+    ).rejects({
+      message: 'Stack does not exist',
     });
 
     nock(
