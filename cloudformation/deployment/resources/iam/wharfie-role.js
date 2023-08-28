@@ -166,7 +166,6 @@ const Resources = {
       Policies: [
         {
           PolicyName: 'main',
-          Version: '2012-10-17',
           PolicyDocument: {
             Statement: [
               {
