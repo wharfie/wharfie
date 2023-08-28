@@ -23,9 +23,10 @@ const STACK_NAME = process.env.STACK_NAME || '';
  * @property {any} Resources -
  * @property {any} Outputs -
  * @param {import('../../../typedefs').CloudformationEvent} event -
+ * @param {boolean} [migration_resource] -
  * @returns {CloudformationTemplate} -
  */
-function Wharfie(event) {
+function Wharfie(event, migration_resource = false) {
   const {
     LogicalResourceId,
     StackId,
@@ -52,11 +53,6 @@ function Wharfie(event) {
     AWSTemplateFormatVersion: '2010-09-09',
     Metadata,
     Parameters: {
-      MigrationResource: {
-        Type: 'String',
-        Default: 'false',
-        AllowedValues: ['true', 'false'],
-      },
       CreateDashboard: {
         Type: 'String',
         Default: 'true',
@@ -65,9 +61,6 @@ function Wharfie(event) {
     },
     Mappings: {},
     Conditions: {
-      isMigrationResource: {
-        'Fn::Equals': [{ Ref: 'MigrationResource' }, 'true'],
-      },
       createDashboard: {
         'Fn::Equals': [{ Ref: 'CreateDashboard' }, 'true'],
       },
@@ -134,13 +127,9 @@ function Wharfie(event) {
             Parameters: { 'parquet.compress': 'GZIP', EXTERNAL: 'TRUE' },
             PartitionKeys: TableInput.PartitionKeys || [],
             StorageDescriptor: {
-              Location: {
-                'Fn::If': [
-                  'isMigrationResource',
-                  `${Location}migrate-references/`,
-                  `${Location}references/`,
-                ],
-              },
+              Location: migration_resource
+                ? `${Location}migrate-references/`
+                : `${Location}references/`,
               Columns: TableInput.StorageDescriptor.Columns,
               InputFormat:
                 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat',

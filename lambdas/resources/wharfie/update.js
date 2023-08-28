@@ -70,13 +70,16 @@ async function update(event) {
   if (migration) {
     const migrate_stackname = `migrate-${StackName}`;
 
-    const migrationTemplate = templateGenerator.Wharfie({
-      ...event,
-      ResourceProperties: {
-        ...event.ResourceProperties,
-        DatabaseName: `migrate_${event.ResourceProperties}`,
+    const migrationTemplate = templateGenerator.Wharfie(
+      {
+        ...event,
+        ResourceProperties: {
+          ...event.ResourceProperties,
+          DatabaseName: `migrate_${event.ResourceProperties}`,
+        },
       },
-    });
+      true
+    );
     const resource = {
       resource_id: migrate_stackname,
       resource_arn: StackId,

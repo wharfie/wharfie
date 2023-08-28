@@ -130,7 +130,8 @@ class S3 {
    * @returns {import('../typedefs').S3Location} - S3 bucket, prefix
    */
   parseS3Uri(uri) {
-    if (typeof uri !== 'string') throw new TypeError('uri is not a string');
+    if (typeof uri !== 'string')
+      throw new TypeError(`uri (${uri}) is not a string`);
     const match = uri.match(/^s3:\/\/([^/]+)\/(.+?)(\/*)$/);
     if (!match) throw new Error(uri + ' is not of form s3://bucket/key');
     const trailingSlashes = match[3];

@@ -145,7 +145,7 @@ describe('tests for S3', () => {
     expect.assertions(1);
     const s3 = new S3({ region: 'us-east-1' });
     expect(() => s3.parseS3Uri(123)).toThrowErrorMatchingInlineSnapshot(
-      `"uri is not a string"`
+      `"uri (123) is not a string"`
     );
   });
 

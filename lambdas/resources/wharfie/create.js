@@ -40,7 +40,6 @@ async function create(event) {
     destination_properties: template.Resources.Compacted.Properties,
     wharfie_version: version,
   };
-
   await resource_db.putResource(resource);
 
   if (event.ResourceProperties.TableInput.StorageDescriptor.Location)
