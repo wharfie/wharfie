@@ -129,11 +129,11 @@ module.exports = class S3LogTransport extends Transport {
       });
       if (!CopyPartResult || !CopyPartResult.ETag)
         throw new Error('No ETag for CopyPartResult');
-      partNumber++;
       parts.push({
-        ETag: CopyPartResult.ETag,
+        ETag: CopyPartResult.ETag.split('"').join(''),
         PartNumber: partNumber,
       });
+      partNumber++;
     }
     if (existingObject === null) {
       if (!this._left_pad_object_checked) {
@@ -165,11 +165,11 @@ module.exports = class S3LogTransport extends Transport {
       });
       if (!CopyPartResult || !CopyPartResult.ETag)
         throw new Error('No ETag for CopyPartResult');
-      partNumber++;
       parts.push({
-        ETag: CopyPartResult.ETag,
+        ETag: CopyPartResult.ETag.split('"').join(''),
         PartNumber: partNumber,
       });
+      partNumber++;
     }
     const { ETag } = await this.uploadPart({
       Bucket: params.Bucket,
@@ -180,9 +180,8 @@ module.exports = class S3LogTransport extends Transport {
     });
     if (!ETag)
       throw new Error('No ETag for uploadPart result. Something went wrong');
-    partNumber++;
     parts.push({
-      ETag,
+      ETag: ETag.split('"').join(''),
       PartNumber: partNumber,
     });
     await this.completeMultipartUpload({
@@ -207,7 +206,7 @@ module.exports = class S3LogTransport extends Transport {
         Bucket: BUCKET,
         Key: `${DEPLOYMENT_NAME}/dt=${this.dt}/hr=${this.hr}/lambda=${FUNCTION_NAME}/lambda.log`,
       },
-      Buffer.from(JSON.stringify(info))
+      Buffer.from(JSON.stringify(info) + '\n')
     );
     // Perform the writing to the remote service
     callback();
