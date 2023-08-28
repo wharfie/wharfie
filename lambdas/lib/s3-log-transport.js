@@ -207,7 +207,7 @@ module.exports = class S3LogTransport extends Transport {
         Bucket: BUCKET,
         Key: `${DEPLOYMENT_NAME}/dt=${this.dt}/hr=${this.hr}/lambda=${FUNCTION_NAME}/lambda.log`,
       },
-      info
+      Buffer.from(JSON.stringify(info))
     );
     // Perform the writing to the remote service
     callback();
