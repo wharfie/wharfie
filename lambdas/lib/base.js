@@ -1,7 +1,6 @@
 'use strict';
 const logging = require('./logging');
 const daemon_log = logging.getDaemonLogger();
-
 class BaseAWS {
   /**
    *

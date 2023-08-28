@@ -59,7 +59,7 @@ function Wharfie(event) {
       },
       CreateDashboard: {
         Type: 'String',
-        Default: 'false',
+        Default: 'true',
         AllowedValues: ['true', 'false'],
       },
     },
