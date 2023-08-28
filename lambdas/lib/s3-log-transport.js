@@ -31,7 +31,7 @@ module.exports = class S3LogTransport extends Transport {
     this.dt = formattedDate;
     this.hr = currentHourUTC;
 
-    this._LEFT_PAD_OBJECT_NAME = '5MB_file.txt';
+    this._LEFT_PAD_OBJECT_NAME = `${DEPLOYMENT_NAME}/5MB_file.txt`;
     this._LEFT_PAD_SIZE = 5 * 1024 * 1024;
     this._left_pad_object_checked = false;
   }

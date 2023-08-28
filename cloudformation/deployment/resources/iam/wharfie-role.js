@@ -166,6 +166,7 @@ const Resources = {
       Policies: [
         {
           PolicyName: 'main',
+          Version: '2012-10-17',
           PolicyDocument: {
             Statement: [
               {
@@ -203,7 +204,6 @@ const Resources = {
                   'sqs:ReceiveMessage',
                   'sqs:GetQueueAttributes',
                   'sqs:SendMessage',
-                  'sqs:SendMessageBatch',
                 ],
                 Resource: [
                   wharfie.util.getAtt('DaemonQueue', 'Arn'),
