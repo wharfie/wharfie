@@ -333,7 +333,12 @@ const Resources = {
               {
                 Sid: 'OutputWrite',
                 Effect: 'Allow',
-                Action: ['s3:GetObject', 's3:PutObject'],
+                Action: [
+                  's3:GetObject',
+                  's3:PutObject',
+                  's3:ListMultipartUploadParts',
+                  's3:AbortMultipartUpload',
+                ],
                 Resource: [
                   wharfie.util.sub(
                     'arn:${AWS::Partition}:s3:::${ArtifactBucket}/wharfie-templates/*'
