@@ -4,6 +4,9 @@ const wharfie = require('../../../client');
 
 const WharfieLogRole = new wharfie.Role({
   LogicalName: 'WharfieLogRole',
+  DependsOn: ['WharfieManagedPolicy', 'WharfieRole'],
+  _WharfieRole: wharfie.util.getAtt('WharfieRole', 'Arn'),
+  _WharfieBasePolicy: wharfie.util.ref('WharfieManagedPolicy'),
   WharfieDeployment: wharfie.util.sub('${AWS::StackName}'),
   InputLocations: [
     wharfie.util.join('', [
@@ -27,7 +30,7 @@ const WharfieLogTable = new wharfie.Resource({
   LogicalName: 'WharfieLogTable',
   DatabaseName: wharfie.util.ref('LogDatabase'),
   WharfieDeployment: wharfie.util.sub('${AWS::StackName}'),
-  DependsOn: ['Bootstrap'],
+  _ServiceToken: wharfie.util.getAtt('Bootstrap', 'Arn'),
   _TableInputOverride: {
     Name: 'event_log',
     Description:

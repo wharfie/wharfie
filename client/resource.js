@@ -39,6 +39,7 @@ exports.Resource = class Resource {
     _TableInputOverride = undefined,
     CatalogId = util.accountId,
     WharfieDeployment,
+    _ServiceToken = undefined,
     Condition = undefined,
     DependsOn = undefined,
   } = {}) {
@@ -63,7 +64,7 @@ exports.Resource = class Resource {
         Condition,
         DependsOn,
         Properties: {
-          ServiceToken: util.importValue(WharfieDeployment),
+          ServiceToken: _ServiceToken || util.importValue(WharfieDeployment),
           CatalogId,
           DatabaseName,
           CompactedConfig,

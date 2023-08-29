@@ -8,16 +8,16 @@ const { name, version } = require('../../package.json');
 const loggers = {};
 
 /**
- * @returns {import('winston').Logform.Format} -
+ * @returns {import('winston').Logform.Format[]} -
  */
 function _loggerFormat() {
   switch (process.env.LOGGING_FORMAT) {
     case 'json':
-      return winston.format.json();
+      return [winston.format.timestamp(), winston.format.json()];
     case 'cli':
-      return winston.format.cli();
+      return [winston.format.cli()];
     default:
-      return winston.format.json();
+      return [winston.format.timestamp(), winston.format.json()];
   }
 }
 
@@ -32,7 +32,7 @@ function getEventLogger(event, context) {
     return loggers[context.awsRequestId][key];
   winston.loggers.add(key, {
     level: process.env.RESOURCE_LOGGING_LEVEL,
-    format: _loggerFormat(),
+    format: winston.format.combine(..._loggerFormat()),
     defaultMeta: {
       service: name,
       version,
@@ -69,7 +69,7 @@ function getDaemonLogger() {
   if (loggers[key] && loggers[key][key]) return loggers[key][key];
   winston.loggers.add(key, {
     level: process.env.DAEMON_LOGGING_LEVEL,
-    format: _loggerFormat(),
+    format: winston.format.combine(..._loggerFormat()),
     defaultMeta: {
       service: name,
       version,

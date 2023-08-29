@@ -383,11 +383,7 @@ class S3 {
         Delimiter: '/',
       })
     );
-    if (!response.CommonPrefixes)
-      throw new Error(
-        `Failed to ListObjects with params: ${JSON.stringify(params)}`
-      );
-    response.CommonPrefixes.forEach(
+    (response.CommonPrefixes || []).forEach(
       (obj) => obj.Prefix && prefixes.push(obj.Prefix)
     );
 
