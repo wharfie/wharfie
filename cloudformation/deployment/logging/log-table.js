@@ -27,6 +27,7 @@ const WharfieLogTable = new wharfie.Resource({
   LogicalName: 'WharfieLogTable',
   DatabaseName: wharfie.util.ref('LogDatabase'),
   WharfieDeployment: wharfie.util.sub('${AWS::StackName}'),
+  DependsOn: ['Bootstrap'],
   _TableInputOverride: {
     Name: 'event_log',
     Description:
@@ -97,7 +98,7 @@ const Resources = {
 };
 
 module.exports = wharfie.util.merge(
-  { Resources }
-  // WharfieLogTable,
-  // WharfieLogRole
+  { Resources },
+  WharfieLogTable,
+  WharfieLogRole
 );
