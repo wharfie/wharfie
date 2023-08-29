@@ -281,6 +281,9 @@ const Resources = {
                   wharfie.util.sub(
                     'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/Wharfie*'
                   ),
+                  wharfie.util.sub(
+                    'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/migrate-Wharfie*'
+                  ),
                 ],
               },
               {

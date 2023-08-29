@@ -93,12 +93,6 @@ async function update(event) {
     await cloudformation.createStack({
       StackName: migrate_stackname,
       Tags,
-      Parameters: [
-        {
-          ParameterKey: 'MigrationResource',
-          ParameterValue: 'true',
-        },
-      ],
       TemplateBody: JSON.stringify(migrationTemplate),
     });
     await sqs.enqueue(

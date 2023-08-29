@@ -288,12 +288,6 @@ describe('tests for bootstrap lambda', () => {
     expect(createStack.mock.calls[0]).toMatchInlineSnapshot(`
       Array [
         Object {
-          "Parameters": Array [
-            Object {
-              "ParameterKey": "MigrationResource",
-              "ParameterValue": "true",
-            },
-          ],
           "StackName": "migrate-Wharfie-b0390022d7e1bb56b328d44efb209e13",
           "Tags": Array [
             Object {

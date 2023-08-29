@@ -32,6 +32,8 @@ const Cleanup = require('./resources/cleanup');
 const Events = require('./resources/events');
 const Role = require('./resources/iam/wharfie-role');
 
+const LogResources = require('./logging/log-table');
+
 const Parameters = {
   Version: { Type: 'String' },
   GitSha: { Type: 'String', Default: '' },
@@ -125,5 +127,6 @@ module.exports = wharfie.util.merge(
   Dynamo,
   TempFilesBucket,
   Events,
-  Dashboard
+  Dashboard,
+  LogResources
 );
