@@ -277,7 +277,6 @@ describe('tests for s3 event scheduling', () => {
 
   it('run fixtured', async () => {
     expect.assertions(1);
-
     location_return = [
       {
         resource_id: '1',
@@ -286,6 +285,31 @@ describe('tests for s3 event scheduling', () => {
           's3://wharfie-testing-079185815456-us-west-2/wharfie-testing/',
       },
     ];
+    resource_mock = {
+      source_properties: {
+        TableInput: {
+          TableType: 'EXTERNAL_TABLE',
+        },
+      },
+      destination_properties: {
+        TableInput: {
+          PartitionKeys: [
+            {
+              Name: 'dt',
+              Type: 'string',
+            },
+            {
+              Name: 'hr',
+              Type: 'string',
+            },
+            {
+              Name: 'lambda',
+              Type: 'string',
+            },
+          ],
+        },
+      },
+    };
 
     const s3Event = {
       eventVersion: '2.1',
@@ -322,6 +346,11 @@ describe('tests for s3 event scheduling', () => {
 
     expect(
       AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-    ).toMatchInlineSnapshot();
+    ).toMatchInlineSnapshot(`
+      Object {
+        "MessageBody": "{\\"resource_id\\":\\"1\\",\\"sort_key\\":\\"dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon:1466424480000\\",\\"started_at\\":1466424490000,\\"updated_at\\":1466424490000,\\"status\\":\\"scheduled\\",\\"partition\\":{\\"location\\":\\"s3://wharfie-testing-079185815456-us-west-2/wharfie-testing/dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon/\\",\\"partitionValues\\":[\\"dt=2023-09-04\\",\\"hr=19\\",\\"lambda=wharfie-testing-daemon\\"]}}",
+        "QueueUrl": "",
+      }
+    `);
   });
 });
