@@ -12,6 +12,8 @@ process.env.LOGGING_FORMAT = 'cli';
 
 require('yargonaut').style('cyan');
 
+const { displayFailure } = require('../cli/output');
+
 const config = require('../cli/config');
 if (fs.existsSync(process.env.CONFIG_PATH)) {
   if (
@@ -24,10 +26,19 @@ if (fs.existsSync(process.env.CONFIG_PATH)) {
       config.setConfig(
         JSON.parse(fs.readFileSync(process.env.CONFIG_PATH).toString())
       );
+      config.setEnvironment();
     } catch (err) {
-      console.error('Failed to load config. Run "load config" to resolve.');
+      if (
+        process.argv[process.argv.length - 2] !== 'wharfie' &&
+        process.argv[process.argv.length - 1] !== 'config'
+      ) {
+        displayFailure(
+          'Failed to load config. Run "wharfie config" to resolve.'
+        );
+        // eslint-disable-next-line no-process-exit
+        process.exit(1);
+      }
     }
-    config.setEnvironment();
   }
 }
 

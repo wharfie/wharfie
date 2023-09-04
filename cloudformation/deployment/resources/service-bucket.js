@@ -4,7 +4,7 @@ const wharfie = require('../../../client');
 
 const Bucket = wharfie.util.shortcuts.s3Bucket.build({
   BucketName: wharfie.util.sub(
-    '${Deployment}-${AWS::AccountId}-${AWS::Region}'
+    '${AWS::StackName}-${AWS::AccountId}-${AWS::Region}'
   ),
   LifecycleConfiguration: {
     Rules: [
@@ -19,7 +19,7 @@ const Bucket = wharfie.util.shortcuts.s3Bucket.build({
         Id: 'log_files_expiration',
         ExpirationInDays: 1,
         Status: 'Enabled',
-        Prefix: wharfie.util.sub('${Deployment}-logs/'),
+        Prefix: wharfie.util.sub('${AWS::StackName}-logs/'),
       },
       {
         Id: 'athena_results_expiration',
@@ -33,15 +33,13 @@ const Bucket = wharfie.util.shortcuts.s3Bucket.build({
     QueueConfigurations: [
       {
         Event: 's3:ObjectCreated:*',
-        Queue: wharfie.util.importValue(
-          wharfie.util.sub('${Deployment}-s3-event-queue')
-        ),
+        Queue: wharfie.util.getAtt('S3EventQueue', 'Arn'),
         Filter: {
-          Key: {
-            FilterRules: [
+          S3Key: {
+            Rules: [
               {
                 Name: 'prefix',
-                Value: wharfie.util.sub('${Deployment}-logs/'),
+                Value: wharfie.util.sub('${AWS::StackName}-logs/'),
               },
             ],
           },
@@ -51,18 +49,11 @@ const Bucket = wharfie.util.shortcuts.s3Bucket.build({
   },
 });
 
-const Parameters = {
-  Deployment: {
-    Type: 'String',
-    Description: 'What wharfie deployment is this for',
-  },
-};
-
 const Outputs = {
   WharfieServiceBucketName: {
     Value: wharfie.util.ref('Bucket'),
-    Export: { Name: wharfie.util.sub('${Deployment}-Service-Bucket') },
+    Export: { Name: wharfie.util.sub('${AWS::StackName}-Service-Bucket') },
   },
 };
 
-module.exports = wharfie.util.merge({ Parameters, Outputs }, Bucket);
+module.exports = wharfie.util.merge({ Outputs }, Bucket);

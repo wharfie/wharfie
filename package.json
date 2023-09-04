@@ -133,8 +133,6 @@
     "typescript": "^5.0.4"
   },
   "dependencies": {
-    "esbuild": "^0.17.16",
-    "jszip": "^3.10.1",
     "@aws-sdk/client-athena": "^3.363.0",
     "@aws-sdk/client-cloudformation": "^3.363.0",
     "@aws-sdk/client-cloudwatch": "^3.363.0",
@@ -153,9 +151,12 @@
     "chalk": "^4.1.0",
     "cli-progress": "^3.9.0",
     "cuid": "^2.1.8",
+    "death": "^1.1.0",
+    "esbuild": "^0.17.16",
     "graphlib": "^2.1.8",
     "inquirer": "^8.2.0",
     "joi": "^17.9.1",
+    "jszip": "^3.10.1",
     "open": "^7.4.2",
     "uuid": "^8.3.2",
     "winston": "^3.3.3",

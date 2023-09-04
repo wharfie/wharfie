@@ -264,10 +264,9 @@ module.exports = class S3LogTransport extends Transport {
   }
 
   async close() {
-    await this.compactAppendableObject({
-      Bucket: BUCKET,
-      Key: this._LOG_KEY,
-    });
-    console.log(new Date());
+    // await this.compactAppendableObject({
+    //   Bucket: BUCKET,
+    //   Key: this._LOG_KEY,
+    // });
   }
 };

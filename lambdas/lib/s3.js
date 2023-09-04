@@ -78,6 +78,15 @@ class S3 {
   }
 
   /**
+   * @param {import("@aws-sdk/client-s3").DeleteBucketCommandInput} params - params for deleteBucket request
+   * @returns {Promise<import("@aws-sdk/client-s3").DeleteBucketCommandOutput>} -
+   */
+  async deleteBucket(params) {
+    const command = new AWS.DeleteBucketCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
    * @param {import("@aws-sdk/client-s3").ListBucketsCommandInput} params - params for listBuckets request
    * @returns {Promise<import("@aws-sdk/client-s3").ListBucketsCommandOutput>} -
    */

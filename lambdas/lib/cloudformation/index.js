@@ -64,7 +64,6 @@ class CloudFormation {
     let response = await this.cloudformation.send(
       new AWS.DescribeStackEventsCommand(params)
     );
-
     events.push(...(response.StackEvents || []));
     while (response.NextToken) {
       params.NextToken = response.NextToken;
@@ -73,11 +72,13 @@ class CloudFormation {
       );
       events.push(...(response.StackEvents || []));
     }
-
     /** @type {import("@aws-sdk/client-cloudformation").StackEvent | undefined} */
     let failureEvent;
     events
-      .filter(({ ResourceStatus }) => (ResourceStatus || '').match(/FAILED/))
+      .filter(
+        ({ ResourceStatus, ResourceStatusReason }) =>
+          ResourceStatusReason && (ResourceStatus || '').match(/FAILED/)
+      )
       .forEach((event) => {
         if (
           (event.Timestamp || new Date()) <=
@@ -86,8 +87,24 @@ class CloudFormation {
           failureEvent = event;
         }
       });
-    if (!failureEvent) return undefined;
-    return failureEvent.ResourceStatusReason;
+    if (failureEvent) return failureEvent.ResourceStatusReason;
+    /** @type {import("@aws-sdk/client-cloudformation").StackEvent | undefined} */
+    let rollbackEvent;
+    events
+      .filter(
+        ({ ResourceStatus, ResourceStatusReason }) =>
+          ResourceStatusReason && (ResourceStatus || '').match(/ROLLBACK/)
+      )
+      .forEach((event) => {
+        if (
+          (event.Timestamp || new Date()) <=
+          ((failureEvent || {}).Timestamp || new Date())
+        ) {
+          rollbackEvent = event;
+        }
+      });
+    if (rollbackEvent) return rollbackEvent.ResourceStatusReason;
+    return undefined;
   }
 
   /**
@@ -239,7 +256,9 @@ class CloudFormation {
             };
           }
           return {
-            StackError: Stack?.StackStatusReason,
+            StackError:
+              Stack?.StackStatusReason ||
+              'failed for unknown reason, check cloudformation console for more details',
           };
         }
         case 'CREATE_FAILED':
@@ -256,7 +275,9 @@ class CloudFormation {
             };
           }
           return {
-            StackError: Stack?.StackStatusReason,
+            StackError:
+              Stack?.StackStatusReason ||
+              'failed for unknown reason, check cloudformation console for more details',
           };
         }
       }

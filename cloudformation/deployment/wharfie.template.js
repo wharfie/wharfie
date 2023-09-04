@@ -54,15 +54,15 @@ const Parameters = {
     Description: 'Maximum number of queries that a single action can submit',
     Default: 10000,
   },
-  ArtifactBucket: {
-    Type: 'String',
-    Description:
-      'only needed for development, bucket where lambda artifacts are stored',
-  },
   IsDevelopment: {
     Type: 'String',
     Description: 'Is this a development deployment?',
     Default: false,
+  },
+  ArtifactBucket: {
+    Type: 'String',
+    Description:
+      'only needed for development, bucket where lambda artifacts are stored',
   },
 };
 
