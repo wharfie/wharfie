@@ -5,13 +5,11 @@ let S3;
 describe('tests for S3 Mock', () => {
   beforeEach(() => {
     process.env.AWS_MOCKS = true;
-    process.env.TEMP_FILES_BUCKET = 'wharfie-tests-temp-files';
     jest.requireMock('@aws-sdk/client-s3');
     S3 = require('../../lambdas/lib/s3');
   });
   afterAll(() => {
     process.env.AWS_MOCKS = false;
-    process.env.TEMP_FILES_BUCKET = undefined;
   });
   it('putObject mock test', async () => {
     expect.assertions(1);

@@ -8,7 +8,11 @@ const Monitor = new wharfie.util.shortcuts.QueueLambda({
   LogicalName: 'Monitor',
   FunctionName: wharfie.util.sub('${AWS::StackName}-monitor'),
   Code: {
-    S3Bucket: wharfie.util.sub('wharfie-artifacts-${AWS::Region}'),
+    S3Bucket: wharfie.util.if(
+      'IsDevelopment',
+      wharfie.util.ref('ArtifactBucket'),
+      wharfie.util.sub('wharfie-artifacts-${AWS::Region}')
+    ),
     S3Key: wharfie.util.if(
       'IsDevelopment',
       wharfie.util.sub('wharfie/${GitSha}/monitor.zip'),
@@ -39,7 +43,7 @@ const Monitor = new wharfie.util.shortcuts.QueueLambda({
       GLOBAL_QUERY_CONCURRENCY: wharfie.util.ref('GlobalQueryConcurrency'),
       RESOURCE_QUERY_CONCURRENCY: wharfie.util.ref('ResourceQueryConcurrency'),
       MAX_QUERIES_PER_ACTION: wharfie.util.ref('MaxQueriesPerAction'),
-      WHARFIE_ARTIFACT_BUCKET: wharfie.util.ref('ArtifactBucket'),
+      WHARFIE_SERVICE_BUCKET: wharfie.util.ref('ServiceBucket'),
     },
   },
 });

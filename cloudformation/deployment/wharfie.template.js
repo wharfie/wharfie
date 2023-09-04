@@ -2,27 +2,7 @@
 
 const wharfie = require('../../client');
 
-const TempFilesBucket = wharfie.util.shortcuts.s3Bucket.build({
-  BucketName: wharfie.util.sub(
-    '${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-temp-files'
-  ),
-  LifecycleConfiguration: {
-    Rules: [
-      {
-        Id: 'temp_files_expiration',
-        ExpirationInDays: 1,
-        Status: 'Enabled',
-      },
-      {
-        Id: 'abort_incomplete_multipart_uploads',
-        AbortIncompleteMultipartUpload: {
-          DaysAfterInitiation: 1,
-        },
-        Status: 'Enabled',
-      },
-    ],
-  },
-});
+const ServiceBucket = require('./resources/service-bucket');
 const Dashboard = require('./resources/sla-dashboard');
 const Dynamo = require('./resources/dynamo');
 const Monitor = require('./resources/monitor');
@@ -76,7 +56,8 @@ const Parameters = {
   },
   ArtifactBucket: {
     Type: 'String',
-    Description: 'Bucket that lambda artifacts are stored in',
+    Description:
+      'only needed for development, bucket where lambda artifacts are stored',
   },
   IsDevelopment: {
     Type: 'String',
@@ -125,8 +106,8 @@ module.exports = wharfie.util.merge(
   Cleanup,
   Role,
   Dynamo,
-  TempFilesBucket,
   Events,
+  ServiceBucket,
   Dashboard,
   LogResources
 );

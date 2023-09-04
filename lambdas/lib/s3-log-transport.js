@@ -1,10 +1,12 @@
 const Transport = require('winston-transport');
 const AWS = require('@aws-sdk/client-s3');
+const cuid = require('cuid');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 
 const FUNCTION_NAME = process.env.AWS_LAMBDA_FUNCTION_NAME;
-const BUCKET = process.env.WHARFIE_ARTIFACT_BUCKET;
+const BUCKET = process.env.WHARFIE_SERVICE_BUCKET;
 const DEPLOYMENT_NAME = process.env.STACK_NAME;
+const LOG_NAME = `${process.env.AWS_LAMBDA_LOG_STREAM_NAME || cuid()}.log`;
 
 module.exports = class S3LogTransport extends Transport {
   /**
@@ -34,6 +36,7 @@ module.exports = class S3LogTransport extends Transport {
     this._LEFT_PAD_OBJECT_NAME = `${DEPLOYMENT_NAME}/5MB_file.txt`;
     this._LEFT_PAD_SIZE = 5 * 1024 * 1024;
     this._left_pad_object_checked = false;
+    this._LOG_KEY = `${DEPLOYMENT_NAME}/dt=${this.dt}/hr=${this.hr}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
   }
 
   /**
@@ -51,6 +54,15 @@ module.exports = class S3LogTransport extends Transport {
    */
   async headObject(params) {
     const command = new AWS.HeadObjectCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput} params - params for HeadObject request
+   * @returns {Promise<import("@aws-sdk/client-s3").CopyObjectCommandOutput>} -
+   */
+  async copyObject(params) {
+    const command = new AWS.CopyObjectCommand(params);
     return await this.s3.send(command);
   }
 
@@ -117,8 +129,9 @@ module.exports = class S3LogTransport extends Transport {
     const parts = [];
 
     if (
-      (existingObject && existingObject.ContentLength) ||
-      5 * 1024 * 1024 < 0
+      existingObject &&
+      existingObject.ContentLength &&
+      existingObject.ContentLength >= 5 * 1024 * 1024
     ) {
       const { CopyPartResult } = await this.uploadPartCopy({
         Bucket: params.Bucket,
@@ -204,13 +217,57 @@ module.exports = class S3LogTransport extends Transport {
     await this.createAppendableOrAppendToObject(
       {
         Bucket: BUCKET,
-        Key: `${DEPLOYMENT_NAME}/dt=${this.dt}/hr=${this.hr}/lambda=${FUNCTION_NAME}/lambda.log`,
+        Key: this._LOG_KEY,
       },
       Buffer.from(JSON.stringify(info) + '\n')
     );
-    // Perform the writing to the remote service
     callback();
   }
 
-  close() {}
+  /**
+   * @param {import("@aws-sdk/client-s3").GetObjectCommandInput} params -
+   */
+  async compactAppendableObject(params) {
+    const existingObject = await this.headObject({
+      Bucket: params.Bucket,
+      Key: params.Key,
+    });
+    if (!existingObject || !existingObject.ContentLength) return;
+    const { UploadId } = await this.createMultipartUpload({
+      Bucket: params.Bucket,
+      Key: params.Key,
+    });
+    const partNumber = 1;
+    const parts = [];
+    const { CopyPartResult } = await this.uploadPartCopy({
+      Bucket: params.Bucket,
+      Key: params.Key,
+      CopySource: `${params.Bucket}/${params.Key}`,
+      PartNumber: partNumber,
+      CopySourceRange: `bytes=${this._LEFT_PAD_SIZE}-${
+        existingObject.ContentLength - 1
+      }`,
+      UploadId,
+    });
+    if (!CopyPartResult || !CopyPartResult.ETag)
+      throw new Error('No ETag for CopyPartResult');
+    parts.push({
+      ETag: CopyPartResult.ETag.split('"').join(''),
+      PartNumber: partNumber,
+    });
+    await this.completeMultipartUpload({
+      Bucket: params.Bucket,
+      Key: params.Key,
+      MultipartUpload: { Parts: parts },
+      UploadId,
+    });
+  }
+
+  async close() {
+    await this.compactAppendableObject({
+      Bucket: BUCKET,
+      Key: this._LOG_KEY,
+    });
+    console.log(new Date());
+  }
 };

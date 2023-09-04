@@ -3,7 +3,6 @@
 const configuration = {
   region: process.env.WHARFIE_REGION,
   deployment_name: process.env.WHARFIE_DEPLOYMENT_NAME,
-  artifact_bucket: process.env.WHARFIE_ARTIFACT_BUCKET,
 };
 
 const check = ({ region, deployment_name }) => {
@@ -20,16 +19,14 @@ const check = ({ region, deployment_name }) => {
 };
 
 module.exports = {
-  setConfig: ({ deployment_name, region, artifact_bucket }) => {
-    check({ deployment_name, region, artifact_bucket });
+  setConfig: ({ deployment_name, region }) => {
+    check({ deployment_name, region });
     configuration.region = region;
     configuration.deployment_name = deployment_name;
-    configuration.artifact_bucket = artifact_bucket;
   },
   clearConfig: () => {
     configuration.region = undefined;
     configuration.deployment_name = undefined;
-    configuration.artifact_bucket = undefined;
   },
   getConfig: () => {
     check(configuration);
@@ -39,7 +36,6 @@ module.exports = {
     check(configuration);
     process.env.WHARFIE_REGION = configuration.region;
     process.env.WHARFIE_DEPLOYMENT_NAME = configuration.deployment_name;
-    process.env.WHARFIE_ARTIFACT_BUCKET = configuration.artifact_bucket;
     process.env.AWS_REGION = configuration.region;
     process.env.RESOURCE_TABLE = configuration.deployment_name;
   },

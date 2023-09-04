@@ -10,7 +10,6 @@ describe('tests for S3 Mock', () => {
   });
   afterAll(() => {
     process.env.AWS_MOCKS = false;
-    process.env.TEMP_FILES_BUCKET = undefined;
   });
 
   it('createAppendableOrAppendToObject mock test', async () => {
@@ -53,7 +52,7 @@ describe('tests for S3 Mock', () => {
     await s3foo.putObject({
       Bucket: 'test_bucket',
       Key: 'key/path.json',
-      Body: JSON.stringify({ foo: 'bar' }),
+      Body: ' '.repeat(s3foo._LEFT_PAD_SIZE) + JSON.stringify({ foo: 'bar' }),
     });
     await s3foo.createAppendableOrAppendToObject(
       params,

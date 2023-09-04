@@ -24,7 +24,6 @@ describe('tests for Athena', () => {
       .mockImplementationOnce(() => 'ckywjpmr7002zjvd0wyq5asds')
       .mockImplementationOnce(() => 'ckywjpmr7002zjvd0wyq51111');
     process.env.AWS_MOCKS = true;
-    process.env.TEMP_FILES_BUCKET = 'wharfie-tests-temp-files';
     S3 = jest.requireMock('@aws-sdk/client-s3').S3;
     jest.requireMock('@aws-sdk/client-glue');
     Athena = require('../../../lambdas/lib/athena/');
@@ -72,7 +71,7 @@ describe('tests for Athena', () => {
     const result = await athena.startQueryExecution(params);
     expect(result).toMatchInlineSnapshot(`
       Object {
-        "QueryExecutionId": "ckywjpmr70002zjvd0wyq5x48",
+        "QueryExecutionId": "ckywjpmr7002zjvd0wyq5asdf",
       }
     `);
     expect(athena.athena.__getMockState()).toMatchInlineSnapshot(`
@@ -80,7 +79,7 @@ describe('tests for Athena', () => {
         "workgroups": Object {
           "default": Object {
             "queries": Object {
-              "ckywjpmr70002zjvd0wyq5x48": Object {
+              "ckywjpmr7002zjvd0wyq5asdf": Object {
                 "QueryString": "select * from foo.bar",
                 "Status": Object {
                   "State": "FAILED",
@@ -121,7 +120,7 @@ describe('tests for Athena', () => {
       Object {
         "QueryExecution": Object {
           "Query": "select * from foo.bar",
-          "QueryExecutionId": "ckywjpmr70002zjvd0wyqasaq",
+          "QueryExecutionId": "ckywjpr70002zjvd0wyq5aqqs",
           "Status": Object {
             "State": "SUCCEEDED",
           },
@@ -160,7 +159,7 @@ describe('tests for Athena', () => {
           Object {
             "QueryExecution": Object {
               "Query": "select * from foo.bar",
-              "QueryExecutionId": "ckywjpmr7002zjvd0wyq5asds",
+              "QueryExecutionId": "ckywjpmr7002zjvd0wyq51111",
               "Status": Object {
                 "State": "SUCCEEDED",
               },
@@ -170,7 +169,7 @@ describe('tests for Athena', () => {
           Object {
             "QueryExecution": Object {
               "Query": "select * from foo.bar",
-              "QueryExecutionId": "ckywjpmr7002zjvd0wyq5asdf",
+              "QueryExecutionId": "ckywjpmr70002zvd0wyq5asdf",
               "Status": Object {
                 "State": "SUCCEEDED",
               },
@@ -211,7 +210,7 @@ describe('tests for Athena', () => {
           "Query": "
             INSERT INTO foo.bar SELECT * FROM foo.biz
           ",
-          "QueryExecutionId": "ckywjpmr70002zjvd0wyq5x48",
+          "QueryExecutionId": "ckywjpmr7002zjvd0wyq5asdf",
           "Status": Object {
             "State": "SUCCEEDED",
           },

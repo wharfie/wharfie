@@ -17,7 +17,7 @@ const create = async () => {
     inquirer
       .prompt(
         Object.keys(template.Parameters).reduce((acc, key) => {
-          if (['Version', 'Deployment', 'ArtifactBucket'].includes(key)) {
+          if (['Deployment'].includes(key)) {
             return acc;
           }
           const p = template.Parameters[key];
@@ -56,17 +56,9 @@ const create = async () => {
           ParameterValue: String(answers[key]),
         };
       }),
-      // {
-      //   ParameterKey: 'Version',
-      //   ParameterValue: version,
-      // },
       {
         ParameterKey: 'Deployment',
         ParameterValue: process.env.WHARFIE_DEPLOYMENT_NAME,
-      },
-      {
-        ParameterKey: 'ArtifactBucket',
-        ParameterValue: process.env.WHARFIE_ARTIFACT_BUCKET,
       },
     ],
     Capabilities: ['CAPABILITY_IAM'],

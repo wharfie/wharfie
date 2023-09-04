@@ -10,15 +10,11 @@ const https = require('https');
 
 describe('tests for CloudFormation', () => {
   beforeAll(() => {
-    process.env.WHARFIE_ARTIFACT_BUCKET = 'utility-079185815456-us-west-2';
     require('aws-sdk-client-mock-jest');
   });
   afterEach(() => {
     AWSCloudformation.CloudFormationMock.reset();
     AWSS3.S3Mock.reset();
-  });
-  afterAll(() => {
-    process.env.WHARFIE_ARTIFACT_BUCKET = undefined;
   });
   it('cfn-response', async () => {
     expect.assertions(1);
@@ -145,7 +141,10 @@ describe('tests for CloudFormation', () => {
         },
       ],
     });
-    const cloudformation = new CloudFormation();
+    const cloudformation = new CloudFormation(
+      {},
+      { artifact_bucket: 'utility-079185815456-us-west-2' }
+    );
     const params = {
       StackName: 'test',
       TemplateBody: '',
@@ -170,7 +169,7 @@ describe('tests for CloudFormation', () => {
       1,
       AWSS3.PutObjectCommand,
       {
-        Bucket: process.env.WHARFIE_ARTIFACT_BUCKET,
+        Bucket: 'utility-079185815456-us-west-2',
         Key: expect.any(String),
         Body: params.TemplateBody,
       }
@@ -209,7 +208,10 @@ describe('tests for CloudFormation', () => {
       ],
     });
 
-    const cloudformation = new CloudFormation();
+    const cloudformation = new CloudFormation(
+      {},
+      { artifact_bucket: 'utility-079185815456-us-west-2' }
+    );
     const params = {
       StackName: 'test',
       Tags: [],
@@ -260,7 +262,10 @@ describe('tests for CloudFormation', () => {
       ],
     });
 
-    const cloudformation = new CloudFormation();
+    const cloudformation = new CloudFormation(
+      {},
+      { artifact_bucket: 'utility-079185815456-us-west-2' }
+    );
     const params = {
       StackName: 'test',
       Tags: [],
@@ -285,7 +290,7 @@ describe('tests for CloudFormation', () => {
       1,
       AWSS3.PutObjectCommand,
       {
-        Bucket: process.env.WHARFIE_ARTIFACT_BUCKET,
+        Bucket: 'utility-079185815456-us-west-2',
         Key: expect.any(String),
         Body: params.TemplateBody,
       }
@@ -324,8 +329,10 @@ describe('tests for CloudFormation', () => {
       ],
     });
 
-    const cloudformation = new CloudFormation();
-
+    const cloudformation = new CloudFormation(
+      {},
+      { artifact_bucket: 'utility-079185815456-us-west-2' }
+    );
     const params = {
       StackName: 'test',
       Tags: [],
@@ -372,7 +379,10 @@ describe('tests for CloudFormation', () => {
       ],
     });
 
-    const cloudformation = new CloudFormation();
+    const cloudformation = new CloudFormation(
+      {},
+      { artifact_bucket: 'utility-079185815456-us-west-2' }
+    );
 
     const params = {
       StackName: 'stack_id',
@@ -418,9 +428,10 @@ describe('tests for CloudFormation', () => {
       ],
     });
 
-    const cloudformation = new CloudFormation({
-      region: 'us-east-1',
-    });
+    const cloudformation = new CloudFormation(
+      {},
+      { artifact_bucket: 'utility-079185815456-us-west-2' }
+    );
 
     const params = {
       StackName: 'stack_id',

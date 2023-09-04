@@ -10,7 +10,7 @@ const WharfieLogRole = new wharfie.Role({
   WharfieDeployment: wharfie.util.sub('${AWS::StackName}'),
   InputLocations: [
     wharfie.util.join('', [
-      wharfie.util.sub('${ArtifactBucket}'),
+      wharfie.util.sub('${Bucket}'),
       '/',
       wharfie.util.sub('${AWS::StackName}'),
       '/',
@@ -18,7 +18,7 @@ const WharfieLogRole = new wharfie.Role({
   ],
   OutputLocations: [
     wharfie.util.join('', [
-      wharfie.util.sub('${ArtifactBucket}'),
+      wharfie.util.sub('${Bucket}'),
       '/',
       wharfie.util.sub('${AWS::StackName}-logs'),
       '/',
@@ -45,7 +45,7 @@ const WharfieLogTable = new wharfie.Resource({
     StorageDescriptor: {
       Location: wharfie.util.join('', [
         's3://',
-        wharfie.util.sub('${ArtifactBucket}'),
+        wharfie.util.sub('${Bucket}'),
         '/',
         wharfie.util.sub('${AWS::StackName}'),
         '/',
@@ -61,6 +61,7 @@ const WharfieLogTable = new wharfie.Resource({
         { Name: 'resource_id', Type: 'string' },
         { Name: 'service', Type: 'string' },
         { Name: 'version', Type: 'string' },
+        { Name: 'timestamp', Type: 'string' },
       ],
       InputFormat: 'org.apache.hadoop.mapred.TextInputFormat',
       OutputFormat: 'org.apache.hadoop.hive.ql.io.IgnoreKeyTextOutputFormat',
@@ -73,7 +74,7 @@ const WharfieLogTable = new wharfie.Resource({
   CompactedConfig: {
     Location: wharfie.util.join('', [
       's3://',
-      wharfie.util.sub('${ArtifactBucket}'),
+      wharfie.util.sub('${Bucket}'),
       '/',
       wharfie.util.sub('${AWS::StackName}-logs'),
       '/',

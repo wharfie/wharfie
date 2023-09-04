@@ -14,11 +14,25 @@ const BaseAWS = require('../base');
  * @property {any} Outputs -
  */
 
+/**
+ * @typedef wharfieCloudformationClientAdditionalConfig
+ * @property {string} artifact_bucket - name of the s3 bucket to use for cloudformation template artifacts
+ */
+
 class CloudFormation {
   /**
    * @param {import("@aws-sdk/client-cloudformation").CloudFormationClientConfig} options - CloudFormation sdk options
+   * @param {wharfieCloudformationClientAdditionalConfig} wharfie_options -
    */
-  constructor(options) {
+  constructor(
+    options,
+    wharfie_options = {
+      artifact_bucket:
+        process.env.WHARFIE_ARTIFACT_BUCKET ||
+        process.env.WHARFIE_SERVICE_BUCKET ||
+        '',
+    }
+  ) {
     const credentials = fromNodeProviderChain();
     this.cloudformation = new AWS.CloudFormation({
       ...BaseAWS.config(),
@@ -26,7 +40,7 @@ class CloudFormation {
       ...options,
     });
     this.s3 = new S3(options);
-    this.WHARFIE_ARTIFACT_BUCKET = process.env.WHARFIE_ARTIFACT_BUCKET || '';
+    this.artifact_bucket = wharfie_options.artifact_bucket;
     this.WAITER_MAX_WAIT_TIME_CONFIG = 600;
   }
 
@@ -84,7 +98,7 @@ class CloudFormation {
       .toString(36)
       .substring(2, 15)}.json`;
     await this.s3.putObject({
-      Bucket: this.WHARFIE_ARTIFACT_BUCKET,
+      Bucket: this.artifact_bucket,
       Key: key,
       Body: params.TemplateBody,
     });
@@ -93,7 +107,7 @@ class CloudFormation {
     const result = await this.cloudformation.send(
       new AWS.CreateStackCommand({
         ..._params,
-        TemplateURL: `https://${this.WHARFIE_ARTIFACT_BUCKET}.s3.amazonaws.com/${key}`,
+        TemplateURL: `https://${this.artifact_bucket}.s3.amazonaws.com/${key}`,
       })
     );
     const StackId = result.StackId;
@@ -114,7 +128,7 @@ class CloudFormation {
       .toString(36)
       .substring(2, 15)}.json`;
     await this.s3.putObject({
-      Bucket: this.WHARFIE_ARTIFACT_BUCKET,
+      Bucket: this.artifact_bucket,
       Key: key,
       Body: params.TemplateBody,
     });
@@ -125,7 +139,7 @@ class CloudFormation {
       const result = await this.cloudformation.send(
         new AWS.UpdateStackCommand({
           ..._params,
-          TemplateURL: `https://${this.WHARFIE_ARTIFACT_BUCKET}.s3.amazonaws.com/${key}`,
+          TemplateURL: `https://${this.artifact_bucket}.s3.amazonaws.com/${key}`,
         })
       );
       StackId = result.StackId;

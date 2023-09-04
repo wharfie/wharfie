@@ -5,14 +5,10 @@ const S3 = require('../../lambdas/lib/s3');
 
 describe('tests for S3', () => {
   beforeAll(() => {
-    process.env.TEMP_FILES_BUCKET = 'wharfie-tests-temp-files';
     require('aws-sdk-client-mock-jest');
   });
   afterEach(() => {
     AWS.S3Mock.reset();
-  });
-  afterAll(() => {
-    process.env.TEMP_FILES_BUCKET = undefined;
   });
 
   it('putObject', async () => {

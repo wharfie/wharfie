@@ -44,14 +44,24 @@ function getEventLogger(event, context) {
       query_id: event.query_id,
       request_id: context.awsRequestId,
     },
-    transports: [
-      new winston.transports.Console({
-        level: process.env.RESOURCE_LOGGING_LEVEL,
-      }),
-      new S3LogTransport({
-        level: process.env.RESOURCE_LOGGING_LEVEL,
-      }),
-    ],
+    transports:
+      process.env.LOGGING_FORMAT === 'cli'
+        ? [
+            new winston.transports.Console({
+              level: process.env.RESOURCE_LOGGING_LEVEL,
+            }),
+            new S3LogTransport({
+              level: process.env.RESOURCE_LOGGING_LEVEL,
+            }),
+          ]
+        : [
+            new winston.transports.Console({
+              level: process.env.RESOURCE_LOGGING_LEVEL,
+            }),
+            new S3LogTransport({
+              level: process.env.RESOURCE_LOGGING_LEVEL,
+            }),
+          ],
   });
   const logger = winston.loggers.get(key);
   loggers[context.awsRequestId] = {
@@ -74,14 +84,24 @@ function getDaemonLogger() {
       service: name,
       version,
     },
-    transports: [
-      new winston.transports.Console({
-        level: process.env.DAEMON_LOGGING_LEVEL,
-      }),
-      new S3LogTransport({
-        level: process.env.DAEMON_LOGGING_LEVEL,
-      }),
-    ],
+    transports:
+      process.env.LOGGING_FORMAT === 'cli'
+        ? [
+            new winston.transports.Console({
+              level: process.env.DAEMON_LOGGING_LEVEL,
+            }),
+            new S3LogTransport({
+              level: process.env.DAEMON_LOGGING_LEVEL,
+            }),
+          ]
+        : [
+            new winston.transports.Console({
+              level: process.env.DAEMON_LOGGING_LEVEL,
+            }),
+            new S3LogTransport({
+              level: process.env.DAEMON_LOGGING_LEVEL,
+            }),
+          ],
   });
   const logger = winston.loggers.get(key);
   loggers[key] = {
@@ -113,8 +133,24 @@ async function flush(context) {
   delete loggers[context.awsRequestId];
 }
 
+/**
+ *
+ */
+async function flushDaemon() {
+  const key = `daemon`;
+  await new Promise((resolve) => {
+    loggers[key][key].on('finish', () => {
+      delete loggers[key][key];
+      resolve('done');
+    });
+    loggers[key][key].end();
+  });
+  delete loggers[key];
+}
+
 module.exports = {
   getEventLogger,
   getDaemonLogger,
   flush,
+  flushDaemon,
 };

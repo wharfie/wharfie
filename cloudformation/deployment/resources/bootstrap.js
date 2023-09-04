@@ -6,7 +6,11 @@ const Bootstrap = new wharfie.util.shortcuts.Lambda({
   LogicalName: 'Bootstrap',
   FunctionName: wharfie.util.sub('${AWS::StackName}-bootstrap'),
   Code: {
-    S3Bucket: wharfie.util.sub('wharfie-artifacts-${AWS::Region}'),
+    S3Bucket: wharfie.util.if(
+      'IsDevelopment',
+      wharfie.util.ref('ArtifactBucket'),
+      wharfie.util.sub('wharfie-artifacts-${AWS::Region}')
+    ),
     S3Key: wharfie.util.if(
       'IsDevelopment',
       wharfie.util.sub('wharfie/${GitSha}/bootstrap.zip'),
@@ -31,7 +35,7 @@ const Bootstrap = new wharfie.util.shortcuts.Lambda({
       EVENT_TABLE: wharfie.util.ref('EventTable'),
       DAEMON_QUEUE_ARN: wharfie.util.getAtt('DaemonQueue', 'Arn'),
       DAEMON_EVENT_ROLE: wharfie.util.getAtt('DaemonEventRole', 'Arn'),
-      WHARFIE_ARTIFACT_BUCKET: wharfie.util.ref('ArtifactBucket'),
+      WHARFIE_SERVICE_BUCKET: wharfie.util.ref('ServiceBucket'),
       DAEMON_QUEUE_URL: wharfie.util.ref('DaemonQueue'),
     },
   },

@@ -126,6 +126,9 @@ const Resources = {
               wharfie.util.sub(
                 'arn:${AWS::Partition}:s3:::${ArtifactBucket}/wharfie/*'
               ),
+              wharfie.util.sub(
+                'arn:${AWS::Partition}:s3:::${Bucket}/wharfie/*'
+              ),
             ],
           },
           {
@@ -137,6 +140,7 @@ const Resources = {
                 'arn:${AWS::Partition}:s3:::wharfie-artifacts-${AWS::Region}'
               ),
               wharfie.util.sub('arn:${AWS::Partition}:s3:::${ArtifactBucket}'),
+              wharfie.util.sub('arn:${AWS::Partition}:s3:::${Bucket}'),
             ],
           },
         ],
@@ -330,6 +334,7 @@ const Resources = {
                   wharfie.util.sub(
                     'arn:${AWS::Partition}:s3:::${ArtifactBucket}'
                   ),
+                  wharfie.util.sub('arn:${AWS::Partition}:s3:::${Bucket}'),
                 ],
               },
               {
@@ -345,6 +350,9 @@ const Resources = {
                   wharfie.util.sub(
                     'arn:${AWS::Partition}:s3:::${ArtifactBucket}/wharfie-templates/*'
                   ),
+                  wharfie.util.sub(
+                    'arn:${AWS::Partition}:s3:::${Bucket}/wharfie-templates/*'
+                  ),
                 ],
               },
               {
@@ -354,6 +362,9 @@ const Resources = {
                 Resource: [
                   wharfie.util.sub(
                     'arn:${AWS::Partition}:s3:::${ArtifactBucket}/${AWS::StackName}/*'
+                  ),
+                  wharfie.util.sub(
+                    'arn:${AWS::Partition}:s3:::${Bucket}/wharfie-templates/*'
                   ),
                 ],
               },

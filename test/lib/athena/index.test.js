@@ -12,9 +12,6 @@ describe('tests for Athena', () => {
     AWS.AthenaMock.reset();
     AWSGlue.GlueMock.reset();
   });
-  afterAll(() => {
-    process.env.TEMP_FILES_BUCKET = undefined;
-  });
 
   it('extractSources', async () => {
     expect.assertions(1);

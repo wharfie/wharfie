@@ -11,7 +11,6 @@ const FirehoseExample = require('./firehose');
 const Bucket = require('./bucket');
 
 const Parameters = {
-  ArtifactBucket: { Type: 'String' },
   SNSAlarmTopicARN: {
     Type: 'String',
     Description: 'SNS topic to send alarms to',
