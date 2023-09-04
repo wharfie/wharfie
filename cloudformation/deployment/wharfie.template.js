@@ -20,6 +20,7 @@ const Parameters = {
   SNSAlarmTopicARN: {
     Type: 'String',
     Description: 'SNS topic to send alarms to',
+    Default: 'None',
   },
   LoggingTransport: {
     Type: 'String',
@@ -69,7 +70,7 @@ const Parameters = {
 const Conditions = {
   UseNoOpSNSTopic: wharfie.util.equals(
     wharfie.util.ref('SNSAlarmTopicARN'),
-    ''
+    'None'
   ),
   IsDevelopment: wharfie.util.equals(wharfie.util.ref('IsDevelopment'), 'True'),
 };

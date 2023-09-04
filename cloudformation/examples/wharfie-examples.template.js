@@ -11,10 +11,6 @@ const FirehoseExample = require('./firehose');
 const Bucket = require('./bucket');
 
 const Parameters = {
-  SNSAlarmTopicARN: {
-    Type: 'String',
-    Description: 'SNS topic to send alarms to',
-  },
   Deployment: {
     Type: 'String',
     Description: 'What wharfie environment to deploy into',
