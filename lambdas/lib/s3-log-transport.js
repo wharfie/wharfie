@@ -6,7 +6,9 @@ const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 const FUNCTION_NAME = process.env.AWS_LAMBDA_FUNCTION_NAME;
 const BUCKET = process.env.WHARFIE_SERVICE_BUCKET;
 const DEPLOYMENT_NAME = process.env.STACK_NAME;
-const LOG_NAME = `${process.env.AWS_LAMBDA_LOG_STREAM_NAME || cuid()}.log`;
+const LOG_NAME = `${
+  process.env.AWS_LAMBDA_LOG_STREAM_NAME || cuid()
+}.log`.replace('/', '_');
 
 module.exports = class S3LogTransport extends Transport {
   /**
