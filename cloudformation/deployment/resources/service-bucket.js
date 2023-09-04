@@ -19,7 +19,7 @@ const Bucket = wharfie.util.shortcuts.s3Bucket.build({
         Id: 'log_files_expiration',
         ExpirationInDays: 1,
         Status: 'Enabled',
-        Prefix: wharfie.util.sub('${AWS::StackName}-logs/'),
+        Prefix: wharfie.util.sub('${AWS::StackName}/'),
       },
       {
         Id: 'athena_results_expiration',
@@ -39,7 +39,21 @@ const Bucket = wharfie.util.shortcuts.s3Bucket.build({
             Rules: [
               {
                 Name: 'prefix',
-                Value: wharfie.util.sub('${AWS::StackName}-logs/'),
+                Value: wharfie.util.sub('${AWS::StackName}/'),
+              },
+            ],
+          },
+        },
+      },
+      {
+        Event: 's3:ObjectRemoved:*',
+        Queue: wharfie.util.getAtt('S3EventQueue', 'Arn'),
+        Filter: {
+          S3Key: {
+            Rules: [
+              {
+                Name: 'prefix',
+                Value: wharfie.util.sub('${AWS::StackName}/'),
               },
             ],
           },

@@ -8,7 +8,7 @@ const BUCKET = process.env.WHARFIE_SERVICE_BUCKET;
 const DEPLOYMENT_NAME = process.env.STACK_NAME;
 const LOG_NAME = `${
   process.env.AWS_LAMBDA_LOG_STREAM_NAME || cuid()
-}.log`.replace('/', '_');
+}.log`.replace(/\//g, '_');
 
 module.exports = class S3LogTransport extends Transport {
   /**
