@@ -12,7 +12,7 @@ const Cleanup = require('./resources/cleanup');
 const Events = require('./resources/events');
 const Role = require('./resources/iam/wharfie-role');
 
-const LogResources = require('./logging/log-table');
+const LogResources = require('./logging/log-tables');
 
 const Parameters = {
   Version: { Type: 'String' },

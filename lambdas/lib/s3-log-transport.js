@@ -1,20 +1,19 @@
 const Transport = require('winston-transport');
 const AWS = require('@aws-sdk/client-s3');
-const cuid = require('cuid');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 
-const FUNCTION_NAME = process.env.AWS_LAMBDA_FUNCTION_NAME;
-const BUCKET = process.env.WHARFIE_SERVICE_BUCKET;
-const DEPLOYMENT_NAME = process.env.STACK_NAME;
-const LOG_NAME = `${
-  process.env.AWS_LAMBDA_LOG_STREAM_NAME || cuid()
-}.log`.replace(/\//g, '_');
+/**
+ * @typedef S3LogTransportOptions
+ * @property {string} [logObjectKey] -
+ * @property {string} [logBucket] -
+ */
 
 module.exports = class S3LogTransport extends Transport {
   /**
    * @param {import("winston-transport").TransportStreamOptions} [opts] -
+   * @param {S3LogTransportOptions} [s3opts] -
    */
-  constructor(opts = {}) {
+  constructor(opts = {}, s3opts = {}) {
     super(opts);
     const credentials = fromNodeProviderChain();
     this.s3 = new AWS.S3({
@@ -25,20 +24,20 @@ module.exports = class S3LogTransport extends Transport {
       useArnRegion: true,
     });
 
-    const currentDateTime = new Date();
-    const year = currentDateTime.getUTCFullYear();
-    const month = String(currentDateTime.getUTCMonth() + 1).padStart(2, '0'); // Months are 0-indexed
-    const day = String(currentDateTime.getUTCDate()).padStart(2, '0');
-    const currentHourUTC = currentDateTime.getUTCHours();
+    this.buffer = '';
+    this._MAX_BUFFER_SIZE = 5 * 1024 * 1024;
+    this._FLUSH_INTERVAL = 5000;
 
-    const formattedDate = `${year}-${month}-${day}`;
-    this.dt = formattedDate;
-    this.hr = currentHourUTC;
-
-    this._LEFT_PAD_OBJECT_NAME = `${DEPLOYMENT_NAME}/5MB_file.txt`;
+    this._LEFT_PAD_OBJECT_KEY = `5MB_file.txt`;
     this._LEFT_PAD_SIZE = 5 * 1024 * 1024;
     this._left_pad_object_checked = false;
-    this._LOG_KEY = `${DEPLOYMENT_NAME}/dt=${this.dt}/hr=${this.hr}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
+    this._LOG_BUCKET = s3opts.logBucket;
+    this._LOG_KEY = s3opts.logObjectKey;
+
+    this._FLUSH_INTERVAL_ID = setInterval(
+      this.flushBuffer.bind(this),
+      this._FLUSH_INTERVAL
+    );
   }
 
   /**
@@ -155,14 +154,14 @@ module.exports = class S3LogTransport extends Transport {
         try {
           await this.headObject({
             Bucket: params.Bucket,
-            Key: this._LEFT_PAD_OBJECT_NAME,
+            Key: this._LEFT_PAD_OBJECT_KEY,
           });
         } catch (err) {
           // @ts-ignore
           if (err.name === 'NotFound') {
             await this.putObject({
               Bucket: params.Bucket,
-              Key: this._LEFT_PAD_OBJECT_NAME,
+              Key: this._LEFT_PAD_OBJECT_KEY,
               Body: ' '.repeat(this._LEFT_PAD_SIZE),
             });
           } else {
@@ -174,7 +173,7 @@ module.exports = class S3LogTransport extends Transport {
       const { CopyPartResult } = await this.uploadPartCopy({
         Bucket: params.Bucket,
         Key: params.Key,
-        CopySource: `${params.Bucket}/${this._LEFT_PAD_OBJECT_NAME}`,
+        CopySource: `${params.Bucket}/${this._LEFT_PAD_OBJECT_KEY}`,
         PartNumber: partNumber,
         UploadId,
       });
@@ -215,15 +214,22 @@ module.exports = class S3LogTransport extends Transport {
     setImmediate(() => {
       this.emit('logged', info);
     });
-    // TODO: this could make fewer head requests
+    this.buffer += JSON.stringify(info) + '\n';
+    if (this.buffer.length < this._MAX_BUFFER_SIZE) return callback();
+    await this.flushBuffer();
+    callback();
+  }
+
+  async flushBuffer() {
+    if (this.buffer.length === 0) return;
     await this.createAppendableOrAppendToObject(
       {
-        Bucket: BUCKET,
+        Bucket: this._LOG_BUCKET,
         Key: this._LOG_KEY,
       },
-      Buffer.from(JSON.stringify(info) + '\n')
+      Buffer.from(this.buffer)
     );
-    callback();
+    this.buffer = '';
   }
 
   /**
@@ -266,9 +272,7 @@ module.exports = class S3LogTransport extends Transport {
   }
 
   async close() {
-    // await this.compactAppendableObject({
-    //   Bucket: BUCKET,
-    //   Key: this._LOG_KEY,
-    // });
+    clearInterval(this._FLUSH_INTERVAL_ID);
+    this.flushBuffer();
   }
 };

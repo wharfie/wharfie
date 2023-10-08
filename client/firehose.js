@@ -79,7 +79,6 @@ exports.Firehose = class Firehose {
           DaemonConfig: {
             Privileged: true,
             Role: util.getAtt(`${LogicalName}WharfieRole`, 'Arn'),
-            Schedule: 60,
             SLA: {
               MaxDelay: 60,
               ColumnExpression: `date_parse(concat(year, month, day, hr), '%Y%m%d%H')`,

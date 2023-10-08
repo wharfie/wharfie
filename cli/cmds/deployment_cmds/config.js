@@ -28,7 +28,9 @@ const config = async (development) => {
           } else if (p.AllowedValues) {
             type = 'list';
           }
-          if (key === 'ArtifactBucket' && !development) {
+          if (key === 'ArtifactBucket' && development) {
+            delete p.Default;
+          } else if (key === 'ArtifactBucket' && !development) {
             return acc;
           }
           if (key === 'GitSha') {

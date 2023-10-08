@@ -39,6 +39,8 @@ const upgrade = async (development) => {
           }
           if (key === 'ArtifactBucket' && development) {
             delete p.Default;
+          } else if (key === 'ArtifactBucket' && !development) {
+            return acc;
           }
           if (key === 'GitSha') {
             if (development) {

@@ -82,7 +82,11 @@ const WharfieLogTable = new wharfie.Resource({
   },
   DaemonConfig: {
     Role: wharfie.util.getAtt('WharfieLogRole', 'Arn'),
-    Schedule: 60 * 24 * 3,
+    Interval: 60,
+    SLA: {
+      MaxDelay: 60,
+      ColumnExpression: `date_parse(concat(dt, hr), '%Y-%m-%d%H')`,
+    },
   },
 });
 

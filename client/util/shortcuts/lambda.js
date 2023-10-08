@@ -131,7 +131,18 @@ class Lambda {
         Condition,
         Properties: {
           LogGroupName: {
-            'Fn::Sub': ['/aws/lambda/${name}', { name: FunctionName }],
+            'Fn::Sub': [
+              '/aws/lambda/${name}-${id}',
+              {
+                name: FunctionName,
+                id: {
+                  'Fn::Select': [
+                    2,
+                    { 'Fn::Split': ['/', { Ref: 'AWS::StackId' }] },
+                  ],
+                },
+              },
+            ],
           },
           RetentionInDays: 14,
         },

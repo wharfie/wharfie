@@ -1,11 +1,16 @@
 'use strict';
 const winston = require('winston');
 const S3LogTransport = require('./s3-log-transport');
+const cuid = require('cuid');
 
 const { name, version } = require('../../package.json');
 
 /** @type {Object.<string, Object.<string,import('winston').Logger>>} */
 const loggers = {};
+
+const FUNCTION_NAME = process.env.AWS_LAMBDA_FUNCTION_NAME;
+const BUCKET = process.env.WHARFIE_SERVICE_BUCKET || '';
+const DEPLOYMENT_NAME = process.env.STACK_NAME;
 
 /**
  * @returns {import('winston').Logform.Format[]} -
@@ -30,6 +35,15 @@ function getEventLogger(event, context) {
   const key = `${context.awsRequestId}${event.resource_id}${event.operation_id}${event.action_id}${event.query_id}`;
   if (loggers[context.awsRequestId] && loggers[context.awsRequestId][key])
     return loggers[context.awsRequestId][key];
+
+  const currentDateTime = new Date();
+  const year = currentDateTime.getUTCFullYear();
+  const month = String(currentDateTime.getUTCMonth() + 1).padStart(2, '0'); // Months are 0-indexed
+  const day = String(currentDateTime.getUTCDate()).padStart(2, '0');
+  const currentHourUTC = currentDateTime.getUTCHours();
+  const formattedDate = `${year}-${month}-${day}`;
+  const logObjectKey = `${DEPLOYMENT_NAME}/event_logs/dt=${formattedDate}/hr=${currentHourUTC}/${event.resource_id}.log`;
+
   winston.loggers.add(key, {
     level: process.env.RESOURCE_LOGGING_LEVEL,
     format: winston.format.combine(..._loggerFormat()),
@@ -52,12 +66,15 @@ function getEventLogger(event, context) {
             }),
           ]
         : [
-            new winston.transports.Console({
-              level: process.env.RESOURCE_LOGGING_LEVEL,
-            }),
-            new S3LogTransport({
-              level: process.env.RESOURCE_LOGGING_LEVEL,
-            }),
+            new S3LogTransport(
+              {
+                level: process.env.RESOURCE_LOGGING_LEVEL,
+              },
+              {
+                logBucket: BUCKET,
+                logObjectKey,
+              }
+            ),
           ],
   });
   const logger = winston.loggers.get(key);
@@ -74,6 +91,18 @@ function getEventLogger(event, context) {
 function getDaemonLogger() {
   const key = `daemon`;
   if (loggers[key] && loggers[key][key]) return loggers[key][key];
+
+  const currentDateTime = new Date();
+  const year = currentDateTime.getUTCFullYear();
+  const month = String(currentDateTime.getUTCMonth() + 1).padStart(2, '0'); // Months are 0-indexed
+  const day = String(currentDateTime.getUTCDate()).padStart(2, '0');
+  const currentHourUTC = currentDateTime.getUTCHours();
+  const formattedDate = `${year}-${month}-${day}`;
+  const LOG_NAME = `${
+    process.env.AWS_LAMBDA_LOG_STREAM_NAME || cuid()
+  }.log`.replace(/\//g, '_');
+  const logObjectKey = `${DEPLOYMENT_NAME}/daemon_logs/dt=${formattedDate}/hr=${currentHourUTC}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
+
   winston.loggers.add(key, {
     level: process.env.DAEMON_LOGGING_LEVEL,
     format: winston.format.combine(..._loggerFormat()),
@@ -89,12 +118,15 @@ function getDaemonLogger() {
             }),
           ]
         : [
-            new winston.transports.Console({
-              level: process.env.DAEMON_LOGGING_LEVEL,
-            }),
-            new S3LogTransport({
-              level: process.env.DAEMON_LOGGING_LEVEL,
-            }),
+            new S3LogTransport(
+              {
+                level: process.env.DAEMON_LOGGING_LEVEL,
+              },
+              {
+                logBucket: BUCKET,
+                logObjectKey,
+              }
+            ),
           ],
   });
   const logger = winston.loggers.get(key);
