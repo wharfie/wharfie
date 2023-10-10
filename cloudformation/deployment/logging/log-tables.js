@@ -26,13 +26,13 @@ const WharfieLogRole = new wharfie.Role({
   ],
 });
 
-const WharfieLogTable = new wharfie.Resource({
-  LogicalName: 'WharfieLogTable',
+const WharfieEventLogTable = new wharfie.Resource({
+  LogicalName: 'WharfieEventLogTable',
   DatabaseName: wharfie.util.ref('LogDatabase'),
   WharfieDeployment: wharfie.util.sub('${AWS::StackName}'),
   _ServiceToken: wharfie.util.getAtt('Bootstrap', 'Arn'),
   _TableInputOverride: {
-    Name: 'event_log',
+    Name: 'event_logs',
     Description:
       'event logs from wharfie.  This table is managed by wharfie and should not be modified directly.',
     TableType: 'EXTERNAL_TABLE',
@@ -40,7 +40,6 @@ const WharfieLogTable = new wharfie.Resource({
     PartitionKeys: [
       { Name: 'dt', Type: 'string' },
       { Name: 'hr', Type: 'string' },
-      { Name: 'lambda', Type: 'string' },
     ],
     StorageDescriptor: {
       Location: wharfie.util.join('', [
@@ -48,7 +47,7 @@ const WharfieLogTable = new wharfie.Resource({
         wharfie.util.sub('${Bucket}'),
         '/',
         wharfie.util.sub('${AWS::StackName}'),
-        '/',
+        '/event_logs/',
       ]),
       Columns: [
         { Name: 'action_id', Type: 'string' },
@@ -77,7 +76,65 @@ const WharfieLogTable = new wharfie.Resource({
       wharfie.util.sub('${Bucket}'),
       '/',
       wharfie.util.sub('${AWS::StackName}-logs'),
+      '/event_logs/',
+    ]),
+  },
+  DaemonConfig: {
+    Role: wharfie.util.getAtt('WharfieLogRole', 'Arn'),
+    Interval: 60,
+    SLA: {
+      MaxDelay: 60,
+      ColumnExpression: `date_parse(concat(dt, hr), '%Y-%m-%d%H')`,
+    },
+  },
+});
+
+const WharfieDaemonLogTable = new wharfie.Resource({
+  LogicalName: 'WharfieDaemonLogTable',
+  DatabaseName: wharfie.util.ref('LogDatabase'),
+  WharfieDeployment: wharfie.util.sub('${AWS::StackName}'),
+  _ServiceToken: wharfie.util.getAtt('Bootstrap', 'Arn'),
+  _TableInputOverride: {
+    Name: 'daemon_logs',
+    Description:
+      'daemon logs from wharfie.  This table is managed by wharfie and should not be modified directly.',
+    TableType: 'EXTERNAL_TABLE',
+    Parameters: { EXTERNAL: 'TRUE', has_encrypted_data: 'false' },
+    PartitionKeys: [
+      { Name: 'dt', Type: 'string' },
+      { Name: 'hr', Type: 'string' },
+      { Name: 'lambda', Type: 'string' },
+    ],
+    StorageDescriptor: {
+      Location: wharfie.util.join('', [
+        's3://',
+        wharfie.util.sub('${Bucket}'),
+        '/',
+        wharfie.util.sub('${AWS::StackName}'),
+        '/daemon_logs/',
+      ]),
+      Columns: [
+        { Name: 'level', Type: 'string' },
+        { Name: 'message', Type: 'string' },
+        { Name: 'service', Type: 'string' },
+        { Name: 'version', Type: 'string' },
+        { Name: 'timestamp', Type: 'string' },
+      ],
+      InputFormat: 'org.apache.hadoop.mapred.TextInputFormat',
+      OutputFormat: 'org.apache.hadoop.hive.ql.io.IgnoreKeyTextOutputFormat',
+      SerdeInfo: {
+        SerializationLibrary: 'org.openx.data.jsonserde.JsonSerDe',
+        Parameters: { 'ignore.malformed.json': 'true' },
+      },
+    },
+  },
+  CompactedConfig: {
+    Location: wharfie.util.join('', [
+      's3://',
+      wharfie.util.sub('${Bucket}'),
       '/',
+      wharfie.util.sub('${AWS::StackName}-logs'),
+      '/daemon_logs/',
     ]),
   },
   DaemonConfig: {
@@ -107,6 +164,7 @@ const Resources = {
 
 module.exports = wharfie.util.merge(
   { Resources },
-  WharfieLogTable,
+  WharfieEventLogTable,
+  WharfieDaemonLogTable,
   WharfieLogRole
 );
