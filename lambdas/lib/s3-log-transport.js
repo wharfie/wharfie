@@ -6,6 +6,8 @@ const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
  * @typedef S3LogTransportOptions
  * @property {string} [logObjectKey] -
  * @property {string} [logBucket] -
+ * @property {number} [flushInterval] -
+ * @property {number} [maxBufferSize] -
  */
 
 module.exports = class S3LogTransport extends Transport {
@@ -25,8 +27,8 @@ module.exports = class S3LogTransport extends Transport {
     });
 
     this.buffer = '';
-    this._MAX_BUFFER_SIZE = 5 * 1024 * 1024;
-    this._FLUSH_INTERVAL = 5000;
+    this._MAX_BUFFER_SIZE = s3opts.maxBufferSize || 5 * 1024 * 1024;
+    this._FLUSH_INTERVAL = s3opts.flushInterval || 5000;
 
     this._LEFT_PAD_OBJECT_KEY = `5MB_file.txt`;
     this._LEFT_PAD_SIZE = 5 * 1024 * 1024;
@@ -34,10 +36,12 @@ module.exports = class S3LogTransport extends Transport {
     this._LOG_BUCKET = s3opts.logBucket;
     this._LOG_KEY = s3opts.logObjectKey;
 
-    this._FLUSH_INTERVAL_ID = setInterval(
-      this.flushBuffer.bind(this),
-      this._FLUSH_INTERVAL
-    );
+    if (this._FLUSH_INTERVAL > 0) {
+      this._FLUSH_INTERVAL_ID = setInterval(
+        this.flushBuffer.bind(this),
+        this._FLUSH_INTERVAL
+      );
+    }
   }
 
   /**
@@ -209,6 +213,7 @@ module.exports = class S3LogTransport extends Transport {
   /**
    * @param {any} info -
    * @param {any} callback -
+   * @returns {Promise<void>} -
    */
   async log(info, callback) {
     setImmediate(() => {
@@ -272,7 +277,9 @@ module.exports = class S3LogTransport extends Transport {
   }
 
   async close() {
-    clearInterval(this._FLUSH_INTERVAL_ID);
+    if (this._FLUSH_INTERVAL_ID) {
+      clearInterval(this._FLUSH_INTERVAL_ID);
+    }
     this.flushBuffer();
   }
 };

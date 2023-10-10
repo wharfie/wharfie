@@ -73,6 +73,8 @@ function getEventLogger(event, context) {
               {
                 logBucket: BUCKET,
                 logObjectKey,
+                // don't use flush intervals when running in jest
+                flushInterval: process.env.JEST_WORKER_ID ? -1 : 5000,
               }
             ),
           ],
@@ -125,6 +127,8 @@ function getDaemonLogger() {
               {
                 logBucket: BUCKET,
                 logObjectKey,
+                // don't use flush intervals when running in jest
+                flushInterval: process.env.JEST_WORKER_ID ? -1 : 5000,
               }
             ),
           ],

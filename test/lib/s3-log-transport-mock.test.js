@@ -14,7 +14,7 @@ describe('tests for S3 Mock', () => {
 
   it('createAppendableOrAppendToObject mock test', async () => {
     expect.assertions(1);
-    const s3foo = new S3LogTransport();
+    const s3foo = new S3LogTransport({}, { flushInterval: -1 });
     s3foo.s3.__setMockState({
       's3://test_bucket/fake': '',
     });
@@ -30,7 +30,7 @@ describe('tests for S3 Mock', () => {
       params,
       `${JSON.stringify({ biz: 'baz' })}\n`
     );
-    const s3bar = new S3LogTransport();
+    const s3bar = new S3LogTransport({}, { flushInterval: -1 });
 
     const result = await s3bar.s3.getObject(params);
     expect(result.Body.trim()).toMatchInlineSnapshot(`
@@ -41,7 +41,7 @@ describe('tests for S3 Mock', () => {
 
   it('createAppendableOrAppendToObject mock test existing object', async () => {
     expect.assertions(1);
-    const s3foo = new S3LogTransport();
+    const s3foo = new S3LogTransport({}, { flushInterval: -1 });
     s3foo.s3.__setMockState({
       's3://test_bucket/fake': '',
     });
@@ -58,7 +58,7 @@ describe('tests for S3 Mock', () => {
       params,
       JSON.stringify({ biz: 'baz' })
     );
-    const s3bar = new S3LogTransport();
+    const s3bar = new S3LogTransport({}, { flushInterval: -1 });
     const result = await s3bar.s3.getObject(params);
     expect(result.Body.trim()).toMatchInlineSnapshot(
       `"{\\"foo\\":\\"bar\\"}{\\"biz\\":\\"baz\\"}"`
