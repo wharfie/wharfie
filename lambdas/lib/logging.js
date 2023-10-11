@@ -66,6 +66,9 @@ function getEventLogger(event, context) {
             }),
           ]
         : [
+            new winston.transports.Console({
+              level: process.env.RESOURCE_LOGGING_LEVEL,
+            }),
             new S3LogTransport(
               {
                 level: process.env.RESOURCE_LOGGING_LEVEL,
@@ -120,6 +123,9 @@ function getDaemonLogger() {
             }),
           ]
         : [
+            new winston.transports.Console({
+              level: process.env.RESOURCE_LOGGING_LEVEL,
+            }),
             new S3LogTransport(
               {
                 level: process.env.DAEMON_LOGGING_LEVEL,
