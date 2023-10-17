@@ -61,6 +61,9 @@ class Glue {
         let backoff = false;
         while (Errors.length > 0) {
           const error = Errors.pop() ?? {};
+          if (error.ErrorDetail?.ErrorCode === 'AlreadyExistsException') {
+            continue;
+          }
           const rerun = chunk.find(
             (p) => p.Values?.join('/') === error.PartitionValues?.join('/')
           );

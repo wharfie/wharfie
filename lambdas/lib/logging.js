@@ -66,9 +66,6 @@ function getEventLogger(event, context) {
             }),
           ]
         : [
-            new winston.transports.Console({
-              level: process.env.RESOURCE_LOGGING_LEVEL,
-            }),
             new S3LogTransport(
               {
                 level: process.env.RESOURCE_LOGGING_LEVEL,
@@ -123,12 +120,63 @@ function getDaemonLogger() {
             }),
           ]
         : [
-            new winston.transports.Console({
-              level: process.env.RESOURCE_LOGGING_LEVEL,
-            }),
             new S3LogTransport(
               {
                 level: process.env.DAEMON_LOGGING_LEVEL,
+              },
+              {
+                logBucket: BUCKET,
+                logObjectKey,
+                // don't use flush intervals when running in jest
+                flushInterval: process.env.JEST_WORKER_ID ? -1 : 5000,
+              }
+            ),
+          ],
+  });
+  const logger = winston.loggers.get(key);
+  loggers[key] = {
+    ...loggers[key],
+    [key]: logger,
+  };
+  return logger;
+}
+
+/**
+ * @returns {import('winston').Logger} -
+ */
+function getAWSSDKLogger() {
+  const key = `aws`;
+  if (loggers[key] && loggers[key][key]) return loggers[key][key];
+
+  const currentDateTime = new Date();
+  const year = currentDateTime.getUTCFullYear();
+  const month = String(currentDateTime.getUTCMonth() + 1).padStart(2, '0'); // Months are 0-indexed
+  const day = String(currentDateTime.getUTCDate()).padStart(2, '0');
+  const currentHourUTC = currentDateTime.getUTCHours();
+  const formattedDate = `${year}-${month}-${day}`;
+  const LOG_NAME = `${
+    process.env.AWS_LAMBDA_LOG_STREAM_NAME || cuid()
+  }.log`.replace(/\//g, '_');
+  const logObjectKey = `${DEPLOYMENT_NAME}/aws_sdk_logs/dt=${formattedDate}/hr=${currentHourUTC}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
+
+  winston.loggers.add(key, {
+    level: process.env.DAEMON_LOGGING_LEVEL,
+    format: winston.format.combine(..._loggerFormat()),
+    defaultMeta: {
+      service: name,
+      version,
+    },
+    transports:
+      process.env.LOGGING_FORMAT === 'cli'
+        ? [
+            new winston.transports.Console({
+              level: process.env.AWS_SDK_LOGGING_LEVEL,
+            }),
+          ]
+        : [
+            new S3LogTransport(
+              {
+                level: process.env.AWS_SDK_LOGGING_LEVEL,
               },
               {
                 logBucket: BUCKET,
@@ -165,7 +213,7 @@ async function flush(context) {
       );
     }
   );
-  await Promise.all(flushRequests);
+  await Promise.all([...flushRequests, flushDaemon(), flushAWSSDK()]);
   delete loggers[context.awsRequestId];
 }
 
@@ -174,6 +222,23 @@ async function flush(context) {
  */
 async function flushDaemon() {
   const key = `daemon`;
+  if (!loggers[key] || !loggers[key][key]) return;
+  await new Promise((resolve) => {
+    loggers[key][key].on('finish', () => {
+      delete loggers[key][key];
+      resolve('done');
+    });
+    loggers[key][key].end();
+  });
+  delete loggers[key];
+}
+
+/**
+ *
+ */
+async function flushAWSSDK() {
+  const key = `aws`;
+  if (!loggers[key] || !loggers[key][key]) return;
   await new Promise((resolve) => {
     loggers[key][key].on('finish', () => {
       delete loggers[key][key];
@@ -187,6 +252,6 @@ async function flushDaemon() {
 module.exports = {
   getEventLogger,
   getDaemonLogger,
+  getAWSSDKLogger,
   flush,
-  flushDaemon,
 };
