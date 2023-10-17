@@ -20,8 +20,14 @@ const WharfieLogRole = new wharfie.Role({
     wharfie.util.join('', [
       wharfie.util.sub('${Bucket}'),
       '/',
-      wharfie.util.sub('${AWS::StackName}-logs'),
+      wharfie.util.sub('${AWS::StackName}'),
+      '/event_logs_compacted/',
+    ]),
+    wharfie.util.join('', [
+      wharfie.util.sub('${Bucket}'),
       '/',
+      wharfie.util.sub('${AWS::StackName}'),
+      '/daemon_logs_compacted/',
     ]),
   ],
 });
@@ -75,8 +81,8 @@ const WharfieEventLogTable = new wharfie.Resource({
       's3://',
       wharfie.util.sub('${Bucket}'),
       '/',
-      wharfie.util.sub('${AWS::StackName}-logs'),
-      '/event_logs/',
+      wharfie.util.sub('${AWS::StackName}'),
+      '/event_logs_compacted/',
     ]),
   },
   DaemonConfig: {
@@ -133,8 +139,8 @@ const WharfieDaemonLogTable = new wharfie.Resource({
       's3://',
       wharfie.util.sub('${Bucket}'),
       '/',
-      wharfie.util.sub('${AWS::StackName}-logs'),
-      '/daemon_logs/',
+      wharfie.util.sub('${AWS::StackName}'),
+      '/daemon_logs_compacted/',
     ]),
   },
   DaemonConfig: {

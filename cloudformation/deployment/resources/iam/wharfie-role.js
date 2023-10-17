@@ -27,6 +27,9 @@ const Resources = {
               wharfie.util.sub(
                 'arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/Wharfie*'
               ),
+              wharfie.util.sub(
+                'arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/migrate-Wharfie*'
+              ),
             ],
           },
           {
@@ -198,6 +201,9 @@ const Resources = {
                   wharfie.util.sub(
                     'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:Wharfie*'
                   ),
+                  wharfie.util.sub(
+                    'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:migrate-Wharfie*'
+                  ),
                 ],
               },
               {
@@ -297,6 +303,9 @@ const Resources = {
                   wharfie.util.sub(
                     'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/Wharfie*'
                   ),
+                  wharfie.util.sub(
+                    'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/migrate-Wharfie*'
+                  ),
                 ],
               },
               {
@@ -320,6 +329,20 @@ const Resources = {
                   'glue:GetTables',
                 ],
                 Resource: '*',
+              },
+              {
+                Sid: 'Logging',
+                Effect: 'Allow',
+                Action: [
+                  's3:PutObject',
+                  's3:PutObjectAcl',
+                  's3:GetObject',
+                  's3:ListMultipartUploadParts',
+                  's3:AbortMultipartUpload',
+                ],
+                Resource: [
+                  wharfie.util.sub('arn:${AWS::Partition}:s3:::${Bucket}/*'),
+                ],
               },
               {
                 Sid: 'Bucket',
@@ -356,19 +379,6 @@ const Resources = {
                 ],
               },
               {
-                Sid: 'Logging',
-                Effect: 'Allow',
-                Action: ['s3:GetObject', 's3:PutObject'],
-                Resource: [
-                  wharfie.util.sub(
-                    'arn:${AWS::Partition}:s3:::${ArtifactBucket}/${AWS::StackName}/*'
-                  ),
-                  wharfie.util.sub(
-                    'arn:${AWS::Partition}:s3:::${Bucket}/wharfie-templates/*'
-                  ),
-                ],
-              },
-              {
                 Effect: 'Allow',
                 Action: ['athena:GetQueryExecution'],
                 Resource: '*',
@@ -379,6 +389,9 @@ const Resources = {
                 Resource: [
                   wharfie.util.sub(
                     'arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/Wharfie*'
+                  ),
+                  wharfie.util.sub(
+                    'arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/migrate-Wharfie*'
                   ),
                 ],
               },

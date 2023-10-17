@@ -20,7 +20,9 @@ const Resources = {};
 Resources.FirehoseExampleTestDataLambdaSchedule = {
   Type: 'AWS::Events::Rule',
   Properties: {
-    Name: 'FirehoseExampleTestDataLambda',
+    Name: {
+      'Fn::Sub': 'FirehoseExampleTestDataLambda_${AWS::StackName}',
+    },
     Description: {
       'Fn::Sub':
         'Schedule for FirehoseExampleTestDataLambda in ${AWS::StackName} stack',
