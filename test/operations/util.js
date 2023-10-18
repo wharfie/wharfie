@@ -1,6 +1,7 @@
 'use strict';
 process.env.STACK_NAME = 'test-stack';
 process.env.DAEMON_LOGGING_LEVEL = 'warn';
+process.env.AWS_SDK_LOGGING_LEVEL = 'warn';
 process.env.RESOURCE_LOGGING_LEVEL = 'warn';
 process.env.TEMPORARY_GLUE_DATABASE = 'temp-glue-database';
 process.env.RESOURCE_TABLE = 'resource-table';

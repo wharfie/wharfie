@@ -7,10 +7,18 @@ class BaseAWS {
    */
   static config() {
     const logger = {
-      debug: aws_sdk_log.debug,
-      info: aws_sdk_log.info,
-      warn: aws_sdk_log.warn,
-      error: aws_sdk_log.error,
+      debug: (/** @type {any[]} */ ...content) => {
+        content.map(aws_sdk_log.debug);
+      },
+      info: (/** @type {any[]} */ ...content) => {
+        content.map(aws_sdk_log.info);
+      },
+      warn: (/** @type {any[]} */ ...content) => {
+        content.map(aws_sdk_log.warn);
+      },
+      error: (/** @type {any[]} */ ...content) => {
+        content.map(aws_sdk_log.error);
+      },
     };
     return {
       maxAttempts: 20,

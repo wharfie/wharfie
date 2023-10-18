@@ -33,6 +33,7 @@ const Monitor = new wharfie.util.shortcuts.QueueLambda({
       STACK_NAME: wharfie.util.stackName,
       LOGGING_TRANSPORT: wharfie.util.ref('LoggingTransport'),
       DAEMON_LOGGING_LEVEL: wharfie.util.ref('DaemonLoggingLevel'),
+      AWS_SDK_LOGGING_LEVEL: wharfie.util.ref('DaemonLoggingLevel'),
       RESOURCE_LOGGING_LEVEL: wharfie.util.ref('ResourceLoggingLevel'),
       TEMPORARY_GLUE_DATABASE: wharfie.util.ref('TemporaryDatabase'),
       RESOURCE_TABLE: wharfie.util.ref('ResourceTable'),

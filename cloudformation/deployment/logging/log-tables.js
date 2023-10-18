@@ -254,6 +254,6 @@ module.exports = wharfie.util.merge(
   { Resources },
   WharfieEventLogTable,
   WharfieDaemonLogTable,
-  WharfieLogRole,
-  WharfieAWSSDKLogTable
+  WharfieAWSSDKLogTable,
+  WharfieLogRole
 );

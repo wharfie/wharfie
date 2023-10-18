@@ -160,7 +160,7 @@ function getAWSSDKLogger() {
   const logObjectKey = `${DEPLOYMENT_NAME}/aws_sdk_logs/dt=${formattedDate}/hr=${currentHourUTC}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
 
   winston.loggers.add(key, {
-    level: process.env.DAEMON_LOGGING_LEVEL,
+    level: process.env.AWS_SDK_LOGGING_LEVEL || 'warn',
     format: winston.format.combine(..._loggerFormat()),
     defaultMeta: {
       service: name,

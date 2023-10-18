@@ -28,6 +28,7 @@ const Bootstrap = new wharfie.util.shortcuts.Lambda({
       STACK_NAME: wharfie.util.stackName,
       LOGGING_TRANSPORT: wharfie.util.ref('LoggingTransport'),
       DAEMON_LOGGING_LEVEL: wharfie.util.ref('DaemonLoggingLevel'),
+      AWS_SDK_LOGGING_LEVEL: wharfie.util.ref('DaemonLoggingLevel'),
       RESOURCE_LOGGING_LEVEL: wharfie.util.ref('ResourceLoggingLevel'),
       RESOURCE_TABLE: wharfie.util.ref('ResourceTable'),
       SEMAPHORE_TABLE: wharfie.util.ref('SemaphoreTable'),
