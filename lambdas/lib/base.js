@@ -8,48 +8,16 @@ class BaseAWS {
   static config() {
     const logger = {
       debug: (/** @type {any[]} */ ...content) => {
-        content.forEach((record) => {
-          if (record.input) {
-            record.input = JSON.stringify(record.input);
-          }
-          if (record.output) {
-            record.output = JSON.stringify(record.output);
-          }
-          aws_sdk_log.debug(record);
-        });
+        content.forEach(aws_sdk_log.debug);
       },
       info: (/** @type {any[]} */ ...content) => {
-        content.forEach((record) => {
-          if (record.input) {
-            record.input = JSON.stringify(record.input);
-          }
-          if (record.output) {
-            record.output = JSON.stringify(record.output);
-          }
-          aws_sdk_log.info(record);
-        });
+        content.forEach(aws_sdk_log.info);
       },
       warn: (/** @type {any[]} */ ...content) => {
-        content.forEach((record) => {
-          if (record.input) {
-            record.input = JSON.stringify(record.input);
-          }
-          if (record.output) {
-            record.output = JSON.stringify(record.output);
-          }
-          aws_sdk_log.warn(record);
-        });
+        content.forEach(aws_sdk_log.warn);
       },
       error: (/** @type {any[]} */ ...content) => {
-        content.forEach((record) => {
-          if (record.input) {
-            record.input = JSON.stringify(record.input);
-          }
-          if (record.output) {
-            record.output = JSON.stringify(record.output);
-          }
-          aws_sdk_log.error(record);
-        });
+        content.forEach(aws_sdk_log.error);
       },
     };
     return {
