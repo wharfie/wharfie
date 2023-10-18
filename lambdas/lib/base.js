@@ -8,16 +8,48 @@ class BaseAWS {
   static config() {
     const logger = {
       debug: (/** @type {any[]} */ ...content) => {
-        content.map(aws_sdk_log.debug);
+        content.forEach((record) => {
+          if (record.input) {
+            record.input = JSON.stringify(record.input);
+          }
+          if (record.output) {
+            record.output = JSON.stringify(record.output);
+          }
+          aws_sdk_log.debug(record);
+        });
       },
       info: (/** @type {any[]} */ ...content) => {
-        content.map(aws_sdk_log.info);
+        content.forEach((record) => {
+          if (record.input) {
+            record.input = JSON.stringify(record.input);
+          }
+          if (record.output) {
+            record.output = JSON.stringify(record.output);
+          }
+          aws_sdk_log.info(record);
+        });
       },
       warn: (/** @type {any[]} */ ...content) => {
-        content.map(aws_sdk_log.warn);
+        content.forEach((record) => {
+          if (record.input) {
+            record.input = JSON.stringify(record.input);
+          }
+          if (record.output) {
+            record.output = JSON.stringify(record.output);
+          }
+          aws_sdk_log.warn(record);
+        });
       },
       error: (/** @type {any[]} */ ...content) => {
-        content.map(aws_sdk_log.error);
+        content.forEach((record) => {
+          if (record.input) {
+            record.input = JSON.stringify(record.input);
+          }
+          if (record.output) {
+            record.output = JSON.stringify(record.output);
+          }
+          aws_sdk_log.error(record);
+        });
       },
     };
     return {

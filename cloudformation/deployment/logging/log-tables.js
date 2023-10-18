@@ -196,16 +196,16 @@ const WharfieAWSSDKLogTable = new wharfie.Resource({
         '/aws_sdk_logs/',
       ]),
       Columns: [
-        { Name: 'clientName', Type: 'string' },
-        { Name: 'commandName', Type: 'string' },
-        { Name: 'input', Type: 'string' },
+        { Name: 'service', Type: 'string' },
+        { Name: 'version', Type: 'string' },
+        { Name: 'level', Type: 'string' },
         {
-          Name: 'error',
-          Type: 'struct<name:string,$fault:string,$metadata:struct<httpStatusCode:int,requestId:string,extendedRequestId:string,attempts:int,totalRetryDelay:int>,Code:string,Key:string,RequestId:string,HostId:string,message:string>',
+          Name: 'message',
+          Type: 'struct<clientName:string,commandName:string,metadata:struct<httpStatusCode:int,requestId:string,extendedRequestId:string,attempts:int,totalRetryDelay:int>,input:string,output:string,error:struct<name:string,$fault:string,$metadata:struct<httpStatusCode:int,requestId:string,extendedRequestId:string,attempts:int,totalRetryDelay:int>,Code:string,Key:string,RequestId:string,HostId:string,message:string>>',
         },
         {
           Name: 'timestamp',
-          Type: 'struct<httpStatusCode:int,requestId:string,extendedRequestId:string,attempts:int,totalRetryDelay:int>',
+          Type: 'string',
         },
       ],
       InputFormat: 'org.apache.hadoop.mapred.TextInputFormat',

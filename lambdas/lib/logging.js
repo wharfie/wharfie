@@ -120,6 +120,13 @@ function getDaemonLogger() {
             }),
           ]
         : [
+            ...(process.env.DAEMON_LOGGING_LEVEL === 'debug'
+              ? [
+                  new winston.transports.Console({
+                    level: process.env.DAEMON_LOGGING_LEVEL,
+                  }),
+                ]
+              : []),
             new S3LogTransport(
               {
                 level: process.env.DAEMON_LOGGING_LEVEL,
@@ -160,7 +167,7 @@ function getAWSSDKLogger() {
   const logObjectKey = `${DEPLOYMENT_NAME}/aws_sdk_logs/dt=${formattedDate}/hr=${currentHourUTC}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
 
   winston.loggers.add(key, {
-    level: process.env.AWS_SDK_LOGGING_LEVEL || 'warn',
+    level: process.env.AWS_SDK_LOGGING_LEVEL,
     format: winston.format.combine(..._loggerFormat()),
     defaultMeta: {
       service: name,
@@ -174,6 +181,13 @@ function getAWSSDKLogger() {
             }),
           ]
         : [
+            ...(process.env.AWS_SDK_LOGGING_LEVEL === 'debug'
+              ? [
+                  new winston.transports.Console({
+                    level: process.env.AWS_SDK_LOGGING_LEVEL,
+                  }),
+                ]
+              : []),
             new S3LogTransport(
               {
                 level: process.env.AWS_SDK_LOGGING_LEVEL,
@@ -213,7 +227,8 @@ async function flush(context) {
       );
     }
   );
-  await Promise.all([...flushRequests, flushDaemon(), flushAWSSDK()]);
+  await Promise.all(flushRequests);
+  // await Promise.all([...flushRequests, flushDaemon(), flushAWSSDK()]);
   delete loggers[context.awsRequestId];
 }
 
@@ -254,4 +269,6 @@ module.exports = {
   getDaemonLogger,
   getAWSSDKLogger,
   flush,
+  flushDaemon,
+  flushAWSSDK,
 };
