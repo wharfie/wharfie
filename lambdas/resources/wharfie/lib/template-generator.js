@@ -3,10 +3,10 @@
 const { parse } = require('@sandfox/arn');
 const { version } = require('../../../../package.json');
 
-const get_dashboard = require('./dashboard');
+// const get_dashboard = require('./dashboard');
 const { generateSchedule } = require('./cron');
 
-const STACK_NAME = process.env.STACK_NAME || '';
+// const STACK_NAME = process.env.STACK_NAME || '';
 
 /**
  * @typedef Column
@@ -144,29 +144,6 @@ function Wharfie(event, migration_resource = false) {
               StoredAsSubDirectories: false,
               NumberOfBuckets: 0,
             },
-          },
-        },
-      },
-      Dashboard: {
-        Type: 'AWS::CloudWatch::Dashboard',
-        Condition: 'createDashboard',
-        Properties: {
-          DashboardName: {
-            'Fn::Sub': [
-              '${originalStack}_${LogicalResourceId}',
-              { originalStack, LogicalResourceId },
-            ],
-          },
-          DashboardBody: {
-            'Fn::Sub': [
-              JSON.stringify(
-                get_dashboard(LogicalResourceId, originalStack, Metadata)
-              ),
-              {
-                WharfieStack: STACK_NAME,
-                Region: { Ref: 'AWS::Region' },
-              },
-            ],
           },
         },
       },
