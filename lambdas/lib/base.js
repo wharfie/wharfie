@@ -16,8 +16,9 @@ class BaseAWS {
             } catch (e) {
               daemon_log.debug(`[aws-log] ${String(value)}`);
             }
+          } else {
+            daemon_log.debug(`[aws-log] ${String(value)}`);
           }
-          daemon_log.debug(`[aws-log] ${String(value)}`);
         });
       },
       info: (/** @type {any[]} */ ...content) => {
@@ -28,8 +29,9 @@ class BaseAWS {
             } catch (e) {
               daemon_log.info(`[aws-log] ${String(value)}`);
             }
+          } else {
+            daemon_log.info(`[aws-log] ${String(value)}`);
           }
-          daemon_log.info(`[aws-log] ${String(value)}`);
         });
       },
       warn: (/** @type {any[]} */ ...content) => {
@@ -40,8 +42,9 @@ class BaseAWS {
             } catch (e) {
               daemon_log.warn(`[aws-log] ${String(value)}`);
             }
+          } else {
+            daemon_log.warn(`[aws-log] ${String(value)}`);
           }
-          daemon_log.warn(`[aws-log] ${String(value)}`);
         });
       },
       error: (/** @type {any[]} */ ...content) => {
@@ -52,8 +55,9 @@ class BaseAWS {
             } catch (e) {
               daemon_log.error(`[aws-log] ${String(value)}`);
             }
+          } else {
+            daemon_log.error(`[aws-log] ${String(value)}`);
           }
-          daemon_log.error(`[aws-log] ${String(value)}`);
         });
       },
     };
