@@ -1,0 +1,18 @@
+[package]
+name = "wharfie"
+description = "An experimental table-oriented data application framework built ontop of AWS Athena."
+version = "0.0.1"
+authors = ["Joe <joe@wharfie.dev>"]
+edition = "2021"
+
+[dependencies]
+node-bindgen = { version = "6.0" }
+aws-config = "0.56.1"
+aws-sdk-s3 = "0.34.0"
+tokio = { version = "1", features = ["full"] }
+
+[build-dependencies]
+node-bindgen = { version = "6.0", features = ["build"] }
+
+[lib]
+crate-type = ["cdylib"]
