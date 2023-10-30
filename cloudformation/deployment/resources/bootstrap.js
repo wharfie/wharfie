@@ -26,7 +26,6 @@ const Bootstrap = new wharfie.util.shortcuts.Lambda({
       NODE_OPTIONS: '--enable-source-maps',
       AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1,
       STACK_NAME: wharfie.util.stackName,
-      LOGGING_TRANSPORT: wharfie.util.ref('LoggingTransport'),
       DAEMON_LOGGING_LEVEL: wharfie.util.ref('DaemonLoggingLevel'),
       AWS_SDK_LOGGING_LEVEL: wharfie.util.ref('DaemonLoggingLevel'),
       RESOURCE_LOGGING_LEVEL: wharfie.util.ref('ResourceLoggingLevel'),
