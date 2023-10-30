@@ -42,7 +42,9 @@ function getEventLogger(event, context) {
   const day = String(currentDateTime.getUTCDate()).padStart(2, '0');
   const currentHourUTC = currentDateTime.getUTCHours();
   const formattedDate = `${year}-${month}-${day}`;
-  const logObjectKey = `${DEPLOYMENT_NAME}/event_logs/dt=${formattedDate}/hr=${currentHourUTC}/${event.resource_id}.log`;
+  const logObjectKey = `${DEPLOYMENT_NAME}/event_logs/dt=${formattedDate}/hr=${currentHourUTC}/${
+    event.resource_id
+  }-${cuid()}.log`;
 
   winston.loggers.add(key, {
     level: process.env.RESOURCE_LOGGING_LEVEL,
@@ -102,7 +104,7 @@ function getDaemonLogger() {
   const formattedDate = `${year}-${month}-${day}`;
   const LOG_NAME = `${
     process.env.AWS_LAMBDA_LOG_STREAM_NAME || cuid()
-  }.log`.replace(/\//g, '_');
+  }-${cuid()}.log`.replace(/\//g, '_');
   const logObjectKey = `${DEPLOYMENT_NAME}/daemon_logs/dt=${formattedDate}/hr=${currentHourUTC}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
 
   winston.loggers.add(key, {
@@ -163,7 +165,7 @@ function getAWSSDKLogger() {
   const formattedDate = `${year}-${month}-${day}`;
   const LOG_NAME = `${
     process.env.AWS_LAMBDA_LOG_STREAM_NAME || cuid()
-  }.log`.replace(/\//g, '_');
+  }-${cuid()}.log`.replace(/\//g, '_');
   const logObjectKey = `${DEPLOYMENT_NAME}/aws_sdk_logs/dt=${formattedDate}/hr=${currentHourUTC}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
 
   winston.loggers.add(key, {

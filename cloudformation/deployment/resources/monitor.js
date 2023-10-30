@@ -23,6 +23,7 @@ const Monitor = new wharfie.util.shortcuts.QueueLambda({
   EventSourceArn: wharfie.util.getAtt('MonitorQueue', 'Arn'),
   ReservedConcurrentExecutions: 5,
   BatchSize: 10,
+  MaximumBatchingWindowInSeconds: 5,
   Timeout: TIMEOUT,
   MemorySize: 1024,
   RoleArn: wharfie.util.getAtt('WharfieRole', 'Arn'),
@@ -48,8 +49,6 @@ const Monitor = new wharfie.util.shortcuts.QueueLambda({
     },
   },
 });
-delete Monitor.Resources.MonitorLogPolicy;
-Monitor.Resources.MonitorEventSource.Properties.MaximumBatchingWindowInSeconds = 5;
 
 const Resources = {
   MonitorEventRole: {

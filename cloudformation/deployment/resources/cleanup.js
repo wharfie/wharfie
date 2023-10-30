@@ -23,6 +23,7 @@ const Cleanup = new wharfie.util.shortcuts.QueueLambda({
   EventSourceArn: wharfie.util.getAtt('CleanupQueue', 'Arn'),
   ReservedConcurrentExecutions: 5,
   BatchSize: 10,
+  MaximumBatchingWindowInSeconds: 5,
   Timeout: TIMEOUT,
   MemorySize: 1024,
   RoleArn: wharfie.util.getAtt('WharfieRole', 'Arn'),
@@ -48,8 +49,6 @@ const Cleanup = new wharfie.util.shortcuts.QueueLambda({
     },
   },
 });
-delete Cleanup.Resources.CleanupLogPolicy;
-Cleanup.Resources.CleanupEventSource.Properties.MaximumBatchingWindowInSeconds = 5;
 
 const Outputs = {
   CleanupQueue: {

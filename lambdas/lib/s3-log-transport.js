@@ -227,13 +227,11 @@ module.exports = class S3LogTransport extends Transport {
 
   async flushBuffer() {
     if (this.buffer.length === 0) return;
-    await this.createAppendableOrAppendToObject(
-      {
-        Bucket: this._LOG_BUCKET,
-        Key: this._LOG_KEY,
-      },
-      Buffer.from(this.buffer)
-    );
+    await this.putObject({
+      Bucket: this._LOG_BUCKET,
+      Key: this._LOG_KEY,
+      Body: Buffer.from(this.buffer),
+    });
     this.buffer = '';
   }
 

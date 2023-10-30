@@ -48,8 +48,6 @@ const Bootstrap = new wharfie.util.shortcuts.Lambda({
   AlarmName: wharfie.util.sub('${AWS::StackName}-source-bootstrap-errors'),
 });
 
-delete Bootstrap.Resources.BootstrapLogPolicy;
-
 const Outputs = {
   WharfieServiceToken: {
     Value: wharfie.util.getAtt('Bootstrap', 'Arn'),
