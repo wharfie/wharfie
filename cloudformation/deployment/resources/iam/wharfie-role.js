@@ -149,6 +149,11 @@ const Resources = {
             Statement: [
               {
                 Effect: 'Allow',
+                Action: ['cloudwatch:PutMetricData'],
+                Resource: '*',
+              },
+              {
+                Effect: 'Allow',
                 Action: [
                   'sqs:DeleteMessage',
                   'sqs:ReceiveMessage',

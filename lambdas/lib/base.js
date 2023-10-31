@@ -12,7 +12,7 @@ class BaseAWS {
         content.forEach((value) => {
           if (typeof value === 'object') {
             try {
-              aws_sdk_log.debug(value);
+              aws_sdk_log.debug(JSON.stringify(value));
             } catch (e) {
               daemon_log.debug(`[aws-log] ${String(value)}`);
             }
@@ -25,7 +25,7 @@ class BaseAWS {
         content.forEach((value) => {
           if (typeof value === 'object') {
             try {
-              aws_sdk_log.info(value);
+              aws_sdk_log.info(JSON.stringify(value));
             } catch (e) {
               daemon_log.info(`[aws-log] ${String(value)}`);
             }
@@ -38,7 +38,7 @@ class BaseAWS {
         content.forEach((value) => {
           if (typeof value === 'object') {
             try {
-              aws_sdk_log.warn(value);
+              aws_sdk_log.warn(JSON.stringify(value));
             } catch (e) {
               daemon_log.warn(`[aws-log] ${String(value)}`);
             }
@@ -51,7 +51,7 @@ class BaseAWS {
         content.forEach((value) => {
           if (typeof value === 'object') {
             try {
-              aws_sdk_log.error(value);
+              aws_sdk_log.error(JSON.stringify(value));
             } catch (e) {
               daemon_log.error(`[aws-log] ${String(value)}`);
             }

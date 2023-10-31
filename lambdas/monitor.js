@@ -268,6 +268,7 @@ async function monitorWharfie(cloudwatchEvent, context) {
 /**
  * @param {import('./typedefs').AthenaEvent} cloudwatchEvent -
  */
+// eslint-disable-next-line no-unused-vars
 async function createMetrics(cloudwatchEvent) {
   const query = cloudwatchEvent.detail;
   const metricData = [];
@@ -382,7 +383,7 @@ async function createMetrics(cloudwatchEvent) {
  */
 async function run(athenaEvent, context) {
   await monitorWharfie(athenaEvent, context);
-  await createMetrics(athenaEvent);
+  // await createMetrics(athenaEvent);
 }
 
 /**
