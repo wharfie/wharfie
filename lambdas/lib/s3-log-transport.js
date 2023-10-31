@@ -1,10 +1,11 @@
 const Transport = require('winston-transport');
 const AWS = require('@aws-sdk/client-s3');
+const cuid = require('cuid');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 
 /**
  * @typedef S3LogTransportOptions
- * @property {string} [logObjectKey] -
+ * @property {string} [logObjectKeyPrefix] -
  * @property {string} [logBucket] -
  * @property {number} [flushInterval] -
  * @property {number} [maxBufferSize] -
@@ -34,7 +35,7 @@ module.exports = class S3LogTransport extends Transport {
     this._LEFT_PAD_SIZE = 5 * 1024 * 1024;
     this._left_pad_object_checked = false;
     this._LOG_BUCKET = s3opts.logBucket;
-    this._LOG_KEY = s3opts.logObjectKey;
+    this._LOG_KEY_PREFIX = s3opts.logObjectKeyPrefix;
 
     if (this._FLUSH_INTERVAL > 0) {
       this._FLUSH_INTERVAL_ID = setInterval(
@@ -229,7 +230,7 @@ module.exports = class S3LogTransport extends Transport {
     if (this.buffer.length === 0) return;
     await this.putObject({
       Bucket: this._LOG_BUCKET,
-      Key: this._LOG_KEY,
+      Key: `${this._LOG_KEY_PREFIX}-${cuid()}.log`,
       Body: Buffer.from(this.buffer),
     });
     this.buffer = '';

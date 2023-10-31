@@ -42,9 +42,7 @@ function getEventLogger(event, context) {
   const day = String(currentDateTime.getUTCDate()).padStart(2, '0');
   const currentHourUTC = currentDateTime.getUTCHours();
   const formattedDate = `${year}-${month}-${day}`;
-  const logObjectKey = `${DEPLOYMENT_NAME}/event_logs/dt=${formattedDate}/hr=${currentHourUTC}/${
-    event.resource_id
-  }-${cuid()}.log`;
+  const logObjectKeyPrefix = `${DEPLOYMENT_NAME}/event_logs/dt=${formattedDate}/hr=${currentHourUTC}/${event.resource_id}`;
 
   winston.loggers.add(key, {
     level: process.env.RESOURCE_LOGGING_LEVEL,
@@ -74,7 +72,7 @@ function getEventLogger(event, context) {
               },
               {
                 logBucket: BUCKET,
-                logObjectKey,
+                logObjectKeyPrefix,
                 // don't use flush intervals when running in jest
                 flushInterval: process.env.JEST_WORKER_ID ? -1 : 5000,
               }
@@ -104,8 +102,8 @@ function getDaemonLogger() {
   const formattedDate = `${year}-${month}-${day}`;
   const LOG_NAME = `${
     process.env.AWS_LAMBDA_LOG_STREAM_NAME || cuid()
-  }-${cuid()}.log`.replace(/\//g, '_');
-  const logObjectKey = `${DEPLOYMENT_NAME}/daemon_logs/dt=${formattedDate}/hr=${currentHourUTC}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
+  }`.replace(/\//g, '_');
+  const logObjectKeyPrefix = `${DEPLOYMENT_NAME}/daemon_logs/dt=${formattedDate}/hr=${currentHourUTC}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
 
   winston.loggers.add(key, {
     level: process.env.DAEMON_LOGGING_LEVEL,
@@ -135,7 +133,7 @@ function getDaemonLogger() {
               },
               {
                 logBucket: BUCKET,
-                logObjectKey,
+                logObjectKeyPrefix,
                 // don't use flush intervals when running in jest
                 flushInterval: process.env.JEST_WORKER_ID ? -1 : 5000,
               }
@@ -165,8 +163,8 @@ function getAWSSDKLogger() {
   const formattedDate = `${year}-${month}-${day}`;
   const LOG_NAME = `${
     process.env.AWS_LAMBDA_LOG_STREAM_NAME || cuid()
-  }-${cuid()}.log`.replace(/\//g, '_');
-  const logObjectKey = `${DEPLOYMENT_NAME}/aws_sdk_logs/dt=${formattedDate}/hr=${currentHourUTC}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
+  }`.replace(/\//g, '_');
+  const logObjectKeyPrefix = `${DEPLOYMENT_NAME}/aws_sdk_logs/dt=${formattedDate}/hr=${currentHourUTC}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
 
   winston.loggers.add(key, {
     level: process.env.AWS_SDK_LOGGING_LEVEL,
@@ -196,7 +194,7 @@ function getAWSSDKLogger() {
               },
               {
                 logBucket: BUCKET,
-                logObjectKey,
+                logObjectKeyPrefix,
                 // don't use flush intervals when running in jest
                 flushInterval: process.env.JEST_WORKER_ID ? -1 : 5000,
               }
