@@ -120,13 +120,6 @@ function getDaemonLogger() {
             }),
           ]
         : [
-            ...(process.env.DAEMON_LOGGING_LEVEL === 'debug'
-              ? [
-                  new winston.transports.Console({
-                    level: process.env.DAEMON_LOGGING_LEVEL,
-                  }),
-                ]
-              : []),
             new S3LogTransport(
               {
                 level: process.env.DAEMON_LOGGING_LEVEL,
@@ -181,13 +174,6 @@ function getAWSSDKLogger() {
             }),
           ]
         : [
-            ...(process.env.AWS_SDK_LOGGING_LEVEL === 'debug'
-              ? [
-                  new winston.transports.Console({
-                    level: process.env.AWS_SDK_LOGGING_LEVEL,
-                  }),
-                ]
-              : []),
             new S3LogTransport(
               {
                 level: process.env.AWS_SDK_LOGGING_LEVEL,

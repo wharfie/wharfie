@@ -12,7 +12,17 @@ class BaseAWS {
         content.forEach((value) => {
           if (typeof value === 'object') {
             try {
-              aws_sdk_log.debug(JSON.stringify(value));
+              switch (process.env.LOGGING_FORMAT) {
+                case 'json':
+                  aws_sdk_log.debug(value);
+                  break;
+                case 'cli':
+                  aws_sdk_log.debug(JSON.stringify(value));
+                  break;
+                default:
+                  aws_sdk_log.debug(value);
+                  break;
+              }
             } catch (e) {
               daemon_log.debug(`[aws-log] ${String(value)}`);
             }
@@ -25,7 +35,17 @@ class BaseAWS {
         content.forEach((value) => {
           if (typeof value === 'object') {
             try {
-              aws_sdk_log.info(JSON.stringify(value));
+              switch (process.env.LOGGING_FORMAT) {
+                case 'json':
+                  aws_sdk_log.info(value);
+                  break;
+                case 'cli':
+                  aws_sdk_log.info(JSON.stringify(value));
+                  break;
+                default:
+                  aws_sdk_log.info(value);
+                  break;
+              }
             } catch (e) {
               daemon_log.info(`[aws-log] ${String(value)}`);
             }
@@ -38,7 +58,17 @@ class BaseAWS {
         content.forEach((value) => {
           if (typeof value === 'object') {
             try {
-              aws_sdk_log.warn(JSON.stringify(value));
+              switch (process.env.LOGGING_FORMAT) {
+                case 'json':
+                  aws_sdk_log.warn(value);
+                  break;
+                case 'cli':
+                  aws_sdk_log.warn(JSON.stringify(value));
+                  break;
+                default:
+                  aws_sdk_log.warn(value);
+                  break;
+              }
             } catch (e) {
               daemon_log.warn(`[aws-log] ${String(value)}`);
             }
@@ -51,7 +81,17 @@ class BaseAWS {
         content.forEach((value) => {
           if (typeof value === 'object') {
             try {
-              aws_sdk_log.error(JSON.stringify(value));
+              switch (process.env.LOGGING_FORMAT) {
+                case 'json':
+                  aws_sdk_log.error(value);
+                  break;
+                case 'cli':
+                  aws_sdk_log.error(JSON.stringify(value));
+                  break;
+                default:
+                  aws_sdk_log.error(value);
+                  break;
+              }
             } catch (e) {
               daemon_log.error(`[aws-log] ${String(value)}`);
             }
