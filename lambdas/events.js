@@ -96,6 +96,7 @@ const handler = async (event, context) => {
   await Promise.all(
     event.Records.map((record) => processRecord(record, context))
   );
+  daemon_log.info(`MEMORY USAGE: `, process.memoryUsage());
   await logging.flush(context);
 };
 

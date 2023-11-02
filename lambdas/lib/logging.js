@@ -236,7 +236,6 @@ async function flush(context) {
       );
     }
   );
-  // await Promise.all(flushRequests);
   await Promise.all([...flushRequests, flushDaemon(), flushAWSSDK()]);
   delete loggers[context.awsRequestId];
 }
