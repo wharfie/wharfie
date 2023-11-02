@@ -92,6 +92,7 @@ const WharfieEventLogTable = new wharfie.Resource({
         SerializationLibrary: 'org.openx.data.jsonserde.JsonSerDe',
         Parameters: { 'ignore.malformed.json': 'true' },
       },
+      Compressed: true,
     },
   },
   CompactedConfig: {
@@ -105,7 +106,7 @@ const WharfieEventLogTable = new wharfie.Resource({
   },
   DaemonConfig: {
     Role: wharfie.util.getAtt('WharfieLogRole', 'Arn'),
-    Interval: 60 * 3,
+    Interval: 60 * 5,
     SLA: {
       MaxDelay: 60,
       ColumnExpression: `date_parse(concat(dt, hr), '%Y-%m-%d%H')`,
@@ -150,6 +151,7 @@ const WharfieDaemonLogTable = new wharfie.Resource({
         SerializationLibrary: 'org.openx.data.jsonserde.JsonSerDe',
         Parameters: { 'ignore.malformed.json': 'true' },
       },
+      Compressed: true,
     },
   },
   CompactedConfig: {
@@ -163,7 +165,7 @@ const WharfieDaemonLogTable = new wharfie.Resource({
   },
   DaemonConfig: {
     Role: wharfie.util.getAtt('WharfieLogRole', 'Arn'),
-    Interval: 60 * 3,
+    Interval: 60 * 5,
     SLA: {
       MaxDelay: 60,
       ColumnExpression: `date_parse(concat(dt, hr), '%Y-%m-%d%H')`,
@@ -214,6 +216,7 @@ const WharfieAWSSDKLogTable = new wharfie.Resource({
         SerializationLibrary: 'org.openx.data.jsonserde.JsonSerDe',
         Parameters: { 'ignore.malformed.json': 'true' },
       },
+      Compressed: true,
     },
   },
   CompactedConfig: {
@@ -227,7 +230,7 @@ const WharfieAWSSDKLogTable = new wharfie.Resource({
   },
   DaemonConfig: {
     Role: wharfie.util.getAtt('WharfieLogRole', 'Arn'),
-    Interval: 60 * 3,
+    Interval: 60 * 5,
     SLA: {
       MaxDelay: 60,
       ColumnExpression: `date_parse(concat(dt, hr), '%Y-%m-%d%H')`,

@@ -1,6 +1,7 @@
 const Transport = require('winston-transport');
 const AWS = require('@aws-sdk/client-s3');
 const cuid = require('cuid');
+const zlib = require('zlib');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 
 /**
@@ -230,8 +231,9 @@ module.exports = class S3LogTransport extends Transport {
     if (this.buffer.length === 0) return;
     await this.putObject({
       Bucket: this._LOG_BUCKET,
-      Key: `${this._LOG_KEY_PREFIX}-${cuid()}.log`,
-      Body: Buffer.from(this.buffer),
+      Key: `${this._LOG_KEY_PREFIX}-${cuid()}.log.gzip`,
+      Body: zlib.deflateSync(Buffer.from(this.buffer)),
+      ContentEncoding: 'gzip',
     });
     this.buffer = '';
   }

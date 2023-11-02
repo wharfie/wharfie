@@ -44,7 +44,9 @@ function getEventLogger(event, context) {
   const day = String(currentDateTime.getUTCDate()).padStart(2, '0');
   const currentHourUTC = currentDateTime.getUTCHours();
   const formattedDate = `${year}-${month}-${day}`;
-  const logObjectKeyPrefix = `${DEPLOYMENT_NAME}/event_logs/dt=${formattedDate}/hr=${currentHourUTC}/${event.resource_id}`;
+  const logObjectKeyPrefix = `${DEPLOYMENT_NAME}/event_logs/dt=${formattedDate}/hr=${currentHourUTC}/${
+    event.resource_id
+  }-${currentDateTime.toISOString()}`;
 
   winston.loggers.add(key, {
     level: process.env.RESOURCE_LOGGING_LEVEL,
@@ -102,7 +104,7 @@ function getDaemonLogger() {
   const day = String(currentDateTime.getUTCDate()).padStart(2, '0');
   const currentHourUTC = currentDateTime.getUTCHours();
   const formattedDate = `${year}-${month}-${day}`;
-  const LOG_NAME = `${
+  const LOG_NAME = `${currentDateTime.toISOString()}-${
     process.env.AWS_LAMBDA_LOG_STREAM_NAME || cuid()
   }`.replace(/\//g, '_');
   const logObjectKeyPrefix = `${DEPLOYMENT_NAME}/daemon_logs/dt=${formattedDate}/hr=${currentHourUTC}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
@@ -175,7 +177,7 @@ function getAWSSDKLogger() {
   const day = String(currentDateTime.getUTCDate()).padStart(2, '0');
   const currentHourUTC = currentDateTime.getUTCHours();
   const formattedDate = `${year}-${month}-${day}`;
-  const LOG_NAME = `${
+  const LOG_NAME = `${currentDateTime.toISOString()}-${
     process.env.AWS_LAMBDA_LOG_STREAM_NAME || cuid()
   }`.replace(/\//g, '_');
   const logObjectKeyPrefix = `${DEPLOYMENT_NAME}/aws_sdk_logs/dt=${formattedDate}/hr=${currentHourUTC}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
@@ -234,8 +236,8 @@ async function flush(context) {
       );
     }
   );
-  await Promise.all(flushRequests);
-  // await Promise.all([...flushRequests, flushDaemon(), flushAWSSDK()]);
+  // await Promise.all(flushRequests);
+  await Promise.all([...flushRequests, flushDaemon(), flushAWSSDK()]);
   delete loggers[context.awsRequestId];
 }
 
