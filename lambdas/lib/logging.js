@@ -1,5 +1,7 @@
 'use strict';
 const winston = require('winston');
+// eslint-disable-next-line node/no-extraneous-require
+const { format } = require('logform');
 const S3LogTransport = require('./s3-log-transport');
 const cuid = require('cuid');
 
@@ -142,6 +144,25 @@ function getDaemonLogger() {
 }
 
 /**
+ * @returns {import('winston').Logform.Format} -
+ * @param {import('winston').Logform.Format} info -
+ * @param {{}} opts -
+ */
+const sdkLogFormatter = format((info, opts = {}) => {
+  if (info.message && info.message.error) {
+    if (info.message.error.$fault) {
+      info.message.error.fault = info.message.error.$fault;
+      delete info.message.error.$fault;
+    }
+    if (info.message.error.$metadata) {
+      info.message.error.metadata = info.message.error.$metadata;
+      delete info.message.error.$metadata;
+    }
+  }
+  return info;
+});
+
+/**
  * @returns {import('winston').Logger} -
  */
 function getAWSSDKLogger() {
@@ -161,7 +182,7 @@ function getAWSSDKLogger() {
 
   winston.loggers.add(key, {
     level: process.env.AWS_SDK_LOGGING_LEVEL,
-    format: winston.format.combine(..._loggerFormat()),
+    format: winston.format.combine(..._loggerFormat(), sdkLogFormatter()),
     defaultMeta: {
       service: name,
       version,

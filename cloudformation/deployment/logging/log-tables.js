@@ -105,7 +105,7 @@ const WharfieEventLogTable = new wharfie.Resource({
   },
   DaemonConfig: {
     Role: wharfie.util.getAtt('WharfieLogRole', 'Arn'),
-    Interval: 60,
+    Interval: 60 * 3,
     SLA: {
       MaxDelay: 60,
       ColumnExpression: `date_parse(concat(dt, hr), '%Y-%m-%d%H')`,
@@ -163,7 +163,7 @@ const WharfieDaemonLogTable = new wharfie.Resource({
   },
   DaemonConfig: {
     Role: wharfie.util.getAtt('WharfieLogRole', 'Arn'),
-    Interval: 60,
+    Interval: 60 * 3,
     SLA: {
       MaxDelay: 60,
       ColumnExpression: `date_parse(concat(dt, hr), '%Y-%m-%d%H')`,
@@ -201,7 +201,7 @@ const WharfieAWSSDKLogTable = new wharfie.Resource({
         { Name: 'level', Type: 'string' },
         {
           Name: 'message',
-          Type: 'struct<clientName:string,commandName:string,metadata:struct<httpStatusCode:int,requestId:string,extendedRequestId:string,attempts:int,totalRetryDelay:int>,input:string,output:string,error:struct<name:string,$fault:string,$metadata:struct<httpStatusCode:int,requestId:string,extendedRequestId:string,attempts:int,totalRetryDelay:int>,Code:string,Key:string,RequestId:string,HostId:string,message:string>>',
+          Type: 'struct<clientName:string,commandName:string,metadata:struct<httpStatusCode:int,requestId:string,extendedRequestId:string,attempts:int,totalRetryDelay:int>,input:string,output:string,error:struct<name:string,fault:string,metadata:struct<httpStatusCode:int,requestId:string,extendedRequestId:string,attempts:int,totalRetryDelay:int>,Code:string,Key:string,RequestId:string,HostId:string,message:string>>',
         },
         {
           Name: 'timestamp',
@@ -227,7 +227,7 @@ const WharfieAWSSDKLogTable = new wharfie.Resource({
   },
   DaemonConfig: {
     Role: wharfie.util.getAtt('WharfieLogRole', 'Arn'),
-    Interval: 60,
+    Interval: 60 * 3,
     SLA: {
       MaxDelay: 60,
       ColumnExpression: `date_parse(concat(dt, hr), '%Y-%m-%d%H')`,
