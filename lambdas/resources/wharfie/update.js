@@ -75,7 +75,10 @@ async function update(event) {
         ...event,
         ResourceProperties: {
           ...event.ResourceProperties,
-          DatabaseName: `migrate_${event.ResourceProperties.DatabaseName}`,
+          TableInput: {
+            ...event.ResourceProperties.TableInput,
+            TableName: `migrate_${event.ResourceProperties.TableInput.TableName}`,
+          },
         },
       },
       true
