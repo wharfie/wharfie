@@ -92,7 +92,7 @@ const WharfieEventLogTable = new wharfie.Resource({
         SerializationLibrary: 'org.openx.data.jsonserde.JsonSerDe',
         Parameters: { 'ignore.malformed.json': 'true' },
       },
-      Compressed: true,
+      // Compressed: true,
     },
   },
   CompactedConfig: {
@@ -151,7 +151,7 @@ const WharfieDaemonLogTable = new wharfie.Resource({
         SerializationLibrary: 'org.openx.data.jsonserde.JsonSerDe',
         Parameters: { 'ignore.malformed.json': 'true' },
       },
-      Compressed: true,
+      // Compressed: true,
     },
   },
   CompactedConfig: {
@@ -216,7 +216,7 @@ const WharfieAWSSDKLogTable = new wharfie.Resource({
         SerializationLibrary: 'org.openx.data.jsonserde.JsonSerDe',
         Parameters: { 'ignore.malformed.json': 'true' },
       },
-      Compressed: true,
+      // Compressed: true,
     },
   },
   CompactedConfig: {
