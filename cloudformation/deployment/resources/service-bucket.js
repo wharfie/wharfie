@@ -28,6 +28,12 @@ const Bucket = wharfie.util.shortcuts.s3Bucket.build({
         Prefix: wharfie.util.sub('${AWS::StackName}/daemon_logs/'),
       },
       {
+        Id: 'aws_sdk_log_files_expiration',
+        ExpirationInDays: 1,
+        Status: 'Enabled',
+        Prefix: wharfie.util.sub('${AWS::StackName}/aws_sdk_logs/'),
+      },
+      {
         Id: 'athena_results_expiration',
         ExpirationInDays: 1,
         Status: 'Enabled',
