@@ -89,12 +89,7 @@ function getBucketResource(options) {
     Properties: {
       BucketName: options.BucketName,
       AccessControl: 'Private',
-      Tags: [
-        {
-          Key: 'built_with',
-          Value: 's3-bucket-template',
-        },
-      ],
+      Tags: [],
       // https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-s3-bucket-loggingconfig.html
       LoggingConfiguration: {
         DestinationBucketName: options.AccessLoggingBucketName,
@@ -170,7 +165,7 @@ function build(options, template) {
   ) {
     options.PublicAccessBlockOptions = {
       BlockPublicAcls: true,
-      IgnorePublicAcls: false,
+      IgnorePublicAcls: true,
       BlockPublicPolicy: true,
       RestrictPublicBuckets: true,
     };

@@ -71,6 +71,20 @@ const Bucket = wharfie.util.shortcuts.s3Bucket.build({
           },
         },
       },
+      {
+        Event: 's3:ObjectCreated:*',
+        Queue: wharfie.util.getAtt('S3EventQueue', 'Arn'),
+        Filter: {
+          S3Key: {
+            Rules: [
+              {
+                Name: 'prefix',
+                Value: wharfie.util.sub('${AWS::StackName}/aws_sdk_logs/'),
+              },
+            ],
+          },
+        },
+      },
     ],
   },
 });
