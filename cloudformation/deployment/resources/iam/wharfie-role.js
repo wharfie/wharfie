@@ -154,6 +154,11 @@ const Resources = {
               },
               {
                 Effect: 'Allow',
+                Action: ['firehose:PutRecordBatch'],
+                Resource: [wharfie.util.getAtt('LoggingFirehose', 'Arn')],
+              },
+              {
+                Effect: 'Allow',
                 Action: [
                   'sqs:DeleteMessage',
                   'sqs:ReceiveMessage',

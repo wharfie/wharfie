@@ -46,6 +46,7 @@ const Daemon = new wharfie.util.shortcuts.QueueLambda({
       RESOURCE_QUERY_CONCURRENCY: wharfie.util.ref('ResourceQueryConcurrency'),
       MAX_QUERIES_PER_ACTION: wharfie.util.ref('MaxQueriesPerAction'),
       WHARFIE_SERVICE_BUCKET: wharfie.util.ref('Bucket'),
+      WHARFIE_LOGGING_FIREHOSE: wharfie.util.ref('LoggingFirehose'),
     },
   },
 });

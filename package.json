@@ -137,6 +137,7 @@
     "@aws-sdk/client-cloudformation": "^3.363.0",
     "@aws-sdk/client-cloudwatch": "^3.363.0",
     "@aws-sdk/client-dynamodb": "^3.363.0",
+    "@aws-sdk/client-firehose": "^3.441.0",
     "@aws-sdk/client-glue": "^3.363.0",
     "@aws-sdk/client-s3": "^3.363.0",
     "@aws-sdk/client-sns": "^3.363.0",

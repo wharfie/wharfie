@@ -2,17 +2,19 @@
 const winston = require('winston');
 // eslint-disable-next-line node/no-extraneous-require
 const { format } = require('logform');
-const S3LogTransport = require('./s3-log-transport');
-const cuid = require('cuid');
+// const S3LogTransport = require('./s3-log-transport');
+const FirehoseLogTransport = require('./firehose-log-transport');
 
 const { name, version } = require('../../package.json');
 
 /** @type {Object.<string, Object.<string,import('winston').Logger>>} */
 const loggers = {};
 
-const FUNCTION_NAME = process.env.AWS_LAMBDA_FUNCTION_NAME;
-const BUCKET = process.env.WHARFIE_SERVICE_BUCKET || '';
-const DEPLOYMENT_NAME = process.env.STACK_NAME;
+const firehoseTransportOptions = {
+  logDeliveryStreamName: process.env.WHARFIE_LOGGING_FIREHOSE,
+  // don't use flush intervals when running in jest
+  flushInterval: process.env.JEST_WORKER_ID ? -1 : 5000,
+};
 
 /**
  * @returns {import('winston').Logform.Format[]} -
@@ -38,16 +40,6 @@ function getEventLogger(event, context) {
   if (loggers[context.awsRequestId] && loggers[context.awsRequestId][key])
     return loggers[context.awsRequestId][key];
 
-  const currentDateTime = new Date();
-  const year = currentDateTime.getUTCFullYear();
-  const month = String(currentDateTime.getUTCMonth() + 1).padStart(2, '0'); // Months are 0-indexed
-  const day = String(currentDateTime.getUTCDate()).padStart(2, '0');
-  const currentHourUTC = currentDateTime.getUTCHours();
-  const formattedDate = `${year}-${month}-${day}`;
-  const logObjectKeyPrefix = `${DEPLOYMENT_NAME}/event_logs/dt=${formattedDate}/hr=${currentHourUTC}/${
-    event.resource_id
-  }-${currentDateTime.toISOString()}`;
-
   winston.loggers.add(key, {
     level: process.env.RESOURCE_LOGGING_LEVEL,
     format: winston.format.combine(..._loggerFormat()),
@@ -61,6 +53,7 @@ function getEventLogger(event, context) {
       action_type: event.action_type,
       query_id: event.query_id,
       request_id: context.awsRequestId,
+      log_type: 'event',
     },
     transports:
       process.env.LOGGING_FORMAT === 'cli'
@@ -70,16 +63,11 @@ function getEventLogger(event, context) {
             }),
           ]
         : [
-            new S3LogTransport(
+            new FirehoseLogTransport(
               {
                 level: process.env.RESOURCE_LOGGING_LEVEL,
               },
-              {
-                logBucket: BUCKET,
-                logObjectKeyPrefix,
-                // don't use flush intervals when running in jest
-                flushInterval: process.env.JEST_WORKER_ID ? -1 : 5000,
-              }
+              firehoseTransportOptions
             ),
           ],
   });
@@ -98,23 +86,13 @@ function getDaemonLogger() {
   const key = `daemon`;
   if (loggers[key] && loggers[key][key]) return loggers[key][key];
 
-  const currentDateTime = new Date();
-  const year = currentDateTime.getUTCFullYear();
-  const month = String(currentDateTime.getUTCMonth() + 1).padStart(2, '0'); // Months are 0-indexed
-  const day = String(currentDateTime.getUTCDate()).padStart(2, '0');
-  const currentHourUTC = currentDateTime.getUTCHours();
-  const formattedDate = `${year}-${month}-${day}`;
-  const LOG_NAME = `${currentDateTime.toISOString()}-${
-    process.env.AWS_LAMBDA_LOG_STREAM_NAME || cuid()
-  }`.replace(/\//g, '_');
-  const logObjectKeyPrefix = `${DEPLOYMENT_NAME}/daemon_logs/dt=${formattedDate}/hr=${currentHourUTC}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
-
   winston.loggers.add(key, {
     level: process.env.DAEMON_LOGGING_LEVEL,
     format: winston.format.combine(..._loggerFormat()),
     defaultMeta: {
       service: name,
       version,
+      log_type: 'daemon',
     },
     transports:
       process.env.LOGGING_FORMAT === 'cli'
@@ -124,16 +102,11 @@ function getDaemonLogger() {
             }),
           ]
         : [
-            new S3LogTransport(
+            new FirehoseLogTransport(
               {
                 level: process.env.DAEMON_LOGGING_LEVEL,
               },
-              {
-                logBucket: BUCKET,
-                logObjectKeyPrefix,
-                // don't use flush intervals when running in jest
-                flushInterval: process.env.JEST_WORKER_ID ? -1 : 5000,
-              }
+              firehoseTransportOptions
             ),
           ],
   });
@@ -171,23 +144,13 @@ function getAWSSDKLogger() {
   const key = `aws`;
   if (loggers[key] && loggers[key][key]) return loggers[key][key];
 
-  const currentDateTime = new Date();
-  const year = currentDateTime.getUTCFullYear();
-  const month = String(currentDateTime.getUTCMonth() + 1).padStart(2, '0'); // Months are 0-indexed
-  const day = String(currentDateTime.getUTCDate()).padStart(2, '0');
-  const currentHourUTC = currentDateTime.getUTCHours();
-  const formattedDate = `${year}-${month}-${day}`;
-  const LOG_NAME = `${currentDateTime.toISOString()}-${
-    process.env.AWS_LAMBDA_LOG_STREAM_NAME || cuid()
-  }`.replace(/\//g, '_');
-  const logObjectKeyPrefix = `${DEPLOYMENT_NAME}/aws_sdk_logs/dt=${formattedDate}/hr=${currentHourUTC}/lambda=${FUNCTION_NAME}/${LOG_NAME}`;
-
   winston.loggers.add(key, {
     level: process.env.AWS_SDK_LOGGING_LEVEL,
     format: winston.format.combine(..._loggerFormat(), sdkLogFormatter()),
     defaultMeta: {
       service: name,
       version,
+      log_type: 'aws_sdk',
     },
     transports:
       process.env.LOGGING_FORMAT === 'cli'
@@ -197,16 +160,11 @@ function getAWSSDKLogger() {
             }),
           ]
         : [
-            new S3LogTransport(
+            new FirehoseLogTransport(
               {
                 level: process.env.AWS_SDK_LOGGING_LEVEL,
               },
-              {
-                logBucket: BUCKET,
-                logObjectKeyPrefix,
-                // don't use flush intervals when running in jest
-                flushInterval: process.env.JEST_WORKER_ID ? -1 : 5000,
-              }
+              firehoseTransportOptions
             ),
           ],
   });

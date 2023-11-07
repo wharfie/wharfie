@@ -50,192 +50,32 @@ const WharfieLogRole = new wharfie.Role({
   ],
 });
 
-const WharfieEventLogTable = new wharfie.Resource({
-  LogicalName: 'WharfieEventLogTable',
-  DatabaseName: wharfie.util.ref('LogDatabase'),
-  WharfieDeployment: wharfie.util.sub('${AWS::StackName}'),
-  _ServiceToken: wharfie.util.getAtt('Bootstrap', 'Arn'),
-  _TableInputOverride: {
-    Name: 'event_logs',
-    Description:
-      'event logs from wharfie.  This table is managed by wharfie and should not be modified directly.',
-    TableType: 'EXTERNAL_TABLE',
-    Parameters: { EXTERNAL: 'TRUE', has_encrypted_data: 'false' },
-    PartitionKeys: [
-      { Name: 'dt', Type: 'string' },
-      { Name: 'hr', Type: 'string' },
-    ],
-    StorageDescriptor: {
-      Location: wharfie.util.join('', [
-        's3://',
-        wharfie.util.sub('${Bucket}'),
-        '/',
-        wharfie.util.sub('${AWS::StackName}'),
-        '/event_logs/',
-      ]),
-      Columns: [
-        { Name: 'action_id', Type: 'string' },
-        { Name: 'action_type', Type: 'string' },
-        { Name: 'level', Type: 'string' },
-        { Name: 'message', Type: 'string' },
-        { Name: 'operation_id', Type: 'string' },
-        { Name: 'operation_type', Type: 'string' },
-        { Name: 'request_id', Type: 'string' },
-        { Name: 'resource_id', Type: 'string' },
-        { Name: 'service', Type: 'string' },
-        { Name: 'version', Type: 'string' },
-        { Name: 'timestamp', Type: 'string' },
-      ],
-      InputFormat: 'org.apache.hadoop.mapred.TextInputFormat',
-      OutputFormat: 'org.apache.hadoop.hive.ql.io.IgnoreKeyTextOutputFormat',
-      SerdeInfo: {
-        SerializationLibrary: 'org.openx.data.jsonserde.JsonSerDe',
-        Parameters: { 'ignore.malformed.json': 'true' },
-      },
-      // Compressed: true,
-    },
-  },
-  CompactedConfig: {
-    Location: wharfie.util.join('', [
-      's3://',
-      wharfie.util.sub('${Bucket}'),
-      '/',
-      wharfie.util.sub('${AWS::StackName}'),
-      '/event_logs_compacted/',
-    ]),
-  },
-  DaemonConfig: {
-    Role: wharfie.util.getAtt('WharfieLogRole', 'Arn'),
-    Interval: 60 * 5,
-    SLA: {
-      MaxDelay: 60,
-      ColumnExpression: `date_parse(concat(dt, hr), '%Y-%m-%d%H')`,
-    },
-  },
-});
+const Columns = [
+  { Name: 'action_id', Type: 'string' },
+  { Name: 'action_type', Type: 'string' },
+  { Name: 'level', Type: 'string' },
+  { Name: 'message', Type: 'string' },
+  { Name: 'operation_id', Type: 'string' },
+  { Name: 'operation_type', Type: 'string' },
+  { Name: 'request_id', Type: 'string' },
+  { Name: 'resource_id', Type: 'string' },
+  { Name: 'service', Type: 'string' },
+  { Name: 'version', Type: 'string' },
+  { Name: 'timestamp', Type: 'string' },
+  { Name: 'log_type', Type: 'string' },
+];
 
-const WharfieDaemonLogTable = new wharfie.Resource({
-  LogicalName: 'WharfieDaemonLogTable',
+const LoggingFireHose = new wharfie.Firehose({
+  LogicalName: 'Logging',
   DatabaseName: wharfie.util.ref('LogDatabase'),
+  TableName: 'logs',
+  Description: 'raw logs from wharfie',
+  Columns,
+  DestinationBucket: wharfie.util.ref('Bucket'),
+  DestinationPrefix: 'logs/',
+  FirehoseLoggingEnabled: true,
   WharfieDeployment: wharfie.util.sub('${AWS::StackName}'),
-  _ServiceToken: wharfie.util.getAtt('Bootstrap', 'Arn'),
-  _TableInputOverride: {
-    Name: 'daemon_logs',
-    Description:
-      'daemon logs from wharfie.  This table is managed by wharfie and should not be modified directly.',
-    TableType: 'EXTERNAL_TABLE',
-    Parameters: { EXTERNAL: 'TRUE', has_encrypted_data: 'false' },
-    PartitionKeys: [
-      { Name: 'dt', Type: 'string' },
-      { Name: 'hr', Type: 'string' },
-      { Name: 'lambda', Type: 'string' },
-    ],
-    StorageDescriptor: {
-      Location: wharfie.util.join('', [
-        's3://',
-        wharfie.util.sub('${Bucket}'),
-        '/',
-        wharfie.util.sub('${AWS::StackName}'),
-        '/daemon_logs/',
-      ]),
-      Columns: [
-        { Name: 'level', Type: 'string' },
-        { Name: 'message', Type: 'string' },
-        { Name: 'service', Type: 'string' },
-        { Name: 'version', Type: 'string' },
-        { Name: 'timestamp', Type: 'string' },
-      ],
-      InputFormat: 'org.apache.hadoop.mapred.TextInputFormat',
-      OutputFormat: 'org.apache.hadoop.hive.ql.io.IgnoreKeyTextOutputFormat',
-      SerdeInfo: {
-        SerializationLibrary: 'org.openx.data.jsonserde.JsonSerDe',
-        Parameters: { 'ignore.malformed.json': 'true' },
-      },
-      // Compressed: true,
-    },
-  },
-  CompactedConfig: {
-    Location: wharfie.util.join('', [
-      's3://',
-      wharfie.util.sub('${Bucket}'),
-      '/',
-      wharfie.util.sub('${AWS::StackName}'),
-      '/daemon_logs_compacted/',
-    ]),
-  },
-  DaemonConfig: {
-    Role: wharfie.util.getAtt('WharfieLogRole', 'Arn'),
-    Interval: 60 * 5,
-    SLA: {
-      MaxDelay: 60,
-      ColumnExpression: `date_parse(concat(dt, hr), '%Y-%m-%d%H')`,
-    },
-  },
-});
-
-const WharfieAWSSDKLogTable = new wharfie.Resource({
-  LogicalName: 'WharfieAWSSDKLogTable',
-  DatabaseName: wharfie.util.ref('LogDatabase'),
-  WharfieDeployment: wharfie.util.sub('${AWS::StackName}'),
-  _ServiceToken: wharfie.util.getAtt('Bootstrap', 'Arn'),
-  _TableInputOverride: {
-    Name: 'aws_sdk_logs',
-    Description:
-      'aws_sdk logs from wharfie.  This table is managed by wharfie and should not be modified directly.',
-    TableType: 'EXTERNAL_TABLE',
-    Parameters: { EXTERNAL: 'TRUE', has_encrypted_data: 'false' },
-    PartitionKeys: [
-      { Name: 'dt', Type: 'string' },
-      { Name: 'hr', Type: 'string' },
-      { Name: 'lambda', Type: 'string' },
-    ],
-    StorageDescriptor: {
-      Location: wharfie.util.join('', [
-        's3://',
-        wharfie.util.sub('${Bucket}'),
-        '/',
-        wharfie.util.sub('${AWS::StackName}'),
-        '/aws_sdk_logs/',
-      ]),
-      Columns: [
-        { Name: 'service', Type: 'string' },
-        { Name: 'version', Type: 'string' },
-        { Name: 'level', Type: 'string' },
-        {
-          Name: 'message',
-          Type: 'struct<clientName:string,commandName:string,metadata:struct<httpStatusCode:int,requestId:string,extendedRequestId:string,attempts:int,totalRetryDelay:int>,input:string,output:string,error:struct<name:string,fault:string,metadata:struct<httpStatusCode:int,requestId:string,extendedRequestId:string,attempts:int,totalRetryDelay:int>,Code:string,Key:string,RequestId:string,HostId:string,message:string>>',
-        },
-        {
-          Name: 'timestamp',
-          Type: 'string',
-        },
-      ],
-      InputFormat: 'org.apache.hadoop.mapred.TextInputFormat',
-      OutputFormat: 'org.apache.hadoop.hive.ql.io.IgnoreKeyTextOutputFormat',
-      SerdeInfo: {
-        SerializationLibrary: 'org.openx.data.jsonserde.JsonSerDe',
-        Parameters: { 'ignore.malformed.json': 'true' },
-      },
-      // Compressed: true,
-    },
-  },
-  CompactedConfig: {
-    Location: wharfie.util.join('', [
-      's3://',
-      wharfie.util.sub('${Bucket}'),
-      '/',
-      wharfie.util.sub('${AWS::StackName}'),
-      '/aws_sdk_logs_compacted/',
-    ]),
-  },
-  DaemonConfig: {
-    Role: wharfie.util.getAtt('WharfieLogRole', 'Arn'),
-    Interval: 60 * 5,
-    SLA: {
-      MaxDelay: 60,
-      ColumnExpression: `date_parse(concat(dt, hr), '%Y-%m-%d%H')`,
-    },
-  },
+  BufferInterval: 60,
 });
 
 const Resources = {
@@ -255,8 +95,6 @@ const Resources = {
 
 module.exports = wharfie.util.merge(
   { Resources },
-  WharfieEventLogTable,
-  WharfieDaemonLogTable,
-  WharfieAWSSDKLogTable,
+  LoggingFireHose,
   WharfieLogRole
 );
