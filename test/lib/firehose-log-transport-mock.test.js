@@ -39,10 +39,10 @@ describe('mock tests for firehose log transport', () => {
         .__getMockState()
         ['test-stream'][0].Data.toString()
     ).toMatchInlineSnapshot(`
-      "test1
-      test2
-      test3
-      test4
+      "\\"test1\\"
+      \\"test2\\"
+      \\"test3\\"
+      \\"test4\\"
       "
     `);
     expect(
@@ -50,8 +50,8 @@ describe('mock tests for firehose log transport', () => {
         .__getMockState()
         ['test-stream'][1].Data.toString()
     ).toMatchInlineSnapshot(`
-      "test5
-      test6
+      "\\"test5\\"
+      \\"test6\\"
       "
     `);
   });
@@ -59,7 +59,7 @@ describe('mock tests for firehose log transport', () => {
   it('log mock test binpacking', async () => {
     expect.assertions(2);
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE + 2).join('a'),
+      { message: new Array(FirehoseLogTransport._MAX_BIN_SIZE + 2).join('a') },
       () => {}
     );
     await firehoseLogTransport.log('test2', () => {});
@@ -74,9 +74,9 @@ describe('mock tests for firehose log transport', () => {
         .__getMockState()
         ['test-stream'][1].Data.toString()
     ).toMatchInlineSnapshot(`
-      "test2
-      test3
-      test4
+      "\\"test2\\"
+      \\"test3\\"
+      \\"test4\\"
       "
     `);
   });
@@ -84,23 +84,23 @@ describe('mock tests for firehose log transport', () => {
   it('log mock test autoFlush bytesize', async () => {
     expect.assertions(1);
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('a'),
+      { message: new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('a') },
       () => {}
     );
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('b'),
+      { message: new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('b') },
       () => {}
     );
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('c'),
+      { message: new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('c') },
       () => {}
     );
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('d'),
+      { message: new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('d') },
       () => {}
     );
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('e'),
+      { message: new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('e') },
       () => {}
     );
     expect(
@@ -138,5 +138,23 @@ describe('mock tests for firehose log transport', () => {
     ).toStrictEqual(
       firehoseLogTransportFoo.firehose.__getMockState()['test-stream']
     );
+  });
+
+  it('log truncation', async () => {
+    expect.assertions(2);
+    await firehoseLogTransport.log(
+      { message: new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('a') },
+      () => {}
+    );
+    await firehoseLogTransport.close();
+    expect(
+      firehoseLogTransport.firehose.__getMockState()['test-stream']
+    ).toHaveLength(1);
+    expect(
+      firehoseLogTransport.firehose
+        .__getMockState()
+        ['test-stream'][0].Data.toString()
+        .slice(0, 30)
+    ).toMatchInlineSnapshot(`"{\\"message\\":\\"TRUNCATEDaaaaaaaaa"`);
   });
 });

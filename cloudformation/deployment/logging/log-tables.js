@@ -76,6 +76,9 @@ const LoggingFireHose = new wharfie.Firehose({
   FirehoseLoggingEnabled: true,
   WharfieDeployment: wharfie.util.sub('${AWS::StackName}'),
   BufferInterval: 60,
+  _WharfieRole: wharfie.util.getAtt('WharfieRole', 'Arn'),
+  _WharfieBasePolicy: wharfie.util.ref('WharfieManagedPolicy'),
+  _ServiceToken: wharfie.util.getAtt('Bootstrap', 'Arn'),
 });
 
 const Resources = {

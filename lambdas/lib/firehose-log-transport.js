@@ -53,11 +53,18 @@ class FirehoseLogTransport extends Transport {
     setImmediate(() => {
       this.emit('logged', info);
     });
-    let record;
-    if (info.length + 1 >= FirehoseLogTransport._MAX_BIN_SIZE) {
-      record = info.slice(0, FirehoseLogTransport._MAX_BIN_SIZE - 1) + '\n';
-    } else {
-      record = info + '\n';
+    let record = JSON.stringify(info) + '\n';
+    if (record.length >= FirehoseLogTransport._MAX_BIN_SIZE) {
+      info.message =
+        'TRUNCATED' +
+        info.message.slice(
+          0,
+          FirehoseLogTransport._MAX_BIN_SIZE -
+            (record.length + 'TRUNCATED'.length)
+        );
+      record =
+        JSON.stringify(info).slice(0, FirehoseLogTransport._MAX_BIN_SIZE - 1) +
+        '\n';
     }
     if (
       FirehoseLogTransport.buffer_records_size + record.length >=
