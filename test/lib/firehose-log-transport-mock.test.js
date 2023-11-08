@@ -119,7 +119,7 @@ describe('mock tests for firehose log transport', () => {
     ).toHaveLength(1);
   });
 
-  it('singleton', async () => {
+  it('shared output', async () => {
     expect.assertions(1);
     const firehoseLogTransportFoo = new FirehoseLogTransport(
       {},

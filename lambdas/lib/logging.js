@@ -10,11 +10,16 @@ const { name, version } = require('../../package.json');
 /** @type {Object.<string, Object.<string,import('winston').Logger>>} */
 const loggers = {};
 
-const firehoseTransportOptions = {
-  logDeliveryStreamName: process.env.WHARFIE_LOGGING_FIREHOSE,
-  // don't use flush intervals when running in jest
-  flushInterval: process.env.JEST_WORKER_ID ? -1 : 5000,
-};
+const FIREHOSE_TRANSPORT = new FirehoseLogTransport(
+  {
+    level: process.env.AWS_SDK_LOGGING_LEVEL,
+  },
+  {
+    logDeliveryStreamName: process.env.WHARFIE_LOGGING_FIREHOSE,
+    // don't use flush intervals when running in jest
+    flushInterval: process.env.JEST_WORKER_ID ? -1 : 5000,
+  }
+);
 
 /**
  * @returns {import('winston').Logform.Format[]} -
@@ -62,14 +67,7 @@ function getEventLogger(event, context) {
               level: process.env.RESOURCE_LOGGING_LEVEL,
             }),
           ]
-        : [
-            new FirehoseLogTransport(
-              {
-                level: process.env.RESOURCE_LOGGING_LEVEL,
-              },
-              firehoseTransportOptions
-            ),
-          ],
+        : [FIREHOSE_TRANSPORT],
   });
   const logger = winston.loggers.get(key);
   loggers[context.awsRequestId] = {
@@ -101,14 +99,7 @@ function getDaemonLogger() {
               level: process.env.DAEMON_LOGGING_LEVEL,
             }),
           ]
-        : [
-            new FirehoseLogTransport(
-              {
-                level: process.env.DAEMON_LOGGING_LEVEL,
-              },
-              firehoseTransportOptions
-            ),
-          ],
+        : [FIREHOSE_TRANSPORT],
   });
   const logger = winston.loggers.get(key);
   loggers[key] = {
@@ -159,14 +150,7 @@ function getAWSSDKLogger() {
               level: process.env.AWS_SDK_LOGGING_LEVEL,
             }),
           ]
-        : [
-            new FirehoseLogTransport(
-              {
-                level: process.env.AWS_SDK_LOGGING_LEVEL,
-              },
-              firehoseTransportOptions
-            ),
-          ],
+        : [FIREHOSE_TRANSPORT],
   });
   const logger = winston.loggers.get(key);
   loggers[key] = {

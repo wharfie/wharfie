@@ -27,6 +27,16 @@ class FirehoseLogTransport extends Transport {
 
     this._LOG_DELIVERY_STREAM_NAME = firehoseOptions.logDeliveryStreamName;
 
+    /**
+     * @type {string[]}
+     */
+    this.buffer_records = [];
+    /**
+     * @type {Object<number, number>}
+     */
+    this.buffer_record_size_map = {};
+    this.buffer_records_size = 0;
+
     if (this._FLUSH_INTERVAL > 0) {
       this._FLUSH_INTERVAL_ID = setInterval(
         this.flushBuffer.bind(this),
@@ -67,18 +77,15 @@ class FirehoseLogTransport extends Transport {
         '\n';
     }
     if (
-      FirehoseLogTransport.buffer_records_size + record.length >=
+      this.buffer_records_size + record.length >=
         FirehoseLogTransport._MAX_BUFFER_SIZE ||
-      FirehoseLogTransport.buffer_records.length + 1 >=
-        FirehoseLogTransport._MAX_BINS
+      this.buffer_records.length + 1 >= FirehoseLogTransport._MAX_BINS
     ) {
       await this.flushBuffer();
     }
-    FirehoseLogTransport.buffer_records_size += record.length;
-    FirehoseLogTransport.buffer_records.push(record);
-    FirehoseLogTransport.buffer_record_size_map[
-      FirehoseLogTransport.buffer_records.length - 1
-    ] = record.length;
+    this.buffer_records_size += record.length;
+    this.buffer_records.push(record);
+    this.buffer_record_size_map[this.buffer_records.length - 1] = record.length;
     callback();
   }
 
@@ -86,14 +93,13 @@ class FirehoseLogTransport extends Transport {
    * Naively bin packs records into bins minimizing unused _BIN_COST_INCREMENT
    * @returns {string[]} -
    */
-  static naiveBinPackBufferRecords() {
+  naiveBinPackBufferRecords() {
     const bins = [];
     let bin_record_index = 0;
     const buffer_record_metadatas = [];
     const packedRecords = new Set();
-    while (bin_record_index < FirehoseLogTransport.buffer_records.length) {
-      const record_size =
-        FirehoseLogTransport.buffer_record_size_map[bin_record_index];
+    while (bin_record_index < this.buffer_records.length) {
+      const record_size = this.buffer_record_size_map[bin_record_index];
       const remainder = record_size % FirehoseLogTransport._BIN_COST_INCREMENT;
       buffer_record_metadatas.push({
         remainder,
@@ -105,10 +111,7 @@ class FirehoseLogTransport extends Transport {
     for (let i = 0; i < buffer_record_metadatas.length; i++) {
       const buffer_record_metadata = buffer_record_metadatas[i];
       if (packedRecords.has(buffer_record_metadata.bin_record_index)) continue;
-      let bin =
-        FirehoseLogTransport.buffer_records[
-          buffer_record_metadata.bin_record_index
-        ];
+      let bin = this.buffer_records[buffer_record_metadata.bin_record_index];
       packedRecords.add(buffer_record_metadata.bin_record_index);
       let current_remainder = buffer_record_metadata.remainder;
       let valid_bin_fill_records = buffer_record_metadatas.filter(
@@ -122,8 +125,7 @@ class FirehoseLogTransport extends Transport {
         const remainder_fill = valid_bin_fill_records.shift();
         if (!remainder_fill) break;
         if (packedRecords.has(remainder_fill.bin_record_index)) continue;
-        bin +=
-          FirehoseLogTransport.buffer_records[remainder_fill.bin_record_index];
+        bin += this.buffer_records[remainder_fill.bin_record_index];
         packedRecords.add(remainder_fill.bin_record_index);
         current_remainder += remainder_fill.remainder;
         valid_bin_fill_records = buffer_record_metadatas.filter(
@@ -140,18 +142,16 @@ class FirehoseLogTransport extends Transport {
   }
 
   async flushBuffer() {
-    if (FirehoseLogTransport.buffer_records.length === 0) return;
+    if (this.buffer_records.length === 0) return;
     await this.putRecordsBatch({
       DeliveryStreamName: this._LOG_DELIVERY_STREAM_NAME,
-      Records: FirehoseLogTransport.naiveBinPackBufferRecords().map(
-        (record) => ({
-          Data: Buffer.from(record),
-        })
-      ),
+      Records: this.naiveBinPackBufferRecords().map((record) => ({
+        Data: Buffer.from(record),
+      })),
     });
-    FirehoseLogTransport.buffer_records_size = 0;
-    FirehoseLogTransport.buffer_record_size_map = {};
-    FirehoseLogTransport.buffer_records = [];
+    this.buffer_records_size = 0;
+    this.buffer_record_size_map = {};
+    this.buffer_records = [];
   }
 
   async close() {
@@ -161,16 +161,6 @@ class FirehoseLogTransport extends Transport {
     this.flushBuffer();
   }
 }
-
-/**
- * @type {string[]}
- */
-FirehoseLogTransport.buffer_records = [];
-/**
- * @type {Object<number, number>}
- */
-FirehoseLogTransport.buffer_record_size_map = {};
-FirehoseLogTransport.buffer_records_size = 0;
 
 // https://docs.aws.amazon.com/AWSJavaScriptSDK/v3/latest/clients/client-firehose/classes/putrecordbatchcommand.html
 FirehoseLogTransport._MAX_BUFFER_SIZE = 4 * 1024 * 1024;
