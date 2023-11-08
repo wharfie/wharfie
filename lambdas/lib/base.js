@@ -11,6 +11,15 @@ class BaseAWS {
       debug: (/** @type {any[]} */ ...content) => {
         content.forEach((value) => {
           if (typeof value === 'object') {
+            if (value.input) {
+              const stringifiedInput = JSON.stringify(value.input);
+              if (stringifiedInput.length > 1000) {
+                value.input = `TRUNCATED: ${stringifiedInput.slice(
+                  0,
+                  1000
+                )}...`;
+              }
+            }
             try {
               switch (process.env.LOGGING_FORMAT) {
                 case 'json':
@@ -34,6 +43,15 @@ class BaseAWS {
       info: (/** @type {any[]} */ ...content) => {
         content.forEach((value) => {
           if (typeof value === 'object') {
+            if (value.input) {
+              const stringifiedInput = JSON.stringify(value.input);
+              if (stringifiedInput.length > 1000) {
+                value.input = `TRUNCATED: ${stringifiedInput.slice(
+                  0,
+                  1000
+                )}...`;
+              }
+            }
             try {
               switch (process.env.LOGGING_FORMAT) {
                 case 'json':
@@ -57,6 +75,15 @@ class BaseAWS {
       warn: (/** @type {any[]} */ ...content) => {
         content.forEach((value) => {
           if (typeof value === 'object') {
+            if (value.input) {
+              const stringifiedInput = JSON.stringify(value.input);
+              if (stringifiedInput.length > 1000) {
+                value.input = `TRUNCATED: ${stringifiedInput.slice(
+                  0,
+                  1000
+                )}...`;
+              }
+            }
             try {
               switch (process.env.LOGGING_FORMAT) {
                 case 'json':
@@ -80,6 +107,15 @@ class BaseAWS {
       error: (/** @type {any[]} */ ...content) => {
         content.forEach((value) => {
           if (typeof value === 'object') {
+            if (value.input) {
+              const stringifiedInput = JSON.stringify(value.input);
+              if (stringifiedInput.length > 1000) {
+                value.input = `TRUNCATED: ${stringifiedInput.slice(
+                  0,
+                  1000
+                )}...`;
+              }
+            }
             try {
               switch (process.env.LOGGING_FORMAT) {
                 case 'json':
