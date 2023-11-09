@@ -9,7 +9,7 @@ const HOME = require('os').homedir();
 const CONFIG_DIR = process.env.XDG_CONFIG_HOME || path.join(HOME, '.config');
 process.env.CONFIG_PATH = `${CONFIG_DIR}/wharfie.config`;
 process.env.LOGGING_FORMAT = 'cli';
-process.env.AWS_SDK_LOGGING_LEVEL = 'warn';
+process.env.LOGGING_LEVEL = 'warn';
 
 require('yargonaut').style('cyan');
 

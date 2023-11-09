@@ -10,6 +10,7 @@ const create_event = require('../../fixtures/wharfieUDF-create.json');
 const nock = require('nock');
 
 process.env.WHARFIE_SERVICE_BUCKET = 'service-bucket';
+process.env.WHARFIE_ARTIFACT_BUCKET = 'service-bucket';
 process.env.AWS_REGION = 'us-east-1';
 
 jest.useFakeTimers();

@@ -9,6 +9,7 @@ const delete_event = require('../../fixtures/wharfieUDF-delete.json');
 const nock = require('nock');
 
 process.env.WHARFIE_SERVICE_BUCKET = 'service-bucket';
+process.env.WHARFIE_ARTIFACT_BUCKET = 'service-bucket';
 process.env.AWS_REGION = 'us-east-1';
 process.env.STACK_NAME = 'wharfie-testing';
 

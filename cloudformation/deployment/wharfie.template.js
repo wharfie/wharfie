@@ -22,15 +22,9 @@ const Parameters = {
     Description: 'SNS topic to send alarms to',
     Default: 'None',
   },
-  DaemonLoggingLevel: {
+  LoggingLevel: {
     Type: 'String',
-    Description: 'Which logging level to use for daemon',
-    AllowedValues: ['debug', 'info', 'warn', 'error'],
-    Default: 'info',
-  },
-  ResourceLoggingLevel: {
-    Type: 'String',
-    Description: 'Which logging level to use for wharfie resources',
+    Description: 'Which logging level to use ',
     AllowedValues: ['debug', 'info', 'warn', 'error'],
     Default: 'info',
   },

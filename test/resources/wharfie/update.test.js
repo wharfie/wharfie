@@ -16,6 +16,7 @@ jest.createMockFromModule('graphlib');
 jest.mock('../../../package.json', () => ({ version: '0.0.1' }));
 
 process.env.WHARFIE_SERVICE_BUCKET = 'service-bucket';
+process.env.WHARFIE_ARTIFACT_BUCKET = 'service-bucket';
 process.env.AWS_REGION = 'us-east-1';
 
 const mockMath = Object.create(global.Math);
