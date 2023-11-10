@@ -78,7 +78,12 @@ function getEventLogger(event, context) {
       request_id: context.awsRequestId,
       log_type: 'event',
     },
-    transports: [getLogTransport()],
+    transports: [
+      getLogTransport(),
+      new winston.transports.Console({
+        level: process.env.LOGGING_LEVEL,
+      }),
+    ],
   });
   const logger = winston.loggers.get(key);
   loggers[context.awsRequestId] = {
@@ -103,7 +108,12 @@ function getDaemonLogger() {
       version,
       log_type: 'daemon',
     },
-    transports: [getLogTransport()],
+    transports: [
+      getLogTransport(),
+      new winston.transports.Console({
+        level: process.env.LOGGING_LEVEL,
+      }),
+    ],
   });
   const logger = winston.loggers.get(key);
   loggers[key] = {
@@ -147,7 +157,12 @@ function getAWSSDKLogger() {
       version,
       log_type: 'aws_sdk',
     },
-    transports: [getLogTransport()],
+    transports: [
+      getLogTransport(),
+      new winston.transports.Console({
+        level: process.env.LOGGING_LEVEL,
+      }),
+    ],
   });
   const logger = winston.loggers.get(key);
   loggers[key] = {

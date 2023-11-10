@@ -107,12 +107,28 @@ class Lambda {
     if (Statement.length > 0 && RoleArn) {
       throw new Error('You cannot specify both Statements and a RoleArn');
     }
+    let roleName;
+    if (RoleArn) {
+      roleName = { 'Fn::Select': [1, { 'Fn::Split': ['/', RoleArn] }] };
+    } else {
+      roleName = { Ref: `${LogicalName}Role` };
+    }
 
     this.LogicalName = LogicalName;
     this.FunctionName = FunctionName;
     this.Condition = Condition;
 
     this.Resources = {
+      [`${LogicalName}Logs`]: {
+        Type: 'AWS::Logs::LogGroup',
+        Condition,
+        Properties: {
+          LogGroupName: {
+            'Fn::Sub': ['/aws/lambda/${name}', { name: FunctionName }],
+          },
+          RetentionInDays: 14,
+        },
+      },
       [`${LogicalName}`]: {
         Type: 'AWS::Lambda::Function',
         Condition,
@@ -162,6 +178,27 @@ class Lambda {
             },
           ],
           MetricName: 'Errors',
+        },
+      },
+      [`${LogicalName}LogPolicy`]: {
+        Type: 'AWS::IAM::Policy',
+        Condition,
+        DependsOn: RoleArn ? undefined : `${LogicalName}Role`,
+        Properties: {
+          PolicyName: 'lambda-log-access',
+          Roles: [roleName],
+          PolicyDocument: {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: 'logs:*',
+                Resource: {
+                  'Fn::GetAtt': [`${LogicalName}Logs`, 'Arn'],
+                },
+              },
+            ],
+          },
         },
       },
     };

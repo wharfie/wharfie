@@ -96,6 +96,29 @@ const Resources = {
             ),
           },
           {
+            Effect: 'Allow',
+            Action: [
+              'logs:CreateLogGroup',
+              'logs:DeleteLogGroup',
+              'logs:DescribeLogGroups',
+              'logs:PutRetentionPolicy',
+              'logs:DeleteRetentionPolicy',
+            ],
+            Resource: [
+              wharfie.util.sub(
+                'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/WharfieUDF*'
+              ),
+              wharfie.util.sub(
+                'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/WharfieUDF*:log-stream:*'
+              ),
+            ],
+          },
+          {
+            Effect: 'Allow',
+            Action: ['logs:DescribeLogGroups'],
+            Resource: '*',
+          },
+          {
             Sid: 'OutputWrite',
             Effect: 'Allow',
             Action: ['s3:GetObject'],
@@ -147,6 +170,29 @@ const Resources = {
           PolicyName: 'main',
           PolicyDocument: {
             Statement: [
+              {
+                Effect: 'Allow',
+                Action: 'cloudwatch:*',
+                Resource: [
+                  wharfie.util.sub(
+                    'arn:${AWS::Partition}:cloudwatch::${AWS::AccountId}:dashboard/*'
+                  ),
+                ],
+              },
+              {
+                Effect: 'Allow',
+                Action: 'logs:*',
+                Resource: [
+                  wharfie.util.getAtt('DaemonLogs', 'Arn'),
+                  wharfie.util.getAtt('BootstrapLogs', 'Arn'),
+                  wharfie.util.getAtt('MonitorLogs', 'Arn'),
+                  wharfie.util.getAtt('CleanupLogs', 'Arn'),
+                  wharfie.util.getAtt('EventsLogs', 'Arn'),
+                  wharfie.util.sub(
+                    'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:Wharfie*'
+                  ),
+                ],
+              },
               {
                 Effect: 'Allow',
                 Action: ['cloudwatch:PutMetricData'],
