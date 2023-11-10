@@ -10,7 +10,7 @@ const { name, version } = require('../../package.json');
 /** @type {Object.<string, Object.<string,import('winston').Logger>>} */
 const loggers = {};
 
-/** @type {import('winston-transport')} */
+/** @type {FirehoseLogTransport} */
 let _log_transport;
 
 /**
@@ -21,7 +21,7 @@ function getLogTransport() {
     return _log_transport;
   }
   if (process.env.LOGGING_FORMAT === 'cli') {
-    _log_transport = new winston.transports.Console({
+    return new winston.transports.Console({
       level: process.env.LOGGING_LEVEL,
     });
   } else {
@@ -173,61 +173,12 @@ function getAWSSDKLogger() {
 }
 
 /**
- * @param {import('aws-lambda').Context} context -
+ * @returns {Promise<void>} -
  */
-async function flush(context) {
-  if (!loggers[context.awsRequestId]) return;
-  const flushRequests = Object.keys(loggers[context.awsRequestId]).map(
-    (key) => {
-      return /** @type {Promise<void>} */ (
-        new Promise((resolve) => {
-          loggers[context.awsRequestId][key].on('finish', () => {
-            delete loggers[context.awsRequestId][key];
-            winston.loggers.close(key);
-            resolve();
-          });
-          loggers[context.awsRequestId][key].end();
-        })
-      );
-    }
-  );
-  // await Promise.all(flushRequests);
-  await Promise.all([...flushRequests, flushDaemon(), flushAWSSDK()]);
-  delete loggers[context.awsRequestId];
-}
-
-/**
- *
- */
-async function flushDaemon() {
-  const key = `daemon`;
-  if (!loggers[key] || !loggers[key][key]) return;
-  await new Promise((resolve) => {
-    loggers[key][key].on('finish', () => {
-      delete loggers[key][key];
-      resolve('done');
-    });
-    loggers[key][key].end();
-  });
-  winston.loggers.close(key);
-  delete loggers[key];
-}
-
-/**
- *
- */
-async function flushAWSSDK() {
-  const key = `aws`;
-  if (!loggers[key] || !loggers[key][key]) return;
-  await new Promise((resolve) => {
-    loggers[key][key].on('finish', () => {
-      delete loggers[key][key];
-      resolve('done');
-    });
-    loggers[key][key].end();
-  });
-  winston.loggers.close(key);
-  delete loggers[key];
+async function flush() {
+  if (_log_transport && _log_transport.flushBuffer) {
+    await _log_transport.flushBuffer();
+  }
 }
 
 module.exports = {
@@ -235,6 +186,4 @@ module.exports = {
   getDaemonLogger,
   getAWSSDKLogger,
   flush,
-  flushDaemon,
-  flushAWSSDK,
 };
