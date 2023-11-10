@@ -5,6 +5,8 @@ const AWS = require('@aws-sdk/client-firehose');
 const mockedDate = new Date(1466424490000);
 jest.useFakeTimers('modern');
 jest.setSystemTime(mockedDate);
+// eslint-disable-next-line jest/no-untyped-mock-factory
+jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 let logging;
 describe('tests for logging', () => {
   beforeAll(() => {
@@ -87,9 +89,9 @@ describe('tests for logging', () => {
         AWS.PutRecordBatchCommand
       )[0].args[0].input.Records[0].Data.toString()
     ).toMatchInlineSnapshot(`
-      "{\\"message\\":\\"event\\",\\"level\\":\\"info\\",\\"service\\":\\"@wharfie/wharfie\\",\\"version\\":\\"0.0.5-52\\",\\"resource_id\\":\\"resource_id\\",\\"operation_id\\":\\"operation_id\\",\\"operation_type\\":\\"operation_type\\",\\"action_id\\":\\"action_id\\",\\"action_type\\":\\"action_type\\",\\"query_id\\":\\"query_id\\",\\"request_id\\":\\"1234\\",\\"log_type\\":\\"event\\",\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\"}
-      {\\"message\\":\\"daemon\\",\\"level\\":\\"info\\",\\"service\\":\\"@wharfie/wharfie\\",\\"version\\":\\"0.0.5-52\\",\\"log_type\\":\\"daemon\\",\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\"}
-      {\\"message\\":\\"aws\\",\\"level\\":\\"info\\",\\"service\\":\\"@wharfie/wharfie\\",\\"version\\":\\"0.0.5-52\\",\\"log_type\\":\\"aws_sdk\\",\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\"}
+      "{\\"message\\":\\"event\\",\\"level\\":\\"info\\",\\"version\\":\\"0.0.1\\",\\"resource_id\\":\\"resource_id\\",\\"operation_id\\":\\"operation_id\\",\\"operation_type\\":\\"operation_type\\",\\"action_id\\":\\"action_id\\",\\"action_type\\":\\"action_type\\",\\"query_id\\":\\"query_id\\",\\"request_id\\":\\"1234\\",\\"log_type\\":\\"event\\",\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\"}
+      {\\"message\\":\\"daemon\\",\\"level\\":\\"info\\",\\"version\\":\\"0.0.1\\",\\"log_type\\":\\"daemon\\",\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\"}
+      {\\"message\\":\\"aws\\",\\"level\\":\\"info\\",\\"version\\":\\"0.0.1\\",\\"log_type\\":\\"aws_sdk\\",\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\"}
       "
     `);
     Eventlogger = logging.getEventLogger(event, context);
@@ -108,9 +110,9 @@ describe('tests for logging', () => {
         AWS.PutRecordBatchCommand
       )[1].args[0].input.Records[0].Data.toString()
     ).toMatchInlineSnapshot(`
-      "{\\"message\\":\\"event 2\\",\\"level\\":\\"info\\",\\"service\\":\\"@wharfie/wharfie\\",\\"version\\":\\"0.0.5-52\\",\\"resource_id\\":\\"resource_id\\",\\"operation_id\\":\\"operation_id\\",\\"operation_type\\":\\"operation_type\\",\\"action_id\\":\\"action_id\\",\\"action_type\\":\\"action_type\\",\\"query_id\\":\\"query_id\\",\\"request_id\\":\\"1234\\",\\"log_type\\":\\"event\\",\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\"}
-      {\\"message\\":\\"daemon 2\\",\\"level\\":\\"info\\",\\"service\\":\\"@wharfie/wharfie\\",\\"version\\":\\"0.0.5-52\\",\\"log_type\\":\\"daemon\\",\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\"}
-      {\\"message\\":\\"aws 2\\",\\"level\\":\\"info\\",\\"service\\":\\"@wharfie/wharfie\\",\\"version\\":\\"0.0.5-52\\",\\"log_type\\":\\"aws_sdk\\",\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\"}
+      "{\\"message\\":\\"event 2\\",\\"level\\":\\"info\\",\\"version\\":\\"0.0.1\\",\\"resource_id\\":\\"resource_id\\",\\"operation_id\\":\\"operation_id\\",\\"operation_type\\":\\"operation_type\\",\\"action_id\\":\\"action_id\\",\\"action_type\\":\\"action_type\\",\\"query_id\\":\\"query_id\\",\\"request_id\\":\\"1234\\",\\"log_type\\":\\"event\\",\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\"}
+      {\\"message\\":\\"daemon 2\\",\\"level\\":\\"info\\",\\"version\\":\\"0.0.1\\",\\"log_type\\":\\"daemon\\",\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\"}
+      {\\"message\\":\\"aws 2\\",\\"level\\":\\"info\\",\\"version\\":\\"0.0.1\\",\\"log_type\\":\\"aws_sdk\\",\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\"}
       "
     `);
   });
