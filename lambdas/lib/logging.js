@@ -10,25 +10,34 @@ const { name, version } = require('../../package.json');
 /** @type {Object.<string, Object.<string,import('winston').Logger>>} */
 const loggers = {};
 
-const logTransport =
-  process.env.LOGGING_FORMAT === 'cli'
-    ? [
-        new winston.transports.Console({
-          level: process.env.LOGGING_LEVEL,
-        }),
-      ]
-    : [
-        new FirehoseLogTransport(
-          {
-            level: process.env.LOGGING_LEVEL,
-          },
-          {
-            logDeliveryStreamName: process.env.WHARFIE_LOGGING_FIREHOSE,
-            // don't use flush intervals when running in jest
-            flushInterval: process.env.JEST_WORKER_ID ? -1 : 5000,
-          }
-        ),
-      ];
+/** @type {import('winston-transport')} */
+let _log_transport;
+
+/**
+ * @returns {import('winston-transport')} -
+ */
+function getLogTransport() {
+  if (_log_transport && _log_transport.writable) {
+    return _log_transport;
+  }
+  if (process.env.LOGGING_FORMAT === 'cli') {
+    _log_transport = new winston.transports.Console({
+      level: process.env.LOGGING_LEVEL,
+    });
+  } else {
+    _log_transport = new FirehoseLogTransport(
+      {
+        level: process.env.LOGGING_LEVEL,
+      },
+      {
+        logDeliveryStreamName: process.env.WHARFIE_LOGGING_FIREHOSE,
+        // don't use flush intervals when running in jest
+        flushInterval: process.env.JEST_WORKER_ID ? -1 : 5000,
+      }
+    );
+  }
+  return _log_transport;
+}
 
 /**
  * @returns {import('winston').Logform.Format[]} -
@@ -69,7 +78,7 @@ function getEventLogger(event, context) {
       request_id: context.awsRequestId,
       log_type: 'event',
     },
-    transports: logTransport,
+    transports: [getLogTransport()],
   });
   const logger = winston.loggers.get(key);
   loggers[context.awsRequestId] = {
@@ -94,7 +103,7 @@ function getDaemonLogger() {
       version,
       log_type: 'daemon',
     },
-    transports: logTransport,
+    transports: [getLogTransport()],
   });
   const logger = winston.loggers.get(key);
   loggers[key] = {
@@ -138,7 +147,7 @@ function getAWSSDKLogger() {
       version,
       log_type: 'aws_sdk',
     },
-    transports: logTransport,
+    transports: [getLogTransport()],
   });
   const logger = winston.loggers.get(key);
   loggers[key] = {
@@ -159,6 +168,7 @@ async function flush(context) {
         new Promise((resolve) => {
           loggers[context.awsRequestId][key].on('finish', () => {
             delete loggers[context.awsRequestId][key];
+            winston.loggers.close(key);
             resolve();
           });
           loggers[context.awsRequestId][key].end();
@@ -166,8 +176,8 @@ async function flush(context) {
       );
     }
   );
-  await Promise.all(flushRequests);
-  // await Promise.all([...flushRequests, flushDaemon(), flushAWSSDK()]);
+  // await Promise.all(flushRequests);
+  await Promise.all([...flushRequests, flushDaemon(), flushAWSSDK()]);
   delete loggers[context.awsRequestId];
 }
 
@@ -184,6 +194,7 @@ async function flushDaemon() {
     });
     loggers[key][key].end();
   });
+  winston.loggers.close(key);
   delete loggers[key];
 }
 
@@ -200,6 +211,7 @@ async function flushAWSSDK() {
     });
     loggers[key][key].end();
   });
+  winston.loggers.close(key);
   delete loggers[key];
 }
 

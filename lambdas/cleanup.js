@@ -138,7 +138,7 @@ const handler = async (event, context) => {
     },
     { concurrency: 4 }
   );
-  daemon_log.info(`MEMORY USAGE: `, process.memoryUsage());
+  daemon_log.info(process.memoryUsage());
   await logging.flush(context);
 };
 
