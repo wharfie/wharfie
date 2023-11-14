@@ -453,7 +453,7 @@ async function checkForStaleQuery(query_execution_id, logger) {
 /**
  * @param {import('../../typedefs').OperationRecord} operation -
  * @param {string} action_type -
- * @param {import('winston').Logger?} logger -
+ * @param {import('pino').Logger?} logger -
  * @param {boolean} includeQueries -
  * @returns {Promise<boolean>} -
  */
