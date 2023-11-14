@@ -26,7 +26,7 @@ const Parameters = {
     Type: 'String',
     Description: 'Which logging level to use ',
     AllowedValues: ['debug', 'info', 'warn', 'error'],
-    Default: 'info',
+    Default: 'debug',
   },
   GlobalQueryConcurrency: {
     Type: 'Number',
@@ -61,6 +61,7 @@ const Conditions = {
     'None'
   ),
   IsDevelopment: wharfie.util.equals(wharfie.util.ref('IsDevelopment'), 'True'),
+  IsDebug: wharfie.util.equals(wharfie.util.ref('LoggingLevel'), 'debug'),
 };
 
 const Resources = {

@@ -1,184 +1,90 @@
 'use strict';
-const winston = require('winston');
-// eslint-disable-next-line node/no-extraneous-require
-const { format } = require('logform');
-// const S3LogTransport = require('./s3-log-transport');
-const FirehoseLogTransport = require('./firehose-log-transport');
 
-const { name, version } = require('../../package.json');
+const pino = require('pino');
+const path = require('path');
+const os = require('os');
 
-/** @type {Object.<string, Object.<string,import('winston').Logger>>} */
-const loggers = {};
+const { version } = require('../../package.json');
 
-/** @type {FirehoseLogTransport} */
-let _log_transport;
-
-/**
- * @returns {import('winston-transport')} -
- */
-function getLogTransport() {
-  if (_log_transport && _log_transport.writable) {
-    return _log_transport;
-  }
-  if (process.env.LOGGING_FORMAT === 'cli') {
-    return new winston.transports.Console({
-      level: process.env.LOGGING_LEVEL,
-    });
-  } else {
-    _log_transport = new FirehoseLogTransport(
+const ROOT_LOGGER = pino.pino({
+  level: process.env.LOG_LEVEL || 'info',
+  base: {
+    pid: process.pid,
+    hostname: os.hostname,
+    wharfie_version: version,
+  },
+  transport: {
+    targets: [
       {
-        level: process.env.LOGGING_LEVEL,
+        target: path.join(__dirname, `./pino-firehose-log-transport.js`),
+        options: {
+          flushInterval: 5000,
+          logDeliveryStreamName: process.env.WHARFIE_LOGGING_FIREHOSE,
+        },
+        level: process.env.LOG_LEVEL || 'info',
       },
-      {
-        logDeliveryStreamName: process.env.WHARFIE_LOGGING_FIREHOSE,
-        // don't use flush intervals when running in jest
-        flushInterval: process.env.JEST_WORKER_ID ? -1 : 5000,
-      }
-    );
-  }
-  return _log_transport;
-}
+      ...(process.env.LOG_LEVEL === 'debug'
+        ? [
+            {
+              level: 'info',
+              target: 'pino-pretty',
+              options: {},
+            },
+          ]
+        : []),
+    ],
+  },
+});
 
-/**
- * @returns {import('winston').Logform.Format[]} -
- */
-function _loggerFormat() {
-  switch (process.env.LOGGING_FORMAT) {
-    case 'json':
-      return [winston.format.timestamp(), winston.format.json()];
-    case 'cli':
-      return [winston.format.cli()];
-    default:
-      return [winston.format.timestamp(), winston.format.json()];
-  }
-}
+const AWS_SDK_LOGGER = ROOT_LOGGER.child({
+  log_type: 'aws_sdk',
+});
+
+/** @type {Object.<string, Object.<string,import('pino').Logger>>} */
+const loggers = {};
 
 /**
  * @param {import('../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @returns {import('winston').Logger} -
+ * @returns {import('pino').Logger} -
  */
 function getEventLogger(event, context) {
   const key = `${context.awsRequestId}${event.resource_id}${event.operation_id}${event.action_id}${event.query_id}`;
   if (loggers[context.awsRequestId] && loggers[context.awsRequestId][key])
     return loggers[context.awsRequestId][key];
-
-  winston.loggers.add(key, {
-    level: process.env.LOGGING_LEVEL,
-    format: winston.format.combine(..._loggerFormat()),
-    defaultMeta: {
-      service: name,
-      version,
-      resource_id: event.resource_id,
-      operation_id: event.operation_id,
-      operation_type: event.operation_type,
-      action_id: event.action_id,
-      action_type: event.action_type,
-      query_id: event.query_id,
-      request_id: context.awsRequestId,
-      log_type: 'event',
-    },
-    transports: [
-      getLogTransport(),
-      new winston.transports.Console({
-        level: process.env.LOGGING_LEVEL,
-      }),
-    ],
+  if (!loggers[context.awsRequestId]) loggers[context.awsRequestId] = {};
+  loggers[context.awsRequestId][key] = ROOT_LOGGER.child({
+    resource_id: event.resource_id,
+    operation_id: event.operation_id,
+    operation_type: event.operation_type,
+    action_id: event.action_id,
+    action_type: event.action_type,
+    query_id: event.query_id,
+    request_id: context.awsRequestId,
+    log_type: 'event',
   });
-  const logger = winston.loggers.get(key);
-  loggers[context.awsRequestId] = {
-    ...loggers[context.awsRequestId],
-    [key]: logger,
-  };
-  return logger;
+  return loggers[context.awsRequestId][key];
 }
 
 /**
- * @returns {import('winston').Logger} -
+ * @returns {import('pino').Logger} -
  */
 function getDaemonLogger() {
-  const key = `daemon`;
-  if (loggers[key] && loggers[key][key]) return loggers[key][key];
-
-  winston.loggers.add(key, {
-    level: process.env.LOGGING_LEVEL,
-    format: winston.format.combine(..._loggerFormat()),
-    defaultMeta: {
-      service: name,
-      version,
-      log_type: 'daemon',
-    },
-    transports: [
-      getLogTransport(),
-      new winston.transports.Console({
-        level: process.env.LOGGING_LEVEL,
-      }),
-    ],
-  });
-  const logger = winston.loggers.get(key);
-  loggers[key] = {
-    ...loggers[key],
-    [key]: logger,
-  };
-  return logger;
+  return ROOT_LOGGER;
 }
 
 /**
- * @returns {import('winston').Logform.Format} -
- * @param {import('winston').Logform.Format} info -
- * @param {{}} opts -
- */
-const sdkLogFormatter = format((info, opts = {}) => {
-  if (info.message && info.message.error) {
-    if (info.message.error.$fault) {
-      info.message.error.fault = info.message.error.$fault;
-      delete info.message.error.$fault;
-    }
-    if (info.message.error.$metadata) {
-      info.message.error.metadata = info.message.error.$metadata;
-      delete info.message.error.$metadata;
-    }
-  }
-  return info;
-});
-
-/**
- * @returns {import('winston').Logger} -
+ * @returns {import('pino').Logger} -
  */
 function getAWSSDKLogger() {
-  const key = `aws`;
-  if (loggers[key] && loggers[key][key]) return loggers[key][key];
-
-  winston.loggers.add(key, {
-    level: process.env.LOGGING_LEVEL,
-    format: winston.format.combine(..._loggerFormat(), sdkLogFormatter()),
-    defaultMeta: {
-      service: name,
-      version,
-      log_type: 'aws_sdk',
-    },
-    transports: [
-      getLogTransport(),
-      new winston.transports.Console({
-        level: process.env.LOGGING_LEVEL,
-      }),
-    ],
-  });
-  const logger = winston.loggers.get(key);
-  loggers[key] = {
-    ...loggers[key],
-    [key]: logger,
-  };
-  return logger;
+  return AWS_SDK_LOGGER;
 }
 
 /**
- * @returns {Promise<void>} -
+ *
  */
 async function flush() {
-  if (_log_transport && _log_transport.flushBuffer) {
-    await _log_transport.flushBuffer();
-  }
+  await new Promise((resolve) => ROOT_LOGGER.flush(resolve));
 }
 
 module.exports = {

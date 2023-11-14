@@ -1,4 +1,7 @@
-const Transport = require('winston-transport');
+'use strict';
+
+const build = require('pino-abstract-transport');
+
 const AWS = require('@aws-sdk/client-firehose');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 
@@ -8,13 +11,11 @@ const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
  * @property {number} [flushInterval] -
  */
 
-class FirehoseLogTransport extends Transport {
+class FirehoseLogTransport {
   /**
-   * @param {import("winston-transport").TransportStreamOptions} [options] -
-   * @param {FirehoseLogTransportOptions} [firehoseOptions] -
+   * @param {FirehoseLogTransportOptions} [options] -a
    */
-  constructor(options = {}, firehoseOptions = {}) {
-    super(options);
+  constructor(options = {}) {
     const credentials = fromNodeProviderChain();
     this.firehose = new AWS.Firehose({
       credentials,
@@ -23,9 +24,9 @@ class FirehoseLogTransport extends Transport {
       retryMode: 'adaptive',
     });
 
-    this._FLUSH_INTERVAL = firehoseOptions.flushInterval || 10000;
+    this._FLUSH_INTERVAL = options.flushInterval || 10000;
 
-    this._LOG_DELIVERY_STREAM_NAME = firehoseOptions.logDeliveryStreamName;
+    this._LOG_DELIVERY_STREAM_NAME = options.logDeliveryStreamName;
 
     /**
      * @type {string[]}
@@ -36,6 +37,17 @@ class FirehoseLogTransport extends Transport {
      */
     this.buffer_record_size_map = {};
     this.buffer_records_size = 0;
+
+    this._stream = build(
+      (source) => {
+        source.on('data', async (obj) => {
+          await this.log(obj);
+        });
+      },
+      {
+        close: () => this.close(),
+      }
+    );
 
     if (this._FLUSH_INTERVAL > 0) {
       this._FLUSH_INTERVAL_ID = setInterval(
@@ -55,25 +67,21 @@ class FirehoseLogTransport extends Transport {
   }
 
   /**
-   * @param {any} info -
-   * @param {any} callback -
+   * @param {any} data -
    * @returns {Promise<void>} -
    */
-  async log(info, callback) {
-    setImmediate(() => {
-      this.emit('logged', info);
-    });
-    let record = JSON.stringify(info) + '\n';
+  async log(data) {
+    let record = JSON.stringify(data) + '\n';
     if (record.length >= FirehoseLogTransport._MAX_BIN_SIZE) {
-      info.message =
+      data.message =
         'TRUNCATED' +
-        info.message.slice(
+        data.message.slice(
           0,
           FirehoseLogTransport._MAX_BIN_SIZE -
             (record.length + 'TRUNCATED'.length)
         );
       record =
-        JSON.stringify(info).slice(0, FirehoseLogTransport._MAX_BIN_SIZE - 1) +
+        JSON.stringify(data).slice(0, FirehoseLogTransport._MAX_BIN_SIZE - 1) +
         '\n';
     }
     if (
@@ -86,7 +94,6 @@ class FirehoseLogTransport extends Transport {
     this.buffer_records_size += record.length;
     this.buffer_records.push(record);
     this.buffer_record_size_map[this.buffer_records.length - 1] = record.length;
-    callback();
   }
 
   /**
@@ -143,12 +150,19 @@ class FirehoseLogTransport extends Transport {
 
   async flushBuffer() {
     if (this.buffer_records.length === 0) return;
-    await this.putRecordsBatch({
+    const { FailedPutCount, RequestResponses } = await this.putRecordsBatch({
       DeliveryStreamName: this._LOG_DELIVERY_STREAM_NAME,
       Records: this.naiveBinPackBufferRecords().map((record) => ({
         Data: Buffer.from(record),
       })),
     });
+    if (FailedPutCount && FailedPutCount > 0) {
+      throw new Error(
+        `Failed to send ${FailedPutCount} records to Firehose ${JSON.stringify(
+          RequestResponses
+        )}`
+      );
+    }
     this.buffer_records_size = 0;
     this.buffer_record_size_map = {};
     this.buffer_records = [];
@@ -167,5 +181,4 @@ FirehoseLogTransport._MAX_BUFFER_SIZE = 4 * 1024 * 1024;
 FirehoseLogTransport._MAX_BINS = 500;
 FirehoseLogTransport._MAX_BIN_SIZE = 1000 * 1024;
 FirehoseLogTransport._BIN_COST_INCREMENT = 5 * 1024;
-
 module.exports = FirehoseLogTransport;

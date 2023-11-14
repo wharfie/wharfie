@@ -3,7 +3,7 @@
 const AWS = require('@aws-sdk/client-firehose');
 
 let FirehoseLogTransport;
-describe('mock tests for firehose log transport', () => {
+describe('tests for firehose log transport', () => {
   beforeAll(() => {
     require('aws-sdk-client-mock-jest');
     FirehoseLogTransport = require('../../lambdas/lib/firehose-log-transport');
@@ -12,70 +12,45 @@ describe('mock tests for firehose log transport', () => {
     AWS.FirehoseMock.reset();
   });
 
-  it('log mock test', async () => {
-    expect.assertions(2);
+  it('log test', async () => {
+    expect.assertions(3);
     AWS.FirehoseMock.on(AWS.PutRecordBatchCommand).resolves({});
-    const firehoseLogTransport = new FirehoseLogTransport(
-      {},
-      { flushInterval: -1, logDeliveryStreamName: 'test-stream' }
-    );
+    const firehoseLogTransport = new FirehoseLogTransport({
+      flushInterval: -1,
+      logDeliveryStreamName: 'test-stream',
+    });
     await firehoseLogTransport.log('test1', () => {});
     await firehoseLogTransport.log('test2', () => {});
     await firehoseLogTransport.log('test3', () => {});
     await firehoseLogTransport.log('test4', () => {});
+    await firehoseLogTransport.flushBuffer();
+    await firehoseLogTransport.log('test5', () => {});
+    await firehoseLogTransport.log('test6', () => {});
     await firehoseLogTransport.close();
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      1
+      2
     );
     expect(
-      AWS.FirehoseMock.commandCalls(AWS.PutRecordBatchCommand)[0].args[0].input
+      AWS.FirehoseMock.commandCalls(
+        AWS.PutRecordBatchCommand
+      )[0].args[0].input.Records[0].Data.toString()
     ).toMatchInlineSnapshot(`
-      Object {
-        "DeliveryStreamName": "test-stream",
-        "Records": Array [
-          Object {
-            "Data": Object {
-              "data": Array [
-                34,
-                116,
-                101,
-                115,
-                116,
-                49,
-                34,
-                10,
-                34,
-                116,
-                101,
-                115,
-                116,
-                50,
-                34,
-                10,
-                34,
-                116,
-                101,
-                115,
-                116,
-                51,
-                34,
-                10,
-                34,
-                116,
-                101,
-                115,
-                116,
-                52,
-                34,
-                10,
-              ],
-              "type": "Buffer",
-            },
-          },
-        ],
-      }
+      "\\"test1\\"
+      \\"test2\\"
+      \\"test3\\"
+      \\"test4\\"
+      "
+    `);
+    expect(
+      AWS.FirehoseMock.commandCalls(
+        AWS.PutRecordBatchCommand
+      )[1].args[0].input.Records[0].Data.toString()
+    ).toMatchInlineSnapshot(`
+      "\\"test5\\"
+      \\"test6\\"
+      "
     `);
   });
 });

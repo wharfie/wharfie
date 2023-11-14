@@ -89,7 +89,7 @@ describe('s3 event tests', () => {
 
   afterEach(() => {
     clearLambdaTriggers();
-    logging.flush(CONTEXT);
+    logging.flush();
   });
 
   it('end to end', async () => {

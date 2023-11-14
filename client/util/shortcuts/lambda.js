@@ -121,7 +121,7 @@ class Lambda {
     this.Resources = {
       [`${LogicalName}Logs`]: {
         Type: 'AWS::Logs::LogGroup',
-        Condition,
+        Condition: 'IsDebug',
         Properties: {
           LogGroupName: {
             'Fn::Sub': ['/aws/lambda/${name}', { name: FunctionName }],

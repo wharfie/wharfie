@@ -158,7 +158,7 @@ describe('migrate tests', () => {
 
   afterEach(() => {
     clearLambdaTriggers();
-    logging.flush(CONTEXT);
+    logging.flush();
   });
 
   it('end to end', async () => {

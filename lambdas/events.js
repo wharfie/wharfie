@@ -97,7 +97,7 @@ const handler = async (event, context) => {
     event.Records.map((record) => processRecord(record, context))
   );
   daemon_log.info(process.memoryUsage());
-  await logging.flush(context);
+  await logging.flush();
 };
 
 module.exports = {

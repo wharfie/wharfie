@@ -21,6 +21,7 @@ class FirehoseMock {
       FirehoseMock.__state[params.DeliveryStreamName] = [];
     }
     FirehoseMock.__state[params.DeliveryStreamName].push(...params.Records);
+    return {};
   }
 }
 

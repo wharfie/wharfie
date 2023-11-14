@@ -8,10 +8,10 @@ describe('mock tests for firehose log transport', () => {
     process.env.AWS_MOCKS = true;
     jest.requireMock('@aws-sdk/client-firehose');
     FirehoseLogTransport = require('../../lambdas/lib/firehose-log-transport');
-    firehoseLogTransport = new FirehoseLogTransport(
-      {},
-      { flushInterval: -1, logDeliveryStreamName: 'test-stream' }
-    );
+    firehoseLogTransport = new FirehoseLogTransport({
+      flushInterval: -1,
+      logDeliveryStreamName: 'test-stream',
+    });
   });
   afterEach(() => {
     firehoseLogTransport.flushBuffer();
@@ -121,10 +121,10 @@ describe('mock tests for firehose log transport', () => {
 
   it('shared output', async () => {
     expect.assertions(1);
-    const firehoseLogTransportFoo = new FirehoseLogTransport(
-      {},
-      { flushInterval: -1, logDeliveryStreamName: 'test-stream' }
-    );
+    const firehoseLogTransportFoo = new FirehoseLogTransport({
+      flushInterval: -1,
+      logDeliveryStreamName: 'test-stream',
+    });
 
     firehoseLogTransportFoo.log('hello', () => {});
     for (let i = 0; i < FirehoseLogTransport._MAX_BINS - 2; i++) {
