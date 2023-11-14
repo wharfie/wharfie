@@ -15,14 +15,18 @@ const ROOT_LOGGER = pino.pino({
   },
   transport: {
     targets: [
-      {
-        target: path.join(__dirname, `./pino-firehose-log-transport.js`),
-        options: {
-          flushInterval: 5000,
-          logDeliveryStreamName: process.env.WHARFIE_LOGGING_FIREHOSE,
-        },
-        level: process.env.LOG_LEVEL || 'info',
-      },
+      ...(process.env.WHARFIE_LOGGING_FIREHOSE
+        ? [
+            {
+              target: path.join(__dirname, `./pino-firehose-log-transport.js`),
+              options: {
+                flushInterval: 5000,
+                logDeliveryStreamName: process.env.WHARFIE_LOGGING_FIREHOSE,
+              },
+              level: process.env.LOG_LEVEL || 'info',
+            },
+          ]
+        : []),
       ...(process.env.LOG_LEVEL === 'debug'
         ? [
             {
