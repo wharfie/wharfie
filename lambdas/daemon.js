@@ -5,7 +5,7 @@ const { parse } = require('@sandfox/arn');
 const uuid = require('uuid');
 const bluebirdPromise = require('bluebird');
 
-const logging = require('./lib/logging');
+const logging = require('./lib/logging/');
 const daemon_log = logging.getDaemonLogger();
 
 const maintain = require('./operations/maintain/');

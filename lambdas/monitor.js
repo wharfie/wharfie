@@ -14,7 +14,7 @@ const S3 = require('./lib/s3');
 const Glue = require('./lib/glue');
 const CloudWatch = require('./lib/cloudwatch');
 const Clean = require('./operations/actions/lib/clean');
-const logging = require('./lib/logging');
+const logging = require('./lib/logging/');
 const daemon_log = logging.getDaemonLogger();
 
 const sqs = new SQS({ region: process.env.AWS_REGION });

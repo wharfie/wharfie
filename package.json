@@ -159,13 +159,7 @@
     "joi": "^17.9.1",
     "jszip": "^3.10.1",
     "open": "^7.4.2",
-    "pino": "^8.16.1",
-    "pino-abstract-transport": "^1.1.0",
-    "pino-pretty": "^10.2.3",
     "uuid": "^8.3.2",
-    "winston": "^3.3.3",
-    "winston-cloudwatch": "^6.2.0",
-    "winston-transport": "^4.4.0",
     "yargonaut": "^1.1.4",
     "yargs": "^17.1.1"
   }

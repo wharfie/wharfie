@@ -1,56 +1,45 @@
 'use strict';
 
-const pino = require('pino');
-const path = require('path');
+const Logger = require('./logger');
+const ConsoleLogTransport = require('./console-log-transport');
+const FirehoseLogTransport = require('./firehose-log-transport');
 const os = require('os');
 
-const { version } = require('../../package.json');
+const { version } = require('../../../package.json');
 
-const ROOT_LOGGER = pino.pino({
+const ROOT_LOGGER = new Logger({
   level: process.env.LOG_LEVEL || 'info',
+  jsonFormat: true,
   base: {
     pid: process.pid,
     hostname: os.hostname,
     wharfie_version: version,
   },
-  transport: {
-    targets: [
-      ...(process.env.WHARFIE_LOGGING_FIREHOSE
-        ? [
-            {
-              target: path.join(__dirname, `./pino-firehose-log-transport.js`),
-              options: {
-                flushInterval: 5000,
-                logDeliveryStreamName: process.env.WHARFIE_LOGGING_FIREHOSE,
-              },
-              level: process.env.LOG_LEVEL || 'info',
-            },
-          ]
-        : []),
-      ...(process.env.LOG_LEVEL === 'debug'
-        ? [
-            {
-              level: 'info',
-              target: 'pino-pretty',
-              options: {},
-            },
-          ]
-        : []),
-    ],
-  },
+  transports: [
+    ...(process.env.WHARFIE_LOGGING_FIREHOSE
+      ? [
+          new FirehoseLogTransport({
+            flushInterval:
+              Number(process.env.WHARFIE_LOGGING_FLUSH_INTERVAL) || 5000,
+            logDeliveryStreamName: process.env.WHARFIE_LOGGING_FIREHOSE,
+          }),
+        ]
+      : []),
+    ...(process.env.LOG_LEVEL === 'debug' ? [new ConsoleLogTransport()] : []),
+  ],
 });
 
 const AWS_SDK_LOGGER = ROOT_LOGGER.child({
   log_type: 'aws_sdk',
 });
 
-/** @type {Object.<string, Object.<string,import('pino').Logger>>} */
+/** @type {Object.<string, Object.<string,Logger>>} */
 const loggers = {};
 
 /**
- * @param {import('../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @returns {import('pino').Logger} -
+ * @returns {Logger} -
  */
 function getEventLogger(event, context) {
   const key = `${context.awsRequestId}${event.resource_id}${event.operation_id}${event.action_id}${event.query_id}`;
@@ -71,14 +60,14 @@ function getEventLogger(event, context) {
 }
 
 /**
- * @returns {import('pino').Logger} -
+ * @returns {Logger} -
  */
 function getDaemonLogger() {
   return ROOT_LOGGER;
 }
 
 /**
- * @returns {import('pino').Logger} -
+ * @returns {Logger} -
  */
 function getAWSSDKLogger() {
   return AWS_SDK_LOGGER;
@@ -88,7 +77,7 @@ function getAWSSDKLogger() {
  *
  */
 async function flush() {
-  await new Promise((resolve) => ROOT_LOGGER.flush(resolve));
+  await ROOT_LOGGER.flush();
 }
 
 module.exports = {

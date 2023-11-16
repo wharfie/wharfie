@@ -5,7 +5,7 @@ const sqs = new SQS({ region: process.env.AWS_REGION });
 
 const event_db = require('../../lib/dynamo/event');
 const resource_db = require('../../lib/dynamo/resource');
-const logging = require('../../lib/logging');
+const logging = require('../../lib/logging/');
 const daemon_log = logging.getDaemonLogger();
 
 const DAEMON_QUEUE_URL = process.env.DAEMON_QUEUE_URL || '';
