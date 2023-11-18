@@ -8,7 +8,7 @@ const os = require('os');
 const { version } = require('../../../package.json');
 
 const ROOT_LOGGER = new Logger({
-  level: process.env.LOG_LEVEL || 'info',
+  level: process.env.LOGGING_LEVEL || 'info',
   jsonFormat: true,
   base: {
     pid: process.pid,
@@ -25,7 +25,9 @@ const ROOT_LOGGER = new Logger({
           }),
         ]
       : []),
-    ...(process.env.LOG_LEVEL === 'debug' ? [new ConsoleLogTransport()] : []),
+    ...(process.env.LOGGING_LEVEL === 'debug'
+      ? [new ConsoleLogTransport()]
+      : []),
   ],
 });
 

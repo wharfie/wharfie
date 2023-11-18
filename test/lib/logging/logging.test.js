@@ -10,7 +10,7 @@ describe('tests for logging', () => {
     AWS.FirehoseMock.on(AWS.PutRecordBatchCommand).resolves({});
     process.env.WHARFIE_LOGGING_FIREHOSE = 'test_firehose';
     process.env.WHARFIE_LOGGING_FLUSH_INTERVAL = -1;
-    process.env.LOG_LEVEL = 'debug';
+    process.env.LOGGING_LEVEL = 'debug';
     logging = require('../../../lambdas/lib/logging/');
   });
   afterEach(() => {
