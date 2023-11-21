@@ -33,7 +33,7 @@ const Bucket = wharfie.util.shortcuts.s3Bucket.build({
             Rules: [
               {
                 Name: 'prefix',
-                Value: wharfie.util.sub('/logs/raw/'),
+                Value: 'logs/raw/',
               },
             ],
           },
