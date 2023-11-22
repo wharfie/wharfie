@@ -268,6 +268,7 @@ async function monitorWharfie(cloudwatchEvent, context) {
 /**
  * @param {import('./typedefs').AthenaEvent} cloudwatchEvent -
  */
+// TODO: switch to using something other than cloudwatch
 // eslint-disable-next-line no-unused-vars
 async function createMetrics(cloudwatchEvent) {
   const query = cloudwatchEvent.detail;

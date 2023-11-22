@@ -3,10 +3,7 @@
 const { parse } = require('@sandfox/arn');
 const { version } = require('../../../../package.json');
 
-// const get_dashboard = require('./dashboard');
 const { generateSchedule } = require('./cron');
-
-// const STACK_NAME = process.env.STACK_NAME || '';
 
 /**
  * @typedef Column
@@ -52,19 +49,9 @@ function Wharfie(event, migration_resource = false) {
   const template = {
     AWSTemplateFormatVersion: '2010-09-09',
     Metadata,
-    Parameters: {
-      CreateDashboard: {
-        Type: 'String',
-        Default: 'true',
-        AllowedValues: ['true', 'false'],
-      },
-    },
+    Parameters: {},
     Mappings: {},
-    Conditions: {
-      createDashboard: {
-        'Fn::Equals': [{ Ref: 'CreateDashboard' }, 'true'],
-      },
-    },
+    Conditions: {},
     Resources: {
       Workgroup: {
         Type: 'AWS::Athena::WorkGroup',
