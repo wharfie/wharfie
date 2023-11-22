@@ -36,6 +36,8 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run test
+        env:
+          WHARFIE_ARTIFACT_BUCKET: service-bucket
       - run: npm run typecheck
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2

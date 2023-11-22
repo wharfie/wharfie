@@ -1,7 +1,5 @@
 'use strict';
 process.env.STACK_NAME = 'test-stack';
-process.env.DAEMON_LOGGING_LEVEL = 'warn';
-process.env.RESOURCE_LOGGING_LEVEL = 'warn';
 process.env.TEMPORARY_GLUE_DATABASE = 'temp-glue-database';
 process.env.RESOURCE_TABLE = 'resource-table';
 process.env.SEMAPHORE_TABLE = 'semaphore-table';
@@ -13,8 +11,6 @@ process.env.DLQ_URL = 'deadletter-queue';
 process.env.GLOBAL_QUERY_CONCURRENCY = 3;
 process.env.RESOURCE_QUERY_CONCURRENCY = 2;
 process.env.MAX_QUERIES_PER_ACTION = 100;
-process.env.TEMPLATE_BUCKET = 'template-bucket';
-process.env.LOGGING_FORMAT = 'cli';
 
 const daemon_lambda = require('../../lambdas/daemon');
 const monitor_lambda = require('../../lambdas/monitor');

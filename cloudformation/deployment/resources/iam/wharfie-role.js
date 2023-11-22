@@ -27,6 +27,9 @@ const Resources = {
               wharfie.util.sub(
                 'arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/Wharfie*'
               ),
+              wharfie.util.sub(
+                'arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/migrate-Wharfie*'
+              ),
             ],
           },
           {
@@ -126,6 +129,9 @@ const Resources = {
               wharfie.util.sub(
                 'arn:${AWS::Partition}:s3:::${ArtifactBucket}/wharfie/*'
               ),
+              wharfie.util.sub(
+                'arn:${AWS::Partition}:s3:::${Bucket}/wharfie/*'
+              ),
             ],
           },
           {
@@ -137,6 +143,7 @@ const Resources = {
                 'arn:${AWS::Partition}:s3:::wharfie-artifacts-${AWS::Region}'
               ),
               wharfie.util.sub('arn:${AWS::Partition}:s3:::${ArtifactBucket}'),
+              wharfie.util.sub('arn:${AWS::Partition}:s3:::${Bucket}'),
             ],
           },
         ],
@@ -157,22 +164,12 @@ const Resources = {
           },
         ],
       },
-      ManagedPolicyArns: [
-        wharfie.util.sub(
-          'arn:${AWS::Partition}:iam::aws:policy/CloudWatchLambdaInsightsExecutionRolePolicy'
-        ),
-        wharfie.util.ref('WharfieUDFManagedPolicy'),
-      ],
+      ManagedPolicyArns: [wharfie.util.ref('WharfieUDFManagedPolicy')],
       Policies: [
         {
           PolicyName: 'main',
           PolicyDocument: {
             Statement: [
-              {
-                Effect: 'Allow',
-                Action: ['cloudwatch:PutMetricData'],
-                Resource: '*',
-              },
               {
                 Effect: 'Allow',
                 Action: 'cloudwatch:*',
@@ -198,12 +195,21 @@ const Resources = {
               },
               {
                 Effect: 'Allow',
+                Action: ['cloudwatch:PutMetricData'],
+                Resource: '*',
+              },
+              {
+                Effect: 'Allow',
+                Action: ['firehose:PutRecordBatch'],
+                Resource: [wharfie.util.getAtt('LoggingFirehose', 'Arn')],
+              },
+              {
+                Effect: 'Allow',
                 Action: [
                   'sqs:DeleteMessage',
                   'sqs:ReceiveMessage',
                   'sqs:GetQueueAttributes',
                   'sqs:SendMessage',
-                  'sqs:SendMessageBatch',
                 ],
                 Resource: [
                   wharfie.util.getAtt('DaemonQueue', 'Arn'),
@@ -282,6 +288,9 @@ const Resources = {
                   wharfie.util.sub(
                     'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/Wharfie*'
                   ),
+                  wharfie.util.sub(
+                    'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/migrate-Wharfie*'
+                  ),
                 ],
               },
               {
@@ -290,6 +299,9 @@ const Resources = {
                 Resource: [
                   wharfie.util.sub(
                     'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/Wharfie*'
+                  ),
+                  wharfie.util.sub(
+                    'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/migrate-Wharfie*'
                   ),
                 ],
               },
@@ -316,6 +328,20 @@ const Resources = {
                 Resource: '*',
               },
               {
+                Sid: 'Logging',
+                Effect: 'Allow',
+                Action: [
+                  's3:PutObject',
+                  's3:PutObjectAcl',
+                  's3:GetObject',
+                  's3:ListMultipartUploadParts',
+                  's3:AbortMultipartUpload',
+                ],
+                Resource: [
+                  wharfie.util.sub('arn:${AWS::Partition}:s3:::${Bucket}/*'),
+                ],
+              },
+              {
                 Sid: 'Bucket',
                 Effect: 'Allow',
                 Action: [
@@ -328,15 +354,24 @@ const Resources = {
                   wharfie.util.sub(
                     'arn:${AWS::Partition}:s3:::${ArtifactBucket}'
                   ),
+                  wharfie.util.sub('arn:${AWS::Partition}:s3:::${Bucket}'),
                 ],
               },
               {
                 Sid: 'OutputWrite',
                 Effect: 'Allow',
-                Action: ['s3:GetObject', 's3:PutObject'],
+                Action: [
+                  's3:GetObject',
+                  's3:PutObject',
+                  's3:ListMultipartUploadParts',
+                  's3:AbortMultipartUpload',
+                ],
                 Resource: [
                   wharfie.util.sub(
                     'arn:${AWS::Partition}:s3:::${ArtifactBucket}/wharfie-templates/*'
+                  ),
+                  wharfie.util.sub(
+                    'arn:${AWS::Partition}:s3:::${Bucket}/wharfie-templates/*'
                   ),
                 ],
               },
@@ -351,6 +386,9 @@ const Resources = {
                 Resource: [
                   wharfie.util.sub(
                     'arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/Wharfie*'
+                  ),
+                  wharfie.util.sub(
+                    'arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/migrate-Wharfie*'
                   ),
                 ],
               },

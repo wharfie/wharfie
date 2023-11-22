@@ -11,7 +11,8 @@ const nock = require('nock');
 jest.useFakeTimers();
 jest.createMockFromModule('graphlib');
 
-process.env.TEMPLATE_BUCKET = 'template-bucket';
+process.env.WHARFIE_SERVICE_BUCKET = 'service-bucket';
+process.env.WHARFIE_ARTIFACT_BUCKET = 'service-bucket';
 process.env.AWS_REGION = 'us-east-1';
 process.env.STACK_NAME = 'wharfie-testing';
 
@@ -55,9 +56,11 @@ describe('tests for wharfie resource delete handler', () => {
     AWSCloudFormation.CloudFormationMock.on(
       AWSCloudFormation.DeleteStackCommand
     ).resolves({});
-    const waitUntilStackDeleteComplete = jest
-      .spyOn(AWSCloudFormation, 'waitUntilStackDeleteComplete')
-      .mockResolvedValue({});
+    AWSCloudFormation.CloudFormationMock.on(
+      AWSCloudFormation.DescribeStacksCommand
+    ).rejects({
+      message: 'Stack does not exist',
+    });
 
     nock(
       'https://cloudformation-custom-resource-response-useast1.s3.amazonaws.com'
@@ -120,6 +123,9 @@ describe('tests for wharfie resource delete handler', () => {
         "StackName": "Wharfie-8a20992363488c7290d6cbc4e39f7712",
       }
     `);
-    expect(waitUntilStackDeleteComplete).toHaveBeenCalledTimes(1);
+    expect(AWSCloudFormation.CloudFormationMock).toHaveReceivedCommandTimes(
+      AWSCloudFormation.DescribeStacksCommand,
+      1
+    );
   });
 });

@@ -15,16 +15,8 @@ describe('tests for Athena', () => {
     process.env.MONITOR_QUEUE_URL = 'monitor-queue';
   });
   beforeEach(() => {
-    cuid
-      .mockImplementationOnce(() => 'ckywjpmr70002zjvd0wyq5x48')
-      .mockImplementationOnce(() => 'ckywjpmr7002zjvd0wyq5asdf')
-      .mockImplementationOnce(() => 'ckywjpmr70002zvd0wyq5asdf')
-      .mockImplementationOnce(() => 'ckywjpmr70002zjvd0wyqasaq')
-      .mockImplementationOnce(() => 'ckywjpr70002zjvd0wyq5aqqs')
-      .mockImplementationOnce(() => 'ckywjpmr7002zjvd0wyq5asds')
-      .mockImplementationOnce(() => 'ckywjpmr7002zjvd0wyq51111');
+    cuid.mockImplementation(() => 'ckywjpmr70002zjvd0wyq5x48');
     process.env.AWS_MOCKS = true;
-    process.env.TEMP_FILES_BUCKET = 'wharfie-tests-temp-files';
     S3 = jest.requireMock('@aws-sdk/client-s3').S3;
     jest.requireMock('@aws-sdk/client-glue');
     Athena = require('../../../lambdas/lib/athena/');
@@ -121,11 +113,11 @@ describe('tests for Athena', () => {
       Object {
         "QueryExecution": Object {
           "Query": "select * from foo.bar",
-          "QueryExecutionId": "ckywjpmr70002zjvd0wyqasaq",
+          "QueryExecutionId": "ckywjpmr70002zjvd0wyq5x48",
           "Status": Object {
             "State": "SUCCEEDED",
           },
-          "WorkGroup": "default",
+          "WorkGroup": "foo",
         },
       }
     `);
@@ -160,21 +152,21 @@ describe('tests for Athena', () => {
           Object {
             "QueryExecution": Object {
               "Query": "select * from foo.bar",
-              "QueryExecutionId": "ckywjpmr7002zjvd0wyq5asds",
+              "QueryExecutionId": "ckywjpmr70002zjvd0wyq5x48",
               "Status": Object {
                 "State": "SUCCEEDED",
               },
-              "WorkGroup": "default",
+              "WorkGroup": "foo",
             },
           },
           Object {
             "QueryExecution": Object {
               "Query": "select * from foo.bar",
-              "QueryExecutionId": "ckywjpmr7002zjvd0wyq5asdf",
+              "QueryExecutionId": "ckywjpmr70002zjvd0wyq5x48",
               "Status": Object {
                 "State": "SUCCEEDED",
               },
-              "WorkGroup": "default",
+              "WorkGroup": "foo",
             },
           },
         ],
@@ -208,14 +200,12 @@ describe('tests for Athena', () => {
     expect(result).toMatchInlineSnapshot(`
       Object {
         "QueryExecution": Object {
-          "Query": "
-            INSERT INTO foo.bar SELECT * FROM foo.biz
-          ",
+          "Query": "select * from foo.bar",
           "QueryExecutionId": "ckywjpmr70002zjvd0wyq5x48",
           "Status": Object {
             "State": "SUCCEEDED",
           },
-          "WorkGroup": "default",
+          "WorkGroup": "foo",
         },
       }
     `);

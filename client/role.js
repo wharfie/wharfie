@@ -19,6 +19,8 @@ exports.Role = class Role {
     OutputLocations = [],
     WharfieDeployment,
     AdditionalPolicies = [],
+    _WharfieRole = undefined,
+    _WharfieBasePolicy = undefined,
     Condition = undefined,
     DependsOn = undefined,
   } = {}) {
@@ -37,18 +39,21 @@ exports.Role = class Role {
                 Action: 'sts:AssumeRole',
                 Effect: 'Allow',
                 Principal: {
-                  AWS: util.importValue(
-                    util.join('-', [WharfieDeployment, 'role'])
-                  ),
+                  AWS:
+                    _WharfieRole ||
+                    util.importValue(
+                      util.join('-', [WharfieDeployment, 'role'])
+                    ),
                 },
               },
             ],
             Version: '2012-10-17',
           },
           ManagedPolicyArns: [
-            util.importValue(
-              util.join('-', [WharfieDeployment, 'base-policy'])
-            ),
+            _WharfieBasePolicy ||
+              util.importValue(
+                util.join('-', [WharfieDeployment, 'base-policy'])
+              ),
           ],
           Policies: [
             {

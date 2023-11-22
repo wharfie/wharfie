@@ -20,6 +20,7 @@ class QueueLambda extends Lambda {
       BatchSize = 1,
       EventSourceArn,
       ReservedConcurrentExecutions = 0,
+      MaximumBatchingWindowInSeconds = 0,
     } = options;
 
     const required = [EventSourceArn, ReservedConcurrentExecutions];
@@ -42,6 +43,7 @@ class QueueLambda extends Lambda {
         Enabled,
         BatchSize,
         EventSourceArn,
+        MaximumBatchingWindowInSeconds,
         FunctionName: { Ref: this.LogicalName },
       },
     };

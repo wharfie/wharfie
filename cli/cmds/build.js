@@ -11,8 +11,11 @@ const {
 } = require('../output');
 const path = require('path');
 const S3 = require('../../lambdas/lib/s3');
-const s3 = new S3();
+const STS = require('../../lambdas/lib/sts');
 const child_process = require('child_process');
+
+const s3 = new S3();
+const sts = new STS();
 
 const LAMBDAS = ['bootstrap', 'cleanup', 'daemon', 'events', 'monitor'];
 
@@ -71,10 +74,14 @@ const build = async (label) => {
   );
 
   displayInfo('Uploading bundles to S3...');
+  const { Account } = await sts.getCallerIdentity();
+
   await Promise.all(
     LAMBDAS.map(async (lambda) => {
       await s3.putObject({
-        Bucket: process.env.WHARFIE_ARTIFACT_BUCKET,
+        Bucket:
+          process.env.WHARFIE_ARTIFACT_BUCKET ||
+          `${process.env.WHARFIE_DEPLOYMENT_NAME}-${Account}-${process.env.WHARFIE_REGION}`,
         Key: `wharfie/${label}/${lambda}.zip`,
         Body: await fs.promises.readFile(
           path.join(__dirname, `../../dist/${label}/${lambda}/ouput.zip`)

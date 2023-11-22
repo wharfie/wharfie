@@ -20,7 +20,9 @@ const Resources = {};
 Resources.FirehoseExampleTestDataLambdaSchedule = {
   Type: 'AWS::Events::Rule',
   Properties: {
-    Name: 'FirehoseExampleTestDataLambda',
+    Name: {
+      'Fn::Sub': 'FirehoseExampleTestDataLambda_${AWS::StackName}',
+    },
     Description: {
       'Fn::Sub':
         'Schedule for FirehoseExampleTestDataLambda in ${AWS::StackName} stack',
@@ -89,8 +91,12 @@ const firehose = new wharfie.Firehose({
   BufferInterval: 60,
 });
 
+const Conditions = {
+  IsDebug: wharfie.util.equals('true', 'true'),
+};
+
 module.exports = wharfie.util.merge(
-  { Resources },
+  { Resources, Conditions },
   firehose,
   firehoseExampleDataGeneratorLambda
 );

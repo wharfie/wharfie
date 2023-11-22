@@ -9,7 +9,8 @@ const update_event = require('../../fixtures/wharfieUDF-update.json');
 
 const nock = require('nock');
 
-process.env.TEMPLATE_BUCKET = 'template-bucket';
+process.env.WHARFIE_SERVICE_BUCKET = 'service-bucket';
+process.env.WHARFIE_ARTIFACT_BUCKET = 'service-bucket';
 process.env.AWS_REGION = 'us-east-1';
 
 jest.useFakeTimers();
@@ -43,9 +44,15 @@ describe('tests for wharfieUDF resource update handler', () => {
     ).resolves({
       StackId: 'stack_id',
     });
-    const waitUntilStackUpdateComplete = jest
-      .spyOn(AWSCloudFormation, 'waitUntilStackUpdateComplete')
-      .mockResolvedValue({});
+    AWSCloudFormation.CloudFormationMock.on(
+      AWSCloudFormation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'UPDATE_COMPLETE',
+        },
+      ],
+    });
     nock(
       'https://cloudformation-custom-resource-response-useast1.s3.amazonaws.com'
     )
@@ -64,7 +71,7 @@ describe('tests for wharfieUDF resource update handler', () => {
       .toMatchInlineSnapshot(`
       Object {
         "Body": "{\\"AWSTemplateFormatVersion\\":\\"2010-09-09\\",\\"Metadata\\":{\\"WharfieVersion\\":\\"0.0.1\\",\\"ParentStack\\":\\"wharfie-staging\\",\\"LogicalResourceId\\":\\"StackMappings\\"},\\"Parameters\\":{},\\"Mappings\\":{},\\"Conditions\\":{},\\"Resources\\":{\\"UDFLambda\\":{\\"Type\\":\\"AWS::Lambda::Function\\",\\"Properties\\":{\\"Tags\\":[{\\"Value\\":\\"wharfie-staging\\",\\"Key\\":\\"CloudFormationStackName\\"}],\\"Architectures\\":[\\"arm64\\"],\\"Code\\":{\\"S3Bucket\\":\\"wharfie\\",\\"S3Key\\":\\"stack-mappings/staging/wharfie.zip\\"},\\"Description\\":{\\"Fn::Sub\\":\\"Wharfie UDF Lambda in the \${AWS::StackName} stack\\"},\\"FunctionName\\":{\\"Fn::Sub\\":\\"\${AWS::StackName}\\"},\\"Handler\\":\\"udf_entrypoint.handler\\",\\"Layers\\":[{\\"Fn::Sub\\":\\"arn:\${AWS::Partition}:lambda:\${AWS::Region}:580247275435:layer:LambdaInsightsExtension-Arm64:2\\"}],\\"MemorySize\\":256,\\"Runtime\\":\\"nodejs18.x\\",\\"Timeout\\":20,\\"Role\\":{\\"Fn::GetAtt\\":[\\"UDFLambdaRole\\",\\"Arn\\"]},\\"Environment\\":{\\"Variables\\":{\\"WHARFIE_UDF_HANDLER\\":\\"index.handler\\",\\"NODE_OPTIONS\\":\\"--enable-source-maps\\",\\"AWS_NODEJS_CONNECTION_REUSE_ENABLED\\":1}}}},\\"UDFLambdaLogs\\":{\\"Type\\":\\"AWS::Logs::LogGroup\\",\\"Properties\\":{\\"LogGroupName\\":{\\"Fn::Sub\\":\\"/aws/lambda/\${AWS::StackName}\\"},\\"RetentionInDays\\":14}},\\"UDFLambdaLogPolicy\\":{\\"Type\\":\\"AWS::IAM::Policy\\",\\"DependsOn\\":\\"UDFLambdaRole\\",\\"Properties\\":{\\"PolicyName\\":\\"lambda-log-access\\",\\"Roles\\":[{\\"Ref\\":\\"UDFLambdaRole\\"}],\\"PolicyDocument\\":{\\"Version\\":\\"2012-10-17\\",\\"Statement\\":[{\\"Effect\\":\\"Allow\\",\\"Action\\":\\"logs:*\\",\\"Resource\\":{\\"Fn::GetAtt\\":[\\"UDFLambdaLogs\\",\\"Arn\\"]}}]}}},\\"UDFLambdaRole\\":{\\"Type\\":\\"AWS::IAM::Role\\",\\"Properties\\":{\\"AssumeRolePolicyDocument\\":{\\"Statement\\":[{\\"Effect\\":\\"Allow\\",\\"Action\\":\\"sts:AssumeRole\\",\\"Principal\\":{\\"Service\\":\\"lambda.amazonaws.com\\"}}]}}}},\\"Outputs\\":{}}",
-        "Bucket": "template-bucket",
+        "Bucket": "service-bucket",
         "Key": "wharfie-templates/WharfieUDF-260ca406900a3f747e42cd69c3591fd9-i.json",
       }
     `);
@@ -84,18 +91,18 @@ describe('tests for wharfieUDF resource update handler', () => {
             "Value": "wharfie-staging",
           },
         ],
-        "TemplateURL": "https://template-bucket.s3.amazonaws.com/wharfie-templates/WharfieUDF-260ca406900a3f747e42cd69c3591fd9-i.json",
+        "TemplateURL": "https://service-bucket.s3.amazonaws.com/wharfie-templates/WharfieUDF-260ca406900a3f747e42cd69c3591fd9-i.json",
       }
     `);
-    expect(waitUntilStackUpdateComplete).toHaveBeenCalledWith(
-      {
-        client: expect.anything(),
-        maxWaitTime: 600,
-      },
-      {
-        StackName: 'stack_id',
+    expect(
+      AWSCloudFormation.CloudFormationMock.commandCalls(
+        AWSCloudFormation.DescribeStacksCommand
+      )[0].args[0].input
+    ).toMatchInlineSnapshot(`
+      Object {
+        "StackName": "stack_id",
       }
-    );
+    `);
   });
 
   it('handle failure', async () => {
@@ -106,9 +113,16 @@ describe('tests for wharfieUDF resource update handler', () => {
     ).resolves({
       StackId: 'stack_id',
     });
-    const waitUntilStackUpdateComplete = jest
-      .spyOn(AWSCloudFormation, 'waitUntilStackUpdateComplete')
-      .mockRejectedValue(new Error());
+
+    AWSCloudFormation.CloudFormationMock.on(
+      AWSCloudFormation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'ROLLBACK_COMPLETE',
+        },
+      ],
+    });
 
     AWSCloudFormation.CloudFormationMock.on(
       AWSCloudFormation.DescribeStackEventsCommand
@@ -117,6 +131,7 @@ describe('tests for wharfieUDF resource update handler', () => {
         {
           ResourceStatus: 'UPDATE_FAILED',
           ResourceStatusReason: 'some error occured',
+          Timestamp: new Date('2021-01-19T20:00:00.000Z'),
         },
       ],
     });
@@ -139,7 +154,10 @@ describe('tests for wharfieUDF resource update handler', () => {
       AWSCloudFormation.DescribeStackEventsCommand,
       1
     );
-    expect(waitUntilStackUpdateComplete).toHaveBeenCalledTimes(2);
+    expect(AWSCloudFormation.CloudFormationMock).toHaveReceivedCommandTimes(
+      AWSCloudFormation.DescribeStacksCommand,
+      1
+    );
   });
 
   it('basic', async () => {
@@ -150,9 +168,16 @@ describe('tests for wharfieUDF resource update handler', () => {
     ).resolves({
       StackId: 'stack_id',
     });
-    const waitUntilStackUpdateComplete = jest
-      .spyOn(AWSCloudFormation, 'waitUntilStackUpdateComplete')
-      .mockResolvedValue({});
+
+    AWSCloudFormation.CloudFormationMock.on(
+      AWSCloudFormation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'UPDATE_COMPLETE',
+        },
+      ],
+    });
     update_event.OldResourceProperties.Tags[0].Value = 'wharfie-testing';
     nock(
       'https://cloudformation-custom-resource-response-useast1.s3.amazonaws.com'
@@ -174,7 +199,7 @@ describe('tests for wharfieUDF resource update handler', () => {
       .toMatchInlineSnapshot(`
       Object {
         "Body": "{\\"AWSTemplateFormatVersion\\":\\"2010-09-09\\",\\"Metadata\\":{\\"WharfieVersion\\":\\"0.0.1\\",\\"ParentStack\\":\\"wharfie-staging\\",\\"LogicalResourceId\\":\\"StackMappings\\"},\\"Parameters\\":{},\\"Mappings\\":{},\\"Conditions\\":{},\\"Resources\\":{\\"UDFLambda\\":{\\"Type\\":\\"AWS::Lambda::Function\\",\\"Properties\\":{\\"Tags\\":[{\\"Value\\":\\"wharfie-staging\\",\\"Key\\":\\"CloudFormationStackName\\"}],\\"Architectures\\":[\\"arm64\\"],\\"Code\\":{\\"S3Bucket\\":\\"wharfie\\",\\"S3Key\\":\\"stack-mappings/staging/wharfie.zip\\"},\\"Description\\":{\\"Fn::Sub\\":\\"Wharfie UDF Lambda in the \${AWS::StackName} stack\\"},\\"FunctionName\\":{\\"Fn::Sub\\":\\"\${AWS::StackName}\\"},\\"Handler\\":\\"udf_entrypoint.handler\\",\\"Layers\\":[{\\"Fn::Sub\\":\\"arn:\${AWS::Partition}:lambda:\${AWS::Region}:580247275435:layer:LambdaInsightsExtension-Arm64:2\\"}],\\"MemorySize\\":256,\\"Runtime\\":\\"nodejs18.x\\",\\"Timeout\\":20,\\"Role\\":{\\"Fn::GetAtt\\":[\\"UDFLambdaRole\\",\\"Arn\\"]},\\"Environment\\":{\\"Variables\\":{\\"WHARFIE_UDF_HANDLER\\":\\"index.handler\\",\\"NODE_OPTIONS\\":\\"--enable-source-maps\\",\\"AWS_NODEJS_CONNECTION_REUSE_ENABLED\\":1}}}},\\"UDFLambdaLogs\\":{\\"Type\\":\\"AWS::Logs::LogGroup\\",\\"Properties\\":{\\"LogGroupName\\":{\\"Fn::Sub\\":\\"/aws/lambda/\${AWS::StackName}\\"},\\"RetentionInDays\\":14}},\\"UDFLambdaLogPolicy\\":{\\"Type\\":\\"AWS::IAM::Policy\\",\\"DependsOn\\":\\"UDFLambdaRole\\",\\"Properties\\":{\\"PolicyName\\":\\"lambda-log-access\\",\\"Roles\\":[{\\"Ref\\":\\"UDFLambdaRole\\"}],\\"PolicyDocument\\":{\\"Version\\":\\"2012-10-17\\",\\"Statement\\":[{\\"Effect\\":\\"Allow\\",\\"Action\\":\\"logs:*\\",\\"Resource\\":{\\"Fn::GetAtt\\":[\\"UDFLambdaLogs\\",\\"Arn\\"]}}]}}},\\"UDFLambdaRole\\":{\\"Type\\":\\"AWS::IAM::Role\\",\\"Properties\\":{\\"AssumeRolePolicyDocument\\":{\\"Statement\\":[{\\"Effect\\":\\"Allow\\",\\"Action\\":\\"sts:AssumeRole\\",\\"Principal\\":{\\"Service\\":\\"lambda.amazonaws.com\\"}}]}}}},\\"Outputs\\":{}}",
-        "Bucket": "template-bucket",
+        "Bucket": "service-bucket",
         "Key": "wharfie-templates/WharfieUDF-260ca406900a3f747e42cd69c3591fd9-i.json",
       }
     `);
@@ -194,17 +219,13 @@ describe('tests for wharfieUDF resource update handler', () => {
             "Value": "wharfie-staging",
           },
         ],
-        "TemplateURL": "https://template-bucket.s3.amazonaws.com/wharfie-templates/WharfieUDF-260ca406900a3f747e42cd69c3591fd9-i.json",
+        "TemplateURL": "https://service-bucket.s3.amazonaws.com/wharfie-templates/WharfieUDF-260ca406900a3f747e42cd69c3591fd9-i.json",
       }
     `);
-    expect(waitUntilStackUpdateComplete).toHaveBeenCalledWith(
-      {
-        client: expect.anything(),
-        maxWaitTime: 600,
-      },
-      {
-        StackName: 'stack_id',
-      }
+
+    expect(AWSCloudFormation.CloudFormationMock).toHaveReceivedCommandTimes(
+      AWSCloudFormation.DescribeStacksCommand,
+      1
     );
   });
 });

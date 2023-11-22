@@ -39,6 +39,9 @@ exports.Firehose = class Firehose {
     BufferMBs = 128,
     CatalogId = util.accountId,
     WharfieDeployment,
+    _WharfieRole = undefined,
+    _ServiceToken = undefined,
+    _WharfieBasePolicy = undefined,
     Condition = undefined,
     DependsOn = undefined,
   } = {}) {
@@ -64,7 +67,7 @@ exports.Firehose = class Firehose {
         Condition,
         DependsOn,
         Properties: {
-          ServiceToken: util.importValue(WharfieDeployment),
+          ServiceToken: _ServiceToken || util.importValue(WharfieDeployment),
           CatalogId,
           DatabaseName,
           CompactedConfig: {
@@ -79,7 +82,6 @@ exports.Firehose = class Firehose {
           DaemonConfig: {
             Privileged: true,
             Role: util.getAtt(`${LogicalName}WharfieRole`, 'Arn'),
-            Schedule: 60,
             SLA: {
               MaxDelay: 60,
               ColumnExpression: `date_parse(concat(year, month, day, hr), '%Y%m%d%H')`,
@@ -283,18 +285,21 @@ exports.Firehose = class Firehose {
                 Action: 'sts:AssumeRole',
                 Effect: 'Allow',
                 Principal: {
-                  AWS: util.importValue(
-                    util.join('-', [WharfieDeployment, 'role'])
-                  ),
+                  AWS:
+                    _WharfieRole ||
+                    util.importValue(
+                      util.join('-', [WharfieDeployment, 'role'])
+                    ),
                 },
               },
             ],
             Version: '2012-10-17',
           },
           ManagedPolicyArns: [
-            util.importValue(
-              util.join('-', [WharfieDeployment, 'base-policy'])
-            ),
+            _WharfieBasePolicy ||
+              util.importValue(
+                util.join('-', [WharfieDeployment, 'base-policy'])
+              ),
           ],
           Policies: [
             {

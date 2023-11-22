@@ -27,10 +27,6 @@ const AmazonBerkeleyObjectsAggregated = new wharfie.MaterializedView({
       's3://${Bucket}/AmazonBerkelyObjectsAggregated/'
     ),
   },
-  Backfill: {
-    Version: 1,
-    Duration: 60 * 24,
-  },
   DaemonConfig: {
     Role: wharfie.util.getAtt('WharfieExamplesRole', 'Arn'),
     Interval: 60 * 60,

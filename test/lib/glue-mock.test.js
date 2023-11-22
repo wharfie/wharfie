@@ -5,13 +5,11 @@ let Glue;
 describe('tests for Glue', () => {
   beforeEach(() => {
     process.env.AWS_MOCKS = true;
-    process.env.TEMP_FILES_BUCKET = 'wharfie-tests-temp-files';
     jest.requireMock('@aws-sdk/client-s3');
     Glue = require('../../lambdas/lib/glue');
   });
   afterAll(() => {
     process.env.AWS_MOCKS = false;
-    process.env.TEMP_FILES_BUCKET = undefined;
   });
   it('getTable mock', async () => {
     expect.assertions(1);

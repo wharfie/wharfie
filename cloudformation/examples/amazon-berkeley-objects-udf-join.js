@@ -25,10 +25,6 @@ const AmazonBerkeleyObjectsUDFJoin = new wharfie.MaterializedView({
   CompactedConfig: {
     Location: wharfie.util.sub('s3://${Bucket}/AmazonBerkelyObjectsUDFJoin/'),
   },
-  Backfill: {
-    Version: 1,
-    Duration: 60 * 24,
-  },
   DaemonConfig: {
     Role: wharfie.util.getAtt('WharfieExamplesRole', 'Arn'),
     Interval: 60 * 60,
