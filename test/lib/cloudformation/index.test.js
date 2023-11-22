@@ -132,10 +132,19 @@ describe('tests for CloudFormation', () => {
     ).resolves({
       StackId: 'stack_id',
     });
-    const waitUntilStackCreateComplete = jest
-      .spyOn(AWSCloudformation, 'waitUntilStackCreateComplete')
-      .mockResolvedValue(undefined);
-    const cloudformation = new CloudFormation();
+    AWSCloudformation.CloudFormationMock.on(
+      AWSCloudformation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'CREATE_COMPLETE',
+        },
+      ],
+    });
+    const cloudformation = new CloudFormation(
+      {},
+      { artifact_bucket: 'utility-079185815456-us-west-2' }
+    );
     const params = {
       StackName: 'test',
       TemplateBody: '',
@@ -160,19 +169,14 @@ describe('tests for CloudFormation', () => {
       1,
       AWSS3.PutObjectCommand,
       {
-        Bucket: '',
+        Bucket: 'utility-079185815456-us-west-2',
         Key: expect.any(String),
         Body: params.TemplateBody,
       }
     );
-    expect(waitUntilStackCreateComplete).toHaveBeenCalledWith(
-      {
-        client: expect.anything(),
-        maxWaitTime: 600,
-      },
-      {
-        StackName: 'stack_id',
-      }
+    expect(AWSCloudformation.CloudFormationMock).toHaveReceivedCommandTimes(
+      AWSCloudformation.DescribeStacksCommand,
+      1
     );
   });
 
@@ -194,11 +198,20 @@ describe('tests for CloudFormation', () => {
         },
       ],
     });
-    jest
-      .spyOn(AWSCloudformation, 'waitUntilStackCreateComplete')
-      .mockRejectedValue(undefined);
+    AWSCloudformation.CloudFormationMock.on(
+      AWSCloudformation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'CREATE_FAILED',
+        },
+      ],
+    });
 
-    const cloudformation = new CloudFormation();
+    const cloudformation = new CloudFormation(
+      {},
+      { artifact_bucket: 'utility-079185815456-us-west-2' }
+    );
     const params = {
       StackName: 'test',
       Tags: [],
@@ -239,11 +252,20 @@ describe('tests for CloudFormation', () => {
     ).resolves({
       StackId: 'stack_id',
     });
-    const waitUntilStackUpdateComplete = jest
-      .spyOn(AWSCloudformation, 'waitUntilStackUpdateComplete')
-      .mockResolvedValue(undefined);
+    AWSCloudformation.CloudFormationMock.on(
+      AWSCloudformation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'UPDATE_COMPLETE',
+        },
+      ],
+    });
 
-    const cloudformation = new CloudFormation();
+    const cloudformation = new CloudFormation(
+      {},
+      { artifact_bucket: 'utility-079185815456-us-west-2' }
+    );
     const params = {
       StackName: 'test',
       Tags: [],
@@ -268,19 +290,14 @@ describe('tests for CloudFormation', () => {
       1,
       AWSS3.PutObjectCommand,
       {
-        Bucket: '',
+        Bucket: 'utility-079185815456-us-west-2',
         Key: expect.any(String),
         Body: params.TemplateBody,
       }
     );
-    expect(waitUntilStackUpdateComplete).toHaveBeenCalledWith(
-      {
-        client: expect.anything(),
-        maxWaitTime: 600,
-      },
-      {
-        StackName: 'stack_id',
-      }
+    expect(AWSCloudformation.CloudFormationMock).toHaveReceivedCommandTimes(
+      AWSCloudformation.DescribeStacksCommand,
+      1
     );
   });
 
@@ -292,9 +309,15 @@ describe('tests for CloudFormation', () => {
     ).resolves({
       StackId: 'stack_id',
     });
-    jest
-      .spyOn(AWSCloudformation, 'waitUntilStackUpdateComplete')
-      .mockRejectedValue(undefined);
+    AWSCloudformation.CloudFormationMock.on(
+      AWSCloudformation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'ROLLBACK_COMPLETE',
+        },
+      ],
+    });
     AWSCloudformation.CloudFormationMock.on(
       AWSCloudformation.DescribeStackEventsCommand
     ).resolves({
@@ -306,8 +329,10 @@ describe('tests for CloudFormation', () => {
       ],
     });
 
-    const cloudformation = new CloudFormation();
-
+    const cloudformation = new CloudFormation(
+      {},
+      { artifact_bucket: 'utility-079185815456-us-west-2' }
+    );
     const params = {
       StackName: 'test',
       Tags: [],
@@ -344,11 +369,20 @@ describe('tests for CloudFormation', () => {
     AWSCloudformation.CloudFormationMock.on(
       AWSCloudformation.DeleteStackCommand
     ).resolves(undefined);
-    const waitUntilStackDeleteComplete = jest
-      .spyOn(AWSCloudformation, 'waitUntilStackDeleteComplete')
-      .mockResolvedValue(undefined);
+    AWSCloudformation.CloudFormationMock.on(
+      AWSCloudformation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'DELETE_COMPLETE',
+        },
+      ],
+    });
 
-    const cloudformation = new CloudFormation();
+    const cloudformation = new CloudFormation(
+      {},
+      { artifact_bucket: 'utility-079185815456-us-west-2' }
+    );
 
     const params = {
       StackName: 'stack_id',
@@ -363,14 +397,9 @@ describe('tests for CloudFormation', () => {
       AWSCloudformation.DeleteStackCommand,
       params
     );
-    expect(waitUntilStackDeleteComplete).toHaveBeenCalledWith(
-      {
-        client: expect.anything(),
-        maxWaitTime: 600,
-      },
-      {
-        StackName: 'stack_id',
-      }
+    expect(AWSCloudformation.CloudFormationMock).toHaveReceivedCommandTimes(
+      AWSCloudformation.DescribeStacksCommand,
+      1
     );
   });
 
@@ -379,9 +408,15 @@ describe('tests for CloudFormation', () => {
     AWSCloudformation.CloudFormationMock.on(
       AWSCloudformation.DeleteStackCommand
     ).resolves(undefined);
-    jest
-      .spyOn(AWSCloudformation, 'waitUntilStackDeleteComplete')
-      .mockRejectedValue(undefined);
+    AWSCloudformation.CloudFormationMock.on(
+      AWSCloudformation.DescribeStacksCommand
+    ).resolves({
+      Stacks: [
+        {
+          StackStatus: 'DELETE_FAILED',
+        },
+      ],
+    });
     AWSCloudformation.CloudFormationMock.on(
       AWSCloudformation.DescribeStackEventsCommand
     ).resolves({
@@ -393,9 +428,10 @@ describe('tests for CloudFormation', () => {
       ],
     });
 
-    const cloudformation = new CloudFormation({
-      region: 'us-east-1',
-    });
+    const cloudformation = new CloudFormation(
+      {},
+      { artifact_bucket: 'utility-079185815456-us-west-2' }
+    );
 
     const params = {
       StackName: 'stack_id',

@@ -3,10 +3,7 @@
 const { parse } = require('@sandfox/arn');
 const { version } = require('../../../../package.json');
 
-const get_dashboard = require('./dashboard');
 const { generateSchedule } = require('./cron');
-
-const STACK_NAME = process.env.STACK_NAME || '';
 
 /**
  * @typedef Column
@@ -23,9 +20,10 @@ const STACK_NAME = process.env.STACK_NAME || '';
  * @property {any} Resources -
  * @property {any} Outputs -
  * @param {import('../../../typedefs').CloudformationEvent} event -
+ * @param {boolean} [migration_resource] -
  * @returns {CloudformationTemplate} -
  */
-function Wharfie(event) {
+function Wharfie(event, migration_resource = false) {
   const {
     LogicalResourceId,
     StackId,
@@ -51,19 +49,9 @@ function Wharfie(event) {
   const template = {
     AWSTemplateFormatVersion: '2010-09-09',
     Metadata,
-    Parameters: {
-      MigrationResource: {
-        Type: 'String',
-        Default: 'false',
-        AllowedValues: ['true', 'false'],
-      },
-    },
+    Parameters: {},
     Mappings: {},
-    Conditions: {
-      isMigrationResource: {
-        'Fn::Equals': [{ Ref: 'isMigrationResource' }, 'true'],
-      },
-    },
+    Conditions: {},
     Resources: {
       Workgroup: {
         Type: 'AWS::Athena::WorkGroup',
@@ -126,13 +114,9 @@ function Wharfie(event) {
             Parameters: { 'parquet.compress': 'GZIP', EXTERNAL: 'TRUE' },
             PartitionKeys: TableInput.PartitionKeys || [],
             StorageDescriptor: {
-              Location: {
-                'Fn::If': [
-                  'isMigrationResource',
-                  `${Location}migrate-references/`,
-                  `${Location}references/`,
-                ],
-              },
+              Location: migration_resource
+                ? `${Location}migrate-references/`
+                : `${Location}references/`,
               Columns: TableInput.StorageDescriptor.Columns,
               InputFormat:
                 'org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat',
@@ -147,28 +131,6 @@ function Wharfie(event) {
               StoredAsSubDirectories: false,
               NumberOfBuckets: 0,
             },
-          },
-        },
-      },
-      Dashboard: {
-        Type: 'AWS::CloudWatch::Dashboard',
-        Properties: {
-          DashboardName: {
-            'Fn::Sub': [
-              '${originalStack}_${LogicalResourceId}',
-              { originalStack, LogicalResourceId },
-            ],
-          },
-          DashboardBody: {
-            'Fn::Sub': [
-              JSON.stringify(
-                get_dashboard(LogicalResourceId, originalStack, Metadata)
-              ),
-              {
-                WharfieStack: STACK_NAME,
-                Region: { Ref: 'AWS::Region' },
-              },
-            ],
           },
         },
       },

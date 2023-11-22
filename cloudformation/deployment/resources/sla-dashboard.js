@@ -14,7 +14,7 @@ const widget_json = {
           [
             {
               expression:
-                'SUM(SEARCH(\'{Wharfie/Wharfie,operation_type,resource,stack} Wharfie MetricName="operations" stack="${AWS::StackName}"\', \'SampleCount\', 300))',
+                'SUM(SEARCH(\'{Wharfie,operation_type,resource,stack} Wharfie MetricName="operations" stack="${AWS::StackName}"\', \'SampleCount\', 300))',
               id: 'e1',
               period: 300,
               region: '${AWS::Region}',

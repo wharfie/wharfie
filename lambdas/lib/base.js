@@ -1,100 +1,155 @@
 'use strict';
 const logging = require('./logging');
+const aws_sdk_log = logging.getAWSSDKLogger();
 const daemon_log = logging.getDaemonLogger();
 class BaseAWS {
   /**
-   *
-   * @returns {import("@aws-sdk/client-sts").STSClientConfig} - sdk options
+   * '$' is not allowed in the name of a property in the JSON format and breaks querying
+   * @param {any} log -
+   * @returns {any} -
+   */
+  static formatJsonLog(log) {
+    if (log.message && log.message.error) {
+      if (log.message.error.$fault) {
+        log.message.error.fault = log.message.error.$fault;
+        delete log.message.error.$fault;
+      }
+      if (log.message.error.$metadata) {
+        log.message.error.metadata = log.message.error.$metadata;
+        delete log.message.error.$metadata;
+      }
+    }
+    return log;
+  }
+
+  /**
+   * @returns {import("@aws-sdk/client-sts").ClientDefaults} - sdk options
    */
   static config() {
-    // const backoff = (
-    //   /** @type {number} */ retryCount,
-    //   /** @type {any} */ error
-    // ) => {
-    //   if (error)
-    //     daemon_log.info(
-    //       `[${error.statusCode} ${error.hostname} ${error.region} ${retryCount}] ${error.name} - ${error.message}`
-    //     );
-    //   return Math.floor(
-    //     Math.random() * Math.min(5000, 1 * Math.pow(2, retryCount))
-    //   );
-    // };
-
     const logger = {
       debug: (/** @type {any[]} */ ...content) => {
-        const joined_content = content
-          .map((value) => {
-            if (typeof value === 'object') {
-              try {
-                return JSON.stringify(value);
-              } catch (e) {
-                // Converting circular structure to JSON\n --> starting at object with constructor 'TLSSocket'\n | property 'parser' -> object with constructor 'HTTPParser'\n --- property 'socket' closes the circle\n at JSON.stringify (<anonymous>)\n at value (/lambdas/lib/base.js:42:27)
-                return String(value);
+        content.forEach((value) => {
+          if (typeof value === 'object') {
+            if (value.input) {
+              const stringifiedInput = JSON.stringify(value.input);
+              if (stringifiedInput.length > 1000) {
+                value.input = `TRUNCATED: ${stringifiedInput.slice(
+                  0,
+                  1000
+                )}...`;
               }
             }
-            return String(value);
-          })
-          .join(' ');
-        daemon_log.debug(
-          joined_content.substring(0, Math.min(1000, joined_content.length))
-        );
+            try {
+              switch (process.env.LOGGING_FORMAT || 'json') {
+                case 'json':
+                  aws_sdk_log.debug(this.formatJsonLog(value));
+                  break;
+                case 'cli':
+                  aws_sdk_log.debug(JSON.stringify(value));
+                  break;
+              }
+            } catch (e) {
+              daemon_log.debug(`[aws-log] ${String(value)}`);
+            }
+          } else {
+            daemon_log.debug(`[aws-log] ${String(value)}`);
+          }
+        });
       },
       info: (/** @type {any[]} */ ...content) => {
-        const joined_content = content
-          .map((value) => {
-            if (typeof value === 'object') {
-              try {
-                return JSON.stringify(value);
-              } catch (e) {
-                return String(value);
+        content.forEach((value) => {
+          if (typeof value === 'object') {
+            if (value.input) {
+              const stringifiedInput = JSON.stringify(value.input);
+              if (stringifiedInput.length > 1000) {
+                value.input = `TRUNCATED: ${stringifiedInput.slice(
+                  0,
+                  1000
+                )}...`;
               }
             }
-            return String(value);
-          })
-          .join(' ');
-        daemon_log.debug(
-          joined_content.substring(0, Math.min(1000, joined_content.length))
-        );
+            try {
+              switch (process.env.LOGGING_FORMAT || 'json') {
+                case 'json':
+                  aws_sdk_log.info(this.formatJsonLog(value));
+                  break;
+                case 'cli':
+                  aws_sdk_log.info(JSON.stringify(value));
+                  break;
+              }
+            } catch (e) {
+              daemon_log.info(`[aws-log] ${String(value)}`);
+            }
+          } else {
+            daemon_log.info(`[aws-log] ${String(value)}`);
+          }
+        });
       },
       warn: (/** @type {any[]} */ ...content) => {
-        const joined_content = content
-          .map((value) => {
-            if (typeof value === 'object') {
-              try {
-                return JSON.stringify(value);
-              } catch (e) {
-                return String(value);
+        content.forEach((value) => {
+          if (typeof value === 'object') {
+            if (value.input) {
+              const stringifiedInput = JSON.stringify(value.input);
+              if (stringifiedInput.length > 1000) {
+                value.input = `TRUNCATED: ${stringifiedInput.slice(
+                  0,
+                  1000
+                )}...`;
               }
             }
-            return String(value);
-          })
-          .join(' ');
-        daemon_log.warn(
-          joined_content.substring(0, Math.min(1000, joined_content.length))
-        );
+            try {
+              switch (process.env.LOGGING_FORMAT || 'json') {
+                case 'json':
+                  aws_sdk_log.warn(this.formatJsonLog(value));
+                  break;
+                case 'cli':
+                  aws_sdk_log.warn(JSON.stringify(value));
+                  break;
+                default:
+                  aws_sdk_log.warn(value);
+                  break;
+              }
+            } catch (e) {
+              daemon_log.warn(`[aws-log] ${String(value)}`);
+            }
+          } else {
+            daemon_log.warn(`[aws-log] ${String(value)}`);
+          }
+        });
       },
       error: (/** @type {any[]} */ ...content) => {
-        const joined_content = content
-          .map((value) => {
-            if (typeof value === 'object') {
-              try {
-                return JSON.stringify(value);
-              } catch (e) {
-                return String(value);
+        content.forEach((value) => {
+          if (typeof value === 'object') {
+            if (value.input) {
+              const stringifiedInput = JSON.stringify(value.input);
+              if (stringifiedInput.length > 1000) {
+                value.input = `TRUNCATED: ${stringifiedInput.slice(
+                  0,
+                  1000
+                )}...`;
               }
             }
-            return String(value);
-          })
-          .join(' ');
-        daemon_log.error(
-          joined_content.substring(0, Math.min(1000, joined_content.length))
-        );
+            try {
+              switch (process.env.LOGGING_FORMAT || 'json') {
+                case 'json':
+                  aws_sdk_log.error(this.formatJsonLog(value));
+                  break;
+                case 'cli':
+                  aws_sdk_log.error(JSON.stringify(value));
+                  break;
+              }
+            } catch (e) {
+              daemon_log.error(`[aws-log] ${String(value)}`);
+            }
+          } else {
+            daemon_log.error(`[aws-log] ${String(value)}`);
+          }
+        });
       },
     };
     return {
       maxAttempts: 20,
       retryMode: 'adaptive',
-      // @ts-ignore
       logger,
     };
   }

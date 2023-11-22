@@ -3,7 +3,6 @@
 const bluebird = require('bluebird');
 
 process.env.AWS_MOCKS = true;
-process.env.TEMP_FILES_BUCKET = 'wharfie-tests-temp-files';
 jest.requireMock('@aws-sdk/client-s3');
 jest.requireMock('@aws-sdk/client-sns');
 jest.requireMock('@aws-sdk/client-glue');
@@ -89,7 +88,7 @@ describe('maintain tests', () => {
 
   afterEach(() => {
     clearLambdaTriggers();
-    logging.flush(CONTEXT);
+    logging.flush();
   });
 
   it('end to end', async () => {

@@ -70,13 +70,19 @@ async function update(event) {
   if (migration) {
     const migrate_stackname = `migrate-${StackName}`;
 
-    const migrationTemplate = templateGenerator.Wharfie({
-      ...event,
-      ResourceProperties: {
-        ...event.ResourceProperties,
-        DatabaseName: `migrate_${event.ResourceProperties}`,
+    const migrationTemplate = templateGenerator.Wharfie(
+      {
+        ...event,
+        ResourceProperties: {
+          ...event.ResourceProperties,
+          TableInput: {
+            ...event.ResourceProperties.TableInput,
+            TableName: `migrate_${event.ResourceProperties.TableInput.TableName}`,
+          },
+        },
       },
-    });
+      true
+    );
     const resource = {
       resource_id: migrate_stackname,
       resource_arn: StackId,
@@ -90,12 +96,6 @@ async function update(event) {
     await cloudformation.createStack({
       StackName: migrate_stackname,
       Tags,
-      Parameters: [
-        {
-          ParameterKey: 'MigrationResource',
-          ParameterValue: 'true',
-        },
-      ],
       TemplateBody: JSON.stringify(migrationTemplate),
     });
     await sqs.enqueue(

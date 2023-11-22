@@ -5,17 +5,12 @@ const wharfie = require('../../client');
 const AmazonBerkeleyObjects = require('./amazon-berkeley-objects');
 const AmazonBerkeleyObjectImages = require('./amazon-berkeley-object-images');
 const AmazonBerkeleyObjectsAggregated = require('./amazon-berkeley-objects-aggregated');
-// const AmazonBerkeleyObjectsUDFJoin = require('./examples/amazon-berkeley-objects-udf-join');
+// const AmazonBerkeleyObjectsUDFJoin = require('./amazon-berkeley-objects-udf-join');
 const FirehoseExample = require('./firehose');
 // const UDF = require('./udf');
 const Bucket = require('./bucket');
 
 const Parameters = {
-  ArtifactBucket: { Type: 'String' },
-  SNSAlarmTopicARN: {
-    Type: 'String',
-    Description: 'SNS topic to send alarms to',
-  },
   Deployment: {
     Type: 'String',
     Description: 'What wharfie environment to deploy into',

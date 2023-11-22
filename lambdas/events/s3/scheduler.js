@@ -25,7 +25,6 @@ async function schedule_event(location_record, partition_parts, window) {
   const ms = 1000 * interval; // convert s to ms
   const nowInterval = Math.round(now / ms) * ms;
   const [after, before] = window;
-
   const events = await event_db.query(
     location_record.resource_id,
     partition_prefix,
@@ -105,7 +104,8 @@ async function run(s3Event, context) {
   if (s3Event.s3.object.key.includes('processing_failed/')) return;
 
   // fix for manual partition values
-  s3Event.s3.object.key = s3Event.s3.object.key.replace('%3D', '=');
+  s3Event.s3.object.key = decodeURIComponent(s3Event.s3.object.key);
+  s3Event.s3.bucket.name = decodeURIComponent(s3Event.s3.bucket.name);
 
   const location_records = await location_db.findLocations(
     `s3://${s3Event.s3.bucket.name}/${s3Event.s3.object.key}`
@@ -151,6 +151,7 @@ async function run(s3Event, context) {
         partition_parts = partition_parts_filtered;
       if (partitionKeys.length !== partition_parts.length) {
         // invalid location
+        daemon_log.debug(`invalid location ${partitionFile}`);
         return;
       }
     }

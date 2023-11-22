@@ -2,27 +2,7 @@
 
 const wharfie = require('../../client');
 
-const TempFilesBucket = wharfie.util.shortcuts.s3Bucket.build({
-  BucketName: wharfie.util.sub(
-    '${AWS::StackName}-${AWS::AccountId}-${AWS::Region}-temp-files'
-  ),
-  LifecycleConfiguration: {
-    Rules: [
-      {
-        Id: 'temp_files_expiration',
-        ExpirationInDays: 1,
-        Status: 'Enabled',
-      },
-      {
-        Id: 'abort_incomplete_multipart_uploads',
-        AbortIncompleteMultipartUpload: {
-          DaysAfterInitiation: 1,
-        },
-        Status: 'Enabled',
-      },
-    ],
-  },
-});
+const ServiceBucket = require('./resources/service-bucket');
 const Dashboard = require('./resources/sla-dashboard');
 const Dynamo = require('./resources/dynamo');
 const Monitor = require('./resources/monitor');
@@ -32,24 +12,21 @@ const Cleanup = require('./resources/cleanup');
 const Events = require('./resources/events');
 const Role = require('./resources/iam/wharfie-role');
 
+const LogResources = require('./logging/log-tables');
+
 const Parameters = {
   Version: { Type: 'String' },
   GitSha: { Type: 'String', Default: '' },
   SNSAlarmTopicARN: {
     Type: 'String',
     Description: 'SNS topic to send alarms to',
+    Default: 'None',
   },
-  DaemonLoggingLevel: {
+  LoggingLevel: {
     Type: 'String',
-    Description: 'Which logging level to use for daemon',
+    Description: 'Which logging level to use ',
     AllowedValues: ['debug', 'info', 'warn', 'error'],
-    Default: 'info',
-  },
-  ResourceLoggingLevel: {
-    Type: 'String',
-    Description: 'Which logging level to use for wharfie resources',
-    AllowedValues: ['debug', 'info', 'warn', 'error'],
-    Default: 'info',
+    Default: 'debug',
   },
   GlobalQueryConcurrency: {
     Type: 'Number',
@@ -66,23 +43,25 @@ const Parameters = {
     Description: 'Maximum number of queries that a single action can submit',
     Default: 10000,
   },
-  ArtifactBucket: {
-    Type: 'String',
-    Description: 'Bucket that lambda artifacts are stored in',
-  },
   IsDevelopment: {
     Type: 'String',
     Description: 'Is this a development deployment?',
     Default: false,
+  },
+  ArtifactBucket: {
+    Type: 'String',
+    Description:
+      'only needed for development, bucket where lambda artifacts are stored',
   },
 };
 
 const Conditions = {
   UseNoOpSNSTopic: wharfie.util.equals(
     wharfie.util.ref('SNSAlarmTopicARN'),
-    ''
+    'None'
   ),
   IsDevelopment: wharfie.util.equals(wharfie.util.ref('IsDevelopment'), 'True'),
+  IsDebug: wharfie.util.equals(wharfie.util.ref('LoggingLevel'), 'debug'),
 };
 
 const Resources = {
@@ -117,7 +96,8 @@ module.exports = wharfie.util.merge(
   Cleanup,
   Role,
   Dynamo,
-  TempFilesBucket,
   Events,
-  Dashboard
+  ServiceBucket,
+  Dashboard,
+  LogResources
 );

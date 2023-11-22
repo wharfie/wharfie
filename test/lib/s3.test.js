@@ -5,14 +5,10 @@ const S3 = require('../../lambdas/lib/s3');
 
 describe('tests for S3', () => {
   beforeAll(() => {
-    process.env.TEMP_FILES_BUCKET = 'wharfie-tests-temp-files';
     require('aws-sdk-client-mock-jest');
   });
   afterEach(() => {
     AWS.S3Mock.reset();
-  });
-  afterAll(() => {
-    process.env.TEMP_FILES_BUCKET = undefined;
   });
 
   it('putObject', async () => {
@@ -145,7 +141,7 @@ describe('tests for S3', () => {
     expect.assertions(1);
     const s3 = new S3({ region: 'us-east-1' });
     expect(() => s3.parseS3Uri(123)).toThrowErrorMatchingInlineSnapshot(
-      `"uri is not a string"`
+      `"uri (123) is not a string"`
     );
   });
 

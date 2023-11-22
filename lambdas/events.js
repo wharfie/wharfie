@@ -7,7 +7,7 @@ const SQS = require('./lib/sqs');
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
 
-const logging = require('./lib/logging');
+const logging = require('./lib/logging/');
 const daemon_log = logging.getDaemonLogger();
 
 const QUEUE_URL = process.env.EVENTS_QUEUE_URL || '';
@@ -96,7 +96,8 @@ const handler = async (event, context) => {
   await Promise.all(
     event.Records.map((record) => processRecord(record, context))
   );
-  await logging.flush(context);
+  daemon_log.info(process.memoryUsage());
+  await logging.flush();
 };
 
 module.exports = {

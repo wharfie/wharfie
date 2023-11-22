@@ -5,13 +5,11 @@ let S3;
 describe('tests for S3 Mock', () => {
   beforeEach(() => {
     process.env.AWS_MOCKS = true;
-    process.env.TEMP_FILES_BUCKET = 'wharfie-tests-temp-files';
     jest.requireMock('@aws-sdk/client-s3');
     S3 = require('../../lambdas/lib/s3');
   });
   afterAll(() => {
     process.env.AWS_MOCKS = false;
-    process.env.TEMP_FILES_BUCKET = undefined;
   });
   it('putObject mock test', async () => {
     expect.assertions(1);
@@ -123,5 +121,58 @@ describe('tests for S3 Mock', () => {
         ],
       }
     `);
+  });
+
+  it('createAppendableOrAppendToObject mock test', async () => {
+    expect.assertions(1);
+    const s3foo = new S3({ region: 'us-east-1' });
+    s3foo.s3.__setMockState({
+      's3://test_bucket/fake': '',
+    });
+    const params = {
+      Bucket: 'test_bucket',
+      Key: 'key/path.json',
+    };
+    await s3foo.createAppendableOrAppendToObject(
+      params,
+      `${JSON.stringify({ foo: 'bar' })}\n`
+    );
+    await s3foo.createAppendableOrAppendToObject(
+      params,
+      `${JSON.stringify({ biz: 'baz' })}\n`
+    );
+    const s3bar = new S3({ region: 'us-east-1' });
+
+    const result = await s3bar.getObject(params);
+    expect(result.Body.trim()).toMatchInlineSnapshot(`
+      "{\\"foo\\":\\"bar\\"}
+      {\\"biz\\":\\"baz\\"}"
+    `);
+  });
+
+  it('createAppendableOrAppendToObject mock test existing object', async () => {
+    expect.assertions(1);
+    const s3foo = new S3({ region: 'us-east-1' });
+    s3foo.s3.__setMockState({
+      's3://test_bucket/fake': '',
+    });
+    const params = {
+      Bucket: 'test_bucket',
+      Key: 'key/path.json',
+    };
+    await s3foo.putObject({
+      Bucket: 'test_bucket',
+      Key: 'key/path.json',
+      Body: JSON.stringify({ foo: 'bar' }),
+    });
+    await s3foo.createAppendableOrAppendToObject(
+      params,
+      JSON.stringify({ biz: 'baz' })
+    );
+    const s3bar = new S3({ region: 'us-east-1' });
+    const result = await s3bar.getObject(params);
+    expect(result.Body.trim()).toMatchInlineSnapshot(
+      `"{\\"foo\\":\\"bar\\"}{\\"biz\\":\\"baz\\"}"`
+    );
   });
 });

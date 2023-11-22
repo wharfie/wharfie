@@ -7,8 +7,6 @@ const {
 } = require('../output');
 const cuid = require('cuid');
 const uuid = require('uuid');
-process.env.DAEMON_LOGGING_LEVEL = 'debug';
-process.env.RESOURCE_LOGGING_LEVEL = 'debug';
 const { getResource } = require('../../lambdas/lib/dynamo/resource');
 const migration = require('../../lambdas/migrations/');
 

@@ -8,7 +8,11 @@ const Daemon = new wharfie.util.shortcuts.QueueLambda({
   LogicalName: 'Daemon',
   FunctionName: wharfie.util.sub('${AWS::StackName}-daemon'),
   Code: {
-    S3Bucket: wharfie.util.sub('wharfie-artifacts-${AWS::Region}'),
+    S3Bucket: wharfie.util.if(
+      'IsDevelopment',
+      wharfie.util.ref('ArtifactBucket'),
+      wharfie.util.sub('wharfie-artifacts-${AWS::Region}')
+    ),
     S3Key: wharfie.util.if(
       'IsDevelopment',
       wharfie.util.sub('wharfie/${GitSha}/daemon.zip'),
@@ -19,6 +23,7 @@ const Daemon = new wharfie.util.shortcuts.QueueLambda({
   EventSourceArn: wharfie.util.getAtt('DaemonQueue', 'Arn'),
   ReservedConcurrentExecutions: 5,
   BatchSize: 10,
+  MaximumBatchingWindowInSeconds: 5,
   Timeout: TIMEOUT,
   MemorySize: 1024,
   RoleArn: wharfie.util.getAtt('WharfieRole', 'Arn'),
@@ -27,8 +32,7 @@ const Daemon = new wharfie.util.shortcuts.QueueLambda({
       NODE_OPTIONS: '--enable-source-maps',
       AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1,
       STACK_NAME: wharfie.util.stackName,
-      DAEMON_LOGGING_LEVEL: wharfie.util.ref('DaemonLoggingLevel'),
-      RESOURCE_LOGGING_LEVEL: wharfie.util.ref('ResourceLoggingLevel'),
+      LOGGING_LEVEL: wharfie.util.ref('LoggingLevel'),
       TEMPORARY_GLUE_DATABASE: wharfie.util.ref('TemporaryDatabase'),
       RESOURCE_TABLE: wharfie.util.ref('ResourceTable'),
       SEMAPHORE_TABLE: wharfie.util.ref('SemaphoreTable'),
@@ -39,12 +43,11 @@ const Daemon = new wharfie.util.shortcuts.QueueLambda({
       GLOBAL_QUERY_CONCURRENCY: wharfie.util.ref('GlobalQueryConcurrency'),
       RESOURCE_QUERY_CONCURRENCY: wharfie.util.ref('ResourceQueryConcurrency'),
       MAX_QUERIES_PER_ACTION: wharfie.util.ref('MaxQueriesPerAction'),
-      TEMPLATE_BUCKET: wharfie.util.ref('ArtifactBucket'),
+      WHARFIE_SERVICE_BUCKET: wharfie.util.ref('Bucket'),
+      WHARFIE_LOGGING_FIREHOSE: wharfie.util.ref('LoggingFirehose'),
     },
   },
 });
-delete Daemon.Resources.DaemonLogPolicy;
-Daemon.Resources.DaemonEventSource.Properties.MaximumBatchingWindowInSeconds = 5;
 
 const Outputs = {
   DaemonQueue: {

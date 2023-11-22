@@ -1,20 +1,16 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
-process.env.TEMP_FILES_BUCKET = 'wharfie-tests-temp-files';
 const AWS = require('@aws-sdk/client-glue');
 const Glue = require('../../lambdas/lib/glue');
 
 describe('tests for Glue', () => {
   beforeAll(() => {
-    process.env.TEMP_FILES_BUCKET = 'wharfie-tests-temp-files';
     require('aws-sdk-client-mock-jest');
   });
   afterEach(() => {
     AWS.GlueMock.reset();
   });
-  afterAll(() => {
-    process.env.TEMP_FILES_BUCKET = undefined;
-  });
+  afterAll(() => {});
 
   it('getTable', async () => {
     expect.assertions(3);

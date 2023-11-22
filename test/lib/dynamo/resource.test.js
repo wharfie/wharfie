@@ -3,7 +3,7 @@
 const AWS = require('@aws-sdk/lib-dynamodb');
 const AWSAthena = require('@aws-sdk/client-athena');
 const { Graph, json } = require('graphlib');
-const winston = require('winston');
+const Logger = require('../../../lambdas/lib/logging/logger');
 
 process.env.QUERY_TABLE = 'query_table';
 
@@ -726,11 +726,7 @@ describe('dynamo resource db', () => {
         },
       ],
     });
-    const logger = winston.createLogger({
-      level: 'error',
-      defaultMeta: { service: 'user-service' },
-      transports: [],
-    });
+    const logger = new Logger();
     const action_graph = new Graph();
     action_graph.setNode('START', 'action_id');
     action_graph.setNode('FINISH', 'finish_action_id');

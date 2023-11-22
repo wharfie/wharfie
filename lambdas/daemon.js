@@ -5,7 +5,7 @@ const { parse } = require('@sandfox/arn');
 const uuid = require('uuid');
 const bluebirdPromise = require('bluebird');
 
-const logging = require('./lib/logging');
+const logging = require('./lib/logging/');
 const daemon_log = logging.getDaemonLogger();
 
 const maintain = require('./operations/maintain/');
@@ -358,6 +358,6 @@ module.exports.handler = async (event, context) => {
     },
     { concurrency: 4 }
   );
-  daemon_log.info(`MEMORY USAGE: `, process.memoryUsage());
-  await logging.flush(context);
+  daemon_log.info(process.memoryUsage());
+  await logging.flush();
 };

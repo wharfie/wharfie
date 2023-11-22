@@ -60,12 +60,7 @@ class Lambda {
       FunctionName = { 'Fn::Sub': `\${AWS::StackName}-${LogicalName}` },
       Handler = 'index.handler',
       KmsKeyArn,
-      Layers = [
-        {
-          'Fn::Sub':
-            'arn:${AWS::Partition}:lambda:${AWS::Region}:580247275435:layer:LambdaInsightsExtension-Arm64:2',
-        },
-      ],
+      Layers = [],
       MemorySize = 128,
       ReservedConcurrentExecutions,
       Runtime = 'nodejs18.x',
@@ -112,8 +107,6 @@ class Lambda {
     if (Statement.length > 0 && RoleArn) {
       throw new Error('You cannot specify both Statements and a RoleArn');
     }
-
-    // if the RoleArn was specified, we need to split just the name for use with the log policy
     let roleName;
     if (RoleArn) {
       roleName = { 'Fn::Select': [1, { 'Fn::Split': ['/', RoleArn] }] };
@@ -128,7 +121,7 @@ class Lambda {
     this.Resources = {
       [`${LogicalName}Logs`]: {
         Type: 'AWS::Logs::LogGroup',
-        Condition,
+        Condition: 'IsDebug',
         Properties: {
           LogGroupName: {
             'Fn::Sub': ['/aws/lambda/${name}', { name: FunctionName }],
@@ -136,7 +129,6 @@ class Lambda {
           RetentionInDays: 14,
         },
       },
-
       [`${LogicalName}`]: {
         Type: 'AWS::Lambda::Function',
         Condition,
@@ -188,13 +180,12 @@ class Lambda {
           MetricName: 'Errors',
         },
       },
-
       [`${LogicalName}LogPolicy`]: {
         Type: 'AWS::IAM::Policy',
         Condition,
         DependsOn: RoleArn ? undefined : `${LogicalName}Role`,
         Properties: {
-          PolicyName: 'lambda-log-access',
+          PolicyName: `${LogicalName}-lambda-log-access`,
           Roles: [roleName],
           PolicyDocument: {
             Version: '2012-10-17',

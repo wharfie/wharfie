@@ -7,9 +7,9 @@ const bluebirdPromise = require('bluebird');
 
 class S3 {
   /**
-   * @param {import("@aws-sdk/client-s3").S3ClientConfig} options - S3 client configuration
+   * @param {import("@aws-sdk/client-s3").S3ClientConfig} [options] - S3 client configuration
    */
-  constructor(options) {
+  constructor(options = {}) {
     const credentials = fromNodeProviderChain();
     this.s3 = new AWS.S3({
       ...BaseAWS.config(),
@@ -19,6 +19,9 @@ class S3 {
     });
     this.COPY_PART_SIZE_BYTES = 500000000; // ~500 MB
     this.COPY_PART_SIZE_MINIMUM_BYTES = 5242880; // 5 MB
+    this._LEFT_PAD_OBJECT_NAME = '5MB_file.txt';
+    this._LEFT_PAD_SIZE = 5 * 1024 * 1024;
+    this._left_pad_object_checked = false;
   }
 
   /**
@@ -75,6 +78,15 @@ class S3 {
   }
 
   /**
+   * @param {import("@aws-sdk/client-s3").DeleteBucketCommandInput} params - params for deleteBucket request
+   * @returns {Promise<import("@aws-sdk/client-s3").DeleteBucketCommandOutput>} -
+   */
+  async deleteBucket(params) {
+    const command = new AWS.DeleteBucketCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
    * @param {import("@aws-sdk/client-s3").ListBucketsCommandInput} params - params for listBuckets request
    * @returns {Promise<import("@aws-sdk/client-s3").ListBucketsCommandOutput>} -
    */
@@ -127,7 +139,8 @@ class S3 {
    * @returns {import('../typedefs').S3Location} - S3 bucket, prefix
    */
   parseS3Uri(uri) {
-    if (typeof uri !== 'string') throw new TypeError('uri is not a string');
+    if (typeof uri !== 'string')
+      throw new TypeError(`uri (${uri}) is not a string`);
     const match = uri.match(/^s3:\/\/([^/]+)\/(.+?)(\/*)$/);
     if (!match) throw new Error(uri + ' is not of form s3://bucket/key');
     const trailingSlashes = match[3];
@@ -379,11 +392,7 @@ class S3 {
         Delimiter: '/',
       })
     );
-    if (!response.CommonPrefixes)
-      throw new Error(
-        `Failed to ListObjects with params: ${JSON.stringify(params)}`
-      );
-    response.CommonPrefixes.forEach(
+    (response.CommonPrefixes || []).forEach(
       (obj) => obj.Prefix && prefixes.push(obj.Prefix)
     );
 
@@ -445,6 +454,145 @@ class S3 {
     await Promise.all(promises);
 
     return partitions;
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").CreateMultipartUploadCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").CreateMultipartUploadCommandOutput>} -
+   */
+  async createMultipartUpload(params) {
+    const command = new AWS.CreateMultipartUploadCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").CompleteMultipartUploadCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").CompleteMultipartUploadCommandOutput>} -
+   */
+  async completeMultipartUpload(params) {
+    const command = new AWS.CompleteMultipartUploadCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").UploadPartCopyCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCopyCommandOutput>} -
+   */
+  async uploadPartCopy(params) {
+    const command = new AWS.UploadPartCopyCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").UploadPartCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCommandOutput>} -
+   */
+  async uploadPart(params) {
+    const command = new AWS.UploadPartCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").PutObjectCommandInput} params -
+   * @param {Buffer} data -
+   */
+  async createAppendableOrAppendToObject(params, data) {
+    let existingObject;
+    try {
+      existingObject = await this.headObject({
+        Bucket: params.Bucket,
+        Key: params.Key,
+      });
+    } catch (err) {
+      // @ts-ignore
+      if (err.name === 'NotFound') {
+        existingObject = null;
+      } else {
+        throw err;
+      }
+    }
+    const { UploadId } = await this.createMultipartUpload({
+      Bucket: params.Bucket,
+      Key: params.Key,
+    });
+    let partNumber = 1;
+    const parts = [];
+
+    if (
+      (existingObject && existingObject.ContentLength) ||
+      5 * 1024 * 1024 < 0
+    ) {
+      const { CopyPartResult } = await this.uploadPartCopy({
+        Bucket: params.Bucket,
+        Key: params.Key,
+        CopySource: `${params.Bucket}/${params.Key}`,
+        PartNumber: partNumber,
+        UploadId,
+      });
+      if (!CopyPartResult || !CopyPartResult.ETag)
+        throw new Error('No ETag for CopyPartResult');
+      partNumber++;
+      parts.push({
+        ETag: CopyPartResult.ETag,
+        PartNumber: partNumber,
+      });
+    }
+    if (existingObject === null) {
+      if (!this._left_pad_object_checked) {
+        try {
+          await this.headObject({
+            Bucket: params.Bucket,
+            Key: this._LEFT_PAD_OBJECT_NAME,
+          });
+        } catch (err) {
+          // @ts-ignore
+          if (err.name === 'NotFound') {
+            await this.putObject({
+              Bucket: params.Bucket,
+              Key: this._LEFT_PAD_OBJECT_NAME,
+              Body: ' '.repeat(this._LEFT_PAD_SIZE),
+            });
+          } else {
+            throw err;
+          }
+        }
+        this._left_pad_object_checked = true;
+      }
+      const { CopyPartResult } = await this.uploadPartCopy({
+        Bucket: params.Bucket,
+        Key: params.Key,
+        CopySource: `${params.Bucket}/${this._LEFT_PAD_OBJECT_NAME}`,
+        PartNumber: partNumber,
+        UploadId,
+      });
+      if (!CopyPartResult || !CopyPartResult.ETag)
+        throw new Error('No ETag for CopyPartResult');
+      partNumber++;
+      parts.push({
+        ETag: CopyPartResult.ETag,
+        PartNumber: partNumber,
+      });
+    }
+    const { ETag } = await this.uploadPart({
+      Bucket: params.Bucket,
+      Key: params.Key,
+      Body: data,
+      PartNumber: partNumber,
+      UploadId,
+    });
+    if (!ETag)
+      throw new Error('No ETag for uploadPart result. Something went wrong');
+    partNumber++;
+    parts.push({
+      ETag,
+      PartNumber: partNumber,
+    });
+    await this.completeMultipartUpload({
+      Bucket: params.Bucket,
+      Key: params.Key,
+      MultipartUpload: { Parts: parts },
+      UploadId,
+    });
   }
 }
 

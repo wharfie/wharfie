@@ -274,4 +274,83 @@ describe('tests for s3 event scheduling', () => {
       }
     `);
   });
+
+  it('run fixtured', async () => {
+    expect.assertions(1);
+    location_return = [
+      {
+        resource_id: '1',
+        interval: 30,
+        location:
+          's3://wharfie-testing-079185815456-us-west-2/wharfie-testing/',
+      },
+    ];
+    resource_mock = {
+      source_properties: {
+        TableInput: {
+          TableType: 'EXTERNAL_TABLE',
+        },
+      },
+      destination_properties: {
+        TableInput: {
+          PartitionKeys: [
+            {
+              Name: 'dt',
+              Type: 'string',
+            },
+            {
+              Name: 'hr',
+              Type: 'string',
+            },
+            {
+              Name: 'lambda',
+              Type: 'string',
+            },
+          ],
+        },
+      },
+    };
+
+    const s3Event = {
+      eventVersion: '2.1',
+      eventSource: 'aws:s3',
+      awsRegion: 'us-west-2',
+      eventTime: '2023-09-04T19:50:41.917Z',
+      eventName: 'ObjectCreated:CompleteMultipartUpload',
+      userIdentity: {
+        principalId: 'AWS:AROARE36XU6QB3S2TGYSW:wharfie-testing-daemon',
+      },
+      requestParameters: { sourceIPAddress: '52.42.132.142' },
+      responseElements: {
+        'x-amz-request-id': '805H3NA6MF1VM2XM',
+        'x-amz-id-2':
+          'tOKVfekqaF2OXt9OyQaUAJCSDa38zKlDN9AkhU05mEmsl6CnQU+UUWiGizEXWBPrjxukLm/O4TlEA/FiMGqbIN/hAuc1l4ac',
+      },
+      s3: {
+        s3SchemaVersion: '1.0',
+        configurationId: '69afebf5-7848-4a5a-867d-2b6c05fcde6a',
+        bucket: {
+          name: 'wharfie-testing-079185815456-us-west-2',
+          ownerIdentity: { principalId: 'A21QW3A9R7W6GN' },
+          arn: 'arn:aws:s3:::wharfie-testing-079185815456-us-west-2',
+        },
+        object: {
+          key: 'wharfie-testing/dt%3D2023-09-04/hr%3D19/lambda%3Dwharfie-testing-daemon/2023_09_04_%5B%24LATEST%5De5033312656a4fb6b9d92cd6fcc3dcc6.log',
+          size: 5265892,
+          eTag: '8d7ee592453501b0d6e2186f97a63856-2',
+          sequencer: '0064F635119B3846A9',
+        },
+      },
+    };
+    await router({ Records: [s3Event] }, {});
+
+    expect(
+      AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+    ).toMatchInlineSnapshot(`
+      Object {
+        "MessageBody": "{\\"resource_id\\":\\"1\\",\\"sort_key\\":\\"dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon:1466424480000\\",\\"started_at\\":1466424490000,\\"updated_at\\":1466424490000,\\"status\\":\\"scheduled\\",\\"partition\\":{\\"location\\":\\"s3://wharfie-testing-079185815456-us-west-2/wharfie-testing/dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon/\\",\\"partitionValues\\":[\\"dt=2023-09-04\\",\\"hr=19\\",\\"lambda=wharfie-testing-daemon\\"]}}",
+        "QueueUrl": "",
+      }
+    `);
+  });
 });

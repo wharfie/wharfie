@@ -14,7 +14,7 @@ const S3 = require('./lib/s3');
 const Glue = require('./lib/glue');
 const CloudWatch = require('./lib/cloudwatch');
 const Clean = require('./operations/actions/lib/clean');
-const logging = require('./lib/logging');
+const logging = require('./lib/logging/');
 const daemon_log = logging.getDaemonLogger();
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
@@ -268,6 +268,8 @@ async function monitorWharfie(cloudwatchEvent, context) {
 /**
  * @param {import('./typedefs').AthenaEvent} cloudwatchEvent -
  */
+// TODO: switch to using something other than cloudwatch
+// eslint-disable-next-line no-unused-vars
 async function createMetrics(cloudwatchEvent) {
   const query = cloudwatchEvent.detail;
   const metricData = [];
@@ -382,7 +384,7 @@ async function createMetrics(cloudwatchEvent) {
  */
 async function run(athenaEvent, context) {
   await monitorWharfie(athenaEvent, context);
-  await createMetrics(athenaEvent);
+  // await createMetrics(athenaEvent);
 }
 
 /**
@@ -514,6 +516,6 @@ module.exports.handler = async (event, context) => {
     },
     { concurrency: 4 }
   );
-  daemon_log.info(`MEMORY USAGE: `, process.memoryUsage());
-  await logging.flush(context);
+  daemon_log.info(process.memoryUsage());
+  await logging.flush();
 };

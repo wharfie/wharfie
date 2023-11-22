@@ -8,7 +8,7 @@ const cloudformation = new CloudFormation();
 const _delete = async () => {
   const stackName = `${process.env.WHARFIE_DEPLOYMENT_NAME}-examples`;
 
-  displayInfo(`Deleteing wharfie deployment...`);
+  displayInfo(`Deleteing wharfie examples...`);
   await cloudformation.deleteStack({
     StackName: stackName,
   });

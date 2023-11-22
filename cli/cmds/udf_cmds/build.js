@@ -11,8 +11,11 @@ const {
 } = require('../../output');
 const path = require('path');
 const S3 = require('../../../lambdas/lib/s3');
-const s3 = new S3();
+const STS = require('../../../lambdas/lib/sts');
 const child_process = require('child_process');
+
+const s3 = new S3();
+const sts = new STS();
 
 const zip = async (dir) => {
   const zipInstance = new JSZip();
@@ -82,9 +85,12 @@ const build = async (udf_name, entrypoint, label) => {
   await zip(path.join(__dirname, `../../../dist/udf/${udf_name}/${label}`));
 
   displayInfo('Uploading udf bundle to S3...');
+  const { Account } = await sts.getCallerIdentity();
 
   await s3.putObject({
-    Bucket: process.env.WHARFIE_ARTIFACT_BUCKET,
+    Bucket:
+      process.env.WHARFIE_ARTIFACT_BUCKET ||
+      `${process.env.WHARFIE_DEPLOYMENT_NAME}-${Account}-${process.env.WHARFIE_REGION}`,
     Key: `wharfie/udf/${udf_name}/${label}.zip`,
     Body: await fs.promises.readFile(
       path.join(__dirname, `../../../dist/udf/${udf_name}/${label}/ouput.zip`)
