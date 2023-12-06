@@ -1,10 +1,5 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
-// const AWS = require('@aws-sdk/client-glue'),
-//   { S3 } = require('@aws-sdk/client-s3');
-const cuid = require('cuid');
-
-jest.mock('cuid');
 
 process.env.MONITOR_QUEUE_URL = 'monitor-queue';
 
@@ -12,17 +7,14 @@ let Athena;
 let S3;
 describe('tests for Athena', () => {
   beforeAll(() => {
+    jest.mock('../../../lambdas/lib/id');
     process.env.MONITOR_QUEUE_URL = 'monitor-queue';
   });
   beforeEach(() => {
-    cuid.mockImplementation(() => 'ckywjpmr70002zjvd0wyq5x48');
     process.env.AWS_MOCKS = true;
     S3 = jest.requireMock('@aws-sdk/client-s3').S3;
     jest.requireMock('@aws-sdk/client-glue');
     Athena = require('../../../lambdas/lib/athena/');
-  });
-  afterEach(() => {
-    // AWS.At();
   });
   afterAll(() => {
     process.env.MONITOR_QUEUE_URL = undefined;

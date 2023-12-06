@@ -1,8 +1,8 @@
 'use strict';
 
 const { parse } = require('@sandfox/arn');
-const cuid = require('cuid');
 
+const { createId } = require('../../lib/id');
 const logging = require('../../lib/logging');
 const Athena = require('../../lib/athena');
 const Glue = require('../../lib/glue');
@@ -33,7 +33,7 @@ async function run(event, context, resource, operation) {
   const sourceDatabaseName = resource.source_properties.DatabaseName;
   const sourceTableName = resource.source_properties.TableInput.Name;
   const temporaryDatabaseName = TEMPORARY_GLUE_DATABASE;
-  const storage_id = cuid();
+  const storage_id = createId();
   const temporaryTableName = `${resource.resource_id}-${storage_id}`.replace(
     '-',
     '_'

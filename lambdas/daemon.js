@@ -2,7 +2,6 @@
 
 require('./config');
 const { parse } = require('@sandfox/arn');
-const uuid = require('uuid');
 const bluebirdPromise = require('bluebird');
 
 const logging = require('./lib/logging/');
@@ -21,6 +20,7 @@ const { getResource } = require('./migrations/');
 
 const response = require('./lib/cloudformation/cfn-response');
 const { getImmutableID } = require('./lib/cloudformation/id');
+const { createId } = require('./lib/id');
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
 
@@ -101,8 +101,8 @@ async function daemon(event, context) {
     return;
   }
 
-  if (!event.operation_id) event.operation_id = uuid.v4();
-  if (!event.action_id) event.action_id = uuid.v4();
+  if (!event.operation_id) event.operation_id = createId();
+  if (!event.action_id) event.action_id = createId();
   const event_log = logging.getEventLogger(event, context);
   // _operation will be null when the action is START
   const _operation = await resource_db.getOperation(

@@ -1,7 +1,5 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
-const cuid = require('cuid');
-jest.mock('cuid');
 
 let SQS;
 const random = Math.random;
@@ -14,6 +12,7 @@ describe('mock tests for SQS', () => {
     const mockMath = Object.create(global.Math);
     mockMath.random = () => 0.5;
     global.Math = mockMath;
+    jest.mock('../../lambdas/lib/id');
     jest.requireMock('@aws-sdk/client-sqs');
     SQS = require('../../lambdas/lib/sqs');
   });
@@ -55,7 +54,6 @@ describe('mock tests for SQS', () => {
 
   it('sendMessageBatch mock', async () => {
     expect.assertions(1);
-    cuid.mockImplementation(() => 'ckywjpmr70002zjvd0wyq5x48');
     const sqs = new SQS({ region: 'us-east-1' });
     sqs.sqs.__setMockState();
     const params = {

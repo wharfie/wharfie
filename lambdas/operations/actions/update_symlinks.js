@@ -1,7 +1,7 @@
 'use strict';
 const { parse } = require('@sandfox/arn');
-const cuid = require('cuid');
 
+const { createId } = require('../../lib/id');
 const logging = require('../../lib/logging');
 const Glue = require('../../lib/glue');
 const STS = require('../../lib/sts');
@@ -131,7 +131,7 @@ async function update_partition(
   }
 
   // if there already exists a manifest make a copy and pass it to the cleanup lambda
-  const manifestCopyKey = `${prefix}files-${cuid()}`;
+  const manifestCopyKey = `${prefix}files-${createId()}`;
   let runCleanup = true;
   try {
     await s3.copyObjectWithMultiPartFallback({
@@ -377,7 +377,7 @@ async function update_table(event, context, resource, query_execution_id) {
       '/'
     ).replace('/migrate-refrences/', '/')
   );
-  const manifestCopyKey = `${prefix}files-${cuid()}`;
+  const manifestCopyKey = `${prefix}files-${createId()}`;
   let runCleanup = true;
   try {
     await s3.copyObjectWithMultiPartFallback({

@@ -1,5 +1,5 @@
 'use strict';
-const cuid = require('cuid');
+const { createId } = require('../../../lambdas/lib/id');
 
 class SQSMock {
   __setMockState(sqsState) {
@@ -42,7 +42,7 @@ class SQSMock {
     }
     if (!SQSMock.__state.queues[params.QueueUrl])
       SQSMock.__state.queues[params.QueueUrl] = [];
-    const MessageId = cuid();
+    const MessageId = createId();
     SQSMock.__state.queues[params.QueueUrl].push({
       MessageId,
       Body: params.MessageBody,

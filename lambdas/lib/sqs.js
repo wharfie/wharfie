@@ -1,9 +1,9 @@
 'use strict';
 const AWS = require('@aws-sdk/client-sqs');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
-const uuid = require('uuid');
 
 const BaseAWS = require('./base');
+const { createId } = require('./id');
 
 class SQS {
   /**
@@ -109,7 +109,7 @@ class SQS {
       promises.push(
         this.sendMessageBatch({
           Entries: events.splice(0, 10).map((event) => ({
-            Id: uuid.v4(),
+            Id: createId(),
             MessageBody: JSON.stringify(event),
           })),
           QueueUrl: queueUrl,
