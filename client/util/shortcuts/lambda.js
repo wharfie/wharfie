@@ -63,7 +63,7 @@ class Lambda {
       Layers = [],
       MemorySize = 128,
       ReservedConcurrentExecutions,
-      Runtime = 'nodejs18.x',
+      Runtime = 'nodejs20.x',
       Tags,
       Timeout = 300,
       TracingConfig,
