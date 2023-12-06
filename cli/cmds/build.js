@@ -54,7 +54,7 @@ const build = async (label) => {
     minify: true,
     sourcemap: 'inline',
     platform: 'node',
-    target: 'node18',
+    target: 'node20',
     outdir: `dist/${label}`,
   });
 

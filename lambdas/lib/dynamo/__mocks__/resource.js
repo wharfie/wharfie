@@ -206,7 +206,7 @@ async function getQueries(resource_id, operation_id, action_id) {
 /**
  * @param {import('../../../typedefs').OperationRecord} operation -
  * @param {string} action_type -
- * @param {import('winston').Logger?} logger -
+ * @param {import('../../logging/logger')?} logger -
  * @param {boolean} includeQueries -
  * @returns {Promise<boolean>} -
  */
