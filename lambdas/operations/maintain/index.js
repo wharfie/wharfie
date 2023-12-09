@@ -1,8 +1,8 @@
 'use strict';
 
 const { Graph, alg } = require('graphlib');
-const uuid = require('uuid');
 
+const { createId } = require('../../lib/id');
 const CloudWatch = require('../../lib/cloudwatch');
 const cloudwatch = new CloudWatch({
   region: process.env.AWS_REGION,
@@ -30,22 +30,22 @@ async function start(event, context, resource) {
 
   const action_graph = new Graph();
   action_graph.setNode('START', event.action_id);
-  action_graph.setNode('REGISTER_MISSING_PARTITIONS', uuid.v4());
+  action_graph.setNode('REGISTER_MISSING_PARTITIONS', createId());
   action_graph.setEdge('START', 'REGISTER_MISSING_PARTITIONS');
 
-  action_graph.setNode('FIND_COMPACTION_PARTITIONS', uuid.v4());
+  action_graph.setNode('FIND_COMPACTION_PARTITIONS', createId());
   action_graph.setEdge(
     'REGISTER_MISSING_PARTITIONS',
     'FIND_COMPACTION_PARTITIONS'
   );
 
-  action_graph.setNode('RUN_COMPACTION', uuid.v4());
+  action_graph.setNode('RUN_COMPACTION', createId());
   action_graph.setEdge('FIND_COMPACTION_PARTITIONS', 'RUN_COMPACTION');
 
-  action_graph.setNode('UPDATE_SYMLINKS', uuid.v4());
+  action_graph.setNode('UPDATE_SYMLINKS', createId());
   action_graph.setEdge('RUN_COMPACTION', 'UPDATE_SYMLINKS');
 
-  action_graph.setNode('FINISH', uuid.v4());
+  action_graph.setNode('FINISH', createId());
   action_graph.setEdge('UPDATE_SYMLINKS', 'FINISH');
 
   if (!action_graph.isDirected() || !alg.isAcyclic(action_graph))

@@ -2,7 +2,7 @@
 
 const { parse } = require('@sandfox/arn');
 const logging = require('../../lib/logging');
-const uuid = require('uuid');
+const { createId } = require('../../lib/id');
 
 const daemon_log = logging.getDaemonLogger();
 
@@ -33,7 +33,7 @@ async function enqueue(event, context, queries) {
     throw new Error('enqueue requires event with action_id and operation_id');
   const event_log = logging.getEventLogger(event, context);
   const query_records = queries.map((query) => ({
-    query_id: uuid.v4(),
+    query_id: createId(),
     query_status: 'WAITING',
     query_string: query.query_string,
     query_data: query.query_data || {},

@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('crypto');
-const cuid = require('cuid');
+
+const { createId } = require('../../../lambdas/lib/id');
 const SQS = require('./sqs');
 const QueryRunner = require('./query-runner');
 
@@ -91,7 +92,7 @@ class AthenaMock {
     if (!AthenaMock.__state.workgroups[workgroup])
       throw new Error(`workgroup (${workgroup}) does not exist`);
 
-    const QueryExecutionId = cuid();
+    const QueryExecutionId = createId();
     AthenaMock.__state.workgroups[workgroup].queries[QueryExecutionId] = {
       Status: {
         State: 'QUEUED',

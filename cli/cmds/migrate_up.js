@@ -5,19 +5,18 @@ const {
   displayInstruction,
   displaySuccess,
 } = require('../output');
-const cuid = require('cuid');
-const uuid = require('uuid');
+const { createId } = require('../../lambdas/lib/id');
 const { getResource } = require('../../lambdas/lib/dynamo/resource');
 const migration = require('../../lambdas/migrations/');
 
 const migrate_up = async (resource_id) => {
   const resource = await getResource(resource_id);
 
-  const operation_id = `cli-migration-${cuid()}`;
+  const operation_id = `cli-migration-${createId()}`;
   const event = {
     resource_id,
     operation_id,
-    action_id: uuid.v4(),
+    action_id: createId(),
     action_type: `up`,
     query_id: '',
   };
