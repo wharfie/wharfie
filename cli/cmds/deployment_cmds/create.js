@@ -1,7 +1,7 @@
 'use strict';
 const child_process = require('child_process');
 const inquirer = require('inquirer');
-const cuid = require('cuid');
+const { createId } = require('../../../lambdas/lib/id');
 const ON_DEATH = require('death');
 const CloudFormation = require('../../../lambdas/lib/cloudformation');
 const STS = require('../../../lambdas/lib/sts');
@@ -70,7 +70,7 @@ const create = async (development) => {
   displayInfo(`Creating wharfie deployment...`);
   const { Account } = await sts.getCallerIdentity();
 
-  const temporaryBucketName = `wharfie-temp-bootstrap-${cuid()}`;
+  const temporaryBucketName = `wharfie-temp-bootstrap-${createId()}`;
   await s3.createBucket({
     Bucket: temporaryBucketName,
   });

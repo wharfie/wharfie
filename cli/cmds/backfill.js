@@ -7,7 +7,7 @@ const {
 } = require('../output');
 const SQS = require('../../lambdas/lib/sqs');
 const STS = require('../../lambdas/lib/sts');
-const uuid = require('uuid');
+const { createId } = require('../../lambdas/lib/id');
 const { getAllResources } = require('../../lambdas/lib/dynamo/resource');
 const sqs = new SQS();
 const sts = new STS();
@@ -25,7 +25,7 @@ const backfill = async (resource_id, start, end) => {
       action_type: 'START',
       resource_id,
       action_inputs: {
-        Version: `cli-${uuid.v4()}`,
+        Version: `cli-${createId()}`,
         Duration: difference,
       },
       operation_started_at: new Date(operation_start).toISOString(),

@@ -1,8 +1,8 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
-const uuid = require('uuid');
+const { createId } = require('../../lambdas/lib/id');
 const AWS = require('@aws-sdk/client-sqs');
-jest.mock('uuid');
+jest.mock('../../lambdas/lib/id');
 
 const random = Math.random;
 let SQS;
@@ -75,7 +75,7 @@ describe('tests for SQS', () => {
   it('enqueueBatch', async () => {
     expect.assertions(4);
     let idCount = 0;
-    uuid.v4.mockImplementation(() => {
+    createId.mockImplementation(() => {
       idCount = idCount + 1;
       return `id-${idCount}`;
     });
@@ -181,7 +181,7 @@ describe('tests for SQS', () => {
       }
     `);
 
-    uuid.v4.mockClear();
+    createId.mockClear();
   });
 
   it('reenqueue', async () => {

@@ -1,6 +1,6 @@
 'use strict';
 
-const cuid = require('cuid');
+const { createId } = require('../../../lambdas/lib/id');
 
 class S3Mock {
   __setMockState(s3ObjectMap) {
@@ -143,7 +143,7 @@ class S3Mock {
     if (!S3Mock.__state.__MULTIPART_UPLOADS__) {
       S3Mock.__state.__MULTIPART_UPLOADS__ = {};
     }
-    const uploadId = cuid();
+    const uploadId = createId();
 
     S3Mock.__state.__MULTIPART_UPLOADS__[uploadId] = {
       Bucket: params.Bucket,

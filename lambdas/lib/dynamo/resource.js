@@ -3,7 +3,7 @@
 const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
 const { DynamoDB } = require('@aws-sdk/client-dynamodb');
 const { json } = require('graphlib');
-const uuid = require('uuid');
+const { createId } = require('../id');
 const { query, batchWrite } = require('./');
 const STS = require('../sts');
 const SQS = require('../sqs');
@@ -417,7 +417,7 @@ async function checkForStaleQuery(query_execution_id, logger) {
         /** @type {import('../../typedefs').AthenaEvent} */
         const synthetic_athena_event = {
           version: '0',
-          id: uuid.v4(),
+          id: createId(),
           'detail-type': 'Athena Query State Change',
           source: 'aws.athena',
           account: Account || '',
