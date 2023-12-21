@@ -169,6 +169,7 @@ describe('tests for console log transport', () => {
       base: {
         foo: 'bar',
       },
+      jsonFormat: true,
       transports: [
         new FirehoseLogTransport({
           flushInterval: -1,
@@ -177,11 +178,14 @@ describe('tests for console log transport', () => {
         new ConsoleLogTransport(),
       ],
     });
-    const childLoggerFoo = logger.child({ foo: 'foo' });
-    const childLoggerBar = logger.child({ bar: 'bar' });
+    const childLoggerFoo = logger.child({ metadata: { foo: 'foo' } });
+    const childLoggerBar = logger.child({
+      level: 'error',
+      metadata: { bar: 'bar' },
+    });
     childLoggerFoo.info('foo');
     childLoggerBar.info('bar');
-    childLoggerBar.info('bin');
+    childLoggerBar.error('bin');
     logger.info('hello');
     await logger.flush();
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
@@ -193,10 +197,9 @@ describe('tests for console log transport', () => {
         AWS.PutRecordBatchCommand
       )[0].args[0].input.Records[0].Data.toString()
     ).toMatchInlineSnapshot(`
-      "[2016-06-20T12:08:10.000Z] [INFO] foo
-      [2016-06-20T12:08:10.000Z] [INFO] bar
-      [2016-06-20T12:08:10.000Z] [INFO] bin
-      [2016-06-20T12:08:10.000Z] [INFO] hello
+      "{\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\",\\"level\\":\\"INFO\\",\\"message\\":\\"foo\\",\\"foo\\":\\"foo\\"}
+      {\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\",\\"level\\":\\"ERROR\\",\\"message\\":\\"bin\\",\\"foo\\":\\"bar\\",\\"bar\\":\\"bar\\"}
+      {\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\",\\"level\\":\\"INFO\\",\\"message\\":\\"hello\\",\\"foo\\":\\"bar\\"}
       "
     `);
     expect(consoleLog).toHaveBeenCalledTimes(4);

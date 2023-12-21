@@ -46,6 +46,9 @@ const Events = new wharfie.util.shortcuts.QueueLambda({
       MAX_QUERIES_PER_ACTION: wharfie.util.ref('MaxQueriesPerAction'),
       WHARFIE_SERVICE_BUCKET: wharfie.util.ref('Bucket'),
       WHARFIE_LOGGING_FIREHOSE: wharfie.util.ref('LoggingFirehose'),
+      DAGSTER_ORGANIZATION: wharfie.util.ref('DagsterOrganization'),
+      DAGSTER_DEPLOYMENT: wharfie.util.ref('DagsterDeployment'),
+      DAGSTER_TOKEN: wharfie.util.ref('DagsterToken'),
     },
   },
 });

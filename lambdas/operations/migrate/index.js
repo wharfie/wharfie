@@ -3,10 +3,6 @@
 const { Graph, alg } = require('graphlib');
 
 const { createId } = require('../../lib/id');
-const CloudWatch = require('../../lib/cloudwatch');
-const cloudwatch = new CloudWatch({
-  region: process.env.AWS_REGION,
-});
 const logging = require('../../lib/logging');
 const resource_db = require('../../lib/dynamo/resource');
 const register_missing_partitions = require('../actions/register_missing_partitions');
@@ -15,8 +11,7 @@ const run_compaction = require('../actions/run_compaction');
 const update_symlinks = require('../actions/update_symlinks');
 const swap_resource = require('./swap_resource');
 const respond_to_cloudformation = require('./respond_to_cloudformation');
-
-const STACK_NAME = process.env.STACK_NAME || '';
+const side_effects = require('../side_effects');
 
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
@@ -114,57 +109,12 @@ async function finish(event, context, resource, operation) {
     operation_status: 'COMPLETED',
   });
 
-  cloudwatch.putMetricData({
-    MetricData: [
-      {
-        MetricName: `operations`,
-        Dimensions: [
-          {
-            Name: 'stack',
-            Value: STACK_NAME,
-          },
-          {
-            Name: 'resource',
-            Value: resource.resource_id,
-          },
-          {
-            Name: 'operation_type',
-            Value: operation.operation_type,
-          },
-        ],
-        Unit: 'Seconds',
-        Value: completed_at - operation.started_at,
-      },
-      // summable metrics
-      {
-        MetricName: 'operations',
-        Dimensions: [
-          {
-            Name: 'stack',
-            Value: STACK_NAME,
-          },
-          {
-            Name: 'operation_type',
-            Value: operation.operation_type,
-          },
-        ],
-        Unit: 'Count',
-        Value: 1,
-      },
-      {
-        MetricName: 'operations',
-        Dimensions: [
-          {
-            Name: 'stack',
-            Value: STACK_NAME,
-          },
-        ],
-        Unit: 'Count',
-        Value: 1,
-      },
-    ],
-    Namespace: 'Wharfie',
-  });
+  await Promise.all([
+    side_effects.cloudwatch(resource, operation, completed_at),
+    side_effects.wharfie(resource, operation, completed_at),
+    side_effects.dagster(resource, operation, completed_at),
+  ]);
+
   return {
     status: 'COMPLETED',
   };
