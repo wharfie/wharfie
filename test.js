@@ -33,6 +33,8 @@ class Execution {
     // unlock query semaphore
   }
 
+  retry() {}
+
   /**
    * @returns {string} -
    */
@@ -75,101 +77,76 @@ class AthenaQuery extends Execution {
   }
 }
 
-class Op {
-  constructor(value) {
-    this.value = value;
-  }
-
-  method() {
-    return `Value is ${this.value}`;
-  }
-}
-
-/**
- *
- * @param fn
- */
-function op(fn) {
-  const name = fn.name;
-  const instance = new Op(fn);
-
-  /**
-   *
-   */
-  function callableFunction() {
-    console.log(`Function ${name} is called with arguments:`, arguments);
-    // Chek Op status
-    const result = fn.apply(instance.method, arguments);
-    // Mark Op record as completed
-    // Enqueue next Ops
-    console.log('Function returned:', result);
-    return result;
-  }
-  // Copy methods and properties from the instance to the callable function
-  Object.assign(callableFunction, instance);
-  return callableFunction;
-}
-
-class Graph {
-  constructor(fn, name) {
+class Op extends Function {
+  constructor(fn, options = {}) {
+    super();
     this.fn = fn;
-    this.graph_name = name;
+    this.options = options;
+    this.id = options.id || createId();
+    this.graph_name = fn.name || options.name || this.id;
+    return new Proxy(this, {
+      apply: (target, thisArg, args) => target._call(...args),
+    });
   }
 
-  test() {
-    return this.graph_name;
-  }
-}
-/**
- *
- * @param fn
- */
-function graph(fn) {
-  const name = fn.name;
-  const instance = new Graph(fn, name);
-
-  /**
-   *
-   */
-  function callableFunction() {
-    console.log(`Function ${name} is called with arguments:`, arguments);
-    // Chek Op status
-    const result = fn.apply(instance.method, arguments);
-    // Mark Op record as completed
-    // Enqueue next Ops
-    console.log('Function returned:', result);
-    return result;
-  }
-  // Copy methods and properties from the instance to the callable function
-  Object.assign(callableFunction, instance);
-  Object.getOwnPropertyNames(Graph.prototype).forEach((prop) => {
-    console.log(prop);
-    if (prop !== 'constructor') {
-      Object.defineProperty(callableFunction, prop, {
-        value: (...args) => instance[prop](...args),
-        writable: true,
-        configurable: true,
-        enumerable: true,
-      });
+  async _call(...args) {
+    try {
+      await this.fn(...args);
+    } catch (err) {
+      // retry
+      await this.retry(...args);
+      throw err;
     }
-  });
-  return callableFunction;
+  }
 }
 
-const t1 = op(function t1() {
-  return 1 + 1;
+class Graph extends Function {
+  constructor(fn, options = {}) {
+    super();
+    this.fn = fn;
+    this.options = options;
+    this.id = options.id || createId();
+    this.graph_name = fn.name || options.name || this.id;
+    return new Proxy(this, {
+      apply: (target, thisArg, args) => target._call(...args),
+    });
+  }
+
+  _call(...args) {
+    return this.fn(...args);
+  }
+}
+
+const t1 = new Op(function t1() {
+  return 1;
 });
 
-const t2 = op(function t2(t) {
+const t2 = new Op(function t2(t) {
   return t + 1;
 });
 
-const g = graph(function graph() {
+const err = new Op(function err() {
+  throw new Error('test');
+});
+
+const g = new Graph(function graph() {
   return t2(t1());
 });
 
-g();
-console.log(g.test());
-console.log(g);
+// const t1 = function t1() {
+//   return 1;
+// };
+
+// const t2 = function t2(t) {
+//   //   throw new Error('test');
+//   return t + 1;
+// };
+
+// const g = function graph() {
+//   return t2(t1());
+// };
+
+// console.log(g);
+console.log(g());
 
 console.timeEnd('Benchmark');
