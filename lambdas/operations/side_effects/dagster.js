@@ -1,20 +1,28 @@
 'use strict';
 
 const https = require('https');
+const logging = require('../../lib/logging');
 
 const organization = process.env.DAGSTER_ORGANIZATION || '';
 const deployment = process.env.DAGSTER_DEPLOYMENT || '';
 const token = process.env.DAGSTER_TOKEN || '';
 
 /**
- *
+ * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('aws-lambda').Context} context -
  * @param {import('../../typedefs').ResourceRecord} resource -
  * @param {import('../../typedefs').OperationRecord} operation -
- * @param {Number} completed_at -
+ * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
-async function dagster(resource, operation, completed_at) {
+async function dagster(event, context, resource, operation) {
+  const event_log = logging.getEventLogger(event, context);
+  const { completed_at } = event.action_inputs;
+  if (!completed_at) throw new Error('missing required action inputs');
   if (organization === '' || deployment === '' || token === '') {
-    return;
+    event_log.warn('Dagster environment variables not set');
+    return {
+      status: 'COMPLETED',
+    };
   }
   const databaseName = resource.destination_properties.DatabaseName;
   const tableName = resource.destination_properties.TableInput.Name;
@@ -62,6 +70,10 @@ async function dagster(resource, operation, completed_at) {
     req.write(payload);
     req.end();
   });
+
+  return {
+    status: 'COMPLETED',
+  };
 }
 
 module.exports = dagster;

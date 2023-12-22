@@ -55,6 +55,13 @@ async function start(event, context, resource) {
   action_graph.setNode('FINISH', createId());
   action_graph.setEdge('RESPOND_TO_CLOUDFORMATION', 'FINISH');
 
+  action_graph.setNode('SIDE_EFFECT__CLOUDWATCH', createId());
+  action_graph.setNode('SIDE_EFFECT__WHARFIE', createId());
+  action_graph.setNode('SIDE_EFFECT__DAGSTER', createId());
+  action_graph.setEdge('FINISH', 'SIDE_EFFECT__CLOUDWATCH');
+  action_graph.setEdge('FINISH', 'SIDE_EFFECT__WHARFIE');
+  action_graph.setEdge('FINISH', 'SIDE_EFFECT__DAGSTER');
+
   if (!action_graph.isDirected() || !alg.isAcyclic(action_graph))
     throw Error('Invalid action_graph');
 
@@ -108,12 +115,6 @@ async function finish(event, context, resource, operation) {
     last_updated_at: completed_at,
     operation_status: 'COMPLETED',
   });
-
-  await Promise.all([
-    side_effects.cloudwatch(resource, operation, completed_at),
-    side_effects.wharfie(resource, operation, completed_at),
-    side_effects.dagster(resource, operation, completed_at),
-  ]);
 
   return {
     status: 'COMPLETED',
@@ -171,6 +172,12 @@ async function route(event, context, resource, operation) {
         resource,
         operation
       );
+    case 'SIDE_EFFECT__CLOUDWATCH':
+      return await side_effects.cloudwatch(event, context, resource, operation);
+    case 'SIDE_EFFECT__WHARFIE':
+      return await side_effects.wharfie(event, context, resource, operation);
+    case 'SIDE_EFFECT__DAGSTER':
+      return await side_effects.dagster(event, context, resource, operation);
     default:
       throw new Error('Invalid Action, must be valid MAINTAIN action');
   }

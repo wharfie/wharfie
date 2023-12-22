@@ -1,14 +1,27 @@
 'use strict';
+const { createId } = require('../id');
+/**
+ * @typedef OpOptions
+ * @property {string} [id] -
+ * @property {string} type -
+ * @property {string} status -
+ * @property {import('./execution').Execution[]} executions -
+ */
+
 class Op {
   /**
-   * @param {string} id -
-   * @param {any} data -
+   * @param {OpOptions} options -
    */
-  constructor(id, data) {
-    this.id = id;
-    this.data = data;
+  constructor(options) {
+    this.id = options.id || createId();
+    this.type = options.type;
+    this.status = options.status || 'WAITING';
+    this.executions = options.executions || [];
   }
 
+  /**
+   * @returns {string} -
+   */
   toString() {
     return this.id;
   }
@@ -26,7 +39,7 @@ class Op {
    */
   static deserialize(serializedOp) {
     const parsed = JSON.parse(serializedOp);
-    return new Op(parsed.id, parsed.data);
+    return new Op(parsed);
   }
 }
 

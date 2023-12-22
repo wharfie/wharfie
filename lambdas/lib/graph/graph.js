@@ -3,114 +3,144 @@ const Op = require('./op');
 
 class Graph {
   constructor() {
+    /**
+     * @type {Op[]}
+     */
+    this.ops = [];
+    /**
+     * @type {Map<string, string[]>}
+     */
     this.adjacencyList = new Map(); // Outgoing edges
+    /**
+     * @type {Map<string, string[]>}
+     */
     this.incomingEdges = new Map(); // Incoming edges
   }
 
   /**
-   * @param {Op} vertex -
+   * @param {Op} op -
    */
-  addVertex(vertex) {
-    if (!this.adjacencyList.has(vertex)) {
-      this.adjacencyList.set(vertex.serialize(), []);
+  addOp(op) {
+    if (!this.adjacencyList.has(op.id)) {
+      this.adjacencyList.set(op.serialize(), []);
     }
-    if (!this.incomingEdges.has(vertex)) {
-      this.incomingEdges.set(vertex.serialize(), []);
+    if (!this.incomingEdges.has(op.id)) {
+      this.incomingEdges.set(op.serialize(), []);
     }
   }
 
   /**
-   * @param {Op} origin -
-   * @param {Op} destination -
+   * @param {Op} originOp -
+   * @param {Op} destinationOp -
    */
-  addEdge(origin, destination) {
+  addDependency(originOp, destinationOp) {
     if (
-      !this.adjacencyList.has(origin) ||
-      !this.adjacencyList.has(destination)
+      !this.adjacencyList.has(originOp.id) ||
+      !this.adjacencyList.has(destinationOp.id)
     ) {
-      throw new Error('Vertex does not exist');
+      throw new Error('Op does not exist');
     }
 
-    this.adjacencyList.get(origin).push(destination);
-    this.incomingEdges.get(destination).push(origin);
-  }
-
-  getVertices() {
-    return Array.from(this.adjacencyList.keys());
+    (this.adjacencyList.get(originOp.id) || []).push(destinationOp.id);
+    (this.incomingEdges.get(destinationOp.id) || []).push(originOp.id);
   }
 
   /**
-   * @param {Op} vertex -
    * @returns {Op[]} -
    */
-  getEdges(vertex) {
-    return this.adjacencyList.get(vertex) || [];
+  getOps() {
+    return this.ops;
   }
 
   /**
-   * @param {Op} vertex -
-   * @returns {Op[]} -
+   * @param {string} name -
+   * @returns {Op} -
    */
-  getDownstreamVertices(vertex) {
-    if (!this.adjacencyList.has(vertex)) {
-      throw new Error('Vertex does not exist');
+  getOp(name) {
+    const matchedOp = this.ops.filter((op) => op.id === name)[0];
+    if (!matchedOp) {
+      throw new Error(`Op ${name} does not exist`);
     }
-    return this.adjacencyList.get(vertex).slice();
+    return matchedOp;
   }
 
   /**
-   * @param {Op} vertex -
+   * @param {Op} op -
    * @returns {Op[]} -
    */
-  getUpstreamVertices(vertex) {
-    if (!this.incomingEdges.has(vertex)) {
-      throw new Error('Vertex does not exist');
-    }
-    return this.incomingEdges.get(vertex).slice();
+  getDependencies(op) {
+    return (this.adjacencyList.get(op.id) || []).map((name) =>
+      this.getOp(name)
+    );
   }
 
+  /**
+   * @param {Op} op -
+   * @returns {Op[]} -
+   */
+  getDownstreamOps(op) {
+    if (!this.adjacencyList.has(op.id)) {
+      throw new Error('Vertex does not exist');
+    }
+    return (this.adjacencyList.get(op.id) || []).map((name) =>
+      this.getOp(name)
+    );
+  }
+
+  /**
+   * @param {Op} op -
+   * @returns {Op[]} -
+   */
+  getUpstreamOps(op) {
+    if (!this.incomingEdges.has(op.id)) {
+      throw new Error('Vertex does not exist');
+    }
+
+    return (this.incomingEdges.get(op.id) || []).map((name) =>
+      this.getOp(name)
+    );
+  }
+
+  /**
+   * @returns {string} -
+   */
   toString() {
     let result = '';
-    for (const [vertex, edges] of this.adjacencyList) {
-      const edgesList = edges.join(', ');
-      result += `${vertex} -> ${edgesList}\n`;
+    for (const [opName, Dependencies] of this.adjacencyList) {
+      const DependencyList = Dependencies.join(', ');
+      result += `${opName} -> ${DependencyList}\n`;
     }
     return result;
   }
 
+  /**
+   * @returns {string} -
+   */
   serialize() {
-    const adjacencyListObj = {};
-    this.adjacencyList.forEach((edges, vertex) => {
-      adjacencyListObj[vertex.serialize()] = edges.map((edge) =>
-        edge.serialize()
-      );
-    });
-
-    const incomingEdgesObj = {};
-    this.incomingEdges.forEach((edges, vertex) => {
-      incomingEdgesObj[vertex.serialize()] = edges.map((edge) =>
-        edge.serialize()
-      );
-    });
-
     return JSON.stringify({
-      adjacencyList: adjacencyListObj,
-      incomingEdges: incomingEdgesObj,
+      adjacencyList: this.adjacencyList,
+      incomingEdges: this.incomingEdges,
+      ops: this.ops.map((op) => op.serialize()),
     });
   }
 
+  /**
+   * @param {string} serializedGraph -
+   * @returns {Graph} -
+   */
   static deserialize(serializedGraph) {
     const parsedData = JSON.parse(serializedGraph);
     const graph = new Graph();
 
-    for (const [serializedVertex, edges] of Object.entries(
+    for (const serializedOp of parsedData.ops) {
+      const op = Op.deserialize(serializedOp);
+      graph.addOp(op);
+    }
+    for (const [opName, dependencies] of Object.entries(
       parsedData.adjacencyList
     )) {
-      const vertex = Vertex.deserialize(serializedVertex);
-      graph.addVertex(vertex);
-      edges.forEach((serializedEdge) => {
-        const edge = Vertex.deserialize(serializedEdge);
-        graph.addEdge(vertex, edge);
+      dependencies.forEach((/** @type {string} */ dependency) => {
+        graph.addDependency(graph.getOp(dependency), graph.getOp(opName));
       });
     }
 

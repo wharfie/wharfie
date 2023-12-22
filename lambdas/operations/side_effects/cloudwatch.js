@@ -5,12 +5,16 @@ const cloudwatchClient = new CloudWatch({
 const STACK_NAME = process.env.STACK_NAME || '';
 
 /**
- *
+ * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('aws-lambda').Context} context -
  * @param {import('../../typedefs').ResourceRecord} resource -
  * @param {import('../../typedefs').OperationRecord} operation -
- * @param {Number} completed_at -
+ * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
-async function cloudwatch(resource, operation, completed_at) {
+async function cloudwatch(event, context, resource, operation) {
+  const { completed_at } = event.action_inputs;
+  if (!completed_at) throw new Error('missing required action inputs');
+
   await cloudwatchClient.putMetricData({
     MetricData: [
       {
@@ -62,6 +66,10 @@ async function cloudwatch(resource, operation, completed_at) {
     ],
     Namespace: 'Wharfie',
   });
+
+  return {
+    status: 'COMPLETED',
+  };
 }
 
 module.exports = cloudwatch;
