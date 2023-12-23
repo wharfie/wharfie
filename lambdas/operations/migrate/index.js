@@ -55,12 +55,12 @@ async function start(event, context, resource) {
   action_graph.setNode('FINISH', createId());
   action_graph.setEdge('RESPOND_TO_CLOUDFORMATION', 'FINISH');
 
-  action_graph.setNode('SIDE_EFFECT__CLOUDWATCH', createId());
-  action_graph.setNode('SIDE_EFFECT__WHARFIE', createId());
-  action_graph.setNode('SIDE_EFFECT__DAGSTER', createId());
-  action_graph.setEdge('FINISH', 'SIDE_EFFECT__CLOUDWATCH');
-  action_graph.setEdge('FINISH', 'SIDE_EFFECT__WHARFIE');
-  action_graph.setEdge('FINISH', 'SIDE_EFFECT__DAGSTER');
+  // action_graph.setNode('SIDE_EFFECT__CLOUDWATCH', createId());
+  // action_graph.setNode('SIDE_EFFECT__WHARFIE', createId());
+  // action_graph.setNode('SIDE_EFFECT__DAGSTER', createId());
+  // action_graph.setEdge('FINISH', 'SIDE_EFFECT__CLOUDWATCH');
+  // action_graph.setEdge('FINISH', 'SIDE_EFFECT__WHARFIE');
+  // action_graph.setEdge('FINISH', 'SIDE_EFFECT__DAGSTER');
 
   if (!action_graph.isDirected() || !alg.isAcyclic(action_graph))
     throw Error('Invalid action_graph');

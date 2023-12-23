@@ -108,7 +108,11 @@ class Graph {
     let result = '';
     for (const [opName, Dependencies] of this.adjacencyList) {
       const DependencyList = Dependencies.join(', ');
-      result += `${opName} -> ${DependencyList}\n`;
+      if (DependencyList.length > 0) {
+        result += `${opName} -> ${DependencyList}\n`;
+      } else {
+        result += `${opName}\n`;
+      }
     }
     return result;
   }

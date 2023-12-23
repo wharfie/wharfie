@@ -202,23 +202,19 @@ describe('tests for console log transport', () => {
       {\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\",\\"level\\":\\"INFO\\",\\"message\\":\\"hello\\",\\"foo\\":\\"bar\\"}
       "
     `);
-    expect(consoleLog).toHaveBeenCalledTimes(4);
+    expect(consoleLog).toHaveBeenCalledTimes(3);
     expect(consoleLog.mock.calls).toMatchInlineSnapshot(`
       Array [
         Array [
-          "[2016-06-20T12:08:10.000Z] [INFO] foo
+          "{\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\",\\"level\\":\\"INFO\\",\\"message\\":\\"foo\\",\\"foo\\":\\"foo\\"}
       ",
         ],
         Array [
-          "[2016-06-20T12:08:10.000Z] [INFO] bar
+          "{\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\",\\"level\\":\\"ERROR\\",\\"message\\":\\"bin\\",\\"foo\\":\\"bar\\",\\"bar\\":\\"bar\\"}
       ",
         ],
         Array [
-          "[2016-06-20T12:08:10.000Z] [INFO] bin
-      ",
-        ],
-        Array [
-          "[2016-06-20T12:08:10.000Z] [INFO] hello
+          "{\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\",\\"level\\":\\"INFO\\",\\"message\\":\\"hello\\",\\"foo\\":\\"bar\\"}
       ",
         ],
       ]
