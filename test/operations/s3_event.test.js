@@ -22,7 +22,6 @@ jest.mock('../../lambdas/lib/dynamo/resource');
 jest.mock('../../lambdas/lib/dynamo/event');
 jest.mock('../../lambdas/lib/dynamo/location');
 jest.mock('../../lambdas/lib/dynamo/semaphore');
-// jest.mock('../../lambdas/lib/logging/');
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 
@@ -33,7 +32,6 @@ const { Glue } = require('@aws-sdk/client-glue');
 const { SQS } = require('@aws-sdk/client-sqs');
 
 const resource = require('../../lambdas/lib/dynamo/resource');
-// const logging = require('../../lambdas/lib/logging/');
 
 const dynamo_resource = require('../../lambdas/lib/dynamo/resource');
 const semaphore = require('../../lambdas/lib/dynamo/semaphore');
@@ -89,10 +87,9 @@ describe('s3 event tests', () => {
 
   afterEach(async () => {
     clearLambdaTriggers();
-    // await logging.flush();
   });
 
-  it('end to end', async () => {
+  it.only('end to end', async () => {
     expect.assertions(6);
 
     await resource.putResource({

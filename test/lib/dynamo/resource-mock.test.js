@@ -1,7 +1,7 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
-const { Graph } = require('graphlib');
 
+const { OperationActionGraph, Action } = require('../../../lambdas/lib/graph/');
 jest.mock('../../../lambdas/lib/dynamo/resource');
 
 const resource = require('../../../lambdas/lib/dynamo/resource');
@@ -81,7 +81,7 @@ describe('dynamo resource db', () => {
 
   it('createOperation', async () => {
     expect.assertions(1);
-    const action_graph = new Graph();
+    const action_graph = new OperationActionGraph();
     await resource.putResource({
       resource_id: 'resource_id',
       resource_arn: 'StackId',
@@ -122,20 +122,10 @@ describe('dynamo resource db', () => {
             "wharfie_version": "1.0.0",
           },
           "resource_id#operation_id": Object {
-            "action_graph": Graph {
-              "_defaultEdgeLabelFn": [Function],
-              "_defaultNodeLabelFn": [Function],
-              "_edgeLabels": Object {},
-              "_edgeObjs": Object {},
-              "_in": Object {},
-              "_isCompound": false,
-              "_isDirected": true,
-              "_isMultigraph": false,
-              "_label": undefined,
-              "_nodes": Object {},
-              "_out": Object {},
-              "_preds": Object {},
-              "_sucs": Object {},
+            "action_graph": OperationActionGraph {
+              "actions": Array [],
+              "adjacencyList": Map {},
+              "incomingEdges": Map {},
             },
             "last_updated_at": 123124,
             "operation_config": Object {},
@@ -158,7 +148,7 @@ describe('dynamo resource db', () => {
 
   it('getOperation', async () => {
     expect.assertions(1);
-    const action_graph = new Graph();
+    const action_graph = new OperationActionGraph();
     await resource.putResource({
       resource_id: 'resource_id',
       resource_arn: 'StackId',
@@ -189,20 +179,10 @@ describe('dynamo resource db', () => {
     const result = await resource.getOperation('resource_id', 'operation_id');
     expect(result).toMatchInlineSnapshot(`
       Object {
-        "action_graph": Graph {
-          "_defaultEdgeLabelFn": [Function],
-          "_defaultNodeLabelFn": [Function],
-          "_edgeLabels": Object {},
-          "_edgeObjs": Object {},
-          "_in": Object {},
-          "_isCompound": false,
-          "_isDirected": true,
-          "_isMultigraph": false,
-          "_label": undefined,
-          "_nodes": Object {},
-          "_out": Object {},
-          "_preds": Object {},
-          "_sucs": Object {},
+        "action_graph": OperationActionGraph {
+          "actions": Array [],
+          "adjacencyList": Map {},
+          "incomingEdges": Map {},
         },
         "last_updated_at": 123124,
         "operation_config": Object {},
@@ -218,7 +198,7 @@ describe('dynamo resource db', () => {
 
   it('getAction', async () => {
     expect.assertions(1);
-    const action_graph = new Graph();
+    const action_graph = new OperationActionGraph();
     await resource.putResource({
       resource_id: 'resource_id',
       resource_arn: 'StackId',
@@ -253,20 +233,10 @@ describe('dynamo resource db', () => {
     );
     expect(result).toMatchInlineSnapshot(`
       Object {
-        "action_graph": Graph {
-          "_defaultEdgeLabelFn": [Function],
-          "_defaultNodeLabelFn": [Function],
-          "_edgeLabels": Object {},
-          "_edgeObjs": Object {},
-          "_in": Object {},
-          "_isCompound": false,
-          "_isDirected": true,
-          "_isMultigraph": false,
-          "_label": undefined,
-          "_nodes": Object {},
-          "_out": Object {},
-          "_preds": Object {},
-          "_sucs": Object {},
+        "action_graph": OperationActionGraph {
+          "actions": Array [],
+          "adjacencyList": Map {},
+          "incomingEdges": Map {},
         },
         "last_updated_at": 123124,
         "operation_config": Object {},
@@ -282,7 +252,7 @@ describe('dynamo resource db', () => {
 
   it('getActionQueries', async () => {
     expect.assertions(1);
-    const action_graph = new Graph();
+    const action_graph = new OperationActionGraph();
     await resource.putResource({
       resource_id: 'resource_id',
       resource_arn: 'StackId',
@@ -343,7 +313,7 @@ describe('dynamo resource db', () => {
   });
   it('getQueries', async () => {
     expect.assertions(1);
-    const action_graph = new Graph();
+    const action_graph = new OperationActionGraph();
     await resource.putResource({
       resource_id: 'resource_id',
       resource_arn: 'StackId',
@@ -405,7 +375,7 @@ describe('dynamo resource db', () => {
 
   it('putOperation', async () => {
     expect.assertions(1);
-    const action_graph = new Graph();
+    const action_graph = new OperationActionGraph();
     await resource.putResource({
       resource_id: 'resource_id',
       resource_arn: 'StackId',
@@ -428,20 +398,10 @@ describe('dynamo resource db', () => {
     const result = await resource.getOperation('resource_id', 'operation_id');
     expect(result).toMatchInlineSnapshot(`
       Object {
-        "action_graph": Graph {
-          "_defaultEdgeLabelFn": [Function],
-          "_defaultNodeLabelFn": [Function],
-          "_edgeLabels": Object {},
-          "_edgeObjs": Object {},
-          "_in": Object {},
-          "_isCompound": false,
-          "_isDirected": true,
-          "_isMultigraph": false,
-          "_label": undefined,
-          "_nodes": Object {},
-          "_out": Object {},
-          "_preds": Object {},
-          "_sucs": Object {},
+        "action_graph": OperationActionGraph {
+          "actions": Array [],
+          "adjacencyList": Map {},
+          "incomingEdges": Map {},
         },
         "last_updated_at": 123124,
         "operation_config": Object {},
@@ -562,10 +522,17 @@ describe('dynamo resource db', () => {
 
   it('checkActionPrerequisites', async () => {
     expect.assertions(1);
-    const action_graph = new Graph();
-    action_graph.setNode('START', 'action_id_1');
-    action_graph.setNode('FINISH', 'action_id_2');
-    action_graph.setEdge('START', 'FINISH');
+    const action_graph = new OperationActionGraph();
+    const start_action = new Action({
+      type: 'START',
+      id: 'action_id_1',
+    });
+    const finish_action = new Action({
+      type: 'FINISH',
+      id: 'action_id_2',
+    });
+    action_graph.addActions([start_action, finish_action]);
+    action_graph.addDependency(start_action, finish_action);
 
     await resource.putResource({
       resource_id: 'resource_id',
@@ -622,10 +589,17 @@ describe('dynamo resource db', () => {
 
   it('checkActionPrerequisites - not ready', async () => {
     expect.assertions(1);
-    const action_graph = new Graph();
-    action_graph.setNode('START', 'action_id_1');
-    action_graph.setNode('FINISH', 'action_id_2');
-    action_graph.setEdge('START', 'FINISH');
+    const action_graph = new OperationActionGraph();
+    const start_action = new Action({
+      type: 'START',
+      id: 'action_id_1',
+    });
+    const finish_action = new Action({
+      type: 'FINISH',
+      id: 'action_id_2',
+    });
+    action_graph.addActions([start_action, finish_action]);
+    action_graph.addDependency(start_action, finish_action);
 
     await resource.putResource({
       resource_id: 'resource_id',
@@ -682,10 +656,17 @@ describe('dynamo resource db', () => {
 
   it('checkActionPrerequisites - failure', async () => {
     expect.assertions(1);
-    const action_graph = new Graph();
-    action_graph.setNode('START', 'action_id_1');
-    action_graph.setNode('FINISH', 'action_id_2');
-    action_graph.setEdge('START', 'FINISH');
+    const action_graph = new OperationActionGraph();
+    const start_action = new Action({
+      type: 'START',
+      id: 'action_id_1',
+    });
+    const finish_action = new Action({
+      type: 'FINISH',
+      id: 'action_id_2',
+    });
+    action_graph.addActions([start_action, finish_action]);
+    action_graph.addDependency(start_action, finish_action);
 
     await resource.putResource({
       resource_id: 'resource_id',
@@ -743,10 +724,17 @@ describe('dynamo resource db', () => {
 
   it('deleteOperation', async () => {
     expect.assertions(1);
-    const action_graph = new Graph();
-    action_graph.setNode('START', 'action_id_1');
-    action_graph.setNode('FINISH', 'action_id_2');
-    action_graph.setEdge('START', 'FINISH');
+    const action_graph = new OperationActionGraph();
+    const start_action = new Action({
+      type: 'START',
+      id: 'action_id_1',
+    });
+    const finish_action = new Action({
+      type: 'FINISH',
+      id: 'action_id_2',
+    });
+    action_graph.addActions([start_action, finish_action]);
+    action_graph.addDependency(start_action, finish_action);
 
     await resource.putResource({
       resource_id: 'resource_id',

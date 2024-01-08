@@ -21,6 +21,7 @@ const { getResource } = require('./migrations/');
 const response = require('./lib/cloudformation/cfn-response');
 const { getImmutableID } = require('./lib/cloudformation/id');
 const { createId } = require('./lib/id');
+const { Action } = require('./lib/graph/');
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
 
@@ -162,14 +163,15 @@ async function daemon(event, context) {
       `action ${event.operation_type}:${event.action_type} completed, equeueing next actions`
     );
     // START NEXT ACTIONS
+    const current_action = Action.fromRecord(action);
     const next_actions =
-      operation.action_graph.successors(event.action_type) || [];
+      operation.action_graph.getUpstreamActions(current_action) || [];
     await Promise.all(
-      next_actions.map(async (action_type) => {
+      next_actions.map(async (action) => {
         if (
           !(await resource_db.checkActionPrerequisites(
             operation,
-            action_type,
+            action.type,
             null,
             false
           ))
@@ -180,8 +182,8 @@ async function daemon(event, context) {
           resource.resource_id,
           operation.operation_id,
           {
-            action_id: operation.action_graph.node(action_type),
-            action_type,
+            action_id: action.id,
+            action_type: action.type,
             action_status: 'RUNNING',
           }
         );
@@ -189,8 +191,8 @@ async function daemon(event, context) {
           {
             operation_id: operation.operation_id,
             operation_type: operation.operation_type,
-            action_id: operation.action_graph.node(action_type),
-            action_type,
+            action_id: action.id,
+            action_type: action.type,
             resource_id: resource.resource_id,
             retries: 0,
             action_inputs: action_output.nextActionInputs || {},

@@ -1,8 +1,6 @@
 'use strict';
 
-const { Graph, alg } = require('graphlib');
-
-const { createId } = require('../../lib/id');
+const { Action, OperationActionGraph } = require('../../lib/graph/');
 const logging = require('../../lib/logging');
 const resource_db = require('../../lib/dynamo/resource');
 const register_missing_partitions = require('../actions/register_missing_partitions');
@@ -29,54 +27,59 @@ async function start(event, context, resource) {
   )
     throw new Error('Event missing fields');
 
-  const action_graph = new Graph();
-  action_graph.setNode('START', event.action_id);
-  action_graph.setNode('REGISTER_MISSING_PARTITIONS', createId());
-  action_graph.setEdge('START', 'REGISTER_MISSING_PARTITIONS');
-
-  action_graph.setNode('FIND_COMPACTION_PARTITIONS', createId());
-  action_graph.setEdge(
-    'REGISTER_MISSING_PARTITIONS',
-    'FIND_COMPACTION_PARTITIONS'
+  const action_graph = new OperationActionGraph();
+  const start_action = new Action({
+    type: 'START',
+  });
+  const register_missing_partitions_action = new Action({
+    type: 'REGISTER_MISSING_PARTITIONS',
+  });
+  const find_compaction_partitions_action = new Action({
+    type: 'FIND_COMPACTION_PARTITIONS',
+  });
+  const run_compaction_action = new Action({
+    type: 'RUN_COMPACTION',
+  });
+  const update_symlinks_action = new Action({
+    type: 'UPDATE_SYMLINKS',
+  });
+  const swap_resource_action = new Action({
+    type: 'SWAP_RESOURCE',
+  });
+  const respond_to_cloudformation_action = new Action({
+    type: 'RESPOND_TO_CLOUDFORMATION',
+  });
+  const finish_action = new Action({
+    type: 'FINISH',
+  });
+  action_graph.addActions([
+    start_action,
+    register_missing_partitions_action,
+    find_compaction_partitions_action,
+    run_compaction_action,
+    update_symlinks_action,
+    finish_action,
+  ]);
+  action_graph.addDependency(start_action, register_missing_partitions_action);
+  action_graph.addDependency(
+    register_missing_partitions_action,
+    find_compaction_partitions_action
   );
-
-  action_graph.setNode('RUN_COMPACTION', createId());
-  action_graph.setEdge('FIND_COMPACTION_PARTITIONS', 'RUN_COMPACTION');
-
-  action_graph.setNode('UPDATE_SYMLINKS', createId());
-  action_graph.setEdge('RUN_COMPACTION', 'UPDATE_SYMLINKS');
-
-  action_graph.setNode('SWAP_RESOURCE', createId());
-  action_graph.setEdge('UPDATE_SYMLINKS', 'SWAP_RESOURCE');
-
-  action_graph.setNode('RESPOND_TO_CLOUDFORMATION', createId());
-  action_graph.setEdge('SWAP_RESOURCE', 'RESPOND_TO_CLOUDFORMATION');
-
-  action_graph.setNode('FINISH', createId());
-  action_graph.setEdge('RESPOND_TO_CLOUDFORMATION', 'FINISH');
-
-  action_graph.setNode('SIDE_EFFECT__CLOUDWATCH', createId());
-  action_graph.setNode('SIDE_EFFECT__WHARFIE', createId());
-  action_graph.setNode('SIDE_EFFECT__DAGSTER', createId());
-  action_graph.setEdge('FINISH', 'SIDE_EFFECT__CLOUDWATCH');
-  action_graph.setEdge('FINISH', 'SIDE_EFFECT__WHARFIE');
-  action_graph.setEdge('FINISH', 'SIDE_EFFECT__DAGSTER');
-
-  if (!action_graph.isDirected() || !alg.isAcyclic(action_graph))
-    throw Error('Invalid action_graph');
+  action_graph.addDependency(
+    find_compaction_partitions_action,
+    run_compaction_action
+  );
+  action_graph.addDependency(run_compaction_action, update_symlinks_action);
+  action_graph.addDependency(update_symlinks_action, swap_resource_action);
+  action_graph.addDependency(
+    swap_resource_action,
+    respond_to_cloudformation_action
+  );
+  action_graph.addDependency(respond_to_cloudformation_action, finish_action);
 
   event_log.info('action graph generating');
 
-  const actions = action_graph.nodes().map((action_type) => {
-    const action_id = action_graph.node(action_type);
-    const action_status = 'WAITING';
-    return {
-      action_id,
-      action_type,
-      action_status,
-      queries: [],
-    };
-  });
+  const action_records = action_graph.getActionRecords();
 
   event_log.info('creating MIGRATE operation and actions...');
   /** @type {import('../../typedefs').OperationRecord} */
@@ -89,7 +92,7 @@ async function start(event, context, resource) {
     last_updated_at: Date.parse(event.operation_started_at) / 1000,
     operation_inputs: event.operation_inputs,
     action_graph,
-    actions,
+    actions: action_records,
   };
   await resource_db.createOperation(operation);
   event_log.info('MIGRATE started.');

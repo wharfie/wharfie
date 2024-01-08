@@ -1,12 +1,12 @@
 'use strict';
-const Op = require('./op');
+const Action = require('./action');
 
-class Graph {
+class OperationActionGraph {
   constructor() {
     /**
-     * @type {Op[]}
+     * @type {Action[]}
      */
-    this.ops = [];
+    this.actions = [];
     /**
      * @type {Map<string, string[]>}
      */
@@ -18,86 +18,105 @@ class Graph {
   }
 
   /**
-   * @param {Op} op -
+   * @param {Action} action -
    */
-  addOp(op) {
-    if (!this.adjacencyList.has(op.id)) {
-      this.adjacencyList.set(op.serialize(), []);
+  addAction(action) {
+    if (!this.adjacencyList.has(action.id)) {
+      this.adjacencyList = this.adjacencyList.set(action.id, []);
     }
-    if (!this.incomingEdges.has(op.id)) {
-      this.incomingEdges.set(op.serialize(), []);
+    if (!this.incomingEdges.has(action.id)) {
+      this.incomingEdges = this.incomingEdges.set(action.id, []);
     }
+    this.actions.push(action);
   }
 
   /**
-   * @param {Op} originOp -
-   * @param {Op} destinationOp -
+   * @param {Action[]} actions -
    */
-  addDependency(originOp, destinationOp) {
+  addActions(actions) {
+    actions.forEach(this.addAction.bind(this));
+  }
+
+  /**
+   * @param {Action} originAction -
+   * @param {Action} destinationAction -
+   */
+  addDependency(originAction, destinationAction) {
     if (
-      !this.adjacencyList.has(originOp.id) ||
-      !this.adjacencyList.has(destinationOp.id)
+      !this.adjacencyList.has(originAction.id) ||
+      !this.adjacencyList.has(destinationAction.id)
     ) {
-      throw new Error('Op does not exist');
+      throw new Error('Action does not exist');
     }
 
-    (this.adjacencyList.get(originOp.id) || []).push(destinationOp.id);
-    (this.incomingEdges.get(destinationOp.id) || []).push(originOp.id);
+    (this.adjacencyList.get(originAction.id) || []).push(destinationAction.id);
+    (this.incomingEdges.get(destinationAction.id) || []).push(originAction.id);
   }
 
   /**
-   * @returns {Op[]} -
+   * @returns {Action[]} -
    */
-  getOps() {
-    return this.ops;
+  getActions() {
+    return this.actions;
   }
 
   /**
-   * @param {string} name -
-   * @returns {Op} -
+   * @returns {import('../../typedefs').ActionRecord[]} -
    */
-  getOp(name) {
-    const matchedOp = this.ops.filter((op) => op.id === name)[0];
-    if (!matchedOp) {
-      throw new Error(`Op ${name} does not exist`);
+  getActionRecords() {
+    return this.actions.map((action) => action.toRecord());
+  }
+
+  /**
+   * @param {string} id -
+   * @returns {Action} -
+   */
+  getAction(id) {
+    const matchedAction = this.actions.filter((action) => action.id === id)[0];
+    if (!matchedAction) {
+      throw new Error(`Action ${id} does not exist`);
     }
-    return matchedOp;
+    return matchedAction;
   }
 
   /**
-   * @param {Op} op -
-   * @returns {Op[]} -
+   * @param {string} type -
+   * @returns {Action} -
    */
-  getDependencies(op) {
-    return (this.adjacencyList.get(op.id) || []).map((name) =>
-      this.getOp(name)
+  getActionByType(type) {
+    const matchedAction = this.actions.filter(
+      (action) => action.type === type
+    )[0];
+    if (!matchedAction) {
+      throw new Error(`Action ${type} does not exist`);
+    }
+    return matchedAction;
+  }
+
+  /**
+   * @param {Action} action -
+   * @returns {Action[]} -
+   */
+  getDownstreamActions(action) {
+    if (!this.adjacencyList.has(action.id)) {
+      throw new Error('Vertex does not exist');
+    }
+    return (this.adjacencyList.get(action.id) || []).map((name) =>
+      this.getAction(name)
     );
   }
 
   /**
-   * @param {Op} op -
-   * @returns {Op[]} -
+   * @param {Action} action -
+   * @returns {Action[]} -
    */
-  getDownstreamOps(op) {
-    if (!this.adjacencyList.has(op.id)) {
-      throw new Error('Vertex does not exist');
-    }
-    return (this.adjacencyList.get(op.id) || []).map((name) =>
-      this.getOp(name)
-    );
-  }
-
-  /**
-   * @param {Op} op -
-   * @returns {Op[]} -
-   */
-  getUpstreamOps(op) {
-    if (!this.incomingEdges.has(op.id)) {
+  getUpstreamActions(action) {
+    if (!this.incomingEdges.has(action.id)) {
       throw new Error('Vertex does not exist');
     }
 
-    return (this.incomingEdges.get(op.id) || []).map((name) =>
-      this.getOp(name)
+    return (this.incomingEdges.get(action.id) || []).map((name) =>
+      this.getAction(name)
     );
   }
 
@@ -106,15 +125,66 @@ class Graph {
    */
   toString() {
     let result = '';
-    for (const [opName, Dependencies] of this.adjacencyList) {
+    for (const [actionName, Dependencies] of this.adjacencyList) {
       const DependencyList = Dependencies.join(', ');
       if (DependencyList.length > 0) {
-        result += `${opName} -> ${DependencyList}\n`;
+        result += `${actionName} -> ${DependencyList}\n`;
       } else {
-        result += `${opName}\n`;
+        result += `${actionName}\n`;
       }
     }
     return result;
+  }
+
+  /**
+   * @returns {string[]} -
+   */
+  getSequentialActionOrder() {
+    const actions = this.getActions();
+    /**
+     * @type {string[]}
+     */
+    const actionOrder = [];
+    const visited = new Set();
+    /**
+     * @type {Action[]}
+     */
+    const queue = [];
+
+    /**
+     * @param {Action} action -
+     * @this {OperationActionGraph}
+     */
+    function bfs(action) {
+      queue.push(action);
+
+      while (queue.length > 0) {
+        const currentAction = queue.shift();
+        if (!currentAction) {
+          throw new Error('Queue should not be empty');
+        }
+        if (visited.has(currentAction.id)) {
+          continue;
+        }
+        visited.add(currentAction.id);
+        actionOrder.push(currentAction.type);
+
+        const downstreamActions = this.getDownstreamActions(currentAction);
+        for (const dependency of downstreamActions) {
+          if (!visited.has(dependency.id)) {
+            queue.push(dependency);
+          }
+        }
+      }
+    }
+
+    for (const action of actions) {
+      if (!visited.has(action.id)) {
+        bfs.call(this, action);
+      }
+    }
+
+    return actionOrder;
   }
 
   /**
@@ -122,29 +192,30 @@ class Graph {
    */
   serialize() {
     return JSON.stringify({
-      adjacencyList: this.adjacencyList,
-      incomingEdges: this.incomingEdges,
-      ops: this.ops.map((op) => op.serialize()),
+      adjacencyList: Array.from(this.adjacencyList.entries()),
+      incomingEdges: Array.from(this.incomingEdges.entries()),
+      actions: this.actions,
     });
   }
 
   /**
    * @param {string} serializedGraph -
-   * @returns {Graph} -
+   * @returns {OperationActionGraph} -
    */
   static deserialize(serializedGraph) {
     const parsedData = JSON.parse(serializedGraph);
-    const graph = new Graph();
+    const graph = new OperationActionGraph();
 
-    for (const serializedOp of parsedData.ops) {
-      const op = Op.deserialize(serializedOp);
-      graph.addOp(op);
+    for (const parsedAction of parsedData.actions) {
+      const action = new Action(parsedAction);
+      graph.addAction(action);
     }
-    for (const [opName, dependencies] of Object.entries(
-      parsedData.adjacencyList
-    )) {
+    for (const [actionId, dependencies] of parsedData.adjacencyList) {
       dependencies.forEach((/** @type {string} */ dependency) => {
-        graph.addDependency(graph.getOp(dependency), graph.getOp(opName));
+        graph.addDependency(
+          graph.getAction(dependency),
+          graph.getAction(actionId)
+        );
       });
     }
 
@@ -152,4 +223,4 @@ class Graph {
   }
 }
 
-module.exports = Graph;
+module.exports = OperationActionGraph;

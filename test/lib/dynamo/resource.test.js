@@ -2,7 +2,7 @@
 'use strict';
 const AWS = require('@aws-sdk/lib-dynamodb');
 const AWSAthena = require('@aws-sdk/client-athena');
-const { Graph, json } = require('graphlib');
+const { OperationActionGraph, Action } = require('../../../lambdas/lib/graph/');
 const Logger = require('../../../lambdas/lib/logging/logger');
 
 process.env.QUERY_TABLE = 'query_table';
@@ -174,7 +174,7 @@ describe('dynamo resource db', () => {
       ],
     });
     batchWrite.mockResolvedValue({ Item: { value: 10 } });
-    const action_graph = new Graph();
+    const action_graph = new OperationActionGraph();
     await resource.createOperation({
       resource_id: 'resource_id',
       operation_id: 'operation_id',
@@ -203,7 +203,7 @@ describe('dynamo resource db', () => {
                 "PutRequest": Object {
                   "Item": Object {
                     "data": Object {
-                      "action_graph": "{\\"options\\":{\\"directed\\":true,\\"multigraph\\":false,\\"compound\\":false},\\"nodes\\":[],\\"edges\\":[]}",
+                      "action_graph": "{\\"adjacencyList\\":[],\\"incomingEdges\\":[],\\"actions\\":[]}",
                       "last_updated_at": 123124,
                       "operation_config": Object {},
                       "operation_id": "operation_id",
@@ -240,7 +240,7 @@ describe('dynamo resource db', () => {
 
   it('getOperation', async () => {
     expect.assertions(3);
-    const action_graph = new Graph();
+    const action_graph = new OperationActionGraph();
     query.mockResolvedValue({
       Items: [
         {
@@ -252,7 +252,7 @@ describe('dynamo resource db', () => {
             started_at: 123124,
             last_updated_at: 123124,
             operation_config: {},
-            action_graph: JSON.stringify(json.write(action_graph)),
+            action_graph: action_graph.serialize(),
           },
         },
       ],
@@ -274,20 +274,10 @@ describe('dynamo resource db', () => {
     `);
     expect(result).toMatchInlineSnapshot(`
       Object {
-        "action_graph": Graph {
-          "_defaultEdgeLabelFn": [Function],
-          "_defaultNodeLabelFn": [Function],
-          "_edgeLabels": Object {},
-          "_edgeObjs": Object {},
-          "_in": Object {},
-          "_isCompound": false,
-          "_isDirected": true,
-          "_isMultigraph": false,
-          "_label": undefined,
-          "_nodes": Object {},
-          "_out": Object {},
-          "_preds": Object {},
-          "_sucs": Object {},
+        "action_graph": OperationActionGraph {
+          "actions": Array [],
+          "adjacencyList": Map {},
+          "incomingEdges": Map {},
         },
         "last_updated_at": 123124,
         "operation_config": Object {},
@@ -453,7 +443,7 @@ describe('dynamo resource db', () => {
   it('putOperation', async () => {
     expect.assertions(2);
     put.mockResolvedValue(undefined);
-    const action_graph = new Graph();
+    const action_graph = new OperationActionGraph();
     await resource.putOperation('resource_id', {
       operation_id: 'operation_id',
       operation_type: 'operation_type',
@@ -469,7 +459,7 @@ describe('dynamo resource db', () => {
         Object {
           "Item": Object {
             "data": Object {
-              "action_graph": "{\\"options\\":{\\"directed\\":true,\\"multigraph\\":false,\\"compound\\":false},\\"nodes\\":[],\\"edges\\":[]}",
+              "action_graph": "{\\"adjacencyList\\":[],\\"incomingEdges\\":[],\\"actions\\":[]}",
               "last_updated_at": 123,
               "operation_config": Object {},
               "operation_id": "operation_id",
@@ -727,10 +717,18 @@ describe('dynamo resource db', () => {
       ],
     });
     const logger = new Logger();
-    const action_graph = new Graph();
-    action_graph.setNode('START', 'action_id');
-    action_graph.setNode('FINISH', 'finish_action_id');
-    action_graph.setEdge('START', 'FINISH');
+    const action_graph = new OperationActionGraph();
+    const start_action = new Action({
+      type: 'START',
+      id: 'action_id',
+    });
+    const finish_action = new Action({
+      type: 'FINISH',
+      id: 'finish_action_id',
+    });
+    action_graph.addActions([start_action, finish_action]);
+    action_graph.addDependency(start_action, finish_action);
+
     const operation = {
       operation_id: 'operation_id',
       operation_type: 'operation_type',

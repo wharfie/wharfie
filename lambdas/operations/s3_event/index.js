@@ -1,9 +1,6 @@
 'use strict';
 
-const { Graph, alg } = require('graphlib');
-
-const { createId } = require('../../lib/id');
-
+const { Action, OperationActionGraph } = require('../../lib/graph/');
 const logging = require('../../lib/logging');
 const resource_db = require('../../lib/dynamo/resource');
 const register_partition = require('../actions/register_partition');
@@ -22,42 +19,43 @@ async function start(event, context, resource) {
   if (!event.operation_id || !event.action_id || !event.operation_started_at)
     throw new Error('Event missing fields');
 
-  const action_graph = new Graph();
-  action_graph.setNode('START', event.action_id);
-  action_graph.setNode('REGISTER_PARTITION', createId());
-  action_graph.setEdge('START', 'REGISTER_PARTITION');
-
-  action_graph.setNode('RUN_SINGLE_COMPACTION', createId());
-  action_graph.setEdge('REGISTER_PARTITION', 'RUN_SINGLE_COMPACTION');
-
-  action_graph.setNode('UPDATE_SYMLINKS', createId());
-  action_graph.setEdge('RUN_SINGLE_COMPACTION', 'UPDATE_SYMLINKS');
-
-  action_graph.setNode('FINISH', createId());
-  action_graph.setEdge('UPDATE_SYMLINKS', 'FINISH');
-
-  action_graph.setNode('SIDE_EFFECT__CLOUDWATCH', createId());
-  action_graph.setNode('SIDE_EFFECT__WHARFIE', createId());
-  action_graph.setNode('SIDE_EFFECT__DAGSTER', createId());
-  action_graph.setEdge('FINISH', 'SIDE_EFFECT__CLOUDWATCH');
-  action_graph.setEdge('FINISH', 'SIDE_EFFECT__WHARFIE');
-  action_graph.setEdge('FINISH', 'SIDE_EFFECT__DAGSTER');
-
-  if (!action_graph.isDirected() || !alg.isAcyclic(action_graph))
-    throw Error('Invalid action_graph');
+  const action_graph = new OperationActionGraph();
+  const start_action = new Action({
+    type: 'START',
+  });
+  const register_partition_action = new Action({
+    type: 'REGISTER_PARTITION',
+  });
+  const find_single_compaction_action = new Action({
+    type: 'RUN_SINGLE_COMPACTION',
+  });
+  const update_symlinks_action = new Action({
+    type: 'UPDATE_SYMLINKS',
+  });
+  const finish_action = new Action({
+    type: 'FINISH',
+  });
+  action_graph.addActions([
+    start_action,
+    register_partition_action,
+    find_single_compaction_action,
+    update_symlinks_action,
+    finish_action,
+  ]);
+  action_graph.addDependency(start_action, register_partition_action);
+  action_graph.addDependency(
+    register_partition_action,
+    find_single_compaction_action
+  );
+  action_graph.addDependency(
+    find_single_compaction_action,
+    update_symlinks_action
+  );
+  action_graph.addDependency(update_symlinks_action, finish_action);
 
   event_log.info('action graph generating');
 
-  const actions = action_graph.nodes().map((action_type) => {
-    const action_id = action_graph.node(action_type);
-    const action_status = 'WAITING';
-    return {
-      action_id,
-      action_type,
-      action_status,
-      queries: [],
-    };
-  });
+  const action_records = action_graph.getActionRecords();
 
   /** @type {import('../../typedefs').OperationRecord} */
   const operation = {
@@ -69,7 +67,7 @@ async function start(event, context, resource) {
     started_at: Date.parse(event.operation_started_at) / 1000,
     last_updated_at: Date.parse(event.operation_started_at) / 1000,
     action_graph,
-    actions,
+    actions: action_records,
   };
   event_log.info('creating S3_EVENT operation and actions...');
   await resource_db.createOperation(operation);

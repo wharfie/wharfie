@@ -1,8 +1,8 @@
 'use strict';
-const Op = require('./op');
-const Graph = require('./graph');
+const Action = require('./action');
+const OperationActionGraph = require('./graph');
 
 module.exports = {
-  Op,
-  Graph,
+  Action,
+  OperationActionGraph,
 };
