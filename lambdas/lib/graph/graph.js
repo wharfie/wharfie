@@ -42,11 +42,11 @@ class OperationActionGraph {
    * @param {Action} destinationAction -
    */
   addDependency(originAction, destinationAction) {
-    if (
-      !this.adjacencyList.has(originAction.id) ||
-      !this.adjacencyList.has(destinationAction.id)
-    ) {
-      throw new Error('Action does not exist');
+    if (!this.adjacencyList.has(originAction.id)) {
+      throw new Error(`Action ${originAction} does not exist`);
+    }
+    if (!this.adjacencyList.has(destinationAction.id)) {
+      throw new Error(`Action ${destinationAction} does not exist`);
     }
 
     (this.adjacencyList.get(originAction.id) || []).push(destinationAction.id);
@@ -99,10 +99,10 @@ class OperationActionGraph {
    */
   getDownstreamActions(action) {
     if (!this.adjacencyList.has(action.id)) {
-      throw new Error('Vertex does not exist');
+      throw new Error('Action does not exist');
     }
-    return (this.adjacencyList.get(action.id) || []).map((name) =>
-      this.getAction(name)
+    return (this.adjacencyList.get(action.id) || []).map((id) =>
+      this.getAction(id)
     );
   }
 
@@ -112,11 +112,11 @@ class OperationActionGraph {
    */
   getUpstreamActions(action) {
     if (!this.incomingEdges.has(action.id)) {
-      throw new Error('Vertex does not exist');
+      throw new Error('Action does not exist');
     }
 
-    return (this.incomingEdges.get(action.id) || []).map((name) =>
-      this.getAction(name)
+    return (this.incomingEdges.get(action.id) || []).map((id) =>
+      this.getAction(id)
     );
   }
 
@@ -205,9 +205,12 @@ class OperationActionGraph {
   static deserialize(serializedGraph) {
     const parsedData = JSON.parse(serializedGraph);
     const graph = new OperationActionGraph();
-
     for (const parsedAction of parsedData.actions) {
-      const action = new Action(parsedAction);
+      const action = Action.fromRecord({
+        action_id: parsedAction.id,
+        action_type: parsedAction.type,
+        action_status: parsedAction.status,
+      });
       graph.addAction(action);
     }
     for (const [actionId, dependencies] of parsedData.adjacencyList) {

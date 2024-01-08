@@ -165,7 +165,7 @@ async function daemon(event, context) {
     // START NEXT ACTIONS
     const current_action = Action.fromRecord(action);
     const next_actions =
-      operation.action_graph.getUpstreamActions(current_action) || [];
+      operation.action_graph.getDownstreamActions(current_action) || [];
     await Promise.all(
       next_actions.map(async (action) => {
         if (

@@ -95,8 +95,10 @@ async function getOperation(resource_id, operation_id) {
  */
 async function getAction(resource_id, operation_id, action_id) {
   const id = `${resource_id}#${operation_id}#${action_id}`;
-  if (!__state[resource_id] || !__state[resource_id][id])
-    throw new Error('no action exists');
+  if (!__state[resource_id] || !__state[resource_id][id]) {
+    console.log(__state[resource_id]);
+    throw new Error(`no action exists with ID ${id}`);
+  }
   return __state[resource_id][id];
 }
 
@@ -110,7 +112,7 @@ async function getAction(resource_id, operation_id, action_id) {
 async function getQuery(resource_id, operation_id, action_id, query_id) {
   const id = `${resource_id}#${operation_id}#${action_id}#${query_id}`;
   if (!__state[resource_id] || !__state[resource_id][id])
-    throw new Error('no query exists');
+    throw new Error(`no query exists with id: ${id}`);
   return __state[resource_id][id];
 }
 

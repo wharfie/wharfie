@@ -28,6 +28,7 @@ async function start(event, context, resource) {
   const action_graph = new OperationActionGraph();
   const start_action = new Action({
     type: 'START',
+    id: event.action_id,
   });
   const register_missing_partitions_action = new Action({
     type: 'REGISTER_MISSING_PARTITIONS',

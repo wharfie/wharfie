@@ -30,6 +30,7 @@ async function start(event, context, resource) {
   const action_graph = new OperationActionGraph();
   const start_action = new Action({
     type: 'START',
+    id: event.action_id,
   });
   const register_missing_partitions_action = new Action({
     type: 'REGISTER_MISSING_PARTITIONS',
@@ -58,6 +59,8 @@ async function start(event, context, resource) {
     find_compaction_partitions_action,
     run_compaction_action,
     update_symlinks_action,
+    swap_resource_action,
+    respond_to_cloudformation_action,
     finish_action,
   ]);
   action_graph.addDependency(start_action, register_missing_partitions_action);

@@ -22,6 +22,7 @@ async function start(event, context, resource) {
   const action_graph = new OperationActionGraph();
   const start_action = new Action({
     type: 'START',
+    id: event.action_id,
   });
   const register_partition_action = new Action({
     type: 'REGISTER_PARTITION',

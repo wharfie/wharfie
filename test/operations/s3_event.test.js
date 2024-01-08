@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
+
+// process.env.LOGGING_LEVEL = 'debug';
 const bluebird = require('bluebird');
 
 process.env.AWS_MOCKS = true;
@@ -89,7 +91,7 @@ describe('s3 event tests', () => {
     clearLambdaTriggers();
   });
 
-  it.only('end to end', async () => {
+  it('end to end', async () => {
     expect.assertions(6);
 
     await resource.putResource({
