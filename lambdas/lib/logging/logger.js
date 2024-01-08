@@ -8,6 +8,12 @@ const ConsoleLogTransport = require('./console-log-transport');
  * @property {Object} [base] -
  */
 
+/**
+ * @typedef LoggerChildOptions
+ * @property {string} [level] -
+ * @property {Object} [metadata] -
+ */
+
 class Logger {
   /**
    * @param {LoggerOptions} options -
@@ -94,15 +100,15 @@ class Logger {
   }
 
   /**
-   * @param {Object} metadata -
+   * @param {LoggerChildOptions} options -
    * @returns {Logger} -
    */
-  child(metadata = {}) {
+  child(options = {}) {
     return new Logger({
-      level: this.level,
+      level: options.level || this.level,
       jsonFormat: this.jsonFormat,
       transports: this.transports,
-      base: { ...this.base, ...metadata },
+      base: { ...this.base, ...(options.metadata || {}) },
     });
   }
 

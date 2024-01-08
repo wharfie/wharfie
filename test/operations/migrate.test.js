@@ -1,5 +1,6 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
+// process.env.LOGGING_LEVEL = 'debug';
 const bluebird = require('bluebird');
 const nock = require('nock');
 

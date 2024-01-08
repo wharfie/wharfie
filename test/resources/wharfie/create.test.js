@@ -11,7 +11,6 @@ const create_event = require('../../fixtures/wharfie-create.json');
 const nock = require('nock');
 
 jest.useFakeTimers();
-jest.createMockFromModule('graphlib');
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../../package.json', () => ({ version: '0.0.1' }));
 
@@ -28,7 +27,6 @@ describe('tests for wharfie resource create handler', () => {
     require('aws-sdk-client-mock-jest');
   });
   beforeEach(() => {
-    jest.mock('graphlib');
     location_db = require('../../../lambdas/lib/dynamo/location');
     resource_db = require('../../../lambdas/lib/dynamo/resource');
     jest.mock('../../../lambdas/lib/dynamo/location');

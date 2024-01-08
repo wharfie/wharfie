@@ -4,12 +4,10 @@ const _S3 = require('../lambdas/lib/s3');
 const s3 = new _S3();
 jest.mock('../lambdas/lib/sts');
 jest.mock('../lambdas/lib/glue');
-jest.createMockFromModule('graphlib');
 let lambda, S3, resource_db, logging, getObject, deleteObjects;
 
 describe('tests for cleanup lambda', () => {
   beforeAll(() => {
-    jest.mock('graphlib');
     S3 = require('../lambdas/lib/s3');
     logging = require('../lambdas/lib/logging');
     resource_db = require('../lambdas/lib/dynamo/resource');

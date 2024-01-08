@@ -150,7 +150,7 @@
  * @property {string} operation_status - status of operation
  * @property {number} started_at - start timestamp
  * @property {number} last_updated_at - update_at_timestamp
- * @property {import('graphlib').Graph} action_graph - action dependency graph
+ * @property {import('./lib/graph/').OperationActionGraph} action_graph - action dependency graph
  * @property {any} [operation_config] - configuration Blob for the operation
  * @property {ActionRecord[]} [actions] -
  * @property {any} [operation_inputs] - Input Blob for the operation

@@ -32,7 +32,14 @@ const ROOT_LOGGER = new Logger({
 });
 
 const AWS_SDK_LOGGER = ROOT_LOGGER.child({
-  log_type: 'aws_sdk',
+  metadata: {
+    log_type: 'aws_sdk',
+  },
+});
+
+const WHARFIE_DB_LOGGER = ROOT_LOGGER.child({
+  level: 'info',
+  metadata: { log_type: 'wharfie_db' },
 });
 
 /** @type {Object.<string, Object.<string,Logger>>} */
@@ -49,14 +56,16 @@ function getEventLogger(event, context) {
     return loggers[context.awsRequestId][key];
   if (!loggers[context.awsRequestId]) loggers[context.awsRequestId] = {};
   loggers[context.awsRequestId][key] = ROOT_LOGGER.child({
-    resource_id: event.resource_id,
-    operation_id: event.operation_id,
-    operation_type: event.operation_type,
-    action_id: event.action_id,
-    action_type: event.action_type,
-    query_id: event.query_id,
-    request_id: context.awsRequestId,
-    log_type: 'event',
+    metadata: {
+      resource_id: event.resource_id,
+      operation_id: event.operation_id,
+      operation_type: event.operation_type,
+      action_id: event.action_id,
+      action_type: event.action_type,
+      query_id: event.query_id,
+      request_id: context.awsRequestId,
+      log_type: 'event',
+    },
   });
   return loggers[context.awsRequestId][key];
 }
@@ -76,6 +85,13 @@ function getAWSSDKLogger() {
 }
 
 /**
+ * @returns {Logger} -
+ */
+function getWharfieDBLogger() {
+  return WHARFIE_DB_LOGGER;
+}
+
+/**
  *
  */
 async function flush() {
@@ -86,5 +102,6 @@ module.exports = {
   getEventLogger,
   getDaemonLogger,
   getAWSSDKLogger,
+  getWharfieDBLogger,
   flush,
 };

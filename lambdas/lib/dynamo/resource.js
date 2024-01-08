@@ -2,7 +2,7 @@
 'use strict';
 const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
 const { DynamoDB } = require('@aws-sdk/client-dynamodb');
-const { json } = require('graphlib');
+const { OperationActionGraph } = require('../graph/');
 const { createId } = require('../id');
 const { query, batchWrite } = require('./');
 const STS = require('../sts');
@@ -109,7 +109,7 @@ async function createOperation(operation) {
         operation_status: operation.operation_status,
         operation_config: operation.operation_config,
         operation_inputs: operation.operation_inputs,
-        action_graph: JSON.stringify(json.write(operation.action_graph)),
+        action_graph: operation.action_graph.serialize(),
         started_at: operation.started_at,
         last_updated_at: operation.last_updated_at,
       },
@@ -157,7 +157,7 @@ async function getOperation(resource_id, operation_id) {
 
   return {
     ...Items[0].data,
-    action_graph: json.read(JSON.parse(Items[0].data.action_graph)),
+    action_graph: OperationActionGraph.deserialize(Items[0].data.action_graph),
     started_at: Number(Items[0].data.started_at || 0),
     last_updated_at: Number(Items[0].data.last_updated_at || 0),
   };
@@ -274,7 +274,7 @@ async function putOperation(resource_id, operation) {
         operation_status: operation.operation_status,
         operation_config: operation.operation_config,
         operation_inputs: operation.operation_inputs,
-        action_graph: JSON.stringify(json.write(operation.action_graph)),
+        action_graph: operation.action_graph.serialize(),
         started_at: operation.started_at,
         last_updated_at: operation.last_updated_at,
       },
@@ -463,8 +463,9 @@ async function checkActionPrerequisites(
   logger,
   includeQueries = true
 ) {
+  const current_action = operation.action_graph.getActionByType(action_type);
   const prerequisite_actions =
-    operation.action_graph.predecessors(action_type) || [];
+    operation.action_graph.getUpstreamActions(current_action) || [];
   logger &&
     logger.debug(
       `checking that prerequisite actions are completed ${JSON.stringify(
@@ -473,9 +474,8 @@ async function checkActionPrerequisites(
     );
   let prerequisites_met = true;
   while (prerequisite_actions.length > 0) {
-    const action_type = prerequisite_actions.pop();
-    if (!action_type) continue;
-    const action_id = operation.action_graph.node(action_type);
+    const action = prerequisite_actions.pop();
+    if (!action) continue;
     const { Items } = await query({
       TableName: RESOURCE_TABLE,
       ConsistentRead: true,
@@ -483,7 +483,7 @@ async function checkActionPrerequisites(
         'resource_id = :resource_id AND begins_with(sort_key, :sort_key)',
       ExpressionAttributeValues: {
         ':resource_id': operation.resource_id,
-        ':sort_key': `${operation.resource_id}#${operation.operation_id}#${action_id}`,
+        ':sort_key': `${operation.resource_id}#${operation.operation_id}#${action.id}`,
       },
     });
     const incompleteQueries = [];

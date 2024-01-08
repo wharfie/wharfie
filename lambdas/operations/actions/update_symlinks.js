@@ -449,14 +449,16 @@ async function update_symlinks(event, context, resource, operation) {
   if (!temporaryDatabaseName || !temporaryTableName)
     throw new Error('missing required action inputs');
 
+  const update_symlinks_action =
+    operation.action_graph.getActionByType('UPDATE_SYMLINKS');
   const compaction_action =
-    operation.action_graph.predecessors('UPDATE_SYMLINKS') || [];
+    operation.action_graph.getUpstreamActions(update_symlinks_action) || [];
   if (compaction_action.length === 0)
     throw new Error('could not find previous action');
   const queries = await resource_db.getQueries(
     resource.resource_id,
     operation.operation_id,
-    operation.action_graph.node(compaction_action[0])
+    compaction_action[0].id
   );
   event_log.info(
     `registering data and updating symlinks for ${queries.length} queries`
