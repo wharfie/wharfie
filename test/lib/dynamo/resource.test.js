@@ -203,7 +203,7 @@ describe('dynamo resource db', () => {
                 "PutRequest": Object {
                   "Item": Object {
                     "data": Object {
-                      "action_graph": "{\\"adjacencyList\\":[],\\"incomingEdges\\":[],\\"actions\\":[]}",
+                      "action_graph": "{\\"outgoingEdges\\":[],\\"incomingEdges\\":[],\\"actions\\":[]}",
                       "last_updated_at": 123124,
                       "operation_config": Object {},
                       "operation_id": "operation_id",
@@ -276,8 +276,8 @@ describe('dynamo resource db', () => {
       Object {
         "action_graph": OperationActionGraph {
           "actions": Array [],
-          "adjacencyList": Map {},
           "incomingEdges": Map {},
+          "outgoingEdges": Map {},
         },
         "last_updated_at": 123124,
         "operation_config": Object {},
@@ -459,7 +459,7 @@ describe('dynamo resource db', () => {
         Object {
           "Item": Object {
             "data": Object {
-              "action_graph": "{\\"adjacencyList\\":[],\\"incomingEdges\\":[],\\"actions\\":[]}",
+              "action_graph": "{\\"outgoingEdges\\":[],\\"incomingEdges\\":[],\\"actions\\":[]}",
               "last_updated_at": 123,
               "operation_config": Object {},
               "operation_id": "operation_id",

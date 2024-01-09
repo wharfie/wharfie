@@ -10,19 +10,19 @@ class OperationActionGraph {
     /**
      * @type {Map<string, string[]>}
      */
-    this.adjacencyList = new Map(); // Outgoing edges
+    this.outgoingEdges = new Map();
     /**
      * @type {Map<string, string[]>}
      */
-    this.incomingEdges = new Map(); // Incoming edges
+    this.incomingEdges = new Map();
   }
 
   /**
    * @param {Action} action -
    */
   addAction(action) {
-    if (!this.adjacencyList.has(action.id)) {
-      this.adjacencyList = this.adjacencyList.set(action.id, []);
+    if (!this.outgoingEdges.has(action.id)) {
+      this.outgoingEdges = this.outgoingEdges.set(action.id, []);
     }
     if (!this.incomingEdges.has(action.id)) {
       this.incomingEdges = this.incomingEdges.set(action.id, []);
@@ -42,14 +42,14 @@ class OperationActionGraph {
    * @param {Action} destinationAction -
    */
   addDependency(originAction, destinationAction) {
-    if (!this.adjacencyList.has(originAction.id)) {
+    if (!this.outgoingEdges.has(originAction.id)) {
       throw new Error(`Action ${originAction} does not exist`);
     }
-    if (!this.adjacencyList.has(destinationAction.id)) {
+    if (!this.outgoingEdges.has(destinationAction.id)) {
       throw new Error(`Action ${destinationAction} does not exist`);
     }
 
-    (this.adjacencyList.get(originAction.id) || []).push(destinationAction.id);
+    (this.outgoingEdges.get(originAction.id) || []).push(destinationAction.id);
     (this.incomingEdges.get(destinationAction.id) || []).push(originAction.id);
   }
 
@@ -91,10 +91,10 @@ class OperationActionGraph {
    * @returns {Action[]} -
    */
   getDownstreamActions(action) {
-    if (!this.adjacencyList.has(action.id)) {
+    if (!this.outgoingEdges.has(action.id)) {
       throw new Error('Action does not exist');
     }
-    return (this.adjacencyList.get(action.id) || []).map((id) =>
+    return (this.outgoingEdges.get(action.id) || []).map((id) =>
       this.getAction(id)
     );
   }
@@ -118,12 +118,14 @@ class OperationActionGraph {
    */
   toString() {
     let result = '';
-    for (const [actionName, Dependencies] of this.adjacencyList) {
-      const DependencyList = Dependencies.join(', ');
+    for (const [actionName, Dependencies] of this.outgoingEdges) {
+      const DependencyList = Dependencies.map(
+        (dep) => this.getAction(dep).type
+      ).join(', ');
       if (DependencyList.length > 0) {
-        result += `${actionName} -> ${DependencyList}\n`;
+        result += `${this.getAction(actionName).type} -> ${DependencyList}\n`;
       } else {
-        result += `${actionName}\n`;
+        result += `${this.getAction(actionName).type}\n`;
       }
     }
     return result;
@@ -185,7 +187,7 @@ class OperationActionGraph {
    */
   serialize() {
     return JSON.stringify({
-      adjacencyList: Array.from(this.adjacencyList.entries()),
+      outgoingEdges: Array.from(this.outgoingEdges.entries()),
       incomingEdges: Array.from(this.incomingEdges.entries()),
       actions: this.actions,
     });
@@ -206,11 +208,11 @@ class OperationActionGraph {
       });
       graph.addAction(action);
     }
-    for (const [actionId, dependencies] of parsedData.adjacencyList) {
+    for (const [actionId, dependencies] of parsedData.outgoingEdges) {
       dependencies.forEach((/** @type {string} */ dependency) => {
         graph.addDependency(
-          graph.getAction(dependency),
-          graph.getAction(actionId)
+          graph.getAction(actionId),
+          graph.getAction(dependency)
         );
       });
     }

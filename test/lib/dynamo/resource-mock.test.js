@@ -124,8 +124,8 @@ describe('dynamo resource db', () => {
           "resource_id#operation_id": Object {
             "action_graph": OperationActionGraph {
               "actions": Array [],
-              "adjacencyList": Map {},
               "incomingEdges": Map {},
+              "outgoingEdges": Map {},
             },
             "last_updated_at": 123124,
             "operation_config": Object {},
@@ -181,8 +181,8 @@ describe('dynamo resource db', () => {
       Object {
         "action_graph": OperationActionGraph {
           "actions": Array [],
-          "adjacencyList": Map {},
           "incomingEdges": Map {},
+          "outgoingEdges": Map {},
         },
         "last_updated_at": 123124,
         "operation_config": Object {},
@@ -235,8 +235,8 @@ describe('dynamo resource db', () => {
       Object {
         "action_graph": OperationActionGraph {
           "actions": Array [],
-          "adjacencyList": Map {},
           "incomingEdges": Map {},
+          "outgoingEdges": Map {},
         },
         "last_updated_at": 123124,
         "operation_config": Object {},
@@ -400,8 +400,8 @@ describe('dynamo resource db', () => {
       Object {
         "action_graph": OperationActionGraph {
           "actions": Array [],
-          "adjacencyList": Map {},
           "incomingEdges": Map {},
+          "outgoingEdges": Map {},
         },
         "last_updated_at": 123124,
         "operation_config": Object {},

@@ -30,11 +30,11 @@ describe('tests for graph', () => {
       `"{\\"id\\":\\"id-1\\",\\"type\\":\\"cloudwatch\\",\\"executions\\":[]}"`
     );
     expect(graph.serialize()).toMatchInlineSnapshot(
-      `"{\\"adjacencyList\\":[[\\"id-1\\",[]]],\\"incomingEdges\\":[[\\"id-1\\",[]]],\\"actions\\":[{\\"id\\":\\"id-1\\",\\"type\\":\\"cloudwatch\\",\\"executions\\":[]}]}"`
+      `"{\\"outgoingEdges\\":[[\\"id-1\\",[]]],\\"incomingEdges\\":[[\\"id-1\\",[]]],\\"actions\\":[{\\"id\\":\\"id-1\\",\\"type\\":\\"cloudwatch\\",\\"executions\\":[]}]}"`
     );
   });
   it('deserialization', async () => {
-    expect.assertions(2);
+    expect.assertions(3);
     const graph = new OperationActionGraph();
     const first = new Action({
       type: 'first',
@@ -52,7 +52,7 @@ describe('tests for graph', () => {
     graph.addDependency(second, third);
     const serializedGraph = graph.serialize();
     expect(serializedGraph).toMatchInlineSnapshot(
-      `"{\\"adjacencyList\\":[[\\"id-1\\",[\\"id-2\\"]],[\\"id-2\\",[\\"id-3\\"]],[\\"id-3\\",[]]],\\"incomingEdges\\":[[\\"id-1\\",[]],[\\"id-2\\",[\\"id-1\\"]],[\\"id-3\\",[\\"id-2\\"]]],\\"actions\\":[{\\"id\\":\\"id-1\\",\\"type\\":\\"first\\",\\"executions\\":[]},{\\"id\\":\\"id-2\\",\\"type\\":\\"second\\",\\"executions\\":[]},{\\"id\\":\\"id-3\\",\\"type\\":\\"third\\",\\"executions\\":[]}]}"`
+      `"{\\"outgoingEdges\\":[[\\"id-1\\",[\\"id-2\\"]],[\\"id-2\\",[\\"id-3\\"]],[\\"id-3\\",[]]],\\"incomingEdges\\":[[\\"id-1\\",[]],[\\"id-2\\",[\\"id-1\\"]],[\\"id-3\\",[\\"id-2\\"]]],\\"actions\\":[{\\"id\\":\\"id-1\\",\\"type\\":\\"first\\",\\"executions\\":[]},{\\"id\\":\\"id-2\\",\\"type\\":\\"second\\",\\"executions\\":[]},{\\"id\\":\\"id-3\\",\\"type\\":\\"third\\",\\"executions\\":[]}]}"`
     );
     expect(OperationActionGraph.deserialize(serializedGraph))
       .toMatchInlineSnapshot(`
@@ -74,7 +74,7 @@ describe('tests for graph', () => {
             "type": "third",
           },
         ],
-        "adjacencyList": Map {
+        "incomingEdges": Map {
           "id-1" => Array [],
           "id-2" => Array [
             "id-1",
@@ -83,7 +83,7 @@ describe('tests for graph', () => {
             "id-2",
           ],
         },
-        "incomingEdges": Map {
+        "outgoingEdges": Map {
           "id-1" => Array [
             "id-2",
           ],
@@ -94,6 +94,9 @@ describe('tests for graph', () => {
         },
       }
     `);
+    expect(OperationActionGraph.deserialize(serializedGraph)).toStrictEqual(
+      graph
+    );
   });
   it('toString', async () => {
     expect.assertions(1);
@@ -119,10 +122,10 @@ describe('tests for graph', () => {
     graph.addDependency(first, secondB);
     graph.addDependency(secondB, third);
     expect(graph.toString()).toMatchInlineSnapshot(`
-      "id-1 -> id-2, id-3
-      id-2 -> id-4
-      id-3 -> id-4
-      id-4
+      "first -> secondA, secondB
+      secondA -> third
+      secondB -> third
+      third
       "
     `);
   });

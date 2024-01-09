@@ -177,7 +177,6 @@ async function daemon(event, context) {
           ))
         )
           return Promise.resolve();
-
         await resource_db.putAction(
           resource.resource_id,
           operation.operation_id,

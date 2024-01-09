@@ -30,8 +30,6 @@ const list = async (resource_id, operation_id) => {
       displaySuccess(`No operation found`);
       return;
     }
-    console.log(records);
-    console.log(records.operations[0]);
     const graph = OperationActionGraph.deserialize(
       records.operations[0].action_graph
     );
@@ -45,7 +43,14 @@ const list = async (resource_id, operation_id) => {
       }
       return 0;
     });
-    console.table(actions);
+    console.table(
+      actions.map((action) => ({
+        action_id: action.id,
+        action_type: action.type,
+        action_status: records.actions.find((x) => x.action_id === action.id)
+          .action_status,
+      }))
+    );
     console.table(
       records.queries.map((query) => ({
         query_id: query.query_id,
