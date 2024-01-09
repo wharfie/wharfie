@@ -21,6 +21,9 @@ const config = async (development) => {
           if (['Version', 'IsDevelopment'].includes(key)) {
             return acc;
           }
+          if (key.startsWith('SideEffect')) {
+            return acc;
+          }
           const p = template.Parameters[key];
           let type = 'input';
           if (p.Type === 'Number') {

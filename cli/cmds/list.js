@@ -30,6 +30,8 @@ const list = async (resource_id, operation_id) => {
       displaySuccess(`No operation found`);
       return;
     }
+    console.log(records);
+    console.log(records.operations[0]);
     const graph = OperationActionGraph.deserialize(
       records.operations[0].action_graph
     );

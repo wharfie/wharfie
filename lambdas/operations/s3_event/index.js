@@ -56,7 +56,11 @@ async function start(event, context, resource) {
 
   event_log.info('action graph generating');
 
-  const action_records = action_graph.getActionRecords();
+  const action_records = action_graph.getActions().map((action) => ({
+    action_id: action.id,
+    action_type: action.type,
+    action_status: 'PENDING',
+  }));
 
   /** @type {import('../../typedefs').OperationRecord} */
   const operation = {

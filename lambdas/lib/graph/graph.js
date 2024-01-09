@@ -61,13 +61,6 @@ class OperationActionGraph {
   }
 
   /**
-   * @returns {import('../../typedefs').ActionRecord[]} -
-   */
-  getActionRecords() {
-    return this.actions.map((action) => action.toRecord());
-  }
-
-  /**
    * @param {string} id -
    * @returns {Action} -
    */
@@ -137,12 +130,12 @@ class OperationActionGraph {
   }
 
   /**
-   * @returns {string[]} -
+   * @returns {Action[]} -
    */
   getSequentialActionOrder() {
     const actions = this.getActions();
     /**
-     * @type {string[]}
+     * @type {Action[]}
      */
     const actionOrder = [];
     const visited = new Set();
@@ -167,7 +160,7 @@ class OperationActionGraph {
           continue;
         }
         visited.add(currentAction.id);
-        actionOrder.push(currentAction.type);
+        actionOrder.push(currentAction);
 
         const downstreamActions = this.getDownstreamActions(currentAction);
         for (const dependency of downstreamActions) {

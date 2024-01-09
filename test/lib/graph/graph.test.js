@@ -27,10 +27,10 @@ describe('tests for graph', () => {
     graph.addAction(newAction);
 
     expect(newAction.serialize()).toMatchInlineSnapshot(
-      `"{\\"id\\":\\"id-1\\",\\"type\\":\\"cloudwatch\\",\\"status\\":\\"WAITING\\",\\"executions\\":[]}"`
+      `"{\\"id\\":\\"id-1\\",\\"type\\":\\"cloudwatch\\",\\"executions\\":[]}"`
     );
     expect(graph.serialize()).toMatchInlineSnapshot(
-      `"{\\"adjacencyList\\":[[\\"id-1\\",[]]],\\"incomingEdges\\":[[\\"id-1\\",[]]],\\"actions\\":[{\\"id\\":\\"id-1\\",\\"type\\":\\"cloudwatch\\",\\"status\\":\\"WAITING\\",\\"executions\\":[]}]}"`
+      `"{\\"adjacencyList\\":[[\\"id-1\\",[]]],\\"incomingEdges\\":[[\\"id-1\\",[]]],\\"actions\\":[{\\"id\\":\\"id-1\\",\\"type\\":\\"cloudwatch\\",\\"executions\\":[]}]}"`
     );
   });
   it('deserialization', async () => {
@@ -52,7 +52,7 @@ describe('tests for graph', () => {
     graph.addDependency(second, third);
     const serializedGraph = graph.serialize();
     expect(serializedGraph).toMatchInlineSnapshot(
-      `"{\\"adjacencyList\\":[[\\"id-1\\",[\\"id-2\\"]],[\\"id-2\\",[\\"id-3\\"]],[\\"id-3\\",[]]],\\"incomingEdges\\":[[\\"id-1\\",[]],[\\"id-2\\",[\\"id-1\\"]],[\\"id-3\\",[\\"id-2\\"]]],\\"actions\\":[{\\"id\\":\\"id-1\\",\\"type\\":\\"first\\",\\"status\\":\\"WAITING\\",\\"executions\\":[]},{\\"id\\":\\"id-2\\",\\"type\\":\\"second\\",\\"status\\":\\"WAITING\\",\\"executions\\":[]},{\\"id\\":\\"id-3\\",\\"type\\":\\"third\\",\\"status\\":\\"WAITING\\",\\"executions\\":[]}]}"`
+      `"{\\"adjacencyList\\":[[\\"id-1\\",[\\"id-2\\"]],[\\"id-2\\",[\\"id-3\\"]],[\\"id-3\\",[]]],\\"incomingEdges\\":[[\\"id-1\\",[]],[\\"id-2\\",[\\"id-1\\"]],[\\"id-3\\",[\\"id-2\\"]]],\\"actions\\":[{\\"id\\":\\"id-1\\",\\"type\\":\\"first\\",\\"executions\\":[]},{\\"id\\":\\"id-2\\",\\"type\\":\\"second\\",\\"executions\\":[]},{\\"id\\":\\"id-3\\",\\"type\\":\\"third\\",\\"executions\\":[]}]}"`
     );
     expect(OperationActionGraph.deserialize(serializedGraph))
       .toMatchInlineSnapshot(`
@@ -61,19 +61,16 @@ describe('tests for graph', () => {
           Action {
             "executions": Array [],
             "id": "id-1",
-            "status": "WAITING",
             "type": "first",
           },
           Action {
             "executions": Array [],
             "id": "id-2",
-            "status": "WAITING",
             "type": "second",
           },
           Action {
             "executions": Array [],
             "id": "id-3",
-            "status": "WAITING",
             "type": "third",
           },
         ],
@@ -158,13 +155,11 @@ describe('tests for graph', () => {
         Action {
           "executions": Array [],
           "id": "id-2",
-          "status": "WAITING",
           "type": "secondA",
         },
         Action {
           "executions": Array [],
           "id": "id-3",
-          "status": "WAITING",
           "type": "secondB",
         },
       ]
@@ -174,7 +169,6 @@ describe('tests for graph', () => {
         Action {
           "executions": Array [],
           "id": "id-1",
-          "status": "WAITING",
           "type": "first",
         },
       ]
@@ -208,13 +202,11 @@ describe('tests for graph', () => {
         Action {
           "executions": Array [],
           "id": "id-2",
-          "status": "WAITING",
           "type": "secondA",
         },
         Action {
           "executions": Array [],
           "id": "id-3",
-          "status": "WAITING",
           "type": "secondB",
         },
       ]
@@ -224,7 +216,6 @@ describe('tests for graph', () => {
         Action {
           "executions": Array [],
           "id": "id-4",
-          "status": "WAITING",
           "type": "third",
         },
       ]
@@ -256,10 +247,26 @@ describe('tests for graph', () => {
     graph.addDependency(secondB, third);
     expect(graph.getSequentialActionOrder()).toMatchInlineSnapshot(`
       Array [
-        "first",
-        "secondA",
-        "secondB",
-        "third",
+        Action {
+          "executions": Array [],
+          "id": "id-1",
+          "type": "first",
+        },
+        Action {
+          "executions": Array [],
+          "id": "id-2",
+          "type": "secondA",
+        },
+        Action {
+          "executions": Array [],
+          "id": "id-3",
+          "type": "secondB",
+        },
+        Action {
+          "executions": Array [],
+          "id": "id-4",
+          "type": "third",
+        },
       ]
     `);
   });

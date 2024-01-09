@@ -53,17 +53,20 @@ const Parameters = {
     Description:
       'only needed for development, bucket where lambda artifacts are stored',
   },
-  DagsterOrganization: {
+  SideEffectDagsterOrganization: {
     Type: 'String',
     Description: 'organization for dagster cloud',
+    Default: '',
   },
-  DagsterDeployment: {
+  SideEffectDagsterDeployment: {
     Type: 'String',
     Description: 'deployment for dagster cloud',
+    Default: '',
   },
-  DagsterToken: {
+  SideEffectDagsterToken: {
     Type: 'String',
     Description: 'token for dagster cloud',
+    Default: '',
   },
 };
 

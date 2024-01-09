@@ -15,7 +15,6 @@ class Action {
   constructor(options) {
     this.id = options.id || createId();
     this.type = options.type;
-    this.status = options.status || 'WAITING';
     this.executions = options.executions || [];
   }
 
@@ -24,19 +23,6 @@ class Action {
    */
   toString() {
     return this.id;
-  }
-
-  /**
-   * @returns {import('../../typedefs').ActionRecord} -
-   */
-  toRecord() {
-    return {
-      action_id: this.id,
-      action_type: this.type,
-      action_status: this.status,
-      // TODO: Add executions to queries
-      queries: [],
-    };
   }
 
   /**
