@@ -3,9 +3,9 @@
 const https = require('https');
 const logging = require('../../lib/logging');
 
-const organization = process.env.DAGSTER_ORGANIZATION || '';
-const deployment = process.env.DAGSTER_DEPLOYMENT || '';
-const token = process.env.DAGSTER_TOKEN || '';
+const organization = process.env.SIDE_EFFECT_DAGSTER_ORGANIZATION || '';
+const deployment = process.env.SIDE_EFFECT_DAGSTER_DEPLOYMENT || '';
+const token = process.env.SIDE_EFFECT_DAGSTER_TOKEN || '';
 
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
@@ -24,6 +24,12 @@ async function dagster(event, context, resource, operation) {
       status: 'COMPLETED',
     };
   }
+  if (organization === '' || deployment === '' || token === '') {
+    event_log.warn('Dagster environment variables not set');
+    return {
+      status: 'COMPLETED',
+    };
+  }
   const databaseName = resource.destination_properties.DatabaseName;
   const tableName = resource.destination_properties.TableInput.Name;
   const asset_key = `${databaseName}__${tableName}`;
@@ -32,7 +38,8 @@ async function dagster(event, context, resource, operation) {
     metadata: {
       source: 'Wharfie',
       operation_id: operation.operation_id,
-      compelted_at: completed_at,
+      operation_type: operation.operation_type,
+      completed_at,
     },
   });
 

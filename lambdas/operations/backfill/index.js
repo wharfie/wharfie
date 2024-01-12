@@ -45,6 +45,18 @@ async function start(event, context, resource) {
   const finish_action = new Action({
     type: 'FINISH',
   });
+  const side_effect__cloudwatch = new Action({
+    type: 'SIDE_EFFECT__CLOUDWATCH',
+  });
+  const side_effect__dagster = new Action({
+    type: 'SIDE_EFFECT__DAGSTER',
+  });
+  const side_effect__wharfie = new Action({
+    type: 'SIDE_EFFECT__WHARFIE',
+  });
+  const side_effects_finish_action = new Action({
+    type: 'SIDE_EFFECTS__FINISH',
+  });
   action_graph.addActions([
     start_action,
     register_missing_partitions_action,
@@ -52,6 +64,10 @@ async function start(event, context, resource) {
     run_compaction_action,
     update_symlinks_action,
     finish_action,
+    side_effect__cloudwatch,
+    side_effect__dagster,
+    side_effect__wharfie,
+    side_effects_finish_action,
   ]);
   action_graph.addDependency(start_action, register_missing_partitions_action);
   action_graph.addDependency(
@@ -64,6 +80,15 @@ async function start(event, context, resource) {
   );
   action_graph.addDependency(run_compaction_action, update_symlinks_action);
   action_graph.addDependency(update_symlinks_action, finish_action);
+  action_graph.addDependency(finish_action, side_effect__cloudwatch);
+  action_graph.addDependency(finish_action, side_effect__dagster);
+  action_graph.addDependency(finish_action, side_effect__wharfie);
+  action_graph.addDependency(
+    side_effect__cloudwatch,
+    side_effects_finish_action
+  );
+  action_graph.addDependency(side_effect__dagster, side_effects_finish_action);
+  action_graph.addDependency(side_effect__wharfie, side_effects_finish_action);
 
   event_log.info('action graph generating');
 
@@ -146,6 +171,8 @@ async function route(event, context, resource, operation) {
       return await side_effects.wharfie(event, context, resource, operation);
     case 'SIDE_EFFECT__DAGSTER':
       return await side_effects.dagster(event, context, resource, operation);
+    case 'SIDE_EFFECTS__FINISH':
+      return await side_effects.finish(event, context, resource, operation);
     default:
       throw new Error('Invalid Action, must be valid MAINTAIN action');
   }
