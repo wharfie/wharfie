@@ -29,6 +29,12 @@ const view = async () => {
     return {
       name,
       dependsOn,
+      description: resource.destination_properties.Description,
+      metadata: {
+        wharfie_resource_id: resource.resource_id,
+        location:
+          resource.destination_properties.TableInput.StorageDescriptor.Location,
+      },
     };
   });
   console.log(
@@ -43,7 +49,7 @@ const view = async () => {
 };
 
 exports.command = 'dependency_list';
-exports.desc = 'output project resource dependencies';
+exports.desc = "output deployment's resource dependencies";
 exports.builder = (yargs) => {};
 exports.handler = async function () {
   try {
