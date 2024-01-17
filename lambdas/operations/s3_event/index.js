@@ -1,20 +1,12 @@
 'use strict';
 
-const { Graph, alg } = require('graphlib');
-
-const { createId } = require('../../lib/id');
-const CloudWatch = require('../../lib/cloudwatch');
-const cloudwatch = new CloudWatch({
-  region: process.env.AWS_REGION,
-});
-
+const { Action, OperationActionGraph } = require('../../lib/graph/');
 const logging = require('../../lib/logging');
 const resource_db = require('../../lib/dynamo/resource');
 const register_partition = require('../actions/register_partition');
 const run_single_compaction = require('../actions/run_single_compaction');
 const update_symlinks = require('../actions/update_symlinks');
-
-const STACK_NAME = process.env.STACK_NAME || '';
+const side_effects = require('../side_effects');
 
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
@@ -27,35 +19,73 @@ async function start(event, context, resource) {
   if (!event.operation_id || !event.action_id || !event.operation_started_at)
     throw new Error('Event missing fields');
 
-  const action_graph = new Graph();
-  action_graph.setNode('START', event.action_id);
-  action_graph.setNode('REGISTER_PARTITION', createId());
-  action_graph.setEdge('START', 'REGISTER_PARTITION');
-
-  action_graph.setNode('RUN_SINGLE_COMPACTION', createId());
-  action_graph.setEdge('REGISTER_PARTITION', 'RUN_SINGLE_COMPACTION');
-
-  action_graph.setNode('UPDATE_SYMLINKS', createId());
-  action_graph.setEdge('RUN_SINGLE_COMPACTION', 'UPDATE_SYMLINKS');
-
-  action_graph.setNode('FINISH', createId());
-  action_graph.setEdge('UPDATE_SYMLINKS', 'FINISH');
-
-  if (!action_graph.isDirected() || !alg.isAcyclic(action_graph))
-    throw Error('Invalid action_graph');
+  const action_graph = new OperationActionGraph();
+  const start_action = new Action({
+    type: 'START',
+    id: event.action_id,
+  });
+  const register_partition_action = new Action({
+    type: 'REGISTER_PARTITION',
+  });
+  const find_single_compaction_action = new Action({
+    type: 'RUN_SINGLE_COMPACTION',
+  });
+  const update_symlinks_action = new Action({
+    type: 'UPDATE_SYMLINKS',
+  });
+  const finish_action = new Action({
+    type: 'FINISH',
+  });
+  const side_effect__cloudwatch = new Action({
+    type: 'SIDE_EFFECT__CLOUDWATCH',
+  });
+  const side_effect__dagster = new Action({
+    type: 'SIDE_EFFECT__DAGSTER',
+  });
+  const side_effect__wharfie = new Action({
+    type: 'SIDE_EFFECT__WHARFIE',
+  });
+  const side_effects_finish_action = new Action({
+    type: 'SIDE_EFFECTS__FINISH',
+  });
+  action_graph.addActions([
+    start_action,
+    register_partition_action,
+    find_single_compaction_action,
+    update_symlinks_action,
+    finish_action,
+    side_effect__cloudwatch,
+    side_effect__dagster,
+    side_effect__wharfie,
+    side_effects_finish_action,
+  ]);
+  action_graph.addDependency(start_action, register_partition_action);
+  action_graph.addDependency(
+    register_partition_action,
+    find_single_compaction_action
+  );
+  action_graph.addDependency(
+    find_single_compaction_action,
+    update_symlinks_action
+  );
+  action_graph.addDependency(update_symlinks_action, finish_action);
+  action_graph.addDependency(finish_action, side_effect__cloudwatch);
+  action_graph.addDependency(finish_action, side_effect__dagster);
+  action_graph.addDependency(finish_action, side_effect__wharfie);
+  action_graph.addDependency(
+    side_effect__cloudwatch,
+    side_effects_finish_action
+  );
+  action_graph.addDependency(side_effect__dagster, side_effects_finish_action);
+  action_graph.addDependency(side_effect__wharfie, side_effects_finish_action);
 
   event_log.info('action graph generating');
 
-  const actions = action_graph.nodes().map((action_type) => {
-    const action_id = action_graph.node(action_type);
-    const action_status = 'WAITING';
-    return {
-      action_id,
-      action_type,
-      action_status,
-      queries: [],
-    };
-  });
+  const action_records = action_graph.getActions().map((action) => ({
+    action_id: action.id,
+    action_type: action.type,
+    action_status: 'PENDING',
+  }));
 
   /** @type {import('../../typedefs').OperationRecord} */
   const operation = {
@@ -67,7 +97,7 @@ async function start(event, context, resource) {
     started_at: Date.parse(event.operation_started_at) / 1000,
     last_updated_at: Date.parse(event.operation_started_at) / 1000,
     action_graph,
-    actions,
+    actions: action_records,
   };
   event_log.info('creating S3_EVENT operation and actions...');
   await resource_db.createOperation(operation);
@@ -96,60 +126,11 @@ async function finish(event, context, resource, operation) {
     operation_status: 'COMPLETED',
   });
 
-  cloudwatch.putMetricData({
-    MetricData: [
-      {
-        MetricName: `operations`,
-        Dimensions: [
-          {
-            Name: 'stack',
-            Value: STACK_NAME,
-          },
-          {
-            Name: 'resource',
-            Value: resource.resource_id,
-          },
-          {
-            Name: 'operation_type',
-            Value: operation.operation_type,
-          },
-        ],
-        Unit: 'Seconds',
-        Value: completed_at - operation.started_at,
-      },
-      // summable metrics
-      {
-        MetricName: 'operations',
-        Dimensions: [
-          {
-            Name: 'stack',
-            Value: STACK_NAME,
-          },
-          {
-            Name: 'operation_type',
-            Value: operation.operation_type,
-          },
-        ],
-        Unit: 'Count',
-        Value: 1,
-      },
-      {
-        MetricName: 'operations',
-        Dimensions: [
-          {
-            Name: 'stack',
-            Value: STACK_NAME,
-          },
-        ],
-        Unit: 'Count',
-        Value: 1,
-      },
-    ],
-    Namespace: 'Wharfie',
-  });
-
   return {
     status: 'COMPLETED',
+    nextActionInputs: {
+      completed_at,
+    },
   };
 }
 
@@ -173,6 +154,14 @@ async function route(event, context, resource, operation) {
       );
     case 'UPDATE_SYMLINKS':
       return await update_symlinks.run(event, context, resource, operation);
+    case 'SIDE_EFFECT__CLOUDWATCH':
+      return await side_effects.cloudwatch(event, context, resource, operation);
+    case 'SIDE_EFFECT__WHARFIE':
+      return await side_effects.wharfie(event, context, resource, operation);
+    case 'SIDE_EFFECT__DAGSTER':
+      return await side_effects.dagster(event, context, resource, operation);
+    case 'SIDE_EFFECTS__FINISH':
+      return await side_effects.finish(event, context, resource, operation);
     default:
       throw new Error('Invalid Action, must be valid S3_EVENT action');
   }

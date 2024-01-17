@@ -55,13 +55,13 @@ async function run(event, context, resource, operation) {
   );
 
   event_log.info('RUN_TEMP_COMPACTION:fetching_compaction_partitions');
-  const find_action_id = operation.action_graph.node(
+  const action = operation.action_graph.getActionByType(
     'FIND_COMPACTION_PARTITIONS'
   );
   const partition_queries = await resource_db.getActionQueries(
     resource.resource_id,
     operation.operation_id,
-    find_action_id
+    action.id
   );
 
   (partition_queries || []).length > 0 &&

@@ -1,12 +1,6 @@
 'use strict';
 
-const { Graph, alg } = require('graphlib');
-
-const { createId } = require('../../lib/id');
-const CloudWatch = require('../../lib/cloudwatch');
-const cloudwatch = new CloudWatch({
-  region: process.env.AWS_REGION,
-});
+const { Action, OperationActionGraph } = require('../../lib/graph/');
 const logging = require('../../lib/logging');
 const resource_db = require('../../lib/dynamo/resource');
 const register_missing_partitions = require('../actions/register_missing_partitions');
@@ -15,8 +9,7 @@ const run_compaction = require('../actions/run_compaction');
 const update_symlinks = require('../actions/update_symlinks');
 const swap_resource = require('./swap_resource');
 const respond_to_cloudformation = require('./respond_to_cloudformation');
-
-const STACK_NAME = process.env.STACK_NAME || '';
+const side_effects = require('../side_effects');
 
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
@@ -34,47 +27,92 @@ async function start(event, context, resource) {
   )
     throw new Error('Event missing fields');
 
-  const action_graph = new Graph();
-  action_graph.setNode('START', event.action_id);
-  action_graph.setNode('REGISTER_MISSING_PARTITIONS', createId());
-  action_graph.setEdge('START', 'REGISTER_MISSING_PARTITIONS');
-
-  action_graph.setNode('FIND_COMPACTION_PARTITIONS', createId());
-  action_graph.setEdge(
-    'REGISTER_MISSING_PARTITIONS',
-    'FIND_COMPACTION_PARTITIONS'
+  const action_graph = new OperationActionGraph();
+  const start_action = new Action({
+    type: 'START',
+    id: event.action_id,
+  });
+  const register_missing_partitions_action = new Action({
+    type: 'REGISTER_MISSING_PARTITIONS',
+  });
+  const find_compaction_partitions_action = new Action({
+    type: 'FIND_COMPACTION_PARTITIONS',
+  });
+  const run_compaction_action = new Action({
+    type: 'RUN_COMPACTION',
+  });
+  const update_symlinks_action = new Action({
+    type: 'UPDATE_SYMLINKS',
+  });
+  const swap_resource_action = new Action({
+    type: 'SWAP_RESOURCE',
+  });
+  const respond_to_cloudformation_action = new Action({
+    type: 'RESPOND_TO_CLOUDFORMATION',
+  });
+  const finish_action = new Action({
+    type: 'FINISH',
+  });
+  const side_effect__cloudwatch = new Action({
+    type: 'SIDE_EFFECT__CLOUDWATCH',
+  });
+  const side_effect__dagster = new Action({
+    type: 'SIDE_EFFECT__DAGSTER',
+  });
+  const side_effect__wharfie = new Action({
+    type: 'SIDE_EFFECT__WHARFIE',
+  });
+  const side_effects_finish_action = new Action({
+    type: 'SIDE_EFFECTS__FINISH',
+  });
+  action_graph.addActions([
+    start_action,
+    register_missing_partitions_action,
+    find_compaction_partitions_action,
+    run_compaction_action,
+    update_symlinks_action,
+    swap_resource_action,
+    respond_to_cloudformation_action,
+    finish_action,
+    side_effect__cloudwatch,
+    side_effect__dagster,
+    side_effect__wharfie,
+    side_effects_finish_action,
+  ]);
+  action_graph.addDependency(start_action, register_missing_partitions_action);
+  action_graph.addDependency(
+    register_missing_partitions_action,
+    find_compaction_partitions_action
   );
+  action_graph.addDependency(
+    find_compaction_partitions_action,
+    run_compaction_action
+  );
+  action_graph.addDependency(run_compaction_action, update_symlinks_action);
+  action_graph.addDependency(update_symlinks_action, swap_resource_action);
+  action_graph.addDependency(
+    swap_resource_action,
+    respond_to_cloudformation_action
+  );
+  action_graph.addDependency(respond_to_cloudformation_action, finish_action);
 
-  action_graph.setNode('RUN_COMPACTION', createId());
-  action_graph.setEdge('FIND_COMPACTION_PARTITIONS', 'RUN_COMPACTION');
-
-  action_graph.setNode('UPDATE_SYMLINKS', createId());
-  action_graph.setEdge('RUN_COMPACTION', 'UPDATE_SYMLINKS');
-
-  action_graph.setNode('SWAP_RESOURCE', createId());
-  action_graph.setEdge('UPDATE_SYMLINKS', 'SWAP_RESOURCE');
-
-  action_graph.setNode('RESPOND_TO_CLOUDFORMATION', createId());
-  action_graph.setEdge('SWAP_RESOURCE', 'RESPOND_TO_CLOUDFORMATION');
-
-  action_graph.setNode('FINISH', createId());
-  action_graph.setEdge('RESPOND_TO_CLOUDFORMATION', 'FINISH');
-
-  if (!action_graph.isDirected() || !alg.isAcyclic(action_graph))
-    throw Error('Invalid action_graph');
+  action_graph.addDependency(finish_action, side_effect__cloudwatch);
+  action_graph.addDependency(finish_action, side_effect__dagster);
+  action_graph.addDependency(finish_action, side_effect__wharfie);
+  action_graph.addDependency(
+    side_effect__cloudwatch,
+    side_effects_finish_action
+  );
+  action_graph.addDependency(side_effect__dagster, side_effects_finish_action);
+  action_graph.addDependency(side_effect__wharfie, side_effects_finish_action);
 
   event_log.info('action graph generating');
 
-  const actions = action_graph.nodes().map((action_type) => {
-    const action_id = action_graph.node(action_type);
-    const action_status = 'WAITING';
-    return {
-      action_id,
-      action_type,
-      action_status,
-      queries: [],
-    };
-  });
+  const action_records = action_graph.getActions().map((action) => ({
+    action_id: action.id,
+    action_type: action.type,
+    action_status: 'PENDING',
+  }));
 
   event_log.info('creating MIGRATE operation and actions...');
   /** @type {import('../../typedefs').OperationRecord} */
@@ -87,7 +125,7 @@ async function start(event, context, resource) {
     last_updated_at: Date.parse(event.operation_started_at) / 1000,
     operation_inputs: event.operation_inputs,
     action_graph,
-    actions,
+    actions: action_records,
   };
   await resource_db.createOperation(operation);
   event_log.info('MIGRATE started.');
@@ -114,59 +152,11 @@ async function finish(event, context, resource, operation) {
     operation_status: 'COMPLETED',
   });
 
-  cloudwatch.putMetricData({
-    MetricData: [
-      {
-        MetricName: `operations`,
-        Dimensions: [
-          {
-            Name: 'stack',
-            Value: STACK_NAME,
-          },
-          {
-            Name: 'resource',
-            Value: resource.resource_id,
-          },
-          {
-            Name: 'operation_type',
-            Value: operation.operation_type,
-          },
-        ],
-        Unit: 'Seconds',
-        Value: completed_at - operation.started_at,
-      },
-      // summable metrics
-      {
-        MetricName: 'operations',
-        Dimensions: [
-          {
-            Name: 'stack',
-            Value: STACK_NAME,
-          },
-          {
-            Name: 'operation_type',
-            Value: operation.operation_type,
-          },
-        ],
-        Unit: 'Count',
-        Value: 1,
-      },
-      {
-        MetricName: 'operations',
-        Dimensions: [
-          {
-            Name: 'stack',
-            Value: STACK_NAME,
-          },
-        ],
-        Unit: 'Count',
-        Value: 1,
-      },
-    ],
-    Namespace: 'Wharfie',
-  });
   return {
     status: 'COMPLETED',
+    nextActionInputs: {
+      completed_at,
+    },
   };
 }
 
@@ -221,6 +211,14 @@ async function route(event, context, resource, operation) {
         resource,
         operation
       );
+    case 'SIDE_EFFECT__CLOUDWATCH':
+      return await side_effects.cloudwatch(event, context, resource, operation);
+    case 'SIDE_EFFECT__WHARFIE':
+      return await side_effects.wharfie(event, context, resource, operation);
+    case 'SIDE_EFFECT__DAGSTER':
+      return await side_effects.dagster(event, context, resource, operation);
+    case 'SIDE_EFFECTS__FINISH':
+      return await side_effects.finish(event, context, resource, operation);
     default:
       throw new Error('Invalid Action, must be valid MAINTAIN action');
   }

@@ -4,7 +4,8 @@ const {
   displayInstruction,
   displaySuccess,
 } = require('../output');
-const graphlib = require('graphlib');
+const { OperationActionGraph } = require('../../lambdas/lib/graph/');
+
 const { getRecords } = require('../../lambdas/lib/dynamo/resource');
 
 const list = async (resource_id, operation_id) => {
@@ -29,13 +30,10 @@ const list = async (resource_id, operation_id) => {
       displaySuccess(`No operation found`);
       return;
     }
-    const graph = graphlib.json.read(
-      JSON.parse(records.operations[0].action_graph)
+    const graph = OperationActionGraph.deserialize(
+      records.operations[0].action_graph
     );
-    const actions = graphlib.alg.preorder(graph, 'START');
-    records.actions.forEach((action) => {
-      actions[actions.indexOf(action.action_type)] = action;
-    });
+    const actions = graph.getSequentialActionOrder();
     records.queries.sort((a, b) => {
       if (a.query_status < b.query_status) {
         return -1;
@@ -45,7 +43,14 @@ const list = async (resource_id, operation_id) => {
       }
       return 0;
     });
-    console.table(actions);
+    console.table(
+      actions.map((action) => ({
+        action_id: action.id,
+        action_type: action.type,
+        action_status: records.actions.find((x) => x.action_id === action.id)
+          .action_status,
+      }))
+    );
     console.table(
       records.queries.map((query) => ({
         query_id: query.query_id,

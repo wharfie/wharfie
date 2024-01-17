@@ -23,6 +23,9 @@ const upgrade = async (development) => {
           if (['Version', 'IsDevelopment'].includes(key)) {
             return acc;
           }
+          if (key.startsWith('SideEffect')) {
+            return acc;
+          }
           const p = template.Parameters[key];
           if (p.Default) {
             defaultParams.push({

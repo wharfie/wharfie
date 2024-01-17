@@ -1,6 +1,6 @@
 SELECT *
-FROM daemon_logs
-WHERE dt = CAST(current_date AS varchar)
-	AND hr = CAST(hour(current_timestamp) AS varchar)
+FROM logs
+WHERE concat(year, '-', month, '-', day) = CAST(current_date AS varchar)
+	AND hr = LPAD(CAST(hour(current_timestamp) AS varchar), 2, '0')
 ORDER BY timestamp DESC
-LIMIT 1000;
+LIMIT 2000;

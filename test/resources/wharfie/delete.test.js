@@ -9,7 +9,6 @@ const delete_event = require('../../fixtures/wharfie-delete.json');
 const nock = require('nock');
 
 jest.useFakeTimers();
-jest.createMockFromModule('graphlib');
 
 process.env.WHARFIE_SERVICE_BUCKET = 'service-bucket';
 process.env.WHARFIE_ARTIFACT_BUCKET = 'service-bucket';
@@ -25,7 +24,6 @@ describe('tests for wharfie resource delete handler', () => {
     require('aws-sdk-client-mock-jest');
   });
   beforeEach(() => {
-    jest.mock('graphlib');
     location_db = require('../../../lambdas/lib/dynamo/location');
     resource_db = require('../../../lambdas/lib/dynamo/resource');
     semaphore_db = require('../../../lambdas/lib/dynamo/semaphore');
