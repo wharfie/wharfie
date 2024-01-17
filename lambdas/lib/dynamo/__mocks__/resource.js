@@ -95,8 +95,9 @@ async function getOperation(resource_id, operation_id) {
  */
 async function getAction(resource_id, operation_id, action_id) {
   const id = `${resource_id}#${operation_id}#${action_id}`;
-  if (!__state[resource_id] || !__state[resource_id][id])
-    throw new Error('no action exists');
+  if (!__state[resource_id] || !__state[resource_id][id]) {
+    throw new Error(`no action exists with ID ${id}`);
+  }
   return __state[resource_id][id];
 }
 
@@ -110,7 +111,7 @@ async function getAction(resource_id, operation_id, action_id) {
 async function getQuery(resource_id, operation_id, action_id, query_id) {
   const id = `${resource_id}#${operation_id}#${action_id}#${query_id}`;
   if (!__state[resource_id] || !__state[resource_id][id])
-    throw new Error('no query exists');
+    throw new Error(`no query exists with id: ${id}`);
   return __state[resource_id][id];
 }
 
@@ -218,8 +219,9 @@ async function checkActionPrerequisites(
 ) {
   if (!__state[operation.resource_id])
     throw new Error('resource does not exist');
+  const current_action = operation.action_graph.getActionByType(action_type);
   const prerequisite_actions =
-    operation.action_graph.predecessors(action_type) || [];
+    operation.action_graph.getUpstreamActions(current_action) || [];
   logger &&
     logger.debug(
       `checking that prerequisite actions are completed ${JSON.stringify(
@@ -228,10 +230,9 @@ async function checkActionPrerequisites(
     );
   let prerequisites_met = true;
   while (prerequisite_actions.length > 0) {
-    const action_type = prerequisite_actions.pop();
-    if (!action_type) continue;
-    const action_id = operation.action_graph.node(action_type);
-    const id = `${operation.resource_id}#${operation.operation_id}#${action_id}`;
+    const action = prerequisite_actions.pop();
+    if (!action) continue;
+    const id = `${operation.resource_id}#${operation.operation_id}#${action.id}`;
     const Items = Object.keys(__state[operation.resource_id])
       .filter((key) => key.startsWith(id))
       .map((key) => __state[operation.resource_id][key]);

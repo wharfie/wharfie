@@ -69,6 +69,7 @@ class Lambda {
       TracingConfig,
       VpcConfig,
       Condition = undefined,
+      LoggingCondition = undefined,
       DependsOn = undefined,
       Statement = [],
       RoleArn,
@@ -121,7 +122,7 @@ class Lambda {
     this.Resources = {
       [`${LogicalName}Logs`]: {
         Type: 'AWS::Logs::LogGroup',
-        Condition: 'IsDebug',
+        Condition: LoggingCondition,
         Properties: {
           LogGroupName: {
             'Fn::Sub': ['/aws/lambda/${name}', { name: FunctionName }],
@@ -182,7 +183,7 @@ class Lambda {
       },
       [`${LogicalName}LogPolicy`]: {
         Type: 'AWS::IAM::Policy',
-        Condition,
+        Condition: LoggingCondition,
         DependsOn: RoleArn ? undefined : `${LogicalName}Role`,
         Properties: {
           PolicyName: `${LogicalName}-lambda-log-access`,

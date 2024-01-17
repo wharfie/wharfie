@@ -91,12 +91,8 @@ const firehose = new wharfie.Firehose({
   BufferInterval: 60,
 });
 
-const Conditions = {
-  IsDebug: wharfie.util.equals('true', 'true'),
-};
-
 module.exports = wharfie.util.merge(
-  { Resources, Conditions },
+  { Resources },
   firehose,
   firehoseExampleDataGeneratorLambda
 );

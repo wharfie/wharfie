@@ -182,16 +182,24 @@ const Resources = {
               {
                 Effect: 'Allow',
                 Action: 'logs:*',
-                Resource: [
-                  wharfie.util.getAtt('DaemonLogs', 'Arn'),
-                  wharfie.util.getAtt('BootstrapLogs', 'Arn'),
-                  wharfie.util.getAtt('MonitorLogs', 'Arn'),
-                  wharfie.util.getAtt('CleanupLogs', 'Arn'),
-                  wharfie.util.getAtt('EventsLogs', 'Arn'),
-                  wharfie.util.sub(
-                    'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:Wharfie*'
-                  ),
-                ],
+                Resource: wharfie.util.if(
+                  'IsDebug',
+                  [
+                    wharfie.util.getAtt('DaemonLogs', 'Arn'),
+                    wharfie.util.getAtt('BootstrapLogs', 'Arn'),
+                    wharfie.util.getAtt('MonitorLogs', 'Arn'),
+                    wharfie.util.getAtt('CleanupLogs', 'Arn'),
+                    wharfie.util.getAtt('EventsLogs', 'Arn'),
+                    wharfie.util.sub(
+                      'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:Wharfie*'
+                    ),
+                  ],
+                  [
+                    wharfie.util.sub(
+                      'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:Wharfie*'
+                    ),
+                  ]
+                ),
               },
               {
                 Effect: 'Allow',

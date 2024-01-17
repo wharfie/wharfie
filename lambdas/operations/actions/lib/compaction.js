@@ -78,14 +78,14 @@ class Compaction {
   }
 
   /**
-   * @typedef getTempCompactionQueriesParams
+   * @typedef getCompactionQueriesParams
    * @property {import('../../../typedefs').ResourceRecord} resource -
    * @property {Array<import('../../../typedefs').Partition>} partitions - partitions to be compacted
    * @property {string} sourceDatabaseName - raw data to be compacted
    * @property {string} sourceTableName - raw data to be compacted
    * @property {string} temporaryDatabaseName - output location for compacted data
    * @property {string} temporaryTableName - output location for compacted data
-   * @param {getTempCompactionQueriesParams} params -
+   * @param {getCompactionQueriesParams} params -
    * @returns {Promise<import('../../../typedefs').QueryEnqueueInput[]>} -
    */
   async getCompactionQueries({

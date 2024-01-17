@@ -295,13 +295,101 @@ class CloudFormation {
   }
 
   /**
-   * @param {import("@aws-sdk/client-cloudformation").DescribeStacksInput} params - CloudFormation getTemplate params
+   * @param {import("@aws-sdk/client-cloudformation").DescribeStacksInput} params -
    * @returns {Promise<import("@aws-sdk/client-cloudformation").DescribeStacksOutput>} -
    */
   async describeStacks(params) {
     return await this.cloudformation.send(
       new AWS.DescribeStacksCommand(params)
     );
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-cloudformation").CreateChangeSetCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-cloudformation").CreateChangeSetCommandOutput>} -
+   * @todo unused
+   */
+  async createChangeSet(params) {
+    return await this.cloudformation.send(
+      new AWS.CreateChangeSetCommand(params)
+    );
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-cloudformation").DescribeChangeSetCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-cloudformation").DescribeChangeSetCommandOutput>} -
+   * @todo unused
+   */
+  async describeChangeSet(params) {
+    return await this.cloudformation.send(
+      new AWS.DescribeChangeSetCommand(params)
+    );
+  }
+  /**
+   * @typedef waitForChangesetStatusInput
+   * @property {string} ChangesetName -
+   * @property {string} ChangesetStatus -
+   * @todo unused
+   */
+
+  /**
+   * @typedef waitForChangesetStatusOuput
+   * @property {string} [ChangesetError] -
+   * @todo unused
+   */
+
+  /**
+   * @param {waitForChangesetStatusInput} params - name of the changeset to wait for
+   * @returns {Promise<waitForChangesetStatusOuput>} -
+   * @todo unused
+   */
+  async waitForChangesetStatus(params) {
+    while (true) {
+      let changeset;
+      try {
+        changeset = await this.describeChangeSet({
+          ChangeSetName: params.ChangesetName,
+        });
+      } catch (err) {
+        if (
+          // @ts-ignore
+          err.message.includes('does not exist') &&
+          params.ChangesetStatus === 'DELETE_COMPLETE'
+        ) {
+          // cloudformation eventually expires deleted changesets so missing changesets can count as deleted
+          return {};
+        }
+        throw err;
+      }
+      if (changeset.Status === params.ChangesetStatus) {
+        return {};
+      }
+      switch (changeset.Status) {
+        case 'CREATE_PENDING':
+        case 'CREATE_IN_PROGRESS':
+        case 'DELETE_PENDING':
+        case 'DELETE_IN_PROGRESS':
+          break;
+        case 'CREATE_COMPLETE':
+        case 'DELETE_COMPLETE': {
+          return {
+            ChangesetError:
+              changeset.StatusReason ||
+              'failed for unknown reason, check cloudformation console for more details',
+          };
+        }
+        case 'DELETE_FAILED':
+        case 'FAILED': {
+          return {
+            ChangesetError:
+              changeset.StatusReason ||
+              'failed for unknown reason, check cloudformation console for more details',
+          };
+        }
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
   }
 }
 
