@@ -53,6 +53,7 @@ const Monitor = new wharfie.util.shortcuts.QueueLambda({
       SIDE_EFFECT_DAGSTER_TOKEN: wharfie.util.ref('SideEffectDagsterToken'),
     },
   },
+  LoggingCondition: 'IsDebug',
 });
 
 const Resources = {

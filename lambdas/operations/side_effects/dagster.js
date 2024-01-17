@@ -32,8 +32,8 @@ async function dagster(event, context, resource, operation) {
   }
   const databaseName = resource.destination_properties.DatabaseName;
   const tableName = resource.destination_properties.TableInput.Name;
-  const asset_key = `${databaseName}__${tableName}`;
-  const url = `https://${organization}.dagster.cloud/${deployment}/report_asset_materialization/${asset_key}`;
+  const asset_key = `${databaseName}.${tableName}`;
+  const url = `https://${organization}.dagster.cloud/${deployment}/report_asset_materialization/?asset_key=${asset_key}`;
   const payload = JSON.stringify({
     metadata: {
       source: 'Wharfie',
