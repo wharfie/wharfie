@@ -23,6 +23,7 @@ jest.mock('../../lambdas/lib/dynamo/resource');
 jest.mock('../../lambdas/lib/dynamo/event');
 jest.mock('../../lambdas/lib/dynamo/location');
 jest.mock('../../lambdas/lib/dynamo/semaphore');
+jest.mock('../../lambdas/lib/dynamo/dependency');
 jest.mock('../../lambdas/lib/logging');
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
