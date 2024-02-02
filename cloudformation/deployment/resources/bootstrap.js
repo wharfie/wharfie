@@ -44,6 +44,7 @@ const Bootstrap = new wharfie.util.shortcuts.Lambda({
     [wharfie.util.ref('SNSAlarmTopicARN')]
   ),
   AlarmName: wharfie.util.sub('${AWS::StackName}-source-bootstrap-errors'),
+  LoggingCondition: 'IsDebug',
 });
 
 const Outputs = {
