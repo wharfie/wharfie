@@ -37,6 +37,7 @@ const Events = new wharfie.util.shortcuts.QueueLambda({
       RESOURCE_TABLE: wharfie.util.ref('ResourceTable'),
       SEMAPHORE_TABLE: wharfie.util.ref('SemaphoreTable'),
       LOCATION_TABLE: wharfie.util.ref('LocationTable'),
+      DEPENDENCY_TABLE: wharfie.util.ref('DependencyTable'),
       EVENT_TABLE: wharfie.util.ref('EventTable'),
       EVENTS_QUEUE_URL: wharfie.util.ref('EventsQueue'),
       DLQ_URL: wharfie.util.ref('EventsDeadLetterQueue'),

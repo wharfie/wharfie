@@ -1,7 +1,7 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
 
-let lambda, location_db, resource_db, semaphore_db, event_db;
+let lambda, location_db, resource_db, semaphore_db, event_db, dependency_db;
 
 const AWSCloudFormation = require('@aws-sdk/client-cloudformation');
 const delete_event = require('../../fixtures/wharfie-delete.json');
@@ -28,14 +28,17 @@ describe('tests for wharfie resource delete handler', () => {
     resource_db = require('../../../lambdas/lib/dynamo/resource');
     semaphore_db = require('../../../lambdas/lib/dynamo/semaphore');
     event_db = require('../../../lambdas/lib/dynamo/event');
+    dependency_db = require('../../../lambdas/lib/dynamo/dependency');
     jest.mock('../../../lambdas/lib/dynamo/location');
     jest.mock('../../../lambdas/lib/dynamo/resource');
     jest.mock('../../../lambdas/lib/dynamo/semaphore');
     jest.mock('../../../lambdas/lib/dynamo/event');
+    jest.mock('../../../lambdas/lib/dynamo/dependency');
     jest.spyOn(location_db, 'deleteLocation').mockImplementation();
     jest.spyOn(resource_db, 'deleteResource').mockImplementation();
     jest.spyOn(semaphore_db, 'deleteSemaphore').mockImplementation();
     jest.spyOn(event_db, 'delete_records').mockImplementation();
+    jest.spyOn(dependency_db, 'deleteDependency').mockImplementation();
     lambda = require('../../../lambdas/bootstrap');
   });
 
@@ -44,6 +47,7 @@ describe('tests for wharfie resource delete handler', () => {
     resource_db.deleteResource.mockClear();
     semaphore_db.deleteSemaphore.mockClear();
     event_db.delete_records.mockClear();
+    dependency_db.deleteDependency.mockClear();
     AWSCloudFormation.CloudFormationMock.reset();
     nock.cleanAll();
   });
