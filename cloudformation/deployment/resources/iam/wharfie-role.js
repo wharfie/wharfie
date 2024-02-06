@@ -287,6 +287,7 @@ const Resources = {
                   wharfie.util.getAtt('ResourceTable', 'Arn'),
                   wharfie.util.getAtt('LocationTable', 'Arn'),
                   wharfie.util.getAtt('EventTable', 'Arn'),
+                  wharfie.util.getAtt('DependencyTable', 'Arn'),
                 ],
               },
               {
