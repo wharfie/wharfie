@@ -38,6 +38,7 @@ const Monitor = new wharfie.util.shortcuts.QueueLambda({
       SEMAPHORE_TABLE: wharfie.util.ref('SemaphoreTable'),
       DAEMON_QUEUE_URL: wharfie.util.ref('DaemonQueue'),
       MONITOR_QUEUE_URL: wharfie.util.ref('MonitorQueue'),
+      EVENTS_QUEUE_URL: wharfie.util.ref('EventsQueue'),
       DLQ_URL: wharfie.util.ref('MonitorResourceDeadLetterQueue'),
       GLOBAL_QUERY_CONCURRENCY: wharfie.util.ref('GlobalQueryConcurrency'),
       RESOURCE_QUERY_CONCURRENCY: wharfie.util.ref('ResourceQueryConcurrency'),

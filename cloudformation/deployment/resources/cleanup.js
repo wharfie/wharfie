@@ -38,6 +38,7 @@ const Cleanup = new wharfie.util.shortcuts.QueueLambda({
       SEMAPHORE_TABLE: wharfie.util.ref('SemaphoreTable'),
       MONITOR_QUEUE_URL: wharfie.util.ref('MonitorQueue'),
       CLEANUP_QUEUE_URL: wharfie.util.ref('CleanupQueue'),
+      EVENTS_QUEUE_URL: wharfie.util.ref('EventsQueue'),
       DLQ_URL: wharfie.util.ref('CleanupDeadLetterQueue'),
       GLOBAL_QUERY_CONCURRENCY: wharfie.util.ref('GlobalQueryConcurrency'),
       RESOURCE_QUERY_CONCURRENCY: wharfie.util.ref('ResourceQueryConcurrency'),

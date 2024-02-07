@@ -39,11 +39,10 @@ async function _delete(event) {
       })
     );
   const isView =
-    event.ResourceProperties.source_properties?.TableInput?.TableType ===
-    'VIRTUAL_VIEW';
+    event.ResourceProperties.TableInput.TableType === 'VIRTUAL_VIEW';
   if (isView) {
     const viewOriginalText =
-      event.ResourceProperties.source_properties.TableInput.ViewOriginalText;
+      event.ResourceProperties.TableInput.ViewOriginalText;
     const view_sql = JSON.parse(
       Buffer.from(
         viewOriginalText.substring(16, viewOriginalText.length - 3),
@@ -54,11 +53,13 @@ async function _delete(event) {
     while (sources.length > 0) {
       const source = sources.pop();
       if (!source || !source.DatabaseName || !source.TableName) continue;
-      await dependency_db.deleteDependency({
-        resource_id: StackName,
-        dependency: `${source.DatabaseName}.${source.TableName}`,
-        interval: event.ResourceProperties.DaemonConfig.Interval || '300',
-      });
+      deletes.push(
+        dependency_db.deleteDependency({
+          resource_id: StackName,
+          dependency: `${source.DatabaseName}.${source.TableName}`,
+          interval: event.ResourceProperties.DaemonConfig.Interval || '300',
+        })
+      );
     }
   }
 

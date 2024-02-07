@@ -306,6 +306,47 @@ async function putAction(resource_id, operation_id, action) {
  * @param {string} resource_id -
  * @param {string} operation_id -
  * @param {string} action_id -
+ * @param {string} new_status -
+ * @param {string} old_status -
+ * @returns {Promise<boolean>} -
+ */
+async function updateActionStatus(
+  resource_id,
+  operation_id,
+  action_id,
+  new_status,
+  old_status
+) {
+  try {
+    await docClient.update({
+      TableName: RESOURCE_TABLE,
+      Key: {
+        resource_id,
+        sort_key: `${resource_id}#${operation_id}#${action_id}`,
+      },
+      UpdateExpression: 'SET #status = :new_status',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ConditionExpression: '#status = :old_status',
+      ExpressionAttributeValues: {
+        ':new_status': new_status,
+        ':old_status': old_status,
+      },
+      ReturnValues: 'NONE',
+    });
+  } catch (error) {
+    // @ts-ignore
+    if (error && error.name === 'ConditionalCheckFailedException') {
+      return false;
+    }
+    throw error;
+  }
+  return true;
+}
+
+/**
+ * @param {string} resource_id -
+ * @param {string} operation_id -
+ * @param {string} action_id -
  * @param {import('../../typedefs').QueryRecord} query -
  */
 async function putQuery(resource_id, operation_id, action_id, query) {
@@ -649,6 +690,7 @@ module.exports = {
   putResource,
   putOperation,
   putAction,
+  updateActionStatus,
   putQuery,
   putQueries,
   deleteResource,

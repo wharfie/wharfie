@@ -126,12 +126,10 @@ async function update(event) {
   }
 
   const isView =
-    event.ResourceProperties.source_properties?.TableInput?.TableType ===
-    'VIRTUAL_VIEW';
+    event.ResourceProperties?.TableInput?.TableType === 'VIRTUAL_VIEW';
   if (isView) {
     const oldViewOriginalText =
-      event.OldResourceProperties.source_properties.TableInput
-        .ViewOriginalText || '';
+      event.OldResourceProperties.TableInput.ViewOriginalText || '';
     const oldeViewSQL = JSON.parse(
       Buffer.from(
         oldViewOriginalText.substring(16, oldViewOriginalText.length - 3),
@@ -143,7 +141,7 @@ async function update(event) {
       (source) => `${source.DatabaseName}.${source.TableName}`
     );
     const newViewOriginalText =
-      event.ResourceProperties.source_properties.TableInput.ViewOriginalText;
+      event.ResourceProperties.TableInput.ViewOriginalText;
     const newViewSQL = JSON.parse(
       Buffer.from(
         newViewOriginalText.substring(16, newViewOriginalText.length - 3),
