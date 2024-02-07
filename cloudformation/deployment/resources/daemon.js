@@ -23,7 +23,7 @@ const Daemon = new wharfie.util.shortcuts.QueueLambda({
   EventSourceArn: wharfie.util.getAtt('DaemonQueue', 'Arn'),
   ReservedConcurrentExecutions: 5,
   BatchSize: 10,
-  MaximumBatchingWindowInSeconds: 5,
+  MaximumBatchingWindowInSeconds: 1,
   Timeout: TIMEOUT,
   MemorySize: 1024,
   RoleArn: wharfie.util.getAtt('WharfieRole', 'Arn'),

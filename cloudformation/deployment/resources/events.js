@@ -22,7 +22,7 @@ const Events = new wharfie.util.shortcuts.QueueLambda({
   Handler: 'index.handler',
   EventSourceArn: wharfie.util.getAtt('EventsQueue', 'Arn'),
   ReservedConcurrentExecutions: 5,
-  MaximumBatchingWindowInSeconds: 5,
+  MaximumBatchingWindowInSeconds: 1,
   BatchSize: 10,
   Timeout: TIMEOUT,
   MemorySize: 768,

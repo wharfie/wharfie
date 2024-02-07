@@ -324,9 +324,12 @@ async function updateActionStatus(
         resource_id,
         sort_key: `${resource_id}#${operation_id}#${action_id}`,
       },
-      UpdateExpression: 'SET #status = :new_status',
-      ExpressionAttributeNames: { '#status': 'status' },
-      ConditionExpression: '#status = :old_status',
+      UpdateExpression: 'SET #data.#action_status = :new_status',
+      ExpressionAttributeNames: {
+        '#data': 'data',
+        '#action_status': 'action_status',
+      },
+      ConditionExpression: '#data.#action_status = :old_status',
       ExpressionAttributeValues: {
         ':new_status': new_status,
         ':old_status': old_status,
