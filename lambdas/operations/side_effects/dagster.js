@@ -17,7 +17,8 @@ const token = process.env.SIDE_EFFECT_DAGSTER_TOKEN || '';
 async function dagster(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
   const { completed_at } = event.action_inputs;
-  if (!completed_at) throw new Error('missing required action inputs');
+  if (!completed_at)
+    throw new Error('missing required action inputs for dagster side effect');
   if (organization === '' || deployment === '' || token === '') {
     event_log.warn('Dagster environment variables not set');
     return {
@@ -39,7 +40,7 @@ async function dagster(event, context, resource, operation) {
       source: 'Wharfie',
       operation_id: operation.operation_id,
       operation_type: operation.operation_type,
-      completed_at,
+      duration: completed_at - operation.started_at,
     },
   });
 

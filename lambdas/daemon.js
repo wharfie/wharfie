@@ -172,20 +172,22 @@ async function daemon(event, context) {
           !(await resource_db.checkActionPrerequisites(
             operation,
             action.type,
-            null,
+            event_log,
             false
           ))
         )
           return Promise.resolve();
-        await resource_db.putAction(
+        const updated_status = resource_db.updateActionStatus(
           resource.resource_id,
           operation.operation_id,
-          {
-            action_id: action.id,
-            action_type: action.type,
-            action_status: 'RUNNING',
-          }
+          action.id,
+          'RUNNING',
+          'PENDING'
         );
+        if (!updated_status) {
+          // status already in RUNNING state, caused by action graph with reduce pattern
+          return Promise.resolve();
+        }
         await sqs.enqueue(
           {
             operation_id: operation.operation_id,

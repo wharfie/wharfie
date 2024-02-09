@@ -5,8 +5,9 @@ const wharfie = require('../../client');
 const AmazonBerkeleyObjects = require('./amazon-berkeley-objects');
 const AmazonBerkeleyObjectImages = require('./amazon-berkeley-object-images');
 const AmazonBerkeleyObjectsAggregated = require('./amazon-berkeley-objects-aggregated');
+const AmazonBerkeleyObjectsJoin = require('./amazon-berkeley-objects-join');
 // const AmazonBerkeleyObjectsUDFJoin = require('./amazon-berkeley-objects-udf-join');
-const FirehoseExample = require('./firehose');
+// const FirehoseExample = require('./firehose');
 // const UDF = require('./udf');
 const Bucket = require('./bucket');
 
@@ -45,8 +46,9 @@ module.exports = wharfie.util.merge(
   AmazonBerkeleyObjects,
   AmazonBerkeleyObjectImages,
   AmazonBerkeleyObjectsAggregated,
+  AmazonBerkeleyObjectsJoin,
   // AmazonBerkeleyObjectsUDFJoin,
-  FirehoseExample,
+  // FirehoseExample,
   Bucket
   // UDF
 );

@@ -135,4 +135,40 @@ describe('mock tests for firehose log transport', () => {
         .slice(0, 30)
     ).toMatchInlineSnapshot(`"TRUNCATEDaaaaaaaaaaaaaaaaaaaaa"`);
   });
+
+  it('close after flush', async () => {
+    expect.assertions(2);
+    await firehoseLogTransport.log('test1 ');
+    await firehoseLogTransport.log('test2 ');
+    await firehoseLogTransport.log('test3 ');
+    await firehoseLogTransport.log('test4 ');
+    await firehoseLogTransport.flush();
+    await firehoseLogTransport.close();
+    expect(
+      firehoseLogTransport.firehose.__getMockState()['test-stream']
+    ).toHaveLength(1);
+    expect(
+      firehoseLogTransport.firehose
+        .__getMockState()
+        ['test-stream'][0].Data.toString()
+    ).toMatchInlineSnapshot(`"test1 test2 test3 test4 "`);
+  });
+
+  it('flush after close', async () => {
+    expect.assertions(2);
+    await firehoseLogTransport.log('test1 ');
+    await firehoseLogTransport.log('test2 ');
+    await firehoseLogTransport.log('test3 ');
+    await firehoseLogTransport.log('test4 ');
+    await firehoseLogTransport.close();
+    await firehoseLogTransport.flush();
+    expect(
+      firehoseLogTransport.firehose.__getMockState()['test-stream']
+    ).toHaveLength(1);
+    expect(
+      firehoseLogTransport.firehose
+        .__getMockState()
+        ['test-stream'][0].Data.toString()
+    ).toMatchInlineSnapshot(`"test1 test2 test3 test4 "`);
+  });
 });

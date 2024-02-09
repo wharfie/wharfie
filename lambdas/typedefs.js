@@ -186,6 +186,16 @@
  */
 
 /**
+ * @typedef WharfieEventRecord
+ * @property {string} resource_id -
+ * @property {string} database_name -
+ * @property {string} table_name -
+ * @property {string} version -
+ * @property {string} type -
+ * @property {number} [retries] -
+ */
+
+/**
  * @typedef QueryEnqueueInput
  * @property {string} query_string -
  * @property {any} [query_data] -
@@ -221,6 +231,13 @@
  * @property {string} location - location of the wharfie input
  * @property {string} resource_id - name of the wharfie cloudformation stack
  * @property {string} interval - interval to deduplicate and process s3 events
+ */
+
+/**
+ * @typedef DependencyRecord
+ * @property {string} dependency - upstream dependency db name + table name
+ * @property {string} resource_id - id of the wharfie resource that has the associated dependency
+ * @property {string} interval - interval to deduplicate and process wharfie events
  */
 
 /**
@@ -286,44 +303,7 @@
  */
 
 /**
- * @typedef GlueEventRecordDetails
- * @property {string[]} changedPartitions -
- * @property {string} databaseName -
- * @property {string} tableName -
- * @property {string} typeOfChange -
- */
-
-/**
- * @typedef GlueEventRecord
- * @property {string} version -
- * @property {string} id -
- * @property {string} awsRegion -
- * @property {string} detail-type -
- * @property {string} source -
- * @property {string} account -
- * @property {string} time -
- * @property {string} region -
- * @property {string[]} resources -
- * @property {GlueEventRecordDetails} detail -
- */
-
-/**
- * @typedef GlueEvent
- * @property {number} [retries] -
- * @property {GlueEventRecord[]} Records -
- */
-
-/**
- * @typedef {GlueEventRecord & S3EventRecord} InputRecord
- */
-
-/**
- * @typedef InputEventBase
- * @property {InputRecord[]} Records -
- */
-
-/**
- * @typedef {InputEventBase & S3Event & GlueEvent & ScheduledEventRecord} InputEvent
+ * @typedef {S3Event & ScheduledEventRecord & WharfieEventRecord} InputEvent
  */
 
 /**

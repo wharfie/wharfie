@@ -26,7 +26,7 @@ const Parameters = {
     Type: 'String',
     Description: 'Which logging level to use ',
     AllowedValues: ['debug', 'info', 'warn', 'error'],
-    Default: 'debug',
+    Default: 'info',
   },
   GlobalQueryConcurrency: {
     Type: 'Number',

@@ -3,10 +3,12 @@
 const { parse } = require('@sandfox/arn');
 const { getImmutableID } = require('../../lib/cloudformation/id');
 const CloudFormation = require('../../lib/cloudformation');
+const Athena = require('../../lib/athena/index.js');
 const resource_db = require('../../lib/dynamo/resource');
 const sempahore_db = require('../../lib/dynamo/semaphore');
 const location_db = require('../../lib/dynamo/location');
 const event_db = require('../../lib/dynamo/event');
+const dependency_db = require('../../lib/dynamo/dependency');
 
 /**
  * @param {import('../../typedefs').CloudformationEvent} event -
@@ -16,6 +18,7 @@ async function _delete(event) {
   const { StackId } = event;
   const { region } = parse(StackId);
   const cloudformation = new CloudFormation({ region });
+  const athena = new Athena({ region });
   const StackName = `Wharfie-${getImmutableID(event)}`;
   const deletes = [];
   deletes.push(resource_db.deleteResource(StackName));
@@ -35,6 +38,30 @@ async function _delete(event) {
         interval: event.ResourceProperties.DaemonConfig.Interval || '300',
       })
     );
+  const isView =
+    event.ResourceProperties.TableInput.TableType === 'VIRTUAL_VIEW';
+  if (isView) {
+    const viewOriginalText =
+      event.ResourceProperties.TableInput.ViewOriginalText;
+    const view_sql = JSON.parse(
+      Buffer.from(
+        viewOriginalText.substring(16, viewOriginalText.length - 3),
+        'base64'
+      ).toString()
+    ).originalSql;
+    const { sources } = athena.extractSources(view_sql);
+    while (sources.length > 0) {
+      const source = sources.pop();
+      if (!source || !source.DatabaseName || !source.TableName) continue;
+      deletes.push(
+        dependency_db.deleteDependency({
+          resource_id: StackName,
+          dependency: `${source.DatabaseName}.${source.TableName}`,
+          interval: event.ResourceProperties.DaemonConfig.Interval || '300',
+        })
+      );
+    }
+  }
 
   // deleting s3 event data
   deletes.push(event_db.delete_records(StackName));

@@ -30,12 +30,14 @@ const Bootstrap = new wharfie.util.shortcuts.Lambda({
       RESOURCE_TABLE: wharfie.util.ref('ResourceTable'),
       SEMAPHORE_TABLE: wharfie.util.ref('SemaphoreTable'),
       LOCATION_TABLE: wharfie.util.ref('LocationTable'),
+      DEPENDENCY_TABLE: wharfie.util.ref('DependencyTable'),
       EVENT_TABLE: wharfie.util.ref('EventTable'),
       DAEMON_QUEUE_ARN: wharfie.util.getAtt('DaemonQueue', 'Arn'),
       DAEMON_EVENT_ROLE: wharfie.util.getAtt('DaemonEventRole', 'Arn'),
       WHARFIE_SERVICE_BUCKET: wharfie.util.ref('Bucket'),
       WHARFIE_LOGGING_FIREHOSE: wharfie.util.ref('LoggingFirehose'),
       DAEMON_QUEUE_URL: wharfie.util.ref('DaemonQueue'),
+      EVENTS_QUEUE_URL: wharfie.util.ref('EventsQueue'),
     },
   },
   AlarmActions: wharfie.util.if(
@@ -44,6 +46,7 @@ const Bootstrap = new wharfie.util.shortcuts.Lambda({
     [wharfie.util.ref('SNSAlarmTopicARN')]
   ),
   AlarmName: wharfie.util.sub('${AWS::StackName}-source-bootstrap-errors'),
+  LoggingCondition: 'IsDebug',
 });
 
 const Outputs = {

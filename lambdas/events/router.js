@@ -1,6 +1,6 @@
 'use strict';
-const processor = require('./s3/processor');
-const scheduler = require('./s3/scheduler');
+const s3Events = require('./s3');
+const wharfieEvents = require('./wharfie');
 
 /**
  * @param {import('../typedefs').InputEvent} event -
@@ -8,15 +8,21 @@ const scheduler = require('./s3/scheduler');
  * @returns {Promise<void>}
  */
 async function router(event, context) {
-  if (event.resource_id) {
+  if (event.resource_id && event.type !== 'WHARFIE:OPERATION:COMPLETED') {
     // handle starting scheduled operations
-    await processor.run(event, context);
+    await s3Events.processor(event, context);
+  } else if (
+    event.resource_id &&
+    event.type === 'WHARFIE:OPERATION:COMPLETED'
+  ) {
+    // handle finishing scheduled operations
+    await wharfieEvents.scheduler(event, context);
   } else if (event.Records) {
     await Promise.all(
       event.Records.map((record) => {
         if (record.eventSource === 'aws:s3') {
           // handle s3 events
-          return scheduler.run(record, context);
+          return s3Events.scheduler(record, context);
         } else {
           throw new Error('Event not recognized');
         }

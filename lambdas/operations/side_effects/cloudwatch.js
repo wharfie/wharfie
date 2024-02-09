@@ -13,7 +13,10 @@ const STACK_NAME = process.env.STACK_NAME || '';
  */
 async function cloudwatch(event, context, resource, operation) {
   const { completed_at } = event.action_inputs;
-  if (!completed_at) throw new Error('missing required action inputs');
+  if (!completed_at)
+    throw new Error(
+      'missing required action inputs for cloudwatch side effect'
+    );
 
   await cloudwatchClient.putMetricData({
     MetricData: [

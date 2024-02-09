@@ -1,7 +1,7 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
 
-let lambda, location_db, resource_db;
+let lambda, location_db, resource_db, dependency_db;
 
 const AWSCloudFormation = require('@aws-sdk/client-cloudformation');
 const AWSSQS = require('@aws-sdk/client-sqs');
@@ -29,10 +29,13 @@ describe('tests for wharfie resource create handler', () => {
   beforeEach(() => {
     location_db = require('../../../lambdas/lib/dynamo/location');
     resource_db = require('../../../lambdas/lib/dynamo/resource');
+    dependency_db = require('../../../lambdas/lib/dynamo/dependency');
     jest.mock('../../../lambdas/lib/dynamo/location');
     jest.mock('../../../lambdas/lib/dynamo/resource');
+    jest.mock('../../../lambdas/lib/dynamo/dependency');
     jest.spyOn(location_db, 'putLocation').mockImplementation();
     jest.spyOn(resource_db, 'putResource').mockImplementation();
+    jest.spyOn(dependency_db, 'putDependency').mockImplementation();
     AWSS3.S3Mock.on(AWSS3.PutObjectCommand).resolves({});
     AWSSQS.SQSMock.on(AWSSQS.SendMessageCommand).resolves({
       StackId: 'fake-id',
@@ -43,6 +46,7 @@ describe('tests for wharfie resource create handler', () => {
   afterEach(() => {
     location_db.putLocation.mockClear();
     resource_db.putResource.mockClear();
+    dependency_db.putDependency.mockClear();
     AWSS3.S3Mock.reset();
     AWSSQS.SQSMock.reset();
     AWSCloudFormation.CloudFormationMock.reset();
