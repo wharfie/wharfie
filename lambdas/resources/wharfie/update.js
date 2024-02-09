@@ -7,9 +7,11 @@ const templateGenerator = require('./lib/template-generator');
 const { getImmutableID } = require('../../lib/cloudformation/id');
 const CloudFormation = require('../../lib/cloudformation');
 const SQS = require('../../lib/sqs');
+const Athena = require('../../lib/athena/index.js');
 const validation = require('./lib/validation');
 const resource_db = require('../../lib/dynamo/resource');
 const location_db = require('../../lib/dynamo/location');
+const dependency_db = require('../../lib/dynamo/dependency');
 
 const DAEMON_QUEUE_URL = process.env.DAEMON_QUEUE_URL || '';
 
@@ -46,6 +48,7 @@ async function update(event) {
   } = event;
   const { region } = parse(StackId);
   const cloudformation = new CloudFormation({ region });
+  const athena = new Athena({ region });
   const sqs = new SQS({ region });
   const StackName = `Wharfie-${getImmutableID(event)}`;
 
@@ -120,6 +123,55 @@ async function update(event) {
       DAEMON_QUEUE_URL
     );
     respondToCloudformation = false;
+  }
+
+  const isView =
+    event.ResourceProperties?.TableInput?.TableType === 'VIRTUAL_VIEW';
+  if (isView) {
+    const oldViewOriginalText =
+      event.OldResourceProperties.TableInput.ViewOriginalText || '';
+    const oldeViewSQL = JSON.parse(
+      Buffer.from(
+        oldViewOriginalText.substring(16, oldViewOriginalText.length - 3),
+        'base64'
+      ).toString()
+    ).originalSql;
+    const { sources: OldSources } = athena.extractSources(oldeViewSQL);
+    const oldSourcesJoined = OldSources.map(
+      (source) => `${source.DatabaseName}.${source.TableName}`
+    );
+    const newViewOriginalText =
+      event.ResourceProperties.TableInput.ViewOriginalText;
+    const newViewSQL = JSON.parse(
+      Buffer.from(
+        newViewOriginalText.substring(16, newViewOriginalText.length - 3),
+        'base64'
+      ).toString()
+    ).originalSql;
+    const { sources: newSources } = athena.extractSources(newViewSQL);
+    const newSourcesJoined = newSources.map(
+      (source) => `${source.DatabaseName}.${source.TableName}`
+    );
+    const sourcesToDelete = oldSourcesJoined.filter(
+      (source) => !newSourcesJoined.includes(source)
+    );
+    const sourcesToAdd = newSourcesJoined.filter(
+      (source) => !oldSourcesJoined.includes(source)
+    );
+    for (const source of sourcesToDelete) {
+      await dependency_db.deleteDependency({
+        resource_id: StackName,
+        dependency: source,
+        interval: event.ResourceProperties.DaemonConfig.Interval || '300',
+      });
+    }
+    for (const source of sourcesToAdd) {
+      await dependency_db.putDependency({
+        resource_id: StackName,
+        dependency: source,
+        interval: event.ResourceProperties.DaemonConfig.Interval || '300',
+      });
+    }
   }
 
   const oldLocation =

@@ -6,10 +6,12 @@ const { version } = require('../../../package.json');
 const templateGenerator = require('./lib/template-generator');
 const { getImmutableID } = require('../../lib/cloudformation/id');
 const CloudFormation = require('../../lib/cloudformation');
+const Athena = require('../../lib/athena/index.js');
 const SQS = require('../../lib/sqs');
 const validation = require('./lib/validation');
 const resource_db = require('../../lib/dynamo/resource');
 const location_db = require('../../lib/dynamo/location');
+const dependency_db = require('../../lib/dynamo/dependency');
 
 const DAEMON_QUEUE_URL = process.env.DAEMON_QUEUE_URL || '';
 
@@ -25,6 +27,7 @@ async function create(event) {
   const { region } = parse(StackId);
   const cloudformation = new CloudFormation({ region });
   const sqs = new SQS({ region });
+  const athena = new Athena({ region });
   const StackName = `Wharfie-${getImmutableID(event)}`;
 
   event = validation.create(event);
@@ -48,6 +51,29 @@ async function create(event) {
       resource_id: StackName,
       interval: event.ResourceProperties.DaemonConfig.Interval || '300',
     });
+
+  const isView =
+    resource.source_properties?.TableInput?.TableType === 'VIRTUAL_VIEW';
+  if (isView) {
+    const viewOriginalText =
+      resource.source_properties.TableInput.ViewOriginalText;
+    const view_sql = JSON.parse(
+      Buffer.from(
+        viewOriginalText.substring(16, viewOriginalText.length - 3),
+        'base64'
+      ).toString()
+    ).originalSql;
+    const { sources } = athena.extractSources(view_sql);
+    while (sources.length > 0) {
+      const source = sources.pop();
+      if (!source || !source.DatabaseName || !source.TableName) continue;
+      await dependency_db.putDependency({
+        resource_id: StackName,
+        dependency: `${source.DatabaseName}.${source.TableName}`,
+        interval: event.ResourceProperties.DaemonConfig.Interval || '300',
+      });
+    }
+  }
   await cloudformation.createStack({
     StackName,
     Tags,

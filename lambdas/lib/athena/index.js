@@ -83,6 +83,40 @@ class Athena {
   }
 
   /**
+   * @param {string} query - query to evaluate
+   * @returns {string[]} -
+   */
+  getQueryDependencies(query) {
+    const stream = new antlr4.CharStreams.fromString(query);
+    const lexer = new athenasqlLexer(stream);
+    const tokens = new antlr4.CommonTokenStream(lexer);
+    /** @type {any} */
+    const parser = new athenasqlParser(tokens);
+    parser.buildParseTrees = true;
+    const tree = parser.program();
+    const printer = new athenasqlListener();
+    antlr4.tree.ParseTreeWalker.DEFAULT.walk(printer, tree);
+
+    return [
+      ...[...printer.tables].reduce((acc, t) => {
+        const [database, table] = t.split('.');
+        if (!table) {
+          acc.add({
+            DatabaseName: '',
+            TableName: database.replace(/['"]+/g, ''),
+          });
+        } else if (table && database) {
+          acc.add({
+            DatabaseName: database.replace(/['"]+/g, ''),
+            TableName: table.replace(/['"]+/g, ''),
+          });
+        }
+        return acc;
+      }, new Set()),
+    ];
+  }
+
+  /**
    * @param {import("@aws-sdk/client-athena").GetWorkGroupInput} params -
    * @returns {Promise<import("@aws-sdk/client-athena").GetWorkGroupOutput>} -
    */

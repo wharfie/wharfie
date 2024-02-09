@@ -42,20 +42,13 @@ const WHARFIE_DB_LOGGER = ROOT_LOGGER.child({
   metadata: { log_type: 'wharfie_db' },
 });
 
-/** @type {Object.<string, Object.<string,Logger>>} */
-const loggers = {};
-
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @returns {Logger} -
  */
 function getEventLogger(event, context) {
-  const key = `${context.awsRequestId}${event.resource_id}${event.operation_id}${event.action_id}${event.query_id}`;
-  if (loggers[context.awsRequestId] && loggers[context.awsRequestId][key])
-    return loggers[context.awsRequestId][key];
-  if (!loggers[context.awsRequestId]) loggers[context.awsRequestId] = {};
-  loggers[context.awsRequestId][key] = ROOT_LOGGER.child({
+  return ROOT_LOGGER.child({
     metadata: {
       resource_id: event.resource_id,
       operation_id: event.operation_id,
@@ -67,7 +60,6 @@ function getEventLogger(event, context) {
       log_type: 'event',
     },
   });
-  return loggers[context.awsRequestId][key];
 }
 
 /**
