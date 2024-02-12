@@ -54,7 +54,6 @@ const AmazonBerkeleyObjectImages = new wharfie.Resource({
     Location: wharfie.util.sub('s3://${Bucket}/AmazonBerkelyObjectImages/'),
   },
   DaemonConfig: {
-    Privileged: true,
     Role: wharfie.util.getAtt('WharfieExamplesRole', 'Arn'),
     Schedule: 60,
   },

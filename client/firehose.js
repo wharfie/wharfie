@@ -80,7 +80,6 @@ exports.Firehose = class Firehose {
             ]),
           },
           DaemonConfig: {
-            Privileged: true,
             Role: util.getAtt(`${LogicalName}WharfieRole`, 'Arn'),
             SLA: {
               MaxDelay: 60,

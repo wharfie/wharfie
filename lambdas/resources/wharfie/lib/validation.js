@@ -26,11 +26,10 @@ const schema = Joi.object({
     Duration: Joi.number().min(0).required(),
   }),
   DaemonConfig: Joi.object({
-    Privileged: Joi.bool(),
     Mode: Joi.string().valid('APPEND', 'REPLACE').default('REPLACE'),
     Role: Joi.string().required(),
     PrimaryKey: Joi.string(),
-    Schedule: Joi.number(),
+    Schedule: Joi.number().min(5).max(10080),
     Interval: Joi.number(),
     SLA: Joi.object({
       MaxDelay: Joi.number(),
@@ -98,14 +97,6 @@ const schema = Joi.object({
   }).required(),
 });
 
-const privilegedDaemonSchema = Joi.object({
-  Schedule: Joi.number().min(5).max(10080),
-}).unknown();
-
-const regularDaemonSchema = Joi.object({
-  Schedule: Joi.number().min(1440).max(10080),
-}).unknown();
-
 /**
  * @param {import('../../../typedefs').CloudformationEvent} event -
  * @returns {import('../../../typedefs').CloudformationEvent} -
@@ -122,14 +113,6 @@ function create(event) {
     throw Error(
       'Cannot set both DaemonConfig.Schedule && DaemonConfig.Interval!'
     );
-  }
-
-  if (value.DaemonConfig.Privileged) {
-    const { error } = privilegedDaemonSchema.validate(value.DaemonConfig);
-    if (error) throw error;
-  } else {
-    const { error } = regularDaemonSchema.validate(value.DaemonConfig);
-    if (error) throw error;
   }
   // POLICY VALIDATION GOES HERE
 
@@ -152,14 +135,6 @@ function update(event) {
     throw Error(
       'Cannot set both DaemonConfig.Schedule && DaemonConfig.Interval!'
     );
-  }
-
-  if (value.DaemonConfig.Privileged) {
-    const { error } = privilegedDaemonSchema.validate(value.DaemonConfig);
-    if (error) throw error;
-  } else {
-    const { error } = regularDaemonSchema.validate(value.DaemonConfig);
-    if (error) throw error;
   }
 
   // POLICY VALIDATION GOES HERE

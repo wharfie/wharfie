@@ -1,0 +1,10 @@
+permissions:
+  readLocations:
+    - storage: s3
+      path: s3://amazon-berkeley-objects/
+  writeLocations:
+    - storage: s3
+      path: s3://example_project/locations
+
+deployment:
+  name: wharfie-testing
