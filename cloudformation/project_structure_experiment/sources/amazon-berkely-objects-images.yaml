@@ -1,0 +1,17 @@
+name: amazon_berkely_objects_images
+description: 'Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html'
+format: 'json'
+input_location:
+  storage: s3
+  path: s3://amazon-berkeley-objects/listings/metadata/
+service_level_agreement: 
+  freshness: 60
+columns: 
+- name: image_id
+  type: string
+- name: height
+  type: bigint
+- name: width
+  type: bigint
+- name: path
+  type: string

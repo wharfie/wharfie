@@ -1,15 +1,11 @@
-tableName: amazon_berkely_objects
-databaseName: example_project
+name: amazon_berkely_objects
 description: 'Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html'
 format: 'json'
-inputLocation:
+input_location:
   storage: s3
   path: s3://amazon-berkeley-objects/listings/metadata/
-outputLocation:
-  storage: s3
-  path: s3://amazon-berkeley-objects/listings/metadata/
-wharfieConfig:
-  schedule: 60
+service_level_agreement:
+  freshness: 60
 columns: 
 - name: brand
   type: array<struct<language_tag:string,value:string>>

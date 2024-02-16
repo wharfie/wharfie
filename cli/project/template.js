@@ -1,0 +1,163 @@
+const { WHARFIE_DEFAULT_ENVIRONMENT } = require('./constants');
+
+const { Role } = require('../../client/resources/role');
+const { Resource } = require('../../client/resources/resource');
+const {
+  MaterializedView,
+} = require('../../client/resources/materialized-view');
+const util = require('../../client/util');
+
+/**
+ * @param {import('./typedefs').Project} project -
+ * @param {import('./typedefs').Environment} environment -
+ * @returns {String} -
+ */
+function getStackName(project, environment) {
+  return `${project.name}${
+    environment.name === WHARFIE_DEFAULT_ENVIRONMENT
+      ? ''
+      : `-${environment.name.replac}`
+  }`.replace(/_/g, '-');
+}
+
+/**
+ *
+ * @param {import('./typedefs').Project} project -
+ * @param {import('./typedefs').Environment} environment -
+ * @returns {any} -
+ */
+function buildProjectCloudformationTemplate(project, environment) {
+  const resources = [];
+  resources.push(
+    util.shortcuts.s3Bucket.build({
+      BucketName: util.sub(
+        '${AWS::StackName}-${AWS::AccountId}-${AWS::Region}'
+      ),
+      LifecycleConfiguration: {
+        Rules: [
+          {
+            AbortIncompleteMultipartUpload: {
+              DaysAfterInitiation: 1,
+            },
+            Status: 'Enabled',
+          },
+        ],
+      },
+      NotificationConfiguration: {
+        QueueConfigurations: [
+          {
+            Event: 's3:ObjectCreated:*',
+            Queue: util.importValue(util.sub('${Deployment}-s3-event-queue')),
+          },
+          {
+            Event: 's3:ObjectRemoved:*',
+            Queue: util.importValue(util.sub('${Deployment}-s3-event-queue')),
+          },
+        ],
+      },
+    })
+  );
+  for (const model of project.models) {
+    resources.push(
+      new MaterializedView({
+        LogicalName: model.name.split('_').join(''),
+        DatabaseName: 'wharfie',
+        TableName: model.name,
+        Columns: model.columns.map((column) => ({
+          Name: column.name,
+          Type: column.type,
+        })),
+        PartitionKeys: (model.partitions || []).map((partition) => ({
+          Name: partition.name,
+          Type: partition.type,
+        })),
+        CompactedConfig: {
+          Location: util.sub(`s3://\${Bucket}/${model.name}/`),
+        },
+        OriginalSql: model.sql,
+        DaemonConfig: {
+          Role: util.getAtt('ProjectRole', 'Arn'),
+          Interval: model.service_level_agreement.freshness,
+        },
+        SqlVariables: {
+          db: util.ref('Database'),
+        },
+        WharfieDeployment: util.ref('Deployment'),
+      })
+    );
+  }
+  for (const source of project.sources) {
+    resources.push(
+      new Resource({
+        LogicalName: source.name.split('_').join(''),
+        DatabaseName: 'wharfie',
+        TableName: source.name,
+        Columns: source.columns.map((column) => ({
+          Name: column.name,
+          Type: column.type,
+        })),
+        PartitionKeys: (source.partitions || []).map((partition) => ({
+          Name: partition.name,
+          Type: partition.type,
+        })),
+        Format: source.format,
+        CompactedConfig: {
+          Location: util.sub(`s3://\${Bucket}/${source.name}/`),
+        },
+        InputLocation: source.input_location.path,
+        DaemonConfig: {
+          Role: util.getAtt('ProjectRole', 'Arn'),
+          Schedule: source.service_level_agreement.freshness,
+        },
+        WharfieDeployment: util.ref('Deployment'),
+      })
+    );
+  }
+  resources.push(
+    new Role({
+      LogicalName: 'ProjectRole',
+      WharfieDeployment: util.ref('Deployment'),
+      InputLocations: [
+        ...project.sources.map(
+          (source) => source.input_location.path.split('/')[2] + '/'
+        ),
+        util.sub('${Bucket}/'),
+      ],
+      OutputLocations: [util.sub('${Bucket}/')],
+    })
+  );
+  return util.merge(
+    {
+      AWSTemplateFormatVersion: '2010-09-09',
+      Metadata: {},
+      Parameters: {
+        Deployment: {
+          Type: 'String',
+          Description: 'What wharfie deployment to use',
+        },
+      },
+      Mappings: {},
+      Conditions: {},
+      Resources: {
+        Database: {
+          Type: 'AWS::Glue::Database',
+          Properties: {
+            CatalogId: util.accountId,
+            DatabaseInput: {
+              Name: util.join(
+                '_',
+                util.split('-', util.sub('${AWS::StackName}'))
+              ),
+            },
+          },
+        },
+      },
+    },
+    ...resources
+  );
+}
+
+module.exports = {
+  buildProjectCloudformationTemplate,
+  getStackName,
+};
