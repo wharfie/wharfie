@@ -25,9 +25,10 @@ async function diffProject({ project, environmentName }) {
   );
   let existingProjectTemplate;
   try {
-    existingProjectTemplate = await cloudformation.getTemplate({
+    const getTemplateResponse = await cloudformation.getTemplate({
       StackName: getStackName(project, environment),
     });
+    existingProjectTemplate = JSON.parse(getTemplateResponse.TemplateBody);
   } catch (err) {
     if (
       // @ts-ignore

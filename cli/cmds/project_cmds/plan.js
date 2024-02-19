@@ -3,6 +3,8 @@
 const diffProject = require('../../project/diff');
 const loadProject = require('../../project/load');
 const { displayFailure, displayInfo } = require('../../output');
+const Diff = require('diff');
+const chalk = require('chalk');
 
 const plan = async (path, environmentName) => {
   displayInfo(`showing changes to project...`);
@@ -13,9 +15,17 @@ const plan = async (path, environmentName) => {
     project,
     environmentName,
   });
-  // TODO: diff the templates
-  console.log(newProjectTemplate);
-  console.log(existingProjectTemplate);
+  // TODO: this isn't very intuitive
+  const diff = Diff.diffJson(newProjectTemplate, existingProjectTemplate);
+  diff.forEach((part) => {
+    // green for additions, red for deletions
+    if (part.added) {
+      console.log(chalk.green(part.value));
+    }
+    if (part.removed) {
+      console.log(chalk.red(part.value));
+    }
+  });
 };
 
 exports.command = 'plan [path]';

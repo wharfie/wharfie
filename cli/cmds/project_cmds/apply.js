@@ -11,7 +11,7 @@ const cloudformation = new CloudFormation();
 
 const { displayFailure, displayInfo, displaySuccess } = require('../../output');
 
-const create = async (path, environmentName) => {
+const apply = async (path, environmentName) => {
   const project = await loadProject({
     path,
   });
@@ -71,7 +71,7 @@ exports.handler = async function ({ path, environment }) {
     path = process.cwd();
   }
   try {
-    await create(path, environment);
+    await apply(path, environment);
   } catch (err) {
     console.error(err);
     displayFailure(err);
