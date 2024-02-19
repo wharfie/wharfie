@@ -21,6 +21,7 @@ const destroy = async (path, environmentName) => {
   const environment = loadEnvironment(project, environmentName);
   const stackName = getStackName(project, environment);
   const { Account } = await sts.getCallerIdentity();
+  const bucketName = `${stackName}-${Account}-${process.env.WHARFIE_REGION}`;
 
   const answers = await new Promise((resolve, reject) => {
     inquirer
@@ -28,7 +29,7 @@ const destroy = async (path, environmentName) => {
         {
           type: 'confirm',
           name: 'confirmation',
-          message: `This will destroy the project including all processed data in the ${stackName}-${Account}-${process.env.WHARFIE_REGION} S3 bucket. Are you sure?`,
+          message: `This will destroy the project including all data in the ${bucketName} S3 bucket. Are you sure?`,
           default: false,
         },
       ])
@@ -41,7 +42,7 @@ const destroy = async (path, environmentName) => {
   }
   displayInfo(`destroying wharfie project ${stackName}...`);
   await s3.deletePath({
-    Bucket: `${stackName}-${Account}-${process.env.WHARFIE_REGION}`,
+    Bucket: bucketName,
   });
   await cloudformation.deleteStack({
     StackName: stackName,
