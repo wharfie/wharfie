@@ -18,7 +18,8 @@ const create = async (path, environmentName) => {
   const environment = loadEnvironment(project, environmentName);
   const stackName = getStackName(project, environment);
   displayInfo(`applying changes to ${stackName}...`);
-  let stack, stackExists;
+  let stack;
+  let stackExists = true;
   try {
     const { Stacks } = await cloudformation.describeStacks({
       StackName: stackName,
@@ -31,6 +32,8 @@ const create = async (path, environmentName) => {
       stack?.StackStatus === 'DELETE_COMPLETE'
     ) {
       stackExists = false;
+    } else {
+      throw err;
     }
   }
 

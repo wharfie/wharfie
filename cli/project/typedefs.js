@@ -35,10 +35,27 @@
  * @property {string} name -
  * @property {string} description -
  * @property {string} format -
+ * @property {CustomFormat?} custom_format -
  * @property {InputLocation} input_location -
  * @property {Column[]} columns -
  * @property {Column[]} partitions -
  * @property {ServiceLevelAgreement} service_level_agreement -
+ */
+
+/**
+ * @typedef CustomFormat
+ * @property {string} input_format -
+ * @property {string} output_format -
+ * @property {SerdeInfo} serde_info -
+ * @property {Boolean} compressed -
+ * @property {Boolean} stored_as_sub_directories -
+ * @property {Number} number_of_buckets -
+ */
+
+/**
+ * @typedef SerdeInfo
+ * @property {string} serialization_library -
+ * @property {Object<string, string>} parameters -
  */
 
 /**

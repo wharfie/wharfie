@@ -1,21 +1,65 @@
 'use strict';
 
+const inquirer = require('inquirer');
+
 const CloudFormation = require('../../../lambdas/lib/cloudformation');
-const { loadProject } = require('../../project/load');
+const S3 = require('../../../lambdas/lib/s3');
+const STS = require('../../../lambdas/lib/sts');
+const loadProject = require('../../project/load');
+const loadEnvironment = require('../../project/load-environment');
+const { getStackName } = require('../../project/template');
 const { displayFailure, displayInfo, displaySuccess } = require('../../output');
 
 const cloudformation = new CloudFormation();
+const s3 = new S3();
+const sts = new STS();
 
-const destroy = async ({ path, environmentName }) => {
+const destroy = async (path, environmentName) => {
   const project = await loadProject({
     path,
   });
-  const stackName = `${project.name}-${environmentName}`;
+  const environment = loadEnvironment(project, environmentName);
+  const stackName = getStackName(project, environment);
 
-  displayInfo(`destroying wharfie project ${stackName}...`);
-  await cloudformation.deleteStack({
-    StackName: stackName,
+  const answers = await new Promise((resolve, reject) => {
+    inquirer
+      .prompt([
+        {
+          type: 'confirm',
+          name: 'confirmation',
+          message:
+            'This will destroy the project including all processed data on S3 are you sure?',
+          default: false,
+        },
+      ])
+      .then(resolve)
+      .catch(reject);
   });
+  if (!answers.confirmation) {
+    displayFailure('destroy cancelled');
+    return;
+  }
+  displayInfo(`destroying wharfie project ${stackName}...`);
+  try {
+    await cloudformation.deleteStack({
+      StackName: stackName,
+    });
+  } catch (err) {
+    if (
+      // @ts-ignore
+      err.message.includes('The bucket you tried to delete is not empty')
+    ) {
+      const { Account } = await sts.getCallerIdentity();
+      await s3.deletePath({
+        Bucket: `${stackName}-${Account}-${process.env.WHARFIE_REGION}`,
+      });
+      await cloudformation.deleteStack({
+        StackName: stackName,
+      });
+    } else {
+      throw err;
+    }
+  }
   displaySuccess(`destroyed wharfie project ${stackName} successfully`);
 };
 
@@ -34,9 +78,12 @@ exports.builder = (yargs) => {
       describe: 'the wharfie project environment to use',
     });
 };
-exports.handler = async function () {
+exports.handler = async function ({ path, environment }) {
+  if (!path) {
+    path = process.cwd();
+  }
   try {
-    await destroy();
+    await destroy(path, environment);
   } catch (err) {
     displayFailure(err);
   }

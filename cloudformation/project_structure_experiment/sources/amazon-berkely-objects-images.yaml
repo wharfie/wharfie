@@ -1,6 +1,15 @@
 name: amazon_berkely_objects_images
 description: 'Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html'
-format: 'json'
+custom_format: 
+  input_format: 'org.apache.hadoop.mapred.TextInputFormat'
+  output_format: 'org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat'
+  serde_info:
+    serialization_library: 'org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe'
+    parameters: 
+      'field.delim': ','
+      'serialization.format': ','
+      'skip.header.line.count': '1'
+  compressed: false
 input_location:
   storage: s3
   path: s3://amazon-berkeley-objects/listings/metadata/

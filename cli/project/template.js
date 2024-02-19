@@ -61,7 +61,7 @@ function buildProjectCloudformationTemplate(project, environment) {
     resources.push(
       new MaterializedView({
         LogicalName: model.name.split('_').join(''),
-        DatabaseName: 'wharfie',
+        DatabaseName: util.ref('Database'),
         TableName: model.name,
         Columns: model.columns.map((column) => ({
           Name: column.name,
@@ -90,7 +90,7 @@ function buildProjectCloudformationTemplate(project, environment) {
     resources.push(
       new Resource({
         LogicalName: source.name.split('_').join(''),
-        DatabaseName: 'wharfie',
+        DatabaseName: util.ref('Database'),
         TableName: source.name,
         Columns: source.columns.map((column) => ({
           Name: column.name,
@@ -100,7 +100,22 @@ function buildProjectCloudformationTemplate(project, environment) {
           Name: partition.name,
           Type: partition.type,
         })),
-        Format: source.format,
+        Format: source.format === 'custom' ? undefined : source.format,
+        CustomFormat: source.custom_format
+          ? {
+              InputFormat: source.custom_format.input_format,
+              OutputFormat: source.custom_format.output_format,
+              SerdeInfo: {
+                SerializationLibrary:
+                  source.custom_format.serde_info.serialization_library,
+                Parameters: source.custom_format.serde_info.parameters,
+              },
+              Compressed: source.custom_format.compressed,
+              StoredAsSubDirectories:
+                source.custom_format.stored_as_sub_directories,
+              NumberOfBuckets: source.custom_format.number_of_buckets,
+            }
+          : undefined,
         CompactedConfig: {
           Location: util.sub(`s3://\${Bucket}/${source.name}/`),
         },

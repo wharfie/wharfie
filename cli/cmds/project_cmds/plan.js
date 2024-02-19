@@ -18,7 +18,7 @@ const plan = async (path, environmentName) => {
   console.log(existingProjectTemplate);
 };
 
-exports.command = 'plan [path] [environment]';
+exports.command = 'plan [path]';
 exports.desc = 'plan changes to wharfie project';
 exports.builder = (yargs) => {
   yargs
