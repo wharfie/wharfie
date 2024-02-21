@@ -2,6 +2,8 @@
 
 const wharfie = require('../../client');
 
+const path = require('path');
+
 const AmazonBerkeleyObjects = require('./amazon-berkeley-objects');
 const AmazonBerkeleyObjectImages = require('./amazon-berkeley-object-images');
 const AmazonBerkeleyObjectsAggregated = require('./amazon-berkeley-objects-aggregated');
@@ -40,8 +42,13 @@ const WharfieExamplesRole = new wharfie.Role({
   OutputLocations: [wharfie.util.sub('${Bucket}/')],
 });
 
+const WharfieProject = wharfie.loadProject({
+  path: path.join(__dirname, '../project_structure_experiment'),
+});
+
 module.exports = wharfie.util.merge(
   { Parameters, Resources },
+  WharfieProject,
   WharfieExamplesRole,
   AmazonBerkeleyObjects,
   AmazonBerkeleyObjectImages,
