@@ -12,7 +12,7 @@ custom_format:
   compressed: false
 input_location:
   storage: s3
-  path: s3://amazon-berkeley-objects/listings/metadata/
+  path: s3://amazon-berkeley-objects/images/metadata/
 service_level_agreement: 
   freshness: 60
 columns: 
