@@ -19,12 +19,7 @@ const side_effects = require('../side_effects');
  */
 async function start(event, context, resource) {
   const event_log = logging.getEventLogger(event, context);
-  if (
-    !event.operation_id ||
-    !event.action_id ||
-    !event.action_inputs ||
-    !event.operation_started_at
-  )
+  if (!event.operation_id || !event.action_id || !event.operation_started_at)
     throw new Error('Event missing fields');
 
   const action_graph = new OperationActionGraph();
