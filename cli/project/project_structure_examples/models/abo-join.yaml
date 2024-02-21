@@ -1,0 +1,11 @@
+name: amazon_berkely_objects_join
+description: 'Materialized Table'
+columns: 
+- name: item_id
+  type: string
+- name: marketplace
+  type: string
+- name: path
+  type: string
+service_level_agreement:
+  freshness: 60

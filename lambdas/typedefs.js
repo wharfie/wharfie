@@ -112,7 +112,6 @@
 /**
  * @typedef DaemonConfig
  * @property {string} MaterializationPartitionQuery -
- * @property {boolean} Privileged -
  * @property {string} Mode -
  * @property {string} Role -
  * @property {string} PrimaryKey -

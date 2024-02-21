@@ -1,6 +1,6 @@
 'use strict';
-const util = require('./util');
-const getTableInput = require('./formats');
+const util = require('../util');
+const getTableInput = require('../formats');
 
 /**
  *
@@ -32,11 +32,11 @@ exports.Resource = class Resource {
     CompactedConfig,
     DaemonConfig,
     Format,
+    CustomFormat,
     InputLocation,
     Compression = undefined,
     Description = undefined,
     Backfill = undefined,
-    _TableInputOverride = undefined,
     CatalogId = util.accountId,
     WharfieDeployment,
     _ServiceToken = undefined,
@@ -70,17 +70,16 @@ exports.Resource = class Resource {
           CompactedConfig,
           DaemonConfig,
           Backfill,
-          TableInput:
-            _TableInputOverride ||
-            getTableInput({
-              TableName,
-              Description,
-              Location: InputLocation,
-              Columns,
-              PartitionKeys,
-              Format,
-              Compression,
-            }),
+          TableInput: getTableInput({
+            TableName,
+            Description,
+            Location: InputLocation,
+            Columns,
+            PartitionKeys,
+            Format,
+            Compression,
+            CustomFormat,
+          }),
         },
       },
     };

@@ -6,8 +6,14 @@ const json = require('./json');
 const orc = require('./orc');
 const parquet = require('./parquet');
 const s3 = require('./s3');
+const customFormat = require('./custom-format');
 
 module.exports = (params) => {
+  if (params.CustomFormat && params.Format)
+    throw new Error('Cannot specify both CustomFormat and Format');
+  if (params.CustomFormat && params.Compression)
+    throw new Error('Cannot specify both CustomFormat and Compression');
+  if (params.CustomFormat) return customFormat(params);
   switch (params.Format) {
     case 'cloudfront':
       return cloudfront(params);
