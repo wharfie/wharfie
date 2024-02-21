@@ -80,7 +80,8 @@ async function update(event) {
           ...event.ResourceProperties,
           TableInput: {
             ...event.ResourceProperties.TableInput,
-            TableName: `migrate_${event.ResourceProperties.TableInput.TableName}`,
+            Name: `migrate_${event.ResourceProperties.TableInput.Name}`,
+            DatabaseName: process.env.TEMPORARY_GLUE_DATABASE,
           },
         },
       },
