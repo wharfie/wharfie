@@ -594,6 +594,24 @@ class S3 {
       UploadId,
     });
   }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").PutBucketNotificationConfigurationCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketNotificationConfigurationCommandOutput>} -
+   */
+  async putBucketNotificationConfiguration(params) {
+    const command = new AWS.PutBucketNotificationConfigurationCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").GetBucketNotificationConfigurationCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketNotificationConfigurationCommandOutput>} -
+   */
+  async getBucketNotificationConfiguration(params) {
+    const command = new AWS.GetBucketNotificationConfigurationCommand(params);
+    return await this.s3.send(command);
+  }
 }
 
 module.exports = S3;

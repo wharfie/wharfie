@@ -5,7 +5,7 @@ let lambda;
 
 const AWSCloudFormation = require('@aws-sdk/client-cloudformation');
 const AWSS3 = require('@aws-sdk/client-s3');
-const update_event = require('../../fixtures/wharfieUDF-update.json');
+const update_event = require('../../fixtures/wharfie-udf-update.json');
 
 const nock = require('nock');
 

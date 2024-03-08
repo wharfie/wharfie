@@ -3,6 +3,9 @@ const { WHARFIE_DEFAULT_ENVIRONMENT } = require('./constants');
 const { Role } = require('../../client/resources/role');
 const { Resource } = require('../../client/resources/resource');
 const {
+  S3BucketEventNotification,
+} = require('../../client/resources/s3-bucket-event-notification');
+const {
   MaterializedView,
 } = require('../../client/resources/materialized-view');
 const util = require('../../client/util');
@@ -127,6 +130,32 @@ function buildProjectCloudformationTemplate(project, environment) {
         WharfieDeployment: util.ref('Deployment'),
       })
     );
+  }
+  // build event notifications for sources
+  /** @type {Object<string,string[]>} */
+  const source_buckets = {};
+  for (const source of project.sources) {
+    if (!source_buckets[source.input_location.bucket]) {
+      source_buckets[source.input_location.bucket] = [];
+    }
+    source_buckets[source.input_location.bucket].push(
+      source.input_location.path
+    );
+  }
+  for (const source_bucket in Object.keys(source_buckets)) {
+    let previousDependsOn = null;
+    for (const path in source_buckets[source_bucket]) {
+      const dependsOn = previousDependsOn ? [previousDependsOn] : undefined;
+      resources.push(
+        new S3BucketEventNotification({
+          LogicalName: `S3EventNotification-${source_bucket}-${path}`,
+          S3URI: `arn:aws:s3:::${source_bucket}/${path}`,
+          WharfieDeployment: util.ref('Deployment'),
+          DependsOn: dependsOn,
+        })
+      );
+      previousDependsOn = `S3EventNotification-${source_bucket}-${path}`;
+    }
   }
   resources.push(
     new Role({
