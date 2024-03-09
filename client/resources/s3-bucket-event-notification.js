@@ -21,19 +21,6 @@ exports.S3BucketEventNotification = class S3BucketEventNotification {
   } = {}) {
     if (!LogicalName) throw new Error('LogicalName is required');
     if (!WharfieDeployment) throw new Error('WharfieDeployment is required');
-
-    this.Outputs = {
-      [`${LogicalName}`]: {
-        Description: 'Wharfie resource ID',
-        Value: Condition
-          ? util.if(
-              Condition,
-              util.join('-', ['wharfie', util.ref(LogicalName)]),
-              ''
-            )
-          : util.join('-', ['wharfie', util.ref(LogicalName)]),
-      },
-    };
     this.Resources = {
       [`${LogicalName}`]: {
         Type: 'Custom::WharfieS3BucketEventNotification',

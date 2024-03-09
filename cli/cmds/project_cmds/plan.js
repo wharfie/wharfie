@@ -15,17 +15,26 @@ const plan = async (path, environmentName) => {
     project,
     environmentName,
   });
+  console.log(
+    newProjectTemplate.Resources
+      .S3EventNotification1bec0a3af3011fe9d2939e9077976f77
+  );
   // TODO: this isn't very intuitive
-  const diff = Diff.diffJson(newProjectTemplate, existingProjectTemplate);
+  const diff = Diff.diffJson(existingProjectTemplate, newProjectTemplate);
+  let additions = 0;
+  let deletions = 0;
   diff.forEach((part) => {
     // green for additions, red for deletions
     if (part.added) {
       console.log(chalk.green(part.value));
+      additions++;
     }
     if (part.removed) {
       console.log(chalk.red(part.value));
+      deletions++;
     }
   });
+  displayInfo(`A total of ${additions + deletions} changes will be made.`);
 };
 
 exports.command = 'plan [path]';

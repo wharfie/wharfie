@@ -9,6 +9,11 @@ const {
   MaterializedView,
 } = require('../../client/resources/materialized-view');
 const util = require('../../client/util');
+const S3 = require('../../lambdas/lib/s3');
+const STS = require('../../lambdas/lib/sts');
+const s3 = new S3();
+const sts = new STS();
+const { createHash } = require('crypto');
 
 /**
  * @param {import('./typedefs').Project} project -
@@ -29,7 +34,8 @@ function getStackName(project, environment) {
  * @param {import('./typedefs').Environment} environment -
  * @returns {any} -
  */
-function buildProjectCloudformationTemplate(project, environment) {
+async function buildProjectCloudformationTemplate(project, environment) {
+  const { Account } = await sts.getCallerIdentity();
   const resources = [];
   resources.push(
     util.shortcuts.s3Bucket.build({
@@ -133,30 +139,39 @@ function buildProjectCloudformationTemplate(project, environment) {
   }
   // build event notifications for sources
   /** @type {Object<string,string[]>} */
+
   const source_buckets = {};
   for (const source of project.sources) {
-    if (!source_buckets[source.input_location.bucket]) {
-      source_buckets[source.input_location.bucket] = [];
+    if (source.input_location.storage !== 's3') continue;
+    const { bucket } = s3.parseS3Uri(source.input_location.path);
+    // check if the user owns the bucket, we can only attach notifications to buckets owned by the user
+    if (!(await s3.checkBucketOwnership(bucket, Account))) continue;
+    if (!source_buckets[bucket]) {
+      source_buckets[bucket] = [];
     }
-    source_buckets[source.input_location.bucket].push(
-      source.input_location.path
-    );
+    source_buckets[bucket].push(source.input_location.path);
   }
-  for (const source_bucket in Object.keys(source_buckets)) {
+
+  Object.keys(source_buckets).forEach((source_bucket) => {
     let previousDependsOn = null;
-    for (const path in source_buckets[source_bucket]) {
+    for (const path of source_buckets[source_bucket]) {
       const dependsOn = previousDependsOn ? [previousDependsOn] : undefined;
+      const hash = createHash('md5');
+      hash.update(source_bucket);
+      hash.update(path);
+      const id = hash.digest('hex');
+      // return hash.digest('hex');
       resources.push(
         new S3BucketEventNotification({
-          LogicalName: `S3EventNotification-${source_bucket}-${path}`,
-          S3URI: `arn:aws:s3:::${source_bucket}/${path}`,
+          LogicalName: `S3EventNotification${id}`,
+          S3URI: path,
           WharfieDeployment: util.ref('Deployment'),
           DependsOn: dependsOn,
         })
       );
-      previousDependsOn = `S3EventNotification-${source_bucket}-${path}`;
+      previousDependsOn = `S3EventNotification${id}`;
     }
-  }
+  });
   resources.push(
     new Role({
       LogicalName: 'ProjectRole',

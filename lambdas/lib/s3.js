@@ -612,6 +612,23 @@ class S3 {
     const command = new AWS.GetBucketNotificationConfigurationCommand(params);
     return await this.s3.send(command);
   }
-}
 
+  /**
+   * @param {string} bucketName -
+   * @param {string} expectedOwnerId -
+   * @returns {Promise<boolean>} -
+   */
+  async checkBucketOwnership(bucketName, expectedOwnerId) {
+    const command = new AWS.HeadBucketCommand({
+      Bucket: bucketName,
+      ExpectedBucketOwner: expectedOwnerId,
+    });
+    try {
+      await this.s3.send(command);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+}
 module.exports = S3;

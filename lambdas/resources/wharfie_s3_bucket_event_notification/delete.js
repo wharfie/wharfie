@@ -3,7 +3,6 @@
 const { parse } = require('@sandfox/arn');
 
 const S3 = require('../../lib/s3');
-const validation = require('./lib/validation');
 const { getImmutableID } = require('../../lib/cloudformation/id');
 
 /**
@@ -14,7 +13,7 @@ async function _delete(event) {
   const {
     StackId,
     ResourceProperties: { S3URI },
-  } = validation.create(event);
+  } = event;
   const { region } = parse(StackId);
   const s3 = new S3({ region });
 
