@@ -95,7 +95,19 @@ async function buildProjectCloudformationTemplate(project, environment) {
       })
     );
   }
+
+  /** @type {Object<string,string[]>} */
+  const source_buckets = {};
   for (const source of project.sources) {
+    const { bucket } = s3.parseS3Uri(source.input_location.path);
+    const internal_source = await s3.checkBucketOwnership(bucket, Account);
+    // check if the user owns the bucket, we can only attach notifications to buckets owned by the user
+    if (internal_source) {
+      if (!source_buckets[bucket]) {
+        source_buckets[bucket] = [];
+      }
+      source_buckets[bucket].push(source.input_location.path);
+    }
     resources.push(
       new Resource({
         LogicalName: source.name.split('_').join(''),
@@ -129,29 +141,19 @@ async function buildProjectCloudformationTemplate(project, environment) {
           Location: util.sub(`s3://\${Bucket}/${source.name}/`),
         },
         InputLocation: source.input_location.path,
-        DaemonConfig: {
-          Role: util.getAtt('ProjectRole', 'Arn'),
-          Schedule: source.service_level_agreement.freshness,
-        },
+        DaemonConfig: internal_source
+          ? {
+              Role: util.getAtt('ProjectRole', 'Arn'),
+              Interval: source.service_level_agreement.freshness,
+            }
+          : {
+              Role: util.getAtt('ProjectRole', 'Arn'),
+              Schedule: source.service_level_agreement.freshness,
+            },
         WharfieDeployment: util.ref('Deployment'),
       })
     );
   }
-  // build event notifications for sources
-  /** @type {Object<string,string[]>} */
-
-  const source_buckets = {};
-  for (const source of project.sources) {
-    if (source.input_location.storage !== 's3') continue;
-    const { bucket } = s3.parseS3Uri(source.input_location.path);
-    // check if the user owns the bucket, we can only attach notifications to buckets owned by the user
-    if (!(await s3.checkBucketOwnership(bucket, Account))) continue;
-    if (!source_buckets[bucket]) {
-      source_buckets[bucket] = [];
-    }
-    source_buckets[bucket].push(source.input_location.path);
-  }
-
   Object.keys(source_buckets).forEach((source_bucket) => {
     let previousDependsOn = null;
     for (const path of source_buckets[source_bucket]) {
@@ -160,7 +162,6 @@ async function buildProjectCloudformationTemplate(project, environment) {
       hash.update(source_bucket);
       hash.update(path);
       const id = hash.digest('hex');
-      // return hash.digest('hex');
       resources.push(
         new S3BucketEventNotification({
           LogicalName: `S3EventNotification${id}`,

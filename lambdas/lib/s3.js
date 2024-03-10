@@ -35,7 +35,7 @@ class S3 {
 
   /**
    * @param {import("@aws-sdk/client-s3").GetObjectRequest} params - params for GetObject request
-   * @returns {Promise<import("@aws-sdk/client-s3").GetObjectOutput>} -
+   * @returns {Promise<string>} -
    */
   async getObject(params) {
     const command = new AWS.GetObjectCommand(params);
@@ -46,17 +46,10 @@ class S3 {
       throw new Error('No body returned from getObject');
     }
     let body = '';
-    if (result.Body instanceof Readable) {
-      for await (const chunk of result.Body) {
-        body += chunk;
-      }
-    } else {
-      body = result.Body.toString();
+    for await (const chunk of result.Body) {
+      body += chunk;
     }
-    return {
-      ...result,
-      Body: body,
-    };
+    return body;
   }
 
   /**
@@ -550,7 +543,7 @@ class S3 {
             await this.putObject({
               Bucket: params.Bucket,
               Key: this._LEFT_PAD_OBJECT_NAME,
-              Body: ' '.repeat(this._LEFT_PAD_SIZE),
+              Body: Readable.from([' '.repeat(this._LEFT_PAD_SIZE)]),
             });
           } else {
             throw err;

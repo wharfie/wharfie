@@ -3,6 +3,7 @@ const AWS = require('@aws-sdk/client-cloudformation');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 const S3 = require('../s3');
 const BaseAWS = require('../base');
+const { Readable } = require('stream');
 
 /**
  * @typedef CloudformationTemplate
@@ -117,7 +118,7 @@ class CloudFormation {
     await this.s3.putObject({
       Bucket: this.artifact_bucket,
       Key: key,
-      Body: params.TemplateBody,
+      Body: Readable.from([params.TemplateBody]),
     });
     const _params = Object.assign({}, params);
     delete _params.TemplateBody;
@@ -147,7 +148,7 @@ class CloudFormation {
     await this.s3.putObject({
       Bucket: this.artifact_bucket,
       Key: key,
-      Body: params.TemplateBody,
+      Body: Readable.from([params.TemplateBody]),
     });
     let StackId;
     try {

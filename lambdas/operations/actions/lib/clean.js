@@ -194,11 +194,10 @@ class Clean {
       this.s3.parseS3Uri(queryManifestLocation);
     let body;
     try {
-      const { Body } = await this.s3.getObject({
+      body = await this.s3.getObject({
         Bucket: queryManifestBucket,
         Key: queryManifestPrefix,
       });
-      body = Body;
     } catch (error) {
       // @ts-ignore
       if (error.name === 'NoSuchKey') return;
@@ -237,11 +236,11 @@ class Clean {
     /** @type {Array<string>} */
     let references = [];
     try {
-      const { Body } = await this.s3.getObject({
+      const body = await this.s3.getObject({
         Bucket: bucket,
         Key: prefix,
       });
-      references = [...(Body || '').toString().split('\n'), manifest_uri];
+      references = [...(body || '').toString().split('\n'), manifest_uri];
     } catch (error) {
       // @ts-ignore
       if (error.name === 'NoSuchKey') return;

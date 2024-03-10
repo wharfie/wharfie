@@ -15,10 +15,6 @@ const plan = async (path, environmentName) => {
     project,
     environmentName,
   });
-  console.log(
-    newProjectTemplate.Resources
-      .S3EventNotification1bec0a3af3011fe9d2939e9077976f77
-  );
   // TODO: this isn't very intuitive
   const diff = Diff.diffJson(existingProjectTemplate, newProjectTemplate);
   let additions = 0;

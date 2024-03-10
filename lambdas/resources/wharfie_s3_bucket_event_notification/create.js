@@ -7,6 +7,8 @@ const validation = require('./lib/validation');
 const { getImmutableID } = require('../../lib/cloudformation/id');
 const S3_EVENTS_QUEUE_ARN = process.env.S3_EVENTS_QUEUE_ARN || '';
 
+const S3Client = require('@aws-sdk/client-s3');
+
 /**
  * @param {import('../../typedefs').CloudformationEvent} event -
  * @returns {Promise<import('../../typedefs').ResourceRouterResponse>} -
@@ -34,12 +36,15 @@ async function create(event) {
     queueConfiguration = {
       Id: id,
       QueueArn: S3_EVENTS_QUEUE_ARN,
-      Events: ['s3:ObjectCreated:*', 's3:ObjectRemoved:*'],
+      Events: [
+        S3Client.Event.s3_ObjectCreated_,
+        S3Client.Event.s3_ObjectRemoved_,
+      ],
       Filter: {
         Key: {
           FilterRules: [
             {
-              Name: 'prefix',
+              Name: S3Client.FilterRuleName.prefix,
               Value: prefix,
             },
           ],
@@ -50,7 +55,10 @@ async function create(event) {
     queueConfiguration = {
       Id: id,
       QueueArn: S3_EVENTS_QUEUE_ARN,
-      Events: ['s3:ObjectCreated:*', 's3:ObjectRemoved:*'],
+      Events: [
+        S3Client.Event.s3_ObjectCreated_,
+        S3Client.Event.s3_ObjectRemoved_,
+      ],
     };
   }
 

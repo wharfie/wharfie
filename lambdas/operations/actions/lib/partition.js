@@ -51,11 +51,11 @@ class Partition {
   async followSymlinks(partition) {
     const { bucket, prefix } = this.s3.parseS3Uri(partition.location);
     try {
-      const { Body } = await this.s3.getObject({
+      const body = await this.s3.getObject({
         Bucket: bucket,
         Key: `${prefix}files`,
       });
-      const references = (Body || '').toString().split('\n');
+      const references = (body || '').toString().split('\n');
       if (references.length === 0) throw new Error('empty reference file');
       const { bucket: refBucket, prefix: refPrefix } = this.s3.parseS3Uri(
         references[0]

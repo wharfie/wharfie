@@ -1,6 +1,7 @@
 'use strict';
 
 const { createId } = require('../../../lambdas/lib/id');
+const { Readable } = require('stream');
 
 class S3Mock {
   __setMockState(s3ObjectMap) {
@@ -71,7 +72,7 @@ class S3Mock {
       throw error;
     }
     return {
-      Body: S3Mock.__state[params.Bucket][params.Key],
+      Body: Readable.from([S3Mock.__state[params.Bucket][params.Key]]),
     };
   }
 
