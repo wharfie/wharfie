@@ -208,7 +208,29 @@ describe('tests for Athena', () => {
     });
     expect(sideEffect).toMatchInlineSnapshot(`
       Object {
-        "Body": "baz",
+        "Body": Readable {
+          "_destroy": [Function],
+          "_events": Object {
+            "close": undefined,
+            "data": undefined,
+            "end": undefined,
+            "error": undefined,
+            "readable": undefined,
+          },
+          "_maxListeners": undefined,
+          "_read": [Function],
+          "_readableState": ReadableState {
+            "awaitDrainWriters": null,
+            "buffer": Array [],
+            "bufferIndex": 0,
+            "highWaterMark": 1,
+            "length": 0,
+            "pipes": Array [],
+            Symbol(kState): 1052941,
+          },
+          Symbol(shapeMode): true,
+          Symbol(kCapture): false,
+        },
       }
     `);
   });

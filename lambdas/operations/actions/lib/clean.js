@@ -240,7 +240,7 @@ class Clean {
         Bucket: bucket,
         Key: prefix,
       });
-      references = [...(body || '').toString().split('\n'), manifest_uri];
+      references = [...body.split('\n'), manifest_uri];
     } catch (error) {
       // @ts-ignore
       if (error.name === 'NoSuchKey') return;

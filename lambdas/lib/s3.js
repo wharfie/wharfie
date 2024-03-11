@@ -4,6 +4,7 @@ const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 const { Readable } = require('stream');
 const BaseAWS = require('./base');
 const bluebirdPromise = require('bluebird');
+const { text } = require('stream/consumers');
 
 class S3 {
   /**
@@ -45,11 +46,14 @@ class S3 {
     if (!result.Body) {
       throw new Error('No body returned from getObject');
     }
-    let body = '';
-    for await (const chunk of result.Body) {
-      body += chunk;
+
+    if (result.Body.transformToString) {
+      return result.Body.transformToString();
+    } else {
+      // workaround for mocks
+      // @ts-ignore
+      return text(result.Body);
     }
-    return body;
   }
 
   /**

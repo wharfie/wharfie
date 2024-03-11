@@ -22,11 +22,7 @@ describe('tests for S3 Mock', () => {
     await s3foo.putObject(params);
     const s3bar = new S3({ region: 'us-east-1' });
     const result = await s3bar.getObject(params);
-    expect(result).toMatchInlineSnapshot(`
-      Object {
-        "Body": "{\\"foo\\":\\"bar\\"}",
-      }
-    `);
+    expect(result).toMatchInlineSnapshot(`"{\\"foo\\":\\"bar\\"}"`);
   });
 
   it('findPartitions mock test', async () => {
@@ -144,9 +140,10 @@ describe('tests for S3 Mock', () => {
     const s3bar = new S3({ region: 'us-east-1' });
 
     const result = await s3bar.getObject(params);
-    expect(result.Body.trim()).toMatchInlineSnapshot(`
-      "{\\"foo\\":\\"bar\\"}
-      {\\"biz\\":\\"baz\\"}"
+    expect(result).toMatchInlineSnapshot(`
+      "[object Object]{\\"foo\\":\\"bar\\"}
+      {\\"biz\\":\\"baz\\"}
+      "
     `);
   });
 
@@ -171,7 +168,7 @@ describe('tests for S3 Mock', () => {
     );
     const s3bar = new S3({ region: 'us-east-1' });
     const result = await s3bar.getObject(params);
-    expect(result.Body.trim()).toMatchInlineSnapshot(
+    expect(result).toMatchInlineSnapshot(
       `"{\\"foo\\":\\"bar\\"}{\\"biz\\":\\"baz\\"}"`
     );
   });

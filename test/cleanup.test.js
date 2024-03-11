@@ -18,9 +18,9 @@ describe('tests for cleanup lambda', () => {
       debug: () => {},
       info: () => {},
     }));
-    getObject = jest.fn().mockResolvedValue({
-      Body: 's3://a-bucket/prefix/data/somefile.json',
-    });
+    getObject = jest
+      .fn()
+      .mockResolvedValue('s3://a-bucket/prefix/data/somefile.json');
     deleteObjects = jest.fn().mockImplementation(() => {});
     S3.mockImplementation(() => {
       return {
