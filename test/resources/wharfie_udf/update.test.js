@@ -71,7 +71,6 @@ describe('tests for wharfieUDF resource update handler', () => {
       .toMatchInlineSnapshot(`
       Object {
         "Body": Readable {
-          "_destroy": [Function],
           "_events": Object {
             "close": undefined,
             "data": undefined,
@@ -85,7 +84,7 @@ describe('tests for wharfieUDF resource update handler', () => {
             "awaitDrainWriters": null,
             "buffer": Array [],
             "bufferIndex": 0,
-            "highWaterMark": 1,
+            "highWaterMark": 16,
             "length": 0,
             "pipes": Array [],
             Symbol(kState): 1052941,
@@ -94,6 +93,7 @@ describe('tests for wharfieUDF resource update handler', () => {
           Symbol(kCapture): false,
         },
         "Bucket": "service-bucket",
+        "ContentLength": 1611,
         "Key": "wharfie-templates/WharfieUDF-260ca406900a3f747e42cd69c3591fd9-i.json",
       }
     `);
@@ -221,7 +221,6 @@ describe('tests for wharfieUDF resource update handler', () => {
       .toMatchInlineSnapshot(`
       Object {
         "Body": Readable {
-          "_destroy": [Function],
           "_events": Object {
             "close": undefined,
             "data": undefined,
@@ -235,7 +234,7 @@ describe('tests for wharfieUDF resource update handler', () => {
             "awaitDrainWriters": null,
             "buffer": Array [],
             "bufferIndex": 0,
-            "highWaterMark": 1,
+            "highWaterMark": 16,
             "length": 0,
             "pipes": Array [],
             Symbol(kState): 1052941,
@@ -244,6 +243,7 @@ describe('tests for wharfieUDF resource update handler', () => {
           Symbol(kCapture): false,
         },
         "Bucket": "service-bucket",
+        "ContentLength": 1611,
         "Key": "wharfie-templates/WharfieUDF-260ca406900a3f747e42cd69c3591fd9-i.json",
       }
     `);

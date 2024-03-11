@@ -451,7 +451,6 @@ describe('tests for wharfie resource update handler', () => {
       .toMatchInlineSnapshot(`
       Object {
         "Body": Readable {
-          "_destroy": [Function],
           "_events": Object {
             "close": undefined,
             "data": undefined,
@@ -465,7 +464,7 @@ describe('tests for wharfie resource update handler', () => {
             "awaitDrainWriters": null,
             "buffer": Array [],
             "bufferIndex": 0,
-            "highWaterMark": 1,
+            "highWaterMark": 16,
             "length": 0,
             "pipes": Array [],
             Symbol(kState): 1052941,
@@ -474,6 +473,7 @@ describe('tests for wharfie resource update handler', () => {
           Symbol(kCapture): false,
         },
         "Bucket": "service-bucket",
+        "ContentLength": 3555,
         "Key": "wharfie-templates/migrate-Wharfie-260ca406900a3f747e42cd69c3591fd9-i.json",
       }
     `);

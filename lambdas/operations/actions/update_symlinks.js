@@ -153,11 +153,12 @@ async function update_partition(
       }),
       QueueUrl: CLEANUP_QUEUE_URL,
     });
-
+  const referencesString = references.join('\n');
   await s3.putObject({
     Bucket: bucket,
     Key: `${prefix}files`,
-    Body: Readable.from([references.join('\n')]),
+    Body: Readable.from(referencesString),
+    ContentLength: referencesString.length,
   });
 
   return {

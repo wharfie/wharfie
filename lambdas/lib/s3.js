@@ -1,10 +1,9 @@
 'use strict';
 const AWS = require('@aws-sdk/client-s3');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
-const { Readable } = require('stream');
 const BaseAWS = require('./base');
 const bluebirdPromise = require('bluebird');
-const { text } = require('stream/consumers');
+const { Readable } = require('stream');
 
 class S3 {
   /**
@@ -52,7 +51,7 @@ class S3 {
     } else {
       // workaround for mocks
       // @ts-ignore
-      return text(result.Body);
+      return result.Body;
     }
   }
 
@@ -544,10 +543,12 @@ class S3 {
         } catch (err) {
           // @ts-ignore
           if (err.name === 'NotFound') {
+            const offset = ' '.repeat(this._LEFT_PAD_SIZE);
             await this.putObject({
               Bucket: params.Bucket,
               Key: this._LEFT_PAD_OBJECT_NAME,
-              Body: Readable.from([' '.repeat(this._LEFT_PAD_SIZE)]),
+              Body: Readable.from(offset),
+              ContentLength: offset.length,
             });
           } else {
             throw err;

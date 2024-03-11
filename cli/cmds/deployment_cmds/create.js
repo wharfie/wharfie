@@ -134,11 +134,12 @@ const create = async (development) => {
       TemplateBody: JSON.stringify(template),
     });
   } catch (err) {
-    cleanupTemporaryBucket();
+    await cleanupTemporaryBucket();
+    console.trace(err);
     throw err;
   }
 
-  cleanupTemporaryBucket();
+  await cleanupTemporaryBucket();
   displaySuccess(`Created wharfie deployment`);
 };
 

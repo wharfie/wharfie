@@ -148,7 +148,7 @@ describe('tests for CloudFormation', () => {
     );
     const params = {
       StackName: 'test',
-      TemplateBody: '',
+      TemplateBody: '{}',
       Tags: [],
     };
     await cloudformation.createStack(params);
@@ -216,7 +216,7 @@ describe('tests for CloudFormation', () => {
     const params = {
       StackName: 'test',
       Tags: [],
-      TemplateBody: '',
+      TemplateBody: '{}',
     };
     await expect(
       cloudformation.createStack(params)
@@ -269,6 +269,7 @@ describe('tests for CloudFormation', () => {
     );
     const params = {
       StackName: 'test',
+      TemplateBody: '{}',
       Tags: [],
     };
     await cloudformation.updateStack(params);
@@ -337,7 +338,7 @@ describe('tests for CloudFormation', () => {
     const params = {
       StackName: 'test',
       Tags: [],
-      TemplateBody: '',
+      TemplateBody: '{}',
     };
     await expect(
       cloudformation.updateStack(params)

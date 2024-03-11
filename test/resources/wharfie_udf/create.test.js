@@ -71,7 +71,6 @@ describe('tests for wharfieUDF resource create handler', () => {
       .toMatchInlineSnapshot(`
       Object {
         "Body": Readable {
-          "_destroy": [Function],
           "_events": Object {
             "close": undefined,
             "data": undefined,
@@ -85,7 +84,7 @@ describe('tests for wharfieUDF resource create handler', () => {
             "awaitDrainWriters": null,
             "buffer": Array [],
             "bufferIndex": 0,
-            "highWaterMark": 1,
+            "highWaterMark": 16,
             "length": 0,
             "pipes": Array [],
             Symbol(kState): 1052941,
@@ -94,6 +93,7 @@ describe('tests for wharfieUDF resource create handler', () => {
           Symbol(kCapture): false,
         },
         "Bucket": "service-bucket",
+        "ContentLength": 1641,
         "Key": "wharfie-templates/WharfieUDF-6afd22c8fb977fe4b9df55ed495499f3-i.json",
       }
     `);

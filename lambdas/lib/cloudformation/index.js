@@ -115,10 +115,12 @@ class CloudFormation {
     const key = `wharfie-templates/${params.StackName}-${Math.random()
       .toString(36)
       .substring(2, 15)}.json`;
+    if (!params.TemplateBody) throw new Error('TemplateBody is required');
     await this.s3.putObject({
       Bucket: this.artifact_bucket,
       Key: key,
-      Body: Readable.from([params.TemplateBody]),
+      Body: Readable.from(params.TemplateBody),
+      ContentLength: params.TemplateBody.length,
     });
     const _params = Object.assign({}, params);
     delete _params.TemplateBody;
@@ -145,10 +147,12 @@ class CloudFormation {
     const key = `wharfie-templates/${params.StackName}-${Math.random()
       .toString(36)
       .substring(2, 15)}.json`;
+    if (!params.TemplateBody) throw new Error('TemplateBody is required');
     await this.s3.putObject({
       Bucket: this.artifact_bucket,
       Key: key,
-      Body: Readable.from([params.TemplateBody]),
+      Body: Readable.from(params.TemplateBody),
+      ContentLength: params.TemplateBody.length,
     });
     let StackId;
     try {
