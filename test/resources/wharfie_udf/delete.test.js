@@ -4,7 +4,7 @@
 let lambda;
 
 const AWSCloudFormation = require('@aws-sdk/client-cloudformation');
-const delete_event = require('../../fixtures/wharfieUDF-delete.json');
+const delete_event = require('../../fixtures/wharfie-udf-delete.json');
 
 const nock = require('nock');
 

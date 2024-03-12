@@ -1,9 +1,9 @@
 'use strict';
 const AWS = require('@aws-sdk/client-s3');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
-const { Readable } = require('stream');
 const BaseAWS = require('./base');
 const bluebirdPromise = require('bluebird');
+const { Readable } = require('stream');
 
 class S3 {
   /**
@@ -35,7 +35,7 @@ class S3 {
 
   /**
    * @param {import("@aws-sdk/client-s3").GetObjectRequest} params - params for GetObject request
-   * @returns {Promise<import("@aws-sdk/client-s3").GetObjectOutput>} -
+   * @returns {Promise<string>} -
    */
   async getObject(params) {
     const command = new AWS.GetObjectCommand(params);
@@ -45,18 +45,14 @@ class S3 {
     if (!result.Body) {
       throw new Error('No body returned from getObject');
     }
-    let body = '';
-    if (result.Body instanceof Readable) {
-      for await (const chunk of result.Body) {
-        body += chunk;
-      }
+
+    if (result.Body.transformToString) {
+      return result.Body.transformToString();
     } else {
-      body = result.Body.toString();
+      // workaround for mocks
+      // @ts-ignore
+      return result.Body;
     }
-    return {
-      ...result,
-      Body: body,
-    };
   }
 
   /**
@@ -547,10 +543,12 @@ class S3 {
         } catch (err) {
           // @ts-ignore
           if (err.name === 'NotFound') {
+            const offset = ' '.repeat(this._LEFT_PAD_SIZE);
             await this.putObject({
               Bucket: params.Bucket,
               Key: this._LEFT_PAD_OBJECT_NAME,
-              Body: ' '.repeat(this._LEFT_PAD_SIZE),
+              Body: Readable.from(offset),
+              ContentLength: offset.length,
             });
           } else {
             throw err;
@@ -594,6 +592,41 @@ class S3 {
       UploadId,
     });
   }
-}
 
+  /**
+   * @param {import("@aws-sdk/client-s3").PutBucketNotificationConfigurationCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketNotificationConfigurationCommandOutput>} -
+   */
+  async putBucketNotificationConfiguration(params) {
+    const command = new AWS.PutBucketNotificationConfigurationCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").GetBucketNotificationConfigurationCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketNotificationConfigurationCommandOutput>} -
+   */
+  async getBucketNotificationConfiguration(params) {
+    const command = new AWS.GetBucketNotificationConfigurationCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
+   * @param {string} bucketName -
+   * @param {string} expectedOwnerId -
+   * @returns {Promise<boolean>} -
+   */
+  async checkBucketOwnership(bucketName, expectedOwnerId) {
+    const command = new AWS.HeadBucketCommand({
+      Bucket: bucketName,
+      ExpectedBucketOwner: expectedOwnerId,
+    });
+    try {
+      await this.s3.send(command);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+}
 module.exports = S3;

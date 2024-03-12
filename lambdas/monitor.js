@@ -16,6 +16,7 @@ const CloudWatch = require('./lib/cloudwatch');
 const Clean = require('./operations/actions/lib/clean');
 const logging = require('./lib/logging/');
 const daemon_log = logging.getDaemonLogger();
+const CloudwatchClient = require('@aws-sdk/client-cloudwatch');
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
 const athena = new Athena({ region: process.env.AWS_REGION });
@@ -296,7 +297,7 @@ async function createMetrics(cloudwatchEvent) {
           Value: query.statementType,
         },
       ],
-      Unit: 'Bytes',
+      Unit: CloudwatchClient.StandardUnit.Bytes,
       Value: (athenaMetrics.Statistics || {}).DataScannedInBytes || 0,
     });
 
@@ -334,7 +335,7 @@ async function createMetrics(cloudwatchEvent) {
             Value: database,
           },
         ],
-        Unit: 'Bytes',
+        Unit: CloudwatchClient.StandardUnit.Bytes,
         Value: (athenaMetrics.Statistics || {}).DataScannedInBytes || 0,
       });
     });
@@ -360,7 +361,7 @@ async function createMetrics(cloudwatchEvent) {
             Value: table,
           },
         ],
-        Unit: 'Bytes',
+        Unit: CloudwatchClient.StandardUnit.Bytes,
         Value: (athenaMetrics.Statistics || {}).DataScannedInBytes || 0,
       });
     });

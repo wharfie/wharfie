@@ -7,6 +7,7 @@ const Glue = require('../../lib/glue');
 const STS = require('../../lib/sts');
 const S3 = require('../../lib/s3');
 const SQS = require('../../lib/sqs');
+const { Readable } = require('stream');
 
 const resource_db = require('../../lib/dynamo/resource');
 
@@ -152,11 +153,12 @@ async function update_partition(
       }),
       QueueUrl: CLEANUP_QUEUE_URL,
     });
-
+  const referencesString = references.join('\n');
   await s3.putObject({
     Bucket: bucket,
     Key: `${prefix}files`,
-    Body: references.join('\n'),
+    Body: Readable.from(referencesString),
+    ContentLength: referencesString.length,
   });
 
   return {
@@ -219,11 +221,10 @@ async function update_partitions(
     s3.parseS3Uri(queryManifestLocation);
   let body;
   try {
-    const { Body } = await s3.getObject({
+    body = await s3.getObject({
       Bucket: queryManifestBucket,
       Key: queryManifestPrefix,
     });
-    body = Body;
   } catch (error) {
     // @ts-ignore
     if (error.name === 'NoSuchKey') return;

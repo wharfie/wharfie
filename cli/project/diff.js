@@ -19,11 +19,11 @@ const cloudformation = new CloudFormation();
  */
 async function diffProject({ project, environmentName }) {
   const environment = loadEnvironment(project, environmentName);
-  const newProjectTemplate = buildProjectCloudformationTemplate(
+  const newProjectTemplate = await buildProjectCloudformationTemplate(
     project,
     environment
   );
-  let existingProjectTemplate;
+  let existingProjectTemplate = {};
   try {
     const getTemplateResponse = await cloudformation.getTemplate({
       StackName: getStackName(project, environment),
@@ -36,6 +36,7 @@ async function diffProject({ project, environmentName }) {
     ) {
       existingProjectTemplate = {};
     }
+    throw err;
   }
   return {
     newProjectTemplate,

@@ -16,7 +16,7 @@ const cloudformation = new CloudFormation();
  *  @param {CreateProjectOptions} options -
  */
 async function createProject({ project, environment }) {
-  const projectTemplate = buildProjectCloudformationTemplate(
+  const projectTemplate = await buildProjectCloudformationTemplate(
     project,
     environment
   );
