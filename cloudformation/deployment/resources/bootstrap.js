@@ -38,6 +38,7 @@ const Bootstrap = new wharfie.util.shortcuts.Lambda({
       WHARFIE_LOGGING_FIREHOSE: wharfie.util.ref('LoggingFirehose'),
       DAEMON_QUEUE_URL: wharfie.util.ref('DaemonQueue'),
       EVENTS_QUEUE_URL: wharfie.util.ref('EventsQueue'),
+      S3_EVENTS_QUEUE_ARN: wharfie.util.getAtt('S3EventQueue', 'Arn'),
     },
   },
   AlarmActions: wharfie.util.if(

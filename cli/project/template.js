@@ -3,9 +3,17 @@ const { WHARFIE_DEFAULT_ENVIRONMENT } = require('./constants');
 const { Role } = require('../../client/resources/role');
 const { Resource } = require('../../client/resources/resource');
 const {
+  S3BucketEventNotification,
+} = require('../../client/resources/s3-bucket-event-notification');
+const {
   MaterializedView,
 } = require('../../client/resources/materialized-view');
 const util = require('../../client/util');
+const S3 = require('../../lambdas/lib/s3');
+const STS = require('../../lambdas/lib/sts');
+const s3 = new S3();
+const sts = new STS();
+const { createHash } = require('crypto');
 
 /**
  * @param {import('./typedefs').Project} project -
@@ -26,7 +34,8 @@ function getStackName(project, environment) {
  * @param {import('./typedefs').Environment} environment -
  * @returns {any} -
  */
-function buildProjectCloudformationTemplate(project, environment) {
+async function buildProjectCloudformationTemplate(project, environment) {
+  const { Account } = await sts.getCallerIdentity();
   const resources = [];
   resources.push(
     util.shortcuts.s3Bucket.build({
@@ -86,7 +95,19 @@ function buildProjectCloudformationTemplate(project, environment) {
       })
     );
   }
+
+  /** @type {Object<string,string[]>} */
+  const source_buckets = {};
   for (const source of project.sources) {
+    const { bucket } = s3.parseS3Uri(source.input_location.path);
+    const internal_source = await s3.checkBucketOwnership(bucket, Account);
+    // check if the user owns the bucket, we can only attach notifications to buckets owned by the user
+    if (internal_source) {
+      if (!source_buckets[bucket]) {
+        source_buckets[bucket] = [];
+      }
+      source_buckets[bucket].push(source.input_location.path);
+    }
     resources.push(
       new Resource({
         LogicalName: source.name.split('_').join(''),
@@ -120,14 +141,38 @@ function buildProjectCloudformationTemplate(project, environment) {
           Location: util.sub(`s3://\${Bucket}/${source.name}/`),
         },
         InputLocation: source.input_location.path,
-        DaemonConfig: {
-          Role: util.getAtt('ProjectRole', 'Arn'),
-          Schedule: source.service_level_agreement.freshness,
-        },
+        DaemonConfig: internal_source
+          ? {
+              Role: util.getAtt('ProjectRole', 'Arn'),
+              Interval: source.service_level_agreement.freshness,
+            }
+          : {
+              Role: util.getAtt('ProjectRole', 'Arn'),
+              Schedule: source.service_level_agreement.freshness,
+            },
         WharfieDeployment: util.ref('Deployment'),
       })
     );
   }
+  Object.keys(source_buckets).forEach((source_bucket) => {
+    let previousDependsOn = null;
+    for (const path of source_buckets[source_bucket]) {
+      const dependsOn = previousDependsOn ? [previousDependsOn] : undefined;
+      const hash = createHash('md5');
+      hash.update(source_bucket);
+      hash.update(path);
+      const id = hash.digest('hex');
+      resources.push(
+        new S3BucketEventNotification({
+          LogicalName: `S3EventNotification${id}`,
+          S3URI: path,
+          WharfieDeployment: util.ref('Deployment'),
+          DependsOn: dependsOn,
+        })
+      );
+      previousDependsOn = `S3EventNotification${id}`;
+    }
+  });
   resources.push(
     new Role({
       LogicalName: 'ProjectRole',

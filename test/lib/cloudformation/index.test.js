@@ -7,6 +7,7 @@ const { getImmutableID } = require('../../../lambdas/lib/cloudformation/id');
 const response = require('../../../lambdas/lib/cloudformation/cfn-response');
 const { EventEmitter } = require('events');
 const https = require('https');
+const { Readable } = require('stream');
 
 describe('tests for CloudFormation', () => {
   beforeAll(() => {
@@ -147,7 +148,7 @@ describe('tests for CloudFormation', () => {
     );
     const params = {
       StackName: 'test',
-      TemplateBody: '',
+      TemplateBody: '{}',
       Tags: [],
     };
     await cloudformation.createStack(params);
@@ -171,7 +172,7 @@ describe('tests for CloudFormation', () => {
       {
         Bucket: 'utility-079185815456-us-west-2',
         Key: expect.any(String),
-        Body: params.TemplateBody,
+        Body: expect.any(Readable),
       }
     );
     expect(AWSCloudformation.CloudFormationMock).toHaveReceivedCommandTimes(
@@ -215,7 +216,7 @@ describe('tests for CloudFormation', () => {
     const params = {
       StackName: 'test',
       Tags: [],
-      TemplateBody: '',
+      TemplateBody: '{}',
     };
     await expect(
       cloudformation.createStack(params)
@@ -268,6 +269,7 @@ describe('tests for CloudFormation', () => {
     );
     const params = {
       StackName: 'test',
+      TemplateBody: '{}',
       Tags: [],
     };
     await cloudformation.updateStack(params);
@@ -292,7 +294,7 @@ describe('tests for CloudFormation', () => {
       {
         Bucket: 'utility-079185815456-us-west-2',
         Key: expect.any(String),
-        Body: params.TemplateBody,
+        Body: expect.any(Readable),
       }
     );
     expect(AWSCloudformation.CloudFormationMock).toHaveReceivedCommandTimes(
@@ -336,7 +338,7 @@ describe('tests for CloudFormation', () => {
     const params = {
       StackName: 'test',
       Tags: [],
-      TemplateBody: '',
+      TemplateBody: '{}',
     };
     await expect(
       cloudformation.updateStack(params)

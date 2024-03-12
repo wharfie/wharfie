@@ -337,6 +337,15 @@ const Resources = {
                 Resource: '*',
               },
               {
+                Sid: 'ProjectEventDrivenSources',
+                Effect: 'Allow',
+                Action: [
+                  's3:PutBucketNotification',
+                  's3:GetBucketNotification',
+                ],
+                Resource: '*',
+              },
+              {
                 Sid: 'Logging',
                 Effect: 'Allow',
                 Action: [
