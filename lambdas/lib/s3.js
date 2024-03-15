@@ -5,23 +5,60 @@ const BaseAWS = require('./base');
 const bluebirdPromise = require('bluebird');
 const { Readable } = require('stream');
 
+const AWS_REGIONS = [
+  'us-east-1',
+  'us-east-2',
+  'us-west-1',
+  'us-west-2',
+  'ap-south-1',
+  'ap-northeast-1',
+  'ap-northeast-2',
+  'ap-southeast-1',
+  'ap-southeast-2',
+  'ca-central-1',
+  'eu-central-1',
+  'eu-west-1',
+  'eu-west-2',
+  'eu-west-3',
+  'sa-east-1',
+];
+
 class S3 {
   /**
    * @param {import("@aws-sdk/client-s3").S3ClientConfig} [options] - S3 client configuration
    */
   constructor(options = {}) {
     const credentials = fromNodeProviderChain();
-    this.s3 = new AWS.S3({
+    this.client_config = {
       ...BaseAWS.config(),
       credentials,
       ...options,
       useArnRegion: true,
-    });
+    };
+    this.s3 = new AWS.S3(this.client_config);
     this.COPY_PART_SIZE_BYTES = 500000000; // ~500 MB
     this.COPY_PART_SIZE_MINIMUM_BYTES = 5242880; // 5 MB
     this._LEFT_PAD_OBJECT_NAME = '5MB_file.txt';
     this._LEFT_PAD_SIZE = 5 * 1024 * 1024;
     this._left_pad_object_checked = false;
+
+    this.region_clients = {
+      [this.s3.config.region.toString()]: this.s3,
+    };
+  }
+
+  /**
+   * @param {string} region - params for PutObject request
+   * @returns {import("@aws-sdk/client-s3").S3} -
+   */
+  _getRegionClient(region) {
+    if (!this.region_clients[region]) {
+      this.region_clients[region] = new AWS.S3({
+        ...this.client_config,
+        region,
+      });
+    }
+    return this.region_clients[region];
   }
 
   /**
@@ -627,6 +664,70 @@ class S3 {
     } catch (error) {
       return false;
     }
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").GetBucketLocationCommandInput} params -
+   * @param {string} [region] -
+   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketLocationCommandOutput>} -
+   */
+  async getBucketLocation(params, region) {
+    const command = new AWS.GetBucketLocationCommand({
+      ...params,
+    });
+    return await (region
+      ? this._getRegionClient(region).send(command)
+      : this.s3.send(command));
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").GetBucketLocationCommandInput} params -
+   * @returns {Promise<string>} -
+   */
+  async findBucketRegion(params) {
+    try {
+      const { LocationConstraint } = await this.getBucketLocation(params);
+      // If the LocationConstraint is null or not present, the bucket is in us-east-1
+      return LocationConstraint || 'us-east-1';
+    } catch (error) {
+      const regionPromises = AWS_REGIONS.map(async (region) => {
+        const { LocationConstraint } = await this.getBucketLocation(
+          params,
+          region
+        );
+        return LocationConstraint || 'us-east-1';
+      });
+      return await bluebirdPromise.any(regionPromises);
+    }
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").ListObjectsV2Request} params - params for ListObjectV2 request
+   * @param {string} [region] -
+   * @param {Number} [byteSize] - accumulator for common prefixes
+   * @returns {Promise<Number>} -
+   */
+  async getPrefixByteSize(params, region, byteSize = 0) {
+    const listCommand = new AWS.ListObjectsV2Command({
+      ...params,
+    });
+    const response = await (region
+      ? this._getRegionClient(region).send(listCommand)
+      : this.s3.send(listCommand));
+
+    (response.Contents || []).forEach((obj) => (byteSize += obj.Size || 0));
+
+    if (response.NextContinuationToken) {
+      await this.getPrefixByteSize(
+        {
+          ...params,
+          ContinuationToken: response.NextContinuationToken,
+        },
+        region,
+        byteSize
+      );
+    }
+    return byteSize;
   }
 }
 module.exports = S3;
