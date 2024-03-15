@@ -43,7 +43,7 @@ class S3 {
     this._left_pad_object_checked = false;
 
     this.region_clients = {
-      [this.s3.config.region.toString()]: this.s3,
+      [this.s3?.config?.region.toString()]: this.s3,
     };
   }
 
