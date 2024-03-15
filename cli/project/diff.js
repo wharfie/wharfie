@@ -1,4 +1,3 @@
-const loadEnvironment = require('./load-environment');
 const {
   getStackName,
   buildProjectCloudformationTemplate,
@@ -10,15 +9,14 @@ const cloudformation = new CloudFormation();
 /**
  * @typedef DiffProjectOptions
  * @property {import('./typedefs').Project} project -
- * @property {string} environmentName -
+ * @property {import('./typedefs').Environment} environment -
  */
 
 /**
  *  @param {DiffProjectOptions} options -
  *  @returns {Promise<{newProjectTemplate: any, existingProjectTemplate: any}>} -
  */
-async function diffProject({ project, environmentName }) {
-  const environment = loadEnvironment(project, environmentName);
+async function diffProject({ project, environment }) {
   const newProjectTemplate = await buildProjectCloudformationTemplate(
     project,
     environment

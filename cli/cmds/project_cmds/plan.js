@@ -2,6 +2,7 @@
 
 const diffProject = require('../../project/diff');
 const loadProject = require('../../project/load');
+const loadEnvironment = require('../../project/load-environment');
 const { displayFailure, displayInfo } = require('../../output');
 const Diff = require('diff');
 const chalk = require('chalk');
@@ -11,9 +12,10 @@ const plan = async (path, environmentName) => {
   const project = await loadProject({
     path,
   });
+  const environment = loadEnvironment(project, environmentName);
   const { newProjectTemplate, existingProjectTemplate } = await diffProject({
     project,
-    environmentName,
+    environment,
   });
   // TODO: this isn't very intuitive
   const diff = Diff.diffJson(existingProjectTemplate, newProjectTemplate);
@@ -55,7 +57,6 @@ exports.handler = async function ({ path, environment }) {
   try {
     await plan(path, environment);
   } catch (err) {
-    console.error(err);
     displayFailure(err);
   }
 };
