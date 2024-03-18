@@ -281,7 +281,7 @@
  */
 
 /**
- * @typedef S3EventRecord
+ * @typedef S3EventServiceRecord
  * @property {string} eventVersion -
  * @property {string} eventSource -
  * @property {string} awsRegion -
@@ -292,6 +292,52 @@
  * @property {S3EventResponseElements} responseElements -
  * @property {S3EventS3} s3 -
  * @property {string} glacierEventData -
+ */
+
+/**
+ * @typedef S3EventBridgeDetailBucket
+ * @property {string} name -
+ */
+
+/**
+ * @typedef S3EventBridgeDetailObject
+ * @property {string} key -
+ * @property {number} size -
+ * @property {string} etag -
+ * @property {string} version-id -
+ * @property {string} sequencer -
+ */
+
+/**
+ * @typedef S3EventBridgeDetail
+ * @property {string} version -
+ * @property {S3EventBridgeDetailBucket} bucket -
+ * @property {S3EventBridgeDetailObject} object -
+ * @property {string} account -
+ * @property {string} request-id -
+ * @property {string} requester -
+ * @property {string} source-ip-address -
+ * @property {string} reason -
+ */
+
+/**
+ * @typedef S3EventBridgeRecord
+ * @property {string} version -
+ * @property {string} id -
+ * @property {string} source -
+ * @property {string} account -
+ * @property {string} time -
+ * @property {string} region -
+ * @property {string[]} resources -
+ * @property {S3EventUserIdentity} userIdentity -
+ * @property {S3EventRequestParameters} requestParameters -
+ * @property {S3EventResponseElements} responseElements -
+ * @property {S3EventBridgeDetail} detail -
+ * @property {string} glacierEventData -
+ */
+
+/**
+ * @typedef {S3EventServiceRecord & S3EventBridgeRecord} S3EventRecord
  */
 
 /**

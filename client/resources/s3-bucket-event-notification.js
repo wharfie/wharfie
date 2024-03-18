@@ -14,21 +14,51 @@ const util = require('../util');
 exports.S3BucketEventNotification = class S3BucketEventNotification {
   constructor({
     LogicalName,
-    S3URI,
+    Bucket,
+    Prefix,
     WharfieDeployment,
+    Name,
     Condition = undefined,
     DependsOn = undefined,
+    Description = undefined,
   } = {}) {
     if (!LogicalName) throw new Error('LogicalName is required');
     if (!WharfieDeployment) throw new Error('WharfieDeployment is required');
+    if (!Bucket) throw new Error('Bucket is required');
     this.Resources = {
       [`${LogicalName}`]: {
-        Type: 'Custom::WharfieS3BucketEventNotification',
+        Type: 'AWS::Events::Rule',
         Condition,
         DependsOn,
         Properties: {
-          ServiceToken: util.importValue(WharfieDeployment),
-          S3URI,
+          Name,
+          Description,
+          EventBusName: util.importValue(
+            util.join('-', util.ref('Deployment'), 'Event-Bus')
+          ),
+          EventPattern: {
+            source: ['aws.s3'],
+            'detail-type': ['Object Created', 'Object Deleted'],
+            detail: {
+              bucket: {
+                name: [Bucket],
+              },
+              ...(Prefix && {
+                Object: {
+                  key: [{ prefix: Prefix }],
+                },
+              }),
+            },
+          },
+          State: 'ENABLED',
+          Targets: [
+            {
+              Id: 'S3EventQueue',
+              Arn: util.importValue(
+                util.join('-', util.ref('Deployment'), 's3-event-queue')
+              ),
+            },
+          ],
         },
       },
     };

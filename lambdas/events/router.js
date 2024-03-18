@@ -21,7 +21,10 @@ async function router(event, context) {
     await Promise.all(
       event.Records.map((record) => {
         if (record.eventSource === 'aws:s3') {
-          // handle s3 events
+          // handle s3 events from s3 service
+          return s3Events.scheduler(record, context);
+        } else if (record.source === 'aws.s3') {
+          // handle s3 events from eventbridge
           return s3Events.scheduler(record, context);
         } else {
           throw new Error('Event not recognized');
