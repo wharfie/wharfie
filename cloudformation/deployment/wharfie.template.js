@@ -3,6 +3,7 @@
 const wharfie = require('../../client');
 
 const ServiceBucket = require('./resources/service-bucket');
+const EventBus = require('./resources/event-bus');
 const Dashboard = require('./resources/sla-dashboard');
 const Dynamo = require('./resources/dynamo');
 const Monitor = require('./resources/monitor');
@@ -113,6 +114,7 @@ module.exports = wharfie.util.merge(
   Dynamo,
   Events,
   ServiceBucket,
+  EventBus,
   Dashboard,
   LogResources
 );

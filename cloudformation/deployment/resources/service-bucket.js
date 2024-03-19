@@ -24,6 +24,9 @@ const Bucket = wharfie.util.shortcuts.s3Bucket.build({
     ],
   },
   NotificationConfiguration: {
+    EventBridgeConfiguration: {
+      EventBridgeEnabled: true,
+    },
     QueueConfigurations: [
       {
         Event: 's3:ObjectCreated:*',
