@@ -353,8 +353,7 @@ class S3 {
    */
   async deletePath(params) {
     const response = await this.s3.send(new AWS.ListObjectsV2Command(params));
-    if (!response.Contents)
-      throw new Error(`No objects to delete with Params: ${params}`);
+    if (!response.Contents) return;
     if (response.Contents.length === 0) return;
     const objectsToDelete = response.Contents.filter(
       (object) => object.Key
