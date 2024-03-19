@@ -20,7 +20,7 @@ const init = async () => {
             const valid = re.test(input);
             if (!valid)
               displayFailure(
-                'project name can only contain letters, numbers, spaces, and underscores'
+                ' project name can only contain letters, numbers, spaces, and underscores'
               );
             return valid;
           },
