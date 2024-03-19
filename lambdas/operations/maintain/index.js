@@ -74,7 +74,6 @@ async function start(event, context, resource) {
   );
   action_graph.addDependency(run_compaction_action, update_symlinks_action);
   action_graph.addDependency(update_symlinks_action, finish_action);
-  action_graph.addDependency(update_symlinks_action, finish_action);
   action_graph.addDependency(finish_action, side_effect__cloudwatch);
   action_graph.addDependency(finish_action, side_effect__dagster);
   action_graph.addDependency(finish_action, side_effect__wharfie);
