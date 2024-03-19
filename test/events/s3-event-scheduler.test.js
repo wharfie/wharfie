@@ -410,7 +410,7 @@ describe('tests for s3 event scheduling', () => {
         reason: 'PutObject',
       },
     };
-    await router({ Records: [s3Event] }, {});
+    await router(s3Event, {});
 
     expect(
       AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input

@@ -21,6 +21,7 @@ exports.S3BucketEventNotification = class S3BucketEventNotification {
     Condition = undefined,
     DependsOn = undefined,
     Description = undefined,
+    Tags = undefined,
   } = {}) {
     if (!LogicalName) throw new Error('LogicalName is required');
     if (!WharfieDeployment) throw new Error('WharfieDeployment is required');
@@ -30,12 +31,13 @@ exports.S3BucketEventNotification = class S3BucketEventNotification {
         Type: 'AWS::Events::Rule',
         Condition,
         DependsOn,
+        Tags,
         Properties: {
           Name,
           Description,
-          EventBusName: util.importValue(
-            util.join('-', util.ref('Deployment'), 'Event-Bus')
-          ),
+          // EventBusName: util.importValue(
+          //   util.join('-', [WharfieDeployment, 'Event-Bus'])
+          // ),
           EventPattern: {
             source: ['aws.s3'],
             'detail-type': ['Object Created', 'Object Deleted'],
@@ -44,7 +46,7 @@ exports.S3BucketEventNotification = class S3BucketEventNotification {
                 name: [Bucket],
               },
               ...(Prefix && {
-                Object: {
+                object: {
                   key: [{ prefix: Prefix }],
                 },
               }),
@@ -55,7 +57,7 @@ exports.S3BucketEventNotification = class S3BucketEventNotification {
             {
               Id: 'S3EventQueue',
               Arn: util.importValue(
-                util.join('-', util.ref('Deployment'), 's3-event-queue')
+                util.join('-', [WharfieDeployment, 's3-event-queue'])
               ),
             },
           ],

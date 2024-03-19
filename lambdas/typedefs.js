@@ -343,12 +343,12 @@
 /**
  * @typedef S3Event
  * @property {number} [retries] -
- * @property {S3EventRecord[]} Records -
+ * @property {S3EventServiceRecord[]} Records -
  * @property {string} Event -
  */
 
 /**
- * @typedef {S3Event & ScheduledEventRecord & WharfieEventRecord} InputEvent
+ * @typedef {S3Event & S3EventBridgeRecord & ScheduledEventRecord & WharfieEventRecord} InputEvent
  */
 
 /**
