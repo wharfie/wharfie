@@ -99,14 +99,18 @@ async function buildProjectCloudformationTemplate(project, environment) {
   /** @type {Object<string,string[]>} */
   const source_buckets = {};
   for (const source of project.sources) {
-    const { bucket } = s3.parseS3Uri(source.input_location.path);
+    const { bucket, prefix } = s3.parseS3Uri(source.input_location.path);
     const internal_source = await s3.checkBucketOwnership(bucket, Account);
     // check if the user owns the bucket, we can only attach notifications to buckets owned by the user
     if (internal_source) {
       if (!source_buckets[bucket]) {
         source_buckets[bucket] = [];
       }
-      source_buckets[bucket].push(source.input_location.path);
+      source_buckets[bucket].push({
+        uri: source.input_location.path,
+        prefix,
+        source_name: source.name,
+      });
     }
     resources.push(
       new Resource({
@@ -155,22 +159,21 @@ async function buildProjectCloudformationTemplate(project, environment) {
     );
   }
   Object.keys(source_buckets).forEach((source_bucket) => {
-    let previousDependsOn = null;
-    for (const path of source_buckets[source_bucket]) {
-      const dependsOn = previousDependsOn ? [previousDependsOn] : undefined;
+    for (const { uri, source_name, prefix } of source_buckets[source_bucket]) {
       const hash = createHash('md5');
       hash.update(source_bucket);
-      hash.update(path);
+      hash.update(uri);
       const id = hash.digest('hex');
       resources.push(
         new S3BucketEventNotification({
           LogicalName: `S3EventNotification${id}`,
-          S3URI: path,
+          Name: `${source_name}_${id}`,
+          Description: `S3 Event Notification for ${source_name} in ${source_bucket}`,
+          Bucket: source_bucket,
+          Prefix: prefix,
           WharfieDeployment: util.ref('Deployment'),
-          DependsOn: dependsOn,
         })
       );
-      previousDependsOn = `S3EventNotification${id}`;
     }
   });
   resources.push(

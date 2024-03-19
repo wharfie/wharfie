@@ -4,8 +4,6 @@ const response = require('./lib/cloudformation/cfn-response');
 const { getImmutableID } = require('./lib/cloudformation/id');
 const Wharfie = require('./resources/wharfie');
 const WharfieUDF = require('./resources/wharfie_udf');
-const WharfieS3BucketEventNotification = require('./resources/wharfie_s3_bucket_event_notification');
-
 /**
  * @param {import('./typedefs').CloudformationEvent & import('./typedefs').CloudformationUpdateEvent} event -
  * @returns {Promise<import('./typedefs').ResourceRouterResponse>} -
@@ -16,9 +14,6 @@ async function router(event) {
   }
   if (event.ResourceType === 'Custom::WharfieUDF') {
     return await WharfieUDF.handler(event);
-  }
-  if (event.ResourceType === 'Custom::WharfieS3BucketEventNotification') {
-    return await WharfieS3BucketEventNotification.handler(event);
   }
   throw new Error(
     "Invalid ResourceType, must be one of ['Custom::Wharfie', 'Custom::WharfieUDF', 'Custom::WharfieS3BucketEventNotification']"

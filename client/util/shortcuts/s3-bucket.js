@@ -158,7 +158,6 @@ function build(options, template) {
   if (options.PublicAccessBlock === undefined) {
     options.PublicAccessBlock = true;
   }
-
   if (
     options.PublicAccessBlock &&
     options.PublicAccessBlockOptions === undefined

@@ -79,51 +79,47 @@ async function schedule_event(location_record, partition_parts, window) {
 }
 
 /**
- * @param {import('../../typedefs').S3EventRecord} s3Event -
+ * @typedef ScheduleRunParams
+ * @property {string} bucket -
+ * @property {string} key -
+ */
+
+/**
+ * @param {ScheduleRunParams} params -
  * @param {import('aws-lambda').Context} context -
  */
-async function run(s3Event, context) {
-  if (
-    !s3Event.s3 ||
-    !s3Event.s3.bucket ||
-    !s3Event.s3.bucket.name ||
-    !s3Event.s3.object ||
-    !s3Event.s3.object.key
-  ) {
-    daemon_log.info(
-      `invalid s3 event ${JSON.stringify(s3Event)}, ${JSON.stringify(context)}`
-    );
-    return;
+async function run({ bucket, key }, context) {
+  if (!bucket || !key) {
+    throw new Error('missing required params');
   } else {
     daemon_log.debug(
-      `s3 event ${JSON.stringify(s3Event)}, ${JSON.stringify(context)}`
+      `s3 event for location ${key} in bucket ${bucket}, ${JSON.stringify(
+        context
+      )}`
     );
   }
 
   // ignores kinesis firehose's failure prefix
-  if (s3Event.s3.object.key.includes('processing_failed/')) return;
+  if (key.includes('processing_failed/')) return;
 
   // fix for manual partition values
-  s3Event.s3.object.key = decodeURIComponent(s3Event.s3.object.key);
-  s3Event.s3.bucket.name = decodeURIComponent(s3Event.s3.bucket.name);
+  key = decodeURIComponent(key);
+  bucket = decodeURIComponent(bucket);
 
   const location_records = await location_db.findLocations(
-    `s3://${s3Event.s3.bucket.name}/${s3Event.s3.object.key}`
+    `s3://${bucket}/${key}`
   );
 
   if (!location_records || location_records.length === 0) {
-    daemon_log.info(
-      `MISSING LOCATION RECORD: ${`s3://${s3Event.s3.bucket.name}/${s3Event.s3.object.key}`}`
-    );
+    daemon_log.info(`MISSING LOCATION RECORD: ${`s3://${bucket}/${key}`}`);
     return;
   }
 
   while (location_records.length > 0) {
     const location_record = location_records.splice(0, 1)[0];
-    const partitionFile =
-      `s3://${s3Event.s3.bucket.name}/${s3Event.s3.object.key}`
-        .replace(location_record.location, '')
-        .split('/');
+    const partitionFile = `s3://${bucket}/${key}`
+      .replace(location_record.location, '')
+      .split('/');
 
     const now = Date.now();
     const interval = parseInt(location_record.interval);
