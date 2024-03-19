@@ -38,9 +38,16 @@ const destroy = async () => {
   await s3.deletePath({
     Bucket: bucketName,
   });
+  // This is a workaround for the fact that during stack delete the kinesis firehose will continue to drain into the bucket causing a delete failure
+  const delete_timeout = setInterval(async () => {
+    await s3.deletePath({
+      Bucket: bucketName,
+    });
+  }, 2000);
   await cloudformation.deleteStack({
     StackName: stackName,
   });
+  clearInterval(delete_timeout);
   displaySuccess(`Destroyed wharfie deployment`);
 };
 
