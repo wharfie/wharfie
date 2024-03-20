@@ -507,9 +507,9 @@ async function checkActionPrerequisites(
   logger,
   includeQueries = true
 ) {
-  const current_action = operation.action_graph.getActionByType(action_type);
+  const action_to_check = operation.action_graph.getActionByType(action_type);
   const prerequisite_actions =
-    operation.action_graph.getUpstreamActions(current_action) || [];
+    operation.action_graph.getUpstreamActions(action_to_check) || [];
   logger &&
     logger.debug(
       `checking that prerequisite actions are completed ${JSON.stringify(
@@ -536,13 +536,13 @@ async function checkActionPrerequisites(
       if (data.action_status && data.action_status !== 'COMPLETED') {
         logger &&
           logger.info(
-            `prerequisite action ${operation.operation_type}:${action_type} hasn't finished running yet`
+            `prerequisite action ${operation.operation_type}:${data.action_type} hasn't finished running yet`
           );
         prerequisites_met = false;
       }
       if (data.action_status && data.action_status === 'FAILED') {
         throw new Error(
-          `prerequisite action ${operation.operation_type}:${action_type} failed`
+          `prerequisite action ${operation.operation_type}:${data.action_type} failed`
         );
       }
       if (
