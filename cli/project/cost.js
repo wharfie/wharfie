@@ -47,13 +47,13 @@ class ProjectCostEstimator {
    *  @returns {string} -
    */
   applySQLTemplating(sql) {
-    return sql.replace(/\${.*}/g, (match) => {
+    return sql.replace(/\${([^}]+)}/g, (match) => {
       switch (match) {
         case '${db}':
         case '${database}':
           return this.projectDatabaseName;
         default:
-          return '';
+          return match;
       }
     });
   }
