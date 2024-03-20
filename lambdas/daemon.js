@@ -129,6 +129,13 @@ async function daemon(event, context) {
       return;
     }
   }
+  if (!_operation && event.action_type !== 'START') {
+    // operation was deleted, warn and return
+    event_log.warn(
+      `operation ${event.operation_type} unexpectedly missing, maybe it was deleted?`
+    );
+    return;
+  }
   event_log.info(
     `running action ${event.operation_type}:${event.action_type}....`
   );
