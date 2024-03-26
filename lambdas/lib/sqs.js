@@ -130,6 +130,87 @@ class SQS {
       DelaySeconds: Math.floor(Math.random() * (90 - 30) + 30),
     });
   }
+
+  /**
+   * @typedef listQueuesOutput
+   * @property {string[]} QueueUrls -
+   * @property {Object<string, any>} QueueDetails -
+   */
+
+  /**
+   * @param {import("@aws-sdk/client-sqs").ListQueuesCommandInput} params - SQS listQueues params
+   * @returns {Promise<listQueuesOutput>} - SQS listQueues result
+   */
+  async listQueues(params) {
+    const allQueueUrls = [];
+    const { NextToken, QueueUrls } = await this.sqs.send(
+      new AWS.ListQueuesCommand(params)
+    );
+    allQueueUrls.push(...(QueueUrls || []));
+    let Marker = NextToken;
+    while (Marker) {
+      const { NextToken, QueueUrls } = await this.sqs.send(
+        new AWS.ListQueuesCommand({
+          ...params,
+          NextToken: Marker,
+        })
+      );
+      allQueueUrls.push(...(QueueUrls || []));
+      Marker = NextToken;
+    }
+    /**
+     * @type {Object<string, any>}
+     */
+    const details = {};
+    for (const queueUrl of allQueueUrls) {
+      const { Attributes } = await this.getQueueAttributes({
+        QueueUrl: queueUrl,
+        AttributeNames: ['All'],
+      });
+      details[queueUrl] = Attributes;
+    }
+
+    return {
+      QueueUrls: allQueueUrls,
+      QueueDetails: details,
+    };
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-sqs").GetQueueAttributesCommandInput} params - SQS getQueueAttributes params
+   * @returns {Promise<import("@aws-sdk/client-sqs").GetQueueAttributesCommandOutput>} - SQS getQueueAttributes result
+   */
+  async getQueueAttributes(params) {
+    const command = new AWS.GetQueueAttributesCommand(params);
+    return await this.sqs.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-sqs").SetQueueAttributesCommandInput} params - SQS setQueueAttributes params
+   * @returns {Promise<import("@aws-sdk/client-sqs").SetQueueAttributesCommandOutput>} - SQS setQueueAttributes result
+   */
+  async setQueueAttributes(params) {
+    const command = new AWS.SetQueueAttributesCommand(params);
+    return await this.sqs.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-sqs").CreateQueueCommandInput} params - SQS createQueue params
+   * @returns {Promise<import("@aws-sdk/client-sqs").CreateQueueCommandOutput>} - SQS createQueue result
+   */
+  async createQueue(params) {
+    const command = new AWS.CreateQueueCommand(params);
+    return await this.sqs.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-sqs").DeleteQueueCommandInput} params - SQS deleteQueue params
+   * @returns {Promise<import("@aws-sdk/client-sqs").DeleteQueueCommandOutput>} - SQS deleteQueue result
+   */
+  async deleteQueue(params) {
+    const command = new AWS.DeleteQueueCommand(params);
+    return await this.sqs.send(command);
+  }
 }
 
 module.exports = SQS;
