@@ -5,14 +5,14 @@ const {
   displayFailure,
   displayInfo,
   displayInstruction,
-} = require('../output');
+} = require('../../output');
 const {
   getAllResources,
   getResource,
-} = require('../../lambdas/lib/dynamo/resource');
-const Glue = require('../../lambdas/lib/glue');
-const S3 = require('../../lambdas/lib/s3');
-const Clean = require('../../lambdas/operations/actions/lib/clean');
+} = require('../../../lambdas/lib/dynamo/resource');
+const Glue = require('../../../lambdas/lib/glue');
+const S3 = require('../../../lambdas/lib/s3');
+const Clean = require('../../../lambdas/operations/actions/lib/clean');
 const glue = new Glue();
 const s3 = new S3();
 const clean = new Clean({

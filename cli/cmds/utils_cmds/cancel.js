@@ -5,12 +5,12 @@ const {
   displayFailure,
   displayInstruction,
   displayInfo,
-} = require('../output');
+} = require('../../output');
 const {
   getRecords,
   deleteOperation,
   getAllResources,
-} = require('../../lambdas/lib/dynamo/resource');
+} = require('../../../lambdas/lib/dynamo/resource');
 
 const cancel = async (resource_id, operation_id, operation_type) => {
   const records = await getRecords(resource_id);

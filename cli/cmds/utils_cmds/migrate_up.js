@@ -4,10 +4,10 @@ const {
   displayFailure,
   displayInstruction,
   displaySuccess,
-} = require('../output');
-const { createId } = require('../../lambdas/lib/id');
-const { getResource } = require('../../lambdas/lib/dynamo/resource');
-const migration = require('../../lambdas/migrations/');
+} = require('../../output');
+const { createId } = require('../../../lambdas/lib/id');
+const { getResource } = require('../../../lambdas/lib/dynamo/resource');
+const migration = require('../../../lambdas/migrations');
 
 const migrate_up = async (resource_id) => {
   const resource = await getResource(resource_id);

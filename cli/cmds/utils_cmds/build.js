@@ -8,10 +8,10 @@ const {
   displayWarning,
   displayInfo,
   displaySuccess,
-} = require('../output');
+} = require('../../output');
 const path = require('path');
-const S3 = require('../../lambdas/lib/s3');
-const STS = require('../../lambdas/lib/sts');
+const S3 = require('../../../lambdas/lib/s3');
+const STS = require('../../../lambdas/lib/sts');
 const child_process = require('child_process');
 
 const s3 = new S3();

@@ -1,15 +1,22 @@
 'use strict';
-const {
-  displayFailure,
-  displayInstruction,
-  displaySuccess,
-} = require('../output');
+const { displayFailure, displaySuccess } = require('../output');
 const { OperationActionGraph } = require('../../lambdas/lib/graph/');
 
-const { getRecords } = require('../../lambdas/lib/dynamo/resource');
+const {
+  getRecords,
+  getAllResources,
+} = require('../../lambdas/lib/dynamo/resource');
 
 const list = async (resource_id, operation_id) => {
-  if (!operation_id) {
+  if (!resource_id) {
+    const resources = await getAllResources();
+    resources.sort((a, b) => b.last_updated_at - a.last_updated_at);
+    console.table(
+      resources.map(({ resource_id }) => ({
+        resource_id,
+      }))
+    );
+  } else if (!operation_id) {
     const records = await getRecords(resource_id);
     records.operations.sort((a, b) => b.started_at - a.started_at);
     console.table(
@@ -61,14 +68,17 @@ const list = async (resource_id, operation_id) => {
   }
 };
 
-exports.command = 'list [resource_id] [operation_id]';
-exports.desc = 'list operation/action/query records';
+exports.command = [
+  'list [resource_id] [operation_id]',
+  'ls [resource_id] [operation_id]',
+];
+exports.desc = 'list wharfie records';
 exports.builder = (yargs) => {
   yargs
     .positional('resource_id', {
       type: 'string',
       describe: 'the wharfie resource id',
-      demand: 'Please provide a resource id',
+      optional: true,
     })
     .positional('operation_id', {
       type: 'string',
@@ -77,10 +87,6 @@ exports.builder = (yargs) => {
     });
 };
 exports.handler = async function ({ resource_id, operation_id }) {
-  if (!resource_id) {
-    displayInstruction("Param 'resource_id' Missing 🙁");
-    return;
-  }
   try {
     await list(resource_id, operation_id);
   } catch (err) {
