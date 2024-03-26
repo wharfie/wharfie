@@ -4,9 +4,9 @@ const {
   displaySuccess,
   displayFailure,
   displayInstruction,
-} = require('../output');
-const SQS = require('../../lambdas/lib/sqs');
-const STS = require('../../lambdas/lib/sts');
+} = require('../../output');
+const SQS = require('../../../lambdas/lib/sqs');
+const STS = require('../../../lambdas/lib/sts');
 const sqs = new SQS();
 const sts = new STS();
 
