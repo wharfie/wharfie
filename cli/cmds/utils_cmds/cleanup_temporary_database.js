@@ -3,8 +3,8 @@
 const cliProgress = require('cli-progress');
 const progressBar = new cliProgress.Bar();
 
-const { displaySuccess, displayFailure, displayInfo } = require('../output');
-const Glue = require('../../lambdas/lib/glue');
+const { displaySuccess, displayFailure, displayInfo } = require('../../output');
+const Glue = require('../../../lambdas/lib/glue');
 
 const cleanupTemporaryDB = async () => {
   const DatabaseName = `${process.env.WHARFIE_DEPLOYMENT_NAME}_temporary_store`;

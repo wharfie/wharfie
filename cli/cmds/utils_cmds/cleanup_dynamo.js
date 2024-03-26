@@ -3,11 +3,11 @@
 const cliProgress = require('cli-progress');
 const progressBar = new cliProgress.Bar();
 
-const { displaySuccess, displayFailure, displayInfo } = require('../output');
+const { displaySuccess, displayFailure, displayInfo } = require('../../output');
 const {
   getAllOperations,
   deleteOperation,
-} = require('../../lambdas/lib/dynamo/resource');
+} = require('../../../lambdas/lib/dynamo/resource');
 
 const list = async () => {
   displayInfo(`fetching operations...`);

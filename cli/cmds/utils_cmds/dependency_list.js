@@ -1,8 +1,8 @@
 'use strict';
-const { displayFailure } = require('../output.js');
+const { displayFailure } = require('../../output.js');
 
-const Athena = require('../../lambdas/lib/athena/index.js');
-const { getAllResources } = require('../../lambdas/lib/dynamo/resource.js');
+const Athena = require('../../../lambdas/lib/athena/index.js');
+const { getAllResources } = require('../../../lambdas/lib/dynamo/resource.js');
 const view = async () => {
   const athena = new Athena();
 
