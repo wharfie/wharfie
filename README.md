@@ -39,11 +39,12 @@ When defining tables with Wharfie, you only need to statically define your table
 npm i -g @wharfie/wharfie
 wharfie config
 wharfie deployment create
-wharfie examples create
+wharfie project init
 ```
 
 ### Reference
 
+- **[Project Structure](./docs/project.md)**
 - **[Shortcuts](./docs/shortcuts.md)**
 - **[API](./docs/API.md)**
 - **[Defining a role for Wharfie](./docs/defining_a_role_for_wharfie.md)**
