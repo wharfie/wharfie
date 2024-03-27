@@ -64,17 +64,14 @@ class Actor {
             LogFormat: 'Text',
             LogGroup: '/aws/lambda/wharfie-testing-monitor',
           },
-          Environment: {
-            Variables: {
-              DLQ_URL:
-                'https://sqs.us-west-2.amazonaws.com/079185815456/wharfie-testing-monitor-resource-dead-letter',
-            },
-          },
           EphemeralStorage: { Size: 512 },
           Architectures: ['arm64'],
         },
       ],
     };
+    const result = await clients.sqs.createQueue({
+      QueueName: `${this.name}-queue`,
+    });
     // console.log(
     //   JSON.stringify(existingResources.lambdas['wharfie-testing-monitor'])
     // );

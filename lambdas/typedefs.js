@@ -133,6 +133,7 @@
 /**
  * @typedef ResourceRecord
  * @property {string} resource_id - name of the wharfie cloudformation stack
+ * @property {string} resource_status -
  * @property {string} resource_arn - arn of the wharfie cloudformation stack
  * @property {string} athena_workgroup - name of the stack's athena workgroup
  * @property {DaemonConfig} daemon_config -
