@@ -18,25 +18,21 @@ describe('tests for s3 event scheduling', () => {
     dependency_return = [];
     resource_mock = {
       source_properties: {
-        TableInput: {
-          TableType: 'EXTERNAL_TABLE',
-        },
+        tableType: 'EXTERNAL_TABLE',
       },
       destination_properties: {
-        DatabaseName: 'test_db',
-        TableInput: {
-          Name: 'test_table',
-          PartitionKeys: [
-            {
-              Name: 'a',
-              Type: 'string',
-            },
-            {
-              Name: 'b',
-              Type: 'string',
-            },
-          ],
-        },
+        databaseName: 'test_db',
+        name: 'test_table',
+        partitionKeys: [
+          {
+            name: 'a',
+            type: 'string',
+          },
+          {
+            name: 'b',
+            type: 'string',
+          },
+        ],
       },
     };
     date = jest.spyOn(Date, 'now').mockReturnValue(1466424490000);
@@ -98,12 +94,17 @@ describe('tests for s3 event scheduling', () => {
     await router(wharfieEvent, {});
 
     expect(
-      AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-    ).toMatchInlineSnapshot(`
-      Object {
-        "MessageBody": "{\\"resource_id\\":\\"1\\",\\"sort_key\\":\\"unpartitioned:1466424600000\\",\\"started_at\\":1466424490000,\\"updated_at\\":1466424490000,\\"status\\":\\"scheduled\\",\\"partition\\":{}}",
-        "QueueUrl": "",
-      }
-    `);
+      JSON.parse(
+        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+          .MessageBody
+      )
+    ).toStrictEqual({
+      resource_id: '1',
+      sort_key: 'unpartitioned:1466424600000',
+      started_at: 1466424490000,
+      updated_at: 1466424490000,
+      status: 'scheduled',
+      partition: {},
+    });
   });
 });

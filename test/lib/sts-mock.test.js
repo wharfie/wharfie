@@ -16,7 +16,7 @@ describe('tests for STS mock', () => {
     const sts = new STS({ region: 'us-east-1' });
     const response = await sts.getCallerIdentity();
     expect(response).toMatchInlineSnapshot(`
-      Object {
+      {
         "Account": "",
         "Arn": "",
         "UserId": "",
@@ -28,7 +28,7 @@ describe('tests for STS mock', () => {
     const sts = new STS({ region: 'us-east-1' });
     const response = await sts.getCredentials('fake-role-arn');
     expect(response).toMatchInlineSnapshot(`
-      Object {
+      {
         "accessKeyId": "123",
         "secretAccessKey": "123",
         "sessionToken": "123",

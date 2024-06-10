@@ -1,6 +1,5 @@
 'use strict';
 
-const { parse } = require('@sandfox/arn');
 const logging = require('../../lib/logging');
 const response = require('../../lib/cloudformation/cfn-response');
 const { getImmutableID } = require('../../lib/cloudformation/id');
@@ -17,7 +16,7 @@ const sempahore_db = require('../../lib/dynamo/semaphore');
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function run(event, context, resource, operation) {
-  const { region } = parse(resource.resource_arn);
+  const region = resource.region;
   const cloudformation = new CloudFormation({ region });
   const event_log = logging.getEventLogger(event, context);
   event_log.info('deleting migration temporary resources');

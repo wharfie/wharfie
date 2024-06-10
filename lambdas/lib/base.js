@@ -1,7 +1,15 @@
 'use strict';
+const { ConfiguredRetryStrategy } = require('@aws-sdk/util-retry');
+
 const logging = require('./logging');
 const aws_sdk_log = logging.getAWSSDKLogger();
 const daemon_log = logging.getDaemonLogger();
+
+/**
+ * @typedef BaseAWSConfig
+ * @property {number} [maxAttempts] -
+ */
+
 class BaseAWS {
   /**
    * '$' is not allowed in the name of a property in the JSON format and breaks querying
@@ -23,9 +31,10 @@ class BaseAWS {
   }
 
   /**
-   * @returns {import("@aws-sdk/client-sts").ClientDefaults} - sdk options
+   * @param {BaseAWSConfig} [options] -
+   * @returns {import("@aws-sdk/client-s3").S3ClientConfig} - sdk options
    */
-  static config() {
+  static config(options = { maxAttempts: 20 }) {
     const logger = {
       debug: (/** @type {any[]} */ ...content) => {
         content.forEach((value) => {
@@ -148,8 +157,11 @@ class BaseAWS {
       },
     };
     return {
-      maxAttempts: 20,
-      retryMode: 'adaptive',
+      retryStrategy: new ConfiguredRetryStrategy(
+        options?.maxAttempts || 20,
+        (attempt) =>
+          Math.floor(Math.random() * Math.min(20, 1 * Math.pow(2, attempt))) // backoff function.
+      ),
       logger,
     };
   }

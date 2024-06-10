@@ -66,14 +66,12 @@ describe('compaction', () => {
         },
       },
       source_properties: {
-        TableInput: {
-          TableType: 'VIRTUAL_VIEW',
-          ViewOriginalText: `/* Presto View: ${Buffer.from(
-            JSON.stringify({
-              originalSql: 'select * from test_db.test_table',
-            })
-          ).toString('base64')} */`,
-        },
+        tableType: 'VIRTUAL_VIEW',
+        viewOriginalText: `/* Presto View: ${Buffer.from(
+          JSON.stringify({
+            originalSql: 'select * from test_db.test_table',
+          })
+        ).toString('base64')} */`,
       },
     };
     const operation = {
@@ -93,26 +91,26 @@ describe('compaction', () => {
       partitions,
       sourceDatabaseName: 'sourceDatabaseName',
       sourceTableName: 'sourceTableName',
-      destinationDatabaseName: 'destinationDatabaseName',
-      destinationTableName: 'destinationTableName',
+      temporaryDatabaseName: 'destinationDatabaseName',
+      temporaryTableName: 'destinationTableName',
     });
 
     expect(queries).toMatchInlineSnapshot(`
-      Array [
-        Object {
-          "query_data": Object {
-            "partitions": Array [
-              Object {
+      [
+        {
+          "query_data": {
+            "partitions": [
+              {
                 "location": "",
-                "partitionValues": Object {
+                "partitionValues": {
                   "c": 1,
                   "dt": 1,
                   "hr": 1,
                 },
               },
-              Object {
+              {
                 "location": "",
-                "partitionValues": Object {
+                "partitionValues": {
                   "c": 2,
                   "dt": 1,
                   "hr": 1,
@@ -121,17 +119,17 @@ describe('compaction', () => {
             ],
           },
           "query_string": "
-        INSERT INTO \\"undefined\\".\\"undefined\\"
+        INSERT INTO "destinationDatabaseName"."destinationTableName"
         SELECT *
-        FROM \\"sourceDatabaseName\\".\\"sourceTableName\\"
+        FROM "sourceDatabaseName"."sourceTableName"
         WHERE ((c=1 and hr=1 and dt=1) or (c=2 and hr=1 and dt=1))",
         },
-        Object {
-          "query_data": Object {
-            "partitions": Array [
-              Object {
+        {
+          "query_data": {
+            "partitions": [
+              {
                 "location": "",
-                "partitionValues": Object {
+                "partitionValues": {
                   "c": 1,
                   "dt": 2,
                   "hr": 2,
@@ -140,9 +138,9 @@ describe('compaction', () => {
             ],
           },
           "query_string": "
-        INSERT INTO \\"undefined\\".\\"undefined\\"
+        INSERT INTO "destinationDatabaseName"."destinationTableName"
         SELECT *
-        FROM \\"sourceDatabaseName\\".\\"sourceTableName\\"
+        FROM "sourceDatabaseName"."sourceTableName"
         WHERE ((c=1 and hr=2 and dt=2))",
         },
       ]
@@ -217,14 +215,12 @@ describe('compaction', () => {
         },
       },
       source_properties: {
-        TableInput: {
-          TableType: 'VIRTUAL_VIEW',
-          ViewOriginalText: `/* Presto View: ${Buffer.from(
-            JSON.stringify({
-              originalSql: `select *, concat(year, '-', month, '-', day) as creation_date from test_db.test_table`,
-            })
-          ).toString('base64')} */`,
-        },
+        tableType: 'VIRTUAL_VIEW',
+        viewOriginalText: `/* Presto View: ${Buffer.from(
+          JSON.stringify({
+            originalSql: `select *, concat(year, '-', month, '-', day) as creation_date from test_db.test_table`,
+          })
+        ).toString('base64')} */`,
       },
     };
     const operation = {
@@ -244,25 +240,25 @@ describe('compaction', () => {
       partitions,
       sourceDatabaseName: 'sourceDatabaseName',
       sourceTableName: 'sourceTableName',
-      destinationDatabaseName: 'destinationDatabaseName',
-      destinationTableName: 'destinationTableName',
+      temporaryDatabaseName: 'destinationDatabaseName',
+      temporaryTableName: 'destinationTableName',
     });
 
     expect(queries).toHaveLength(3);
     expect(queries[0]).toMatchInlineSnapshot(`
-      Object {
-        "query_data": Object {
-          "partitions": Array [
-            Object {
+      {
+        "query_data": {
+          "partitions": [
+            {
               "location": "",
-              "partitionValues": Object {
+              "partitionValues": {
                 "creation_date": "2021-08-20",
                 "quadkey": "002",
               },
             },
-            Object {
+            {
               "location": "",
-              "partitionValues": Object {
+              "partitionValues": {
                 "creation_date": "2021-08-20",
                 "quadkey": "001",
               },
@@ -270,26 +266,26 @@ describe('compaction', () => {
           ],
         },
         "query_string": "
-        INSERT INTO \\"undefined\\".\\"undefined\\"
+        INSERT INTO "destinationDatabaseName"."destinationTableName"
         SELECT *
-        FROM \\"sourceDatabaseName\\".\\"sourceTableName\\"
+        FROM "sourceDatabaseName"."sourceTableName"
         WHERE ((quadkey='002' and creation_date='2021-08-20') or (quadkey='001' and creation_date='2021-08-20'))",
       }
     `);
     expect(queries[1]).toMatchInlineSnapshot(`
-      Object {
-        "query_data": Object {
-          "partitions": Array [
-            Object {
+      {
+        "query_data": {
+          "partitions": [
+            {
               "location": "",
-              "partitionValues": Object {
+              "partitionValues": {
                 "creation_date": "2021-08-21",
                 "quadkey": "002",
               },
             },
-            Object {
+            {
               "location": "",
-              "partitionValues": Object {
+              "partitionValues": {
                 "creation_date": "2021-08-21",
                 "quadkey": "001",
               },
@@ -297,19 +293,19 @@ describe('compaction', () => {
           ],
         },
         "query_string": "
-        INSERT INTO \\"undefined\\".\\"undefined\\"
+        INSERT INTO "destinationDatabaseName"."destinationTableName"
         SELECT *
-        FROM \\"sourceDatabaseName\\".\\"sourceTableName\\"
+        FROM "sourceDatabaseName"."sourceTableName"
         WHERE ((quadkey='002' and creation_date='2021-08-21') or (quadkey='001' and creation_date='2021-08-21'))",
       }
     `);
     expect(queries[2]).toMatchInlineSnapshot(`
-      Object {
-        "query_data": Object {
-          "partitions": Array [
-            Object {
+      {
+        "query_data": {
+          "partitions": [
+            {
               "location": "",
-              "partitionValues": Object {
+              "partitionValues": {
                 "creation_date": "2021-08-22",
                 "quadkey": "001",
               },
@@ -317,9 +313,9 @@ describe('compaction', () => {
           ],
         },
         "query_string": "
-        INSERT INTO \\"undefined\\".\\"undefined\\"
+        INSERT INTO "destinationDatabaseName"."destinationTableName"
         SELECT *
-        FROM \\"sourceDatabaseName\\".\\"sourceTableName\\"
+        FROM "sourceDatabaseName"."sourceTableName"
         WHERE ((quadkey='001' and creation_date='2021-08-22'))",
       }
     `);
@@ -367,9 +363,7 @@ describe('compaction', () => {
           Schedule: 60,
         },
         source_properties: {
-          TableInput: {
-            TableType: 'EXTERNAL_TABLE',
-          },
+          tableType: 'EXTERNAL_TABLE',
         },
       },
       SLA: {
@@ -450,9 +444,7 @@ describe('compaction', () => {
           Schedule: 1440,
         },
         source_properties: {
-          TableInput: {
-            TableType: 'EXTERNAL_TABLE',
-          },
+          tableType: 'EXTERNAL_TABLE',
         },
       },
       SLA: {
@@ -467,7 +459,7 @@ describe('compaction', () => {
     expect(query).toMatchInlineSnapshot(`
       "
                   SELECT a ,b
-                  FROM sourceDatabaseName.\\"sourceTableName$partitions\\"
+                  FROM sourceDatabaseName."sourceTableName$partitions"
                 
        WHERE date_diff('minute', date_parse(concat(a,'-', cast(b as varchar)), '%Y-%m-%d-%k'), from_unixtime(1608654677)) <= 4320 + 991
        AND date_diff('minute', date_parse(concat(a,'-', cast(b as varchar)), '%Y-%m-%d-%k'), from_unixtime(1608654677)) >= 0"
@@ -501,9 +493,7 @@ describe('compaction', () => {
           Schedule: 14400,
         },
         source_properties: {
-          TableInput: {
-            TableType: 'EXTERNAL_TABLE',
-          },
+          tableType: 'EXTERNAL_TABLE',
         },
       },
       SLA: {
@@ -564,14 +554,12 @@ describe('compaction', () => {
           Schedule: 15,
         },
         source_properties: {
-          TableInput: {
-            TableType: 'VIRTUAL_VIEW',
-            ViewOriginalText: `/* Presto View: ${Buffer.from(
-              JSON.stringify({
-                originalSql: 'select a, not_partition from test_db.test_table',
-              })
-            ).toString('base64')} */`,
-          },
+          tableType: 'VIRTUAL_VIEW',
+          viewOriginalText: `/* Presto View: ${Buffer.from(
+            JSON.stringify({
+              originalSql: 'select a, not_partition from test_db.test_table',
+            })
+          ).toString('base64')} */`,
         },
       },
       SLA: {
@@ -632,14 +620,12 @@ describe('compaction', () => {
           Schedule: 15,
         },
         source_properties: {
-          TableInput: {
-            TableType: 'VIRTUAL_VIEW',
-            ViewOriginalText: `/* Presto View: ${Buffer.from(
-              JSON.stringify({
-                originalSql: 'select a, b from test_db.test_table',
-              })
-            ).toString('base64')} */`,
-          },
+          tableType: 'VIRTUAL_VIEW',
+          viewOriginalText: `/* Presto View: ${Buffer.from(
+            JSON.stringify({
+              originalSql: 'select a, b from test_db.test_table',
+            })
+          ).toString('base64')} */`,
         },
       },
       SLA: {
@@ -697,14 +683,12 @@ describe('compaction', () => {
     const query = await compaction.getCalculatePartitionQueries({
       resource: {
         source_properties: {
-          TableInput: {
-            TableType: 'VIRTUAL_VIEW',
-            ViewOriginalText: `/* Presto View: ${Buffer.from(
-              JSON.stringify({
-                originalSql: 'select a, b from test_db.test_table',
-              })
-            ).toString('base64')} */`,
-          },
+          tableType: 'VIRTUAL_VIEW',
+          viewOriginalText: `/* Presto View: ${Buffer.from(
+            JSON.stringify({
+              originalSql: 'select a, b from test_db.test_table',
+            })
+          ).toString('base64')} */`,
         },
       },
       SLA: {
@@ -719,7 +703,7 @@ describe('compaction', () => {
     expect(query).toMatchInlineSnapshot(`
       "
                   SELECT a ,b
-                  FROM sourceDatabaseName.\\"sourceTableName$partitions\\"
+                  FROM sourceDatabaseName."sourceTableName$partitions"
                 
        WHERE date_diff('minute', date_parse(concat(a,'-', cast(b as varchar)), '%Y-%m-%d-%k'), from_unixtime(1608654677)) <= 4320 + 0
        AND date_diff('minute', date_parse(concat(a,'-', cast(b as varchar)), '%Y-%m-%d-%k'), from_unixtime(1608654677)) >= 0"
@@ -768,14 +752,12 @@ describe('compaction', () => {
           Schedule: 15,
         },
         source_properties: {
-          TableInput: {
-            TableType: 'VIRTUAL_VIEW',
-            ViewOriginalText: `/* Presto View: ${Buffer.from(
-              JSON.stringify({
-                originalSql: 'select a, b from test_db.test_table',
-              })
-            ).toString('base64')} */`,
-          },
+          tableType: 'VIRTUAL_VIEW',
+          viewOriginalText: `/* Presto View: ${Buffer.from(
+            JSON.stringify({
+              originalSql: 'select a, b from test_db.test_table',
+            })
+          ).toString('base64')} */`,
         },
       },
       operationTime: '1608654677',
@@ -786,7 +768,7 @@ describe('compaction', () => {
     expect(query).toMatchInlineSnapshot(`
       "
                   SELECT a ,b
-                  FROM sourceDatabaseName.\\"sourceTableName$partitions\\"
+                  FROM sourceDatabaseName."sourceTableName$partitions"
                 "
     `);
   });
@@ -832,9 +814,7 @@ describe('compaction', () => {
           Schedule: 15,
         },
         source_properties: {
-          TableInput: {
-            TableType: 'EXTERNAL_TABLE',
-          },
+          tableType: 'EXTERNAL_TABLE',
         },
       },
       SLA: {

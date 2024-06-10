@@ -8,9 +8,10 @@ const BaseAWS = require('../base');
 const credentials = fromNodeProviderChain();
 const docClient = DynamoDBDocument.from(
   new DynamoDB({
-    ...BaseAWS.config(),
+    ...BaseAWS.config({
+      maxAttempts: Number(process.env?.DYNAMO_MAX_RETRIES || 300),
+    }),
     region: process.env.AWS_REGION,
-    maxAttempts: Number(process.env.DYNAMO_MAX_RETRIES || 300),
     credentials,
   }),
   { marshallOptions: { removeUndefinedValues: true } }
@@ -55,4 +56,39 @@ async function batchWrite(params) {
   }
 }
 
-module.exports = { query, batchWrite };
+const MAX_PUT_RETRY_TIMEOUT_SECONDS = 20;
+const MAX_PUT_RETRY_ATTEMPTS = 100;
+/**
+ * @param {import("@aws-sdk/lib-dynamodb").PutCommandInput} params -
+ * @returns {Promise<import("@aws-sdk/lib-dynamodb").PutCommandOutput>} -
+ */
+async function putWithThroughputRetry(params) {
+  let attempts = 0;
+  while (attempts < MAX_PUT_RETRY_ATTEMPTS) {
+    try {
+      return await docClient.put(params);
+    } catch (e) {
+      // @ts-ignore
+      if (e.name === 'ProvisionedThroughputExceededException') {
+        await new Promise((resolve) =>
+          setTimeout(
+            resolve,
+            Math.floor(
+              Math.random() *
+                Math.min(
+                  MAX_PUT_RETRY_TIMEOUT_SECONDS,
+                  1 * Math.pow(2, attempts)
+                )
+            ) * 1000
+          )
+        );
+        attempts++;
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error('Max attempts exceeded');
+}
+
+module.exports = { query, batchWrite, putWithThroughputRetry };

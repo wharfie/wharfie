@@ -20,11 +20,11 @@ describe('tests for Athena', () => {
       'select * from test_database.test_table'
     );
     expect(result).toMatchInlineSnapshot(`
-      Object {
-        "columns": Array [],
-        "selectAsColumns": Array [],
-        "sources": Array [
-          Object {
+      {
+        "columns": [],
+        "selectAsColumns": [],
+        "sources": [
+          {
             "DatabaseName": "test_database",
             "TableName": "test_table",
           },
@@ -40,27 +40,27 @@ describe('tests for Athena', () => {
       'select column1, column_2 from test_database.test_table'
     );
     expect(result).toMatchInlineSnapshot(`
-      Object {
-        "columns": Array [
+      {
+        "columns": [
           "column1",
           "column_2",
         ],
-        "selectAsColumns": Array [
-          Object {
+        "selectAsColumns": [
+          {
             "columns": Set {
               "column1",
             },
             "identifier": "column1",
           },
-          Object {
+          {
             "columns": Set {
               "column_2",
             },
             "identifier": "column_2",
           },
         ],
-        "sources": Array [
-          Object {
+        "sources": [
+          {
             "DatabaseName": "test_database",
             "TableName": "test_table",
           },
@@ -238,23 +238,23 @@ describe('tests for Athena', () => {
       params
     );
     expect(results).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "bar": 23.4,
-          "bar-array": Array [
+          "bar-array": [
             "amazing",
             "great",
             "test",
           ],
           "bar-boolean": true,
-          "bar-map": Object {
+          "bar-map": {
             "another": "another value",
             "test": "value",
           },
           "bar-timestamp": 2012-08-06T20:00:00.000Z,
           "foo": "amazing",
         },
-        Object {
+        {
           "bar": 3.4,
           "foo": "another",
         },
@@ -283,14 +283,14 @@ describe('tests for Athena', () => {
 
     const result = await athena.getQueryMetrics('1');
     expect(result).toMatchInlineSnapshot(`
-      Object {
-        "References": Array [
-          Object {
+      {
+        "References": [
+          {
             "DatabaseName": "test",
             "TableName": "test_table",
           },
         ],
-        "Statistics": Object {
+        "Statistics": {
           "Stats": "",
         },
       }
@@ -330,14 +330,14 @@ describe('tests for Athena', () => {
 
     const result = await athena.getQueryMetrics('1');
     expect(result).toMatchInlineSnapshot(`
-      Object {
-        "References": Array [
-          Object {
+      {
+        "References": [
+          {
             "DatabaseName": "test",
             "TableName": "test_table",
           },
         ],
-        "Statistics": Object {
+        "Statistics": {
           "Stats": "",
         },
       }

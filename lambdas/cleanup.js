@@ -1,7 +1,6 @@
 'use strict';
 require('./config');
 
-const { parse } = require('@sandfox/arn');
 const bluebirdPromise = require('bluebird');
 
 const SQS = require('./lib/sqs');
@@ -42,7 +41,7 @@ async function run(cleanupEvent, context) {
     daemon_log.warn('resource unexpectedly missing, maybe it was deleted?');
     return;
   }
-  const { region } = parse(resource.resource_arn);
+  const region = resource.region;
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
   const s3 = new S3({ region, credentials });

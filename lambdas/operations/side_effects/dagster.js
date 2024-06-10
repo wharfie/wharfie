@@ -31,8 +31,8 @@ async function dagster(event, context, resource, operation) {
       status: 'COMPLETED',
     };
   }
-  const databaseName = resource.destination_properties.DatabaseName;
-  const tableName = resource.destination_properties.TableInput.Name;
+  const databaseName = resource.destination_properties.databaseName;
+  const tableName = resource.destination_properties.name;
   const asset_key = `${databaseName}.${tableName}`;
   const url = `https://${organization}.dagster.cloud/${deployment}/report_asset_materialization/?asset_key=${asset_key}`;
   const payload = JSON.stringify({

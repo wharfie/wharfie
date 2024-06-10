@@ -4,20 +4,15 @@ const _S3 = require('../lambdas/lib/s3');
 const s3 = new _S3();
 jest.mock('../lambdas/lib/sts');
 jest.mock('../lambdas/lib/glue');
-let lambda, S3, resource_db, logging, getObject, deleteObjects;
+let lambda, S3, resource_db, getObject, deleteObjects;
 
 describe('tests for cleanup lambda', () => {
   beforeAll(() => {
     S3 = require('../lambdas/lib/s3');
-    logging = require('../lambdas/lib/logging');
     resource_db = require('../lambdas/lib/dynamo/resource');
     jest.mock('../lambdas/lib/dynamo/resource');
     jest.mock('../lambdas/lib/s3');
     jest.mock('../lambdas/lib/logging');
-    jest.spyOn(logging, 'getDaemonLogger').mockImplementation(() => ({
-      debug: () => {},
-      info: () => {},
-    }));
     getObject = jest
       .fn()
       .mockResolvedValue('s3://a-bucket/prefix/data/somefile.json');
@@ -40,7 +35,6 @@ describe('tests for cleanup lambda', () => {
 
   afterAll(() => {
     S3.mockClear();
-    logging.mockClear();
     resource_db.getResource.mockClear();
   });
 
@@ -60,8 +54,8 @@ describe('tests for cleanup lambda', () => {
     expect(resource_db.getResource).toHaveBeenCalledTimes(1);
     expect(getObject).toHaveBeenCalledTimes(1);
     expect(getObject.mock.calls[0]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "Bucket": "a-bucket",
           "Key": "prefix/refs/manifest",
         },
@@ -69,15 +63,15 @@ describe('tests for cleanup lambda', () => {
     `);
     expect(deleteObjects).toHaveBeenCalledTimes(1);
     expect(deleteObjects.mock.calls[0]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "Bucket": "a-bucket",
-          "Delete": Object {
-            "Objects": Array [
-              Object {
+          "Delete": {
+            "Objects": [
+              {
                 "Key": "prefix/data/somefile.json",
               },
-              Object {
+              {
                 "Key": "prefix/refs/manifest",
               },
             ],

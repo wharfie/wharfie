@@ -30,16 +30,16 @@ describe('dynamo event db', () => {
     });
     const value = await event.query('test', 'dt=10', ['112312', '212312']);
     expect(value).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "resource_id": "test",
           "sort_key": "dt=10:112312",
         },
-        Object {
+        {
           "resource_id": "test",
           "sort_key": "dt=10:212312",
         },
-        Object {
+        {
           "resource_id": "test",
           "sort_key": "dt=10:112313",
         },
@@ -62,13 +62,13 @@ describe('dynamo event db', () => {
       sort_key: 'dt=10:212312',
     });
     expect(event.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "test": Object {
-          "dt=10:112312": Object {
+      {
+        "test": {
+          "dt=10:112312": {
             "resource_id": "test",
             "sort_key": "dt=10:112312",
           },
-          "dt=10:212312": Object {
+          "dt=10:212312": {
             "resource_id": "test",
             "sort_key": "dt=10:212312",
           },
@@ -91,9 +91,9 @@ describe('dynamo event db', () => {
       'running'
     );
     expect(event.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "test": Object {
-          "dt=10:112312": Object {
+      {
+        "test": {
+          "dt=10:112312": {
             "resource_id": "test",
             "sort_key": "dt=10:112312",
             "status": "running",
@@ -119,9 +119,9 @@ describe('dynamo event db', () => {
     });
     await event.delete_records('test');
     expect(event.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "test-1": Object {
-          "dt=10:112312": Object {
+      {
+        "test-1": {
+          "dt=10:112312": {
             "resource_id": "test-1",
             "sort_key": "dt=10:112312",
           },

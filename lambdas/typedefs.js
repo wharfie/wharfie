@@ -131,14 +131,52 @@
  */
 
 /**
+ * @typedef Column
+ * @property {string} name -
+ * @property {string} type -
+ * @property {string} [comment] -
+ */
+
+/**
+ * @typedef SerdeInfo
+ * @property {string} SerializationLibrary -
+ * @property {Object<string,string>} Parameters -
+ */
+
+/**
+ * @typedef TableProperties
+ * @property {string} arn -
+ * @property {string} catalogId -
+ * @property {Column[]} columns -
+ * @property {boolean} compressed -
+ * @property {string} databaseName -
+ * @property {string} description -
+ * @property {string} name -
+ * @property {number} numberOfBuckets -
+ * @property {Object<string,string>} parameters -
+ * @property {string} region -
+ * @property {boolean} storedAsSubDirectories -
+ * @property {string} tableType -
+ * @property {Object<string,string>} tags -
+ * @property {string} [location] -
+ * @property {Column[]} [partitionKeys] -
+ * @property {string} [viewExpandedText] -
+ * @property {string} [viewOriginalText] -
+ * @property {string} [inputFormat] -
+ * @property {string} [outputFormat] -
+ * @property {SerdeInfo} [serdeInfo] -
+ */
+
+/**
  * @typedef ResourceRecord
- * @property {string} resource_id - name of the wharfie cloudformation stack
+ * @property {string} resource_id - name of the resource
  * @property {string} resource_status -
- * @property {string} resource_arn - arn of the wharfie cloudformation stack
+ * @property {string} region - aws region of the resource
+ * @property {string} status - status of the resource
  * @property {string} athena_workgroup - name of the stack's athena workgroup
  * @property {DaemonConfig} daemon_config -
- * @property {any} source_properties -
- * @property {any} destination_properties -
+ * @property {TableProperties} source_properties -
+ * @property {TableProperties} destination_properties -
  * @property {string} wharfie_version -
  */
 
@@ -224,6 +262,7 @@
  * @typedef S3Location
  * @property {string} bucket - S3 bucket name
  * @property {string} prefix - S3 prefix
+ * @property {string} arn - S3 arn
  */
 
 /**

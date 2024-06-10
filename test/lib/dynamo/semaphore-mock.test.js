@@ -23,12 +23,12 @@ describe('dynamo semaphore db', () => {
     result = await semaphore.increase('semaphore_name_2', 3);
     expect(result).toBe(true);
     expect(semaphore.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "semaphore_name": Object {
+      {
+        "semaphore_name": {
           "limit": Infinity,
           "value": 3,
         },
-        "semaphore_name_2": Object {
+        "semaphore_name_2": {
           "limit": Infinity,
           "value": 1,
         },
@@ -46,12 +46,12 @@ describe('dynamo semaphore db', () => {
     await semaphore.release('semaphore_name_2');
     await semaphore.release('semaphore_name');
     expect(semaphore.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "semaphore_name": Object {
+      {
+        "semaphore_name": {
           "limit": Infinity,
           "value": 2,
         },
-        "semaphore_name_2": Object {
+        "semaphore_name_2": {
           "limit": Infinity,
           "value": 0,
         },
@@ -72,8 +72,8 @@ describe('dynamo semaphore db', () => {
     await semaphore.increase('semaphore_name');
     await semaphore.deleteSemaphore('semaphore_name');
     expect(semaphore.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "wharfie": Object {
+      {
+        "wharfie": {
           "limit": Infinity,
           "value": 3,
         },

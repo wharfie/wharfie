@@ -51,14 +51,14 @@ describe('tests for S3', () => {
     expect(AWS.S3Mock).toHaveReceivedCommandTimes(AWS.DeleteObjectsCommand, 2);
     expect(AWS.S3Mock.commandCalls(AWS.DeleteObjectsCommand)[0].args[0].input)
       .toMatchInlineSnapshot(`
-      Object {
+      {
         "Bucket": "test_bucket",
-        "Delete": Object {
-          "Objects": Array [
-            Object {
+        "Delete": {
+          "Objects": [
+            {
               "Key": "key/path.json",
             },
-            Object {
+            {
               "Key": "key/path1.json",
             },
           ],
@@ -68,11 +68,11 @@ describe('tests for S3', () => {
     `);
     expect(AWS.S3Mock.commandCalls(AWS.DeleteObjectsCommand)[1].args[0].input)
       .toMatchInlineSnapshot(`
-      Object {
+      {
         "Bucket": "test_bucket",
-        "Delete": Object {
-          "Objects": Array [
-            Object {
+        "Delete": {
+          "Objects": [
+            {
               "Key": "key/path.json",
             },
           ],
@@ -235,6 +235,7 @@ describe('tests for S3', () => {
     expect(result).toStrictEqual({
       bucket: 'example-bucket',
       prefix: 'path/to/object/',
+      arn: 'arn:aws:s3:::example-bucket/path/to/object/',
     });
   });
 
@@ -310,10 +311,10 @@ describe('tests for S3', () => {
     const s3 = new S3({});
     const result = await s3.findPartitions('example-bucket', 'test/prefix/', [
       {
-        Name: 'month',
+        name: 'month',
       },
       {
-        Name: 'day',
+        name: 'day',
       },
     ]);
     expect(result).toStrictEqual([

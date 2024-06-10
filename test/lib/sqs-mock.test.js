@@ -44,9 +44,9 @@ describe('mock tests for SQS', () => {
     });
 
     expect(sqs.sqs.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "queues": Object {
-          "test_queue": Array [],
+      {
+        "queues": {
+          "test_queue": [],
         },
       }
     `);
@@ -70,15 +70,15 @@ describe('mock tests for SQS', () => {
     await sqs.sendMessageBatch(params);
 
     expect(sqs.sqs.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "queues": Object {
-          "test_queue": Array [
-            Object {
-              "Body": "\\"foo\\"",
+      {
+        "queues": {
+          "test_queue": [
+            {
+              "Body": ""foo"",
               "MessageId": "ckywjpmr70002zjvd0wyq5x48",
             },
-            Object {
-              "Body": "\\"bar\\"",
+            {
+              "Body": ""bar"",
               "MessageId": "ckywjpmr70002zjvd0wyq5x48",
             },
           ],

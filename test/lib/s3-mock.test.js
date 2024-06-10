@@ -22,7 +22,7 @@ describe('tests for S3 Mock', () => {
     await s3foo.putObject(params);
     const s3bar = new S3({ region: 'us-east-1' });
     const result = await s3bar.getObject(params);
-    expect(result).toMatchInlineSnapshot(`"{\\"foo\\":\\"bar\\"}"`);
+    expect(result).toMatchInlineSnapshot(`"{"foo":"bar"}"`);
   });
 
   it('findPartitions mock test', async () => {
@@ -37,39 +37,39 @@ describe('tests for S3 Mock', () => {
     });
     const result = await s3.findPartitions('bucket', 'prefix', [
       {
-        Name: 'dt',
+        name: 'dt',
       },
       {
-        Name: 'hr',
+        name: 'hr',
       },
     ]);
 
     expect(result).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "location": "s3://bucket/prefix/dt=2021-01-20/hr=10",
-          "partitionValues": Object {
+          "partitionValues": {
             "dt": "2021-01-20",
             "hr": "10",
           },
         },
-        Object {
+        {
           "location": "s3://bucket/prefix/dt=2021-01-21/hr=22",
-          "partitionValues": Object {
+          "partitionValues": {
             "dt": "2021-01-21",
             "hr": "22",
           },
         },
-        Object {
+        {
           "location": "s3://bucket/prefix/dt=2021-01-22/hr=16",
-          "partitionValues": Object {
+          "partitionValues": {
             "dt": "2021-01-22",
             "hr": "16",
           },
         },
-        Object {
+        {
           "location": "s3://bucket/prefix/dt=2021-01-23/hr=20",
-          "partitionValues": Object {
+          "partitionValues": {
             "dt": "2021-01-23",
             "hr": "20",
           },
@@ -99,18 +99,18 @@ describe('tests for S3 Mock', () => {
     });
 
     expect(result).toMatchInlineSnapshot(`
-      Object {
+      {
         "Bucket": "bucket",
-        "Contents": Array [
-          Object {
+        "Contents": [
+          {
             "Key": "prefix/dt=2021-01-21/hr=22/34.json",
             "LastModified": 1970-01-01T00:00:00.000Z,
           },
-          Object {
+          {
             "Key": "prefix/dt=2021-01-22/hr=16/56.json",
             "LastModified": 1970-01-01T00:00:00.000Z,
           },
-          Object {
+          {
             "Key": "prefix/dt=2021-01-23/hr=20/77.json",
             "LastModified": 1970-01-01T00:00:00.000Z,
           },
@@ -141,8 +141,8 @@ describe('tests for S3 Mock', () => {
 
     const result = await s3bar.getObject(params);
     expect(result).toMatchInlineSnapshot(`
-      "[object Object]{\\"foo\\":\\"bar\\"}
-      {\\"biz\\":\\"baz\\"}
+      "[object Object]{"foo":"bar"}
+      {"biz":"baz"}
       "
     `);
   });
@@ -168,8 +168,6 @@ describe('tests for S3 Mock', () => {
     );
     const s3bar = new S3({ region: 'us-east-1' });
     const result = await s3bar.getObject(params);
-    expect(result).toMatchInlineSnapshot(
-      `"{\\"foo\\":\\"bar\\"}{\\"biz\\":\\"baz\\"}"`
-    );
+    expect(result).toMatchInlineSnapshot(`"{"foo":"bar"}{"biz":"baz"}"`);
   });
 });

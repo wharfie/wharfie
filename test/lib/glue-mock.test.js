@@ -33,17 +33,17 @@ describe('tests for Glue', () => {
       Name: 'table_name',
     });
     expect(result).toMatchInlineSnapshot(`
-      Object {
-        "Table": Object {
+      {
+        "Table": {
           "DatabaseName": "database_name",
           "Description": "some description",
           "Name": "table_name",
-          "PartitionKeys": Array [
-            Object {
+          "PartitionKeys": [
+            {
               "Name": "dt",
             },
           ],
-          "_partitions": Object {},
+          "_partitions": {},
         },
       }
     `);
@@ -95,22 +95,22 @@ describe('tests for Glue', () => {
       Name: 'table_name_cloned',
     });
     expect(result).toMatchInlineSnapshot(`
-      Object {
-        "Table": Object {
+      {
+        "Table": {
           "DatabaseName": "database_name",
           "Description": "some description",
           "Name": "table_name_cloned",
-          "PartitionKeys": Array [
-            Object {
+          "PartitionKeys": [
+            {
               "Name": "dt",
             },
           ],
-          "StorageDescriptor": Object {
+          "StorageDescriptor": {
             "InputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-            "Location": "s3://bucket/table/refrences/data/undefined/",
+            "Location": "data/undefined/",
             "OutputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
           },
-          "_partitions": Object {},
+          "_partitions": {},
         },
       }
     `);
@@ -171,18 +171,18 @@ describe('tests for Glue', () => {
 
     expect(result.length).toMatchInlineSnapshot(`150`);
     expect(result[0]).toMatchInlineSnapshot(`
-      Object {
+      {
         "location": "s3://bucket/location",
-        "partitionValues": Object {
+        "partitionValues": {
           "dt": 0,
           "hr": 0,
         },
       }
     `);
     expect(result[result.length - 1]).toMatchInlineSnapshot(`
-      Object {
+      {
         "location": "s3://bucket/location",
-        "partitionValues": Object {
+        "partitionValues": {
           "dt": 14,
           "hr": 9,
         },

@@ -132,10 +132,8 @@ async function run({ bucket, key }, context) {
       daemon_log.warn('resource unexpectedly missing, maybe it was deleted?');
       return;
     }
-    const isView =
-      resource.source_properties.TableInput.TableType === 'VIRTUAL_VIEW';
-    const partitionKeys =
-      resource.destination_properties?.TableInput?.PartitionKeys || [];
+    const isView = resource.source_properties.tableType === 'VIRTUAL_VIEW';
+    const partitionKeys = resource.destination_properties?.partitionKeys || [];
     const isPartitioned = partitionKeys.length > 0;
     let partition_parts = ['unpartitioned'];
     if (isPartitioned && !isView) {

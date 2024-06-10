@@ -1,6 +1,5 @@
 'use strict';
 require('./config');
-const { parse } = require('@sandfox/arn');
 const bluebirdPromise = require('bluebird');
 
 const semaphore_db = require('./lib/dynamo/semaphore');
@@ -90,7 +89,7 @@ async function getWharfieQueryMetadata(queryExecutionId) {
  * @param {import('./typedefs').QueryRecord} query -
  */
 async function _cleanupFailedOrCancelledQuery(resource, query) {
-  const { region } = parse(resource.resource_arn);
+  const region = resource.region;
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
   const s3 = new S3({ region, credentials });
@@ -437,7 +436,7 @@ async function DLQ(event, context, err) {
   )
     return;
 
-  const { region } = parse(resource.resource_arn);
+  const region = resource.region;
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
   const sns = new SNS({ region, credentials });

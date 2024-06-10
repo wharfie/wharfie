@@ -79,7 +79,7 @@ class Partition {
   /**
    * @typedef registerParams
    * @property {string} uri - uri for target table's s3 root
-   * @property {Array<{Name: string}>} partitionKeys - partition keys for target table
+   * @property {Array<{name: string}>} partitionKeys - partition keys for target table
    * @property {string} databaseName - target database name
    * @property {string} tableName - target table name
    * @param {registerParams} params -
@@ -147,7 +147,7 @@ class Partition {
       DatabaseName: databaseName,
       TableName: tableName,
       PartitionInputList: symlinkedPartitions.map((p) => ({
-        Values: partitionKeys.map((key) => `${p.partitionValues[key.Name]}`),
+        Values: partitionKeys.map((key) => `${p.partitionValues[key.name]}`),
         StorageDescriptor: {
           ...Table.StorageDescriptor,
           Location: p.location,
@@ -181,14 +181,14 @@ class Partition {
     const registeredPartitionsSet = new Set(
       registeredPartitions.map((partition) =>
         partitionKeys
-          .map((key) => partition.partitionValues[key.Name])
+          .map((key) => partition.partitionValues[key.name])
           .join('/')
       )
     );
     const logicalPartitionsSet = new Set(
       logicalPartitions.map((partition) =>
         partitionKeys
-          .map((key) => partition.partitionValues[key.Name])
+          .map((key) => partition.partitionValues[key.name])
           .join('/')
       )
     );
@@ -196,7 +196,7 @@ class Partition {
       (partition) =>
         !registeredPartitionsSet.has(
           partitionKeys
-            .map((key) => partition.partitionValues[key.Name])
+            .map((key) => partition.partitionValues[key.name])
             .join('/')
         )
     );
@@ -204,7 +204,7 @@ class Partition {
       (partition) =>
         !logicalPartitionsSet.has(
           partitionKeys
-            .map((key) => partition.partitionValues[key.Name])
+            .map((key) => partition.partitionValues[key.name])
             .join('/')
         )
     );
@@ -218,7 +218,7 @@ class Partition {
         DatabaseName: databaseName,
         TableName: tableName,
         PartitionInputList: symlinkedPartitions.map((p) => ({
-          Values: partitionKeys.map((key) => `${p.partitionValues[key.Name]}`),
+          Values: partitionKeys.map((key) => `${p.partitionValues[key.name]}`),
           StorageDescriptor: {
             ...Table.StorageDescriptor,
             Location: p.location,
@@ -230,7 +230,7 @@ class Partition {
         DatabaseName: databaseName,
         TableName: tableName,
         PartitionsToDelete: expiredPartitions.map((p) => ({
-          Values: partitionKeys.map((key) => `${p.partitionValues[key.Name]}`),
+          Values: partitionKeys.map((key) => `${p.partitionValues[key.name]}`),
         })),
       }),
     ]);

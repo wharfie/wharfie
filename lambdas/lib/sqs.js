@@ -177,6 +177,15 @@ class SQS {
   }
 
   /**
+   * @param {import("@aws-sdk/client-sqs").GetQueueUrlCommandInput} params - SQS getQueueUrl params
+   * @returns {Promise<import("@aws-sdk/client-sqs").GetQueueUrlCommandOutput>} - SQS getQueueUrl result
+   */
+  async getQueueUrl(params) {
+    const command = new AWS.GetQueueUrlCommand(params);
+    return await this.sqs.send(command);
+  }
+
+  /**
    * @param {import("@aws-sdk/client-sqs").GetQueueAttributesCommandInput} params - SQS getQueueAttributes params
    * @returns {Promise<import("@aws-sdk/client-sqs").GetQueueAttributesCommandOutput>} - SQS getQueueAttributes result
    */

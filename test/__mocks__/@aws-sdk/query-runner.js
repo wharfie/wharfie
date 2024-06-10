@@ -91,12 +91,10 @@ class QueryRunner {
   ) {
     if (operation.operation_inputs?.partition) {
       const { bucket, prefix } = this.s3._parseS3Uri(
-        resource.destination_properties.TableInput.StorageDescriptor.Location
+        resource.destination_properties.location
       );
       const location_segments =
-        resource.destination_properties.TableInput.StorageDescriptor.Location.split(
-          '/'
-        );
+        resource.destination_properties.location.split('/');
       const base_location = location_segments
         .slice(0, location_segments.length - 2)
         .join('/');

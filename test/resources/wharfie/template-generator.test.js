@@ -66,44 +66,44 @@ describe('tests for template-generator', () => {
     });
 
     expect(template.Resources.Workgroup).toMatchInlineSnapshot(`
-      Object {
-        "Properties": Object {
+      {
+        "Properties": {
           "Description": "Workgroup for the Wharfie-test Wharfie Resource in the resource-id stack",
-          "Name": Object {
-            "Fn::Sub": Array [
+          "Name": {
+            "Fn::Sub": [
               "\${AWS::StackName}",
-              Object {},
+              {},
             ],
           },
           "RecursiveDeleteOption": true,
           "State": "ENABLED",
-          "Tags": Array [
-            Object {
+          "Tags": [
+            {
               "Name": "Team",
               "Value": "DataTools",
             },
           ],
-          "WorkGroupConfiguration": Object {
+          "WorkGroupConfiguration": {
             "EnforceWorkGroupConfiguration": true,
-            "EngineVersion": Object {
+            "EngineVersion": {
               "SelectedEngineVersion": "Athena engine version 3",
             },
             "PublishCloudWatchMetricsEnabled": true,
-            "ResultConfiguration": Object {
-              "EncryptionConfiguration": Object {
+            "ResultConfiguration": {
+              "EncryptionConfiguration": {
                 "EncryptionOption": "SSE_S3",
               },
               "OutputLocation": "s3://wharfie-logs/cloudtrail/compacted/query_metadata/",
             },
           },
-          "WorkGroupConfigurationUpdates": Object {
+          "WorkGroupConfigurationUpdates": {
             "EnforceWorkGroupConfiguration": true,
-            "EngineVersion": Object {
+            "EngineVersion": {
               "SelectedEngineVersion": "Athena engine version 3",
             },
             "PublishCloudWatchMetricsEnabled": true,
-            "ResultConfigurationUpdates": Object {
-              "EncryptionConfiguration": Object {
+            "ResultConfigurationUpdates": {
+              "EncryptionConfiguration": {
                 "EncryptionOption": "SSE_S3",
               },
               "OutputLocation": "s3://wharfie-logs/cloudtrail/compacted/query_metadata/",
@@ -114,33 +114,33 @@ describe('tests for template-generator', () => {
       }
     `);
     expect(template.Resources.Source).toMatchInlineSnapshot(`
-      Object {
-        "Properties": Object {
+      {
+        "Properties": {
           "CatalogId": "primary",
           "DatabaseName": "testDb",
-          "TableInput": Object {
+          "TableInput": {
             "Description": "CloudTrail logs",
             "Name": "test_raw",
-            "Parameters": Object {
+            "Parameters": {
               "EXTERNAL": "true",
             },
-            "PartitionKeys": Array [
-              Object {
+            "PartitionKeys": [
+              {
                 "Name": "month",
                 "Type": "string",
               },
-              Object {
+              {
                 "Name": "day",
                 "Type": "string",
               },
             ],
-            "StorageDescriptor": Object {
-              "Columns": Array [
-                Object {
+            "StorageDescriptor": {
+              "Columns": [
+                {
                   "Name": "eventid",
                   "Type": "string",
                 },
-                Object {
+                {
                   "Name": "column",
                   "Type": "int",
                 },
@@ -148,7 +148,7 @@ describe('tests for template-generator', () => {
               "InputFormat": "com.amazon.emr.cloudtrail.CloudTrailInputFormat",
               "Location": "s3://wharfie-logs/cloudtrail/AWSLogs/123456789123/CloudTrail/us-east-1/2020/",
               "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
-              "SerdeInfo": Object {
+              "SerdeInfo": {
                 "SerializationLibrary": "com.amazon.emr.hive.serde.CloudTrailSerde",
               },
             },
@@ -159,34 +159,34 @@ describe('tests for template-generator', () => {
       }
     `);
     expect(template.Resources.Compacted).toMatchInlineSnapshot(`
-      Object {
-        "Properties": Object {
+      {
+        "Properties": {
           "CatalogId": "primary",
           "DatabaseName": "testDb",
-          "TableInput": Object {
+          "TableInput": {
             "Description": "CloudTrail logs",
             "Name": "test",
-            "Parameters": Object {
+            "Parameters": {
               "EXTERNAL": "TRUE",
               "parquet.compress": "GZIP",
             },
-            "PartitionKeys": Array [
-              Object {
+            "PartitionKeys": [
+              {
                 "Name": "month",
                 "Type": "string",
               },
-              Object {
+              {
                 "Name": "day",
                 "Type": "string",
               },
             ],
-            "StorageDescriptor": Object {
-              "Columns": Array [
-                Object {
+            "StorageDescriptor": {
+              "Columns": [
+                {
                   "Name": "eventid",
                   "Type": "string",
                 },
-                Object {
+                {
                   "Name": "column",
                   "Type": "int",
                 },
@@ -196,8 +196,8 @@ describe('tests for template-generator', () => {
               "Location": "s3://wharfie-logs/cloudtrail/compacted/references/",
               "NumberOfBuckets": 0,
               "OutputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
-              "SerdeInfo": Object {
-                "Parameters": Object {
+              "SerdeInfo": {
+                "Parameters": {
                   "parquet.compress": "GZIP",
                 },
                 "SerializationLibrary": "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe",
@@ -211,43 +211,43 @@ describe('tests for template-generator', () => {
       }
     `);
     expect(template.Resources.Schedule).toMatchInlineSnapshot(`
-      Object {
-        "Properties": Object {
-          "Description": Object {
-            "Fn::Sub": Array [
+      {
+        "Properties": {
+          "Description": {
+            "Fn::Sub": [
               "Schedule for \${table} in \${AWS::StackName} stack maintained by \${stack}",
-              Object {
+              {
                 "stack": undefined,
                 "table": "test",
               },
             ],
           },
-          "Name": Object {
-            "Fn::Sub": Array [
+          "Name": {
+            "Fn::Sub": [
               "\${AWS::StackName}",
-              Object {},
+              {},
             ],
           },
           "RoleArn": undefined,
           "ScheduleExpression": "cron(30 1/1 ? * * *)",
           "State": "ENABLED",
-          "Targets": Array [
-            Object {
+          "Targets": [
+            {
               "Arn": undefined,
-              "Id": Object {
-                "Fn::Sub": Array [
+              "Id": {
+                "Fn::Sub": [
                   "\${AWS::StackName}",
-                  Object {},
+                  {},
                 ],
               },
-              "InputTransformer": Object {
-                "InputPathsMap": Object {
+              "InputTransformer": {
+                "InputPathsMap": {
                   "time": "$.time",
                 },
-                "InputTemplate": Object {
-                  "Fn::Sub": Array [
-                    "{\\"operation_started_at\\":<time>, \\"operation_type\\":\\"MAINTAIN\\", \\"action_type\\":\\"START\\", \\"resource_id\\":\\"\${AWS::StackName}\\"}",
-                    Object {},
+                "InputTemplate": {
+                  "Fn::Sub": [
+                    "{"operation_started_at":<time>, "operation_type":"MAINTAIN", "action_type":"START", "resource_id":"\${AWS::StackName}"}",
+                    {},
                   ],
                 },
               },

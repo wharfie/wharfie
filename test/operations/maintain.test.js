@@ -102,24 +102,16 @@ describe('maintain tests', () => {
         Role: 'test-role',
       },
       source_properties: {
-        DatabaseName: 'test_db',
-        TableInput: {
-          Name: 'table_name_raw',
-          PartitionKeys: [{ Type: 'string', Name: 'dt' }],
-          StorageDescriptor: {
-            Location: 's3://test-bucket/raw/',
-          },
-        },
+        databaseName: 'test_db',
+        name: 'table_name_raw',
+        partitionKeys: [{ type: 'string', name: 'dt' }],
+        location: 's3://test-bucket/raw/',
       },
       destination_properties: {
-        DatabaseName: 'test_db',
-        TableInput: {
-          Name: 'table_name',
-          PartitionKeys: [{ Type: 'string', Name: 'dt' }],
-          StorageDescriptor: {
-            Location: 's3://test-bucket/compacted/',
-          },
-        },
+        databaseName: 'test_db',
+        name: 'table_name',
+        partitionKeys: [{ type: 'string', name: 'dt' }],
+        location: 's3://test-bucket/compacted/',
       },
       wharfie_version: version,
     });
@@ -169,44 +161,36 @@ describe('maintain tests', () => {
     timeout.cancel();
     // eslint-disable-next-line jest/no-large-snapshots
     expect(dynamo_resource.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "resource_id": Object {
-          "resource_id": Object {
+      {
+        "resource_id": {
+          "resource_id": {
             "athena_workgroup": "Wharfie:StackName",
-            "daemon_config": Object {
+            "daemon_config": {
               "Role": "test-role",
             },
-            "destination_properties": Object {
-              "DatabaseName": "test_db",
-              "TableInput": Object {
-                "Name": "table_name",
-                "PartitionKeys": Array [
-                  Object {
-                    "Name": "dt",
-                    "Type": "string",
-                  },
-                ],
-                "StorageDescriptor": Object {
-                  "Location": "s3://test-bucket/compacted/",
+            "destination_properties": {
+              "databaseName": "test_db",
+              "location": "s3://test-bucket/compacted/",
+              "name": "table_name",
+              "partitionKeys": [
+                {
+                  "name": "dt",
+                  "type": "string",
                 },
-              },
+              ],
             },
             "resource_arn": "arn:aws:custom:us-east-1:123456789012:wharfie",
             "resource_id": "resource_id",
-            "source_properties": Object {
-              "DatabaseName": "test_db",
-              "TableInput": Object {
-                "Name": "table_name_raw",
-                "PartitionKeys": Array [
-                  Object {
-                    "Name": "dt",
-                    "Type": "string",
-                  },
-                ],
-                "StorageDescriptor": Object {
-                  "Location": "s3://test-bucket/raw/",
+            "source_properties": {
+              "databaseName": "test_db",
+              "location": "s3://test-bucket/raw/",
+              "name": "table_name_raw",
+              "partitionKeys": [
+                {
+                  "name": "dt",
+                  "type": "string",
                 },
-              },
+              ],
             },
             "wharfie_version": "0.0.1",
           },
@@ -216,12 +200,12 @@ describe('maintain tests', () => {
 
     // eslint-disable-next-line jest/no-large-snapshots
     expect(semaphore.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "wharfie": Object {
+      {
+        "wharfie": {
           "limit": Infinity,
           "value": 0,
         },
-        "wharfie:MAINTAIN:resource_id": Object {
+        "wharfie:MAINTAIN:resource_id": {
           "limit": Infinity,
           "value": 0,
         },
@@ -230,35 +214,35 @@ describe('maintain tests', () => {
 
     // eslint-disable-next-line jest/no-large-snapshots
     expect(Glue.__state.test_db).toMatchInlineSnapshot(`
-      Object {
-        "_tables": Object {
-          "table_name": Object {
+      {
+        "_tables": {
+          "table_name": {
             "DatabaseName": "test_db",
             "Name": "table_name",
-            "PartitionKeys": Array [
-              Object {
+            "PartitionKeys": [
+              {
                 "Name": "dt",
                 "Type": "string",
               },
             ],
-            "_partitions": Object {},
+            "_partitions": {},
           },
-          "table_name_raw": Object {
+          "table_name_raw": {
             "DatabaseName": "test_db",
             "Name": "table_name_raw",
-            "PartitionKeys": Array [
-              Object {
+            "PartitionKeys": [
+              {
                 "Name": "dt",
                 "Type": "string",
               },
             ],
-            "_partitions": Object {
-              "2021-01-20": Object {
+            "_partitions": {
+              "2021-01-20": {
                 "Parameters": undefined,
-                "StorageDescriptor": Object {
+                "StorageDescriptor": {
                   "Location": "s3://test-bucket/raw/dt=2021-01-20",
                 },
-                "Values": Array [
+                "Values": [
                   "2021-01-20",
                 ],
               },
@@ -269,12 +253,12 @@ describe('maintain tests', () => {
     `);
     // eslint-disable-next-line jest/no-large-snapshots
     expect(SQS.__state).toMatchInlineSnapshot(`
-      Object {
-        "queues": Object {
-          "cleanup-queue": Array [],
-          "daemon-queue": Array [],
-          "events-queue": Array [],
-          "monitor-queue": Array [],
+      {
+        "queues": {
+          "cleanup-queue": [],
+          "daemon-queue": [],
+          "events-queue": [],
+          "monitor-queue": [],
         },
       }
     `);

@@ -1,7 +1,5 @@
 'use strict';
 
-const { parse } = require('@sandfox/arn');
-
 const logging = require('../../lib/logging');
 const Glue = require('../../lib/glue');
 const S3 = require('../../lib/s3');
@@ -16,7 +14,7 @@ const STS = require('../../lib/sts');
  */
 async function run(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
-  const { region } = parse(resource.resource_arn);
+  const region = resource.region;
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
   const s3 = new S3({ region, credentials });
@@ -24,28 +22,27 @@ async function run(event, context, resource, operation) {
   const partition = new Partition({ s3, glue });
 
   if (
-    !resource.source_properties.TableInput.PartitionKeys ||
-    resource.source_properties.TableInput.PartitionKeys.length === 0
+    !resource.source_properties.partitionKeys ||
+    resource.source_properties.partitionKeys.length === 0
   ) {
     return {
       status: 'COMPLETED',
     };
   }
 
-  const isView =
-    resource.source_properties.TableInput.TableType === 'VIRTUAL_VIEW';
+  const isView = resource.source_properties.tableType === 'VIRTUAL_VIEW';
 
   const isPartitioned =
-    resource.destination_properties.TableInput.PartitionKeys &&
-    resource.destination_properties.TableInput.PartitionKeys.length > 0;
+    resource.destination_properties.partitionKeys &&
+    resource.destination_properties.partitionKeys.length > 0;
   if (!isView && isPartitioned) {
     event_log.debug(
       `registering partition in location ${operation.operation_inputs.partition.location}`
     );
     await partition.registerPartition({
       partition: operation.operation_inputs.partition,
-      databaseName: resource.source_properties.DatabaseName,
-      tableName: resource.source_properties.TableInput.Name,
+      databaseName: resource.source_properties.databaseName,
+      tableName: resource.source_properties.name,
     });
   }
 

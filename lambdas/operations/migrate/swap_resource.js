@@ -1,7 +1,5 @@
 'use strict';
 
-const { parse } = require('@sandfox/arn');
-
 const logging = require('../../lib/logging');
 const Glue = require('../../lib/glue');
 const STS = require('../../lib/sts');
@@ -36,8 +34,8 @@ async function swap_partitions(
   event_log.info(`existing table: ${JSON.stringify(destinationtable)}`);
   event_log.info(`migration partitions: ${migratePartitions.length}`);
   const existingPartitions = await glue.getPartitions({
-    DatabaseName: resource.destination_properties.DatabaseName,
-    TableName: resource.destination_properties.TableInput.Name,
+    DatabaseName: resource.destination_properties.databaseName,
+    TableName: resource.destination_properties.name,
   });
   event_log.info(`existing partitions: ${existingPartitions.length}`);
   if (!destinationtable?.StorageDescriptor?.Location)
@@ -163,18 +161,18 @@ async function swap_partitions(
 
   await Promise.all([
     glue.batchCreatePartition({
-      DatabaseName: resource.destination_properties.DatabaseName,
-      TableName: resource.destination_properties.TableInput.Name,
+      DatabaseName: resource.destination_properties.databaseName,
+      TableName: resource.destination_properties.name,
       PartitionInputList: partitionCreateOps,
     }),
     glue.batchUpdatePartition({
-      DatabaseName: resource.destination_properties.DatabaseName,
-      TableName: resource.destination_properties.TableInput.Name,
+      DatabaseName: resource.destination_properties.databaseName,
+      TableName: resource.destination_properties.name,
       Entries: partitionUpdateOps,
     }),
     glue.batchDeletePartition({
-      DatabaseName: resource.destination_properties.DatabaseName,
-      TableName: resource.destination_properties.TableInput.Name,
+      DatabaseName: resource.destination_properties.databaseName,
+      TableName: resource.destination_properties.name,
       PartitionsToDelete: partitionDeleteOps,
     }),
   ]);
@@ -200,22 +198,21 @@ async function swap_partitions(
  */
 async function run(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
-  const { region } = parse(resource.resource_arn);
+  const region = resource.region;
 
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
   const glue = new Glue({ region });
   const s3 = new S3({ region, credentials });
 
-  const destinationDatabaseName = resource.destination_properties.DatabaseName;
-  const destinationTableName = resource.destination_properties.TableInput.Name;
+  const destinationDatabaseName = resource.destination_properties.databaseName;
+  const destinationTableName = resource.destination_properties.name;
 
   const migrateDatabaseName =
     operation.operation_inputs.migration_resource.destination_properties
-      .DatabaseName;
+      .databaseName;
   const migrateTableName =
-    operation.operation_inputs.migration_resource.destination_properties
-      .TableInput.Name;
+    operation.operation_inputs.migration_resource.destination_properties.name;
 
   const { Table: migrateTable } = await glue.getTable({
     DatabaseName: migrateDatabaseName,

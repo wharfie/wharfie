@@ -1,7 +1,5 @@
 'use strict';
 
-const { parse } = require('@sandfox/arn');
-
 const Glue = require('../../lib/glue');
 const Athena = require('../../lib/athena');
 const logging = require('../../lib/logging');
@@ -17,7 +15,7 @@ const query = require('../query');
  */
 async function run(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
-  const { region } = parse(resource.resource_arn);
+  const region = resource.region;
   const glue = new Glue({ region });
   const athena = new Athena({ region });
 
@@ -45,8 +43,8 @@ async function run(event, context, resource, operation) {
     resource,
     SLA,
     operationTime: operation.started_at,
-    sourceDatabaseName: resource.source_properties.DatabaseName,
-    sourceTableName: resource.source_properties.TableInput.Name,
+    sourceDatabaseName: resource.source_properties.databaseName,
+    sourceTableName: resource.source_properties.name,
     athenaWorkgroup: resource.athena_workgroup,
   });
   event_log.info(`FIND_COMPACTION_PARTITIONS:submitting query`);
