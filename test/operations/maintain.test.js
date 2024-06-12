@@ -55,7 +55,7 @@ describe('maintain tests', () => {
       's3://test-bucket/raw/dt=2021-01-20/data.json': '',
     });
     await athena.createWorkGroup({
-      Name: 'Wharfie:StackName',
+      Name: 'wharfie:StackName',
     });
     await glue.createDatabase({
       DatabaseInput: {
@@ -97,7 +97,7 @@ describe('maintain tests', () => {
     await resource.putResource({
       resource_id: 'resource_id',
       resource_arn: 'arn:aws:custom:us-east-1:123456789012:wharfie',
-      athena_workgroup: 'Wharfie:StackName',
+      athena_workgroup: 'wharfie:StackName',
       daemon_config: {
         Role: 'test-role',
       },
@@ -164,7 +164,7 @@ describe('maintain tests', () => {
       {
         "resource_id": {
           "resource_id": {
-            "athena_workgroup": "Wharfie:StackName",
+            "athena_workgroup": "wharfie:StackName",
             "daemon_config": {
               "Role": "test-role",
             },

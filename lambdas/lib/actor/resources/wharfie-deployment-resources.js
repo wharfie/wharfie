@@ -285,6 +285,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     });
     const sharedPolicy = new Policy({
       name: `${this.get('deployment').name}-shared-policy`,
+      dependsOn: [eventRole, systemBucket],
       properties: {
         deployment: () => this.get('deployment'),
         description: `${this.get('deployment').name} shared policy`,
@@ -295,6 +296,22 @@ class WharfieDeploymentResources extends BaseResourceGroup {
               Effect: 'Allow',
               Action: ['athena:GetQueryExecution', 'athena:*'],
               Resource: '*',
+            },
+            {
+              Effect: 'Allow',
+              Action: [
+                's3:GetBucketLocation',
+                's3:GetObject',
+                's3:ListBucket',
+                's3:ListBucketMultipartUploads',
+                's3:ListMultipartUploadParts',
+                's3:AbortMultipartUpload',
+                's3:PutObject',
+              ],
+              Resource: [
+                systemBucket.get('arn'),
+                `${systemBucket.get('arn')}/*`,
+              ],
             },
             {
               Effect: 'Allow',
@@ -346,6 +363,11 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         document: () => ({
           Version: '2012-10-17',
           Statement: [
+            {
+              Effect: 'Allow',
+              Action: ['athena:GetQueryExecution'],
+              Resource: '*',
+            },
             {
               Effect: 'Allow',
               Action: ['cloudwatch:PutMetricData'],

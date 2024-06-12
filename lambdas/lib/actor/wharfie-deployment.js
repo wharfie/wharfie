@@ -43,7 +43,7 @@ class WharfieDeployment extends ActorDeployment {
         globalQueryConcurrency: 10,
         resourceQueryConcurrency: 10,
         maxQueriesPerAction: 10000,
-        loggingLevel: 'debug',
+        loggingLevel: 'info',
         _INTERNAL_STATE_RESOURCE: true,
       },
       properties

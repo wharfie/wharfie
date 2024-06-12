@@ -2,6 +2,7 @@
 
 const Glue = require('../../lib/glue');
 const Athena = require('../../lib/athena');
+const STS = require('../../lib/sts');
 const logging = require('../../lib/logging');
 const Compaction = require('./lib/compaction');
 const query = require('../query');
@@ -16,8 +17,10 @@ const query = require('../query');
 async function run(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
   const region = resource.region;
-  const glue = new Glue({ region });
-  const athena = new Athena({ region });
+  const sts = new STS({ region });
+  const credentials = await sts.getCredentials(resource.daemon_config.Role);
+  const glue = new Glue({ region, credentials });
+  const athena = new Athena({ region, credentials });
 
   const compaction = new Compaction({
     glue,

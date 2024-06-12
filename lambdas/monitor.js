@@ -234,7 +234,7 @@ async function _monitorWharfie(cloudwatchEvent, queryEvent, context) {
  * @param {import('aws-lambda').Context} context -
  */
 async function monitorWharfie(cloudwatchEvent, context) {
-  if (!cloudwatchEvent.detail.workgroupName.startsWith('Wharfie')) return;
+  if (!cloudwatchEvent.detail.workgroupName.startsWith('wharfie')) return;
   if (!TERMINAL_STATE.has(cloudwatchEvent.detail.currentState)) return;
   const { QueryExecution } = await athena.getQueryExecution({
     QueryExecutionId: cloudwatchEvent.detail.queryExecutionId,

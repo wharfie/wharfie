@@ -139,6 +139,8 @@ class GlueTable extends BaseResource {
               StoredAsSubDirectories: this.get('storedAsSubDirectories'),
               SerdeInfo: this.get('serdeInfo'),
               Compressed: this.get('compressed'),
+              InputFormat: this.get('inputFormat'),
+              OutputFormat: this.get('outputFormat'),
             },
             ViewOriginalText: this.get('viewOriginalText'),
             ViewExpandedText: this.get('viewExpandedText'),

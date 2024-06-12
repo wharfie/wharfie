@@ -76,6 +76,7 @@ class AthenaWorkGroup extends BaseResource {
   async _destroy() {
     await this.athena.deleteWorkGroup({
       WorkGroup: this.name,
+      RecursiveDeleteOption: true,
     });
   }
 }

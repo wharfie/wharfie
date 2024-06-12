@@ -18,7 +18,7 @@ async function run(event, context, resource, operation) {
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
   const s3 = new S3({ region, credentials });
-  const glue = new Glue({ region });
+  const glue = new Glue({ region, credentials });
   const partition = new Partition({ s3, glue });
 
   if (

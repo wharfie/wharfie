@@ -22,10 +22,10 @@ const MAX_QUERIES_PER_ACTION = process.env.MAX_QUERIES_PER_ACTION || 0;
 async function run(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
   const region = resource.region;
-  const glue = new Glue({ region });
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
   const athena = new Athena({ region, credentials });
+  const glue = new Glue({ region, credentials });
 
   const compaction = new Compaction({
     glue,

@@ -202,7 +202,7 @@ async function run(event, context, resource, operation) {
 
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
-  const glue = new Glue({ region });
+  const glue = new Glue({ region, credentials });
   const s3 = new S3({ region, credentials });
 
   const destinationDatabaseName = resource.destination_properties.databaseName;

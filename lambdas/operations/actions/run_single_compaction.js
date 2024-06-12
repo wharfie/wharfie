@@ -22,7 +22,7 @@ async function run(event, context, resource, operation) {
   const region = resource.region;
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
-  const glue = new Glue({ region });
+  const glue = new Glue({ region, credentials });
   const athena = new Athena({ region, credentials });
   const compaction = new Compaction({
     glue,

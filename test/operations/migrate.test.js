@@ -67,7 +67,7 @@ describe('migrate tests', () => {
       StackName: 'migrate-resource_id',
     });
     await athena.createWorkGroup({
-      Name: 'Wharfie:StackName',
+      Name: 'wharfie:StackName',
     });
     await athena.createWorkGroup({
       Name: 'migrate-Wharfie:StackName',
@@ -181,7 +181,7 @@ describe('migrate tests', () => {
     await resource.putResource({
       resource_id: 'resource_id',
       resource_arn: 'arn:aws:custom:us-east-1:123456789012:wharfie',
-      athena_workgroup: 'Wharfie:StackName',
+      athena_workgroup: 'wharfie:StackName',
       daemon_config: {
         Role: 'test-role',
       },
@@ -312,7 +312,7 @@ describe('migrate tests', () => {
       {
         "resource_id": {
           "resource_id": {
-            "athena_workgroup": "Wharfie:StackName",
+            "athena_workgroup": "wharfie:StackName",
             "daemon_config": {
               "Role": "test-role",
             },

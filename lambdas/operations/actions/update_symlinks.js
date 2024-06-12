@@ -66,7 +66,7 @@ async function update_partition(
 
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
-  const glue = new Glue({ region });
+  const glue = new Glue({ region, credentials });
   const sqs = new SQS({ region });
   const s3 = new S3({ region, credentials });
 
@@ -189,7 +189,7 @@ async function update_partitions(
 
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
-  const glue = new Glue({ region });
+  const glue = new Glue({ region, credentials });
   const s3 = new S3({ region, credentials });
 
   const destinationDatabaseName = resource.destination_properties.databaseName;
@@ -317,7 +317,7 @@ async function update_table(event, context, resource, query_execution_id) {
   const region = resource.region;
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
-  const glue = new Glue({ region });
+  const glue = new Glue({ region, credentials });
   const sqs = new SQS({ region });
   const s3 = new S3({ region, credentials });
 
@@ -497,7 +497,9 @@ async function run(event, context, resource, operation) {
   if (!temporaryDatabaseName || !temporaryTableName)
     throw new Error('missing required action inputs');
   const region = resource.region;
-  const glue = new Glue({ region });
+  const sts = new STS({ region });
+  const credentials = await sts.getCredentials(resource.daemon_config.Role);
+  const glue = new Glue({ region, credentials });
 
   await update_symlinks(event, context, resource, operation);
 
