@@ -33,7 +33,7 @@ class Reconcilable {
     this.status = status;
     this.name = name;
     this.dependsOn = dependsOn;
-    this._MAX_RETRIES = 30;
+    this._MAX_RETRIES = 10;
     this._MAX_RETRY_TIMEOUT_SECONDS = 10;
     /**
      * @type {Error[]}
@@ -97,6 +97,7 @@ class Reconcilable {
         this.status = Status.STABLE;
         break;
       } catch (error) {
+        console.trace(error);
         // @ts-ignore
         this._reconcileErrors.push(error);
         if (
@@ -124,6 +125,12 @@ class Reconcilable {
       }
     }
     this.reconcile_end = Date.now();
+
+    console.log(
+      `${this.constructor.name}::${this.name} reconciled in ${
+        this.reconcile_end - this.reconcile_start
+      }`
+    );
     if (!this.isStable()) throw last_error;
     this._post_reconcile();
   }

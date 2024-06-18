@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const BaseResourceGroup = require('./base-resource-group');
 const WharfieResource = require('./wharfie-resource');
 const GlueDatabase = require('./aws/glue-database');
@@ -6,6 +5,7 @@ const Bucket = require('./aws/bucket');
 const Role = require('./aws/role');
 const S3 = require('../../s3');
 const { putWithThroughputRetry } = require('../../dynamo/');
+const { createStableHash } = require('../../crypto');
 
 /**
  * @typedef WharfieProjectProperties
@@ -106,25 +106,6 @@ class WharfieProject extends BaseResourceGroup {
   }
 
   /**
-   * Create an 8-character stable hash of a string.
-   * @param {string} input - The input string to hash.
-   * @returns {string} - The 8-character hash.
-   */
-  createStableHash(input) {
-    // Create a SHA-256 hash of the input
-    const hash = crypto.createHash('sha256').update(input).digest('base64');
-
-    // Convert to URL-safe base64 by replacing characters and removing padding
-    const base64urlHash = hash
-      .replace(/\+/g, '-')
-      .replace(/\//g, '-')
-      .replace(/=+$/, '');
-
-    // Truncate the base64 hash to 8 characters and lowercase them
-    return base64urlHash.substring(0, 8).toLowerCase();
-  }
-
-  /**
    * @returns {(import('./base-resource') | BaseResourceGroup)[]} -
    */
   _defineGroupResources() {
@@ -135,7 +116,7 @@ class WharfieProject extends BaseResourceGroup {
       },
     });
     const bucket = new Bucket({
-      name: `${this.name.replace(/[\s_]/g, '-')}-bucket-${this.createStableHash(
+      name: `${this.name.replace(/[\s_]/g, '-')}-bucket-${createStableHash(
         this.name
       )}`,
       properties: {
@@ -355,7 +336,7 @@ class WharfieProject extends BaseResourceGroup {
 
   getBucket() {
     return this.getResource(
-      `${this.name.replace(/[\s_]/g, '-')}-bucket-${this.createStableHash(
+      `${this.name.replace(/[\s_]/g, '-')}-bucket-${createStableHash(
         this.name
       )}`
     );

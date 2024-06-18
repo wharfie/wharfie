@@ -5,6 +5,7 @@ const Lambda = require('../lambda');
 const IAM = require('../iam');
 const WharfieDeploymentResources = require('./resources/wharfie-deployment-resources');
 const AutoScalingTable = require('./resources/aws/autoscaling-table');
+const BucketNotificationConfiguration = require('./resources/aws/bucket-notification-configuration');
 const ActorDeployment = require('./actor-deployment');
 const { Daemon, Cleanup, Events, Monitor } = require('./wharfie-actors');
 const { putWithThroughputRetry } = require('../dynamo/');
@@ -144,7 +145,37 @@ class WharfieDeployment extends ActorDeployment {
         deployment: this.getDeploymentProperties.bind(this),
       },
     });
-    return [resourceGroup, systemTable];
+    const logNotificationBucketNotificationConfiguration =
+      new BucketNotificationConfiguration({
+        name: `${this.name}-log-notification-bucket-notification-configuration`,
+        dependsOn: [resourceGroup, ...this.getActors()],
+        properties: {
+          deployment: this.getDeploymentProperties.bind(this),
+          bucketName: resourceGroup.getBucket().name,
+          notificationConfiguration: () => ({
+            QueueConfigurations: [
+              {
+                Events: ['s3:ObjectCreated:*'],
+                QueueArn: `arn:aws:sqs:${this.get('region')}:${this.get(
+                  'accountId'
+                )}:${this.name}-events-queue`,
+              },
+              {
+                Events: ['s3:ObjectRemoved:*'],
+                QueueArn: `arn:aws:sqs:${this.get('region')}:${this.get(
+                  'accountId'
+                )}:${this.name}-events-queue`,
+              },
+            ],
+          }),
+        },
+      });
+
+    return [
+      resourceGroup,
+      systemTable,
+      logNotificationBucketNotificationConfiguration,
+    ];
   }
 
   async setRegion() {

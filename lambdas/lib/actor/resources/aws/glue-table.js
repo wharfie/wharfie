@@ -5,7 +5,7 @@ const BaseResource = require('../base-resource');
 /**
  * @typedef GlueTableProperties
  * @property {string} databaseName -
- * @property {string | function(): Promise<string>} catalogId -
+ * @property {string | function(): string} catalogId -
  * @property {string} description -
  * @property {string} tableType -
  * @property {any} parameters -
@@ -21,7 +21,7 @@ const BaseResource = require('../base-resource');
  * @property {string} [viewOriginalText] -
  * @property {string} [viewExpandedText] -
  * @property {any} [tags] -
- * @property {string | function(): Promise<string>} [region] -
+ * @property {string | function(): string} [region] -
  */
 
 /**

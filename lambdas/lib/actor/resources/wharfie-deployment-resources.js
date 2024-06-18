@@ -1,5 +1,7 @@
 const BaseResourceGroup = require('./base-resource-group');
+const WharfieResource = require('./wharfie-resource');
 const AutoScalingTable = require('./aws/autoscaling-table');
+const GlueDatabase = require('./aws/glue-database');
 const Bucket = require('./aws/bucket');
 const Firehose = require('./aws/firehose');
 const Role = require('./aws/role');
@@ -65,7 +67,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
       properties: {
         deployment: () => this.get('deployment'),
         tableName: `${this.get('deployment').name}-resource`,
-        minReadCapacity: 1,
+        minReadCapacity: 5,
         maxReadCapacity: 50,
         minWriteCapacity: 1,
         maxWriteCapacity: 50,
@@ -94,8 +96,8 @@ class WharfieDeploymentResources extends BaseResourceGroup {
       properties: {
         deployment: () => this.get('deployment'),
         tableName: `${this.get('deployment').name}-locations`,
-        minReadCapacity: 1,
-        maxReadCapacity: 50,
+        minReadCapacity: 5,
+        maxReadCapacity: 100,
         minWriteCapacity: 1,
         maxWriteCapacity: 50,
         attributeDefinitions: [
@@ -307,6 +309,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
                 's3:ListMultipartUploadParts',
                 's3:AbortMultipartUpload',
                 's3:PutObject',
+                's3:DeleteObject',
               ],
               Resource: [
                 systemBucket.get('arn'),
@@ -451,6 +454,123 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         }),
       },
     });
+    const loggingResourceRole = new Role({
+      name: `${this.name}-logging-resource-role`,
+      properties: {
+        deployment: () => this.get('deployment'),
+        description: `${this.name} logging resource role`,
+        assumeRolePolicyDocument: () => ({
+          Version: '2012-10-17',
+          Statement: [
+            {
+              Action: 'sts:AssumeRole',
+              Effect: 'Allow',
+              Principal: {
+                AWS: '*',
+              },
+            },
+          ],
+        }),
+        managedPolicyArns: () => [sharedPolicy.get('arn')],
+        rolePolicyDocument: () => {
+          return {
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Sid: 'Bucket',
+                Effect: 'Allow',
+                Action: [
+                  's3:GetBucketLocation',
+                  's3:GetBucketAcl',
+                  's3:ListBucket',
+                  's3:ListBucketMultipartUploads',
+                  's3:AbortMultipartUpload',
+                ],
+                Resource: [`arn:aws:s3:::${systemBucket.name}`],
+              },
+              {
+                Sid: 'OutputWrite',
+                Effect: 'Allow',
+                Action: ['s3:*'],
+                Resource: `arn:aws:s3:::${systemBucket.name}/logs/processed/*`,
+              },
+              {
+                Sid: 'InputRead',
+                Effect: 'Allow',
+                Action: ['s3:GetObject'],
+                Resource: `arn:aws:s3:::${systemBucket.name}/logs/raw/*`,
+              },
+            ],
+          };
+        },
+      },
+    });
+    const systemGlueDatabase = new GlueDatabase({
+      name: this.get('deployment').name,
+      properties: {
+        deployment: () => this.get('deployment'),
+      },
+    });
+    const loggingResource = new WharfieResource({
+      name: `${this.name}-log-resource`,
+      dependsOn: [
+        systemGlueDatabase,
+        loggingResourceRole,
+        resourceTable,
+        locationTable,
+        dependencyTable,
+        systemBucket,
+      ],
+      properties: {
+        description: `${this.name} wharfie logs`,
+        columns: [
+          { name: 'action_id', type: 'string' },
+          { name: 'action_type', type: 'string' },
+          { name: 'level', type: 'string' },
+          { name: 'message', type: 'string' },
+          { name: 'operation_id', type: 'string' },
+          { name: 'operation_type', type: 'string' },
+          { name: 'request_id', type: 'string' },
+          { name: 'resource_id', type: 'string' },
+          { name: 'service', type: 'string' },
+          { name: 'wharfie_version', type: 'string' },
+          { name: 'pid', type: 'string' },
+          { name: 'hostname', type: 'string' },
+          { name: 'timestamp', type: 'string' },
+          { name: 'log_type', type: 'string' },
+        ],
+        partitionKeys: [
+          { name: 'year', type: 'string' },
+          { name: 'month', type: 'string' },
+          { name: 'day', type: 'string' },
+          { name: 'hr', type: 'string' },
+        ],
+        inputLocation: `s3://${systemBucket.name}/logs/raw/`,
+        tableType: 'EXTERNAL_TABLE',
+        parameters: { EXTERNAL: 'true' },
+        inputFormat: 'org.apache.hadoop.mapred.TextInputFormat',
+        outputFormat:
+          'org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat',
+        serdeInfo: {
+          SerializationLibrary: 'org.openx.data.jsonserde.JsonSerDe',
+          Parameters: { 'ignore.malformed.json': 'true' },
+        },
+        // general properties
+        deployment: () => this.get('deployment'),
+        resourceName: 'logs',
+        projectName: this.get('deployment').name,
+        databaseName: this.get('deployment').name,
+        outputLocation: `s3://${systemBucket.name}/logs/processed/`,
+        deploymentBucket: systemBucket.name,
+        region: () => this.get('deployment').region,
+        catalogId: () => this.get('deployment').accountId,
+        roleArn: () => loggingResourceRole.get('arn'),
+        resourceTable: `${this.get('deployment').name}-resource`,
+        dependencyTable: `${this.get('deployment').name}-dependencies`,
+        locationTable: `${this.get('deployment').name}-locations`,
+        tags: [],
+      },
+    });
 
     return [
       systemBucket,
@@ -465,6 +585,9 @@ class WharfieDeploymentResources extends BaseResourceGroup {
       eventRole,
       temporaryDatabase,
       actorPolicy,
+      systemGlueDatabase,
+      loggingResource,
+      loggingResourceRole,
     ];
   }
 

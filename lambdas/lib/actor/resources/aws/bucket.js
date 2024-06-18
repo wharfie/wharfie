@@ -34,7 +34,9 @@ class Bucket extends BaseResource {
     } catch (error) {
       // @ts-ignore
       if (error.name === 'NoSuchBucket') {
-        await this.s3.createBucket({ Bucket: this.name });
+        await this.s3.createBucket({
+          Bucket: this.name,
+        });
       } else {
         throw error;
       }

@@ -14,7 +14,7 @@ const _athena = new Athena({});
  * @property {string} resourceName -
  * @property {string} projectName -
  * @property {string} databaseName -
- * @property {string} catalogId -
+ * @property {string | function(): string} catalogId -
  * @property {string} [schedule] -
  * @property {string} description -
  * @property {string} tableType -
@@ -33,10 +33,10 @@ const _athena = new Athena({});
  * @property {string} [viewExpandedText] -
  * @property {any} tags -
  * @property {string} deploymentBucket -
- * @property {string} region -
+ * @property {string | function(): string} region -
  * @property {number} [interval] -
- * @property {string} scheduleQueueArn -
- * @property {string} scheduleRoleArn -
+ * @property {string} [scheduleQueueArn] -
+ * @property {string} [scheduleRoleArn] -
  * @property {string | function(): string} roleArn -
  * @property {string} resourceTable -
  * @property {string} dependencyTable -
@@ -79,10 +79,12 @@ class WharfieResource extends BaseResourceGroup {
    * @returns {(import('./base-resource') | BaseResourceGroup)[]} -
    */
   _defineGroupResources() {
+    const resources = [];
     const workgroup = new AthenaWorkGroup({
       name: `${this.get('deployment').name}-${this.get(
         'resourceName'
       )}-workgroup`,
+      dependsOn: this.dependsOn,
       properties: {
         deployment: () => this.get('deployment'),
         description: `${this.get('deployment').name} resource ${this.get(
@@ -95,6 +97,7 @@ class WharfieResource extends BaseResourceGroup {
     });
     const inputTable = new GlueTable({
       name: `${this.get('resourceName')}_raw`,
+      dependsOn: this.dependsOn,
       properties: {
         deployment: () => this.get('deployment'),
         databaseName: this.get('databaseName'),
@@ -123,12 +126,13 @@ class WharfieResource extends BaseResourceGroup {
           ? { viewExpandedText: this.get('viewExpandedText') }
           : {}),
         tags: this.get('tags', []),
-        region: this.get('region'),
-        catalogId: this.get('catalogId'),
+        region: () => this.get('region'),
+        catalogId: () => this.get('catalogId'),
       },
     });
     const outputTable = new GlueTable({
       name: this.get('resourceName'),
+      dependsOn: this.dependsOn,
       properties: {
         deployment: () => this.get('deployment'),
         databaseName: this.get('databaseName'),
@@ -151,41 +155,51 @@ class WharfieResource extends BaseResourceGroup {
         numberOfBuckets: 0,
         storedAsSubDirectories: false,
         tags: this.get('tags', []),
-        region: this.get('region'),
-        catalogId: this.get('catalogId'),
+        region: () => this.get('region'),
+        catalogId: () => this.get('catalogId'),
       },
     });
-    const rule = new EventsRule({
-      name: `${this.get('projectName')}-${this.get('resourceName')}-rule`,
-      properties: {
-        deployment: () => this.get('deployment'),
-        description: `${this.get('projectName')} resource ${this.get(
-          'resourceName'
-        )} rule`,
-        state: this.has('schedule') ? EventsRule.ENABLED : EventsRule.DISABLED,
-        scheduleExpression: generateSchedule(
-          Number(this.get('schedule', 1800))
-        ),
-        roleArn: () => this.get('scheduleRoleArn'),
-        targets: () => [
-          {
-            Id: `${this.get('projectName')}-${this.get(
-              'resourceName'
-            )}-rule-target`,
-            Arn: this.get('scheduleQueueArn'),
-            InputTransformer: {
-              InputPathsMap: {
-                time: '$.time',
-              },
-              // TODO use a real id
-              InputTemplate: `{"operation_started_at":<time>, "operation_type":"MAINTAIN", "action_type":"START", "resource_id":"${this.get(
+    if (
+      this.get('scheduleQueueArn') &&
+      this.get('scheduleRoleArn') &&
+      this.get('schedule')
+    ) {
+      const rule = new EventsRule({
+        name: `${this.get('projectName')}-${this.get('resourceName')}-rule`,
+        dependsOn: this.dependsOn,
+        properties: {
+          deployment: () => this.get('deployment'),
+          description: `${this.get('projectName')} resource ${this.get(
+            'resourceName'
+          )} rule`,
+          state: this.has('schedule')
+            ? EventsRule.ENABLED
+            : EventsRule.DISABLED,
+          scheduleExpression: generateSchedule(
+            Number(this.get('schedule', 1800))
+          ),
+          roleArn: () => this.get('scheduleRoleArn'),
+          targets: () => [
+            {
+              Id: `${this.get('projectName')}-${this.get(
                 'resourceName'
-              )}"}`,
+              )}-rule-target`,
+              Arn: this.get('scheduleQueueArn'),
+              InputTransformer: {
+                InputPathsMap: {
+                  time: '$.time',
+                },
+                // TODO use a real id
+                InputTemplate: `{"operation_started_at":<time>, "operation_type":"MAINTAIN", "action_type":"START", "resource_id":"${this.get(
+                  'resourceName'
+                )}"}`,
+              },
             },
-          },
-        ],
-      },
-    });
+          ],
+        },
+      });
+      resources.push(rule);
+    }
     const records = [];
 
     records.push(
@@ -193,6 +207,7 @@ class WharfieResource extends BaseResourceGroup {
         name: `${this.get('projectName')}-${this.get(
           'resourceName'
         )}-resource-record`,
+        dependsOn: this.dependsOn,
         properties: {
           deployment: () => this.get('deployment'),
           tableName: this.get('resourceTable'),
@@ -207,7 +222,11 @@ class WharfieResource extends BaseResourceGroup {
               status: 'CREATING',
               athena_workgroup: workgroup.name,
               daemon_config: {
-                Role: () => this.get('roleArn'),
+                Role: () => {
+                  if (!this.get('roleArn'))
+                    throw new Error('no daemon config role found');
+                  return this.get('roleArn');
+                },
               },
               source_properties: {
                 name: inputTable.name,
@@ -242,6 +261,7 @@ class WharfieResource extends BaseResourceGroup {
             name: `${this.get('projectName')}-${this.get(
               'resourceName'
             )}-dependency-record-${dependencyCount}`,
+            dependsOn: this.dependsOn,
             properties: {
               deployment: () => this.get('deployment'),
               tableName: this.get('dependencyTable'),
@@ -264,6 +284,7 @@ class WharfieResource extends BaseResourceGroup {
           name: `${this.get('projectName')}-${this.get(
             'resourceName'
           )}-location-record`,
+          dependsOn: this.dependsOn,
           properties: {
             deployment: () => this.get('deployment'),
             tableName: this.get('locationTable'),
@@ -279,7 +300,7 @@ class WharfieResource extends BaseResourceGroup {
       );
     }
 
-    return [workgroup, inputTable, outputTable, rule, ...records];
+    return [workgroup, inputTable, outputTable, ...records, ...resources];
   }
 }
 
