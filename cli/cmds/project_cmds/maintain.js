@@ -1,16 +1,12 @@
 'use strict';
 
-const loadProject = require('../../../project/load');
-const { load } = require('../../../../lambdas/lib/actor/deserialize');
-const SQS = require('../../../../lambdas/lib/sqs');
-const loadEnvironment = require('../../../project/load-environment');
-const { getResourceOptions } = require('../../../project/template-actor');
+const loadProject = require('../../project/load');
+const { load } = require('../../../lambdas/lib/actor/deserialize');
+const SQS = require('../../../lambdas/lib/sqs');
+const loadEnvironment = require('../../project/load-environment');
+const { getResourceOptions } = require('../../project/template-actor');
 
-const {
-  displayFailure,
-  displayInfo,
-  displaySuccess,
-} = require('../../../output');
+const { displayFailure, displayInfo, displaySuccess } = require('../../output');
 
 const sqs = new SQS();
 

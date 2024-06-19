@@ -1,11 +1,11 @@
 'use strict';
 const chokidar = require('chokidar');
 
-const loadProject = require('../../../project/load');
-const loadEnvironment = require('../../../project/load-environment');
-const { load } = require('../../../../lambdas/lib/actor/deserialize');
-const WharfieProject = require('../../../../lambdas/lib/actor/resources/wharfie-project');
-const { getResourceOptions } = require('../../../project/template-actor');
+const loadProject = require('../../project/load');
+const loadEnvironment = require('../../project/load-environment');
+const { load } = require('../../../lambdas/lib/actor/deserialize');
+const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
+const { getResourceOptions } = require('../../project/template-actor');
 
 /**
  * @param {function} func -
@@ -30,11 +30,7 @@ function debounceAsync(func, wait) {
   };
 }
 
-const {
-  displayFailure,
-  displayInfo,
-  displaySuccess,
-} = require('../../../output');
+const { displayFailure, displayInfo, displaySuccess } = require('../../output');
 
 const dev = async (projectPath, environmentName) => {
   const project = await loadProject({

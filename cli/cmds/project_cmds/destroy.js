@@ -2,26 +2,40 @@
 
 const inquirer = require('inquirer');
 
-const CloudFormation = require('../../../lambdas/lib/cloudformation');
-const S3 = require('../../../lambdas/lib/s3');
-const STS = require('../../../lambdas/lib/sts');
 const loadProject = require('../../project/load');
+const { load } = require('../../../lambdas/lib/actor/deserialize');
+const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
 const loadEnvironment = require('../../project/load-environment');
-const { getStackName } = require('../../project/template');
+const { getResourceOptions } = require('../../project/template-actor');
 const { displayFailure, displayInfo, displaySuccess } = require('../../output');
-
-const cloudformation = new CloudFormation();
-const s3 = new S3();
-const sts = new STS();
 
 const destroy = async (path, environmentName) => {
   const project = await loadProject({
     path,
   });
-  const environment = loadEnvironment(project, environmentName);
-  const stackName = getStackName(project, environment);
-  const { Account } = await sts.getCallerIdentity();
-  const bucketName = `${stackName}-${Account}-${process.env.WHARFIE_REGION}`;
+  let projectResources;
+  try {
+    projectResources = await load({
+      deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME,
+      resourceName: project.name,
+    });
+  } catch (error) {
+    if (
+      !['No resource found', 'Resource was not stored'].includes(error.message)
+    )
+      throw error;
+    const deployment = await load({
+      deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME,
+    });
+    projectResources = new WharfieProject({
+      deployment,
+      name: project.name,
+    });
+    const environment = loadEnvironment(project, environmentName);
+    const resourceOptions = getResourceOptions(environment, project);
+
+    projectResources.registerWharfieResources(resourceOptions);
+  }
 
   const answers = await new Promise((resolve, reject) => {
     inquirer
@@ -29,7 +43,9 @@ const destroy = async (path, environmentName) => {
         {
           type: 'confirm',
           name: 'confirmation',
-          message: `This will destroy the project including all data in the ${bucketName} S3 bucket. Are you sure?`,
+          message: `This will destroy the project including all data in the ${
+            projectResources.getBucket().name
+          } S3 bucket. Are you sure?`,
           default: false,
         },
       ])
@@ -40,14 +56,10 @@ const destroy = async (path, environmentName) => {
     displayFailure('destroy cancelled');
     return;
   }
-  displayInfo(`destroying wharfie project ${stackName}...`);
-  await s3.deletePath({
-    Bucket: bucketName,
-  });
-  await cloudformation.deleteStack({
-    StackName: stackName,
-  });
-  displaySuccess(`destroyed wharfie project ${stackName} successfully`);
+  displayInfo(`destroying wharfie project ${project.name}...`);
+
+  await projectResources.destroy();
+  displaySuccess(`destroyed wharfie project ${project.name} successfully`);
 };
 
 exports.command = 'destroy [path]';
@@ -72,6 +84,7 @@ exports.handler = async function ({ path, environment }) {
   try {
     await destroy(path, environment);
   } catch (err) {
+    console.trace(err);
     displayFailure(err);
   }
 };
