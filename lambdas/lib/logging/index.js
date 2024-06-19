@@ -28,9 +28,6 @@ const ROOT_LOGGER = new Logger({
     ...(process.env.LOGGING_LEVEL === 'debug'
       ? [new ConsoleLogTransport()]
       : []),
-    ...(process.env.LOGGING_LEVEL === 'info'
-      ? [new ConsoleLogTransport()]
-      : []),
   ],
 });
 
