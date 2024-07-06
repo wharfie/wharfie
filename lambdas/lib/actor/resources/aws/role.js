@@ -1,6 +1,7 @@
 'use strict';
 const IAM = require('../../../iam');
 const BaseResource = require('../base-resource');
+const { NoSuchEntityException } = require('@aws-sdk/client-iam');
 
 /**
  * @typedef RoleProperties
@@ -34,8 +35,7 @@ class Role extends BaseResource {
       });
       this.set('arn', Role?.Arn);
     } catch (error) {
-      // @ts-ignore
-      if (error.name === 'NoSuchEntityException') {
+      if (error instanceof NoSuchEntityException) {
         const { Role } = await this.iam.createRole({
           RoleName: this.name,
           Description: this.get('description'),
@@ -70,10 +70,9 @@ class Role extends BaseResource {
 
   async _destroy() {
     try {
-      const { AttachedPolicies } =
-        await this.iam.listAttachedRolePoliciesCommand({
-          RoleName: this.name,
-        });
+      const { AttachedPolicies } = await this.iam.listAttachedRolePolicies({
+        RoleName: this.name,
+      });
       for (const AttachedPolicy of AttachedPolicies || []) {
         await this.iam.detachRolePolicy({
           RoleName: this.name,
@@ -81,8 +80,7 @@ class Role extends BaseResource {
         });
       }
     } catch (error) {
-      // @ts-ignore
-      if (error.name !== 'NoSuchEntityException') throw error;
+      if (!(error instanceof NoSuchEntityException)) throw error;
     }
 
     try {
@@ -96,8 +94,7 @@ class Role extends BaseResource {
         });
       }
     } catch (error) {
-      // @ts-ignore
-      if (error.name !== 'NoSuchEntityException') throw error;
+      if (!(error instanceof NoSuchEntityException)) throw error;
     }
 
     try {
@@ -105,8 +102,7 @@ class Role extends BaseResource {
         RoleName: this.name,
       });
     } catch (error) {
-      // @ts-ignore
-      if (error.name !== 'NoSuchEntityException') throw error;
+      if (!(error instanceof NoSuchEntityException)) throw error;
     }
   }
 }

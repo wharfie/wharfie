@@ -1,6 +1,7 @@
 'use strict';
 const SQS = require('../../../sqs');
 const BaseResource = require('../base-resource');
+const { QueueDoesNotExist } = require('@aws-sdk/client-sqs');
 
 /**
  * @typedef QueueProperties
@@ -73,8 +74,7 @@ class Queue extends BaseResource {
         });
       }
     } catch (error) {
-      // @ts-ignore
-      if (error.name === 'QueueDoesNotExist') {
+      if (error instanceof QueueDoesNotExist) {
         const { QueueUrl } = await this.sqs.createQueue({
           QueueName: this.name,
           Attributes: {

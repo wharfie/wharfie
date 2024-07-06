@@ -2,6 +2,8 @@
 const S3 = require('../../../s3');
 const BaseResource = require('../base-resource');
 
+const { NoSuchBucket } = require('@aws-sdk/client-s3');
+
 /**
  * @typedef BucketProperties
  * @property {import('@aws-sdk/client-s3').BucketLifecycleConfiguration} [lifecycleConfiguration] -
@@ -32,8 +34,7 @@ class Bucket extends BaseResource {
         Bucket: this.name,
       });
     } catch (error) {
-      // @ts-ignore
-      if (error.name === 'NoSuchBucket') {
+      if (error instanceof NoSuchBucket) {
         await this.s3.createBucket({
           Bucket: this.name,
         });
@@ -92,8 +93,7 @@ class Bucket extends BaseResource {
         Bucket: this.name,
       });
     } catch (error) {
-      // @ts-ignore
-      if (error.name !== 'NoSuchBucket') {
+      if (!(error instanceof NoSuchBucket)) {
         throw error;
       }
     }

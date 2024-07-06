@@ -1,6 +1,8 @@
 'use strict';
 const { createId } = require('../../../lambdas/lib/id');
 
+const { QueueDoesNotExist } = jest.requireActual('@aws-sdk/client-sqs');
+
 class SQSMock {
   __setMockState(sqsState) {
     SQSMock.__state = {
@@ -19,6 +21,14 @@ class SQSMock {
     switch (command.constructor.name) {
       case 'CreateQueueCommand':
         return await this.createQueue(command.input);
+      case 'GetQueueUrlCommand':
+        return await this.getQueueUrl(command.input);
+      case 'GetQueueAttributesCommand':
+        return await this.getQueueAttributes(command.input);
+      case 'SetQueueAttributesCommand':
+        return await this.setQueueAttributes(command.input);
+      case 'DeleteQueueCommand':
+        return await this.deleteQueue(command.input);
       case 'SendMessageCommand':
         return await this.sendMessage(command.input);
       case 'SendMessageBatchCommand':
@@ -33,17 +43,49 @@ class SQSMock {
   }
 
   async createQueue(params) {
-    SQSMock.__state.queues[params.QueueName] = [];
+    SQSMock.__state.queues[params.QueueName] = {
+      queue: [],
+      Attributes: params.Attributes || {},
+    };
+    return { QueueUrl: params.QueueName };
+  }
+
+  async deleteQueue(params) {
+    delete SQSMock.__state.queues[params.QueueUrl];
+  }
+
+  async getQueueUrl(params) {
+    if (!SQSMock.__state.queues[params.QueueName])
+      throw new QueueDoesNotExist({
+        message: `queue ${params.QueueName} does not exist`,
+      });
+    return { QueueUrl: params.QueueName };
+  }
+
+  async setQueueAttributes(params) {
+    if (!SQSMock.__state.queues[params.QueueUrl])
+      throw new QueueDoesNotExist({
+        message: `queue ${params.QueueUrl} does not exist`,
+      });
+    SQSMock.__state.queues[params.QueueUrl].Attributes = params.Attributes;
+  }
+
+  async getQueueAttributes(params) {
+    if (!SQSMock.__state.queues[params.QueueUrl])
+      throw new QueueDoesNotExist({
+        message: `queue ${params.QueueUrl} does not exist`,
+      });
+    return SQSMock.__state.queues[params.QueueUrl];
   }
 
   async sendMessage(params) {
-    if (params.QueueUrl === undefined) {
-      console.trace(params);
-    }
     if (!SQSMock.__state.queues[params.QueueUrl])
-      SQSMock.__state.queues[params.QueueUrl] = [];
+      SQSMock.__state.queues[params.QueueUrl] = {
+        queue: [],
+        Attributes: {},
+      };
     const MessageId = createId();
-    SQSMock.__state.queues[params.QueueUrl].push({
+    SQSMock.__state.queues[params.QueueUrl].queue.push({
       MessageId,
       Body: params.MessageBody,
     });
@@ -68,11 +110,11 @@ class SQSMock {
     params.MaxNumberOfMessages = params.MaxNumberOfMessages || 1;
     while (
       params.MaxNumberOfMessages > 0 &&
-      SQSMock.__state.queues[params.QueueUrl].length > 0
+      SQSMock.__state.queues[params.QueueUrl].queue.length > 0
     ) {
-      const limit = SQSMock.__state.queues[params.QueueUrl].length;
+      const limit = SQSMock.__state.queues[params.QueueUrl].queue.length;
       const messageIndex = Math.floor(Math.random() * limit);
-      const _message = SQSMock.__state.queues[params.QueueUrl].splice(
+      const _message = SQSMock.__state.queues[params.QueueUrl].queue.splice(
         messageIndex,
         1
       )[0];
@@ -89,9 +131,9 @@ class SQSMock {
   }
 
   async deleteMessage(params) {
-    SQSMock.__state.queues[params.QueueUrl] = SQSMock.__state.queues[
+    SQSMock.__state.queues[params.QueueUrl].queue = SQSMock.__state.queues[
       params.QueueUrl
-    ].filter((message) => message.MessageId !== params.ReceiptHandle);
+    ].queue.filter((message) => message.MessageId !== params.ReceiptHandle);
   }
 
   async deleteMessageBatch(params) {

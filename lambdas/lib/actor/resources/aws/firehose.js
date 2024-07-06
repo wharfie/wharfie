@@ -1,6 +1,7 @@
 'use strict';
 const FirehoseSDK = require('../../../firehose');
 const BaseResource = require('../base-resource');
+const { ResourceNotFoundException } = require('@aws-sdk/client-firehose');
 /**
  * @typedef FirehoseProperties
  * @property {import('@aws-sdk/client-firehose').S3DestinationConfiguration | function(): import('@aws-sdk/client-firehose').S3DestinationConfiguration} s3DestinationConfiguration -
@@ -31,8 +32,7 @@ class Firehose extends BaseResource {
         });
       this.set('arn', DeliveryStreamDescription?.DeliveryStreamARN);
     } catch (error) {
-      // @ts-ignore
-      if (error.name === 'ResourceNotFoundException') {
+      if (error instanceof ResourceNotFoundException) {
         const { DeliveryStreamARN } = await this.firehose.createDeliveryStream({
           DeliveryStreamName: this.name,
           DeliveryStreamType: 'DirectPut',
@@ -53,8 +53,7 @@ class Firehose extends BaseResource {
       });
       await this.waitForDeliveryStreamStatus('DELETING');
     } catch (error) {
-      // @ts-ignore
-      if (error.name !== 'ResourceNotFoundException') {
+      if (!(error instanceof ResourceNotFoundException)) {
         throw error;
       }
     }

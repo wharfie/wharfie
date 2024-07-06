@@ -1,6 +1,7 @@
 'use strict';
 const S3 = require('../../../s3');
 const BaseResource = require('../base-resource');
+const { NoSuchBucket } = require('@aws-sdk/client-s3');
 
 /**
  * @typedef BucketNotificationConfigurationProperties
@@ -52,8 +53,7 @@ class BucketNotificationConfiguration extends BaseResource {
         NotificationConfiguration: {},
       });
     } catch (error) {
-      // @ts-ignore
-      if (error.name !== 'NoSuchBucket') {
+      if (!(error instanceof NoSuchBucket)) {
         throw error;
       }
     }

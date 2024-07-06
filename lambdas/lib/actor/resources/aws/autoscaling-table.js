@@ -4,7 +4,7 @@ const Role = require('./role');
 const Table = require('./table');
 const AutoScalingPolicy = require('./autoscaling-policy');
 const AutoScalingTarget = require('./autoscaling-target');
-const ApplicationAutoScaling = require('../../../application-autoscaling');
+const ApplicationAutoScaling = require('../../../application-auto-scaling');
 const BaseResourceGroup = require('../base-resource-group');
 
 /**

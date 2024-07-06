@@ -46,7 +46,10 @@ describe('mock tests for SQS', () => {
     expect(sqs.sqs.__getMockState()).toMatchInlineSnapshot(`
       {
         "queues": {
-          "test_queue": [],
+          "test_queue": {
+            "Attributes": {},
+            "queue": [],
+          },
         },
       }
     `);
@@ -72,16 +75,19 @@ describe('mock tests for SQS', () => {
     expect(sqs.sqs.__getMockState()).toMatchInlineSnapshot(`
       {
         "queues": {
-          "test_queue": [
-            {
-              "Body": ""foo"",
-              "MessageId": "ckywjpmr70002zjvd0wyq5x48",
-            },
-            {
-              "Body": ""bar"",
-              "MessageId": "ckywjpmr70002zjvd0wyq5x48",
-            },
-          ],
+          "test_queue": {
+            "Attributes": {},
+            "queue": [
+              {
+                "Body": ""foo"",
+                "MessageId": "ckywjpmr70002zjvd0wyq5x48",
+              },
+              {
+                "Body": ""bar"",
+                "MessageId": "ckywjpmr70002zjvd0wyq5x48",
+              },
+            ],
+          },
         },
       }
     `);

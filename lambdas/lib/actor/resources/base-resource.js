@@ -19,7 +19,7 @@ class BaseResource extends Reconcilable {
     // if (!properties.deployment && this.constructor.name !== 'WharfieDeployment')
     //   throw new Error('deployment property required for base resource');
     this.resourceType = this.constructor.name;
-    this.properties = properties;
+    this.properties = properties || {};
   }
 
   /**

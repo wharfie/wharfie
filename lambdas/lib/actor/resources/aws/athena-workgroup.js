@@ -2,6 +2,8 @@
 const Athena = require('../../../athena');
 const BaseResource = require('../base-resource');
 
+const { InvalidRequestException } = require('@aws-sdk/client-athena');
+
 /**
  * @typedef AthenaWorkgroupProperties
  * @property {string} outputLocation -
@@ -47,8 +49,7 @@ class AthenaWorkGroup extends BaseResource {
         });
       }
     } catch (error) {
-      // @ts-ignore
-      if (error.name === 'InvalidRequestException') {
+      if (error instanceof InvalidRequestException) {
         await this.athena.createWorkGroup({
           Name: this.name,
           Configuration: {

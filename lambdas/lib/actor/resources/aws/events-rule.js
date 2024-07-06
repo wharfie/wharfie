@@ -1,7 +1,10 @@
 'use strict';
 const CloudWatchEvents = require('../../../cloudwatch-events');
 const BaseResource = require('../base-resource');
-const AWS = require('@aws-sdk/client-cloudwatch-events');
+const {
+  ResourceNotFoundException,
+  RuleState,
+} = require('@aws-sdk/client-cloudwatch-events');
 
 /**
  * @typedef EventsRuleProperties
@@ -101,8 +104,7 @@ class EventsRule extends BaseResource {
       }
       // TODO handle target updates
     } catch (error) {
-      // @ts-ignore
-      if (error.name === 'ResourceNotFoundException') {
+      if (error instanceof ResourceNotFoundException) {
         await this.cloudwatchEvents.putRule({
           Name: this.name,
           Description: this.get('description'),
@@ -135,7 +137,7 @@ class EventsRule extends BaseResource {
         });
       }
       try {
-        await this.cloudwatchEvents.deleteRuleCommand({
+        await this.cloudwatchEvents.deleteRule({
           Name: this.name,
         });
       } catch (error) {
@@ -145,15 +147,14 @@ class EventsRule extends BaseResource {
         }
       }
     } catch (error) {
-      // @ts-ignore
-      if (error.name !== 'ResourceNotFoundException') {
+      if (!(error instanceof ResourceNotFoundException)) {
         throw error;
       }
     }
   }
 }
 
-EventsRule.ENABLED = AWS.RuleState.ENABLED;
-EventsRule.DISABLED = AWS.RuleState.DISABLED;
+EventsRule.ENABLED = RuleState.ENABLED;
+EventsRule.DISABLED = RuleState.DISABLED;
 
 module.exports = EventsRule;

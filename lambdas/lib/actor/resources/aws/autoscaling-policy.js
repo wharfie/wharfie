@@ -1,7 +1,7 @@
 'use strict';
 
 const BaseResource = require('../base-resource');
-const ApplicationAutoScaling = require('../../../application-autoscaling');
+const ApplicationAutoScaling = require('../../../application-auto-scaling');
 
 /**
  * @typedef AutoscalingPolicyProperties

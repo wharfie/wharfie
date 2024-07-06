@@ -145,13 +145,14 @@ describe('s3 event tests', () => {
     const emptyQueues = new Promise((resolve) => {
       pollInterval = setInterval(() => {
         if (
-          (SQS.__state.queues[process.env.DAEMON_QUEUE_URL] || []).length ===
-            0 &&
-          (SQS.__state.queues[process.env.MONITOR_QUEUE_URL] || []).length ===
-            0 &&
-          (SQS.__state.queues[process.env.EVENTS_QUEUE_URL] || []).length ===
-            0 &&
-          (SQS.__state.queues[process.env.CLEANUP_QUEUE_URL] || []).length === 0
+          (SQS.__state.queues[process.env.DAEMON_QUEUE_URL].queue || [])
+            .length === 0 &&
+          (SQS.__state.queues[process.env.MONITOR_QUEUE_URL].queue || [])
+            .length === 0 &&
+          (SQS.__state.queues[process.env.EVENTS_QUEUE_URL].queue || [])
+            .length === 0 &&
+          (SQS.__state.queues[process.env.CLEANUP_QUEUE_URL].queue || [])
+            .length === 0
         ) {
           completed_checks += 1;
           if (completed_checks >= 5) {
@@ -280,10 +281,22 @@ describe('s3 event tests', () => {
     expect(SQS.__state).toMatchInlineSnapshot(`
       {
         "queues": {
-          "cleanup-queue": [],
-          "daemon-queue": [],
-          "events-queue": [],
-          "monitor-queue": [],
+          "cleanup-queue": {
+            "Attributes": {},
+            "queue": [],
+          },
+          "daemon-queue": {
+            "Attributes": {},
+            "queue": [],
+          },
+          "events-queue": {
+            "Attributes": {},
+            "queue": [],
+          },
+          "monitor-queue": {
+            "Attributes": {},
+            "queue": [],
+          },
         },
       }
     `);

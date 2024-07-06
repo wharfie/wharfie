@@ -1,6 +1,7 @@
 'use strict';
 const Lambda = require('../../../lambda');
 const BaseResource = require('../base-resource');
+const { ResourceNotFoundException } = require('@aws-sdk/client-lambda');
 /**
  * @typedef LambdaProperties
  * @property {import('@aws-sdk/client-lambda').Runtime} runtime -
@@ -105,8 +106,7 @@ class LambdaFunction extends BaseResource {
         });
       }
     } catch (error) {
-      // @ts-ignore
-      if (error.name === 'ResourceNotFoundException') {
+      if (error instanceof ResourceNotFoundException) {
         const { FunctionArn } = await this.lambda.createFunction({
           FunctionName: this.name,
           Runtime: this.get('runtime'),
@@ -139,8 +139,7 @@ class LambdaFunction extends BaseResource {
         FunctionName: this.name,
       });
     } catch (error) {
-      // @ts-ignore
-      if (error.name !== 'ResourceNotFoundException') throw error;
+      if (!(error instanceof ResourceNotFoundException)) throw error;
     }
   }
 }

@@ -1,6 +1,7 @@
 'use strict';
 const IAM = require('../../../iam');
 const BaseResource = require('../base-resource');
+const { NoSuchEntityException } = require('@aws-sdk/client-iam');
 
 /**
  * @typedef PolicyProperties
@@ -36,8 +37,7 @@ class Policy extends BaseResource {
         PolicyArn: this.get('arn'),
       });
     } catch (error) {
-      // @ts-ignore
-      if (error.name === 'NoSuchEntityException') {
+      if (error instanceof NoSuchEntityException) {
         await this.iam.createPolicy({
           PolicyName: this.name,
           Description: this.get('description'),
@@ -51,7 +51,7 @@ class Policy extends BaseResource {
 
   async _destroy() {
     try {
-      const { PolicyRoles } = await this.iam.listEntitiesForPolicyCommand({
+      const { PolicyRoles } = await this.iam.listEntitiesForPolicy({
         PolicyArn: this.get('arn'),
       });
       if (PolicyRoles) {
@@ -67,8 +67,7 @@ class Policy extends BaseResource {
         PolicyArn: this.get('arn'),
       });
     } catch (error) {
-      // @ts-ignore
-      if (error.name !== 'NoSuchEntityException') throw error;
+      if (!(error instanceof NoSuchEntityException)) throw error;
     }
   }
 }

@@ -129,7 +129,7 @@ class IAM {
    * @param {import("@aws-sdk/client-iam").ListAttachedRolePoliciesCommandInput} params -
    * @returns {Promise<import("@aws-sdk/client-iam").ListAttachedRolePoliciesCommandOutput>} -
    */
-  async listAttachedRolePoliciesCommand(params) {
+  async listAttachedRolePolicies(params) {
     const command = new AWS.ListAttachedRolePoliciesCommand(params);
     return await this.iam.send(command);
   }
@@ -138,7 +138,7 @@ class IAM {
    * @param {import("@aws-sdk/client-iam").ListEntitiesForPolicyCommandInput} params -
    * @returns {Promise<import("@aws-sdk/client-iam").ListEntitiesForPolicyCommandOutput>} -
    */
-  async listEntitiesForPolicyCommand(params) {
+  async listEntitiesForPolicy(params) {
     const command = new AWS.ListEntitiesForPolicyCommand(params);
     return await this.iam.send(command);
   }

@@ -1,6 +1,7 @@
 'use strict';
 
 const { createId } = require('../../../lambdas/lib/id');
+const { NoSuchBucket, NotFound } = jest.requireActual('@aws-sdk/client-s3');
 
 class S3Mock {
   __setMockState(s3ObjectMap) {
@@ -8,9 +9,11 @@ class S3Mock {
     Object.keys(s3ObjectMap).forEach((s3Key) => {
       const { bucket, prefix } = this._parseS3Uri(s3Key);
       if (!S3Mock.__state[bucket]) {
-        S3Mock.__state[bucket] = {};
+        S3Mock.__state[bucket] = {
+          objects: {},
+        };
       }
-      S3Mock.__state[bucket][prefix] = s3ObjectMap[s3Key];
+      S3Mock.__state[bucket].objects[prefix] = s3ObjectMap[s3Key];
     });
   }
 
@@ -32,6 +35,20 @@ class S3Mock {
 
   async send(command) {
     switch (command.constructor.name) {
+      case 'GetBucketNotificationConfigurationCommand':
+        return await this.getBucketNotificationConfiguration(command.input);
+      case 'PutBucketNotificationConfigurationCommand':
+        return await this.putBucketNotificationConfiguration(command.input);
+      case 'GetBucketLifecycleConfigurationCommand':
+        return await this.getBucketLifecycleConfiguration(command.input);
+      case 'PutBucketLifecycleConfigutationCommand':
+        return await this.putBucketLifecycleConfigutation(command.input);
+      case 'GetBucketLocationCommand':
+        return await this.getBucketLocation(command.input);
+      case 'CreateBucketCommand':
+        return await this.createBucket(command.input);
+      case 'DeleteBucketCommand':
+        return await this.deleteBucket(command.input);
       case 'PutObjectCommand':
         return await this.putObject(command.input);
       case 'GetObjectCommand':
@@ -55,15 +72,100 @@ class S3Mock {
     }
   }
 
+  async getBucketNotificationConfiguration(params) {
+    if (!S3Mock.__state[params.Bucket]) {
+      throw new NoSuchBucket({
+        message: `The specified bucket does not exist: ${params.Bucket}`,
+      });
+    }
+    return {
+      QueueConfigurations:
+        S3Mock.__state[params.Bucket].QueueConfigurations || [],
+    };
+  }
+
+  async putBucketNotificationConfiguration(params) {
+    if (!S3Mock.__state[params.Bucket]) {
+      throw new NoSuchBucket({
+        message: `The specified bucket does not exist: ${params.Bucket}`,
+      });
+    }
+    S3Mock.__state[params.Bucket].QueueConfigurations =
+      params.NotificationConfiguration.QueueConfigurations;
+    return {};
+  }
+
+  async getBucketLifecycleConfiguration(params) {
+    if (!S3Mock.__state[params.Bucket]) {
+      throw new NoSuchBucket({
+        message: `The specified bucket does not exist: ${params.Bucket}`,
+      });
+    }
+    return {
+      Rules: S3Mock.__state[params.Bucket].LifecycleConfiguration
+        ? S3Mock.__state[params.Bucket]?.LifecycleConfiguration?.Rules || []
+        : [],
+    };
+  }
+
+  async putBucketLifecycleConfigutation(params) {
+    if (!S3Mock.__state[params.Bucket]) {
+      throw new NoSuchBucket({
+        message: `The specified bucket does not exist: ${params.Bucket}`,
+      });
+    }
+    S3Mock.__state[params.Bucket].LifecycleConfiguration =
+      params.LifecycleConfiguration;
+    return {};
+  }
+
+  async getBucketLocation(params) {
+    if (!S3Mock.__state[params.Bucket]) {
+      throw new NoSuchBucket({
+        message: `The specified bucket does not exist: ${params.Bucket}`,
+      });
+    }
+    return {
+      LocationConstraint: 'us-east-1',
+    };
+  }
+
+  async createBucket(params) {
+    if (S3Mock.__state[params.Bucket]) {
+      throw new Error(`bucket already exists: ${params.Bucket}`);
+    }
+    S3Mock.__state[params.Bucket] = {
+      objects: {},
+    };
+  }
+
+  async deleteBucket(params) {
+    if (!S3Mock.__state[params.Bucket]) {
+      throw new NoSuchBucket({
+        message: `The specified bucket does not exist: ${params.Bucket}`,
+      });
+    }
+    if (Object.keys(S3Mock.__state[params.Bucket].objects).length > 0) {
+      throw new Error(
+        `bucket is not empty: ${params.Bucket} (${
+          Object.keys(S3Mock.__state[params.Bucket].objects).length
+        } objects)`
+      );
+    }
+    delete S3Mock.__state[params.Bucket];
+  }
+
   async putObject(params) {
     if (!S3Mock.__state[params.Bucket]) {
-      S3Mock.__state[params.Bucket] = {};
+      S3Mock.__state[params.Bucket] = {
+        objects: {},
+      };
     }
-    S3Mock.__state[params.Bucket][params.Key] = params.Body;
+    S3Mock.__state[params.Bucket].objects[params.Key] = params.Body;
   }
 
   async getObject(params) {
-    if (!S3Mock.__state[params.Bucket][params.Key]) {
+    if (!S3Mock.__state[params.Bucket].objects[params.Key]) {
       const error = new Error(
         `object does not exist: ${params.Bucket}/${params.Key}`
       );
@@ -71,26 +173,24 @@ class S3Mock {
       throw error;
     }
     return {
-      Body: S3Mock.__state[params.Bucket][params.Key],
+      Body: S3Mock.__state[params.Bucket].objects[params.Key],
     };
   }
 
   async headObject(params) {
-    if (!S3Mock.__state[params.Bucket][params.Key]) {
-      const err = new Error(
-        `object does not exist: ${params.Bucket}/${params.Key}`
-      );
-      err.name = 'NotFound';
-      throw err;
+    if (!S3Mock.__state[params.Bucket].objects[params.Key]) {
+      throw new NotFound({
+        message: `object does not exist: ${params.Bucket}/${params.Key}`,
+      });
     }
     return {
-      ContentLength: S3Mock.__state[params.Bucket][params.Key].length,
+      ContentLength: S3Mock.__state[params.Bucket].objects[params.Key].length,
     };
   }
 
   async deleteObjects(params) {
     params.Delete.Objects.forEach((_delete) => {
-      delete S3Mock.__state[params.Bucket][_delete.Key];
+      delete S3Mock.__state[params.Bucket].objects[_delete.Key];
     });
     return {
       Errors: [],
@@ -99,18 +199,19 @@ class S3Mock {
 
   async copyObject(params) {
     const { bucket, prefix } = this._parseS3Uri(`s3://${params.CopySource}`);
-    if (!S3Mock.__state[bucket][prefix])
+    if (!S3Mock.__state[bucket].objects[prefix])
       throw new Error('copy source does not exist');
-    S3Mock.__state[params.Bucket][params.Key] = S3Mock.__state[bucket][prefix];
+    S3Mock.__state[params.Bucket].objects[params.Key] =
+      S3Mock.__state[bucket][prefix];
   }
 
   async listObjectsV2(params) {
     if (!params.Prefix) params.Prefix = '';
     if (!S3Mock.__state[params.Bucket])
       throw new Error('bucket does not exist');
-    const matchingKeys = Object.keys(S3Mock.__state[params.Bucket]).filter(
-      (key) => key.startsWith(params.Prefix)
-    );
+    const matchingKeys = Object.keys(
+      S3Mock.__state[params.Bucket].objects
+    ).filter((key) => key.startsWith(params.Prefix));
 
     if (params.Delimiter) {
       return {
@@ -162,7 +263,7 @@ class S3Mock {
       .map((part) => {
         if (part.Body) return part.Body;
         const { bucket, prefix } = this._parseS3Uri(`s3://${part.CopySource}`);
-        return S3Mock.__state[bucket][prefix];
+        return S3Mock.__state[bucket].objects[prefix];
       })
       .join('');
 
@@ -188,7 +289,7 @@ class S3Mock {
 
   async uploadPartCopy(params) {
     const { bucket, prefix } = this._parseS3Uri(`s3://${params.CopySource}`);
-    if (!S3Mock.__state[bucket][prefix])
+    if (!S3Mock.__state[bucket].objects[prefix])
       throw new Error('copy source does not exist');
     const upload = S3Mock.__state.__MULTIPART_UPLOADS__[params.UploadId];
     upload.Parts.push({

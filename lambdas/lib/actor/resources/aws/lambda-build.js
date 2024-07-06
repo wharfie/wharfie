@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const JSZip = require('jszip');
+const { NotFound } = require('@aws-sdk/client-s3');
 
 const S3 = require('../../../s3');
 const BaseResource = require('../base-resource');
@@ -113,8 +114,7 @@ class LambdaBuild extends BaseResource {
       });
       return;
     } catch (error) {
-      // @ts-ignore
-      if (error?.name !== 'NotFound') {
+      if (!(error instanceof NotFound)) {
         throw error;
       }
     }

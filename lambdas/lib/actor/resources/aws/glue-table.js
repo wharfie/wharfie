@@ -1,6 +1,7 @@
 'use strict';
 const Glue = require('../../../glue');
 const BaseResource = require('../base-resource');
+const { EntityNotFoundException } = require('@aws-sdk/client-glue');
 
 /**
  * @typedef GlueTableProperties
@@ -148,8 +149,7 @@ class GlueTable extends BaseResource {
         });
       }
     } catch (error) {
-      // @ts-ignore
-      if (error.name === 'EntityNotFoundException') {
+      if (error instanceof EntityNotFoundException) {
         await this.glue.createTable({
           CatalogId: this.get('catalogId'),
           DatabaseName: this.get('databaseName'),
@@ -195,7 +195,7 @@ class GlueTable extends BaseResource {
       });
     } catch (error) {
       // @ts-ignore
-      if (error.name !== 'EntityNotFoundException') {
+      if (!(error instanceof EntityNotFoundException)) {
         throw error;
       }
     }

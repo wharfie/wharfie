@@ -55,7 +55,7 @@ class CloudWatchEvents {
    * @param {import("@aws-sdk/client-cloudwatch-events").DeleteRuleCommandInput} params -
    * @returns {Promise<import("@aws-sdk/client-cloudwatch-events").DeleteRuleCommandOutput>} -
    */
-  async deleteRuleCommand(params) {
+  async deleteRule(params) {
     return await this.cloudwatchEvents.send(new AWS.DeleteRuleCommand(params));
   }
 

@@ -1,9 +1,8 @@
 'use strict';
+const DynamoDB = require('../../../dynamodb');
 const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const Dynamo = require('@aws-sdk/client-dynamodb');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+const { ResourceNotFoundException } = require('@aws-sdk/client-dynamodb');
 
-const BaseAWS = require('../../../base');
 const BaseResource = require('../base-resource');
 /**
  * @typedef TableProperties
@@ -27,25 +26,18 @@ class Table extends BaseResource {
    */
   constructor({ name, status, properties, dependsOn = [] }) {
     super({ name, status, properties, dependsOn });
-    const credentials = fromNodeProviderChain();
-    this.dynamo = new Dynamo.DynamoDB({
-      ...BaseAWS.config({
-        maxAttempts: Number(process.env?.DYNAMO_MAX_RETRIES || 300),
-      }),
-      credentials,
-    });
-    this.dynamoDocument = DynamoDBDocument.from(this.dynamo, {
+    this.dynamo = new DynamoDB({});
+    this.dynamoDocument = DynamoDBDocument.from(this.dynamo.dynamodb, {
       marshallOptions: { removeUndefinedValues: true },
     });
   }
 
   async exists() {
     try {
-      await this.describeTable({ TableName: this.name });
+      await this.dynamo.describeTable({ TableName: this.name });
       return true;
     } catch (error) {
-      // @ts-ignore
-      if (error.name === 'ResourceNotFoundException') {
+      if (error instanceof ResourceNotFoundException) {
         return false;
       }
       throw error;
@@ -54,7 +46,9 @@ class Table extends BaseResource {
 
   async _reconcile() {
     try {
-      const { Table } = await this.describeTable({ TableName: this.name });
+      const { Table } = await this.dynamo.describeTable({
+        TableName: this.name,
+      });
       this.set('arn', Table?.TableArn);
       if (
         Table?.ProvisionedThroughput?.ReadCapacityUnits !==
@@ -62,15 +56,14 @@ class Table extends BaseResource {
         Table?.ProvisionedThroughput?.WriteCapacityUnits !==
           this.get('provisionedThroughput').WriteCapacityUnits
       ) {
-        await this.updateTable({
+        await this.dynamo.updateTable({
           TableName: this.name,
           ProvisionedThroughput: this.get('provisionedThroughput'),
         });
       }
     } catch (error) {
-      // @ts-ignore
-      if (error.name === 'ResourceNotFoundException') {
-        const { TableDescription } = await this.createTable({
+      if (error instanceof ResourceNotFoundException) {
+        const { TableDescription } = await this.dynamo.createTable({
           TableName: this.name,
           AttributeDefinitions: this.get('attributeDefinitions'),
           KeySchema: this.get('keySchema'),
@@ -83,14 +76,14 @@ class Table extends BaseResource {
     }
     await this.waitForTableStatus('ACTIVE');
     if (this.has('timeToLiveSpecification')) {
-      const { TimeToLiveDescription } = await this.describeTimeToLive({
+      const { TimeToLiveDescription } = await this.dynamo.describeTimeToLive({
         TableName: this.name,
       });
       if (
         TimeToLiveDescription?.AttributeName !==
         this.get('timeToLiveSpecification').AttributeName
       ) {
-        await this.updateTimeToLive({
+        await this.dynamo.updateTimeToLive({
           TableName: this.name,
           TimeToLiveSpecification: this.get('timeToLiveSpecification'),
         });
@@ -100,10 +93,9 @@ class Table extends BaseResource {
 
   async _destroy() {
     try {
-      await this.deleteTable({ TableName: this.name });
+      await this.dynamo.deleteTable({ TableName: this.name });
     } catch (error) {
-      // @ts-ignore
-      if (error.name !== 'ResourceNotFoundException') {
+      if (!(error instanceof ResourceNotFoundException)) {
         throw error;
       }
     }
@@ -116,7 +108,7 @@ class Table extends BaseResource {
   async waitForTableStatus(desiredStatus) {
     let status = '';
     while (status !== desiredStatus) {
-      const { Table } = await this.describeTable({
+      const { Table } = await this.dynamo.describeTable({
         TableName: this.name,
       });
       status = Table?.TableStatus || '';
@@ -130,12 +122,11 @@ class Table extends BaseResource {
     let waitTimeSeconds = 0;
     while (waitTimeSeconds < 300) {
       try {
-        await this.describeTable({
+        await this.dynamo.describeTable({
           TableName: this.name,
         });
       } catch (error) {
-        // @ts-ignore
-        if (error.name === 'ResourceNotFoundException') {
+        if (error instanceof ResourceNotFoundException) {
           return;
         } else {
           throw error;
@@ -145,60 +136,6 @@ class Table extends BaseResource {
       waitTimeSeconds += 1;
     }
     throw new Error(`Table ${this.name} delete timed out`);
-  }
-
-  /**
-   * @param {import("@aws-sdk/client-dynamodb").CreateTableCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-dynamodb").CreateTableCommandOutput>} -
-   */
-  async createTable(params) {
-    const command = new Dynamo.CreateTableCommand(params);
-    return this.dynamo.send(command);
-  }
-
-  /**
-   * @param {import("@aws-sdk/client-dynamodb").DeleteTableCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-dynamodb").DeleteTableCommandOutput>} -
-   */
-  async deleteTable(params) {
-    const command = new Dynamo.DeleteTableCommand(params);
-    return this.dynamo.send(command);
-  }
-
-  /**
-   * @param {import("@aws-sdk/client-dynamodb").DescribeTableCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-dynamodb").DescribeTableCommandOutput>} -
-   */
-  async describeTable(params) {
-    const command = new Dynamo.DescribeTableCommand(params);
-    return this.dynamo.send(command);
-  }
-
-  /**
-   * @param {import("@aws-sdk/client-dynamodb").UpdateTableCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-dynamodb").UpdateTableCommandOutput>} -
-   */
-  async updateTable(params) {
-    const command = new Dynamo.UpdateTableCommand(params);
-    return this.dynamo.send(command);
-  }
-
-  /**
-   * @param {import("@aws-sdk/client-dynamodb").DescribeTimeToLiveCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-dynamodb").DescribeTimeToLiveCommandOutput>} -
-   */
-  async describeTimeToLive(params) {
-    const command = new Dynamo.DescribeTimeToLiveCommand(params);
-    return this.dynamo.send(command);
-  }
-
-  /**
-   * @param {import("@aws-sdk/client-dynamodb").UpdateTimeToLiveCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-dynamodb").UpdateTimeToLiveCommandOutput>} -
-   */
-  async updateTimeToLive(params) {
-    const command = new Dynamo.UpdateTimeToLiveCommand(params);
-    return this.dynamo.send(command);
   }
 
   /**

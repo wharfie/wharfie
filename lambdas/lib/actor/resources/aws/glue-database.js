@@ -1,6 +1,7 @@
 'use strict';
 const Glue = require('../../../glue');
 const BaseResource = require('../base-resource');
+const { EntityNotFoundException } = require('@aws-sdk/client-glue');
 
 /**
  * @typedef GlueDatabaseOptions
@@ -23,8 +24,7 @@ class GlueDatabase extends BaseResource {
     try {
       await this.glue.getDatabase({ Name: this.name });
     } catch (error) {
-      // @ts-ignore
-      if (error.name === 'EntityNotFoundException') {
+      if (error instanceof EntityNotFoundException) {
         await this.glue.createDatabase({
           DatabaseInput: {
             Name: this.name,
@@ -42,8 +42,7 @@ class GlueDatabase extends BaseResource {
         Name: this.name,
       });
     } catch (error) {
-      // @ts-ignore
-      if (error.name !== 'EntityNotFoundException') {
+      if (!(error instanceof EntityNotFoundException)) {
         throw error;
       }
     }
