@@ -45,7 +45,10 @@ class SQSMock {
   async createQueue(params) {
     SQSMock.__state.queues[params.QueueName] = {
       queue: [],
-      Attributes: params.Attributes || {},
+      Attributes: {
+        QueueArn: `arn:aws:sqs:us-east-1:123456789012:${params.QueueName}`,
+        ...(params.Attributes || {}),
+      },
     };
     return { QueueUrl: params.QueueName };
   }

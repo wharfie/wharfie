@@ -22,7 +22,7 @@ describe('sqs queue IaC', () => {
         "dependsOn": [],
         "name": "test-queue",
         "properties": {
-          "arn": undefined,
+          "arn": "arn:aws:sqs:us-east-1:123456789012:test-queue",
           "delaySeconds": "0",
           "messageRetentionPeriod": "1209600",
           "receiveMessageWaitTimeSeconds": "0",
@@ -45,7 +45,7 @@ describe('sqs queue IaC', () => {
         "dependsOn": [],
         "name": "test-queue",
         "properties": {
-          "arn": undefined,
+          "arn": "arn:aws:sqs:us-east-1:123456789012:test-queue",
           "delaySeconds": "0",
           "messageRetentionPeriod": "1209600",
           "receiveMessageWaitTimeSeconds": "0",
@@ -70,6 +70,7 @@ describe('sqs queue IaC', () => {
         "Attributes": {
           "DelaySeconds": "0",
           "MessageRetentionPeriod": "1209600",
+          "QueueArn": "arn:aws:sqs:us-east-1:123456789012:test-queue",
           "ReceiveMessageWaitTimeSeconds": "0",
           "VisibilityTimeout": "300",
         },

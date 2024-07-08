@@ -22,7 +22,10 @@ describe('lambda function IaC', () => {
     const lambdaBuild = new LambdaBuild({
       name: 'test-function',
       properties: {
-        handler: path.join(__dirname, '../../../lambdas/monitor.handler'),
+        handler: path.join(
+          __dirname,
+          '../../fixtures/lambda-build-test-handler.handler'
+        ),
         artifactBucket: bucket.name,
       },
     });
@@ -35,9 +38,9 @@ describe('lambda function IaC', () => {
         "name": "test-function",
         "properties": {
           "artifactBucket": "test-bucket",
-          "artifactKey": "actor-artifacts/test-function/76f7f8502f60995d15b24e52326c2f6c786faafe60fca4b48e8c5d9f65435393.zip",
-          "functionCodeHash": "76f7f8502f60995d15b24e52326c2f6c786faafe60fca4b48e8c5d9f65435393",
-          "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/monitor.handler",
+          "artifactKey": "actor-artifacts/test-function/8c11f001fe12d44fdb30e6a405c7516320cf7551d3791d42fcab503a0c06e34a.zip",
+          "functionCodeHash": "8c11f001fe12d44fdb30e6a405c7516320cf7551d3791d42fcab503a0c06e34a",
+          "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/test/fixtures/lambda-build-test-handler.handler",
         },
         "resourceType": "LambdaBuild",
         "status": "STABLE",
@@ -49,9 +52,9 @@ describe('lambda function IaC', () => {
     expect(deserialized.properties).toMatchInlineSnapshot(`
       {
         "artifactBucket": "test-bucket",
-        "artifactKey": "actor-artifacts/test-function/76f7f8502f60995d15b24e52326c2f6c786faafe60fca4b48e8c5d9f65435393.zip",
-        "functionCodeHash": "76f7f8502f60995d15b24e52326c2f6c786faafe60fca4b48e8c5d9f65435393",
-        "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/monitor.handler",
+        "artifactKey": "actor-artifacts/test-function/8c11f001fe12d44fdb30e6a405c7516320cf7551d3791d42fcab503a0c06e34a.zip",
+        "functionCodeHash": "8c11f001fe12d44fdb30e6a405c7516320cf7551d3791d42fcab503a0c06e34a",
+        "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/test/fixtures/lambda-build-test-handler.handler",
       }
     `);
     expect(deserialized.status).toBe('STABLE');
@@ -65,7 +68,7 @@ describe('lambda function IaC', () => {
         "Bucket": "test-bucket",
         "Contents": [
           {
-            "Key": "actor-artifacts/test-function/76f7f8502f60995d15b24e52326c2f6c786faafe60fca4b48e8c5d9f65435393.zip",
+            "Key": "actor-artifacts/test-function/8c11f001fe12d44fdb30e6a405c7516320cf7551d3791d42fcab503a0c06e34a.zip",
             "LastModified": 1970-01-01T00:00:00.000Z,
           },
         ],
@@ -81,7 +84,7 @@ describe('lambda function IaC', () => {
         "Bucket": "test-bucket",
         "Contents": [
           {
-            "Key": "actor-artifacts/test-function/76f7f8502f60995d15b24e52326c2f6c786faafe60fca4b48e8c5d9f65435393.zip",
+            "Key": "actor-artifacts/test-function/8c11f001fe12d44fdb30e6a405c7516320cf7551d3791d42fcab503a0c06e34a.zip",
             "LastModified": 1970-01-01T00:00:00.000Z,
           },
         ],

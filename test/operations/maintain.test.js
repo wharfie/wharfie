@@ -257,19 +257,27 @@ describe('maintain tests', () => {
       {
         "queues": {
           "cleanup-queue": {
-            "Attributes": {},
+            "Attributes": {
+              "QueueArn": "arn:aws:sqs:us-east-1:123456789012:cleanup-queue",
+            },
             "queue": [],
           },
           "daemon-queue": {
-            "Attributes": {},
+            "Attributes": {
+              "QueueArn": "arn:aws:sqs:us-east-1:123456789012:daemon-queue",
+            },
             "queue": [],
           },
           "events-queue": {
-            "Attributes": {},
+            "Attributes": {
+              "QueueArn": "arn:aws:sqs:us-east-1:123456789012:events-queue",
+            },
             "queue": [],
           },
           "monitor-queue": {
-            "Attributes": {},
+            "Attributes": {
+              "QueueArn": "arn:aws:sqs:us-east-1:123456789012:monitor-queue",
+            },
             "queue": [],
           },
         },

@@ -3,8 +3,15 @@ const { ResourceNotFoundException } = jest.requireActual(
   '@aws-sdk/client-lambda'
 );
 
+const { createId } = require('../../../lambdas/lib/id');
+
 class LambdaMock {
-  __setMockState(lambdaState = {}) {
+  __setMockState(
+    lambdaState = {
+      functions: {},
+      mappings: {},
+    }
+  ) {
     LambdaMock.__state = lambdaState;
   }
 
@@ -26,81 +33,135 @@ class LambdaMock {
         return await this.createFunction(command.input);
       case 'DeleteFunctionCommand':
         return await this.deleteFunction(command.input);
+      case 'ListEventSourceMappingsCommand':
+        return await this.listEventSourceMappings(command.input);
+      case 'CreateEventSourceMappingCommand':
+        return await this.createEventSourceMapping(command.input);
+      case 'DeleteEventSourceMappingCommand':
+        return await this.deleteEventSourceMapping(command.input);
+      case 'UpdateEventSourceMappingCommand':
+        return await this.updateEventSourceMapping(command.input);
+      default:
+        throw new Error(`Unsupported command: ${command.constructor.name}`);
     }
   }
 
   async getFunction(params) {
-    if (!LambdaMock.__state[params.FunctionName]) {
+    if (!LambdaMock.__state.functions[params.FunctionName]) {
       throw new ResourceNotFoundException({
         message: `Function not found: ${params.FunctionName}`,
       });
     }
     return {
-      Configuration: LambdaMock.__state[params.FunctionName],
-      Tags: LambdaMock.__state[params.FunctionName].Tags || {},
+      Configuration: LambdaMock.__state.functions[params.FunctionName],
+      Tags: LambdaMock.__state.functions[params.FunctionName].Tags || {},
     };
   }
 
   async updateFunctionConfiguration(params) {
-    if (!LambdaMock.__state[params.FunctionName]) {
+    if (!LambdaMock.__state.functions[params.FunctionName]) {
       throw new ResourceNotFoundException({
         message: `Function not found: ${params.FunctionName}`,
       });
     }
-    LambdaMock.__state[params.FunctionName] = {
-      ...LambdaMock.__state[params.FunctionName],
+    LambdaMock.__state.functions[params.FunctionName] = {
+      ...LambdaMock.__state.functions[params.FunctionName],
       ...params,
     };
   }
 
   async updateFunctionCode(params) {
-    if (!LambdaMock.__state[params.FunctionName]) {
+    if (!LambdaMock.__state.functions[params.FunctionName]) {
       throw new ResourceNotFoundException({
         message: `Function not found: ${params.FunctionName}`,
       });
     }
-    LambdaMock.__state[params.FunctionName] = {
-      ...LambdaMock.__state[params.FunctionName],
+    LambdaMock.__state.functions[params.FunctionName] = {
+      ...LambdaMock.__state.functions[params.FunctionName],
       ...params,
     };
   }
 
   async tagResource(params) {
-    if (!LambdaMock.__state[params.Resource]) {
+    if (!LambdaMock.__state.functions[params.Resource]) {
       throw new ResourceNotFoundException({
         message: `Function not found: ${params.Resource}`,
       });
     }
-    LambdaMock.__state[params.Resource] = {
-      ...LambdaMock.__state[params.Resource],
+    LambdaMock.__state.functions[params.Resource] = {
+      ...LambdaMock.__state.functions[params.Resource],
       Tags: {
-        ...(LambdaMock.__state[params.Resource].Tags || {}),
+        ...(LambdaMock.__state.functions[params.Resource].Tags || {}),
         ...params.Tags,
       },
     };
   }
 
   async createFunction(params) {
-    if (LambdaMock.__state[params.FunctionName]) {
+    if (LambdaMock.__state.functions[params.FunctionName]) {
       throw new Error(`Function already exists: ${params.FunctionName}`);
     }
-    LambdaMock.__state[params.FunctionName] = {
+    LambdaMock.__state.functions[params.FunctionName] = {
       ...params,
       FunctionArn: `arn:aws:lambda:us-west-2:123456789012:function:${params.FunctionName}`,
     };
-    return LambdaMock.__state[params.FunctionName];
+    return LambdaMock.__state.functions[params.FunctionName];
   }
 
   async deleteFunction(params) {
-    if (!LambdaMock.__state[params.FunctionName]) {
+    if (!LambdaMock.__state.functions[params.FunctionName]) {
       throw new ResourceNotFoundException({
         message: `Function not found: ${params.FunctionName}`,
       });
     }
-    delete LambdaMock.__state[params.FunctionName];
+    delete LambdaMock.__state.functions[params.FunctionName];
+  }
+
+  async listEventSourceMappings(params) {
+    const functionName = params.FunctionName;
+    const eventSourceMappings = Object.values(
+      LambdaMock.__state.mappings
+    ).filter((mapping) => mapping.FunctionName === functionName);
+    return { EventSourceMappings: eventSourceMappings };
+  }
+
+  async createEventSourceMapping(params) {
+    const uuid = createId();
+    const eventSourceMapping = {
+      ...params,
+      UUID: uuid,
+    };
+    LambdaMock.__state.mappings[uuid] = eventSourceMapping;
+    return eventSourceMapping;
+  }
+
+  async updateEventSourceMapping(params) {
+    const uuid = params.UUID;
+    if (!LambdaMock.__state.mappings[uuid]) {
+      throw new ResourceNotFoundException({
+        message: `mapping not found: ${uuid}`,
+      });
+    }
+    LambdaMock.__state.mappings[uuid] = {
+      ...LambdaMock.__state.mappings[uuid],
+      ...params,
+    };
+  }
+
+  async deleteEventSourceMapping(params) {
+    const uuid = params.UUID;
+    if (!LambdaMock.__state.mappings[uuid]) {
+      throw new ResourceNotFoundException({
+        message: `mapping not found: ${uuid}`,
+      });
+    }
+    delete LambdaMock.__state.mappings[uuid];
   }
 }
 
-LambdaMock.__state = {};
+LambdaMock.__state = {
+  functions: {},
+  mappings: {},
+};
 
 module.exports = LambdaMock;

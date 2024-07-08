@@ -1,6 +1,7 @@
 'use strict';
 const Lambda = require('../../../lambda');
 const BaseResource = require('../base-resource');
+const { ResourceNotFoundException } = require('@aws-sdk/client-lambda');
 
 /**
  * @typedef EventSourceMappingProperties
@@ -75,8 +76,7 @@ class EventSourceMapping extends BaseResource {
           UUID: existingMapping.UUID,
         });
       } catch (error) {
-        // @ts-ignore
-        if (error.name !== 'ResourceNotFoundException') throw error;
+        if (!(error instanceof ResourceNotFoundException)) throw error;
       }
     }
   }

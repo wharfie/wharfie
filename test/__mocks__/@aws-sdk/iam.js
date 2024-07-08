@@ -139,17 +139,16 @@ class IAMMock {
   }
 
   async attachRolePolicy(params) {
+    const policyName = params.PolicyArn.split('/').pop();
     if (!IAMMock.__state.roles[params.RoleName])
       throw new NoSuchEntityException({
         message: `role ${params.RoleName} does not exist`,
       });
-    if (!IAMMock.__state.policies[params.PolicyArn])
+    if (!IAMMock.__state.policies[policyName])
       throw new NoSuchEntityException({
-        message: `policy ${params.PolicyArn} does not exist`,
+        message: `policy ${policyName} does not exist`,
       });
-    IAMMock.__state.roles[params.RoleName].AttachedPolicies.push(
-      params.PolicyArn
-    );
+    IAMMock.__state.roles[params.RoleName].AttachedPolicies.push(policyName);
   }
 
   async listAttachedRolePolicies(params) {

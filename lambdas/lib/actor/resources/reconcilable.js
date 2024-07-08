@@ -155,6 +155,7 @@ class Reconcilable {
         this.status = Status.DESTROYED;
         break;
       } catch (error) {
+        console.trace(error);
         // @ts-ignore
         this._destroyErrors.push(error);
         if (
@@ -183,6 +184,12 @@ class Reconcilable {
     }
     if (!this.isDestroyed()) throw last_error;
     this.destroy_end = Date.now();
+
+    console.log(
+      `${this.constructor.name}::${this.name} destroyed in ${
+        this.destroy_end - this.destroy_start
+      }`
+    );
     await this._post_destroy();
   }
 }

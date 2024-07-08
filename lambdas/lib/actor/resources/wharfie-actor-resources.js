@@ -163,7 +163,7 @@ class WharfieActorResources extends BaseResourceGroup {
       },
     });
     const eventSourceMapping = new EventSourceMapping({
-      name: `${this.get('actorName')} mapping`,
+      name: `${this.get('actorName')}-mapping`,
       dependsOn: [lambda, queue],
       properties: {
         deployment: this.get('deployment'),
