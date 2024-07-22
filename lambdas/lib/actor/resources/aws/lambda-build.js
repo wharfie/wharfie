@@ -19,7 +19,7 @@ const BaseResource = require('../base-resource');
  * @typedef LambdaBuildOptions
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
- * @property {LambdaBuildProperties & import('../../typedefs').SharedDeploymentProperties} properties -
+ * @property {LambdaBuildProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 

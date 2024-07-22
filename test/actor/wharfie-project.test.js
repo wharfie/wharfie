@@ -4,13 +4,21 @@
 const path = require('path');
 
 process.env.AWS_MOCKS = true;
+
+jest.requireMock('@aws-sdk/client-s3');
+jest.requireMock('@aws-sdk/client-sns');
+jest.requireMock('@aws-sdk/client-glue');
+jest.requireMock('@aws-sdk/client-athena');
+jest.requireMock('@aws-sdk/client-sqs');
+jest.requireMock('@aws-sdk/client-sts');
+jest.requireMock('@aws-sdk/client-cloudwatch');
 const WharfieProject = require('../../lambdas/lib/actor/resources/wharfie-project');
 const WharfieDeployment = require('../../lambdas/lib/actor/wharfie-deployment');
 const { getResourceOptions } = require('../../cli/project/template-actor');
 const loadProject = require('../../cli/project/load');
 const { deserialize } = require('../../lambdas/lib/actor/deserialize');
 
-describe('wharfie actor resources IaC', () => {
+describe('wharfie project IaC', () => {
   it('empty project', async () => {
     expect.assertions(4);
     const deployment = new WharfieDeployment({
@@ -56,6 +64,9 @@ describe('wharfie actor resources IaC', () => {
           "deploymentSharedPolicyArn": "arn:aws:iam:::policy/test-deployment-shared-policy",
           "eventsQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
           "locationTable": "test-deployment-locations",
+          "project": {
+            "name": "test-wharife-project",
+          },
           "resourceTable": "test-deployment-resource",
           "scheduleQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-queue",
           "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
@@ -79,6 +90,9 @@ describe('wharfie actor resources IaC', () => {
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
                 "version": "0.0.9",
+              },
+              "project": {
+                "name": "test-wharife-project",
               },
             },
             "resourceType": "GlueDatabase",
@@ -131,6 +145,9 @@ describe('wharfie actor resources IaC', () => {
                   },
                 ],
               },
+              "project": {
+                "name": "test-wharife-project",
+              },
             },
             "resourceType": "Bucket",
             "status": "STABLE",
@@ -175,6 +192,9 @@ describe('wharfie actor resources IaC', () => {
               "managedPolicyArns": [
                 "arn:aws:iam:::policy/test-deployment-shared-policy",
               ],
+              "project": {
+                "name": "test-wharife-project",
+              },
               "rolePolicyDocument": undefined,
             },
             "resourceType": "Role",
@@ -214,6 +234,9 @@ describe('wharfie actor resources IaC', () => {
         "deploymentSharedPolicyArn": "arn:aws:iam:::policy/test-deployment-shared-policy",
         "eventsQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
         "locationTable": "test-deployment-locations",
+        "project": {
+          "name": "test-wharife-project",
+        },
         "resourceTable": "test-deployment-resource",
         "scheduleQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-queue",
         "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
@@ -231,6 +254,7 @@ describe('wharfie actor resources IaC', () => {
       properties: {},
     });
     await deployment.reconcile();
+
     const wharfieProject = new WharfieProject({
       name: 'test-wharife-project',
       deployment,
@@ -282,6 +306,9 @@ describe('wharfie actor resources IaC', () => {
           "deploymentSharedPolicyArn": "arn:aws:iam:::policy/test-deployment-shared-policy",
           "eventsQueueArn": undefined,
           "locationTable": "test-deployment-locations",
+          "project": {
+            "name": "test-wharife-project",
+          },
           "resourceTable": "test-deployment-resource",
           "scheduleQueueArn": undefined,
           "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
@@ -440,6 +467,9 @@ describe('wharfie actor resources IaC', () => {
                 "EXTERNAL": "true",
               },
               "partitionKeys": undefined,
+              "project": {
+                "name": "test-wharife-project",
+              },
               "projectName": "test-wharife-project",
               "region": "us-west-2",
               "resourceName": "amazon_berkely_objects",
@@ -459,10 +489,7 @@ describe('wharfie actor resources IaC', () => {
             "resourceType": "WharfieResource",
             "resources": {
               "amazon_berkely_objects": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "amazon_berkely_objects",
                 "properties": {
                   "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/amazon_berkely_objects",
@@ -622,10 +649,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "amazon_berkely_objects_raw": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "amazon_berkely_objects_raw",
                 "properties": {
                   "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/amazon_berkely_objects_raw",
@@ -784,10 +808,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test-deployment-amazon_berkely_objects-workgroup": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test-deployment-amazon_berkely_objects-workgroup",
                 "properties": {
                   "deployment": {
@@ -811,10 +832,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test-wharife-project-amazon_berkely_objects-location-record": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test-wharife-project-amazon_berkely_objects-location-record",
                 "properties": {
                   "data": {
@@ -844,10 +862,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test-wharife-project-amazon_berkely_objects-resource-record": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test-wharife-project-amazon_berkely_objects-resource-record",
                 "properties": {
                   "data": {
@@ -1246,6 +1261,9 @@ describe('wharfie actor resources IaC', () => {
                 "presto_view": "true",
               },
               "partitionKeys": undefined,
+              "project": {
+                "name": "test-wharife-project",
+              },
               "projectName": "test-wharife-project",
               "region": "us-west-2",
               "resourceName": "amazon_berkely_objects_aggregated",
@@ -1261,10 +1279,7 @@ describe('wharfie actor resources IaC', () => {
             "resourceType": "WharfieResource",
             "resources": {
               "amazon_berkely_objects_aggregated": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "amazon_berkely_objects_aggregated",
                 "properties": {
                   "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/amazon_berkely_objects_aggregated",
@@ -1324,10 +1339,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "amazon_berkely_objects_aggregated_raw": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "amazon_berkely_objects_aggregated_raw",
                 "properties": {
                   "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/amazon_berkely_objects_aggregated_raw",
@@ -1384,10 +1396,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test-deployment-amazon_berkely_objects_aggregated-workgroup": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test-deployment-amazon_berkely_objects_aggregated-workgroup",
                 "properties": {
                   "deployment": {
@@ -1411,10 +1420,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test-wharife-project-amazon_berkely_objects_aggregated-resource-record": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test-wharife-project-amazon_berkely_objects_aggregated-resource-record",
                 "properties": {
                   "data": {
@@ -1617,6 +1623,9 @@ describe('wharfie actor resources IaC', () => {
                 "EXTERNAL": "TRUE",
               },
               "partitionKeys": undefined,
+              "project": {
+                "name": "test-wharife-project",
+              },
               "projectName": "test-wharife-project",
               "region": "us-west-2",
               "resourceName": "amazon_berkely_objects_images",
@@ -1638,10 +1647,7 @@ describe('wharfie actor resources IaC', () => {
             "resourceType": "WharfieResource",
             "resources": {
               "amazon_berkely_objects_images": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "amazon_berkely_objects_images",
                 "properties": {
                   "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/amazon_berkely_objects_images",
@@ -1705,10 +1711,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "amazon_berkely_objects_images_raw": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "amazon_berkely_objects_images_raw",
                 "properties": {
                   "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/amazon_berkely_objects_images_raw",
@@ -1773,10 +1776,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test-deployment-amazon_berkely_objects_images-workgroup": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test-deployment-amazon_berkely_objects_images-workgroup",
                 "properties": {
                   "deployment": {
@@ -1800,10 +1800,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test-wharife-project-amazon_berkely_objects_images-location-record": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test-wharife-project-amazon_berkely_objects_images-location-record",
                 "properties": {
                   "data": {
@@ -1833,10 +1830,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test-wharife-project-amazon_berkely_objects_images-resource-record": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test-wharife-project-amazon_berkely_objects_images-resource-record",
                 "properties": {
                   "data": {
@@ -2045,6 +2039,9 @@ describe('wharfie actor resources IaC', () => {
                 "presto_view": "true",
               },
               "partitionKeys": undefined,
+              "project": {
+                "name": "test-wharife-project",
+              },
               "projectName": "test-wharife-project",
               "region": "us-west-2",
               "resourceName": "amazon_berkely_objects_join",
@@ -2060,10 +2057,7 @@ describe('wharfie actor resources IaC', () => {
             "resourceType": "WharfieResource",
             "resources": {
               "amazon_berkely_objects_join": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "amazon_berkely_objects_join",
                 "properties": {
                   "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/amazon_berkely_objects_join",
@@ -2123,10 +2117,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "amazon_berkely_objects_join_raw": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "amazon_berkely_objects_join_raw",
                 "properties": {
                   "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/amazon_berkely_objects_join_raw",
@@ -2183,10 +2174,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test-deployment-amazon_berkely_objects_join-workgroup": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test-deployment-amazon_berkely_objects_join-workgroup",
                 "properties": {
                   "deployment": {
@@ -2210,10 +2198,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test-wharife-project-amazon_berkely_objects_join-resource-record": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test-wharife-project-amazon_berkely_objects_join-resource-record",
                 "properties": {
                   "data": {
@@ -2410,6 +2395,9 @@ describe('wharfie actor resources IaC', () => {
                 "presto_view": "true",
               },
               "partitionKeys": undefined,
+              "project": {
+                "name": "test-wharife-project",
+              },
               "projectName": "test-wharife-project",
               "region": "us-west-2",
               "resourceName": "inline",
@@ -2425,10 +2413,7 @@ describe('wharfie actor resources IaC', () => {
             "resourceType": "WharfieResource",
             "resources": {
               "inline": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "inline",
                 "properties": {
                   "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/inline",
@@ -2488,10 +2473,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "inline_raw": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "inline_raw",
                 "properties": {
                   "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/inline_raw",
@@ -2548,10 +2530,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test-deployment-inline-workgroup": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test-deployment-inline-workgroup",
                 "properties": {
                   "deployment": {
@@ -2575,10 +2554,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test-wharife-project-inline-resource-record": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test-wharife-project-inline-resource-record",
                 "properties": {
                   "data": {
@@ -2773,6 +2749,9 @@ describe('wharfie actor resources IaC', () => {
                 "EXTERNAL": "true",
               },
               "partitionKeys": undefined,
+              "project": {
+                "name": "test-wharife-project",
+              },
               "projectName": "test-wharife-project",
               "region": "us-west-2",
               "resourceName": "test",
@@ -2792,10 +2771,7 @@ describe('wharfie actor resources IaC', () => {
             "resourceType": "WharfieResource",
             "resources": {
               "test": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test",
                 "properties": {
                   "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/test",
@@ -2851,10 +2827,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test-deployment-test-workgroup": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test-deployment-test-workgroup",
                 "properties": {
                   "deployment": {
@@ -2878,10 +2851,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test-wharife-project-test-location-record": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test-wharife-project-test-location-record",
                 "properties": {
                   "data": {
@@ -2911,10 +2881,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test-wharife-project-test-resource-record": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test-wharife-project-test-resource-record",
                 "properties": {
                   "data": {
@@ -3053,10 +3020,7 @@ describe('wharfie actor resources IaC', () => {
                 "status": "STABLE",
               },
               "test_raw": {
-                "dependsOn": [
-                  "test-wharife-project-project-role",
-                  "test-wharife-project-bucket-lz-fc6bi",
-                ],
+                "dependsOn": [],
                 "name": "test_raw",
                 "properties": {
                   "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/test_raw",
@@ -3131,6 +3095,9 @@ describe('wharfie actor resources IaC', () => {
                 "stateTable": "test-deployment-state",
                 "version": "0.0.9",
               },
+              "project": {
+                "name": "test-wharife-project",
+              },
             },
             "resourceType": "GlueDatabase",
             "status": "STABLE",
@@ -3182,6 +3149,9 @@ describe('wharfie actor resources IaC', () => {
                   },
                 ],
               },
+              "project": {
+                "name": "test-wharife-project",
+              },
             },
             "resourceType": "Bucket",
             "status": "STABLE",
@@ -3226,6 +3196,9 @@ describe('wharfie actor resources IaC', () => {
               "managedPolicyArns": [
                 "arn:aws:iam:::policy/test-deployment-shared-policy",
               ],
+              "project": {
+                "name": "test-wharife-project",
+              },
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -3318,6 +3291,9 @@ describe('wharfie actor resources IaC', () => {
         "deploymentSharedPolicyArn": "arn:aws:iam:::policy/test-deployment-shared-policy",
         "eventsQueueArn": undefined,
         "locationTable": "test-deployment-locations",
+        "project": {
+          "name": "test-wharife-project",
+        },
         "resourceTable": "test-deployment-resource",
         "scheduleQueueArn": undefined,
         "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",

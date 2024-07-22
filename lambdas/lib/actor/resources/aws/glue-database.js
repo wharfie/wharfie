@@ -7,7 +7,7 @@ const { EntityNotFoundException } = require('@aws-sdk/client-glue');
  * @typedef GlueDatabaseOptions
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
- * @property {import('../../typedefs').SharedDeploymentProperties} properties -
+ * @property {import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 

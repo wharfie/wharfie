@@ -15,7 +15,7 @@ const { InvalidRequestException } = require('@aws-sdk/client-athena');
  * @typedef AthenaWorkgroupOptions
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
- * @property {AthenaWorkgroupProperties & import('../../typedefs').SharedDeploymentProperties} properties -
+ * @property {AthenaWorkgroupProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 

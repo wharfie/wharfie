@@ -11,7 +11,6 @@ const { Daemon, Cleanup, Events, Monitor } = require('./wharfie-actors');
 const { putWithThroughputRetry } = require('../dynamo/');
 
 // const bluebirdPromise = require('bluebird');
-const { defaultProvider } = require('@aws-sdk/region-provider');
 // const fs = require('fs');
 // const path = require('path');
 const WharfieActor = require('./wharfie-actor');
@@ -56,7 +55,6 @@ class WharfieDeployment extends ActorDeployment {
       dependsOn,
       resources,
     });
-    this.regionProvider = defaultProvider();
     this.accountProvider = new STS();
     this.sqs = new SQS({});
     this.lambda = new Lambda({});
@@ -180,7 +178,7 @@ class WharfieDeployment extends ActorDeployment {
 
   async setRegion() {
     if (this.has('region')) return;
-    const region = await this.regionProvider();
+    const region = this.accountProvider.sts.config.region;
     this.set('region', region);
   }
 

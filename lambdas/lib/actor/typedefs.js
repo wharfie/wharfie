@@ -19,10 +19,15 @@
  * @property {string} region -
  * @property {string} name -
  */
+/**
+ * @typedef ProjectEnvironmentProperties
+ * @property {string} name -
+ */
 
 /**
- * @typedef SharedDeploymentProperties
+ * @typedef SharedProperties
  * @property {DeploymentEnvironmentProperties| function(): DeploymentEnvironmentProperties} deployment -
+ * @property {ProjectEnvironmentProperties| function(): ProjectEnvironmentProperties} [project] -
  * @property {boolean} [_INTERNAL_STATE_RESOURCE] -
  */
 

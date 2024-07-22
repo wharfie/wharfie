@@ -24,7 +24,7 @@ const BaseResourceGroup = require('../base-resource-group');
  * @typedef AutoscalingTableOptions
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
- * @property {AutoscalingTableProperties & import('../../typedefs').SharedDeploymentProperties} properties -
+ * @property {AutoscalingTableProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
  * @property {Object<string, import('../base-resource') | BaseResourceGroup>} [resources] -
  */

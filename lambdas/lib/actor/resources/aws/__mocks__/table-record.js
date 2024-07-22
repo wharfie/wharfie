@@ -15,7 +15,7 @@ const BaseResource = require('../../base-resource');
  * @typedef TableRecordOptions
  * @property {string} name -
  * @property {import('../../reconcilable').Status} [status] -
- * @property {TableRecordProperties & import('../../../typedefs').SharedDeploymentProperties} properties -
+ * @property {TableRecordProperties & import('../../../typedefs').SharedProperties} properties -
  * @property {import('../../reconcilable')[]} [dependsOn] -
  */
 

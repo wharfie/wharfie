@@ -15,7 +15,7 @@ const { NoSuchEntityException } = require('@aws-sdk/client-iam');
  * @typedef RoleOptions
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
- * @property {RoleProperties & import('../../typedefs').SharedDeploymentProperties} properties -
+ * @property {RoleProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 

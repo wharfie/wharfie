@@ -24,7 +24,7 @@ const { ResourceNotFoundException } = require('@aws-sdk/client-lambda');
  * @typedef LambdaOptions
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
- * @property {LambdaProperties & import('../../typedefs').SharedDeploymentProperties} properties -
+ * @property {LambdaProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 

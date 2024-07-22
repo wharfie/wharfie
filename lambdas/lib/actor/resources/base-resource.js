@@ -1,14 +1,14 @@
 'use strict';
 
 const Reconcilable = require('./reconcilable');
-const { putWithThroughputRetry } = require('../../dynamo/');
+const { putWithThroughputRetry, docClient } = require('../../dynamo/');
 
 /**
  * @typedef BaseResourceOptions
  * @property {string} name -
  * @property {Reconcilable.Status} [status] -
  * @property {Reconcilable[]} [dependsOn] -
- * @property {Object<string, any> & import('../typedefs').SharedDeploymentProperties} properties -
+ * @property {Object<string, any> & import('../typedefs').SharedProperties} properties -
  */
 class BaseResource extends Reconcilable {
   /**
@@ -16,8 +16,6 @@ class BaseResource extends Reconcilable {
    */
   constructor({ name, status, dependsOn = [], properties }) {
     super({ name, status, dependsOn });
-    // if (!properties.deployment && this.constructor.name !== 'WharfieDeployment')
-    //   throw new Error('deployment property required for base resource');
     this.resourceType = this.constructor.name;
     this.properties = properties || {};
   }
@@ -124,17 +122,42 @@ class BaseResource extends Reconcilable {
     if (!this.has('deployment') || !this.get('deployment')) return;
     const { stateTable, version } = this.get('deployment');
 
+    let sort_key = this.name;
+    if (this.has('project')) {
+      sort_key = this.get('project').name;
+    } else if (this.has('deployment')) {
+      sort_key = this.get('deployment').name;
+    }
+
     await putWithThroughputRetry({
       TableName: stateTable,
       Item: {
         name: this.name,
-        sort_key: this.properties.deployment
-          ? this.properties.deployment.name
-          : this.name,
+        sort_key,
         status: this.status,
         version,
       },
       ReturnValues: 'NONE',
+    });
+  }
+
+  async delete() {
+    if (!this.has('deployment') || !this.get('deployment')) return;
+    const { stateTable } = this.get('deployment');
+
+    let sort_key = this.name;
+    if (this.has('project')) {
+      sort_key = this.get('project').name;
+    } else if (this.has('deployment')) {
+      sort_key = this.get('deployment').name;
+    }
+
+    await docClient.delete({
+      TableName: stateTable,
+      Key: {
+        name: this.name,
+        sort_key,
+      },
     });
   }
 

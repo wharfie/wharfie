@@ -83,6 +83,7 @@ describe('table IaC', () => {
           "query": [MockFunction],
           "update": [MockFunction],
         },
+        "emit": false,
         "name": "test-table",
         "properties": {
           "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-table",

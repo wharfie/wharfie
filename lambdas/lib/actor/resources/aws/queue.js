@@ -16,7 +16,7 @@ const { QueueDoesNotExist } = require('@aws-sdk/client-sqs');
  * @typedef QueueOptions
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
- * @property {QueueProperties & import('../../typedefs').SharedDeploymentProperties} properties -
+ * @property {QueueProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 

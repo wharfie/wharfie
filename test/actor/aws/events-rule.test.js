@@ -76,6 +76,7 @@ describe('events rule IaC', () => {
           "cloudwatchEvents": CloudWatchEventsMock {},
         },
         "dependsOn": [],
+        "emit": false,
         "name": "test-rule",
         "properties": {
           "description": "practice rule",

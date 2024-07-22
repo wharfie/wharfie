@@ -12,7 +12,7 @@ const Actor = require('./actor');
  * @property {string} name -
  * @property {import('./resources/reconcilable').Status} [status] -
  * @property {Actor} [parentActor] -
- * @property {WharfieActorProperties & import('./typedefs').SharedDeploymentProperties} properties -
+ * @property {WharfieActorProperties & import('./typedefs').SharedProperties} properties -
  * @property {import('./resources/reconcilable')[]} [dependsOn] -
  * @property {Object<string, import('./resources/base-resource') | import('./resources/base-resource-group')>} [resources] -
  */

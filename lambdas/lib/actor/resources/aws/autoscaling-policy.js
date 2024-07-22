@@ -17,7 +17,7 @@ const ApplicationAutoScaling = require('../../../application-auto-scaling');
  * @typedef AutoscalingPolicyOptions
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
- * @property {AutoscalingPolicyProperties & import('../../typedefs').SharedDeploymentProperties} properties -
+ * @property {AutoscalingPolicyProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 

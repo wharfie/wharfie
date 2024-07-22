@@ -145,7 +145,6 @@
     "@aws-sdk/client-sts": "^3.363.0",
     "@aws-sdk/credential-providers": "^3.363.0",
     "@aws-sdk/lib-dynamodb": "^3.365.0",
-    "@aws-sdk/region-provider": "^0.1.0-preview.1",
     "@aws-sdk/util-retry": "^3.374.0",
     "@paralleldrive/cuid2": "^2.2.2",
     "@sandfox/arn": "^2.1.0",

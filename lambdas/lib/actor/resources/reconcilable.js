@@ -1,5 +1,9 @@
 'use strict';
 
+const EventEmitter = require('events');
+
+class ReconcilableEmitter extends EventEmitter {}
+
 /**
  * @typedef {('DESTROYED'|'DESTROYING'|'STABLE'|'RECONCILING'|'UNPROVISIONED')} StatusEnum
  */
@@ -15,22 +19,41 @@ const Status = {
   UNPROVISIONED: 'UNPROVISIONED',
   DRIFTED: 'DRIFTED',
 };
+
+/**
+ * @typedef {('WHARFIE_STATUS'|'WHARFIE_ERROR')} EventEnum
+ */
+
+/**
+ * @type {Object<EventEnum,EventEnum>}
+ */
+const Events = {
+  WHARFIE_STATUS: 'WHARFIE_STATUS',
+  WHARFIE_ERROR: 'WHARFIE_ERROR',
+};
+
 /**
  * @typedef ReconcilableOptions
  * @property {string} name -
  * @property {StatusEnum} [status] -
  * @property {Reconcilable[]} [dependsOn] -
+ * @property {boolean} [emit] -
  */
 
 class Reconcilable {
   /**
    * @param {ReconcilableOptions} options - Reconcilable Class Options
    */
-  constructor({ name, status = Status.UNPROVISIONED, dependsOn = [] }) {
+  constructor({
+    name,
+    status = Status.UNPROVISIONED,
+    dependsOn = [],
+    emit = false,
+  }) {
     if (!name) {
       throw new Error(`${this.constructor.name} requires a name`);
     }
-    this.status = status;
+    this.emit = emit;
     this.name = name;
     this.dependsOn = dependsOn;
     this._MAX_RETRIES = 10;
@@ -43,6 +66,7 @@ class Reconcilable {
      * @type {Error[]}
      */
     this._destroyErrors = [];
+    this.setStatus(status);
   }
 
   async _reconcile() {
@@ -61,15 +85,28 @@ class Reconcilable {
     if (this.status === Status.DESTROYED) {
       return;
     }
-    this.status = Status.DESTROYING;
+    this.setStatus(Status.DESTROYING);
   }
 
   markForReconcile() {
-    this.status = Status.RECONCILING;
+    this.setStatus(Status.RECONCILING);
   }
 
   isDestroyed() {
     return this.status === Status.DESTROYED;
+  }
+
+  /**
+   * @param {StatusEnum} status -
+   */
+  setStatus(status) {
+    this.status = status;
+    if (this.emit)
+      Reconcilable.Emitter.emit(Events.WHARFIE_STATUS, {
+        name: this.name,
+        constructor: this.constructor.name,
+        status: this.status,
+      });
   }
 
   async reconcile() {
@@ -80,11 +117,12 @@ class Reconcilable {
     if (
       !process.env?.WHARFIE_FORCE_RECONCILIATION &&
       [Status.STABLE].includes(this.status)
-    )
+    ) {
       return;
+    }
     let reconcile_attempts = 0;
     let last_error = null;
-    this.status = Status.RECONCILING;
+    this.setStatus(Status.RECONCILING);
     await this._pre_reconcile();
     this.reconcile_start = Date.now();
     while (reconcile_attempts < this._MAX_RETRIES) {
@@ -94,10 +132,15 @@ class Reconcilable {
           continue;
         }
         await this._reconcile();
-        this.status = Status.STABLE;
+        this.reconcile_end = Date.now();
+        this.setStatus(Status.STABLE);
         break;
       } catch (error) {
-        console.trace(error);
+        Reconcilable.Emitter.emit(Events.WHARFIE_ERROR, {
+          name: this.name,
+          constructor: this.constructor.name,
+          error,
+        });
         // @ts-ignore
         this._reconcileErrors.push(error);
         if (
@@ -124,13 +167,7 @@ class Reconcilable {
         last_error = error;
       }
     }
-    this.reconcile_end = Date.now();
 
-    console.log(
-      `${this.constructor.name}::${this.name} reconciled in ${
-        this.reconcile_end - this.reconcile_start
-      }`
-    );
     if (!this.isStable()) throw last_error;
     this._post_reconcile();
   }
@@ -144,7 +181,7 @@ class Reconcilable {
   async _post_destroy() {}
 
   async destroy() {
-    this.status = Status.DESTROYING;
+    this.setStatus(Status.DESTROYING);
     await this._pre_destroy();
     this.destroy_start = Date.now();
     let destroy_attempts = 0;
@@ -152,9 +189,15 @@ class Reconcilable {
     while (destroy_attempts < this._MAX_RETRIES) {
       try {
         await this._destroy();
-        this.status = Status.DESTROYED;
+        this.destroy_end = Date.now();
+        this.setStatus(Status.DESTROYED);
         break;
       } catch (error) {
+        Reconcilable.Emitter.emit(Events.WHARFIE_ERROR, {
+          name: this.name,
+          constructor: this.constructor.name,
+          error,
+        });
         console.trace(error);
         // @ts-ignore
         this._destroyErrors.push(error);
@@ -183,17 +226,13 @@ class Reconcilable {
       }
     }
     if (!this.isDestroyed()) throw last_error;
-    this.destroy_end = Date.now();
-
-    console.log(
-      `${this.constructor.name}::${this.name} destroyed in ${
-        this.destroy_end - this.destroy_start
-      }`
-    );
     await this._post_destroy();
   }
 }
 
+Reconcilable.Emitter = new ReconcilableEmitter();
+
 Reconcilable.Status = Status;
+Reconcilable.Events = Events;
 
 module.exports = Reconcilable;

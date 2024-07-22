@@ -84,6 +84,7 @@ describe('iam policy IaC', () => {
         "_destroyErrors": [],
         "_reconcileErrors": [],
         "dependsOn": [],
+        "emit": false,
         "iam": IAM {
           "iam": IAMMock {},
         },

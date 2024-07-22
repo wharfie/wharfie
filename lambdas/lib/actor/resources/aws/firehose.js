@@ -11,7 +11,7 @@ const { ResourceNotFoundException } = require('@aws-sdk/client-firehose');
  * @typedef FirehoseOptions
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
- * @property {FirehoseProperties & import('../../typedefs').SharedDeploymentProperties} properties -
+ * @property {FirehoseProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 

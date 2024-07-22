@@ -91,4 +91,4 @@ async function putWithThroughputRetry(params) {
   throw new Error('Max attempts exceeded');
 }
 
-module.exports = { query, batchWrite, putWithThroughputRetry };
+module.exports = { query, batchWrite, putWithThroughputRetry, docClient };

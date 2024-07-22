@@ -92,6 +92,7 @@ describe('lambda function IaC', () => {
         "_destroyErrors": [],
         "_reconcileErrors": [],
         "dependsOn": [],
+        "emit": false,
         "lambda": Lambda {
           "lambda": LambdaMock {},
         },

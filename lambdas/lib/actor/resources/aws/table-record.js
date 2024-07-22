@@ -20,7 +20,7 @@ const BaseResource = require('../base-resource');
  * @typedef TableRecordOptions
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
- * @property {TableRecordProperties & import('../../typedefs').SharedDeploymentProperties} properties -
+ * @property {TableRecordProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 
@@ -50,7 +50,7 @@ class TableRecord extends BaseResource {
   }
 
   async _reconcile() {
-    this.dynamoDocument.put({
+    await this.dynamoDocument.put({
       TableName: this.get('tableName'),
       Item: {
         [this.get('keyName')]: this.get('keyValue'),
@@ -64,7 +64,7 @@ class TableRecord extends BaseResource {
   }
 
   async _destroy() {
-    this.dynamoDocument.delete({
+    await this.dynamoDocument.delete({
       TableName: this.get('tableName'),
       Key: {
         [this.get('keyName')]: this.get('keyValue'),

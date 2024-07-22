@@ -138,6 +138,7 @@ describe('glue table IaC', () => {
         "_destroyErrors": [],
         "_reconcileErrors": [],
         "dependsOn": [],
+        "emit": false,
         "glue": Glue {
           "glue": GlueMock {},
         },

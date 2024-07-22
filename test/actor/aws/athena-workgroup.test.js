@@ -51,6 +51,7 @@ describe('athena workgroup IaC', () => {
           },
         },
         "dependsOn": [],
+        "emit": false,
         "name": "test-workgroup",
         "properties": {},
         "resourceType": "AthenaWorkGroup",

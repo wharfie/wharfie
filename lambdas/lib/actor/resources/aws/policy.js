@@ -13,7 +13,7 @@ const { NoSuchEntityException } = require('@aws-sdk/client-iam');
  * @typedef PolicyOptions
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
- * @property {PolicyProperties & import('../../typedefs').SharedDeploymentProperties} properties -
+ * @property {PolicyProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 

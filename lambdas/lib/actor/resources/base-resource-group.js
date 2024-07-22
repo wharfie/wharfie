@@ -7,7 +7,7 @@ const BaseResource = require('./base-resource');
  * @property {string} name -
  * @property {import('./reconcilable').Status} [status] -
  * @property {import('./reconcilable')[]} [dependsOn] -
- * @property {Object<string, any> & import('../typedefs').SharedDeploymentProperties} properties -
+ * @property {Object<string, any> & import('../typedefs').SharedProperties} properties -
  * @property {Object<string, BaseResource | BaseResourceGroup>} [resources] -
  */
 class BaseResourceGroup extends BaseResource {
@@ -97,41 +97,21 @@ class BaseResourceGroup extends BaseResource {
     };
   }
 
-  // async cache() {
-  //   const data = await this.serialize();
-  //   const {} = envPaths();
-  //   const cacheKey = crypto.createHash('sha256').update(data).digest('hex');
-  //   const cachePath = path.join(
-  //     os.homedir(),
-  //     '.aws-resource-cache',
-  //     `${this.resourceType}-${cacheKey}`
-  //   );
-  // }
+  async delete() {
+    await Promise.all(this.getResources().map((resource) => resource.delete()));
+    await super.delete();
+  }
 
   async _destroy() {
-    // await Promise.all(
-    //   this.getResources().map((resource) => resource.destroy())
-    // );
-  }
-
-  async _reconcile() {
-    // await Promise.all(
-    //   this.getResources().map((resource) => resource.reconcile())
-    // );
-  }
-
-  async destroy() {
     await Promise.all(
       this.getResources().map((resource) => resource.destroy())
     );
-    await super.destroy();
   }
 
-  async reconcile() {
+  async _reconcile() {
     await Promise.all(
       this.getResources().map((resource) => resource.reconcile())
     );
-    await super.reconcile();
   }
 }
 

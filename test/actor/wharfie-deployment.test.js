@@ -247,9 +247,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-cleanup-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-cleanup-build/4693fcd956932844b8cefa4d8a6194ea525ef9e08c68068dabb50a50aedc6f32.zip",
+                        "S3Key": "actor-artifacts/test-deployment-cleanup-build/34c17c52a84dd5faf7bc3c2af02c591a4cd22d048adab205dbc141419c63a19d.zip",
                       },
-                      "codeHash": "4693fcd956932844b8cefa4d8a6194ea525ef9e08c68068dabb50a50aedc6f32",
+                      "codeHash": "34c17c52a84dd5faf7bc3c2af02c591a4cd22d048adab205dbc141419c63a19d",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-cleanup-dlq",
                       },
@@ -593,9 +593,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-daemon-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-daemon-build/e8a1d96e772b18811a3a569a57403bacbbc20716600fe2b53ef88c2ca5f39650.zip",
+                        "S3Key": "actor-artifacts/test-deployment-daemon-build/b5a0dbd08f696eb0dc9cfc6d97497f5e998236c6ec5f4e4772a30df62963b194.zip",
                       },
-                      "codeHash": "e8a1d96e772b18811a3a569a57403bacbbc20716600fe2b53ef88c2ca5f39650",
+                      "codeHash": "b5a0dbd08f696eb0dc9cfc6d97497f5e998236c6ec5f4e4772a30df62963b194",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-dlq",
                       },
@@ -939,9 +939,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-events-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-events-build/3039eb3d6865523324c5da031d35f69677ed6de23d0b62cabf0eafb9cc5e9ddb.zip",
+                        "S3Key": "actor-artifacts/test-deployment-events-build/294e80aa0d3e108338861eb1b57d5b6d32ad2bda93ca75a2e12af076487acecb.zip",
                       },
-                      "codeHash": "3039eb3d6865523324c5da031d35f69677ed6de23d0b62cabf0eafb9cc5e9ddb",
+                      "codeHash": "294e80aa0d3e108338861eb1b57d5b6d32ad2bda93ca75a2e12af076487acecb",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-dlq",
                       },
@@ -1285,9 +1285,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-monitor-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-monitor-build/76f7f8502f60995d15b24e52326c2f6c786faafe60fca4b48e8c5d9f65435393.zip",
+                        "S3Key": "actor-artifacts/test-deployment-monitor-build/3dbf7808c5414476949447bfd156050f7ce8b9a52cd4b673a4b40694f6e8f33b.zip",
                       },
-                      "codeHash": "76f7f8502f60995d15b24e52326c2f6c786faafe60fca4b48e8c5d9f65435393",
+                      "codeHash": "3dbf7808c5414476949447bfd156050f7ce8b9a52cd4b673a4b40694f6e8f33b",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-dlq",
                       },
@@ -2207,14 +2207,7 @@ describe('deployment IaC', () => {
                 "resourceType": "WharfieResource",
                 "resources": {
                   "logs": {
-                    "dependsOn": [
-                      "test-deployment",
-                      "test-deployment-deployment-resources-logging-resource-role",
-                      "test-deployment-resource-autoscaling-table",
-                      "test-deployment-locations-autoscaling-table",
-                      "test-deployment-dependencies-autoscaling-table",
-                      "test-deployment-bucket",
-                    ],
+                    "dependsOn": [],
                     "name": "logs",
                     "properties": {
                       "arn": "arn:aws:glue:us-west-2::table/test-deployment/logs",
@@ -2335,14 +2328,7 @@ describe('deployment IaC', () => {
                     "status": "STABLE",
                   },
                   "logs_raw": {
-                    "dependsOn": [
-                      "test-deployment",
-                      "test-deployment-deployment-resources-logging-resource-role",
-                      "test-deployment-resource-autoscaling-table",
-                      "test-deployment-locations-autoscaling-table",
-                      "test-deployment-dependencies-autoscaling-table",
-                      "test-deployment-bucket",
-                    ],
+                    "dependsOn": [],
                     "name": "logs_raw",
                     "properties": {
                       "arn": "arn:aws:glue:us-west-2::table/test-deployment/logs_raw",
@@ -2462,14 +2448,7 @@ describe('deployment IaC', () => {
                     "status": "STABLE",
                   },
                   "test-deployment-logs-location-record": {
-                    "dependsOn": [
-                      "test-deployment",
-                      "test-deployment-deployment-resources-logging-resource-role",
-                      "test-deployment-resource-autoscaling-table",
-                      "test-deployment-locations-autoscaling-table",
-                      "test-deployment-dependencies-autoscaling-table",
-                      "test-deployment-bucket",
-                    ],
+                    "dependsOn": [],
                     "name": "test-deployment-logs-location-record",
                     "properties": {
                       "data": {
@@ -2499,14 +2478,7 @@ describe('deployment IaC', () => {
                     "status": "STABLE",
                   },
                   "test-deployment-logs-resource-record": {
-                    "dependsOn": [
-                      "test-deployment",
-                      "test-deployment-deployment-resources-logging-resource-role",
-                      "test-deployment-resource-autoscaling-table",
-                      "test-deployment-locations-autoscaling-table",
-                      "test-deployment-dependencies-autoscaling-table",
-                      "test-deployment-bucket",
-                    ],
+                    "dependsOn": [],
                     "name": "test-deployment-logs-resource-record",
                     "properties": {
                       "data": {
@@ -2775,14 +2747,7 @@ describe('deployment IaC', () => {
                     "status": "STABLE",
                   },
                   "test-deployment-logs-workgroup": {
-                    "dependsOn": [
-                      "test-deployment",
-                      "test-deployment-deployment-resources-logging-resource-role",
-                      "test-deployment-resource-autoscaling-table",
-                      "test-deployment-locations-autoscaling-table",
-                      "test-deployment-dependencies-autoscaling-table",
-                      "test-deployment-bucket",
-                    ],
+                    "dependsOn": [],
                     "name": "test-deployment-logs-workgroup",
                     "properties": {
                       "deployment": {

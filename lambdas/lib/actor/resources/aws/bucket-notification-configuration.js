@@ -13,7 +13,7 @@ const { NoSuchBucket } = require('@aws-sdk/client-s3');
  * @typedef BucketNotificationConfigurationOptions
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
- * @property {BucketNotificationConfigurationProperties & import('../../typedefs').SharedDeploymentProperties} properties -
+ * @property {BucketNotificationConfigurationProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 

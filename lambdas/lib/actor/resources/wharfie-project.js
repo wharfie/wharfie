@@ -25,7 +25,7 @@ const { createStableHash } = require('../../crypto');
  * @property {import('../wharfie-deployment')} [deployment] -
  * @property {string} name -
  * @property {import('./reconcilable').Status} [status] -
- * @property {WharfieProjectProperties & import('../typedefs').SharedDeploymentProperties} properties -
+ * @property {WharfieProjectProperties & import('../typedefs').SharedProperties} properties -
  * @property {import('./reconcilable')[]} [dependsOn] -
  * @property {Object<string, import('./base-resource') | BaseResourceGroup>} [resources] -
  */
@@ -41,6 +41,9 @@ class WharfieProject extends BaseResourceGroup {
             deployment: deployment.get('deployment'),
           }
         : {},
+      {
+        project: { name },
+      },
       properties
     );
     super({
@@ -106,6 +109,15 @@ class WharfieProject extends BaseResourceGroup {
   }
 
   /**
+   * @returns {import('../typedefs').ProjectEnvironmentProperties} -
+   */
+  _getProjectProperties() {
+    return {
+      name: this.name,
+    };
+  }
+
+  /**
    * @returns {(import('./base-resource') | BaseResourceGroup)[]} -
    */
   _defineGroupResources() {
@@ -113,6 +125,7 @@ class WharfieProject extends BaseResourceGroup {
       name: `${this.name}`,
       properties: {
         deployment: () => this.get('deployment'),
+        project: this._getProjectProperties(),
       },
     });
     const bucket = new Bucket({
@@ -121,6 +134,7 @@ class WharfieProject extends BaseResourceGroup {
       )}`,
       properties: {
         deployment: () => this.get('deployment'),
+        project: this._getProjectProperties(),
         lifecycleConfiguration: {
           Rules: [
             {
@@ -152,6 +166,7 @@ class WharfieProject extends BaseResourceGroup {
       name: `${this.name}-project-role`,
       properties: {
         deployment: () => this.get('deployment'),
+        project: this._getProjectProperties(),
         description: `${this.name} project role`,
         assumeRolePolicyDocument: () => ({
           Version: '2012-10-17',
@@ -251,6 +266,7 @@ class WharfieProject extends BaseResourceGroup {
       properties: {
         ...options.properties,
         deployment: () => this.get('deployment'),
+        project: this._getProjectProperties(),
         resourceName: options.name,
         projectName: this.name,
         databaseName: this.name,
@@ -266,7 +282,7 @@ class WharfieProject extends BaseResourceGroup {
         locationTable: this.get('locationTable'),
       },
     });
-    this.resources[resource.name] = resource;
+    this.addResource(resource);
   }
 
   /**
@@ -275,7 +291,7 @@ class WharfieProject extends BaseResourceGroup {
   removeWharfieResource(name) {
     if (!this.resources[`${name}-resource`]) return;
     if (!(this.resources[`${name}-resource`] instanceof WharfieResource))
-      throw new Error('cannot remove wharfie resource');
+      throw new Error('cannot remove non-wharfie resource');
     this.resources[`${name}-resource`].markForDestruction();
   }
 
@@ -344,6 +360,10 @@ class WharfieProject extends BaseResourceGroup {
 
   getRole() {
     return this.getResource(`${this.name}-project-role`);
+  }
+
+  async _post_destroy() {
+    await this.delete();
   }
 
   async save() {

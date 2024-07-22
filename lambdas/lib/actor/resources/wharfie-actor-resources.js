@@ -19,7 +19,7 @@ const S3 = require('../../s3');
  * @typedef WharfieActorResourceOptions
  * @property {string} name -
  * @property {import('./reconcilable').Status} [status] -
- * @property {WharfieActorResourceProperties & import('../typedefs').SharedDeploymentProperties} properties -
+ * @property {WharfieActorResourceProperties & import('../typedefs').SharedProperties} properties -
  * @property {import('./reconcilable')[]} [dependsOn] -
  * @property {Object<string, import('./base-resource') | BaseResourceGroup>} [resources] -
  */

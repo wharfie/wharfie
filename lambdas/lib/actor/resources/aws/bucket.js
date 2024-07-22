@@ -14,7 +14,7 @@ const { NoSuchBucket } = require('@aws-sdk/client-s3');
  * @typedef BucketOptions
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
- * @property {BucketProperties & import('../../typedefs').SharedDeploymentProperties} properties -
+ * @property {BucketProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 

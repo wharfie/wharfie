@@ -6,7 +6,12 @@ const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-pro
 const loadEnvironment = require('../../project/load-environment');
 const { getResourceOptions } = require('../../project/template-actor');
 
-const { displayFailure, displayInfo, displaySuccess } = require('../../output');
+const {
+  displayFailure,
+  displayInfo,
+  displaySuccess,
+  monitorReconcilables,
+} = require('../../output/');
 
 const apply = async (path, environmentName) => {
   const project = await loadProject({
@@ -22,6 +27,7 @@ const apply = async (path, environmentName) => {
     projectResources = await load({
       deploymentName: deployment.name,
       resourceName: project.name,
+      emit: true,
     });
   } catch (error) {
     if (
@@ -31,11 +37,14 @@ const apply = async (path, environmentName) => {
     projectResources = new WharfieProject({
       deployment,
       name: project.name,
+      emit: true,
     });
   }
   const resourceOptions = getResourceOptions(environment, project);
 
   projectResources.registerWharfieResources(resourceOptions);
+
+  monitorReconcilables();
 
   await projectResources.reconcile();
 
@@ -65,5 +74,6 @@ exports.handler = async function ({ path, environment }) {
     await apply(path, environment);
   } catch (err) {
     displayFailure(err);
+    console.trace(err);
   }
 };

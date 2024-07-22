@@ -12,7 +12,7 @@ const Database = require('./aws/glue-database');
  * @typedef WharfieDeploymentResourcesOptions
  * @property {string} name -
  * @property {import('./reconcilable').Status} [status] -
- * @property {import('../typedefs').SharedDeploymentProperties} properties -
+ * @property {import('../typedefs').SharedProperties} properties -
  * @property {Object<string, import('./base-resource') | BaseResourceGroup>} [resources] -
  * @property {import('./reconcilable')[]} [dependsOn] -
  */

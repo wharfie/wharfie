@@ -20,7 +20,7 @@ const {
  * @typedef EventsRuleOptions
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
- * @property {EventsRuleProperties & import('../../typedefs').SharedDeploymentProperties} properties -
+ * @property {EventsRuleProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 

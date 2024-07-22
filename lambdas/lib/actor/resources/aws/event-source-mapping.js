@@ -15,7 +15,7 @@ const { ResourceNotFoundException } = require('@aws-sdk/client-lambda');
  * @typedef EventSourceMappingOptions
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
- * @property {EventSourceMappingProperties & import('../../typedefs').SharedDeploymentProperties} properties -
+ * @property {EventSourceMappingProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 
