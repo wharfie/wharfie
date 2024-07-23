@@ -18,6 +18,7 @@ function monitorReconcilables() {
   const progressBars = {};
   Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
     const { constructor, name, status, resources } = event;
+    console.log(event);
     if (resources) {
       resources.forEach((resourceKey) => {
         childMap[resourceKey] = name;
@@ -56,10 +57,10 @@ function monitorReconcilables() {
       progressBars
     );
 
-    console.log(progressBar);
+    // console.log(progressBar);
     // Clear the console and print the updated progressBars
-    console.clear();
-    console.log(JSON.stringify(progressBars, null, 2));
+    // console.clear();
+    // console.log(JSON.stringify(progressBars, null, 2));
   });
 
   //   Reconcilable.Emitter.on('error', (event) => {

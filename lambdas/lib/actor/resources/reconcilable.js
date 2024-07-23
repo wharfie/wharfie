@@ -37,23 +37,16 @@ const Events = {
  * @property {string} name -
  * @property {StatusEnum} [status] -
  * @property {Reconcilable[]} [dependsOn] -
- * @property {boolean} [emit] -
  */
 
 class Reconcilable {
   /**
    * @param {ReconcilableOptions} options - Reconcilable Class Options
    */
-  constructor({
-    name,
-    status = Status.UNPROVISIONED,
-    dependsOn = [],
-    emit = false,
-  }) {
+  constructor({ name, status = Status.UNPROVISIONED, dependsOn = [] }) {
     if (!name) {
       throw new Error(`${this.constructor.name} requires a name`);
     }
-    this.emit = emit;
     this.name = name;
     this.dependsOn = dependsOn;
     this._MAX_RETRIES = 10;
@@ -101,12 +94,15 @@ class Reconcilable {
    */
   setStatus(status) {
     this.status = status;
-    if (this.emit)
-      Reconcilable.Emitter.emit(Events.WHARFIE_STATUS, {
-        name: this.name,
-        constructor: this.constructor.name,
-        status: this.status,
-      });
+    Reconcilable.Emitter.emit(Events.WHARFIE_STATUS, this.asEvent());
+  }
+
+  asEvent() {
+    return {
+      name: this.name,
+      constructor: this.constructor.name,
+      status: this.status,
+    };
   }
 
   async reconcile() {

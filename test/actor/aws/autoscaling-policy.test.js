@@ -71,7 +71,6 @@ describe('autoscaling policy IaC', () => {
           "autoscaling": ApplicationAutoScalingMock {},
         },
         "dependsOn": [],
-        "emit": false,
         "name": "test-rule",
         "properties": {
           "policyType": "TargetTrackingScaling",

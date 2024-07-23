@@ -26,11 +26,6 @@ const classes = Object.assign({}, AWSResources, WharfieActors, {
 });
 
 /**
- * @typedef DeserializeResourceOptions
- * @property {boolean} [emit] -
- */
-
-/**
  * @typedef RawUnserializedResourceData
  * @property {string} name -
  * @property {string} class -
@@ -42,10 +37,9 @@ const classes = Object.assign({}, AWSResources, WharfieActors, {
 /**
  * @param {any} json -
  * @param {Object<string, import('./resources/reconcilable')>} resourceMap -
- * @param {DeserializeResourceOptions } [resourceOptions] -
  * @returns {import('./resources/reconcilable')} -
  */
-function _deserialize(json, resourceMap, resourceOptions = {}) {
+function _deserialize(json, resourceMap) {
   if (!json || typeof json !== 'object' || !json.resourceType) {
     throw new Error('Invalid serialized resource');
   }
@@ -54,7 +48,7 @@ function _deserialize(json, resourceMap, resourceOptions = {}) {
   const deserializedResources = {};
 
   Object.values(json.resources || {}).forEach((resource) => {
-    const deserdResource = _deserialize(resource, resourceMap, resourceOptions);
+    const deserdResource = _deserialize(resource, resourceMap);
     deserializedResources[deserdResource.name] = deserdResource;
     resourceMap[deserdResource.name] = deserdResource;
   });
@@ -64,7 +58,6 @@ function _deserialize(json, resourceMap, resourceOptions = {}) {
     status: json.status,
     resources: deserializedResources,
     properties: json.properties,
-    ...resourceOptions,
   });
   resourceMap[resource.name] = resource;
   return resource;
@@ -73,14 +66,13 @@ function _deserialize(json, resourceMap, resourceOptions = {}) {
 /**
  * @param {any} json -
  * @param {Object<string, import('./resources/reconcilable')>} [resourceMap] -
- * @param {DeserializeResourceOptions} [resourceOptions] -
  * @returns {import('./resources/reconcilable')} -
  */
-function deserialize(json, resourceMap = {}, resourceOptions = {}) {
+function deserialize(json, resourceMap = {}) {
   if (!json || typeof json !== 'object' || !json.resourceType) {
     throw new Error('Invalid serialized resource');
   }
-  const deserializedResource = _deserialize(json, resourceMap, resourceOptions);
+  const deserializedResource = _deserialize(json, resourceMap);
   setDependsOn(deserializedResource, resourceMap);
   setParent(deserializedResource, resourceMap);
   if (deserializedResource instanceof WharfieDeployment) {
@@ -148,14 +140,13 @@ function setDeployment(resource, resourceMap) {
 /**
  * @typedef WharfieDeploymentLoadOptions
  * @property {string} deploymentName -
- * @property {boolean} [emit] -
  * @property {string} [resourceName] -
  */
 /**
  * @param {WharfieDeploymentLoadOptions} options -
  * @returns {Promise<WharfieDeployment | WharfieProject>} -
  */
-async function load({ deploymentName, resourceName, emit = false }) {
+async function load({ deploymentName, resourceName }) {
   if (!resourceName) {
     resourceName = deploymentName;
   }
@@ -176,7 +167,7 @@ async function load({ deploymentName, resourceName, emit = false }) {
   const storedData = Items[0];
   if (!storedData.serialized) throw new Error('Resource was not stored');
   // @ts-ignore
-  return deserialize(storedData?.serialized, {}, { emit });
+  return deserialize(storedData?.serialized, {});
 }
 
 module.exports = {

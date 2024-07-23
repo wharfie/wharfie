@@ -38,7 +38,6 @@ describe('iam role IaC', () => {
         "_destroyErrors": [],
         "_reconcileErrors": [],
         "dependsOn": [],
-        "emit": false,
         "iam": IAM {
           "iam": IAMMock {},
         },
@@ -167,7 +166,6 @@ describe('iam role IaC', () => {
         "_destroyErrors": [],
         "_reconcileErrors": [],
         "dependsOn": [],
-        "emit": false,
         "iam": IAM {
           "iam": IAMMock {},
         },

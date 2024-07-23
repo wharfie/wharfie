@@ -1,4 +1,5 @@
 const BaseResourceGroup = require('./base-resource-group');
+const Reconcilable = require('./reconcilable');
 const WharfieResource = require('./wharfie-resource');
 const GlueDatabase = require('./aws/glue-database');
 const Bucket = require('./aws/bucket');
@@ -259,30 +260,58 @@ class WharfieProject extends BaseResourceGroup {
    * @param {import("./wharfie-resource").WharfieResourceOptions} options -
    */
   addWharfieResource(options) {
-    const resource = new WharfieResource({
-      ...options,
-      name: `${options.name}-resource`,
-      dependsOn: [this.getRole(), this.getBucket()],
-      properties: {
-        ...options.properties,
-        deployment: () => this.get('deployment'),
-        project: this._getProjectProperties(),
-        resourceName: options.name,
-        projectName: this.name,
-        databaseName: this.name,
-        outputLocation: `s3://${this.getBucket().name}/${options.name}/`,
-        deploymentBucket: this.get('deploymentBucket'),
-        region: this.get('deployment').region,
-        catalogId: this.get('deployment').accountId,
-        scheduleQueueArn: this.get('scheduleQueueArn'),
-        scheduleRoleArn: this.get('scheduleRoleArn'),
-        roleArn: () => this.getRole().get('arn'),
-        resourceTable: this.get('resourceTable'),
-        dependencyTable: this.get('dependencyTable'),
-        locationTable: this.get('locationTable'),
-      },
-    });
-    this.addResource(resource);
+    const name = `${options.name}-resource`;
+    const newProperties = {
+      ...options.properties,
+      ...WharfieResource.DefaultProperties,
+      deployment: () => this.get('deployment'),
+      project: this._getProjectProperties(),
+      resourceName: options.name,
+      projectName: this.name,
+      databaseName: this.name,
+      outputLocation: `s3://${this.getBucket().name}/${options.name}/`,
+      deploymentBucket: this.get('deploymentBucket'),
+      region: this.get('deployment').region,
+      catalogId: this.get('deployment').accountId,
+      scheduleQueueArn: this.get('scheduleQueueArn'),
+      scheduleRoleArn: this.get('scheduleRoleArn'),
+      roleArn: () => this.getRole().get('arn'),
+      resourceTable: this.get('resourceTable'),
+      dependencyTable: this.get('dependencyTable'),
+      locationTable: this.get('locationTable'),
+    };
+    if (this.resources[name]) {
+      if (!this.resources[name].checkPropertyEquality(newProperties)) {
+        this.resources[name].properties = newProperties;
+        this.resources[name].setStatus(Reconcilable.Status.DRIFTED);
+      }
+    } else {
+      this.addResource(
+        new WharfieResource({
+          ...options,
+          name,
+          dependsOn: [this.getRole(), this.getBucket()],
+          properties: {
+            ...options.properties,
+            deployment: () => this.get('deployment'),
+            project: this._getProjectProperties(),
+            resourceName: options.name,
+            projectName: this.name,
+            databaseName: this.name,
+            outputLocation: `s3://${this.getBucket().name}/${options.name}/`,
+            deploymentBucket: this.get('deploymentBucket'),
+            region: this.get('deployment').region,
+            catalogId: this.get('deployment').accountId,
+            scheduleQueueArn: this.get('scheduleQueueArn'),
+            scheduleRoleArn: this.get('scheduleRoleArn'),
+            roleArn: () => this.getRole().get('arn'),
+            resourceTable: this.get('resourceTable'),
+            dependencyTable: this.get('dependencyTable'),
+            locationTable: this.get('locationTable'),
+          },
+        })
+      );
+    }
   }
 
   /**

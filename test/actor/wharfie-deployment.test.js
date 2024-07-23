@@ -247,9 +247,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-cleanup-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-cleanup-build/34c17c52a84dd5faf7bc3c2af02c591a4cd22d048adab205dbc141419c63a19d.zip",
+                        "S3Key": "actor-artifacts/test-deployment-cleanup-build/9652034ff179cbd61da462b9aa20bb94d7d2b33462bc9958b091f2c5a006f43f.zip",
                       },
-                      "codeHash": "34c17c52a84dd5faf7bc3c2af02c591a4cd22d048adab205dbc141419c63a19d",
+                      "codeHash": "9652034ff179cbd61da462b9aa20bb94d7d2b33462bc9958b091f2c5a006f43f",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-cleanup-dlq",
                       },
@@ -593,9 +593,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-daemon-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-daemon-build/b5a0dbd08f696eb0dc9cfc6d97497f5e998236c6ec5f4e4772a30df62963b194.zip",
+                        "S3Key": "actor-artifacts/test-deployment-daemon-build/87f7d6520288496fd78a30efaf2a3cb32fbabcd685fff66d5cdd74e35f8de7d1.zip",
                       },
-                      "codeHash": "b5a0dbd08f696eb0dc9cfc6d97497f5e998236c6ec5f4e4772a30df62963b194",
+                      "codeHash": "87f7d6520288496fd78a30efaf2a3cb32fbabcd685fff66d5cdd74e35f8de7d1",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-dlq",
                       },
@@ -939,9 +939,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-events-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-events-build/294e80aa0d3e108338861eb1b57d5b6d32ad2bda93ca75a2e12af076487acecb.zip",
+                        "S3Key": "actor-artifacts/test-deployment-events-build/b5a81584dae698cb1a6747ec8c57ca3010ed71341ad3d6d1625d349d3559801a.zip",
                       },
-                      "codeHash": "294e80aa0d3e108338861eb1b57d5b6d32ad2bda93ca75a2e12af076487acecb",
+                      "codeHash": "b5a81584dae698cb1a6747ec8c57ca3010ed71341ad3d6d1625d349d3559801a",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-dlq",
                       },
@@ -1285,9 +1285,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-monitor-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-monitor-build/3dbf7808c5414476949447bfd156050f7ce8b9a52cd4b673a4b40694f6e8f33b.zip",
+                        "S3Key": "actor-artifacts/test-deployment-monitor-build/808f81f843cfb50823a71f29538e56a666c848ad41fbbf50168e7cc28997a73c.zip",
                       },
-                      "codeHash": "3dbf7808c5414476949447bfd156050f7ce8b9a52cd4b673a4b40694f6e8f33b",
+                      "codeHash": "808f81f843cfb50823a71f29538e56a666c848ad41fbbf50168e7cc28997a73c",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-dlq",
                       },
@@ -4378,8 +4378,8 @@ describe('deployment IaC', () => {
               ],
               "maxReadCapacity": 50,
               "maxWriteCapacity": 50,
-              "minReadCapacity": 1,
-              "minWriteCapacity": 1,
+              "minReadCapacity": 2,
+              "minWriteCapacity": 3,
               "provisionedThroughput": {
                 "ReadCapacityUnits": 5,
                 "WriteCapacityUnits": 5,
@@ -4560,7 +4560,7 @@ describe('deployment IaC', () => {
                     "version": "0.0.1",
                   },
                   "maxCapacity": 50,
-                  "minCapacity": 1,
+                  "minCapacity": 2,
                   "resourceId": "table/test-deployment-state",
                   "roleArn": "arn:aws:iam::123456789012:role/test-deployment-state-autoscaling-role",
                   "scalableDimension": "dynamodb:table:ReadCapacityUnits",
@@ -4628,7 +4628,7 @@ describe('deployment IaC', () => {
                     "version": "0.0.1",
                   },
                   "maxCapacity": 50,
-                  "minCapacity": 1,
+                  "minCapacity": 3,
                   "resourceId": "table/test-deployment-state",
                   "roleArn": "arn:aws:iam::123456789012:role/test-deployment-state-autoscaling-role",
                   "scalableDimension": "dynamodb:table:WriteCapacityUnits",

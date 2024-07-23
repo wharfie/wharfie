@@ -264,7 +264,6 @@ describe('autoscaling table IaC', () => {
         "_destroyErrors": [],
         "_reconcileErrors": [],
         "dependsOn": [],
-        "emit": false,
         "name": "test-rule",
         "properties": {
           "attributeDefinitions": [
@@ -316,7 +315,6 @@ describe('autoscaling table IaC', () => {
               "query": [MockFunction],
               "update": [MockFunction],
             },
-            "emit": false,
             "name": "table-name",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
@@ -373,7 +371,6 @@ describe('autoscaling table IaC', () => {
                   "query": [MockFunction],
                   "update": [MockFunction],
                 },
-                "emit": false,
                 "name": "table-name",
                 "properties": {
                   "_INTERNAL_STATE_RESOURCE": undefined,
@@ -408,7 +405,6 @@ describe('autoscaling table IaC', () => {
                 "status": "STABLE",
               },
             ],
-            "emit": false,
             "iam": IAM {
               "iam": IAMMock {},
             },
@@ -501,7 +497,6 @@ describe('autoscaling table IaC', () => {
                           "query": [MockFunction],
                           "update": [MockFunction],
                         },
-                        "emit": false,
                         "name": "table-name",
                         "properties": {
                           "_INTERNAL_STATE_RESOURCE": undefined,
@@ -536,7 +531,6 @@ describe('autoscaling table IaC', () => {
                         "status": "STABLE",
                       },
                     ],
-                    "emit": false,
                     "iam": IAM {
                       "iam": IAMMock {},
                     },
@@ -589,7 +583,6 @@ describe('autoscaling table IaC', () => {
                     "status": "STABLE",
                   },
                 ],
-                "emit": false,
                 "name": "table-name-readAutoscalingTarget",
                 "properties": {
                   "_INTERNAL_STATE_RESOURCE": undefined,
@@ -605,7 +598,6 @@ describe('autoscaling table IaC', () => {
                 "status": "STABLE",
               },
             ],
-            "emit": false,
             "name": "table-name-readAutoscalingPolicy",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
@@ -658,7 +650,6 @@ describe('autoscaling table IaC', () => {
                       "query": [MockFunction],
                       "update": [MockFunction],
                     },
-                    "emit": false,
                     "name": "table-name",
                     "properties": {
                       "_INTERNAL_STATE_RESOURCE": undefined,
@@ -693,7 +684,6 @@ describe('autoscaling table IaC', () => {
                     "status": "STABLE",
                   },
                 ],
-                "emit": false,
                 "iam": IAM {
                   "iam": IAMMock {},
                 },
@@ -746,7 +736,6 @@ describe('autoscaling table IaC', () => {
                 "status": "STABLE",
               },
             ],
-            "emit": false,
             "name": "table-name-readAutoscalingTarget",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
@@ -802,7 +791,6 @@ describe('autoscaling table IaC', () => {
                           "query": [MockFunction],
                           "update": [MockFunction],
                         },
-                        "emit": false,
                         "name": "table-name",
                         "properties": {
                           "_INTERNAL_STATE_RESOURCE": undefined,
@@ -837,7 +825,6 @@ describe('autoscaling table IaC', () => {
                         "status": "STABLE",
                       },
                     ],
-                    "emit": false,
                     "iam": IAM {
                       "iam": IAMMock {},
                     },
@@ -890,7 +877,6 @@ describe('autoscaling table IaC', () => {
                     "status": "STABLE",
                   },
                 ],
-                "emit": false,
                 "name": "table-name-writeAutoscalingTarget",
                 "properties": {
                   "_INTERNAL_STATE_RESOURCE": undefined,
@@ -906,7 +892,6 @@ describe('autoscaling table IaC', () => {
                 "status": "STABLE",
               },
             ],
-            "emit": false,
             "name": "table-name-writeAutoscalingPolicy",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
@@ -959,7 +944,6 @@ describe('autoscaling table IaC', () => {
                       "query": [MockFunction],
                       "update": [MockFunction],
                     },
-                    "emit": false,
                     "name": "table-name",
                     "properties": {
                       "_INTERNAL_STATE_RESOURCE": undefined,
@@ -994,7 +978,6 @@ describe('autoscaling table IaC', () => {
                     "status": "STABLE",
                   },
                 ],
-                "emit": false,
                 "iam": IAM {
                   "iam": IAMMock {},
                 },
@@ -1047,7 +1030,6 @@ describe('autoscaling table IaC', () => {
                 "status": "STABLE",
               },
             ],
-            "emit": false,
             "name": "table-name-writeAutoscalingTarget",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,

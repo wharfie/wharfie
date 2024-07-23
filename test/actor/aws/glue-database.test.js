@@ -37,7 +37,6 @@ describe('glue database IaC', () => {
         "_destroyErrors": [],
         "_reconcileErrors": [],
         "dependsOn": [],
-        "emit": false,
         "glue": Glue {
           "glue": GlueMock {},
         },

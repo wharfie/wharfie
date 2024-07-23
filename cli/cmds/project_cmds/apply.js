@@ -22,12 +22,12 @@ const apply = async (path, environmentName) => {
   const deployment = await load({
     deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME,
   });
+  monitorReconcilables();
   let projectResources;
   try {
     projectResources = await load({
       deploymentName: deployment.name,
       resourceName: project.name,
-      emit: true,
     });
   } catch (error) {
     if (
@@ -37,14 +37,11 @@ const apply = async (path, environmentName) => {
     projectResources = new WharfieProject({
       deployment,
       name: project.name,
-      emit: true,
     });
   }
   const resourceOptions = getResourceOptions(environment, project);
 
   projectResources.registerWharfieResources(resourceOptions);
-
-  monitorReconcilables();
 
   await projectResources.reconcile();
 

@@ -57,7 +57,6 @@ describe('autoscaling target IaC', () => {
           "autoscaling": ApplicationAutoScalingMock {},
         },
         "dependsOn": [],
-        "emit": false,
         "name": "test-rule",
         "properties": {
           "maxCapacity": 10,

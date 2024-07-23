@@ -7,12 +7,20 @@ const { load } = require('../../../lambdas/lib/actor/deserialize');
 const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
 const loadEnvironment = require('../../project/load-environment');
 const { getResourceOptions } = require('../../project/template-actor');
-const { displayFailure, displayInfo, displaySuccess } = require('../../output');
+
+const {
+  displayFailure,
+  displayInfo,
+  displaySuccess,
+  monitorReconcilables,
+} = require('../../output/');
 
 const destroy = async (path, environmentName) => {
   const project = await loadProject({
     path,
   });
+
+  monitorReconcilables();
   let projectResources;
   try {
     projectResources = await load({

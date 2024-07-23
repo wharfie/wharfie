@@ -43,7 +43,6 @@ describe('sqs queue IaC', () => {
         "_destroyErrors": [],
         "_reconcileErrors": [],
         "dependsOn": [],
-        "emit": false,
         "name": "test-queue",
         "properties": {
           "arn": "arn:aws:sqs:us-east-1:123456789012:test-queue",

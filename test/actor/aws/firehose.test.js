@@ -60,7 +60,6 @@ describe('firehose IaC', () => {
         "_destroyErrors": [],
         "_reconcileErrors": [],
         "dependsOn": [],
-        "emit": false,
         "firehose": Firehose {
           "firehose": FirehoseMock {},
         },

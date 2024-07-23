@@ -58,12 +58,8 @@ class WharfieResource extends BaseResourceGroup {
    */
   constructor({ name, status, properties, dependsOn, resources }) {
     const propertiesWithDefaults = Object.assign(
-      {
-        numberOfBuckets: 0,
-        storedAsSubDirectories: false,
-        compressed: false,
-        interval: 300,
-      },
+      {},
+      WharfieResource.DefaultProperties,
       properties
     );
     super({
@@ -308,5 +304,12 @@ class WharfieResource extends BaseResourceGroup {
     );
   }
 }
+
+WharfieResource.DefaultProperties = {
+  numberOfBuckets: 0,
+  storedAsSubDirectories: false,
+  compressed: false,
+  interval: 300,
+};
 
 module.exports = WharfieResource;

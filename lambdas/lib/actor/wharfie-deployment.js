@@ -82,9 +82,9 @@ class WharfieDeployment extends ActorDeployment {
         _INTERNAL_STATE_RESOURCE: true,
         deployment: this.getDeploymentProperties.bind(this),
         tableName: `${this.name}-state`,
-        minReadCapacity: 1,
+        minReadCapacity: 2,
         maxReadCapacity: 50,
-        minWriteCapacity: 1,
+        minWriteCapacity: 3,
         maxWriteCapacity: 50,
         attributeDefinitions: [
           {

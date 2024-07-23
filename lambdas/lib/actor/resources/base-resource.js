@@ -3,6 +3,8 @@
 const Reconcilable = require('./reconcilable');
 const { putWithThroughputRetry, docClient } = require('../../dynamo/');
 
+const { isEqual } = require('es-toolkit');
+
 /**
  * @typedef BaseResourceOptions
  * @property {string} name -
@@ -67,6 +69,30 @@ class BaseResource extends Reconcilable {
    */
   has(key) {
     return key in this.properties;
+  }
+
+  /**
+   * @param {string} key -
+   * @param {any} newValue -
+   * @returns {boolean} -
+   */
+  assert(key, newValue) {
+    const oldValue = this.get(key);
+    const resolvedNewValue = this._resolveProperty(newValue);
+    return isEqual(oldValue, resolvedNewValue);
+  }
+
+  /**
+   * @param {any} other -
+   * @returns {boolean} -
+   */
+  checkPropertyEquality(other) {
+    Object.keys(this.properties).forEach((key) => {
+      if (!this.assert(key, other[key])) {
+        return false;
+      }
+    });
+    return true;
   }
 
   /**

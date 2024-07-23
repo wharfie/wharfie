@@ -76,6 +76,15 @@ class BaseResourceGroup extends BaseResource {
     return !!this.resources[name];
   }
 
+  asEvent() {
+    return {
+      name: this.name,
+      constructor: this.constructor.name,
+      status: this.status,
+      resources: Object.keys(this.resources || {}),
+    };
+  }
+
   /**
    * @returns {any} -
    */

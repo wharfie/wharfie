@@ -158,9 +158,9 @@ describe('wharfie actor resources IaC', () => {
               "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-test-actor-function",
               "code": {
                 "S3Bucket": "test-bucket",
-                "S3Key": "actor-artifacts/test-deployment-test-actor-build/3dbf7808c5414476949447bfd156050f7ce8b9a52cd4b673a4b40694f6e8f33b.zip",
+                "S3Key": "actor-artifacts/test-deployment-test-actor-build/808f81f843cfb50823a71f29538e56a666c848ad41fbbf50168e7cc28997a73c.zip",
               },
-              "codeHash": "3dbf7808c5414476949447bfd156050f7ce8b9a52cd4b673a4b40694f6e8f33b",
+              "codeHash": "808f81f843cfb50823a71f29538e56a666c848ad41fbbf50168e7cc28997a73c",
               "deadLetterConfig": {
                 "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-test-actor-dlq",
               },
