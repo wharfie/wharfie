@@ -247,9 +247,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-cleanup-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-cleanup-build/9652034ff179cbd61da462b9aa20bb94d7d2b33462bc9958b091f2c5a006f43f.zip",
+                        "S3Key": "actor-artifacts/test-deployment-cleanup-build/ac32e5084a2835a7dccc9ea4855a4216e3e166f0e211130b5b786e6f13a3983e.zip",
                       },
-                      "codeHash": "9652034ff179cbd61da462b9aa20bb94d7d2b33462bc9958b091f2c5a006f43f",
+                      "codeHash": "ac32e5084a2835a7dccc9ea4855a4216e3e166f0e211130b5b786e6f13a3983e",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-cleanup-dlq",
                       },
@@ -593,9 +593,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-daemon-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-daemon-build/87f7d6520288496fd78a30efaf2a3cb32fbabcd685fff66d5cdd74e35f8de7d1.zip",
+                        "S3Key": "actor-artifacts/test-deployment-daemon-build/b8faf93c7db2f6488b9e781e6dc277924b52c030f0bc7b9e8fecaa83aade9865.zip",
                       },
-                      "codeHash": "87f7d6520288496fd78a30efaf2a3cb32fbabcd685fff66d5cdd74e35f8de7d1",
+                      "codeHash": "b8faf93c7db2f6488b9e781e6dc277924b52c030f0bc7b9e8fecaa83aade9865",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-dlq",
                       },
@@ -939,9 +939,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-events-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-events-build/b5a81584dae698cb1a6747ec8c57ca3010ed71341ad3d6d1625d349d3559801a.zip",
+                        "S3Key": "actor-artifacts/test-deployment-events-build/b5ee70d9277b02b72d55a814e27e9c96aeba199e4a79cb355017391fd59ee99c.zip",
                       },
-                      "codeHash": "b5a81584dae698cb1a6747ec8c57ca3010ed71341ad3d6d1625d349d3559801a",
+                      "codeHash": "b5ee70d9277b02b72d55a814e27e9c96aeba199e4a79cb355017391fd59ee99c",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-dlq",
                       },
@@ -1285,9 +1285,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-monitor-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-monitor-build/808f81f843cfb50823a71f29538e56a666c848ad41fbbf50168e7cc28997a73c.zip",
+                        "S3Key": "actor-artifacts/test-deployment-monitor-build/10936b3321073bcb88516710a845cf3c9d4ff8ed941de5622c1bb889aed59316.zip",
                       },
-                      "codeHash": "808f81f843cfb50823a71f29538e56a666c848ad41fbbf50168e7cc28997a73c",
+                      "codeHash": "10936b3321073bcb88516710a845cf3c9d4ff8ed941de5622c1bb889aed59316",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-dlq",
                       },
@@ -1547,7 +1547,7 @@ describe('deployment IaC', () => {
           },
           "test-deployment-deployment-resources": {
             "dependsOn": [
-              "test-deployment-state-autoscaling-table",
+              "test-deployment-state",
             ],
             "name": "test-deployment-deployment-resources",
             "properties": {
@@ -1836,6 +1836,7 @@ describe('deployment IaC', () => {
                           "AttributeType": "S",
                         },
                       ],
+                      "billingMode": "PROVISIONED",
                       "deployment": {
                         "accountId": undefined,
                         "envPaths": {
@@ -2956,6 +2957,7 @@ describe('deployment IaC', () => {
                           "AttributeType": "S",
                         },
                       ],
+                      "billingMode": "PROVISIONED",
                       "deployment": {
                         "accountId": undefined,
                         "envPaths": {
@@ -3359,6 +3361,7 @@ describe('deployment IaC', () => {
                           "AttributeType": "S",
                         },
                       ],
+                      "billingMode": "PROVISIONED",
                       "deployment": {
                         "accountId": undefined,
                         "envPaths": {
@@ -3661,6 +3664,7 @@ describe('deployment IaC', () => {
                           "AttributeType": "S",
                         },
                       ],
+                      "billingMode": "PROVISIONED",
                       "deployment": {
                         "accountId": undefined,
                         "envPaths": {
@@ -3951,6 +3955,7 @@ describe('deployment IaC', () => {
                           "AttributeType": "S",
                         },
                       ],
+                      "billingMode": "PROVISIONED",
                       "deployment": {
                         "accountId": undefined,
                         "envPaths": {
@@ -4337,11 +4342,12 @@ describe('deployment IaC', () => {
             "resourceType": "BucketNotificationConfiguration",
             "status": "STABLE",
           },
-          "test-deployment-state-autoscaling-table": {
+          "test-deployment-state": {
             "dependsOn": [],
-            "name": "test-deployment-state-autoscaling-table",
+            "name": "test-deployment-state",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": true,
+              "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
               "attributeDefinitions": [
                 {
                   "AttributeName": "name",
@@ -4352,6 +4358,7 @@ describe('deployment IaC', () => {
                   "AttributeType": "S",
                 },
               ],
+              "billingMode": "PAY_PER_REQUEST",
               "deployment": {
                 "accountId": "",
                 "envPaths": {
@@ -4376,268 +4383,8 @@ describe('deployment IaC', () => {
                   "KeyType": "RANGE",
                 },
               ],
-              "maxReadCapacity": 50,
-              "maxWriteCapacity": 50,
-              "minReadCapacity": 2,
-              "minWriteCapacity": 3,
-              "provisionedThroughput": {
-                "ReadCapacityUnits": 5,
-                "WriteCapacityUnits": 5,
-              },
-              "tableName": "test-deployment-state",
             },
-            "resourceType": "AutoscalingTable",
-            "resources": {
-              "test-deployment-state": {
-                "dependsOn": [],
-                "name": "test-deployment-state",
-                "properties": {
-                  "_INTERNAL_STATE_RESOURCE": true,
-                  "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
-                  "attributeDefinitions": [
-                    {
-                      "AttributeName": "name",
-                      "AttributeType": "S",
-                    },
-                    {
-                      "AttributeName": "sort_key",
-                      "AttributeType": "S",
-                    },
-                  ],
-                  "deployment": {
-                    "accountId": undefined,
-                    "envPaths": {
-                      "cache": "/Users/Dev/Library/Caches/test-deployment-nodejs",
-                      "config": "/Users/Dev/Library/Preferences/test-deployment-nodejs",
-                      "data": "/Users/Dev/Library/Application Support/test-deployment-nodejs",
-                      "log": "/Users/Dev/Library/Logs/test-deployment-nodejs",
-                      "temp": "/var/folders/0y/_kvxgb354g14trwskq3xwpj00000gp/T/test-deployment-nodejs",
-                    },
-                    "name": "test-deployment",
-                    "region": undefined,
-                    "stateTable": "test-deployment-state",
-                    "version": "0.0.1",
-                  },
-                  "keySchema": [
-                    {
-                      "AttributeName": "name",
-                      "KeyType": "HASH",
-                    },
-                    {
-                      "AttributeName": "sort_key",
-                      "KeyType": "RANGE",
-                    },
-                  ],
-                  "provisionedThroughput": {
-                    "ReadCapacityUnits": 5,
-                    "WriteCapacityUnits": 5,
-                  },
-                },
-                "resourceType": "Table",
-                "status": "STABLE",
-              },
-              "test-deployment-state-autoscaling-role": {
-                "dependsOn": [
-                  "test-deployment-state",
-                ],
-                "name": "test-deployment-state-autoscaling-role",
-                "properties": {
-                  "_INTERNAL_STATE_RESOURCE": true,
-                  "arn": "arn:aws:iam::123456789012:role/test-deployment-state-autoscaling-role",
-                  "assumeRolePolicyDocument": {
-                    "Statement": [
-                      {
-                        "Action": "sts:AssumeRole",
-                        "Effect": "Allow",
-                        "Principal": {
-                          "Service": [
-                            "application-autoscaling.amazonaws.com",
-                          ],
-                        },
-                      },
-                    ],
-                    "Version": "2012-10-17",
-                  },
-                  "deployment": {
-                    "accountId": undefined,
-                    "envPaths": {
-                      "cache": "/Users/Dev/Library/Caches/test-deployment-nodejs",
-                      "config": "/Users/Dev/Library/Preferences/test-deployment-nodejs",
-                      "data": "/Users/Dev/Library/Application Support/test-deployment-nodejs",
-                      "log": "/Users/Dev/Library/Logs/test-deployment-nodejs",
-                      "temp": "/var/folders/0y/_kvxgb354g14trwskq3xwpj00000gp/T/test-deployment-nodejs",
-                    },
-                    "name": "test-deployment",
-                    "region": undefined,
-                    "stateTable": "test-deployment-state",
-                    "version": "0.0.1",
-                  },
-                  "description": "Role for test-deployment-state table autoscaling",
-                  "rolePolicyDocument": {
-                    "Statement": [
-                      {
-                        "Action": [
-                          "dynamodb:DescribeTable",
-                          "dynamodb:UpdateTable",
-                        ],
-                        "Effect": "Allow",
-                        "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
-                      },
-                      {
-                        "Action": [
-                          "cloudwatch:PutMetricAlarm",
-                          "cloudwatch:DescribeAlarms",
-                          "cloudwatch:GetMetricStatistics",
-                          "cloudwatch:SetAlarmState",
-                          "cloudwatch:DeleteAlarms",
-                        ],
-                        "Effect": "Allow",
-                        "Resource": "*",
-                      },
-                    ],
-                    "Version": "2012-10-17",
-                  },
-                },
-                "resourceType": "Role",
-                "status": "STABLE",
-              },
-              "test-deployment-state-readAutoscalingPolicy": {
-                "dependsOn": [
-                  "test-deployment-state-readAutoscalingTarget",
-                ],
-                "name": "test-deployment-state-readAutoscalingPolicy",
-                "properties": {
-                  "_INTERNAL_STATE_RESOURCE": true,
-                  "deployment": {
-                    "accountId": undefined,
-                    "envPaths": {
-                      "cache": "/Users/Dev/Library/Caches/test-deployment-nodejs",
-                      "config": "/Users/Dev/Library/Preferences/test-deployment-nodejs",
-                      "data": "/Users/Dev/Library/Application Support/test-deployment-nodejs",
-                      "log": "/Users/Dev/Library/Logs/test-deployment-nodejs",
-                      "temp": "/var/folders/0y/_kvxgb354g14trwskq3xwpj00000gp/T/test-deployment-nodejs",
-                    },
-                    "name": "test-deployment",
-                    "region": undefined,
-                    "stateTable": "test-deployment-state",
-                    "version": "0.0.1",
-                  },
-                  "policyType": "TargetTrackingScaling",
-                  "resourceId": "table/test-deployment-state",
-                  "scalableDimension": "dynamodb:table:ReadCapacityUnits",
-                  "serviceNamespace": "dynamodb",
-                  "targetTrackingScalingPolicyConfiguration": {
-                    "PredefinedMetricSpecification": {
-                      "PredefinedMetricType": "DynamoDBReadCapacityUtilization",
-                    },
-                    "ScaleInCooldown": 0,
-                    "ScaleOutCooldown": 0,
-                    "TargetValue": 70,
-                  },
-                },
-                "resourceType": "AutoscalingPolicy",
-                "status": "STABLE",
-              },
-              "test-deployment-state-readAutoscalingTarget": {
-                "dependsOn": [
-                  "test-deployment-state-autoscaling-role",
-                ],
-                "name": "test-deployment-state-readAutoscalingTarget",
-                "properties": {
-                  "_INTERNAL_STATE_RESOURCE": true,
-                  "deployment": {
-                    "accountId": undefined,
-                    "envPaths": {
-                      "cache": "/Users/Dev/Library/Caches/test-deployment-nodejs",
-                      "config": "/Users/Dev/Library/Preferences/test-deployment-nodejs",
-                      "data": "/Users/Dev/Library/Application Support/test-deployment-nodejs",
-                      "log": "/Users/Dev/Library/Logs/test-deployment-nodejs",
-                      "temp": "/var/folders/0y/_kvxgb354g14trwskq3xwpj00000gp/T/test-deployment-nodejs",
-                    },
-                    "name": "test-deployment",
-                    "region": undefined,
-                    "stateTable": "test-deployment-state",
-                    "version": "0.0.1",
-                  },
-                  "maxCapacity": 50,
-                  "minCapacity": 2,
-                  "resourceId": "table/test-deployment-state",
-                  "roleArn": "arn:aws:iam::123456789012:role/test-deployment-state-autoscaling-role",
-                  "scalableDimension": "dynamodb:table:ReadCapacityUnits",
-                  "serviceNamespace": "dynamodb",
-                },
-                "resourceType": "AutoscalingTarget",
-                "status": "STABLE",
-              },
-              "test-deployment-state-writeAutoscalingPolicy": {
-                "dependsOn": [
-                  "test-deployment-state-writeAutoscalingTarget",
-                ],
-                "name": "test-deployment-state-writeAutoscalingPolicy",
-                "properties": {
-                  "_INTERNAL_STATE_RESOURCE": true,
-                  "deployment": {
-                    "accountId": undefined,
-                    "envPaths": {
-                      "cache": "/Users/Dev/Library/Caches/test-deployment-nodejs",
-                      "config": "/Users/Dev/Library/Preferences/test-deployment-nodejs",
-                      "data": "/Users/Dev/Library/Application Support/test-deployment-nodejs",
-                      "log": "/Users/Dev/Library/Logs/test-deployment-nodejs",
-                      "temp": "/var/folders/0y/_kvxgb354g14trwskq3xwpj00000gp/T/test-deployment-nodejs",
-                    },
-                    "name": "test-deployment",
-                    "region": undefined,
-                    "stateTable": "test-deployment-state",
-                    "version": "0.0.1",
-                  },
-                  "policyType": "TargetTrackingScaling",
-                  "resourceId": "table/test-deployment-state",
-                  "scalableDimension": "dynamodb:table:WriteCapacityUnits",
-                  "serviceNamespace": "dynamodb",
-                  "targetTrackingScalingPolicyConfiguration": {
-                    "PredefinedMetricSpecification": {
-                      "PredefinedMetricType": "DynamoDBWriteCapacityUtilization",
-                    },
-                    "ScaleInCooldown": 0,
-                    "ScaleOutCooldown": 0,
-                    "TargetValue": 70,
-                  },
-                },
-                "resourceType": "AutoscalingPolicy",
-                "status": "STABLE",
-              },
-              "test-deployment-state-writeAutoscalingTarget": {
-                "dependsOn": [
-                  "test-deployment-state-autoscaling-role",
-                ],
-                "name": "test-deployment-state-writeAutoscalingTarget",
-                "properties": {
-                  "_INTERNAL_STATE_RESOURCE": true,
-                  "deployment": {
-                    "accountId": undefined,
-                    "envPaths": {
-                      "cache": "/Users/Dev/Library/Caches/test-deployment-nodejs",
-                      "config": "/Users/Dev/Library/Preferences/test-deployment-nodejs",
-                      "data": "/Users/Dev/Library/Application Support/test-deployment-nodejs",
-                      "log": "/Users/Dev/Library/Logs/test-deployment-nodejs",
-                      "temp": "/var/folders/0y/_kvxgb354g14trwskq3xwpj00000gp/T/test-deployment-nodejs",
-                    },
-                    "name": "test-deployment",
-                    "region": undefined,
-                    "stateTable": "test-deployment-state",
-                    "version": "0.0.1",
-                  },
-                  "maxCapacity": 50,
-                  "minCapacity": 3,
-                  "resourceId": "table/test-deployment-state",
-                  "roleArn": "arn:aws:iam::123456789012:role/test-deployment-state-autoscaling-role",
-                  "scalableDimension": "dynamodb:table:WriteCapacityUnits",
-                  "serviceNamespace": "dynamodb",
-                },
-                "resourceType": "AutoscalingTarget",
-                "status": "STABLE",
-              },
-            },
+            "resourceType": "Table",
             "status": "STABLE",
           },
         },

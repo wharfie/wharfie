@@ -1,14 +1,29 @@
 'use strict';
 
 const inquirer = require('inquirer');
+const ansiEscapes = require('ansi-escapes');
 
+const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
 const { displayFailure, displayInfo, displaySuccess } = require('../../output');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
+const monitorDeploymentDestroyReconcilables = require('../../output/deployment/destroy');
 
 const destroy = async () => {
-  const deployment = await load({
-    deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME,
-  });
+  let deployment;
+  try {
+    deployment = await load({
+      deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME,
+    });
+  } catch (error) {
+    if (
+      !['No resource found', 'Resource was not stored'].includes(error.message)
+    )
+      throw error;
+    deployment = new WharfieDeployment({
+      name: process.env.WHARFIE_DEPLOYMENT_NAME,
+    });
+    await deployment;
+  }
   const bucket = deployment.getBucket();
   const answers = await new Promise((resolve, reject) => {
     inquirer
@@ -28,7 +43,11 @@ const destroy = async () => {
     return;
   }
   displayInfo(`Destroying wharfie deployment...`);
+
+  const multibar = monitorDeploymentDestroyReconcilables(deployment);
   await deployment.destroy();
+  multibar.stop();
+  process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
   displaySuccess(`Destroyed wharfie deployment`);
 };
 
@@ -40,5 +59,6 @@ exports.handler = async function () {
     await destroy();
   } catch (err) {
     displayFailure(err);
+    console.trace(err);
   }
 };

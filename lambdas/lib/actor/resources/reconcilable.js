@@ -59,6 +59,7 @@ class Reconcilable {
      * @type {Error[]}
      */
     this._destroyErrors = [];
+
     this.setStatus(status);
   }
 
@@ -94,6 +95,10 @@ class Reconcilable {
    */
   setStatus(status) {
     this.status = status;
+    this.dispatchStatusEvent();
+  }
+
+  dispatchStatusEvent() {
     Reconcilable.Emitter.emit(Events.WHARFIE_STATUS, this.asEvent());
   }
 

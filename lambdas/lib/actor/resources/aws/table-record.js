@@ -2,6 +2,7 @@
 const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
 const Dynamo = require('@aws-sdk/client-dynamodb');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+const { ResourceNotFoundException } = require('@aws-sdk/client-dynamodb');
 
 const BaseAWS = require('../../../base');
 const BaseResource = require('../base-resource');
@@ -64,16 +65,22 @@ class TableRecord extends BaseResource {
   }
 
   async _destroy() {
-    await this.dynamoDocument.delete({
-      TableName: this.get('tableName'),
-      Key: {
-        [this.get('keyName')]: this.get('keyValue'),
-        ...(this.has('sortKeyValue')
-          ? { [this.get('sortKeyName')]: this.get('sortKeyValue') }
-          : {}),
-      },
-      ReturnValues: 'NONE',
-    });
+    try {
+      await this.dynamoDocument.delete({
+        TableName: this.get('tableName'),
+        Key: {
+          [this.get('keyName')]: this.get('keyValue'),
+          ...(this.has('sortKeyValue')
+            ? { [this.get('sortKeyName')]: this.get('sortKeyValue') }
+            : {}),
+        },
+        ReturnValues: 'NONE',
+      });
+    } catch (error) {
+      if (!(error instanceof ResourceNotFoundException)) {
+        throw error;
+      }
+    }
   }
 }
 

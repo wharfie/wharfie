@@ -1,6 +1,6 @@
 'use strict';
-
 const inquirer = require('inquirer');
+const ansiEscapes = require('ansi-escapes');
 
 const loadProject = require('../../project/load');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
@@ -12,7 +12,7 @@ const {
   displayFailure,
   displayInfo,
   displaySuccess,
-  monitorReconcilables,
+  monitorProjectDestroyReconcilables,
 } = require('../../output/');
 
 const destroy = async (path, environmentName) => {
@@ -20,7 +20,6 @@ const destroy = async (path, environmentName) => {
     path,
   });
 
-  monitorReconcilables();
   let projectResources;
   try {
     projectResources = await load({
@@ -64,9 +63,15 @@ const destroy = async (path, environmentName) => {
     displayFailure('destroy cancelled');
     return;
   }
+  process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
   displayInfo(`destroying wharfie project ${project.name}...`);
 
+  const multibar = monitorProjectDestroyReconcilables(projectResources);
+
   await projectResources.destroy();
+
+  multibar.stop();
+  process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
   displaySuccess(`destroyed wharfie project ${project.name} successfully`);
 };
 

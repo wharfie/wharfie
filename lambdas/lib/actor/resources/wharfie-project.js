@@ -284,6 +284,7 @@ class WharfieProject extends BaseResourceGroup {
       if (!this.resources[name].checkPropertyEquality(newProperties)) {
         this.resources[name].properties = newProperties;
         this.resources[name].setStatus(Reconcilable.Status.DRIFTED);
+        this.setStatus(Reconcilable.Status.DRIFTED);
       }
     } else {
       this.addResource(
@@ -311,6 +312,7 @@ class WharfieProject extends BaseResourceGroup {
           },
         })
       );
+      this.setStatus(Reconcilable.Status.DRIFTED);
     }
   }
 
@@ -322,6 +324,7 @@ class WharfieProject extends BaseResourceGroup {
     if (!(this.resources[`${name}-resource`] instanceof WharfieResource))
       throw new Error('cannot remove non-wharfie resource');
     this.resources[`${name}-resource`].markForDestruction();
+    this.setStatus(Reconcilable.Status.DRIFTED);
   }
 
   /**

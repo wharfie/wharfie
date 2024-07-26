@@ -1,5 +1,7 @@
 'use strict';
 
+const ansiEscapes = require('ansi-escapes');
+
 const loadProject = require('../../project/load');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
 const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
@@ -10,7 +12,7 @@ const {
   displayFailure,
   displayInfo,
   displaySuccess,
-  monitorReconcilables,
+  monitorProjectApplyReconcilables,
 } = require('../../output/');
 
 const apply = async (path, environmentName) => {
@@ -22,7 +24,6 @@ const apply = async (path, environmentName) => {
   const deployment = await load({
     deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME,
   });
-  monitorReconcilables();
   let projectResources;
   try {
     projectResources = await load({
@@ -43,8 +44,12 @@ const apply = async (path, environmentName) => {
 
   projectResources.registerWharfieResources(resourceOptions);
 
+  const multibar = monitorProjectApplyReconcilables(projectResources);
+
   await projectResources.reconcile();
 
+  multibar.stop();
+  process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
   displaySuccess(`apply for ${project.name} completed successfully`);
 };
 

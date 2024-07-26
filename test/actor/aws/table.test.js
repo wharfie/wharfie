@@ -47,6 +47,7 @@ describe('table IaC', () => {
               "AttributeType": "S",
             },
           ],
+          "billingMode": "PROVISIONED",
           "keySchema": [
             {
               "AttributeName": "semaphore",
@@ -92,6 +93,7 @@ describe('table IaC', () => {
               "AttributeType": "S",
             },
           ],
+          "billingMode": "PROVISIONED",
           "keySchema": [
             {
               "AttributeName": "semaphore",
@@ -122,6 +124,7 @@ describe('table IaC', () => {
               "AttributeType": "S",
             },
           ],
+          "BillingMode": "PROVISIONED",
           "KeySchema": [
             {
               "AttributeName": "semaphore",

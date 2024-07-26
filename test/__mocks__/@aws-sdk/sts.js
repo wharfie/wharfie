@@ -3,7 +3,7 @@
 class STSMock {
   constructor() {
     this.config = {
-      region: 'us-west-2',
+      region: async () => 'us-west-2',
     };
   }
 

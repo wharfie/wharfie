@@ -95,6 +95,7 @@ describe('autoscaling table IaC', () => {
                   "AttributeType": "S",
                 },
               ],
+              "billingMode": "PROVISIONED",
               "deployment": undefined,
               "keySchema": [
                 {
@@ -329,6 +330,7 @@ describe('autoscaling table IaC', () => {
                   "AttributeType": "S",
                 },
               ],
+              "billingMode": "PROVISIONED",
               "deployment": undefined,
               "keySchema": [
                 {
@@ -385,6 +387,7 @@ describe('autoscaling table IaC', () => {
                       "AttributeType": "S",
                     },
                   ],
+                  "billingMode": "PROVISIONED",
                   "deployment": undefined,
                   "keySchema": [
                     {
@@ -511,6 +514,7 @@ describe('autoscaling table IaC', () => {
                               "AttributeType": "S",
                             },
                           ],
+                          "billingMode": "PROVISIONED",
                           "deployment": undefined,
                           "keySchema": [
                             {
@@ -664,6 +668,7 @@ describe('autoscaling table IaC', () => {
                           "AttributeType": "S",
                         },
                       ],
+                      "billingMode": "PROVISIONED",
                       "deployment": undefined,
                       "keySchema": [
                         {
@@ -805,6 +810,7 @@ describe('autoscaling table IaC', () => {
                               "AttributeType": "S",
                             },
                           ],
+                          "billingMode": "PROVISIONED",
                           "deployment": undefined,
                           "keySchema": [
                             {
@@ -958,6 +964,7 @@ describe('autoscaling table IaC', () => {
                           "AttributeType": "S",
                         },
                       ],
+                      "billingMode": "PROVISIONED",
                       "deployment": undefined,
                       "keySchema": [
                         {

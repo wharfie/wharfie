@@ -4,7 +4,7 @@ const STS = require('../sts');
 const Lambda = require('../lambda');
 const IAM = require('../iam');
 const WharfieDeploymentResources = require('./resources/wharfie-deployment-resources');
-const AutoScalingTable = require('./resources/aws/autoscaling-table');
+const Table = require('./resources/aws/table');
 const BucketNotificationConfiguration = require('./resources/aws/bucket-notification-configuration');
 const ActorDeployment = require('./actor-deployment');
 const { Daemon, Cleanup, Events, Monitor } = require('./wharfie-actors');
@@ -76,16 +76,11 @@ class WharfieDeployment extends ActorDeployment {
    * @returns {(import('./resources/base-resource') | import('./resources/base-resource-group'))[]} -
    */
   _defineGroupResources() {
-    const systemTable = new AutoScalingTable({
-      name: `${this.name}-state-autoscaling-table`,
+    const systemTable = new Table({
+      name: `${this.name}-state`,
       properties: {
         _INTERNAL_STATE_RESOURCE: true,
         deployment: this.getDeploymentProperties.bind(this),
-        tableName: `${this.name}-state`,
-        minReadCapacity: 2,
-        maxReadCapacity: 50,
-        minWriteCapacity: 3,
-        maxWriteCapacity: 50,
         attributeDefinitions: [
           {
             AttributeName: 'name',
@@ -100,10 +95,7 @@ class WharfieDeployment extends ActorDeployment {
           },
           { AttributeName: 'sort_key', KeyType: 'RANGE' },
         ],
-        provisionedThroughput: {
-          ReadCapacityUnits: 5,
-          WriteCapacityUnits: 5,
-        },
+        billingMode: Table.BillingMode.PAY_PER_REQUEST,
       },
     });
 
@@ -178,7 +170,7 @@ class WharfieDeployment extends ActorDeployment {
 
   async setRegion() {
     if (this.has('region')) return;
-    const region = this.accountProvider.sts.config.region;
+    const region = await this.accountProvider.sts.config.region();
     this.set('region', region);
   }
 
@@ -201,7 +193,7 @@ class WharfieDeployment extends ActorDeployment {
    */
   getSystemStateTable() {
     // @ts-ignore
-    return this.getResource(`${this.name}-state-autoscaling-table`).getTable();
+    return this.getResource(`${this.name}-state`);
   }
 
   /**
@@ -249,6 +241,8 @@ class WharfieDeployment extends ActorDeployment {
   }
 
   async destroy() {
+    await Promise.all([this.setAccountId(), this.setRegion()]);
+    this.set('deployment', this.getDeploymentProperties());
     await Promise.all([
       this.getDeploymentResources().destroy(),
       ...this.getActors().map((actor) => {

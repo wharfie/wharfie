@@ -1,15 +1,19 @@
 'use strict';
 const DynamoDB = require('../../../dynamodb');
 const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const { ResourceNotFoundException } = require('@aws-sdk/client-dynamodb');
+const {
+  ResourceNotFoundException,
+  BillingMode,
+} = require('@aws-sdk/client-dynamodb');
 
 const BaseResource = require('../base-resource');
 /**
  * @typedef TableProperties
  * @property {import("@aws-sdk/client-dynamodb").AttributeDefinition[]} attributeDefinitions -
  * @property {import("@aws-sdk/client-dynamodb").KeySchemaElement[]} keySchema -
- * @property {import("@aws-sdk/client-dynamodb").ProvisionedThroughput} provisionedThroughput -
+ * @property {import("@aws-sdk/client-dynamodb").ProvisionedThroughput} [provisionedThroughput] -
  * @property {import("@aws-sdk/client-dynamodb").TimeToLiveSpecification} [timeToLiveSpecification] -
+ * @property {import("@aws-sdk/client-dynamodb").BillingMode} [billingMode] -
  */
 
 /**
@@ -25,7 +29,13 @@ class Table extends BaseResource {
    * @param {TableOptions} options -
    */
   constructor({ name, status, properties, dependsOn = [] }) {
-    super({ name, status, properties, dependsOn });
+    const propertiesWithDefaults = Object.assign(
+      {
+        billingMode: BillingMode.PROVISIONED,
+      },
+      properties
+    );
+    super({ name, status, properties: propertiesWithDefaults, dependsOn });
     this.dynamo = new DynamoDB({});
     this.dynamoDocument = DynamoDBDocument.from(this.dynamo.dynamodb, {
       marshallOptions: { removeUndefinedValues: true },
@@ -51,14 +61,21 @@ class Table extends BaseResource {
       });
       this.set('arn', Table?.TableArn);
       if (
-        Table?.ProvisionedThroughput?.ReadCapacityUnits !==
+        this.has('provisionedThroughput') &&
+        (Table?.ProvisionedThroughput?.ReadCapacityUnits !==
           this.get('provisionedThroughput').ReadCapacityUnits ||
-        Table?.ProvisionedThroughput?.WriteCapacityUnits !==
-          this.get('provisionedThroughput').WriteCapacityUnits
+          Table?.ProvisionedThroughput?.WriteCapacityUnits !==
+            this.get('provisionedThroughput').WriteCapacityUnits)
       ) {
         await this.dynamo.updateTable({
           TableName: this.name,
           ProvisionedThroughput: this.get('provisionedThroughput'),
+        });
+      }
+      if (Table?.BillingModeSummary?.BillingMode !== this.get('billingMode')) {
+        await this.dynamo.updateTable({
+          TableName: this.name,
+          BillingMode: this.get('billingMode'),
         });
       }
     } catch (error) {
@@ -68,6 +85,7 @@ class Table extends BaseResource {
           AttributeDefinitions: this.get('attributeDefinitions'),
           KeySchema: this.get('keySchema'),
           ProvisionedThroughput: this.get('provisionedThroughput'),
+          BillingMode: this.get('billingMode'),
         });
         this.set('arn', TableDescription?.TableArn);
       } else {
@@ -149,5 +167,7 @@ class Table extends BaseResource {
     });
   }
 }
+
+Table.BillingMode = BillingMode;
 
 module.exports = Table;

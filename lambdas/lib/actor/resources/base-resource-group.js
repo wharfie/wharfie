@@ -22,6 +22,7 @@ class BaseResourceGroup extends BaseResource {
       this.resources = {};
       this.addResources(this._defineGroupResources());
     }
+    this.dispatchStatusEvent();
   }
 
   /**
