@@ -1,7 +1,11 @@
+/* eslint-disable jest/no-hooks */
 /* eslint-disable jest/no-large-snapshots */
 'use strict';
 
 process.env.AWS_MOCKS = true;
+jest.mock('crypto');
+
+const crypto = require('crypto');
 const path = require('path');
 const { S3 } = jest.requireMock('@aws-sdk/client-s3');
 
@@ -12,6 +16,17 @@ const {
 const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
 
 describe('lambda function IaC', () => {
+  beforeAll(() => {
+    const mockUpdate = jest.fn().mockReturnThis();
+    const mockDigest = jest.fn().mockReturnValue('mockedHash');
+    crypto.createHash.mockReturnValue({
+      update: mockUpdate,
+      digest: mockDigest,
+    });
+  });
+  afterAll(() => {
+    jest.restoreAllMocks();
+  });
   it('basic', async () => {
     expect.assertions(6);
     const s3 = new S3({});
@@ -32,14 +47,15 @@ describe('lambda function IaC', () => {
     await lambdaBuild.reconcile();
 
     const serialized = lambdaBuild.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
         "name": "test-function",
         "properties": {
           "artifactBucket": "test-bucket",
-          "artifactKey": "actor-artifacts/test-function/8c11f001fe12d44fdb30e6a405c7516320cf7551d3791d42fcab503a0c06e34a.zip",
-          "functionCodeHash": "8c11f001fe12d44fdb30e6a405c7516320cf7551d3791d42fcab503a0c06e34a",
+          "artifactKey": "actor-artifacts/test-function/mockedHash.zip",
+          "functionCodeHash": "mockedHash",
           "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/test/fixtures/lambda-build-test-handler.handler",
         },
         "resourceType": "LambdaBuild",
@@ -52,8 +68,8 @@ describe('lambda function IaC', () => {
     expect(deserialized.properties).toMatchInlineSnapshot(`
       {
         "artifactBucket": "test-bucket",
-        "artifactKey": "actor-artifacts/test-function/8c11f001fe12d44fdb30e6a405c7516320cf7551d3791d42fcab503a0c06e34a.zip",
-        "functionCodeHash": "8c11f001fe12d44fdb30e6a405c7516320cf7551d3791d42fcab503a0c06e34a",
+        "artifactKey": "actor-artifacts/test-function/mockedHash.zip",
+        "functionCodeHash": "mockedHash",
         "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/test/fixtures/lambda-build-test-handler.handler",
       }
     `);
@@ -68,7 +84,7 @@ describe('lambda function IaC', () => {
         "Bucket": "test-bucket",
         "Contents": [
           {
-            "Key": "actor-artifacts/test-function/8c11f001fe12d44fdb30e6a405c7516320cf7551d3791d42fcab503a0c06e34a.zip",
+            "Key": "actor-artifacts/test-function/mockedHash.zip",
             "LastModified": 1970-01-01T00:00:00.000Z,
           },
         ],
@@ -84,7 +100,7 @@ describe('lambda function IaC', () => {
         "Bucket": "test-bucket",
         "Contents": [
           {
-            "Key": "actor-artifacts/test-function/8c11f001fe12d44fdb30e6a405c7516320cf7551d3791d42fcab503a0c06e34a.zip",
+            "Key": "actor-artifacts/test-function/mockedHash.zip",
             "LastModified": 1970-01-01T00:00:00.000Z,
           },
         ],

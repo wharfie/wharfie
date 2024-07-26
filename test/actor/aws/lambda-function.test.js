@@ -1,13 +1,28 @@
+/* eslint-disable jest/no-hooks */
 /* eslint-disable jest/no-large-snapshots */
 'use strict';
 
 process.env.AWS_MOCKS = true;
+jest.mock('crypto');
 const { Lambda } = jest.requireMock('@aws-sdk/client-lambda');
+
+const crypto = require('crypto');
 
 const { LambdaFunction } = require('../../../lambdas/lib/actor/resources/aws/');
 const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
 
 describe('lambda function IaC', () => {
+  beforeAll(() => {
+    const mockUpdate = jest.fn().mockReturnThis();
+    const mockDigest = jest.fn().mockReturnValue('mockedHash');
+    crypto.createHash.mockReturnValue({
+      update: mockUpdate,
+      digest: mockDigest,
+    });
+  });
+  afterAll(() => {
+    jest.restoreAllMocks();
+  });
   it('basic', async () => {
     expect.assertions(6);
     const lambda = new Lambda({});

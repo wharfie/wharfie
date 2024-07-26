@@ -1,16 +1,31 @@
+/* eslint-disable jest/no-hooks */
 /* eslint-disable jest/no-large-snapshots */
 'use strict';
 
 process.env.AWS_MOCKS = true;
+jest.mock('crypto');
 
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 jest.mock('../../lambdas/lib/env-paths');
-const WharfieDeployment = require('../../lambdas/lib/actor/wharfie-deployment');
 
+const crypto = require('crypto');
+
+const WharfieDeployment = require('../../lambdas/lib/actor/wharfie-deployment');
 const { deserialize } = require('../../lambdas/lib/actor/deserialize');
 
 describe('deployment IaC', () => {
+  beforeAll(() => {
+    const mockUpdate = jest.fn().mockReturnThis();
+    const mockDigest = jest.fn().mockReturnValue('mockedHash');
+    crypto.createHash.mockReturnValue({
+      update: mockUpdate,
+      digest: mockDigest,
+    });
+  });
+  afterAll(() => {
+    jest.restoreAllMocks();
+  });
   it('basic', async () => {
     expect.assertions(4);
     const deployment = new WharfieDeployment({
@@ -246,9 +261,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-cleanup-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-cleanup-build/ac32e5084a2835a7dccc9ea4855a4216e3e166f0e211130b5b786e6f13a3983e.zip",
+                        "S3Key": "actor-artifacts/test-deployment-cleanup-build/mockedHash.zip",
                       },
-                      "codeHash": "ac32e5084a2835a7dccc9ea4855a4216e3e166f0e211130b5b786e6f13a3983e",
+                      "codeHash": "mockedHash",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-cleanup-dlq",
                       },
@@ -592,9 +607,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-daemon-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-daemon-build/b8faf93c7db2f6488b9e781e6dc277924b52c030f0bc7b9e8fecaa83aade9865.zip",
+                        "S3Key": "actor-artifacts/test-deployment-daemon-build/mockedHash.zip",
                       },
-                      "codeHash": "b8faf93c7db2f6488b9e781e6dc277924b52c030f0bc7b9e8fecaa83aade9865",
+                      "codeHash": "mockedHash",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-dlq",
                       },
@@ -938,9 +953,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-events-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-events-build/b5ee70d9277b02b72d55a814e27e9c96aeba199e4a79cb355017391fd59ee99c.zip",
+                        "S3Key": "actor-artifacts/test-deployment-events-build/mockedHash.zip",
                       },
-                      "codeHash": "b5ee70d9277b02b72d55a814e27e9c96aeba199e4a79cb355017391fd59ee99c",
+                      "codeHash": "mockedHash",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-dlq",
                       },
@@ -1284,9 +1299,9 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-monitor-function",
                       "code": {
                         "S3Bucket": "test-deployment-bucket",
-                        "S3Key": "actor-artifacts/test-deployment-monitor-build/10936b3321073bcb88516710a845cf3c9d4ff8ed941de5622c1bb889aed59316.zip",
+                        "S3Key": "actor-artifacts/test-deployment-monitor-build/mockedHash.zip",
                       },
-                      "codeHash": "10936b3321073bcb88516710a845cf3c9d4ff8ed941de5622c1bb889aed59316",
+                      "codeHash": "mockedHash",
                       "deadLetterConfig": {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-dlq",
                       },
