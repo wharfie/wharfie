@@ -3,8 +3,6 @@ const EventsRule = require('../resources/aws/events-rule');
 const Role = require('../resources/aws/role');
 const WharfieActorResources = require('../resources/wharfie-actor-resources');
 
-const path = require('path');
-
 class Monitor extends WharfieActor {
   /**
    * @param {import('../wharfie-actor').WharfieActorOptions} options -
@@ -17,7 +15,7 @@ class Monitor extends WharfieActor {
       resources,
       properties: {
         ...properties,
-        handler: path.join(__dirname, '../../../monitor.handler'),
+        handler: './lambdas/monitor.handler',
       },
     });
   }

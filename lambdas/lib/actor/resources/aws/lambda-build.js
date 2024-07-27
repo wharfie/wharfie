@@ -67,10 +67,16 @@ class LambdaBuild extends BaseResource {
     if (!this.get('handler').split('.').pop())
       throw new Error('No handler method defined');
 
+    const resolvedHandler = path.join(
+      __dirname,
+      '../../../../../',
+      this.get('handler')
+    );
+
     // TODO hydrate shared actor state generally
     const entryContent = `
-    const { ${this.get('handler').split('.').pop()}: handler } = require('${
-      this.get('handler').split('.')[0]
+    const { ${resolvedHandler.split('.').pop()}: handler } = require('${
+      resolvedHandler.split('.')[0]
     }');
 
     // Lambda handler setup to use actor's handler method

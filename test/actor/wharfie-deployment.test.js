@@ -37,40 +37,40 @@ describe('deployment IaC', () => {
     const serialized = deployment.serialize();
 
     // remove uuid and code hash so snapshots pass
-    const serialized_copy = Object.assign({}, serialized);
+    const serialized_copy = JSON.parse(JSON.stringify(serialized));
     delete serialized_copy.resources.cleanup.resources[
       'cleanup-actor-resources'
     ].resources['cleanup-mapping'].properties.uuid;
     delete serialized_copy.resources.cleanup.resources[
       'cleanup-actor-resources'
-    ].resources['test-deployment-cleanup-build'].properties.artifactKey;
+    ].resources['test-deployment-cleanup-build'].properties.handler;
     delete serialized_copy.resources.cleanup.resources[
       'cleanup-actor-resources'
-    ].resources['test-deployment-cleanup-build'].properties.functionCodeHash;
+    ].properties.handler;
 
     delete serialized_copy.resources.daemon.resources['daemon-actor-resources']
       .resources['daemon-mapping'].properties.uuid;
     delete serialized_copy.resources.daemon.resources['daemon-actor-resources']
-      .resources['test-deployment-daemon-build'].properties.artifactKey;
+      .resources['test-deployment-daemon-build'].properties.handler;
     delete serialized_copy.resources.daemon.resources['daemon-actor-resources']
-      .resources['test-deployment-daemon-build'].properties.functionCodeHash;
+      .properties.handler;
 
     delete serialized_copy.resources.events.resources['events-actor-resources']
       .resources['events-mapping'].properties.uuid;
     delete serialized_copy.resources.events.resources['events-actor-resources']
-      .resources['test-deployment-events-build'].properties.artifactKey;
+      .resources['test-deployment-events-build'].properties.handler;
     delete serialized_copy.resources.events.resources['events-actor-resources']
-      .resources['test-deployment-events-build'].properties.functionCodeHash;
+      .properties.handler;
 
     delete serialized_copy.resources.monitor.resources[
       'monitor-actor-resources'
     ].resources['monitor-mapping'].properties.uuid;
     delete serialized_copy.resources.monitor.resources[
       'monitor-actor-resources'
-    ].resources['test-deployment-monitor-build'].properties.artifactKey;
+    ].resources['test-deployment-monitor-build'].properties.handler;
     delete serialized_copy.resources.monitor.resources[
       'monitor-actor-resources'
-    ].resources['test-deployment-monitor-build'].properties.functionCodeHash;
+    ].properties.handler;
 
     expect(serialized_copy).toMatchInlineSnapshot(`
       {
@@ -119,7 +119,7 @@ describe('deployment IaC', () => {
                 "stateTable": "test-deployment-state",
                 "version": "0.0.1",
               },
-              "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/cleanup.handler",
+              "handler": "./lambdas/cleanup.handler",
             },
             "resourceType": "Cleanup",
             "resources": {
@@ -131,7 +131,6 @@ describe('deployment IaC', () => {
                   "actorSharedPolicyArn": "arn:aws:iam:::policy/test-deployment-actor-policy",
                   "artifactBucket": "test-deployment-bucket",
                   "deployment": {
-                    "accountId": undefined,
                     "envPaths": {
                       "cache": "mock",
                       "config": "mock",
@@ -140,7 +139,6 @@ describe('deployment IaC', () => {
                       "temp": "mock",
                     },
                     "name": "test-deployment",
-                    "region": undefined,
                     "stateTable": "test-deployment-state",
                     "version": "0.0.1",
                   },
@@ -161,7 +159,6 @@ describe('deployment IaC', () => {
                     "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
                     "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
                   },
-                  "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/cleanup.handler",
                 },
                 "resourceType": "WharfieActorResources",
                 "resources": {
@@ -174,7 +171,6 @@ describe('deployment IaC', () => {
                     "properties": {
                       "batchSize": 1,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -183,7 +179,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -199,8 +194,8 @@ describe('deployment IaC', () => {
                     "name": "test-deployment-cleanup-build",
                     "properties": {
                       "artifactBucket": "test-deployment-bucket",
+                      "artifactKey": "actor-artifacts/test-deployment-cleanup-build/mockedHash.zip",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -209,11 +204,10 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
-                      "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/cleanup.handler",
+                      "functionCodeHash": "mockedHash",
                     },
                     "resourceType": "LambdaBuild",
                     "status": "STABLE",
@@ -225,7 +219,6 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-cleanup-dlq",
                       "delaySeconds": "0",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -234,7 +227,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -268,7 +260,6 @@ describe('deployment IaC', () => {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-cleanup-dlq",
                       },
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -277,7 +268,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -326,7 +316,6 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-cleanup-queue",
                       "delaySeconds": "0",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -335,7 +324,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -348,9 +336,7 @@ describe('deployment IaC', () => {
                               "SQS:SendMessage",
                             ],
                             "Condition": {
-                              "StringEquals": {
-                                "aws:SourceAccount": undefined,
-                              },
+                              "StringEquals": {},
                             },
                             "Effect": "Allow",
                             "Principal": {
@@ -402,7 +388,6 @@ describe('deployment IaC', () => {
                         "Version": "2012-10-17",
                       },
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -411,7 +396,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -465,7 +449,7 @@ describe('deployment IaC', () => {
                 "stateTable": "test-deployment-state",
                 "version": "0.0.1",
               },
-              "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/daemon.handler",
+              "handler": "./lambdas/daemon.handler",
             },
             "resourceType": "Daemon",
             "resources": {
@@ -477,7 +461,6 @@ describe('deployment IaC', () => {
                   "actorSharedPolicyArn": "arn:aws:iam:::policy/test-deployment-actor-policy",
                   "artifactBucket": "test-deployment-bucket",
                   "deployment": {
-                    "accountId": undefined,
                     "envPaths": {
                       "cache": "mock",
                       "config": "mock",
@@ -486,7 +469,6 @@ describe('deployment IaC', () => {
                       "temp": "mock",
                     },
                     "name": "test-deployment",
-                    "region": undefined,
                     "stateTable": "test-deployment-state",
                     "version": "0.0.1",
                   },
@@ -507,7 +489,6 @@ describe('deployment IaC', () => {
                     "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
                     "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
                   },
-                  "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/daemon.handler",
                 },
                 "resourceType": "WharfieActorResources",
                 "resources": {
@@ -520,7 +501,6 @@ describe('deployment IaC', () => {
                     "properties": {
                       "batchSize": 1,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -529,7 +509,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -545,8 +524,8 @@ describe('deployment IaC', () => {
                     "name": "test-deployment-daemon-build",
                     "properties": {
                       "artifactBucket": "test-deployment-bucket",
+                      "artifactKey": "actor-artifacts/test-deployment-daemon-build/mockedHash.zip",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -555,11 +534,10 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
-                      "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/daemon.handler",
+                      "functionCodeHash": "mockedHash",
                     },
                     "resourceType": "LambdaBuild",
                     "status": "STABLE",
@@ -571,7 +549,6 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-dlq",
                       "delaySeconds": "0",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -580,7 +557,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -614,7 +590,6 @@ describe('deployment IaC', () => {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-dlq",
                       },
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -623,7 +598,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -672,7 +646,6 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-queue",
                       "delaySeconds": "0",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -681,7 +654,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -694,9 +666,7 @@ describe('deployment IaC', () => {
                               "SQS:SendMessage",
                             ],
                             "Condition": {
-                              "StringEquals": {
-                                "aws:SourceAccount": undefined,
-                              },
+                              "StringEquals": {},
                             },
                             "Effect": "Allow",
                             "Principal": {
@@ -748,7 +718,6 @@ describe('deployment IaC', () => {
                         "Version": "2012-10-17",
                       },
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -757,7 +726,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -811,7 +779,7 @@ describe('deployment IaC', () => {
                 "stateTable": "test-deployment-state",
                 "version": "0.0.1",
               },
-              "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/events.handler",
+              "handler": "./lambdas/events.handler",
             },
             "resourceType": "Events",
             "resources": {
@@ -823,7 +791,6 @@ describe('deployment IaC', () => {
                   "actorSharedPolicyArn": "arn:aws:iam:::policy/test-deployment-actor-policy",
                   "artifactBucket": "test-deployment-bucket",
                   "deployment": {
-                    "accountId": undefined,
                     "envPaths": {
                       "cache": "mock",
                       "config": "mock",
@@ -832,7 +799,6 @@ describe('deployment IaC', () => {
                       "temp": "mock",
                     },
                     "name": "test-deployment",
-                    "region": undefined,
                     "stateTable": "test-deployment-state",
                     "version": "0.0.1",
                   },
@@ -853,7 +819,6 @@ describe('deployment IaC', () => {
                     "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
                     "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
                   },
-                  "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/events.handler",
                 },
                 "resourceType": "WharfieActorResources",
                 "resources": {
@@ -866,7 +831,6 @@ describe('deployment IaC', () => {
                     "properties": {
                       "batchSize": 1,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -875,7 +839,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -891,8 +854,8 @@ describe('deployment IaC', () => {
                     "name": "test-deployment-events-build",
                     "properties": {
                       "artifactBucket": "test-deployment-bucket",
+                      "artifactKey": "actor-artifacts/test-deployment-events-build/mockedHash.zip",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -901,11 +864,10 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
-                      "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/events.handler",
+                      "functionCodeHash": "mockedHash",
                     },
                     "resourceType": "LambdaBuild",
                     "status": "STABLE",
@@ -917,7 +879,6 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-dlq",
                       "delaySeconds": "0",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -926,7 +887,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -960,7 +920,6 @@ describe('deployment IaC', () => {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-dlq",
                       },
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -969,7 +928,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -1018,7 +976,6 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
                       "delaySeconds": "0",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -1027,7 +984,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -1040,9 +996,7 @@ describe('deployment IaC', () => {
                               "SQS:SendMessage",
                             ],
                             "Condition": {
-                              "StringEquals": {
-                                "aws:SourceAccount": undefined,
-                              },
+                              "StringEquals": {},
                             },
                             "Effect": "Allow",
                             "Principal": {
@@ -1094,7 +1048,6 @@ describe('deployment IaC', () => {
                         "Version": "2012-10-17",
                       },
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -1103,7 +1056,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -1157,7 +1109,7 @@ describe('deployment IaC', () => {
                 "stateTable": "test-deployment-state",
                 "version": "0.0.1",
               },
-              "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/monitor.handler",
+              "handler": "./lambdas/monitor.handler",
             },
             "resourceType": "Monitor",
             "resources": {
@@ -1169,7 +1121,6 @@ describe('deployment IaC', () => {
                   "actorSharedPolicyArn": "arn:aws:iam:::policy/test-deployment-actor-policy",
                   "artifactBucket": "test-deployment-bucket",
                   "deployment": {
-                    "accountId": undefined,
                     "envPaths": {
                       "cache": "mock",
                       "config": "mock",
@@ -1178,7 +1129,6 @@ describe('deployment IaC', () => {
                       "temp": "mock",
                     },
                     "name": "test-deployment",
-                    "region": undefined,
                     "stateTable": "test-deployment-state",
                     "version": "0.0.1",
                   },
@@ -1199,7 +1149,6 @@ describe('deployment IaC', () => {
                     "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
                     "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
                   },
-                  "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/monitor.handler",
                 },
                 "resourceType": "WharfieActorResources",
                 "resources": {
@@ -1212,7 +1161,6 @@ describe('deployment IaC', () => {
                     "properties": {
                       "batchSize": 1,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -1221,7 +1169,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -1237,8 +1184,8 @@ describe('deployment IaC', () => {
                     "name": "test-deployment-monitor-build",
                     "properties": {
                       "artifactBucket": "test-deployment-bucket",
+                      "artifactKey": "actor-artifacts/test-deployment-monitor-build/mockedHash.zip",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -1247,11 +1194,10 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
-                      "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/monitor.handler",
+                      "functionCodeHash": "mockedHash",
                     },
                     "resourceType": "LambdaBuild",
                     "status": "STABLE",
@@ -1263,7 +1209,6 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-dlq",
                       "delaySeconds": "0",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -1272,7 +1217,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -1306,7 +1250,6 @@ describe('deployment IaC', () => {
                         "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-dlq",
                       },
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -1315,7 +1258,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -1364,7 +1306,6 @@ describe('deployment IaC', () => {
                       "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-queue",
                       "delaySeconds": "0",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -1373,7 +1314,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -1386,9 +1326,7 @@ describe('deployment IaC', () => {
                               "SQS:SendMessage",
                             ],
                             "Condition": {
-                              "StringEquals": {
-                                "aws:SourceAccount": undefined,
-                              },
+                              "StringEquals": {},
                             },
                             "Effect": "Allow",
                             "Principal": {
@@ -1440,7 +1378,6 @@ describe('deployment IaC', () => {
                         "Version": "2012-10-17",
                       },
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -1449,7 +1386,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -1503,7 +1439,6 @@ describe('deployment IaC', () => {
                     "Version": "2012-10-17",
                   },
                   "deployment": {
-                    "accountId": undefined,
                     "envPaths": {
                       "cache": "mock",
                       "config": "mock",
@@ -1512,7 +1447,6 @@ describe('deployment IaC', () => {
                       "temp": "mock",
                     },
                     "name": "test-deployment",
-                    "region": undefined,
                     "stateTable": "test-deployment-state",
                     "version": "0.0.1",
                   },
@@ -1529,7 +1463,6 @@ describe('deployment IaC', () => {
                 "name": "monitor-athena-events-rule",
                 "properties": {
                   "deployment": {
-                    "accountId": undefined,
                     "envPaths": {
                       "cache": "mock",
                       "config": "mock",
@@ -1538,7 +1471,6 @@ describe('deployment IaC', () => {
                       "temp": "mock",
                     },
                     "name": "test-deployment",
-                    "region": undefined,
                     "stateTable": "test-deployment-state",
                     "version": "0.0.1",
                   },
@@ -1838,7 +1770,6 @@ describe('deployment IaC', () => {
                     "dependsOn": [],
                     "name": "test-deployment-dependencies",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-dependencies",
                       "attributeDefinitions": [
                         {
@@ -1852,7 +1783,6 @@ describe('deployment IaC', () => {
                       ],
                       "billingMode": "PROVISIONED",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -1861,7 +1791,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -1889,7 +1818,6 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-dependencies-autoscaling-role",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "arn": "arn:aws:iam::123456789012:role/test-deployment-dependencies-autoscaling-role",
                       "assumeRolePolicyDocument": {
                         "Statement": [
@@ -1906,7 +1834,6 @@ describe('deployment IaC', () => {
                         "Version": "2012-10-17",
                       },
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -1915,7 +1842,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -1954,9 +1880,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-dependencies-readAutoscalingPolicy",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -1965,7 +1889,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -1991,9 +1914,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-dependencies-readAutoscalingTarget",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -2002,7 +1923,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -2022,9 +1942,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-dependencies-writeAutoscalingPolicy",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -2033,7 +1951,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -2059,9 +1976,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-dependencies-writeAutoscalingTarget",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -2070,7 +1985,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -2504,7 +2418,6 @@ describe('deployment IaC', () => {
                           },
                           "destination_properties": {
                             "arn": "arn:aws:glue:undefined:undefined:table/test-deployment/logs",
-                            "catalogId": undefined,
                             "columns": [
                               {
                                 "name": "action_id",
@@ -2566,7 +2479,6 @@ describe('deployment IaC', () => {
                             "compressed": true,
                             "databaseName": "test-deployment",
                             "deployment": {
-                              "accountId": undefined,
                               "envPaths": {
                                 "cache": "mock",
                                 "config": "mock",
@@ -2575,7 +2487,6 @@ describe('deployment IaC', () => {
                                 "temp": "mock",
                               },
                               "name": "test-deployment",
-                              "region": undefined,
                               "stateTable": "test-deployment-state",
                               "version": "0.0.1",
                             },
@@ -2607,7 +2518,6 @@ describe('deployment IaC', () => {
                                 "type": "string",
                               },
                             ],
-                            "region": undefined,
                             "serdeInfo": {
                               "Parameters": {
                                 "parquet.compress": "GZIP",
@@ -2618,10 +2528,8 @@ describe('deployment IaC', () => {
                             "tableType": "EXTERNAL_TABLE",
                             "tags": [],
                           },
-                          "region": undefined,
                           "source_properties": {
                             "arn": "arn:aws:glue:undefined:undefined:table/test-deployment/logs_raw",
-                            "catalogId": undefined,
                             "columns": [
                               {
                                 "name": "action_id",
@@ -2683,7 +2591,6 @@ describe('deployment IaC', () => {
                             "compressed": false,
                             "databaseName": "test-deployment",
                             "deployment": {
-                              "accountId": undefined,
                               "envPaths": {
                                 "cache": "mock",
                                 "config": "mock",
@@ -2692,7 +2599,6 @@ describe('deployment IaC', () => {
                                 "temp": "mock",
                               },
                               "name": "test-deployment",
-                              "region": undefined,
                               "stateTable": "test-deployment-state",
                               "version": "0.0.1",
                             },
@@ -2723,7 +2629,6 @@ describe('deployment IaC', () => {
                                 "type": "string",
                               },
                             ],
-                            "region": undefined,
                             "serdeInfo": {
                               "Parameters": {
                                 "ignore.malformed.json": "true",
@@ -2959,7 +2864,6 @@ describe('deployment IaC', () => {
                     "dependsOn": [],
                     "name": "test-deployment-events",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-events",
                       "attributeDefinitions": [
                         {
@@ -2973,7 +2877,6 @@ describe('deployment IaC', () => {
                       ],
                       "billingMode": "PROVISIONED",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -2982,7 +2885,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3014,7 +2916,6 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-events-autoscaling-role",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "arn": "arn:aws:iam::123456789012:role/test-deployment-events-autoscaling-role",
                       "assumeRolePolicyDocument": {
                         "Statement": [
@@ -3031,7 +2932,6 @@ describe('deployment IaC', () => {
                         "Version": "2012-10-17",
                       },
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3040,7 +2940,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3079,9 +2978,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-events-readAutoscalingPolicy",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3090,7 +2987,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3116,9 +3012,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-events-readAutoscalingTarget",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3127,7 +3021,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3147,9 +3040,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-events-writeAutoscalingPolicy",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3158,7 +3049,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3184,9 +3074,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-events-writeAutoscalingTarget",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3195,7 +3083,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3363,7 +3250,6 @@ describe('deployment IaC', () => {
                     "dependsOn": [],
                     "name": "test-deployment-locations",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-locations",
                       "attributeDefinitions": [
                         {
@@ -3377,7 +3263,6 @@ describe('deployment IaC', () => {
                       ],
                       "billingMode": "PROVISIONED",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3386,7 +3271,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3414,7 +3298,6 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-locations-autoscaling-role",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "arn": "arn:aws:iam::123456789012:role/test-deployment-locations-autoscaling-role",
                       "assumeRolePolicyDocument": {
                         "Statement": [
@@ -3431,7 +3314,6 @@ describe('deployment IaC', () => {
                         "Version": "2012-10-17",
                       },
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3440,7 +3322,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3479,9 +3360,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-locations-readAutoscalingPolicy",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3490,7 +3369,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3516,9 +3394,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-locations-readAutoscalingTarget",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3527,7 +3403,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3547,9 +3422,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-locations-writeAutoscalingPolicy",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3558,7 +3431,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3584,9 +3456,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-locations-writeAutoscalingTarget",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3595,7 +3465,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3666,7 +3535,6 @@ describe('deployment IaC', () => {
                     "dependsOn": [],
                     "name": "test-deployment-resource",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-resource",
                       "attributeDefinitions": [
                         {
@@ -3680,7 +3548,6 @@ describe('deployment IaC', () => {
                       ],
                       "billingMode": "PROVISIONED",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3689,7 +3556,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3717,7 +3583,6 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-resource-autoscaling-role",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "arn": "arn:aws:iam::123456789012:role/test-deployment-resource-autoscaling-role",
                       "assumeRolePolicyDocument": {
                         "Statement": [
@@ -3734,7 +3599,6 @@ describe('deployment IaC', () => {
                         "Version": "2012-10-17",
                       },
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3743,7 +3607,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3782,9 +3645,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-resource-readAutoscalingPolicy",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3793,7 +3654,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3819,9 +3679,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-resource-readAutoscalingTarget",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3830,7 +3688,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3850,9 +3707,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-resource-writeAutoscalingPolicy",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3861,7 +3716,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3887,9 +3741,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-resource-writeAutoscalingTarget",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3898,7 +3750,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -3961,7 +3812,6 @@ describe('deployment IaC', () => {
                     "dependsOn": [],
                     "name": "test-deployment-semaphore",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-semaphore",
                       "attributeDefinitions": [
                         {
@@ -3971,7 +3821,6 @@ describe('deployment IaC', () => {
                       ],
                       "billingMode": "PROVISIONED",
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -3980,7 +3829,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -4004,7 +3852,6 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-semaphore-autoscaling-role",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "arn": "arn:aws:iam::123456789012:role/test-deployment-semaphore-autoscaling-role",
                       "assumeRolePolicyDocument": {
                         "Statement": [
@@ -4021,7 +3868,6 @@ describe('deployment IaC', () => {
                         "Version": "2012-10-17",
                       },
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -4030,7 +3876,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -4069,9 +3914,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-semaphore-readAutoscalingPolicy",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -4080,7 +3923,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -4106,9 +3948,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-semaphore-readAutoscalingTarget",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -4117,7 +3957,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -4137,9 +3976,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-semaphore-writeAutoscalingPolicy",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -4148,7 +3985,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -4174,9 +4010,7 @@ describe('deployment IaC', () => {
                     ],
                     "name": "test-deployment-semaphore-writeAutoscalingTarget",
                     "properties": {
-                      "_INTERNAL_STATE_RESOURCE": undefined,
                       "deployment": {
-                        "accountId": undefined,
                         "envPaths": {
                           "cache": "mock",
                           "config": "mock",
@@ -4185,7 +4019,6 @@ describe('deployment IaC', () => {
                           "temp": "mock",
                         },
                         "name": "test-deployment",
-                        "region": undefined,
                         "stateTable": "test-deployment-state",
                         "version": "0.0.1",
                       },
@@ -4435,5 +4268,5 @@ describe('deployment IaC', () => {
     expect(deserialized.status).toBe('STABLE');
     await deserialized.destroy();
     expect(deserialized.status).toBe('DESTROYED');
-  }, 10000);
+  }, 20000);
 });

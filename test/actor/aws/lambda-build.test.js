@@ -6,7 +6,6 @@ process.env.AWS_MOCKS = true;
 jest.mock('crypto');
 
 const crypto = require('crypto');
-const path = require('path');
 const { S3 } = jest.requireMock('@aws-sdk/client-s3');
 
 const {
@@ -37,10 +36,7 @@ describe('lambda function IaC', () => {
     const lambdaBuild = new LambdaBuild({
       name: 'test-function',
       properties: {
-        handler: path.join(
-          __dirname,
-          '../../fixtures/lambda-build-test-handler.handler'
-        ),
+        handler: './test/fixtures/lambda-build-test-handler.handler',
         artifactBucket: bucket.name,
       },
     });
@@ -56,7 +52,7 @@ describe('lambda function IaC', () => {
           "artifactBucket": "test-bucket",
           "artifactKey": "actor-artifacts/test-function/mockedHash.zip",
           "functionCodeHash": "mockedHash",
-          "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/test/fixtures/lambda-build-test-handler.handler",
+          "handler": "./test/fixtures/lambda-build-test-handler.handler",
         },
         "resourceType": "LambdaBuild",
         "status": "STABLE",
@@ -70,7 +66,7 @@ describe('lambda function IaC', () => {
         "artifactBucket": "test-bucket",
         "artifactKey": "actor-artifacts/test-function/mockedHash.zip",
         "functionCodeHash": "mockedHash",
-        "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/test/fixtures/lambda-build-test-handler.handler",
+        "handler": "./test/fixtures/lambda-build-test-handler.handler",
       }
     `);
     expect(deserialized.status).toBe('STABLE');

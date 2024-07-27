@@ -1,7 +1,5 @@
 const WharfieActor = require('../wharfie-actor');
 
-const path = require('path');
-
 class Cleanup extends WharfieActor {
   /**
    * @param {import('../wharfie-actor').WharfieActorOptions} options -
@@ -14,7 +12,7 @@ class Cleanup extends WharfieActor {
       resources,
       properties: {
         ...properties,
-        handler: path.join(__dirname, '../../../cleanup.handler'),
+        handler: './lambdas/cleanup.handler',
       },
     });
   }

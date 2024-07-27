@@ -2,7 +2,6 @@
 'use strict';
 
 process.env.AWS_MOCKS = true;
-const path = require('path');
 const WharfieActorResources = require('../../lambdas/lib/actor/resources/wharfie-actor-resources');
 const { Policy, Bucket } = require('../../lambdas/lib/actor/resources/aws');
 
@@ -44,7 +43,7 @@ describe('wharfie actor resources IaC', () => {
           accountId: '123456789012',
           region: 'us-east-1',
         },
-        handler: path.join(__dirname, '../../lambdas/monitor.handler'),
+        handler: './lambdas/monitor.handler',
         actorName: 'test-actor',
         actorSharedPolicyArn: sharedPolicy.get('arn'),
         artifactBucket: bucket.name,
@@ -85,7 +84,7 @@ describe('wharfie actor resources IaC', () => {
             "123": "456",
             "foo": "bar",
           },
-          "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/monitor.handler",
+          "handler": "./lambdas/monitor.handler",
         },
         "resourceType": "WharfieActorResources",
         "resources": {
@@ -119,7 +118,7 @@ describe('wharfie actor resources IaC', () => {
                 "name": "test-deployment",
                 "region": "us-east-1",
               },
-              "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/monitor.handler",
+              "handler": "./lambdas/monitor.handler",
             },
             "resourceType": "LambdaBuild",
             "status": "STABLE",
@@ -319,7 +318,7 @@ describe('wharfie actor resources IaC', () => {
           "123": "456",
           "foo": "bar",
         },
-        "handler": "/Users/Dev/Documents/workspace/wharfie/wharfie/lambdas/monitor.handler",
+        "handler": "./lambdas/monitor.handler",
       }
     `);
     expect(deserialized.status).toBe('STABLE');
