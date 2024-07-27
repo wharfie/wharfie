@@ -1,12 +1,27 @@
+/* eslint-disable jest/no-hooks */
 /* eslint-disable jest/no-large-snapshots */
 'use strict';
 
 process.env.AWS_MOCKS = true;
+jest.mock('crypto');
+
+const crypto = require('crypto');
 const WharfieActorResources = require('../../lambdas/lib/actor/resources/wharfie-actor-resources');
 const { Policy, Bucket } = require('../../lambdas/lib/actor/resources/aws');
 
 const { deserialize } = require('../../lambdas/lib/actor/deserialize');
 describe('wharfie actor resources IaC', () => {
+  beforeAll(() => {
+    const mockUpdate = jest.fn().mockReturnThis();
+    const mockDigest = jest.fn().mockReturnValue('mockedHash');
+    crypto.createHash.mockReturnValue({
+      update: mockUpdate,
+      digest: mockDigest,
+    });
+  });
+  afterAll(() => {
+    jest.restoreAllMocks();
+  });
   it('basic', async () => {
     expect.assertions(4);
     const bucket = new Bucket({
@@ -62,10 +77,6 @@ describe('wharfie actor resources IaC', () => {
     // remove uuid so snapshots pass
     const serialized_copy = Object.assign({}, serialized);
     delete serialized_copy.resources['test-actor-mapping'].properties.uuid;
-    delete serialized_copy.resources['test-deployment-test-actor-build']
-      .properties.artifactKey;
-    delete serialized_copy.resources['test-deployment-test-actor-build']
-      .properties.functionCodeHash;
 
     expect(serialized_copy).toMatchInlineSnapshot(`
       {
@@ -113,11 +124,13 @@ describe('wharfie actor resources IaC', () => {
             "name": "test-deployment-test-actor-build",
             "properties": {
               "artifactBucket": "test-bucket",
+              "artifactKey": "actor-artifacts/test-deployment-test-actor-build/mockedHash.zip",
               "deployment": {
                 "accountId": "123456789012",
                 "name": "test-deployment",
                 "region": "us-east-1",
               },
+              "functionCodeHash": "mockedHash",
               "handler": "./lambdas/monitor.handler",
             },
             "resourceType": "LambdaBuild",
@@ -157,9 +170,9 @@ describe('wharfie actor resources IaC', () => {
               "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-test-actor-function",
               "code": {
                 "S3Bucket": "test-bucket",
-                "S3Key": "actor-artifacts/test-deployment-test-actor-build/10936b3321073bcb88516710a845cf3c9d4ff8ed941de5622c1bb889aed59316.zip",
+                "S3Key": "actor-artifacts/test-deployment-test-actor-build/mockedHash.zip",
               },
-              "codeHash": "10936b3321073bcb88516710a845cf3c9d4ff8ed941de5622c1bb889aed59316",
+              "codeHash": "mockedHash",
               "deadLetterConfig": {
                 "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-test-actor-dlq",
               },
