@@ -1,6 +1,6 @@
 const BaseResourceGroup = require('./base-resource-group');
 const WharfieResource = require('./wharfie-resource');
-const AutoScalingTable = require('./aws/autoscaling-table');
+const Table = require('./aws/table');
 const GlueDatabase = require('./aws/glue-database');
 const Bucket = require('./aws/bucket');
 const Firehose = require('./aws/firehose');
@@ -62,15 +62,10 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         },
       },
     });
-    const resourceTable = new AutoScalingTable({
-      name: `${this.get('deployment').name}-resource-autoscaling-table`,
+    const resourceTable = new Table({
+      name: `${this.get('deployment').name}-resource`,
       properties: {
         deployment: () => this.get('deployment'),
-        tableName: `${this.get('deployment').name}-resource`,
-        minReadCapacity: 5,
-        maxReadCapacity: 50,
-        minWriteCapacity: 1,
-        maxWriteCapacity: 50,
         attributeDefinitions: [
           {
             AttributeName: 'resource_id',
@@ -85,21 +80,13 @@ class WharfieDeploymentResources extends BaseResourceGroup {
           },
           { AttributeName: 'sort_key', KeyType: 'RANGE' },
         ],
-        provisionedThroughput: {
-          ReadCapacityUnits: 5,
-          WriteCapacityUnits: 5,
-        },
+        billingMode: Table.BillingMode.PAY_PER_REQUEST,
       },
     });
-    const locationTable = new AutoScalingTable({
-      name: `${this.get('deployment').name}-locations-autoscaling-table`,
+    const locationTable = new Table({
+      name: `${this.get('deployment').name}-locations`,
       properties: {
         deployment: () => this.get('deployment'),
-        tableName: `${this.get('deployment').name}-locations`,
-        minReadCapacity: 5,
-        maxReadCapacity: 100,
-        minWriteCapacity: 1,
-        maxWriteCapacity: 50,
         attributeDefinitions: [
           {
             AttributeName: 'location',
@@ -114,21 +101,12 @@ class WharfieDeploymentResources extends BaseResourceGroup {
           },
           { AttributeName: 'resource_id', KeyType: 'RANGE' },
         ],
-        provisionedThroughput: {
-          ReadCapacityUnits: 5,
-          WriteCapacityUnits: 5,
-        },
       },
     });
-    const semaphoreTable = new AutoScalingTable({
-      name: `${this.get('deployment').name}-semaphore-autoscaling-table`,
+    const semaphoreTable = new Table({
+      name: `${this.get('deployment').name}-semaphore`,
       properties: {
         deployment: () => this.get('deployment'),
-        tableName: `${this.get('deployment').name}-semaphore`,
-        minReadCapacity: 1,
-        maxReadCapacity: 50,
-        minWriteCapacity: 1,
-        maxWriteCapacity: 50,
         attributeDefinitions: [
           {
             AttributeName: 'semaphore',
@@ -141,21 +119,13 @@ class WharfieDeploymentResources extends BaseResourceGroup {
             KeyType: 'HASH',
           },
         ],
-        provisionedThroughput: {
-          ReadCapacityUnits: 5,
-          WriteCapacityUnits: 5,
-        },
+        billingMode: Table.BillingMode.PAY_PER_REQUEST,
       },
     });
-    const eventTable = new AutoScalingTable({
-      name: `${this.get('deployment').name}-events-autoscaling-table`,
+    const eventTable = new Table({
+      name: `${this.get('deployment').name}-events`,
       properties: {
         deployment: () => this.get('deployment'),
-        tableName: `${this.get('deployment').name}-events`,
-        minReadCapacity: 1,
-        maxReadCapacity: 50,
-        minWriteCapacity: 1,
-        maxWriteCapacity: 50,
         attributeDefinitions: [
           {
             AttributeName: 'resource_id',
@@ -170,25 +140,17 @@ class WharfieDeploymentResources extends BaseResourceGroup {
           },
           { AttributeName: 'sort_key', KeyType: 'RANGE' },
         ],
-        provisionedThroughput: {
-          ReadCapacityUnits: 5,
-          WriteCapacityUnits: 5,
-        },
+        billingMode: Table.BillingMode.PAY_PER_REQUEST,
         timeToLiveSpecification: {
           AttributeName: 'ttl',
           Enabled: true,
         },
       },
     });
-    const dependencyTable = new AutoScalingTable({
-      name: `${this.get('deployment').name}-dependencies-autoscaling-table`,
+    const dependencyTable = new Table({
+      name: `${this.get('deployment').name}-dependencies`,
       properties: {
         deployment: () => this.get('deployment'),
-        tableName: `${this.get('deployment').name}-dependencies`,
-        minReadCapacity: 1,
-        maxReadCapacity: 50,
-        minWriteCapacity: 1,
-        maxWriteCapacity: 50,
         attributeDefinitions: [
           {
             AttributeName: 'dependency',
@@ -203,10 +165,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
           },
           { AttributeName: 'resource_id', KeyType: 'RANGE' },
         ],
-        provisionedThroughput: {
-          ReadCapacityUnits: 5,
-          WriteCapacityUnits: 5,
-        },
+        billingMode: Table.BillingMode.PAY_PER_REQUEST,
       },
     });
     const systemFirehoseRole = new Role({
@@ -412,11 +371,11 @@ class WharfieDeploymentResources extends BaseResourceGroup {
                 'dynamodb:DeleteItem',
               ],
               Resource: [
-                resourceTable.getTable().get('arn'),
-                locationTable.getTable().get('arn'),
-                eventTable.getTable().get('arn'),
-                semaphoreTable.getTable().get('arn'),
-                dependencyTable.getTable().get('arn'),
+                resourceTable.get('arn'),
+                locationTable.get('arn'),
+                eventTable.get('arn'),
+                semaphoreTable.get('arn'),
+                dependencyTable.get('arn'),
               ],
             },
             {

@@ -1538,11 +1538,11 @@ describe('deployment IaC', () => {
               },
               "test-deployment-actor-policy": {
                 "dependsOn": [
-                  "test-deployment-resource-autoscaling-table",
-                  "test-deployment-locations-autoscaling-table",
-                  "test-deployment-semaphore-autoscaling-table",
-                  "test-deployment-events-autoscaling-table",
-                  "test-deployment-dependencies-autoscaling-table",
+                  "test-deployment-resource",
+                  "test-deployment-locations",
+                  "test-deployment-semaphore",
+                  "test-deployment-events",
+                  "test-deployment-dependencies",
                 ],
                 "name": "test-deployment-actor-policy",
                 "properties": {
@@ -1716,10 +1716,11 @@ describe('deployment IaC', () => {
                 "resourceType": "Bucket",
                 "status": "STABLE",
               },
-              "test-deployment-dependencies-autoscaling-table": {
+              "test-deployment-dependencies": {
                 "dependsOn": [],
-                "name": "test-deployment-dependencies-autoscaling-table",
+                "name": "test-deployment-dependencies",
                 "properties": {
+                  "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-dependencies",
                   "attributeDefinitions": [
                     {
                       "AttributeName": "dependency",
@@ -1730,6 +1731,7 @@ describe('deployment IaC', () => {
                       "AttributeType": "S",
                     },
                   ],
+                  "billingMode": "PAY_PER_REQUEST",
                   "deployment": {
                     "accountId": "",
                     "envPaths": {
@@ -1754,260 +1756,17 @@ describe('deployment IaC', () => {
                       "KeyType": "RANGE",
                     },
                   ],
-                  "maxReadCapacity": 50,
-                  "maxWriteCapacity": 50,
-                  "minReadCapacity": 1,
-                  "minWriteCapacity": 1,
-                  "provisionedThroughput": {
-                    "ReadCapacityUnits": 5,
-                    "WriteCapacityUnits": 5,
-                  },
-                  "tableName": "test-deployment-dependencies",
                 },
-                "resourceType": "AutoscalingTable",
-                "resources": {
-                  "test-deployment-dependencies": {
-                    "dependsOn": [],
-                    "name": "test-deployment-dependencies",
-                    "properties": {
-                      "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-dependencies",
-                      "attributeDefinitions": [
-                        {
-                          "AttributeName": "dependency",
-                          "AttributeType": "S",
-                        },
-                        {
-                          "AttributeName": "resource_id",
-                          "AttributeType": "S",
-                        },
-                      ],
-                      "billingMode": "PROVISIONED",
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "keySchema": [
-                        {
-                          "AttributeName": "dependency",
-                          "KeyType": "HASH",
-                        },
-                        {
-                          "AttributeName": "resource_id",
-                          "KeyType": "RANGE",
-                        },
-                      ],
-                      "provisionedThroughput": {
-                        "ReadCapacityUnits": 5,
-                        "WriteCapacityUnits": 5,
-                      },
-                    },
-                    "resourceType": "Table",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-dependencies-autoscaling-role": {
-                    "dependsOn": [
-                      "test-deployment-dependencies",
-                    ],
-                    "name": "test-deployment-dependencies-autoscaling-role",
-                    "properties": {
-                      "arn": "arn:aws:iam::123456789012:role/test-deployment-dependencies-autoscaling-role",
-                      "assumeRolePolicyDocument": {
-                        "Statement": [
-                          {
-                            "Action": "sts:AssumeRole",
-                            "Effect": "Allow",
-                            "Principal": {
-                              "Service": [
-                                "application-autoscaling.amazonaws.com",
-                              ],
-                            },
-                          },
-                        ],
-                        "Version": "2012-10-17",
-                      },
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "description": "Role for test-deployment-dependencies table autoscaling",
-                      "rolePolicyDocument": {
-                        "Statement": [
-                          {
-                            "Action": [
-                              "dynamodb:DescribeTable",
-                              "dynamodb:UpdateTable",
-                            ],
-                            "Effect": "Allow",
-                            "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-dependencies",
-                          },
-                          {
-                            "Action": [
-                              "cloudwatch:PutMetricAlarm",
-                              "cloudwatch:DescribeAlarms",
-                              "cloudwatch:GetMetricStatistics",
-                              "cloudwatch:SetAlarmState",
-                              "cloudwatch:DeleteAlarms",
-                            ],
-                            "Effect": "Allow",
-                            "Resource": "*",
-                          },
-                        ],
-                        "Version": "2012-10-17",
-                      },
-                    },
-                    "resourceType": "Role",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-dependencies-readAutoscalingPolicy": {
-                    "dependsOn": [
-                      "test-deployment-dependencies-readAutoscalingTarget",
-                    ],
-                    "name": "test-deployment-dependencies-readAutoscalingPolicy",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "policyType": "TargetTrackingScaling",
-                      "resourceId": "table/test-deployment-dependencies",
-                      "scalableDimension": "dynamodb:table:ReadCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                      "targetTrackingScalingPolicyConfiguration": {
-                        "PredefinedMetricSpecification": {
-                          "PredefinedMetricType": "DynamoDBReadCapacityUtilization",
-                        },
-                        "ScaleInCooldown": 0,
-                        "ScaleOutCooldown": 0,
-                        "TargetValue": 70,
-                      },
-                    },
-                    "resourceType": "AutoscalingPolicy",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-dependencies-readAutoscalingTarget": {
-                    "dependsOn": [
-                      "test-deployment-dependencies-autoscaling-role",
-                    ],
-                    "name": "test-deployment-dependencies-readAutoscalingTarget",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "maxCapacity": 50,
-                      "minCapacity": 1,
-                      "resourceId": "table/test-deployment-dependencies",
-                      "roleArn": "arn:aws:iam::123456789012:role/test-deployment-dependencies-autoscaling-role",
-                      "scalableDimension": "dynamodb:table:ReadCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                    },
-                    "resourceType": "AutoscalingTarget",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-dependencies-writeAutoscalingPolicy": {
-                    "dependsOn": [
-                      "test-deployment-dependencies-writeAutoscalingTarget",
-                    ],
-                    "name": "test-deployment-dependencies-writeAutoscalingPolicy",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "policyType": "TargetTrackingScaling",
-                      "resourceId": "table/test-deployment-dependencies",
-                      "scalableDimension": "dynamodb:table:WriteCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                      "targetTrackingScalingPolicyConfiguration": {
-                        "PredefinedMetricSpecification": {
-                          "PredefinedMetricType": "DynamoDBWriteCapacityUtilization",
-                        },
-                        "ScaleInCooldown": 0,
-                        "ScaleOutCooldown": 0,
-                        "TargetValue": 70,
-                      },
-                    },
-                    "resourceType": "AutoscalingPolicy",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-dependencies-writeAutoscalingTarget": {
-                    "dependsOn": [
-                      "test-deployment-dependencies-autoscaling-role",
-                    ],
-                    "name": "test-deployment-dependencies-writeAutoscalingTarget",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "maxCapacity": 50,
-                      "minCapacity": 1,
-                      "resourceId": "table/test-deployment-dependencies",
-                      "roleArn": "arn:aws:iam::123456789012:role/test-deployment-dependencies-autoscaling-role",
-                      "scalableDimension": "dynamodb:table:WriteCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                    },
-                    "resourceType": "AutoscalingTarget",
-                    "status": "STABLE",
-                  },
-                },
+                "resourceType": "Table",
                 "status": "STABLE",
               },
               "test-deployment-deployment-resources-log-resource": {
                 "dependsOn": [
                   "test-deployment",
                   "test-deployment-deployment-resources-logging-resource-role",
-                  "test-deployment-resource-autoscaling-table",
-                  "test-deployment-locations-autoscaling-table",
-                  "test-deployment-dependencies-autoscaling-table",
+                  "test-deployment-resource",
+                  "test-deployment-locations",
+                  "test-deployment-dependencies",
                   "test-deployment-bucket",
                 ],
                 "name": "test-deployment-deployment-resources-log-resource",
@@ -2806,10 +2565,11 @@ describe('deployment IaC', () => {
                 "resourceType": "Role",
                 "status": "STABLE",
               },
-              "test-deployment-events-autoscaling-table": {
+              "test-deployment-events": {
                 "dependsOn": [],
-                "name": "test-deployment-events-autoscaling-table",
+                "name": "test-deployment-events",
                 "properties": {
+                  "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-events",
                   "attributeDefinitions": [
                     {
                       "AttributeName": "resource_id",
@@ -2820,6 +2580,7 @@ describe('deployment IaC', () => {
                       "AttributeType": "S",
                     },
                   ],
+                  "billingMode": "PAY_PER_REQUEST",
                   "deployment": {
                     "accountId": "",
                     "envPaths": {
@@ -2844,259 +2605,12 @@ describe('deployment IaC', () => {
                       "KeyType": "RANGE",
                     },
                   ],
-                  "maxReadCapacity": 50,
-                  "maxWriteCapacity": 50,
-                  "minReadCapacity": 1,
-                  "minWriteCapacity": 1,
-                  "provisionedThroughput": {
-                    "ReadCapacityUnits": 5,
-                    "WriteCapacityUnits": 5,
-                  },
-                  "tableName": "test-deployment-events",
                   "timeToLiveSpecification": {
                     "AttributeName": "ttl",
                     "Enabled": true,
                   },
                 },
-                "resourceType": "AutoscalingTable",
-                "resources": {
-                  "test-deployment-events": {
-                    "dependsOn": [],
-                    "name": "test-deployment-events",
-                    "properties": {
-                      "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-events",
-                      "attributeDefinitions": [
-                        {
-                          "AttributeName": "resource_id",
-                          "AttributeType": "S",
-                        },
-                        {
-                          "AttributeName": "sort_key",
-                          "AttributeType": "S",
-                        },
-                      ],
-                      "billingMode": "PROVISIONED",
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "keySchema": [
-                        {
-                          "AttributeName": "resource_id",
-                          "KeyType": "HASH",
-                        },
-                        {
-                          "AttributeName": "sort_key",
-                          "KeyType": "RANGE",
-                        },
-                      ],
-                      "provisionedThroughput": {
-                        "ReadCapacityUnits": 5,
-                        "WriteCapacityUnits": 5,
-                      },
-                      "timeToLiveSpecification": {
-                        "AttributeName": "ttl",
-                        "Enabled": true,
-                      },
-                    },
-                    "resourceType": "Table",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-events-autoscaling-role": {
-                    "dependsOn": [
-                      "test-deployment-events",
-                    ],
-                    "name": "test-deployment-events-autoscaling-role",
-                    "properties": {
-                      "arn": "arn:aws:iam::123456789012:role/test-deployment-events-autoscaling-role",
-                      "assumeRolePolicyDocument": {
-                        "Statement": [
-                          {
-                            "Action": "sts:AssumeRole",
-                            "Effect": "Allow",
-                            "Principal": {
-                              "Service": [
-                                "application-autoscaling.amazonaws.com",
-                              ],
-                            },
-                          },
-                        ],
-                        "Version": "2012-10-17",
-                      },
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "description": "Role for test-deployment-events table autoscaling",
-                      "rolePolicyDocument": {
-                        "Statement": [
-                          {
-                            "Action": [
-                              "dynamodb:DescribeTable",
-                              "dynamodb:UpdateTable",
-                            ],
-                            "Effect": "Allow",
-                            "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-events",
-                          },
-                          {
-                            "Action": [
-                              "cloudwatch:PutMetricAlarm",
-                              "cloudwatch:DescribeAlarms",
-                              "cloudwatch:GetMetricStatistics",
-                              "cloudwatch:SetAlarmState",
-                              "cloudwatch:DeleteAlarms",
-                            ],
-                            "Effect": "Allow",
-                            "Resource": "*",
-                          },
-                        ],
-                        "Version": "2012-10-17",
-                      },
-                    },
-                    "resourceType": "Role",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-events-readAutoscalingPolicy": {
-                    "dependsOn": [
-                      "test-deployment-events-readAutoscalingTarget",
-                    ],
-                    "name": "test-deployment-events-readAutoscalingPolicy",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "policyType": "TargetTrackingScaling",
-                      "resourceId": "table/test-deployment-events",
-                      "scalableDimension": "dynamodb:table:ReadCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                      "targetTrackingScalingPolicyConfiguration": {
-                        "PredefinedMetricSpecification": {
-                          "PredefinedMetricType": "DynamoDBReadCapacityUtilization",
-                        },
-                        "ScaleInCooldown": 0,
-                        "ScaleOutCooldown": 0,
-                        "TargetValue": 70,
-                      },
-                    },
-                    "resourceType": "AutoscalingPolicy",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-events-readAutoscalingTarget": {
-                    "dependsOn": [
-                      "test-deployment-events-autoscaling-role",
-                    ],
-                    "name": "test-deployment-events-readAutoscalingTarget",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "maxCapacity": 50,
-                      "minCapacity": 1,
-                      "resourceId": "table/test-deployment-events",
-                      "roleArn": "arn:aws:iam::123456789012:role/test-deployment-events-autoscaling-role",
-                      "scalableDimension": "dynamodb:table:ReadCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                    },
-                    "resourceType": "AutoscalingTarget",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-events-writeAutoscalingPolicy": {
-                    "dependsOn": [
-                      "test-deployment-events-writeAutoscalingTarget",
-                    ],
-                    "name": "test-deployment-events-writeAutoscalingPolicy",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "policyType": "TargetTrackingScaling",
-                      "resourceId": "table/test-deployment-events",
-                      "scalableDimension": "dynamodb:table:WriteCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                      "targetTrackingScalingPolicyConfiguration": {
-                        "PredefinedMetricSpecification": {
-                          "PredefinedMetricType": "DynamoDBWriteCapacityUtilization",
-                        },
-                        "ScaleInCooldown": 0,
-                        "ScaleOutCooldown": 0,
-                        "TargetValue": 70,
-                      },
-                    },
-                    "resourceType": "AutoscalingPolicy",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-events-writeAutoscalingTarget": {
-                    "dependsOn": [
-                      "test-deployment-events-autoscaling-role",
-                    ],
-                    "name": "test-deployment-events-writeAutoscalingTarget",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "maxCapacity": 50,
-                      "minCapacity": 1,
-                      "resourceId": "table/test-deployment-events",
-                      "roleArn": "arn:aws:iam::123456789012:role/test-deployment-events-autoscaling-role",
-                      "scalableDimension": "dynamodb:table:WriteCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                    },
-                    "resourceType": "AutoscalingTarget",
-                    "status": "STABLE",
-                  },
-                },
+                "resourceType": "Table",
                 "status": "STABLE",
               },
               "test-deployment-firehose": {
@@ -3196,10 +2710,11 @@ describe('deployment IaC', () => {
                 "resourceType": "Role",
                 "status": "STABLE",
               },
-              "test-deployment-locations-autoscaling-table": {
+              "test-deployment-locations": {
                 "dependsOn": [],
-                "name": "test-deployment-locations-autoscaling-table",
+                "name": "test-deployment-locations",
                 "properties": {
+                  "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-locations",
                   "attributeDefinitions": [
                     {
                       "AttributeName": "location",
@@ -3210,6 +2725,7 @@ describe('deployment IaC', () => {
                       "AttributeType": "S",
                     },
                   ],
+                  "billingMode": "PROVISIONED",
                   "deployment": {
                     "accountId": "",
                     "envPaths": {
@@ -3234,257 +2750,15 @@ describe('deployment IaC', () => {
                       "KeyType": "RANGE",
                     },
                   ],
-                  "maxReadCapacity": 100,
-                  "maxWriteCapacity": 50,
-                  "minReadCapacity": 5,
-                  "minWriteCapacity": 1,
-                  "provisionedThroughput": {
-                    "ReadCapacityUnits": 5,
-                    "WriteCapacityUnits": 5,
-                  },
-                  "tableName": "test-deployment-locations",
                 },
-                "resourceType": "AutoscalingTable",
-                "resources": {
-                  "test-deployment-locations": {
-                    "dependsOn": [],
-                    "name": "test-deployment-locations",
-                    "properties": {
-                      "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-locations",
-                      "attributeDefinitions": [
-                        {
-                          "AttributeName": "location",
-                          "AttributeType": "S",
-                        },
-                        {
-                          "AttributeName": "resource_id",
-                          "AttributeType": "S",
-                        },
-                      ],
-                      "billingMode": "PROVISIONED",
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "keySchema": [
-                        {
-                          "AttributeName": "location",
-                          "KeyType": "HASH",
-                        },
-                        {
-                          "AttributeName": "resource_id",
-                          "KeyType": "RANGE",
-                        },
-                      ],
-                      "provisionedThroughput": {
-                        "ReadCapacityUnits": 5,
-                        "WriteCapacityUnits": 5,
-                      },
-                    },
-                    "resourceType": "Table",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-locations-autoscaling-role": {
-                    "dependsOn": [
-                      "test-deployment-locations",
-                    ],
-                    "name": "test-deployment-locations-autoscaling-role",
-                    "properties": {
-                      "arn": "arn:aws:iam::123456789012:role/test-deployment-locations-autoscaling-role",
-                      "assumeRolePolicyDocument": {
-                        "Statement": [
-                          {
-                            "Action": "sts:AssumeRole",
-                            "Effect": "Allow",
-                            "Principal": {
-                              "Service": [
-                                "application-autoscaling.amazonaws.com",
-                              ],
-                            },
-                          },
-                        ],
-                        "Version": "2012-10-17",
-                      },
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "description": "Role for test-deployment-locations table autoscaling",
-                      "rolePolicyDocument": {
-                        "Statement": [
-                          {
-                            "Action": [
-                              "dynamodb:DescribeTable",
-                              "dynamodb:UpdateTable",
-                            ],
-                            "Effect": "Allow",
-                            "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-locations",
-                          },
-                          {
-                            "Action": [
-                              "cloudwatch:PutMetricAlarm",
-                              "cloudwatch:DescribeAlarms",
-                              "cloudwatch:GetMetricStatistics",
-                              "cloudwatch:SetAlarmState",
-                              "cloudwatch:DeleteAlarms",
-                            ],
-                            "Effect": "Allow",
-                            "Resource": "*",
-                          },
-                        ],
-                        "Version": "2012-10-17",
-                      },
-                    },
-                    "resourceType": "Role",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-locations-readAutoscalingPolicy": {
-                    "dependsOn": [
-                      "test-deployment-locations-readAutoscalingTarget",
-                    ],
-                    "name": "test-deployment-locations-readAutoscalingPolicy",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "policyType": "TargetTrackingScaling",
-                      "resourceId": "table/test-deployment-locations",
-                      "scalableDimension": "dynamodb:table:ReadCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                      "targetTrackingScalingPolicyConfiguration": {
-                        "PredefinedMetricSpecification": {
-                          "PredefinedMetricType": "DynamoDBReadCapacityUtilization",
-                        },
-                        "ScaleInCooldown": 0,
-                        "ScaleOutCooldown": 0,
-                        "TargetValue": 70,
-                      },
-                    },
-                    "resourceType": "AutoscalingPolicy",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-locations-readAutoscalingTarget": {
-                    "dependsOn": [
-                      "test-deployment-locations-autoscaling-role",
-                    ],
-                    "name": "test-deployment-locations-readAutoscalingTarget",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "maxCapacity": 100,
-                      "minCapacity": 5,
-                      "resourceId": "table/test-deployment-locations",
-                      "roleArn": "arn:aws:iam::123456789012:role/test-deployment-locations-autoscaling-role",
-                      "scalableDimension": "dynamodb:table:ReadCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                    },
-                    "resourceType": "AutoscalingTarget",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-locations-writeAutoscalingPolicy": {
-                    "dependsOn": [
-                      "test-deployment-locations-writeAutoscalingTarget",
-                    ],
-                    "name": "test-deployment-locations-writeAutoscalingPolicy",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "policyType": "TargetTrackingScaling",
-                      "resourceId": "table/test-deployment-locations",
-                      "scalableDimension": "dynamodb:table:WriteCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                      "targetTrackingScalingPolicyConfiguration": {
-                        "PredefinedMetricSpecification": {
-                          "PredefinedMetricType": "DynamoDBWriteCapacityUtilization",
-                        },
-                        "ScaleInCooldown": 0,
-                        "ScaleOutCooldown": 0,
-                        "TargetValue": 70,
-                      },
-                    },
-                    "resourceType": "AutoscalingPolicy",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-locations-writeAutoscalingTarget": {
-                    "dependsOn": [
-                      "test-deployment-locations-autoscaling-role",
-                    ],
-                    "name": "test-deployment-locations-writeAutoscalingTarget",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "maxCapacity": 50,
-                      "minCapacity": 1,
-                      "resourceId": "table/test-deployment-locations",
-                      "roleArn": "arn:aws:iam::123456789012:role/test-deployment-locations-autoscaling-role",
-                      "scalableDimension": "dynamodb:table:WriteCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                    },
-                    "resourceType": "AutoscalingTarget",
-                    "status": "STABLE",
-                  },
-                },
+                "resourceType": "Table",
                 "status": "STABLE",
               },
-              "test-deployment-resource-autoscaling-table": {
+              "test-deployment-resource": {
                 "dependsOn": [],
-                "name": "test-deployment-resource-autoscaling-table",
+                "name": "test-deployment-resource",
                 "properties": {
+                  "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-resource",
                   "attributeDefinitions": [
                     {
                       "AttributeName": "resource_id",
@@ -3495,6 +2769,7 @@ describe('deployment IaC', () => {
                       "AttributeType": "S",
                     },
                   ],
+                  "billingMode": "PAY_PER_REQUEST",
                   "deployment": {
                     "accountId": "",
                     "envPaths": {
@@ -3519,263 +2794,22 @@ describe('deployment IaC', () => {
                       "KeyType": "RANGE",
                     },
                   ],
-                  "maxReadCapacity": 50,
-                  "maxWriteCapacity": 50,
-                  "minReadCapacity": 5,
-                  "minWriteCapacity": 1,
-                  "provisionedThroughput": {
-                    "ReadCapacityUnits": 5,
-                    "WriteCapacityUnits": 5,
-                  },
-                  "tableName": "test-deployment-resource",
                 },
-                "resourceType": "AutoscalingTable",
-                "resources": {
-                  "test-deployment-resource": {
-                    "dependsOn": [],
-                    "name": "test-deployment-resource",
-                    "properties": {
-                      "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-resource",
-                      "attributeDefinitions": [
-                        {
-                          "AttributeName": "resource_id",
-                          "AttributeType": "S",
-                        },
-                        {
-                          "AttributeName": "sort_key",
-                          "AttributeType": "S",
-                        },
-                      ],
-                      "billingMode": "PROVISIONED",
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "keySchema": [
-                        {
-                          "AttributeName": "resource_id",
-                          "KeyType": "HASH",
-                        },
-                        {
-                          "AttributeName": "sort_key",
-                          "KeyType": "RANGE",
-                        },
-                      ],
-                      "provisionedThroughput": {
-                        "ReadCapacityUnits": 5,
-                        "WriteCapacityUnits": 5,
-                      },
-                    },
-                    "resourceType": "Table",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-resource-autoscaling-role": {
-                    "dependsOn": [
-                      "test-deployment-resource",
-                    ],
-                    "name": "test-deployment-resource-autoscaling-role",
-                    "properties": {
-                      "arn": "arn:aws:iam::123456789012:role/test-deployment-resource-autoscaling-role",
-                      "assumeRolePolicyDocument": {
-                        "Statement": [
-                          {
-                            "Action": "sts:AssumeRole",
-                            "Effect": "Allow",
-                            "Principal": {
-                              "Service": [
-                                "application-autoscaling.amazonaws.com",
-                              ],
-                            },
-                          },
-                        ],
-                        "Version": "2012-10-17",
-                      },
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "description": "Role for test-deployment-resource table autoscaling",
-                      "rolePolicyDocument": {
-                        "Statement": [
-                          {
-                            "Action": [
-                              "dynamodb:DescribeTable",
-                              "dynamodb:UpdateTable",
-                            ],
-                            "Effect": "Allow",
-                            "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-resource",
-                          },
-                          {
-                            "Action": [
-                              "cloudwatch:PutMetricAlarm",
-                              "cloudwatch:DescribeAlarms",
-                              "cloudwatch:GetMetricStatistics",
-                              "cloudwatch:SetAlarmState",
-                              "cloudwatch:DeleteAlarms",
-                            ],
-                            "Effect": "Allow",
-                            "Resource": "*",
-                          },
-                        ],
-                        "Version": "2012-10-17",
-                      },
-                    },
-                    "resourceType": "Role",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-resource-readAutoscalingPolicy": {
-                    "dependsOn": [
-                      "test-deployment-resource-readAutoscalingTarget",
-                    ],
-                    "name": "test-deployment-resource-readAutoscalingPolicy",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "policyType": "TargetTrackingScaling",
-                      "resourceId": "table/test-deployment-resource",
-                      "scalableDimension": "dynamodb:table:ReadCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                      "targetTrackingScalingPolicyConfiguration": {
-                        "PredefinedMetricSpecification": {
-                          "PredefinedMetricType": "DynamoDBReadCapacityUtilization",
-                        },
-                        "ScaleInCooldown": 0,
-                        "ScaleOutCooldown": 0,
-                        "TargetValue": 70,
-                      },
-                    },
-                    "resourceType": "AutoscalingPolicy",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-resource-readAutoscalingTarget": {
-                    "dependsOn": [
-                      "test-deployment-resource-autoscaling-role",
-                    ],
-                    "name": "test-deployment-resource-readAutoscalingTarget",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "maxCapacity": 50,
-                      "minCapacity": 5,
-                      "resourceId": "table/test-deployment-resource",
-                      "roleArn": "arn:aws:iam::123456789012:role/test-deployment-resource-autoscaling-role",
-                      "scalableDimension": "dynamodb:table:ReadCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                    },
-                    "resourceType": "AutoscalingTarget",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-resource-writeAutoscalingPolicy": {
-                    "dependsOn": [
-                      "test-deployment-resource-writeAutoscalingTarget",
-                    ],
-                    "name": "test-deployment-resource-writeAutoscalingPolicy",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "policyType": "TargetTrackingScaling",
-                      "resourceId": "table/test-deployment-resource",
-                      "scalableDimension": "dynamodb:table:WriteCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                      "targetTrackingScalingPolicyConfiguration": {
-                        "PredefinedMetricSpecification": {
-                          "PredefinedMetricType": "DynamoDBWriteCapacityUtilization",
-                        },
-                        "ScaleInCooldown": 0,
-                        "ScaleOutCooldown": 0,
-                        "TargetValue": 70,
-                      },
-                    },
-                    "resourceType": "AutoscalingPolicy",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-resource-writeAutoscalingTarget": {
-                    "dependsOn": [
-                      "test-deployment-resource-autoscaling-role",
-                    ],
-                    "name": "test-deployment-resource-writeAutoscalingTarget",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "maxCapacity": 50,
-                      "minCapacity": 1,
-                      "resourceId": "table/test-deployment-resource",
-                      "roleArn": "arn:aws:iam::123456789012:role/test-deployment-resource-autoscaling-role",
-                      "scalableDimension": "dynamodb:table:WriteCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                    },
-                    "resourceType": "AutoscalingTarget",
-                    "status": "STABLE",
-                  },
-                },
+                "resourceType": "Table",
                 "status": "STABLE",
               },
-              "test-deployment-semaphore-autoscaling-table": {
+              "test-deployment-semaphore": {
                 "dependsOn": [],
-                "name": "test-deployment-semaphore-autoscaling-table",
+                "name": "test-deployment-semaphore",
                 "properties": {
+                  "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-semaphore",
                   "attributeDefinitions": [
                     {
                       "AttributeName": "semaphore",
                       "AttributeType": "S",
                     },
                   ],
+                  "billingMode": "PAY_PER_REQUEST",
                   "deployment": {
                     "accountId": "",
                     "envPaths": {
@@ -3796,243 +2830,8 @@ describe('deployment IaC', () => {
                       "KeyType": "HASH",
                     },
                   ],
-                  "maxReadCapacity": 50,
-                  "maxWriteCapacity": 50,
-                  "minReadCapacity": 1,
-                  "minWriteCapacity": 1,
-                  "provisionedThroughput": {
-                    "ReadCapacityUnits": 5,
-                    "WriteCapacityUnits": 5,
-                  },
-                  "tableName": "test-deployment-semaphore",
                 },
-                "resourceType": "AutoscalingTable",
-                "resources": {
-                  "test-deployment-semaphore": {
-                    "dependsOn": [],
-                    "name": "test-deployment-semaphore",
-                    "properties": {
-                      "arn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-semaphore",
-                      "attributeDefinitions": [
-                        {
-                          "AttributeName": "semaphore",
-                          "AttributeType": "S",
-                        },
-                      ],
-                      "billingMode": "PROVISIONED",
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "keySchema": [
-                        {
-                          "AttributeName": "semaphore",
-                          "KeyType": "HASH",
-                        },
-                      ],
-                      "provisionedThroughput": {
-                        "ReadCapacityUnits": 5,
-                        "WriteCapacityUnits": 5,
-                      },
-                    },
-                    "resourceType": "Table",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-semaphore-autoscaling-role": {
-                    "dependsOn": [
-                      "test-deployment-semaphore",
-                    ],
-                    "name": "test-deployment-semaphore-autoscaling-role",
-                    "properties": {
-                      "arn": "arn:aws:iam::123456789012:role/test-deployment-semaphore-autoscaling-role",
-                      "assumeRolePolicyDocument": {
-                        "Statement": [
-                          {
-                            "Action": "sts:AssumeRole",
-                            "Effect": "Allow",
-                            "Principal": {
-                              "Service": [
-                                "application-autoscaling.amazonaws.com",
-                              ],
-                            },
-                          },
-                        ],
-                        "Version": "2012-10-17",
-                      },
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "description": "Role for test-deployment-semaphore table autoscaling",
-                      "rolePolicyDocument": {
-                        "Statement": [
-                          {
-                            "Action": [
-                              "dynamodb:DescribeTable",
-                              "dynamodb:UpdateTable",
-                            ],
-                            "Effect": "Allow",
-                            "Resource": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-semaphore",
-                          },
-                          {
-                            "Action": [
-                              "cloudwatch:PutMetricAlarm",
-                              "cloudwatch:DescribeAlarms",
-                              "cloudwatch:GetMetricStatistics",
-                              "cloudwatch:SetAlarmState",
-                              "cloudwatch:DeleteAlarms",
-                            ],
-                            "Effect": "Allow",
-                            "Resource": "*",
-                          },
-                        ],
-                        "Version": "2012-10-17",
-                      },
-                    },
-                    "resourceType": "Role",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-semaphore-readAutoscalingPolicy": {
-                    "dependsOn": [
-                      "test-deployment-semaphore-readAutoscalingTarget",
-                    ],
-                    "name": "test-deployment-semaphore-readAutoscalingPolicy",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "policyType": "TargetTrackingScaling",
-                      "resourceId": "table/test-deployment-semaphore",
-                      "scalableDimension": "dynamodb:table:ReadCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                      "targetTrackingScalingPolicyConfiguration": {
-                        "PredefinedMetricSpecification": {
-                          "PredefinedMetricType": "DynamoDBReadCapacityUtilization",
-                        },
-                        "ScaleInCooldown": 0,
-                        "ScaleOutCooldown": 0,
-                        "TargetValue": 70,
-                      },
-                    },
-                    "resourceType": "AutoscalingPolicy",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-semaphore-readAutoscalingTarget": {
-                    "dependsOn": [
-                      "test-deployment-semaphore-autoscaling-role",
-                    ],
-                    "name": "test-deployment-semaphore-readAutoscalingTarget",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "maxCapacity": 50,
-                      "minCapacity": 1,
-                      "resourceId": "table/test-deployment-semaphore",
-                      "roleArn": "arn:aws:iam::123456789012:role/test-deployment-semaphore-autoscaling-role",
-                      "scalableDimension": "dynamodb:table:ReadCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                    },
-                    "resourceType": "AutoscalingTarget",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-semaphore-writeAutoscalingPolicy": {
-                    "dependsOn": [
-                      "test-deployment-semaphore-writeAutoscalingTarget",
-                    ],
-                    "name": "test-deployment-semaphore-writeAutoscalingPolicy",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "policyType": "TargetTrackingScaling",
-                      "resourceId": "table/test-deployment-semaphore",
-                      "scalableDimension": "dynamodb:table:WriteCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                      "targetTrackingScalingPolicyConfiguration": {
-                        "PredefinedMetricSpecification": {
-                          "PredefinedMetricType": "DynamoDBWriteCapacityUtilization",
-                        },
-                        "ScaleInCooldown": 0,
-                        "ScaleOutCooldown": 0,
-                        "TargetValue": 70,
-                      },
-                    },
-                    "resourceType": "AutoscalingPolicy",
-                    "status": "STABLE",
-                  },
-                  "test-deployment-semaphore-writeAutoscalingTarget": {
-                    "dependsOn": [
-                      "test-deployment-semaphore-autoscaling-role",
-                    ],
-                    "name": "test-deployment-semaphore-writeAutoscalingTarget",
-                    "properties": {
-                      "deployment": {
-                        "envPaths": {
-                          "cache": "mock",
-                          "config": "mock",
-                          "data": "mock",
-                          "log": "mock",
-                          "temp": "mock",
-                        },
-                        "name": "test-deployment",
-                        "stateTable": "test-deployment-state",
-                        "version": "0.0.1",
-                      },
-                      "maxCapacity": 50,
-                      "minCapacity": 1,
-                      "resourceId": "table/test-deployment-semaphore",
-                      "roleArn": "arn:aws:iam::123456789012:role/test-deployment-semaphore-autoscaling-role",
-                      "scalableDimension": "dynamodb:table:WriteCapacityUnits",
-                      "serviceNamespace": "dynamodb",
-                    },
-                    "resourceType": "AutoscalingTarget",
-                    "status": "STABLE",
-                  },
-                },
+                "resourceType": "Table",
                 "status": "STABLE",
               },
               "test-deployment-shared-policy": {

@@ -84,34 +84,18 @@ class WharfieActor extends Actor {
               .getTemporaryDatabase().name,
             RESOURCE_TABLE: this.deployment
               .getDeploymentResources()
-              .getResource(`${this.deployment.name}-resource-autoscaling-table`)
-              // @ts-ignore
               .getResource(`${this.deployment.name}-resource`).name,
             SEMAPHORE_TABLE: this.deployment
               .getDeploymentResources()
-              .getResource(
-                `${this.deployment.name}-semaphore-autoscaling-table`
-              )
-              // @ts-ignore
               .getResource(`${this.deployment.name}-semaphore`).name,
             LOCATION_TABLE: this.deployment
               .getDeploymentResources()
-              .getResource(
-                `${this.deployment.name}-locations-autoscaling-table`
-              )
-              // @ts-ignore
               .getResource(`${this.deployment.name}-locations`).name,
             DEPENDENCY_TABLE: this.deployment
               .getDeploymentResources()
-              .getResource(
-                `${this.deployment.name}-dependencies-autoscaling-table`
-              )
-              // @ts-ignore
               .getResource(`${this.deployment.name}-dependencies`).name,
             EVENT_TABLE: this.deployment
               .getDeploymentResources()
-              .getResource(`${this.deployment.name}-events-autoscaling-table`)
-              // @ts-ignore
               .getResource(`${this.deployment.name}-events`).name,
             WHARFIE_SERVICE_BUCKET: this.deployment
               .getDeploymentResources()
