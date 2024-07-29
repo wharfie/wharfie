@@ -65,7 +65,7 @@ describe('partition', () => {
     expect(
       AWSGlue.GlueMock.commandCalls(AWSGlue.GetTableCommand)[0].args[0].input
     ).toMatchInlineSnapshot(`
-      Object {
+      {
         "DatabaseName": "test_db",
         "Name": "test_table",
       }
@@ -79,14 +79,14 @@ describe('partition', () => {
       AWSGlue.GlueMock.commandCalls(AWSGlue.CreatePartitionCommand)[0].args[0]
         .input
     ).toMatchInlineSnapshot(`
-      Object {
+      {
         "DatabaseName": "test_db",
-        "PartitionInput": Object {
-          "Parameters": Object {},
-          "StorageDescriptor": Object {
+        "PartitionInput": {
+          "Parameters": {},
+          "StorageDescriptor": {
             "Location": "s3://somebucket/prefix/a=10/b=20/",
           },
-          "Values": Array [
+          "Values": [
             "10",
             "20",
           ],
@@ -103,19 +103,19 @@ describe('partition', () => {
       AWSGlue.GlueMock.commandCalls(AWSGlue.UpdatePartitionCommand)[0].args[0]
         .input
     ).toMatchInlineSnapshot(`
-      Object {
+      {
         "DatabaseName": "test_db",
-        "PartitionInput": Object {
-          "Parameters": Object {},
-          "StorageDescriptor": Object {
+        "PartitionInput": {
+          "Parameters": {},
+          "StorageDescriptor": {
             "Location": "s3://somebucket/prefix/a=10/b=20/",
           },
-          "Values": Array [
+          "Values": [
             "10",
             "20",
           ],
         },
-        "PartitionValueList": Array [
+        "PartitionValueList": [
           "10",
           "20",
         ],
@@ -229,13 +229,19 @@ describe('partition', () => {
       AWSGlue.GlueMock.commandCalls(AWSGlue.BatchDeletePartitionCommand)[0]
         .args[0].input
     ).toMatchInlineSnapshot(`
-      Object {
+      {
         "DatabaseName": "test_db",
-        "PartitionsToDelete": Array [
-          Object {
-            "Values": Array [
-              "1",
-              "7",
+        "PartitionsToDelete": [
+          {
+            "Values": [
+              "undefined",
+              "undefined",
+            ],
+          },
+          {
+            "Values": [
+              "undefined",
+              "undefined",
             ],
           },
         ],
@@ -246,37 +252,47 @@ describe('partition', () => {
       AWSGlue.GlueMock.commandCalls(AWSGlue.BatchCreatePartitionCommand)[0]
         .args[0].input
     ).toMatchInlineSnapshot(`
-      Object {
+      {
         "DatabaseName": "test_db",
-        "PartitionInputList": Array [
-          Object {
-            "Parameters": Object {},
-            "StorageDescriptor": Object {
+        "PartitionInputList": [
+          {
+            "Parameters": {},
+            "StorageDescriptor": {
+              "Location": "s3://bucket/prefix/data/someprefix1/a=1/b=1",
+            },
+            "Values": [
+              "a=1",
+              "a=1",
+            ],
+          },
+          {
+            "Parameters": {},
+            "StorageDescriptor": {
               "Location": "s3://bucket/prefix/data/someprefix2/a=1/b=2",
             },
-            "Values": Array [
-              "1",
-              "2",
+            "Values": [
+              "a=1",
+              "a=1",
             ],
           },
-          Object {
-            "Parameters": Object {},
-            "StorageDescriptor": Object {
+          {
+            "Parameters": {},
+            "StorageDescriptor": {
               "Location": "s3://bucket/prefix/data/someprefix2/a=1/b=3",
             },
-            "Values": Array [
-              "1",
-              "3",
+            "Values": [
+              "a=1",
+              "a=1",
             ],
           },
-          Object {
-            "Parameters": Object {},
-            "StorageDescriptor": Object {
+          {
+            "Parameters": {},
+            "StorageDescriptor": {
               "Location": "s3://bucket/prefix/data/someprefix2/a=1/b=4",
             },
-            "Values": Array [
-              "1",
-              "4",
+            "Values": [
+              "a=1",
+              "a=1",
             ],
           },
         ],

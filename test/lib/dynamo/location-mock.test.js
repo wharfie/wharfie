@@ -17,9 +17,9 @@ describe('dynamo location db', () => {
       location: 's3://somebucket/prefix/',
     });
     expect(location.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "s3://somebucket/prefix/": Object {
-          "resource_id": Object {
+      {
+        "s3://somebucket/prefix/": {
+          "resource_id": {
             "location": "s3://somebucket/prefix/",
             "resource_id": "resource_id",
           },
@@ -45,7 +45,7 @@ describe('dynamo location db', () => {
     const result = await location.findLocations(
       's3://some_bucket/prefix/partion=a/a_key.json'
     );
-    expect(result).toMatchInlineSnapshot(`Array []`);
+    expect(result).toMatchInlineSnapshot(`[]`);
   });
 
   it('deleteLocation', async () => {
@@ -59,8 +59,8 @@ describe('dynamo location db', () => {
       location: 's3://somebucket/prefix/',
     });
     expect(location.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "s3://somebucket/prefix/": Object {},
+      {
+        "s3://somebucket/prefix/": {},
       }
     `);
   });

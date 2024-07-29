@@ -1,6 +1,12 @@
 'use strict';
 
 class STSMock {
+  constructor() {
+    this.config = {
+      region: async () => 'us-west-2',
+    };
+  }
+
   __setMockState(stsState = {}) {
     STSMock.__state = stsState;
   }

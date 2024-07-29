@@ -29,9 +29,9 @@ describe('dynamo location db', () => {
     });
     expect(put).toHaveBeenCalledTimes(1);
     expect(put.mock.calls[0]).toMatchInlineSnapshot(`
-      Array [
-        Object {
-          "Item": Object {
+      [
+        {
+          "Item": {
             "interval": "300",
             "location": "s3://somebucket/prefix/",
             "resource_id": "resource_id",
@@ -65,13 +65,13 @@ describe('dynamo location db', () => {
     );
     expect(query).toHaveBeenCalledTimes(3);
     expect(query.mock.calls[0]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "ConsistentRead": true,
-          "ExpressionAttributeNames": Object {
+          "ExpressionAttributeNames": {
             "#location": "location",
           },
-          "ExpressionAttributeValues": Object {
+          "ExpressionAttributeValues": {
             ":location": "s3://some_bucket/prefix/partion=a/a_key.json",
           },
           "KeyConditionExpression": "#location = :location",
@@ -80,13 +80,13 @@ describe('dynamo location db', () => {
       ]
     `);
     expect(query.mock.calls[1]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "ConsistentRead": true,
-          "ExpressionAttributeNames": Object {
+          "ExpressionAttributeNames": {
             "#location": "location",
           },
-          "ExpressionAttributeValues": Object {
+          "ExpressionAttributeValues": {
             ":location": "s3://some_bucket/prefix/partion=a/",
           },
           "KeyConditionExpression": "#location = :location",
@@ -95,13 +95,13 @@ describe('dynamo location db', () => {
       ]
     `);
     expect(query.mock.calls[2]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "ConsistentRead": true,
-          "ExpressionAttributeNames": Object {
+          "ExpressionAttributeNames": {
             "#location": "location",
           },
-          "ExpressionAttributeValues": Object {
+          "ExpressionAttributeValues": {
             ":location": "s3://some_bucket/prefix/",
           },
           "KeyConditionExpression": "#location = :location",
@@ -110,8 +110,8 @@ describe('dynamo location db', () => {
       ]
     `);
     expect(result).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "interval": "300",
           "location": "s3://some_bucket/prefix/",
           "resource_id": "resource-123",
@@ -131,9 +131,9 @@ describe('dynamo location db', () => {
     });
     expect(_delete).toHaveBeenCalledTimes(1);
     expect(_delete.mock.calls[0]).toMatchInlineSnapshot(`
-      Array [
-        Object {
-          "Key": Object {
+      [
+        {
+          "Key": {
             "location": "s3://somebucket/prefix/",
             "resource_id": "resource_id",
           },

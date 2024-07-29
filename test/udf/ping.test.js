@@ -26,7 +26,7 @@ describe('tests for bootstrap lambda', () => {
     const { handler } = require('../../lambdas/udf_entrypoint');
     const pingresult = await handler(PING_TEST_EVENT);
     expect(pingresult).toMatchInlineSnapshot(`
-      Object {
+      {
         "@type": "PingResponse",
         "capabilities": 24,
         "catalogName": "udf_name",

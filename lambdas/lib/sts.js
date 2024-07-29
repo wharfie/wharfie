@@ -7,7 +7,7 @@ const BaseAWS = require('./base');
 // TODO implement auto-refresh using https://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/Credentials.html
 class STS {
   /**
-   * @param {import("@aws-sdk/client-sts").STSClientConfig} options - STS sdk options
+   * @param {import("@aws-sdk/client-sts").STSClientConfig} [options] - STS sdk options
    */
   constructor(options) {
     const credentials = fromNodeProviderChain();

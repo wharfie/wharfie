@@ -9,11 +9,10 @@ const view = async () => {
   const resources = await getAllResources();
 
   const wharfie_resources = resources.map((resource) => {
-    const name = `${resource.destination_properties.DatabaseName}.${resource.destination_properties.TableInput.Name}`;
+    const name = `${resource.destination_properties.databaseName}.${resource.destination_properties.name}`;
     const dependsOn = [];
-    if (resource.source_properties.TableInput.TableType === 'VIRTUAL_VIEW') {
-      const viewOriginalText =
-        resource.source_properties.TableInput.ViewOriginalText;
+    if (resource.source_properties.tableType === 'VIRTUAL_VIEW') {
+      const viewOriginalText = resource.source_properties.viewOriginalText;
       const view_sql = JSON.parse(
         Buffer.from(
           viewOriginalText.substring(16, viewOriginalText.length - 3),
@@ -32,8 +31,7 @@ const view = async () => {
       description: resource.destination_properties.Description,
       metadata: {
         wharfie_resource_id: resource.resource_id,
-        location:
-          resource.destination_properties.TableInput.StorageDescriptor.Location,
+        location: resource.destination_properties.location,
       },
     };
   });

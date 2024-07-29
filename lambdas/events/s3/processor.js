@@ -39,12 +39,10 @@ async function run(ScheduledEventRecord, context) {
     return;
   }
 
-  const isView =
-    resource.source_properties.TableInput.TableType === 'VIRTUAL_VIEW';
+  const isView = resource.source_properties.tableType === 'VIRTUAL_VIEW';
 
   const isPartitioned =
-    (resource.destination_properties?.TableInput?.PartitionKeys || []).length >
-    0;
+    (resource.destination_properties?.partitionKeys || []).length > 0;
   let wharfieEvent;
   if (isView || !isPartitioned) {
     wharfieEvent = {
@@ -62,20 +60,19 @@ async function run(ScheduledEventRecord, context) {
         (/** @type {string} */ value) => value.includes('=')
       ).length === ScheduledEventRecord.partition.partitionValues.length
     ) {
-      (resource.destination_properties?.TableInput?.PartitionKeys || [])
+      (resource.destination_properties?.partitionKeys || [])
         .slice()
         .reverse()
         .forEach(
           (/** @type {any} */ partitionKey, /** @type {number} */ index) => {
             const partitionValue =
               ScheduledEventRecord.partition.partitionValues[
-                resource.destination_properties.TableInput.PartitionKeys
-                  .length -
+                (resource.destination_properties?.partitionKeys || []).length -
                   1 -
                   index
               ]
-                .replace(`${partitionKey.Name}=`, '')
-                .replace(`${partitionKey.Name}%3D`, '');
+                .replace(`${partitionKey.name}=`, '')
+                .replace(`${partitionKey.name}%3D`, '');
 
             if (
               [
@@ -85,24 +82,23 @@ async function run(ScheduledEventRecord, context) {
                 'double',
                 'integer',
                 'int',
-              ].includes(partitionKey.Type)
+              ].includes(partitionKey.type)
             ) {
-              partitionValues[partitionKey.Name] = Number(partitionValue);
+              partitionValues[partitionKey.name] = Number(partitionValue);
             } else {
-              partitionValues[partitionKey.Name] = partitionValue;
+              partitionValues[partitionKey.name] = partitionValue;
             }
           }
         );
     } else {
-      (resource.destination_properties?.TableInput?.PartitionKeys || [])
+      (resource.destination_properties?.partitionKeys || [])
         .slice()
         .reverse()
         .forEach(
           (/** @type {any} */ partitionKey, /** @type {number} */ index) => {
             const partitionValue =
               ScheduledEventRecord.partition.partitionValues[
-                resource.destination_properties.TableInput.PartitionKeys
-                  .length -
+                (resource.destination_properties?.partitionKeys || []).length -
                   1 -
                   index
               ];
@@ -115,18 +111,18 @@ async function run(ScheduledEventRecord, context) {
                 'double',
                 'integer',
                 'int',
-              ].includes(partitionKey.Type)
+              ].includes(partitionKey.type)
             ) {
-              partitionValues[partitionKey.Name] = Number(partitionValue);
+              partitionValues[partitionKey.name] = Number(partitionValue);
             } else {
-              partitionValues[partitionKey.Name] = partitionValue;
+              partitionValues[partitionKey.name] = partitionValue;
             }
           }
         );
     }
 
     const hasPartitions =
-      resource.destination_properties?.TableInput?.PartitionKeys?.length > 0;
+      (resource.destination_properties?.partitionKeys || []).length > 0;
 
     wharfieEvent = {
       source: 'wharfie:s3-event-processor',

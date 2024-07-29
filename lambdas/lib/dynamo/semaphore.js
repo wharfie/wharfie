@@ -8,9 +8,10 @@ const BaseAWS = require('../base');
 const credentials = fromNodeProviderChain();
 const docClient = DynamoDBDocument.from(
   new DynamoDB({
-    ...BaseAWS.config(),
+    ...BaseAWS.config({
+      maxAttempts: Number(process.env?.DYNAMO_MAX_RETRIES || 30),
+    }),
     region: process.env.AWS_REGION,
-    maxAttempts: Number(process.env.DYNAMO_MAX_RETRIES || 300),
     credentials,
   }),
   { marshallOptions: { removeUndefinedValues: true } }

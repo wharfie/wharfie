@@ -89,7 +89,7 @@ describe('tests for events lambda', () => {
 
     expect(scheduler.run).toHaveBeenCalledTimes(1);
     expect(scheduler.run.mock.calls[0][0]).toMatchInlineSnapshot(`
-      Object {
+      {
         "bucket": "bucket-name",
         "key": "object-key",
       }
@@ -111,7 +111,7 @@ describe('tests for events lambda', () => {
 
     expect(scheduler.run).toHaveBeenCalledTimes(1);
     expect(scheduler.run.mock.calls[0][0]).toMatchInlineSnapshot(`
-      Object {
+      {
         "bucket": "bucket-name",
         "key": "object-key",
       }
@@ -133,7 +133,7 @@ describe('tests for events lambda', () => {
 
     expect(scheduler.run).toHaveBeenCalledTimes(1);
     expect(scheduler.run.mock.calls[0][0]).toMatchInlineSnapshot(`
-      Object {
+      {
         "bucket": "utility-079185815456-us-west-2",
         "key": "test/hello.json",
       }
@@ -157,7 +157,7 @@ describe('tests for events lambda', () => {
 
     expect(processor.run).toHaveBeenCalledTimes(1);
     expect(processor.run.mock.calls[0][0]).toMatchInlineSnapshot(`
-      Object {
+      {
         "resource_id": "resource_id",
       }
     `);

@@ -1,6 +1,5 @@
 'use strict';
 require('./config');
-const { parse } = require('@sandfox/arn');
 const bluebirdPromise = require('bluebird');
 
 const semaphore_db = require('./lib/dynamo/semaphore');
@@ -90,7 +89,7 @@ async function getWharfieQueryMetadata(queryExecutionId) {
  * @param {import('./typedefs').QueryRecord} query -
  */
 async function _cleanupFailedOrCancelledQuery(resource, query) {
-  const { region } = parse(resource.resource_arn);
+  const region = resource.region;
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
   const s3 = new S3({ region, credentials });
@@ -235,7 +234,7 @@ async function _monitorWharfie(cloudwatchEvent, queryEvent, context) {
  * @param {import('aws-lambda').Context} context -
  */
 async function monitorWharfie(cloudwatchEvent, context) {
-  if (!cloudwatchEvent.detail.workgroupName.startsWith('Wharfie')) return;
+  if (!cloudwatchEvent.detail.workgroupName.startsWith('wharfie')) return;
   if (!TERMINAL_STATE.has(cloudwatchEvent.detail.currentState)) return;
   const { QueryExecution } = await athena.getQueryExecution({
     QueryExecutionId: cloudwatchEvent.detail.queryExecutionId,
@@ -437,7 +436,7 @@ async function DLQ(event, context, err) {
   )
     return;
 
-  const { region } = parse(resource.resource_arn);
+  const region = resource.region;
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
   const sns = new SNS({ region, credentials });

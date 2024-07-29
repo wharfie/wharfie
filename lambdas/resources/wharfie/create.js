@@ -37,12 +37,14 @@ async function create(event) {
   const resource = {
     resource_id: StackName,
     resource_arn: StackId,
+    resource_status: 'CREATING',
     athena_workgroup: StackName,
     daemon_config: event.ResourceProperties.DaemonConfig,
     source_properties: template.Resources.Source.Properties,
     destination_properties: template.Resources.Compacted.Properties,
     wharfie_version: version,
   };
+  // @ts-ignore
   await resource_db.putResource(resource);
 
   if (event.ResourceProperties.TableInput.StorageDescriptor.Location)
@@ -55,8 +57,7 @@ async function create(event) {
   const isView =
     resource.source_properties?.TableInput?.TableType === 'VIRTUAL_VIEW';
   if (isView) {
-    const viewOriginalText =
-      resource.source_properties.TableInput.ViewOriginalText;
+    const viewOriginalText = resource.source_properties.viewOriginalText;
     const view_sql = JSON.parse(
       Buffer.from(
         viewOriginalText.substring(16, viewOriginalText.length - 3),

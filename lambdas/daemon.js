@@ -1,7 +1,6 @@
 'use strict';
 
 require('./config');
-const { parse } = require('@sandfox/arn');
 const bluebirdPromise = require('bluebird');
 
 const logging = require('./lib/logging/');
@@ -283,7 +282,7 @@ async function DLQ(event, context, err) {
   )
     return;
 
-  const { region } = parse(resource.resource_arn);
+  const region = resource.region;
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
   const sns = new SNS({ region, credentials });

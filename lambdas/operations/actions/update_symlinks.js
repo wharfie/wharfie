@@ -1,5 +1,4 @@
 'use strict';
-const { parse } = require('@sandfox/arn');
 
 const { createId } = require('../../lib/id');
 const logging = require('../../lib/logging');
@@ -60,14 +59,14 @@ async function update_partition(
     };
   }
 
-  const destinationDatabaseName = resource.destination_properties.DatabaseName;
-  const destinationTableName = resource.destination_properties.TableInput.Name;
+  const destinationDatabaseName = resource.destination_properties.databaseName;
+  const destinationTableName = resource.destination_properties.name;
 
-  const { region } = parse(resource.resource_arn);
+  const region = resource.region;
 
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
-  const glue = new Glue({ region });
+  const glue = new Glue({ region, credentials });
   const sqs = new SQS({ region });
   const s3 = new S3({ region, credentials });
 
@@ -186,15 +185,15 @@ async function update_partitions(
   query_execution_id
 ) {
   const event_log = logging.getEventLogger(event, context);
-  const { region } = parse(resource.resource_arn);
+  const region = resource.region;
 
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
-  const glue = new Glue({ region });
+  const glue = new Glue({ region, credentials });
   const s3 = new S3({ region, credentials });
 
-  const destinationDatabaseName = resource.destination_properties.DatabaseName;
-  const destinationTableName = resource.destination_properties.TableInput.Name;
+  const destinationDatabaseName = resource.destination_properties.databaseName;
+  const destinationTableName = resource.destination_properties.name;
 
   const { Table: destinationTable } = await glue.getTable({
     DatabaseName: destinationDatabaseName,
@@ -312,14 +311,13 @@ async function update_table(event, context, resource, query_execution_id) {
   if (!temporaryDatabaseName || !temporaryTableName)
     throw new Error('missing required action inputs');
 
-  const destinationDatabaseName = resource.destination_properties.DatabaseName;
-  const destinationTableName = resource.destination_properties.TableInput.Name;
+  const destinationDatabaseName = resource.destination_properties.databaseName;
+  const destinationTableName = resource.destination_properties.name;
 
-  const { region } = parse(resource.resource_arn);
-
+  const region = resource.region;
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
-  const glue = new Glue({ region });
+  const glue = new Glue({ region, credentials });
   const sqs = new SQS({ region });
   const s3 = new S3({ region, credentials });
 
@@ -370,13 +368,11 @@ async function update_table(event, context, resource, query_execution_id) {
     },
   });
   const { bucket, prefix } = s3.parseS3Uri(
-    resource.destination_properties.TableInput.StorageDescriptor.Location
+    resource.destination_properties.location || ''
   );
   const { bucket: sourceBucket, prefix: sourcePrefix } = s3.parseS3Uri(
-    resource.destination_properties.TableInput.StorageDescriptor.Location.replace(
-      '/references/',
-      '/'
-    ).replace('/migrate-refrences/', '/')
+    resource.destination_properties.location ||
+      ''.replace('/references/', '/').replace('/migrate-refrences/', '/')
   );
   const manifestCopyKey = `${prefix}files-${createId()}`;
   let runCleanup = true;
@@ -500,8 +496,10 @@ async function run(event, context, resource, operation) {
   const { temporaryDatabaseName, temporaryTableName } = event.action_inputs;
   if (!temporaryDatabaseName || !temporaryTableName)
     throw new Error('missing required action inputs');
-  const { region } = parse(resource.resource_arn);
-  const glue = new Glue({ region });
+  const region = resource.region;
+  const sts = new STS({ region });
+  const credentials = await sts.getCredentials(resource.daemon_config.Role);
+  const glue = new Glue({ region, credentials });
 
   await update_symlinks(event, context, resource, operation);
 

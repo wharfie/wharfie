@@ -23,15 +23,15 @@ describe('dynamo resource db', () => {
       wharfie_version: '1.0.0',
     });
     expect(resource.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "StackName": Object {
-          "StackName": Object {
+      {
+        "StackName": {
+          "StackName": {
             "athena_workgroup": "StackName",
-            "daemon_config": Object {},
-            "destination_properties": Object {},
+            "daemon_config": {},
+            "destination_properties": {},
             "resource_arn": "StackId",
             "resource_id": "StackName",
-            "source_properties": Object {},
+            "source_properties": {},
             "wharfie_version": "1.0.0",
           },
         },
@@ -52,13 +52,13 @@ describe('dynamo resource db', () => {
     });
     const result = await resource.getResource('StackName');
     expect(result).toMatchInlineSnapshot(`
-      Object {
+      {
         "athena_workgroup": "StackName",
-        "daemon_config": Object {},
-        "destination_properties": Object {},
+        "daemon_config": {},
+        "destination_properties": {},
         "resource_arn": "StackId",
         "resource_id": "StackName",
-        "source_properties": Object {},
+        "source_properties": {},
         "wharfie_version": "1.0.0",
       }
     `);
@@ -76,7 +76,7 @@ describe('dynamo resource db', () => {
       wharfie_version: '1.0.0',
     });
     await resource.deleteResource('StackName');
-    expect(resource.__getMockState()).toMatchInlineSnapshot(`Object {}`);
+    expect(resource.__getMockState()).toMatchInlineSnapshot(`{}`);
   });
 
   it('createOperation', async () => {
@@ -110,25 +110,25 @@ describe('dynamo resource db', () => {
       ],
     });
     expect(resource.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "resource_id": Object {
-          "resource_id": Object {
+      {
+        "resource_id": {
+          "resource_id": {
             "athena_workgroup": "StackName",
-            "daemon_config": Object {},
-            "destination_properties": Object {},
+            "daemon_config": {},
+            "destination_properties": {},
             "resource_arn": "StackId",
             "resource_id": "resource_id",
-            "source_properties": Object {},
+            "source_properties": {},
             "wharfie_version": "1.0.0",
           },
-          "resource_id#operation_id": Object {
+          "resource_id#operation_id": {
             "action_graph": OperationActionGraph {
-              "actions": Array [],
+              "actions": [],
               "incomingEdges": Map {},
               "outgoingEdges": Map {},
             },
             "last_updated_at": 123124,
-            "operation_config": Object {},
+            "operation_config": {},
             "operation_id": "operation_id",
             "operation_inputs": undefined,
             "operation_status": "RUNNING",
@@ -136,7 +136,7 @@ describe('dynamo resource db', () => {
             "resource_id": "resource_id",
             "started_at": 123124,
           },
-          "resource_id#operation_id#action_id": Object {
+          "resource_id#operation_id#action_id": {
             "action_id": "action_id",
             "action_status": "action_status",
             "action_type": "action_type",
@@ -178,14 +178,14 @@ describe('dynamo resource db', () => {
     });
     const result = await resource.getOperation('resource_id', 'operation_id');
     expect(result).toMatchInlineSnapshot(`
-      Object {
+      {
         "action_graph": OperationActionGraph {
-          "actions": Array [],
+          "actions": [],
           "incomingEdges": Map {},
           "outgoingEdges": Map {},
         },
         "last_updated_at": 123124,
-        "operation_config": Object {},
+        "operation_config": {},
         "operation_id": "operation_id",
         "operation_inputs": undefined,
         "operation_status": "RUNNING",
@@ -232,14 +232,14 @@ describe('dynamo resource db', () => {
       'action_id'
     );
     expect(result).toMatchInlineSnapshot(`
-      Object {
+      {
         "action_graph": OperationActionGraph {
-          "actions": Array [],
+          "actions": [],
           "incomingEdges": Map {},
           "outgoingEdges": Map {},
         },
         "last_updated_at": 123124,
-        "operation_config": Object {},
+        "operation_config": {},
         "operation_id": "operation_id",
         "operation_inputs": undefined,
         "operation_status": "RUNNING",
@@ -297,13 +297,13 @@ describe('dynamo resource db', () => {
       'action_id'
     );
     expect(result).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "query_execution_id": "query_execution_id_1",
           "query_id": "query_id_1",
           "query_status": "query_status",
         },
-        Object {
+        {
           "query_execution_id": "query_execution_id_1",
           "query_id": "query_id_2",
           "query_status": "query_status",
@@ -358,13 +358,13 @@ describe('dynamo resource db', () => {
       'action_id'
     );
     expect(result).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "query_execution_id": "query_execution_id_1",
           "query_id": "query_id_1",
           "query_status": "query_status",
         },
-        Object {
+        {
           "query_execution_id": "query_execution_id_1",
           "query_id": "query_id_2",
           "query_status": "query_status",
@@ -397,14 +397,14 @@ describe('dynamo resource db', () => {
     });
     const result = await resource.getOperation('resource_id', 'operation_id');
     expect(result).toMatchInlineSnapshot(`
-      Object {
+      {
         "action_graph": OperationActionGraph {
-          "actions": Array [],
+          "actions": [],
           "incomingEdges": Map {},
           "outgoingEdges": Map {},
         },
         "last_updated_at": 123124,
-        "operation_config": Object {},
+        "operation_config": {},
         "operation_id": "operation_id",
         "operation_inputs": undefined,
         "operation_status": "RUNNING",
@@ -437,7 +437,7 @@ describe('dynamo resource db', () => {
       'action_id'
     );
     expect(result).toMatchInlineSnapshot(`
-      Object {
+      {
         "action_id": "action_id",
         "action_status": "action_status",
         "action_type": "action_type",
@@ -468,7 +468,7 @@ describe('dynamo resource db', () => {
       'query_id'
     );
     expect(result).toMatchInlineSnapshot(`
-      Object {
+      {
         "query_execution_id": "query_execution_id_1",
         "query_id": "query_id",
         "query_status": "query_status",
@@ -505,13 +505,13 @@ describe('dynamo resource db', () => {
       'action_id'
     );
     expect(result).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "query_execution_id": "query_execution_id_1",
           "query_id": "query_id_1",
           "query_status": "query_status",
         },
-        Object {
+        {
           "query_execution_id": "query_execution_id_2",
           "query_id": "query_id_2",
           "query_status": "query_status",
@@ -783,15 +783,15 @@ describe('dynamo resource db', () => {
     await resource.deleteOperation('resource_id', 'operation_id');
     const state = resource.__getMockState('resource_id', 'operation_id');
     expect(state).toMatchInlineSnapshot(`
-      Object {
-        "resource_id": Object {
-          "resource_id": Object {
+      {
+        "resource_id": {
+          "resource_id": {
             "athena_workgroup": "StackName",
-            "daemon_config": Object {},
-            "destination_properties": Object {},
+            "daemon_config": {},
+            "destination_properties": {},
             "resource_arn": "StackId",
             "resource_id": "resource_id",
-            "source_properties": Object {},
+            "source_properties": {},
             "wharfie_version": "1.0.0",
           },
         },
@@ -847,24 +847,24 @@ describe('dynamo resource db', () => {
     });
     const records = await resource.getRecords('resource_id', 'operation_id');
     expect(records).toMatchInlineSnapshot(`
-      Object {
-        "actions": Array [
-          Object {
+      {
+        "actions": [
+          {
             "action_id": "action_id_1",
             "action_status": "COMPLETED",
             "action_type": "START",
           },
-          Object {
+          {
             "action_id": "action_id_2",
             "action_status": "WAITING",
             "action_type": "FINISH",
           },
         ],
-        "operations": Array [
-          Object {
+        "operations": [
+          {
             "action_graph": undefined,
             "last_updated_at": 123124,
-            "operation_config": Object {},
+            "operation_config": {},
             "operation_id": "operation_id",
             "operation_inputs": undefined,
             "operation_status": "RUNNING",
@@ -873,13 +873,13 @@ describe('dynamo resource db', () => {
             "started_at": 123124,
           },
         ],
-        "queries": Array [
-          Object {
+        "queries": [
+          {
             "query_execution_id": "query_execution_id_1",
             "query_id": "query_id_1",
             "query_status": "COMPLETED",
           },
-          Object {
+          {
             "query_execution_id": "query_execution_id_2",
             "query_id": "query_id_2",
             "query_status": "COMPLETED",

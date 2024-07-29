@@ -1,5 +1,7 @@
 'use strict';
 
+const { EntityNotFoundException } = jest.requireActual('@aws-sdk/client-glue');
+
 class GlueMock {
   __setMockState(state) {
     if (state) {
@@ -13,6 +15,8 @@ class GlueMock {
 
   async send(command) {
     switch (command.constructor.name) {
+      case 'GetDatabaseCommand':
+        return await this.getDatabase(command.input);
       case 'GetPartitionCommand':
         return await this.getPartition(command.input);
       case 'GetPartitionsCommand':
@@ -39,13 +43,29 @@ class GlueMock {
         return await this.updateTable(command.input);
       case 'DeleteTableCommand':
         return await this.deleteTable(command.input);
+      case 'DeleteDatabaseCommand':
+        return await this.deleteDatabase(command.input);
+      case 'TagResourceCommand':
+        return await this.tagResource(command.input);
+      case 'GetTagsCommand':
+        return await this.getTags(command.input);
     }
   }
 
+  async getDatabase(params) {
+    if (!GlueMock.__state[params.Name])
+      throw new EntityNotFoundException({
+        message: 'Database not found',
+      });
+
+    return { Database: GlueMock.__state[params.Name] };
+  }
+
   async getPartition(params) {
-    if (!GlueMock.__state[params.DatabaseName]) throw new Error('missing db');
+    if (!GlueMock.__state[params.DatabaseName])
+      throw new EntityNotFoundException({ message: 'Database not found' });
     if (!GlueMock.__state[params.DatabaseName]._tables[params.TableName])
-      throw new Error('missing table');
+      throw new EntityNotFoundException({ message: 'Table not found' });
     let _return = null;
     if (
       GlueMock.__state[params.DatabaseName]._tables[params.TableName]
@@ -150,7 +170,7 @@ class GlueMock {
 
   async createTable(params) {
     if (!GlueMock.__state[params.DatabaseName])
-      throw new Error('db does not exist');
+      throw new EntityNotFoundException({ message: 'database not found' });
     GlueMock.__state[params.DatabaseName]._tables[params.TableInput.Name] = {
       ...params.TableInput,
       DatabaseName: params.DatabaseName,
@@ -159,18 +179,58 @@ class GlueMock {
   }
 
   async getTable(params) {
+    if (!GlueMock.__state[params.DatabaseName])
+      throw new EntityNotFoundException({ message: 'database not found' });
+    if (!GlueMock.__state[params.DatabaseName]._tables[params.Name])
+      throw new EntityNotFoundException({ message: 'table not found' });
     return {
       Table: GlueMock.__state[params.DatabaseName]._tables[params.Name],
     };
   }
 
   async updateTable(params) {
+    if (!GlueMock.__state[params.DatabaseName])
+      throw new EntityNotFoundException({
+        message: 'Database not found',
+      });
+
+    if (!GlueMock.__state[params.DatabaseName]._tables[params.TableInput.Name])
+      throw new EntityNotFoundException({
+        message: 'table not found',
+      });
     GlueMock.__state[params.DatabaseName]._tables[params.Name] =
       params.TableInput;
   }
 
   async deleteTable(params) {
+    if (!GlueMock.__state[params.DatabaseName])
+      throw new EntityNotFoundException({
+        message: 'Database not found',
+      });
+
+    if (!GlueMock.__state[params.DatabaseName]._tables[params.Name])
+      throw new EntityNotFoundException({
+        message: 'table not found',
+      });
     delete GlueMock.__state[params.DatabaseName]._tables[params.Name];
+  }
+
+  async deleteDatabase(params) {
+    if (!GlueMock.__state[params.Name])
+      throw new EntityNotFoundException({
+        message: 'Database not found',
+      });
+
+    delete GlueMock.__state[params.Name];
+  }
+
+  async tagResource(params) {
+    // TODO
+  }
+
+  async getTags(params) {
+    // TODO
+    return { Tags: {} };
   }
 }
 

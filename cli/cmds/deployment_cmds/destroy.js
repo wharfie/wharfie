@@ -1,28 +1,37 @@
 'use strict';
 
 const inquirer = require('inquirer');
+const ansiEscapes = require('ansi-escapes');
 
-const CloudFormation = require('../../../lambdas/lib/cloudformation');
-const S3 = require('../../../lambdas/lib/s3');
-const STS = require('../../../lambdas/lib/sts');
+const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
 const { displayFailure, displayInfo, displaySuccess } = require('../../output');
-
-const cloudformation = new CloudFormation();
-const s3 = new S3();
-const sts = new STS();
+const { load } = require('../../../lambdas/lib/actor/deserialize');
+const monitorDeploymentDestroyReconcilables = require('../../output/deployment/destroy');
 
 const destroy = async () => {
-  const stackName = process.env.WHARFIE_DEPLOYMENT_NAME;
-  const { Account } = await sts.getCallerIdentity();
-  const bucketName = `${stackName}-${Account}-${process.env.WHARFIE_REGION}`;
-
+  let deployment;
+  try {
+    deployment = await load({
+      deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME,
+    });
+  } catch (error) {
+    if (
+      !['No resource found', 'Resource was not stored'].includes(error.message)
+    )
+      throw error;
+    deployment = new WharfieDeployment({
+      name: process.env.WHARFIE_DEPLOYMENT_NAME,
+    });
+    await deployment;
+  }
+  const bucket = deployment.getBucket();
   const answers = await new Promise((resolve, reject) => {
     inquirer
       .prompt([
         {
           type: 'confirm',
           name: 'confirmation',
-          message: `This will destroy the deployment and all data stored in the ${bucketName} S3 bucket. Are you sure?`,
+          message: `This will destroy the deployment and all data stored in the ${bucket.name} S3 bucket. Are you sure?`,
           default: false,
         },
       ])
@@ -33,21 +42,12 @@ const destroy = async () => {
     displayFailure('destroy cancelled');
     return;
   }
-
   displayInfo(`Destroying wharfie deployment...`);
-  await s3.deletePath({
-    Bucket: bucketName,
-  });
-  // This is a workaround for the fact that during stack delete the kinesis firehose will continue to drain into the bucket causing a delete failure
-  const delete_timeout = setInterval(async () => {
-    await s3.deletePath({
-      Bucket: bucketName,
-    });
-  }, 2000);
-  await cloudformation.deleteStack({
-    StackName: stackName,
-  });
-  clearInterval(delete_timeout);
+
+  const multibar = monitorDeploymentDestroyReconcilables(deployment);
+  await deployment.destroy();
+  multibar.stop();
+  process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
   displaySuccess(`Destroyed wharfie deployment`);
 };
 
@@ -59,5 +59,6 @@ exports.handler = async function () {
     await destroy();
   } catch (err) {
     displayFailure(err);
+    console.trace(err);
   }
 };

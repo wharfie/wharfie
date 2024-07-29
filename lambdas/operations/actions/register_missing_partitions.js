@@ -1,7 +1,5 @@
 'use strict';
 
-const { parse } = require('@sandfox/arn');
-
 const logging = require('../../lib/logging');
 const Glue = require('../../lib/glue');
 const S3 = require('../../lib/s3');
@@ -15,48 +13,45 @@ const STS = require('../../lib/sts');
  */
 async function run(event, context, resource) {
   const event_log = logging.getEventLogger(event, context);
-  const { region } = parse(resource.resource_arn);
+  const region = resource.region;
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
   const s3 = new S3({ region, credentials });
-  const glue = new Glue({ region });
+  const glue = new Glue({ region, credentials });
   const partition = new Partition({ s3, glue });
 
   if (
-    !resource.source_properties.TableInput.PartitionKeys ||
-    resource.source_properties.TableInput.PartitionKeys.length === 0
+    !resource.source_properties.partitionKeys ||
+    resource.source_properties.partitionKeys.length === 0
   ) {
     event_log.info('REGISTER_MISSING_PARTITIONS: no partitions to register');
     await partition.followTableSymlink({
-      uri: resource.destination_properties.TableInput.StorageDescriptor
-        .Location,
-      partitionKeys: resource.destination_properties.TableInput.PartitionKeys,
-      databaseName: resource.destination_properties.DatabaseName,
-      tableName: resource.destination_properties.TableInput.Name,
+      uri: resource.destination_properties.location || '',
+      partitionKeys: resource.destination_properties.partitionKeys || [],
+      databaseName: resource.destination_properties.databaseName,
+      tableName: resource.destination_properties.name,
     });
     return {
       status: 'COMPLETED',
     };
   }
 
-  const isView =
-    resource.source_properties.TableInput.TableType === 'VIRTUAL_VIEW';
+  const isView = resource.source_properties.tableType === 'VIRTUAL_VIEW';
 
   await Promise.all([
     !isView
       ? partition.registerMissing({
-          uri: resource.source_properties.TableInput.StorageDescriptor.Location,
-          partitionKeys: resource.source_properties.TableInput.PartitionKeys,
-          databaseName: resource.source_properties.DatabaseName,
-          tableName: resource.source_properties.TableInput.Name,
+          uri: resource.source_properties.location || '',
+          partitionKeys: resource.source_properties.partitionKeys,
+          databaseName: resource.source_properties.databaseName,
+          tableName: resource.source_properties.name,
         })
       : Promise.resolve(),
     partition.registerMissing({
-      uri: resource.destination_properties.TableInput.StorageDescriptor
-        .Location,
-      partitionKeys: resource.destination_properties.TableInput.PartitionKeys,
-      databaseName: resource.destination_properties.DatabaseName,
-      tableName: resource.destination_properties.TableInput.Name,
+      uri: resource.destination_properties.location || '',
+      partitionKeys: resource.destination_properties.partitionKeys || [],
+      databaseName: resource.destination_properties.databaseName,
+      tableName: resource.destination_properties.name,
     }),
   ]);
 

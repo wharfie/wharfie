@@ -24,7 +24,7 @@ function getStackName(project, environment) {
   return `${project.name}${
     environment.name === WHARFIE_DEFAULT_ENVIRONMENT
       ? ''
-      : `-${environment.name.replac}`
+      : `-${environment.name}`
   }`.replace(/_/g, '-');
 }
 

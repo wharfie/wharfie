@@ -1,0 +1,13 @@
+name: test
+description: 'nice'
+format: 'json'
+input_location:
+  storage: s3
+  path: s3://utility-079185815456-us-west-2/test/
+service_level_agreement: 
+  freshness: 60
+columns: 
+- name: name
+  type: string
+- name: count
+  type: bigint

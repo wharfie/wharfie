@@ -26,19 +26,19 @@ describe('dynamo semaphore db', () => {
     await semaphore.increase('semaphore_name');
     expect(update).toHaveBeenCalledTimes(1);
     expect(update.mock.calls[0]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "ConditionExpression": "( attribute_not_exists(#limit) AND ( attribute_not_exists(#val) OR (#val <= :threshold AND #val >= :zero) ) ) OR ( attribute_exists(#limit)     AND ( attribute_not_exists(#val) OR (#val <= #limit     AND #val >= :zero) ) )",
-          "ExpressionAttributeNames": Object {
+          "ExpressionAttributeNames": {
             "#limit": "limit",
             "#val": "value",
           },
-          "ExpressionAttributeValues": Object {
+          "ExpressionAttributeValues": {
             ":incr": 1,
             ":threshold": NaN,
             ":zero": 0,
           },
-          "Key": Object {
+          "Key": {
             "semaphore": "semaphore_name",
           },
           "ReturnValues": "NONE",
@@ -57,18 +57,18 @@ describe('dynamo semaphore db', () => {
     await semaphore.release('semaphore_name');
     expect(update).toHaveBeenCalledTimes(2);
     expect(update.mock.calls[1]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "ConditionExpression": "attribute_not_exists(#val) OR #val > :zero",
-          "ExpressionAttributeNames": Object {
+          "ExpressionAttributeNames": {
             "#val": "value",
           },
-          "ExpressionAttributeValues": Object {
+          "ExpressionAttributeValues": {
             ":default": 1,
             ":incr": -1,
             ":zero": 0,
           },
-          "Key": Object {
+          "Key": {
             "semaphore": "semaphore_name",
           },
           "ReturnValues": "NONE",
@@ -90,10 +90,10 @@ describe('dynamo semaphore db', () => {
     await semaphore.deleteSemaphore('semaphore_name');
     expect(get).toHaveBeenCalledTimes(1);
     expect(get.mock.calls[0]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "ConsistentRead": true,
-          "Key": Object {
+          "Key": {
             "semaphore": "semaphore_name",
           },
           "TableName": "",
@@ -102,18 +102,18 @@ describe('dynamo semaphore db', () => {
     `);
     expect(update).toHaveBeenCalledTimes(4);
     expect(update.mock.calls[2]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "ConditionExpression": "attribute_not_exists(#val) OR #val > :zero",
-          "ExpressionAttributeNames": Object {
+          "ExpressionAttributeNames": {
             "#val": "value",
           },
-          "ExpressionAttributeValues": Object {
+          "ExpressionAttributeValues": {
             ":default": 1,
             ":incr": -1,
             ":zero": 0,
           },
-          "Key": Object {
+          "Key": {
             "semaphore": "wharfie",
           },
           "ReturnValues": "NONE",
@@ -124,9 +124,9 @@ describe('dynamo semaphore db', () => {
     `);
     expect(_delete).toHaveBeenCalledTimes(1);
     expect(_delete.mock.calls[0]).toMatchInlineSnapshot(`
-      Array [
-        Object {
-          "Key": Object {
+      [
+        {
+          "Key": {
             "semaphore": "semaphore_name",
           },
           "TableName": "",

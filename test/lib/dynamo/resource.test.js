@@ -21,7 +21,6 @@ describe('dynamo resource db', () => {
 
   afterAll(() => {
     AWS.clearAllMocks();
-    AWS.AthenaMock.reset();
   });
 
   it('putResource', async () => {
@@ -38,15 +37,15 @@ describe('dynamo resource db', () => {
     });
     expect(put).toHaveBeenCalledTimes(1);
     expect(put.mock.calls[0]).toMatchInlineSnapshot(`
-      Array [
-        Object {
-          "Item": Object {
-            "data": Object {
+      [
+        {
+          "Item": {
+            "data": {
               "athena_workgroup": "StackName",
-              "daemon_config": Object {},
-              "destination_properties": Object {},
+              "daemon_config": {},
+              "destination_properties": {},
               "resource_arn": "StackId",
-              "source_properties": Object {},
+              "source_properties": {},
               "wharfie_version": "1.0.0",
             },
             "resource_id": "StackName",
@@ -75,11 +74,11 @@ describe('dynamo resource db', () => {
     const result = await resource.getResource('resource_id');
     expect(query).toHaveBeenCalledTimes(1);
     expect(result).toMatchInlineSnapshot(`
-      Object {
-        "daemon_config": Object {},
-        "destination_properties": Object {},
+      {
+        "daemon_config": {},
+        "destination_properties": {},
         "resource_id": "resource_id",
-        "source_properties": Object {},
+        "source_properties": {},
       }
     `);
   });
@@ -106,10 +105,10 @@ describe('dynamo resource db', () => {
     await resource.deleteResource('resource_id');
     expect(query).toHaveBeenCalledTimes(2);
     expect(query.mock.calls[1]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "ConsistentRead": true,
-          "ExpressionAttributeValues": Object {
+          "ExpressionAttributeValues": {
             ":resource_id": "resource_id",
           },
           "KeyConditionExpression": "resource_id = :resource_id AND begins_with(sort_key, :resource_id)",
@@ -120,29 +119,29 @@ describe('dynamo resource db', () => {
     `);
     expect(batchWrite).toHaveBeenCalledTimes(1);
     expect(batchWrite.mock.calls[0]).toMatchInlineSnapshot(`
-      Array [
-        Object {
-          "RequestItems": Object {
-            "": Array [
-              Object {
-                "DeleteRequest": Object {
-                  "Key": Object {
+      [
+        {
+          "RequestItems": {
+            "": [
+              {
+                "DeleteRequest": {
+                  "Key": {
                     "resource_id": "counter_name_1",
                     "sort_key": "sortkey#operation",
                   },
                 },
               },
-              Object {
-                "DeleteRequest": Object {
-                  "Key": Object {
+              {
+                "DeleteRequest": {
+                  "Key": {
                     "resource_id": "counter_name_2",
                     "sort_key": "sortkey#operation#action",
                   },
                 },
               },
-              Object {
-                "DeleteRequest": Object {
-                  "Key": Object {
+              {
+                "DeleteRequest": {
+                  "Key": {
                     "resource_id": "counter_name_2",
                     "sort_key": "sortkey#operation#action#query",
                   },
@@ -195,17 +194,17 @@ describe('dynamo resource db', () => {
     });
     expect(batchWrite).toHaveBeenCalledTimes(2);
     expect(batchWrite.mock.calls[1]).toMatchInlineSnapshot(`
-      Array [
-        Object {
-          "RequestItems": Object {
-            "": Array [
-              Object {
-                "PutRequest": Object {
-                  "Item": Object {
-                    "data": Object {
-                      "action_graph": "{\\"outgoingEdges\\":[],\\"incomingEdges\\":[],\\"actions\\":[]}",
+      [
+        {
+          "RequestItems": {
+            "": [
+              {
+                "PutRequest": {
+                  "Item": {
+                    "data": {
+                      "action_graph": "{"outgoingEdges":[],"incomingEdges":[],"actions":[]}",
                       "last_updated_at": 123124,
-                      "operation_config": Object {},
+                      "operation_config": {},
                       "operation_id": "operation_id",
                       "operation_inputs": undefined,
                       "operation_status": "RUNNING",
@@ -218,10 +217,10 @@ describe('dynamo resource db', () => {
                   },
                 },
               },
-              Object {
-                "PutRequest": Object {
-                  "Item": Object {
-                    "data": Object {
+              {
+                "PutRequest": {
+                  "Item": {
+                    "data": {
                       "action_id": "action_id",
                       "action_status": "action_status",
                       "action_type": "action_type",
@@ -260,10 +259,10 @@ describe('dynamo resource db', () => {
     const result = await resource.getOperation('resource_id', 'operation_id');
     expect(query).toHaveBeenCalledTimes(3);
     expect(query.mock.calls[2]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "ConsistentRead": true,
-          "ExpressionAttributeValues": Object {
+          "ExpressionAttributeValues": {
             ":resource_id": "resource_id",
             ":sort_key": "resource_id#operation_id",
           },
@@ -273,14 +272,14 @@ describe('dynamo resource db', () => {
       ]
     `);
     expect(result).toMatchInlineSnapshot(`
-      Object {
+      {
         "action_graph": OperationActionGraph {
-          "actions": Array [],
+          "actions": [],
           "incomingEdges": Map {},
           "outgoingEdges": Map {},
         },
         "last_updated_at": 123124,
-        "operation_config": Object {},
+        "operation_config": {},
         "operation_id": "operation_id",
         "operation_status": "RUNNING",
         "operation_type": "operation_type",
@@ -316,10 +315,10 @@ describe('dynamo resource db', () => {
     );
     expect(query).toHaveBeenCalledTimes(4);
     expect(query.mock.calls[3]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "ConsistentRead": true,
-          "ExpressionAttributeValues": Object {
+          "ExpressionAttributeValues": {
             ":resource_id": "resource_id",
             ":sort_key": "resource_id#operation_id#action_id#query_id",
           },
@@ -329,8 +328,8 @@ describe('dynamo resource db', () => {
       ]
     `);
     expect(result).toMatchInlineSnapshot(`
-      Object {
-        "action_inputs": Object {
+      {
+        "action_inputs": {
           "an_input": 123,
         },
         "last_updated_at": 20123001200,
@@ -362,10 +361,10 @@ describe('dynamo resource db', () => {
     );
     expect(query).toHaveBeenCalledTimes(5);
     expect(query.mock.calls[4]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "ConsistentRead": true,
-          "ExpressionAttributeValues": Object {
+          "ExpressionAttributeValues": {
             ":resource_id": "resource_id",
             ":sort_key": "resource_id#operation_id#action_id",
           },
@@ -375,7 +374,7 @@ describe('dynamo resource db', () => {
       ]
     `);
     expect(result).toMatchInlineSnapshot(`
-      Object {
+      {
         "action_id": "action_id",
         "action_status": "action_status",
         "action_type": "action_type",
@@ -409,13 +408,13 @@ describe('dynamo resource db', () => {
     );
     expect(query).toHaveBeenCalledTimes(6);
     expect(query.mock.calls[5]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "ConsistentRead": true,
-          "ExpressionAttributeNames": Object {
+          "ExpressionAttributeNames": {
             "#data": "data",
           },
-          "ExpressionAttributeValues": Object {
+          "ExpressionAttributeValues": {
             ":resource_id": "resource_id",
             ":sort_key": "resource_id#operation_id#action_id#",
           },
@@ -426,13 +425,13 @@ describe('dynamo resource db', () => {
       ]
     `);
     expect(result).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "query_execution_id": "query_execution_id",
           "query_id": "query_id_1",
           "query_status": "query_status",
         },
-        Object {
+        {
           "query_id": "query_id_2",
           "query_status": "query_status",
         },
@@ -455,13 +454,13 @@ describe('dynamo resource db', () => {
     });
     expect(put).toHaveBeenCalledTimes(2);
     expect(put.mock.calls[1]).toMatchInlineSnapshot(`
-      Array [
-        Object {
-          "Item": Object {
-            "data": Object {
-              "action_graph": "{\\"outgoingEdges\\":[],\\"incomingEdges\\":[],\\"actions\\":[]}",
+      [
+        {
+          "Item": {
+            "data": {
+              "action_graph": "{"outgoingEdges":[],"incomingEdges":[],"actions":[]}",
               "last_updated_at": 123,
-              "operation_config": Object {},
+              "operation_config": {},
               "operation_id": "operation_id",
               "operation_inputs": undefined,
               "operation_status": "operation_status",
@@ -488,10 +487,10 @@ describe('dynamo resource db', () => {
     });
     expect(put).toHaveBeenCalledTimes(3);
     expect(put.mock.calls[2]).toMatchInlineSnapshot(`
-      Array [
-        Object {
-          "Item": Object {
-            "data": Object {
+      [
+        {
+          "Item": {
+            "data": {
               "action_id": "action_id",
               "action_status": "action_status",
               "action_type": "action_type",
@@ -516,10 +515,10 @@ describe('dynamo resource db', () => {
     });
     expect(put).toHaveBeenCalledTimes(4);
     expect(put.mock.calls[3]).toMatchInlineSnapshot(`
-      Array [
-        Object {
-          "Item": Object {
-            "data": Object {
+      [
+        {
+          "Item": {
+            "data": {
               "last_updated_at": 20123001200,
               "query_data": undefined,
               "query_execution_id": "query_execution_id",
@@ -555,14 +554,14 @@ describe('dynamo resource db', () => {
     ]);
     expect(batchWrite).toHaveBeenCalledTimes(3);
     expect(batchWrite.mock.calls[2]).toMatchInlineSnapshot(`
-      Array [
-        Object {
-          "RequestItems": Object {
-            "": Array [
-              Object {
-                "PutRequest": Object {
-                  "Item": Object {
-                    "data": Object {
+      [
+        {
+          "RequestItems": {
+            "": [
+              {
+                "PutRequest": {
+                  "Item": {
+                    "data": {
                       "last_updated_at": 20123001201,
                       "query_data": undefined,
                       "query_execution_id": "query_execution_id_1",
@@ -574,10 +573,10 @@ describe('dynamo resource db', () => {
                   },
                 },
               },
-              Object {
-                "PutRequest": Object {
-                  "Item": Object {
-                    "data": Object {
+              {
+                "PutRequest": {
+                  "Item": {
+                    "data": {
                       "last_updated_at": 20123001201,
                       "query_data": undefined,
                       "query_execution_id": "query_execution_id_2",
@@ -633,29 +632,29 @@ describe('dynamo resource db', () => {
     await resource.deleteOperation('resource_id', 'operation_id');
     expect(batchWrite).toHaveBeenCalledTimes(4);
     expect(batchWrite.mock.calls[3]).toMatchInlineSnapshot(`
-      Array [
-        Object {
-          "RequestItems": Object {
-            "": Array [
-              Object {
-                "DeleteRequest": Object {
-                  "Key": Object {
+      [
+        {
+          "RequestItems": {
+            "": [
+              {
+                "DeleteRequest": {
+                  "Key": {
                     "resource_id": "resource_id",
                     "sort_key": "resource_id#operation_id#action_id",
                   },
                 },
               },
-              Object {
-                "DeleteRequest": Object {
-                  "Key": Object {
+              {
+                "DeleteRequest": {
+                  "Key": {
                     "resource_id": "resource_id",
                     "sort_key": "resource_id#operation_id#action_id#query_id_1",
                   },
                 },
               },
-              Object {
-                "DeleteRequest": Object {
-                  "Key": Object {
+              {
+                "DeleteRequest": {
+                  "Key": {
                     "resource_id": "resource_id",
                     "sort_key": "resource_id#operation_id#action_id#query_id_2",
                   },
@@ -668,10 +667,10 @@ describe('dynamo resource db', () => {
     `);
     expect(query).toHaveBeenCalledTimes(7);
     expect(query.mock.calls[6]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "ConsistentRead": true,
-          "ExpressionAttributeValues": Object {
+          "ExpressionAttributeValues": {
             ":resource_id": "resource_id",
             ":sort_key": "resource_id#operation_id",
           },
@@ -716,7 +715,9 @@ describe('dynamo resource db', () => {
         },
       ],
     });
-    const logger = new Logger();
+    const logger = new Logger({
+      level: 'error',
+    });
     const action_graph = new OperationActionGraph();
     const start_action = new Action({
       type: 'START',
@@ -745,10 +746,10 @@ describe('dynamo resource db', () => {
     );
     expect(query).toHaveBeenCalledTimes(8);
     expect(query.mock.calls[7]).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "ConsistentRead": true,
-          "ExpressionAttributeValues": Object {
+          "ExpressionAttributeValues": {
             ":resource_id": undefined,
             ":sort_key": "undefined#operation_id#action_id",
           },

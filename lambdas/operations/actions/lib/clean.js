@@ -19,11 +19,9 @@ class Clean {
     const dateOffset = 24 * 60 * 60 * 1000; // 24 hours
     const expirationDate = new Date();
     expirationDate.setTime(expirationDate.getTime() - dateOffset);
-    const base_location =
-      resource.destination_properties.TableInput.StorageDescriptor.Location.replace(
-        '/references/',
-        '/'
-      );
+    const base_location = (
+      resource.destination_properties.location || ''
+    ).replace('/references/', '/');
     const { bucket, prefix } = this.s3.parseS3Uri(base_location);
     await this.s3.expireObjects(
       {
@@ -41,16 +39,13 @@ class Clean {
     const dateOffset = 24 * 60 * 60 * 1000; // 24 hours
     const expirationDate = new Date();
     expirationDate.setTime(expirationDate.getTime() - dateOffset);
-    const databaseName = resource.destination_properties.DatabaseName;
-    const tableName = resource.destination_properties.TableInput.Name;
-    const partitionKeys =
-      resource.destination_properties.TableInput.PartitionKeys;
+    const databaseName = resource.destination_properties.databaseName;
+    const tableName = resource.destination_properties.name;
+    const partitionKeys = resource.destination_properties.partitionKeys;
 
-    const base_location =
-      resource.destination_properties.TableInput.StorageDescriptor.Location.replace(
-        '/references/',
-        '/'
-      );
+    const base_location = (
+      resource.destination_properties.location || ''
+    ).replace('/references/', '/');
 
     if (!partitionKeys || partitionKeys.length === 0) {
       const { bucket, prefix } = this.s3.parseS3Uri(base_location);
@@ -169,9 +164,8 @@ class Clean {
    */
   async cleanupQueryOutput(resource, query) {
     const destinationDatabaseName =
-      resource.destination_properties.DatabaseName;
-    const destinationTableName =
-      resource.destination_properties.TableInput.Name;
+      resource.destination_properties.databaseName;
+    const destinationTableName = resource.destination_properties.name;
 
     const { Table: destinationTable } = await this.glue.getTable({
       DatabaseName: destinationDatabaseName,

@@ -60,6 +60,7 @@ async function update(event) {
   const resource = {
     resource_id: StackName,
     resource_arn: StackId,
+    resource_status: 'UPDATING',
     athena_workgroup: StackName,
     daemon_config: event.ResourceProperties.DaemonConfig,
     source_properties: template.Resources.Source.Properties,
@@ -90,12 +91,14 @@ async function update(event) {
     const resource = {
       resource_id: migrate_stackname,
       resource_arn: StackId,
+      resource_status: 'CREATING',
       athena_workgroup: migrate_stackname,
       daemon_config: event.ResourceProperties.DaemonConfig,
       source_properties: migrationTemplate.Resources.Source.Properties,
       destination_properties: migrationTemplate.Resources.Compacted.Properties,
       wharfie_version: version,
     };
+    // @ts-ignore
     await resource_db.putResource(resource);
     await cloudformation.createStack({
       StackName: migrate_stackname,
@@ -195,6 +198,7 @@ async function update(event) {
     }
   }
 
+  // @ts-ignore
   await resource_db.putResource(resource);
   await cloudformation.updateStack({
     StackName,
