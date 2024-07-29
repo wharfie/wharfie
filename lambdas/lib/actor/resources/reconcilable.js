@@ -144,14 +144,15 @@ class Reconcilable {
         });
         // @ts-ignore
         this._reconcileErrors.push(error);
-        if (
-          // @ts-ignore
-          error?.name !== last_error?.name ||
-          // @ts-ignore
-          error?.message !== last_error?.message
-        ) {
-          reconcile_attempts = 0;
-        }
+        // if (
+        //   // @ts-ignore
+        //   error?.name !== last_error?.name ||
+        //   // @ts-ignore
+        //   error?.message !== last_error?.message
+        // ) {
+        //   console.log('error reset');
+        //   reconcile_attempts = 0;
+        // }
         await new Promise((resolve) =>
           setTimeout(
             resolve,
@@ -199,17 +200,16 @@ class Reconcilable {
           constructor: this.constructor.name,
           error,
         });
-        console.trace(error);
         // @ts-ignore
         this._destroyErrors.push(error);
-        if (
-          // @ts-ignore
-          error?.name !== last_error?.name ||
-          // @ts-ignore
-          error?.message !== last_error?.message
-        ) {
-          destroy_attempts = 0;
-        }
+        // if (
+        //   // @ts-ignore
+        //   error?.name !== last_error?.name ||
+        //   // @ts-ignore
+        //   error?.message !== last_error?.message
+        // ) {
+        //   destroy_attempts = 0;
+        // }
         await new Promise((resolve) =>
           setTimeout(
             resolve,

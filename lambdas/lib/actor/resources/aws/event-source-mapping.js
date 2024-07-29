@@ -40,6 +40,7 @@ class EventSourceMapping extends BaseResource {
         FunctionName: this.get('functionName'),
         EventSourceArn: this.get('eventSourceArn'),
         BatchSize: this.get('batchSize'),
+        Enabled: true,
         MaximumBatchingWindowInSeconds: this.get(
           'maximumBatchingWindowInSeconds'
         ),
@@ -54,6 +55,7 @@ class EventSourceMapping extends BaseResource {
         await this.lambda.updateEventSourceMapping({
           UUID: existingMapping.UUID,
           BatchSize: this.get('batchSize'),
+          Enabled: true,
           MaximumBatchingWindowInSeconds: this.get(
             'maximumBatchingWindowInSeconds'
           ),

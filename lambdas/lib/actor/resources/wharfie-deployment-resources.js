@@ -101,6 +101,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
           },
           { AttributeName: 'resource_id', KeyType: 'RANGE' },
         ],
+        billingMode: Table.BillingMode.PAY_PER_REQUEST,
       },
     });
     const semaphoreTable = new Table({
