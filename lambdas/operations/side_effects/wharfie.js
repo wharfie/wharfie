@@ -28,8 +28,8 @@ async function wharfie(event, context, resource, operation) {
     MessageBody: JSON.stringify({
       type: 'WHARFIE:OPERATION:COMPLETED',
       resource_id: resource.resource_id,
-      database_name: resource.destination_properties.DatabaseName,
-      table_name: resource.destination_properties.TableInput.Name,
+      database_name: resource.destination_properties.databaseName,
+      table_name: resource.destination_properties.name,
       version,
     }),
     QueueUrl: QUEUE_URL,

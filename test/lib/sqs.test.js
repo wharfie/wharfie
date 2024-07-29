@@ -104,47 +104,47 @@ describe('tests for SQS', () => {
     expect(
       AWS.SQSMock.commandCalls(AWS.SendMessageBatchCommand)[0].args[0].input
     ).toMatchInlineSnapshot(`
-      Object {
-        "Entries": Array [
-          Object {
+      {
+        "Entries": [
+          {
             "Id": "id-1",
-            "MessageBody": "{\\"foo\\":\\"bar\\"}",
+            "MessageBody": "{"foo":"bar"}",
           },
-          Object {
+          {
             "Id": "id-2",
-            "MessageBody": "{\\"foo\\":\\"bar\\"}",
+            "MessageBody": "{"foo":"bar"}",
           },
-          Object {
+          {
             "Id": "id-3",
-            "MessageBody": "{\\"foo\\":\\"bar\\"}",
+            "MessageBody": "{"foo":"bar"}",
           },
-          Object {
+          {
             "Id": "id-4",
-            "MessageBody": "{\\"foo\\":\\"bar\\"}",
+            "MessageBody": "{"foo":"bar"}",
           },
-          Object {
+          {
             "Id": "id-5",
-            "MessageBody": "{\\"foo\\":\\"bar\\"}",
+            "MessageBody": "{"foo":"bar"}",
           },
-          Object {
+          {
             "Id": "id-6",
-            "MessageBody": "{\\"foo\\":\\"bar\\"}",
+            "MessageBody": "{"foo":"bar"}",
           },
-          Object {
+          {
             "Id": "id-7",
-            "MessageBody": "{\\"foo\\":\\"bar\\"}",
+            "MessageBody": "{"foo":"bar"}",
           },
-          Object {
+          {
             "Id": "id-8",
-            "MessageBody": "{\\"foo\\":\\"bar\\"}",
+            "MessageBody": "{"foo":"bar"}",
           },
-          Object {
+          {
             "Id": "id-9",
-            "MessageBody": "{\\"foo\\":\\"bar\\"}",
+            "MessageBody": "{"foo":"bar"}",
           },
-          Object {
+          {
             "Id": "id-10",
-            "MessageBody": "{\\"foo\\":\\"bar\\"}",
+            "MessageBody": "{"foo":"bar"}",
           },
         ],
         "QueueUrl": "queue",
@@ -153,11 +153,11 @@ describe('tests for SQS', () => {
     expect(
       AWS.SQSMock.commandCalls(AWS.SendMessageBatchCommand)[1].args[0].input
     ).toMatchInlineSnapshot(`
-      Object {
-        "Entries": Array [
-          Object {
+      {
+        "Entries": [
+          {
             "Id": "id-11",
-            "MessageBody": "{\\"foo\\":\\"bar\\"}",
+            "MessageBody": "{"foo":"bar"}",
           },
         ],
         "QueueUrl": "queue",
@@ -166,15 +166,15 @@ describe('tests for SQS', () => {
     expect(
       AWS.SQSMock.commandCalls(AWS.SendMessageBatchCommand)[2].args[0].input
     ).toMatchInlineSnapshot(`
-      Object {
-        "Entries": Array [
-          Object {
+      {
+        "Entries": [
+          {
             "Id": "id-3",
-            "MessageBody": "{\\"foo\\":\\"bar\\"}",
+            "MessageBody": "{"foo":"bar"}",
           },
-          Object {
+          {
             "Id": "id-1",
-            "MessageBody": "{\\"foo\\":\\"bar\\"}",
+            "MessageBody": "{"foo":"bar"}",
           },
         ],
         "QueueUrl": "queue",

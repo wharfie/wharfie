@@ -98,11 +98,10 @@ class Compaction {
   }) {
     /** @type {string?} */
     const PrimaryKey = null;
-    const isView =
-      resource.source_properties.TableInput.TableType === 'VIRTUAL_VIEW';
+    const isView = resource.source_properties.tableType === 'VIRTUAL_VIEW';
     if (isView && partitions.length > 0) {
       const viewOriginalText =
-        resource.source_properties.TableInput.ViewOriginalText;
+        resource.source_properties.viewOriginalText || '';
       const view_sql = JSON.parse(
         Buffer.from(
           viewOriginalText.substring(16, viewOriginalText.length - 3),
@@ -236,12 +235,11 @@ class Compaction {
     if (!Table.PartitionKeys || Table.PartitionKeys.length === 0) return '';
 
     let partitionsOnly = true;
-    const isView =
-      resource.source_properties.TableInput.TableType === 'VIRTUAL_VIEW';
+    const isView = resource.source_properties.tableType === 'VIRTUAL_VIEW';
 
     if (isView) {
       const viewOriginalText =
-        resource.source_properties.TableInput.ViewOriginalText;
+        resource.source_properties.viewOriginalText || '';
       const view_sql = JSON.parse(
         Buffer.from(
           viewOriginalText.substring(16, viewOriginalText.length - 3),

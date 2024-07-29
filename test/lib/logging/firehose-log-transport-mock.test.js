@@ -32,17 +32,17 @@ describe('mock tests for firehose log transport', () => {
     await firehoseLogTransport.log('test6 ');
     await firehoseLogTransport.close();
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream']
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
     ).toHaveLength(2);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'][0].Data.toString()
+        ['test-stream'].records[0].Data.toString()
     ).toMatchInlineSnapshot(`"test1 test2 test3 test4 "`);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'][1].Data.toString()
+        ['test-stream'].records[1].Data.toString()
     ).toMatchInlineSnapshot(`"test5 test6 "`);
   });
 
@@ -56,12 +56,12 @@ describe('mock tests for firehose log transport', () => {
     await firehoseLogTransport.log('test4 ');
     await firehoseLogTransport.close();
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream']
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
     ).toHaveLength(2);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'][1].Data.toString()
+        ['test-stream'].records[1].Data.toString()
     ).toMatchInlineSnapshot(`"test2 test3 test4 "`);
   });
 
@@ -83,7 +83,7 @@ describe('mock tests for firehose log transport', () => {
       new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('e')
     );
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream']
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
     ).toHaveLength(4);
   });
 
@@ -94,7 +94,7 @@ describe('mock tests for firehose log transport', () => {
       await firehoseLogTransport.log('hi');
     }
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream']
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
     ).toHaveLength(1);
   });
 
@@ -113,9 +113,9 @@ describe('mock tests for firehose log transport', () => {
     await firehoseLogTransport.flush();
 
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream']
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
     ).toStrictEqual(
-      firehoseLogTransportFoo.firehose.__getMockState()['test-stream']
+      firehoseLogTransportFoo.firehose.__getMockState()['test-stream'].records
     );
   });
 
@@ -126,12 +126,12 @@ describe('mock tests for firehose log transport', () => {
     );
     await firehoseLogTransport.close();
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream']
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
     ).toHaveLength(1);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'][0].Data.toString()
+        ['test-stream'].records[0].Data.toString()
         .slice(0, 30)
     ).toMatchInlineSnapshot(`"TRUNCATEDaaaaaaaaaaaaaaaaaaaaa"`);
   });
@@ -145,12 +145,12 @@ describe('mock tests for firehose log transport', () => {
     await firehoseLogTransport.flush();
     await firehoseLogTransport.close();
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream']
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
     ).toHaveLength(1);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'][0].Data.toString()
+        ['test-stream'].records[0].Data.toString()
     ).toMatchInlineSnapshot(`"test1 test2 test3 test4 "`);
   });
 
@@ -163,12 +163,12 @@ describe('mock tests for firehose log transport', () => {
     await firehoseLogTransport.close();
     await firehoseLogTransport.flush();
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream']
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
     ).toHaveLength(1);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'][0].Data.toString()
+        ['test-stream'].records[0].Data.toString()
     ).toMatchInlineSnapshot(`"test1 test2 test3 test4 "`);
   });
 });

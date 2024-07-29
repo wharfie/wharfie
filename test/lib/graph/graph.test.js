@@ -27,10 +27,10 @@ describe('tests for graph', () => {
     graph.addAction(newAction);
 
     expect(newAction.serialize()).toMatchInlineSnapshot(
-      `"{\\"id\\":\\"id-1\\",\\"type\\":\\"cloudwatch\\",\\"executions\\":[]}"`
+      `"{"id":"id-1","type":"cloudwatch","executions":[]}"`
     );
     expect(graph.serialize()).toMatchInlineSnapshot(
-      `"{\\"outgoingEdges\\":[[\\"id-1\\",[]]],\\"incomingEdges\\":[[\\"id-1\\",[]]],\\"actions\\":[{\\"id\\":\\"id-1\\",\\"type\\":\\"cloudwatch\\",\\"executions\\":[]}]}"`
+      `"{"outgoingEdges":[["id-1",[]]],"incomingEdges":[["id-1",[]]],"actions":[{"id":"id-1","type":"cloudwatch","executions":[]}]}"`
     );
   });
   it('deserialization', async () => {
@@ -52,45 +52,45 @@ describe('tests for graph', () => {
     graph.addDependency(second, third);
     const serializedGraph = graph.serialize();
     expect(serializedGraph).toMatchInlineSnapshot(
-      `"{\\"outgoingEdges\\":[[\\"id-1\\",[\\"id-2\\"]],[\\"id-2\\",[\\"id-3\\"]],[\\"id-3\\",[]]],\\"incomingEdges\\":[[\\"id-1\\",[]],[\\"id-2\\",[\\"id-1\\"]],[\\"id-3\\",[\\"id-2\\"]]],\\"actions\\":[{\\"id\\":\\"id-1\\",\\"type\\":\\"first\\",\\"executions\\":[]},{\\"id\\":\\"id-2\\",\\"type\\":\\"second\\",\\"executions\\":[]},{\\"id\\":\\"id-3\\",\\"type\\":\\"third\\",\\"executions\\":[]}]}"`
+      `"{"outgoingEdges":[["id-1",["id-2"]],["id-2",["id-3"]],["id-3",[]]],"incomingEdges":[["id-1",[]],["id-2",["id-1"]],["id-3",["id-2"]]],"actions":[{"id":"id-1","type":"first","executions":[]},{"id":"id-2","type":"second","executions":[]},{"id":"id-3","type":"third","executions":[]}]}"`
     );
     expect(OperationActionGraph.deserialize(serializedGraph))
       .toMatchInlineSnapshot(`
       OperationActionGraph {
-        "actions": Array [
+        "actions": [
           Action {
-            "executions": Array [],
+            "executions": [],
             "id": "id-1",
             "type": "first",
           },
           Action {
-            "executions": Array [],
+            "executions": [],
             "id": "id-2",
             "type": "second",
           },
           Action {
-            "executions": Array [],
+            "executions": [],
             "id": "id-3",
             "type": "third",
           },
         ],
         "incomingEdges": Map {
-          "id-1" => Array [],
-          "id-2" => Array [
+          "id-1" => [],
+          "id-2" => [
             "id-1",
           ],
-          "id-3" => Array [
+          "id-3" => [
             "id-2",
           ],
         },
         "outgoingEdges": Map {
-          "id-1" => Array [
+          "id-1" => [
             "id-2",
           ],
-          "id-2" => Array [
+          "id-2" => [
             "id-3",
           ],
-          "id-3" => Array [],
+          "id-3" => [],
         },
       }
     `);
@@ -152,25 +152,25 @@ describe('tests for graph', () => {
     graph.addDependency(secondA, third);
     graph.addDependency(first, secondB);
     graph.addDependency(secondB, third);
-    expect(graph.getUpstreamActions(first)).toMatchInlineSnapshot(`Array []`);
+    expect(graph.getUpstreamActions(first)).toMatchInlineSnapshot(`[]`);
     expect(graph.getUpstreamActions(third)).toMatchInlineSnapshot(`
-      Array [
+      [
         Action {
-          "executions": Array [],
+          "executions": [],
           "id": "id-2",
           "type": "secondA",
         },
         Action {
-          "executions": Array [],
+          "executions": [],
           "id": "id-3",
           "type": "secondB",
         },
       ]
     `);
     expect(graph.getUpstreamActions(secondA)).toMatchInlineSnapshot(`
-      Array [
+      [
         Action {
-          "executions": Array [],
+          "executions": [],
           "id": "id-1",
           "type": "first",
         },
@@ -201,29 +201,29 @@ describe('tests for graph', () => {
     graph.addDependency(first, secondB);
     graph.addDependency(secondB, third);
     expect(graph.getDownstreamActions(first)).toMatchInlineSnapshot(`
-      Array [
+      [
         Action {
-          "executions": Array [],
+          "executions": [],
           "id": "id-2",
           "type": "secondA",
         },
         Action {
-          "executions": Array [],
+          "executions": [],
           "id": "id-3",
           "type": "secondB",
         },
       ]
     `);
     expect(graph.getDownstreamActions(secondA)).toMatchInlineSnapshot(`
-      Array [
+      [
         Action {
-          "executions": Array [],
+          "executions": [],
           "id": "id-4",
           "type": "third",
         },
       ]
     `);
-    expect(graph.getDownstreamActions(third)).toMatchInlineSnapshot(`Array []`);
+    expect(graph.getDownstreamActions(third)).toMatchInlineSnapshot(`[]`);
   });
   it('getSequentialActionOrder', async () => {
     expect.assertions(1);
@@ -249,24 +249,24 @@ describe('tests for graph', () => {
     graph.addDependency(first, secondB);
     graph.addDependency(secondB, third);
     expect(graph.getSequentialActionOrder()).toMatchInlineSnapshot(`
-      Array [
+      [
         Action {
-          "executions": Array [],
+          "executions": [],
           "id": "id-1",
           "type": "first",
         },
         Action {
-          "executions": Array [],
+          "executions": [],
           "id": "id-2",
           "type": "secondA",
         },
         Action {
-          "executions": Array [],
+          "executions": [],
           "id": "id-3",
           "type": "secondB",
         },
         Action {
-          "executions": Array [],
+          "executions": [],
           "id": "id-4",
           "type": "third",
         },

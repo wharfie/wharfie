@@ -4,7 +4,7 @@ const { mockClient } = require('aws-sdk-client-mock');
 
 let Athena, AthenaMock, paginateGetQueryResults;
 if (process.env.AWS_MOCKS) {
-  Athena = require('./athena');
+  Athena = jest.requireActual('./athena');
   paginateGetQueryResults = Athena.paginateGetQueryResults;
 } else {
   Athena = AWS.Athena;

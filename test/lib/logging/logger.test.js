@@ -146,7 +146,7 @@ describe('tests for console log transport', () => {
         )[0].args[0].input.Records[0].Data.toString()
       )
     ).toMatchInlineSnapshot(`
-      Object {
+      {
         "foo": "bar",
         "level": "INFO",
         "message": "test",
@@ -154,7 +154,7 @@ describe('tests for console log transport', () => {
       }
     `);
     expect(JSON.parse(consoleLog.mock.calls[0][0])).toMatchInlineSnapshot(`
-      Object {
+      {
         "foo": "bar",
         "level": "INFO",
         "message": "test",
@@ -197,24 +197,24 @@ describe('tests for console log transport', () => {
         AWS.PutRecordBatchCommand
       )[0].args[0].input.Records[0].Data.toString()
     ).toMatchInlineSnapshot(`
-      "{\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\",\\"level\\":\\"INFO\\",\\"message\\":\\"foo\\",\\"foo\\":\\"foo\\"}
-      {\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\",\\"level\\":\\"ERROR\\",\\"message\\":\\"bin\\",\\"foo\\":\\"bar\\",\\"bar\\":\\"bar\\"}
-      {\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\",\\"level\\":\\"INFO\\",\\"message\\":\\"hello\\",\\"foo\\":\\"bar\\"}
+      "{"timestamp":"2016-06-20T12:08:10.000Z","level":"INFO","message":"foo","foo":"foo"}
+      {"timestamp":"2016-06-20T12:08:10.000Z","level":"ERROR","message":"bin","foo":"bar","bar":"bar"}
+      {"timestamp":"2016-06-20T12:08:10.000Z","level":"INFO","message":"hello","foo":"bar"}
       "
     `);
     expect(consoleLog).toHaveBeenCalledTimes(3);
     expect(consoleLog.mock.calls).toMatchInlineSnapshot(`
-      Array [
-        Array [
-          "{\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\",\\"level\\":\\"INFO\\",\\"message\\":\\"foo\\",\\"foo\\":\\"foo\\"}
+      [
+        [
+          "{"timestamp":"2016-06-20T12:08:10.000Z","level":"INFO","message":"foo","foo":"foo"}
       ",
         ],
-        Array [
-          "{\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\",\\"level\\":\\"ERROR\\",\\"message\\":\\"bin\\",\\"foo\\":\\"bar\\",\\"bar\\":\\"bar\\"}
+        [
+          "{"timestamp":"2016-06-20T12:08:10.000Z","level":"ERROR","message":"bin","foo":"bar","bar":"bar"}
       ",
         ],
-        Array [
-          "{\\"timestamp\\":\\"2016-06-20T12:08:10.000Z\\",\\"level\\":\\"INFO\\",\\"message\\":\\"hello\\",\\"foo\\":\\"bar\\"}
+        [
+          "{"timestamp":"2016-06-20T12:08:10.000Z","level":"INFO","message":"hello","foo":"bar"}
       ",
         ],
       ]

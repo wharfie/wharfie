@@ -102,7 +102,7 @@ async function loadEnvironments(options) {
  */
 async function loadProject(options) {
   const project = {
-    name: options.path.split('/').at(-1),
+    name: options.path.split('/').at(-1).replace(/=+$/, '').toLowerCase(),
     path: options.path,
     environments: await loadEnvironments(options),
     models: await loadModels(options),

@@ -1,54 +1,56 @@
 'use strict';
 
-const createProject = require('../../project/create');
-const updateProject = require('../../project/update');
+const ansiEscapes = require('ansi-escapes');
+
 const loadProject = require('../../project/load');
+const { load } = require('../../../lambdas/lib/actor/deserialize');
+const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
 const loadEnvironment = require('../../project/load-environment');
-const { getStackName } = require('../../project/template');
+const { getResourceOptions } = require('../../project/template-actor');
 
-const CloudFormation = require('../../../lambdas/lib/cloudformation');
-const cloudformation = new CloudFormation();
-
-const { displayFailure, displayInfo, displaySuccess } = require('../../output');
+const {
+  displayFailure,
+  displayInfo,
+  displaySuccess,
+  monitorProjectApplyReconcilables,
+} = require('../../output/');
 
 const apply = async (path, environmentName) => {
   const project = await loadProject({
     path,
   });
+  displayInfo(`applying changes to ${project.name}...`);
   const environment = loadEnvironment(project, environmentName);
-  const stackName = getStackName(project, environment);
-  displayInfo(`applying changes to ${stackName}...`);
-  let stack;
-  let stackExists = true;
+  const deployment = await load({
+    deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME,
+  });
+  let projectResources;
   try {
-    const { Stacks } = await cloudformation.describeStacks({
-      StackName: stackName,
+    projectResources = await load({
+      deploymentName: deployment.name,
+      resourceName: project.name,
     });
-    stack = Stacks?.[0];
-  } catch (err) {
+  } catch (error) {
     if (
-      // @ts-ignore
-      err.message.includes('does not exist') ||
-      stack?.StackStatus === 'DELETE_COMPLETE'
-    ) {
-      stackExists = false;
-    } else {
-      throw err;
-    }
+      !['No resource found', 'Resource was not stored'].includes(error.message)
+    )
+      throw error;
+    projectResources = new WharfieProject({
+      deployment,
+      name: project.name,
+    });
   }
+  const resourceOptions = getResourceOptions(environment, project);
 
-  if (stackExists) {
-    await updateProject({
-      project,
-      environment,
-    });
-  } else {
-    await createProject({
-      project,
-      environment,
-    });
-  }
-  displaySuccess(`apply for ${stackName} completed successfully`);
+  projectResources.registerWharfieResources(resourceOptions);
+
+  const multibar = monitorProjectApplyReconcilables(projectResources);
+
+  await projectResources.reconcile();
+
+  multibar.stop();
+  process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
+  displaySuccess(`apply for ${project.name} completed successfully`);
 };
 
 exports.command = 'apply [path]';
@@ -73,7 +75,7 @@ exports.handler = async function ({ path, environment }) {
   try {
     await apply(path, environment);
   } catch (err) {
-    console.error(err);
     displayFailure(err);
+    console.trace(err);
   }
 };

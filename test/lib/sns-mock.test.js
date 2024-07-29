@@ -20,9 +20,9 @@ describe('tests for SNS Mock', () => {
     };
     await sns.publish(params);
     expect(sns.sns.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "test_topic_arn": Array [
-          "\\"test\\"",
+      {
+        "test_topic_arn": [
+          ""test"",
         ],
       }
     `);

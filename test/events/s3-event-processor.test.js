@@ -10,23 +10,19 @@ describe('tests for s3 events processing', () => {
     require('aws-sdk-client-mock-jest');
     resource_mock = {
       source_properties: {
-        TableInput: {
-          TableType: 'EXTERNAL_TABLE',
-        },
+        tableType: 'EXTERNAL_TABLE',
       },
       destination_properties: {
-        TableInput: {
-          PartitionKeys: [
-            {
-              Name: 'a',
-              Type: 'string',
-            },
-            {
-              Name: 'b',
-              Type: 'string',
-            },
-          ],
-        },
+        partitionKeys: [
+          {
+            name: 'a',
+            type: 'string',
+          },
+          {
+            name: 'b',
+            type: 'string',
+          },
+        ],
       },
     };
     logging = require('../../lambdas/lib/logging');
@@ -83,36 +79,42 @@ describe('tests for s3 events processing', () => {
       1
     );
     expect(
-      AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-    ).toMatchInlineSnapshot(`
-      Object {
-        "MessageBody": "{\\"source\\":\\"wharfie:s3-event-processor\\",\\"operation_started_at\\":\\"2016-06-20T12:08:10.000Z\\",\\"operation_type\\":\\"S3_EVENT\\",\\"action_type\\":\\"START\\",\\"resource_id\\":\\"1\\",\\"operation_inputs\\":{\\"partition\\":{\\"location\\":\\"s3://bucket/prefix/a=1/b=abc/\\",\\"partitionValues\\":{\\"b\\":\\"abc\\",\\"a\\":\\"1\\"}}}}",
-        "QueueUrl": "",
-      }
-    `);
+      JSON.parse(
+        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+          .MessageBody
+      )
+    ).toStrictEqual({
+      source: 'wharfie:s3-event-processor',
+      operation_started_at: '2016-06-20T12:08:10.000Z',
+      operation_type: 'S3_EVENT',
+      action_type: 'START',
+      resource_id: '1',
+      operation_inputs: {
+        partition: {
+          location: 's3://bucket/prefix/a=1/b=abc/',
+          partitionValues: { a: '1', b: 'abc' },
+        },
+      },
+    });
   });
 
   it('run for unexpected path', async () => {
     expect.assertions(3);
     resource_mock = {
       source_properties: {
-        TableInput: {
-          TableType: 'EXTERNAL_TABLE',
-        },
+        tableType: 'EXTERNAL_TABLE',
       },
       destination_properties: {
-        TableInput: {
-          PartitionKeys: [
-            {
-              Name: 'a',
-              Type: 'bigint',
-            },
-            {
-              Name: 'b',
-              Type: 'string',
-            },
-          ],
-        },
+        partitionKeys: [
+          {
+            name: 'a',
+            type: 'bigint',
+          },
+          {
+            name: 'b',
+            type: 'string',
+          },
+        ],
       },
     };
 
@@ -138,40 +140,47 @@ describe('tests for s3 events processing', () => {
       1
     );
     expect(
-      AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-    ).toMatchInlineSnapshot(`
-      Object {
-        "MessageBody": "{\\"source\\":\\"wharfie:s3-event-processor\\",\\"operation_started_at\\":\\"2016-06-20T12:08:10.000Z\\",\\"operation_type\\":\\"S3_EVENT\\",\\"action_type\\":\\"START\\",\\"resource_id\\":\\"1\\",\\"operation_inputs\\":{\\"partition\\":{\\"location\\":\\"s3://bucket/prefix/123123123/a=1/1231231/b=abc/1231123123/\\",\\"partitionValues\\":{\\"b\\":\\"abc\\",\\"a\\":1}}}}",
-        "QueueUrl": "",
-      }
-    `);
+      JSON.parse(
+        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+          .MessageBody
+      )
+    ).toStrictEqual({
+      source: 'wharfie:s3-event-processor',
+      operation_started_at: '2016-06-20T12:08:10.000Z',
+      operation_type: 'S3_EVENT',
+      action_type: 'START',
+      resource_id: '1',
+      operation_inputs: {
+        partition: {
+          location:
+            's3://bucket/prefix/123123123/a=1/1231231/b=abc/1231123123/',
+          partitionValues: { a: 1, b: 'abc' },
+        },
+      },
+    });
   });
 
   it('run for no = signs', async () => {
     expect.assertions(3);
     resource_mock = {
       source_properties: {
-        TableInput: {
-          TableType: 'EXTERNAL_TABLE',
-        },
+        tableType: 'EXTERNAL_TABLE',
       },
       destination_properties: {
-        TableInput: {
-          PartitionKeys: [
-            {
-              Name: 'year',
-              Type: 'bigint',
-            },
-            {
-              Name: 'month',
-              Type: 'string',
-            },
-            {
-              Name: 'day',
-              Type: 'string',
-            },
-          ],
-        },
+        partitionKeys: [
+          {
+            name: 'year',
+            type: 'bigint',
+          },
+          {
+            name: 'month',
+            type: 'string',
+          },
+          {
+            name: 'day',
+            type: 'string',
+          },
+        ],
       },
     };
 
@@ -196,36 +205,42 @@ describe('tests for s3 events processing', () => {
       1
     );
     expect(
-      AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-    ).toMatchInlineSnapshot(`
-      Object {
-        "MessageBody": "{\\"source\\":\\"wharfie:s3-event-processor\\",\\"operation_started_at\\":\\"2016-06-20T12:08:10.000Z\\",\\"operation_type\\":\\"S3_EVENT\\",\\"action_type\\":\\"START\\",\\"resource_id\\":\\"1\\",\\"operation_inputs\\":{\\"partition\\":{\\"location\\":\\"s3://bucket/prefix/2021/10/25/\\",\\"partitionValues\\":{\\"day\\":\\"25\\",\\"month\\":\\"10\\",\\"year\\":2021}}}}",
-        "QueueUrl": "",
-      }
-    `);
+      JSON.parse(
+        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+          .MessageBody
+      )
+    ).toStrictEqual({
+      source: 'wharfie:s3-event-processor',
+      operation_started_at: '2016-06-20T12:08:10.000Z',
+      operation_type: 'S3_EVENT',
+      action_type: 'START',
+      resource_id: '1',
+      operation_inputs: {
+        partition: {
+          location: 's3://bucket/prefix/2021/10/25/',
+          partitionValues: { year: 2021, month: '10', day: '25' },
+        },
+      },
+    });
   });
 
   it('run for view', async () => {
     expect.assertions(3);
     resource_mock = {
       source_properties: {
-        TableInput: {
-          TableType: 'VIRTUAL_VIEW',
-        },
+        tableType: 'VIRTUAL_VIEW',
       },
       destination_properties: {
-        TableInput: {
-          PartitionKeys: [
-            {
-              Name: 'a',
-              Type: 'string',
-            },
-            {
-              Name: 'b',
-              Type: 'string',
-            },
-          ],
-        },
+        partitionKeys: [
+          {
+            name: 'a',
+            type: 'string',
+          },
+          {
+            name: 'b',
+            type: 'string',
+          },
+        ],
       },
     };
 
@@ -250,12 +265,15 @@ describe('tests for s3 events processing', () => {
       1
     );
     expect(
-      AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-    ).toMatchInlineSnapshot(`
-      Object {
-        "MessageBody": "{\\"source\\":\\"wharfie:s3-event-processor\\",\\"operation_started_at\\":\\"2016-06-20T12:08:10.000Z\\",\\"operation_type\\":\\"MAINTAIN\\",\\"action_type\\":\\"START\\"}",
-        "QueueUrl": "",
-      }
-    `);
+      JSON.parse(
+        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+          .MessageBody
+      )
+    ).toStrictEqual({
+      source: 'wharfie:s3-event-processor',
+      operation_started_at: '2016-06-20T12:08:10.000Z',
+      operation_type: 'MAINTAIN',
+      action_type: 'START',
+    });
   });
 });

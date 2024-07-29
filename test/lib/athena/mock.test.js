@@ -32,9 +32,9 @@ describe('tests for Athena', () => {
     };
     const result = await athena.getWorkGroup(params);
     expect(result).toMatchInlineSnapshot(`
-      Object {
+      {
         "Name": "default",
-        "queries": Object {},
+        "queries": {},
       }
     `);
   });
@@ -55,18 +55,18 @@ describe('tests for Athena', () => {
     };
     const result = await athena.startQueryExecution(params);
     expect(result).toMatchInlineSnapshot(`
-      Object {
+      {
         "QueryExecutionId": "ckywjpmr70002zjvd0wyq5x48",
       }
     `);
     expect(athena.athena.__getMockState()).toMatchInlineSnapshot(`
-      Object {
-        "workgroups": Object {
-          "default": Object {
-            "queries": Object {
-              "ckywjpmr70002zjvd0wyq5x48": Object {
+      {
+        "workgroups": {
+          "default": {
+            "queries": {
+              "ckywjpmr70002zjvd0wyq5x48": {
                 "QueryString": "select * from foo.bar",
-                "Status": Object {
+                "Status": {
                   "State": "FAILED",
                 },
                 "WorkGroup": "default",
@@ -102,11 +102,11 @@ describe('tests for Athena', () => {
       QueryExecutionId,
     });
     expect(result).toMatchInlineSnapshot(`
-      Object {
-        "QueryExecution": Object {
+      {
+        "QueryExecution": {
           "Query": "select * from foo.bar",
           "QueryExecutionId": "ckywjpmr70002zjvd0wyq5x48",
-          "Status": Object {
+          "Status": {
             "State": "SUCCEEDED",
           },
           "WorkGroup": "foo",
@@ -139,23 +139,23 @@ describe('tests for Athena', () => {
       QueryExecutionIds: [foo, bar],
     });
     expect(result).toMatchInlineSnapshot(`
-      Object {
-        "QueryExecutions": Array [
-          Object {
-            "QueryExecution": Object {
+      {
+        "QueryExecutions": [
+          {
+            "QueryExecution": {
               "Query": "select * from foo.bar",
               "QueryExecutionId": "ckywjpmr70002zjvd0wyq5x48",
-              "Status": Object {
+              "Status": {
                 "State": "SUCCEEDED",
               },
               "WorkGroup": "foo",
             },
           },
-          Object {
-            "QueryExecution": Object {
+          {
+            "QueryExecution": {
               "Query": "select * from foo.bar",
               "QueryExecutionId": "ckywjpmr70002zjvd0wyq5x48",
-              "Status": Object {
+              "Status": {
                 "State": "SUCCEEDED",
               },
               "WorkGroup": "foo",
@@ -190,11 +190,11 @@ describe('tests for Athena', () => {
       QueryExecutionId,
     });
     expect(result).toMatchInlineSnapshot(`
-      Object {
-        "QueryExecution": Object {
+      {
+        "QueryExecution": {
           "Query": "select * from foo.bar",
           "QueryExecutionId": "ckywjpmr70002zjvd0wyq5x48",
-          "Status": Object {
+          "Status": {
             "State": "SUCCEEDED",
           },
           "WorkGroup": "foo",
@@ -207,7 +207,7 @@ describe('tests for Athena', () => {
       Key: 'bar',
     });
     expect(sideEffect).toMatchInlineSnapshot(`
-      Object {
+      {
         "Body": "baz",
       }
     `);
@@ -259,28 +259,28 @@ describe('tests for Athena', () => {
       results.push(result);
     }
     expect(results).toMatchInlineSnapshot(`
-      Array [
-        Object {
+      [
+        {
           "dt": "2019-01-01",
           "hr": "1",
         },
-        Object {
+        {
           "dt": "2019-01-01",
           "hr": "2",
         },
-        Object {
+        {
           "dt": "2019-01-01",
           "hr": "3",
         },
-        Object {
+        {
           "dt": "2019-01-02",
           "hr": "1",
         },
-        Object {
+        {
           "dt": "2019-01-02",
           "hr": "2",
         },
-        Object {
+        {
           "dt": "2019-01-02",
           "hr": "3",
         },

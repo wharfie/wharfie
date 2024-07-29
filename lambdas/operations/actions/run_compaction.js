@@ -1,7 +1,5 @@
 'use strict';
 
-const { parse } = require('@sandfox/arn');
-
 const { createId } = require('../../lib/id');
 const logging = require('../../lib/logging');
 const Athena = require('../../lib/athena');
@@ -23,18 +21,18 @@ const MAX_QUERIES_PER_ACTION = process.env.MAX_QUERIES_PER_ACTION || 0;
  */
 async function run(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
-  const { region } = parse(resource.resource_arn);
-  const glue = new Glue({ region });
+  const region = resource.region;
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
   const athena = new Athena({ region, credentials });
+  const glue = new Glue({ region, credentials });
 
   const compaction = new Compaction({
     glue,
     athena,
   });
-  const sourceDatabaseName = resource.source_properties.DatabaseName;
-  const sourceTableName = resource.source_properties.TableInput.Name;
+  const sourceDatabaseName = resource.source_properties.databaseName;
+  const sourceTableName = resource.source_properties.name;
   const temporaryDatabaseName = TEMPORARY_GLUE_DATABASE;
   const storage_id = createId();
   const temporaryTableName = `${resource.resource_id}-${storage_id}`.replace(
@@ -46,8 +44,8 @@ async function run(event, context, resource, operation) {
   await glue.cloneDestinationTable(
     resource,
     {
-      Name: resource.destination_properties.TableInput.Name,
-      DatabaseName: resource.destination_properties.DatabaseName,
+      Name: resource.destination_properties.name,
+      DatabaseName: resource.destination_properties.databaseName,
     },
     temporaryDatabaseName,
     temporaryTableName,
@@ -97,8 +95,8 @@ async function run(event, context, resource, operation) {
   }
   if (
     partitions.length === 0 &&
-    resource.source_properties.TableInput.PartitionKeys &&
-    resource.source_properties.TableInput.PartitionKeys.length > 0
+    resource.source_properties.partitionKeys &&
+    resource.source_properties.partitionKeys.length > 0
   ) {
     event_log.info(
       `RUN_TEMP_COMPACTION: no compactions to run, table has no partitions`

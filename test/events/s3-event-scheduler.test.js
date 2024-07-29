@@ -16,23 +16,19 @@ describe('tests for s3 event scheduling', () => {
     location_return = [];
     resource_mock = {
       source_properties: {
-        TableInput: {
-          TableType: 'EXTERNAL_TABLE',
-        },
+        tableType: 'EXTERNAL_TABLE',
       },
       destination_properties: {
-        TableInput: {
-          PartitionKeys: [
-            {
-              Name: 'a',
-              Type: 'string',
-            },
-            {
-              Name: 'b',
-              Type: 'string',
-            },
-          ],
-        },
+        partitionKeys: [
+          {
+            name: 'a',
+            type: 'string',
+          },
+          {
+            name: 'b',
+            type: 'string',
+          },
+        ],
       },
     };
     date = jest.spyOn(Date, 'now').mockReturnValue(1466424490000);
@@ -157,13 +153,21 @@ describe('tests for s3 event scheduling', () => {
     await router({ Records: [s3Event] }, {});
 
     expect(
-      AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-    ).toMatchInlineSnapshot(`
-      Object {
-        "MessageBody": "{\\"resource_id\\":\\"1\\",\\"sort_key\\":\\"a=10/b=20:1466424600000\\",\\"started_at\\":1466424490000,\\"updated_at\\":1466424490000,\\"status\\":\\"scheduled\\",\\"partition\\":{\\"location\\":\\"s3://bucket/prefix/a=10/b=20/\\",\\"partitionValues\\":[\\"a=10\\",\\"b=20\\"]}}",
-        "QueueUrl": "",
-      }
-    `);
+      JSON.parse(
+        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+          .MessageBody
+      )
+    ).toStrictEqual({
+      resource_id: '1',
+      sort_key: 'a=10/b=20:1466424600000',
+      started_at: 1466424490000,
+      updated_at: 1466424490000,
+      status: 'scheduled',
+      partition: {
+        location: 's3://bucket/prefix/a=10/b=20/',
+        partitionValues: ['a=10', 'b=20'],
+      },
+    });
   });
 
   it('run complete with partitioning', async () => {
@@ -191,13 +195,21 @@ describe('tests for s3 event scheduling', () => {
     await router({ Records: [s3Event] }, {});
 
     expect(
-      AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-    ).toMatchInlineSnapshot(`
-      Object {
-        "MessageBody": "{\\"resource_id\\":\\"1\\",\\"sort_key\\":\\"a=1/b=abc:1466424600000\\",\\"started_at\\":1466424490000,\\"updated_at\\":1466424490000,\\"status\\":\\"scheduled\\",\\"partition\\":{\\"location\\":\\"s3://bucket/prefix/a=1/b=abc/\\",\\"partitionValues\\":[\\"a=1\\",\\"b=abc\\"]}}",
-        "QueueUrl": "",
-      }
-    `);
+      JSON.parse(
+        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+          .MessageBody
+      )
+    ).toStrictEqual({
+      resource_id: '1',
+      sort_key: 'a=1/b=abc:1466424600000',
+      started_at: 1466424490000,
+      updated_at: 1466424490000,
+      status: 'scheduled',
+      partition: {
+        location: 's3://bucket/prefix/a=1/b=abc/',
+        partitionValues: ['a=1', 'b=abc'],
+      },
+    });
   });
 
   it('run complete with odd s3 path structure and partitioning', async () => {
@@ -225,13 +237,21 @@ describe('tests for s3 event scheduling', () => {
     await router({ Records: [s3Event] }, {});
 
     expect(
-      AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-    ).toMatchInlineSnapshot(`
-      Object {
-        "MessageBody": "{\\"resource_id\\":\\"1\\",\\"sort_key\\":\\"a=1/b=abc:1466424600000\\",\\"started_at\\":1466424490000,\\"updated_at\\":1466424490000,\\"status\\":\\"scheduled\\",\\"partition\\":{\\"location\\":\\"s3://bucket/prefix/a=1/b=abc/\\",\\"partitionValues\\":[\\"a=1\\",\\"b=abc\\"]}}",
-        "QueueUrl": "",
-      }
-    `);
+      JSON.parse(
+        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+          .MessageBody
+      )
+    ).toStrictEqual({
+      resource_id: '1',
+      sort_key: 'a=1/b=abc:1466424600000',
+      started_at: 1466424490000,
+      updated_at: 1466424490000,
+      status: 'scheduled',
+      partition: {
+        location: 's3://bucket/prefix/a=1/b=abc/',
+        partitionValues: ['a=1', 'b=abc'],
+      },
+    });
   });
 
   it('run complete with no = signs in path', async () => {
@@ -259,13 +279,21 @@ describe('tests for s3 event scheduling', () => {
     await router({ Records: [s3Event] }, {});
 
     expect(
-      AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-    ).toMatchInlineSnapshot(`
-      Object {
-        "MessageBody": "{\\"resource_id\\":\\"1\\",\\"sort_key\\":\\"2021/10:1466424480000\\",\\"started_at\\":1466424490000,\\"updated_at\\":1466424490000,\\"status\\":\\"scheduled\\",\\"partition\\":{\\"location\\":\\"s3://bucket/prefix/2021/10/\\",\\"partitionValues\\":[\\"2021\\",\\"10\\"]}}",
-        "QueueUrl": "",
-      }
-    `);
+      JSON.parse(
+        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+          .MessageBody
+      )
+    ).toStrictEqual({
+      resource_id: '1',
+      sort_key: '2021/10:1466424480000',
+      started_at: 1466424490000,
+      updated_at: 1466424490000,
+      status: 'scheduled',
+      partition: {
+        location: 's3://bucket/prefix/2021/10/',
+        partitionValues: ['2021', '10'],
+      },
+    });
   });
 
   it('run fixtured', async () => {
@@ -280,27 +308,23 @@ describe('tests for s3 event scheduling', () => {
     ];
     resource_mock = {
       source_properties: {
-        TableInput: {
-          TableType: 'EXTERNAL_TABLE',
-        },
+        tableType: 'EXTERNAL_TABLE',
       },
       destination_properties: {
-        TableInput: {
-          PartitionKeys: [
-            {
-              Name: 'dt',
-              Type: 'string',
-            },
-            {
-              Name: 'hr',
-              Type: 'string',
-            },
-            {
-              Name: 'lambda',
-              Type: 'string',
-            },
-          ],
-        },
+        partitionKeys: [
+          {
+            name: 'dt',
+            type: 'string',
+          },
+          {
+            name: 'hr',
+            type: 'string',
+          },
+          {
+            name: 'lambda',
+            type: 'string',
+          },
+        ],
       },
     };
 
@@ -338,13 +362,27 @@ describe('tests for s3 event scheduling', () => {
     await router({ Records: [s3Event] }, {});
 
     expect(
-      AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-    ).toMatchInlineSnapshot(`
-      Object {
-        "MessageBody": "{\\"resource_id\\":\\"1\\",\\"sort_key\\":\\"dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon:1466424480000\\",\\"started_at\\":1466424490000,\\"updated_at\\":1466424490000,\\"status\\":\\"scheduled\\",\\"partition\\":{\\"location\\":\\"s3://wharfie-testing-079185815456-us-west-2/wharfie-testing/dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon/\\",\\"partitionValues\\":[\\"dt=2023-09-04\\",\\"hr=19\\",\\"lambda=wharfie-testing-daemon\\"]}}",
-        "QueueUrl": "",
-      }
-    `);
+      JSON.parse(
+        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+          .MessageBody
+      )
+    ).toStrictEqual({
+      resource_id: '1',
+      sort_key:
+        'dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon:1466424480000',
+      started_at: 1466424490000,
+      updated_at: 1466424490000,
+      status: 'scheduled',
+      partition: {
+        location:
+          's3://wharfie-testing-079185815456-us-west-2/wharfie-testing/dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon/',
+        partitionValues: [
+          'dt=2023-09-04',
+          'hr=19',
+          'lambda=wharfie-testing-daemon',
+        ],
+      },
+    });
   });
 
   it('run fixtured eventbridge', async () => {
@@ -359,27 +397,23 @@ describe('tests for s3 event scheduling', () => {
     ];
     resource_mock = {
       source_properties: {
-        TableInput: {
-          TableType: 'EXTERNAL_TABLE',
-        },
+        tableType: 'EXTERNAL_TABLE',
       },
       destination_properties: {
-        TableInput: {
-          PartitionKeys: [
-            {
-              Name: 'dt',
-              Type: 'string',
-            },
-            {
-              Name: 'hr',
-              Type: 'string',
-            },
-            {
-              Name: 'lambda',
-              Type: 'string',
-            },
-          ],
-        },
+        partitionKeys: [
+          {
+            name: 'dt',
+            type: 'string',
+          },
+          {
+            name: 'hr',
+            type: 'string',
+          },
+          {
+            name: 'lambda',
+            type: 'string',
+          },
+        ],
       },
     };
 
@@ -413,12 +447,26 @@ describe('tests for s3 event scheduling', () => {
     await router(s3Event, {});
 
     expect(
-      AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-    ).toMatchInlineSnapshot(`
-      Object {
-        "MessageBody": "{\\"resource_id\\":\\"1\\",\\"sort_key\\":\\"dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon:1466424480000\\",\\"started_at\\":1466424490000,\\"updated_at\\":1466424490000,\\"status\\":\\"scheduled\\",\\"partition\\":{\\"location\\":\\"s3://wharfie-testing-079185815456-us-west-2/wharfie-testing/dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon/\\",\\"partitionValues\\":[\\"dt=2023-09-04\\",\\"hr=19\\",\\"lambda=wharfie-testing-daemon\\"]}}",
-        "QueueUrl": "",
-      }
-    `);
+      JSON.parse(
+        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+          .MessageBody
+      )
+    ).toStrictEqual({
+      resource_id: '1',
+      sort_key:
+        'dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon:1466424480000',
+      started_at: 1466424490000,
+      updated_at: 1466424490000,
+      status: 'scheduled',
+      partition: {
+        location:
+          's3://wharfie-testing-079185815456-us-west-2/wharfie-testing/dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon/',
+        partitionValues: [
+          'dt=2023-09-04',
+          'hr=19',
+          'lambda=wharfie-testing-daemon',
+        ],
+      },
+    });
   });
 });

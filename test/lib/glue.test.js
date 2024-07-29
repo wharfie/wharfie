@@ -95,20 +95,20 @@ describe('tests for Glue', () => {
       AWS.GlueMock.commandCalls(AWS.BatchCreatePartitionCommand)[0].args[0]
         .input
     ).toMatchInlineSnapshot(`
-      Object {
+      {
         "DatabaseName": "database_name",
-        "PartitionInputList": Array [
-          Object {
-            "StorageDescriptor": Object {},
-            "Values": Array [
+        "PartitionInputList": [
+          {
+            "StorageDescriptor": {},
+            "Values": [
               "2020",
               "03",
               "21",
             ],
           },
-          Object {
-            "StorageDescriptor": Object {},
-            "Values": Array [
+          {
+            "StorageDescriptor": {},
+            "Values": [
               "1999",
               "03",
               "21",
@@ -122,12 +122,12 @@ describe('tests for Glue', () => {
       AWS.GlueMock.commandCalls(AWS.BatchCreatePartitionCommand)[1].args[0]
         .input
     ).toMatchInlineSnapshot(`
-      Object {
+      {
         "DatabaseName": "database_name",
-        "PartitionInputList": Array [
-          Object {
-            "StorageDescriptor": Object {},
-            "Values": Array [
+        "PartitionInputList": [
+          {
+            "StorageDescriptor": {},
+            "Values": [
               "2020",
               "03",
               "21",
@@ -208,36 +208,36 @@ describe('tests for Glue', () => {
       AWS.GlueMock.commandCalls(AWS.BatchUpdatePartitionCommand)[0].args[0]
         .input
     ).toMatchInlineSnapshot(`
-      Object {
+      {
         "DatabaseName": "database_name",
-        "Entries": Array [
-          Object {
-            "PartitionInput": Object {
-              "Parameters": Object {},
-              "StorageDescriptor": Object {},
-              "Values": Array [
+        "Entries": [
+          {
+            "PartitionInput": {
+              "Parameters": {},
+              "StorageDescriptor": {},
+              "Values": [
                 "2020",
                 "03",
                 "21",
               ],
             },
-            "PartitionValueList": Array [
+            "PartitionValueList": [
               "2020",
               "03",
               "21",
             ],
           },
-          Object {
-            "PartitionInput": Object {
-              "Parameters": Object {},
-              "StorageDescriptor": Object {},
-              "Values": Array [
+          {
+            "PartitionInput": {
+              "Parameters": {},
+              "StorageDescriptor": {},
+              "Values": [
                 "1999",
                 "1",
                 "12",
               ],
             },
-            "PartitionValueList": Array [
+            "PartitionValueList": [
               "1999",
               "1",
               "12",
@@ -251,20 +251,20 @@ describe('tests for Glue', () => {
       AWS.GlueMock.commandCalls(AWS.BatchUpdatePartitionCommand)[1].args[0]
         .input
     ).toMatchInlineSnapshot(`
-      Object {
+      {
         "DatabaseName": "database_name",
-        "Entries": Array [
-          Object {
-            "PartitionInput": Object {
-              "Parameters": Object {},
-              "StorageDescriptor": Object {},
-              "Values": Array [
+        "Entries": [
+          {
+            "PartitionInput": {
+              "Parameters": {},
+              "StorageDescriptor": {},
+              "Values": [
                 "2020",
                 "03",
                 "21",
               ],
             },
-            "PartitionValueList": Array [
+            "PartitionValueList": [
               "2020",
               "03",
               "21",
@@ -312,18 +312,18 @@ describe('tests for Glue', () => {
       AWS.GlueMock.commandCalls(AWS.BatchDeletePartitionCommand)[0].args[0]
         .input
     ).toMatchInlineSnapshot(`
-      Object {
+      {
         "DatabaseName": "database_name",
-        "PartitionsToDelete": Array [
-          Object {
-            "Values": Array [
+        "PartitionsToDelete": [
+          {
+            "Values": [
               "2020",
               "03",
               "21",
             ],
           },
-          Object {
-            "Values": Array [
+          {
+            "Values": [
               "1999",
               "1",
               "12",
@@ -418,11 +418,7 @@ describe('tests for Glue', () => {
     await glue.cloneDestinationTable(
       {
         destination_properties: {
-          TableInput: {
-            StorageDescriptor: {
-              Location: 's3://location/data/some_prefix/references/',
-            },
-          },
+          location: 's3://location/data/some_prefix/references/',
         },
       },
       params,
@@ -494,11 +490,7 @@ describe('tests for Glue', () => {
     await glue.cloneDestinationTable(
       {
         destination_properties: {
-          TableInput: {
-            StorageDescriptor: {
-              Location: 's3://location/references/',
-            },
-          },
+          location: 's3://location/references/',
         },
       },
       params,

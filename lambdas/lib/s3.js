@@ -62,8 +62,8 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").PutObjectRequest} params - params for PutObject request
-   * @returns {Promise<import("@aws-sdk/client-s3").PutObjectOutput>} -
+   * @param {import("@aws-sdk/client-s3").PutObjectCommandInput} params - params for PutObject request
+   * @returns {Promise<import("@aws-sdk/client-s3").PutObjectCommandOutput>} -
    */
   async putObject(params) {
     const command = new AWS.PutObjectCommand(params);
@@ -71,7 +71,7 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").GetObjectRequest} params - params for GetObject request
+   * @param {import("@aws-sdk/client-s3").GetObjectCommandInput} params - params for GetObject request
    * @returns {Promise<string>} -
    */
   async getObject(params) {
@@ -94,7 +94,7 @@ class S3 {
 
   /**
    * @param {import("@aws-sdk/client-s3").HeadObjectCommandInput} params - params for HeadObject request
-   * @returns {Promise<import("@aws-sdk/client-s3").HeadObjectOutput>} -
+   * @returns {Promise<import("@aws-sdk/client-s3").HeadObjectCommandOutput>} -
    */
   async headObject(params) {
     const command = new AWS.HeadObjectCommand(params);
@@ -129,7 +129,7 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").DeleteObjectsRequest} params - params for deleteObjects request
+   * @param {import("@aws-sdk/client-s3").DeleteObjectsCommandInput} params - params for deleteObjects request
    */
   async deleteObjects(params) {
     if (!params.Delete || !params.Delete.Objects) {
@@ -181,11 +181,12 @@ class S3 {
     return {
       bucket: match[1],
       prefix: key + trailingSlashes,
+      arn: `arn:aws:s3:::${match[1]}/${key + trailingSlashes}`,
     };
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").CopyObjectRequest} params -
+   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput} params -
    */
   async multiPartCopyObject({ Bucket, Key, CopySource }) {
     if (!CopySource) throw new Error('CopySource is required');
@@ -283,7 +284,7 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").CopyObjectRequest} params -
+   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput} params -
    */
   async copyObjectWithMultiPartFallback(params) {
     try {
@@ -303,7 +304,7 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").CopyObjectRequest[]} params -
+   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput[]} params -
    */
   async copyObjectsWithMultiPartFallback(params) {
     await bluebirdPromise.map(params, this.copyObjectWithMultiPartFallback, {
@@ -312,7 +313,7 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").ListObjectsV2Request} SourceParams -
+   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} SourceParams -
    * @param {string} DestinationBucket -
    * @param {string} DestinationPrefix -
    */
@@ -349,7 +350,7 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").ListObjectsV2Request} params -
+   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params -
    */
   async deletePath(params) {
     const response = await this.s3.send(new AWS.ListObjectsV2Command(params));
@@ -377,7 +378,7 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").ListObjectsV2Request} params -
+   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params -
    * @param {Date} expirationDate -
    */
   async expireObjects(params, expirationDate = new Date()) {
@@ -413,7 +414,7 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").ListObjectsV2Request} params - params for ListObjectV2 request
+   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params - params for ListObjectV2 request
    * @param {Array<string>} prefixes - accumulator for common prefixes
    * @returns {Promise<string[]>} - common prefixes in given s3 location
    */
@@ -443,7 +444,7 @@ class S3 {
   /**
    * @param {string} Bucket - S3 bucket to inspect for partitions
    * @param {string} Prefix - S3 prefix to use for partition inspection
-   * @param {Array<{Name: string}>} partitionKeys - Partition keys that will exist in s3 paths
+   * @param {Array<{name: string}>} partitionKeys - Partition keys that will exist in s3 paths
    * @param {import('../typedefs').PartitionValues} PartitionValues - accumulator for Partition values
    * @param {Array<import('../typedefs').Partition>} partitions - accumulator for Partition objects
    * @returns {Promise<import('../typedefs').Partition[]>} - list of partitions that exists in the given s3 location
@@ -459,16 +460,16 @@ class S3 {
     const promises = prefixes.map(async (prefix) => {
       const partitionValues = Object.assign(
         {
-          [partitionKeys[0].Name]: prefix
+          [partitionKeys[0].name]: prefix
             .replace(Prefix, '')
             .replace('/', '')
-            .replace(`${partitionKeys[0].Name}=`, '')
-            .replace(`${partitionKeys[0].Name}}%3D`, ''),
+            .replace(`${partitionKeys[0].name}=`, '')
+            .replace(`${partitionKeys[0].name}}%3D`, ''),
         },
         PartitionValues
       );
       // ignores kinesis firehose's failure prefix
-      if (partitionValues[partitionKeys[0].Name] === 'processing_failed')
+      if (partitionValues[partitionKeys[0].name] === 'processing_failed')
         return;
       partitionKeys.length > 1
         ? await this.findPartitions(
@@ -648,6 +649,24 @@ class S3 {
   }
 
   /**
+   * @param {import("@aws-sdk/client-s3").PutBucketLifecycleConfigurationCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketLifecycleConfigurationCommandOutput>} -
+   */
+  async putBucketLifecycleConfigutation(params) {
+    const command = new AWS.PutBucketLifecycleConfigurationCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").GetBucketLifecycleConfigurationCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketLifecycleConfigurationCommandOutput>} -
+   */
+  async getBucketLifecycleConfigutation(params) {
+    const command = new AWS.GetBucketLifecycleConfigurationCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
    * @param {string} bucketName -
    * @param {string} expectedOwnerId -
    * @returns {Promise<boolean>} -
@@ -701,7 +720,7 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").ListObjectsV2Request} params - params for ListObjectV2 request
+   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params - params for ListObjectV2 request
    * @param {string} [region] -
    * @param {Number} [byteSize] - accumulator for common prefixes
    * @returns {Promise<Number>} -

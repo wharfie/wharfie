@@ -1,6 +1,5 @@
 'use strict';
 
-const { parse } = require('@sandfox/arn');
 const logging = require('../../lib/logging');
 const { createId } = require('../../lib/id');
 
@@ -74,7 +73,7 @@ async function _run(event, context, resource) {
     throw new Error('Wharfie event missing fields');
   const event_log = logging.getEventLogger(event, context);
   event_log.debug(`Running Query: ${event.query_id}`);
-  const { region } = parse(resource.resource_arn);
+  const region = resource.region;
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
   const athena = new Athena({ region, credentials });

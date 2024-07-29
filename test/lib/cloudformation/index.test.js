@@ -50,9 +50,9 @@ describe('tests for CloudFormation', () => {
       }
     );
     expect(request.mock.calls[0]).toMatchInlineSnapshot(`
-      Array [
-        Object {
-          "headers": Object {
+      [
+        {
+          "headers": {
             "content-length": 130,
             "content-type": "",
           },
@@ -98,9 +98,9 @@ describe('tests for CloudFormation', () => {
       }
     );
     expect(request.mock.calls[0]).toMatchInlineSnapshot(`
-      Array [
-        Object {
-          "headers": Object {
+      [
+        {
+          "headers": {
             "content-length": 149,
             "content-type": "",
           },

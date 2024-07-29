@@ -1,6 +1,9 @@
 'use strict';
 const crypto = require('crypto');
 
+const { InvalidRequestException } = jest.requireActual(
+  '@aws-sdk/client-athena'
+);
 const { createId } = require('../../../lambdas/lib/id');
 const SQS = require('./sqs');
 const QueryRunner = require('./query-runner');
@@ -45,6 +48,10 @@ class AthenaMock {
         return await this.getWorkGroup(command.input);
       case 'CreateWorkGroupCommand':
         return await this.createWorkGroup(command.input);
+      case 'UpdateWorkGroupCommand':
+        return await this.updateWorkGroup(command.input);
+      case 'DeleteWorkGroupCommand':
+        return await this.deleteWorkGroup(command.input);
       case 'StartQueryExecutionCommand':
         return await this.startQueryExecution(command.input);
       case 'GetQueryExecutionCommand':
@@ -58,19 +65,56 @@ class AthenaMock {
 
   async getWorkGroup(params) {
     if (!AthenaMock.__state.workgroups[params.WorkGroup])
-      throw new Error(`workgroup: ${params.WorkGroup} does not exist`);
+      throw new InvalidRequestException({
+        message: `workgroup: ${params.WorkGroup} does not exist`,
+      });
     return AthenaMock.__state.workgroups[params.WorkGroup];
+  }
+
+  async deleteWorkGroup(params) {
+    if (!AthenaMock.__state.workgroups[params.WorkGroup])
+      throw new InvalidRequestException({
+        message: `workgroup: ${params.WorkGroup} does not exist`,
+      });
+
+    delete AthenaMock.__state.workgroups[params.WorkGroup];
   }
 
   async createWorkGroup(params) {
     if (AthenaMock.__state.workgroups[params.Name])
-      throw new Error('workgroup exists');
+      throw new InvalidRequestException({
+        message: `workgroup: ${params.WorkGroup} already exists`,
+      });
 
     AthenaMock.__state.workgroups[params.Name] = {
       ...params,
       queries: {},
     };
     return AthenaMock.__state.workgroups[params.WorkGroup];
+  }
+
+  async updateWorkGroup(params) {
+    if (!AthenaMock.__state.workgroups[params.WorkGroup])
+      throw new InvalidRequestException({
+        message: `workgroup: ${params.WorkGroup} does not exist`,
+      });
+
+    if (params.ConfigurationUpdates?.ResultConfigurationUpdates) {
+      AthenaMock.__state.workgroups[
+        params.WorkGroup
+      ].Configuration.ResultConfiguration = {
+        ...AthenaMock.__state.workgroups[params.WorkGroup].Configuration
+          .ResultConfiguration,
+        ...params.ConfigurationUpdates.ResultConfigurationUpdates,
+      };
+    }
+    if (params?.Description) {
+      AthenaMock.__state.workgroups[params.WorkGroup].Description =
+        params.Description;
+    }
+    if (params?.State) {
+      AthenaMock.__state.workgroups[params.WorkGroup].State = params.State;
+    }
   }
 
   // EXPERIMENTAL
@@ -90,7 +134,9 @@ class AthenaMock {
   async startQueryExecution(params) {
     const workgroup = params.WorkGroup || 'default';
     if (!AthenaMock.__state.workgroups[workgroup])
-      throw new Error(`workgroup (${workgroup}) does not exist`);
+      throw new InvalidRequestException({
+        message: `workgroup: ${params.WorkGroup} does not exist`,
+      });
 
     const QueryExecutionId = createId();
     AthenaMock.__state.workgroups[workgroup].queries[QueryExecutionId] = {

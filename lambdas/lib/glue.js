@@ -147,16 +147,8 @@ class Glue {
   }
 
   /**
-   * @param {import("@aws-sdk/client-glue").UpdateTableRequest} params - params for updateTable request
-   * @returns {Promise<import("@aws-sdk/client-glue").UpdateTableResponse>} - updateTable response
-   */
-  async updateTable(params) {
-    return await this.glue.send(new AWS.UpdateTableCommand(params));
-  }
-
-  /**
-   * @param {import("@aws-sdk/client-glue").DeleteTableRequest} params - params for deleteTable request
-   * @returns {Promise<import("@aws-sdk/client-glue").DeleteTableResponse>} - deleteTable response
+   * @param {import("@aws-sdk/client-glue").DeleteTableCommandInput} params - params for deleteTable request
+   * @returns {Promise<import("@aws-sdk/client-glue").DeleteTableCommandOutput>} - deleteTable response
    */
   async deleteTable(params) {
     return await this.glue.send(new AWS.DeleteTableCommand(params));
@@ -210,19 +202,75 @@ class Glue {
   }
 
   /**
-   * @param {import("@aws-sdk/client-glue").CreateTableRequest} params - params for createTable request
-   * @returns {Promise<import("@aws-sdk/client-glue").CreateTableResponse>} - createTable response
+   * @param {import("@aws-sdk/client-glue").CreateTableCommandInput} params - params for createTable request
+   * @returns {Promise<import("@aws-sdk/client-glue").CreateTableCommandOutput>} - createTable response
    */
   async createTable(params) {
     return await this.glue.send(new AWS.CreateTableCommand(params));
   }
 
   /**
-   * @param {import("@aws-sdk/client-glue").GetTableRequest} params - params for getTable request
-   * @returns {Promise<import("@aws-sdk/client-glue").GetTableResponse>} - getTable response
+   * @param {import("@aws-sdk/client-glue").UpdateTableCommandInput} params - params for updateTable request
+   * @returns {Promise<import("@aws-sdk/client-glue").UpdateTableCommandOutput>} - updateTable response
+   */
+  async updateTable(params) {
+    return await this.glue.send(new AWS.UpdateTableCommand(params));
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-glue").GetTableCommandInput} params - params for getTable request
+   * @returns {Promise<import("@aws-sdk/client-glue").GetTableCommandOutput>} - getTable response
    */
   async getTable(params) {
     return await this.glue.send(new AWS.GetTableCommand(params));
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-glue").GetDatabaseCommandInput} params - params for getDatabase request
+   * @returns {Promise<import("@aws-sdk/client-glue").GetDatabaseCommandOutput>} - getDatabase response
+   */
+  async getDatabase(params) {
+    return await this.glue.send(new AWS.GetDatabaseCommand(params));
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-glue").CreateDatabaseCommandInput} params - params for createDatabase request
+   * @returns {Promise<import("@aws-sdk/client-glue").CreateDatabaseCommandOutput>} - createDatabase response
+   */
+  async createDatabase(params) {
+    return await this.glue.send(new AWS.CreateDatabaseCommand(params));
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-glue").DeleteDatabaseCommandInput} params - params for deleteDatabase request
+   * @returns {Promise<import("@aws-sdk/client-glue").DeleteDatabaseCommandOutput>} - deleteDatabase response
+   */
+  async deleteDatabase(params) {
+    return await this.glue.send(new AWS.DeleteDatabaseCommand(params));
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-glue").GetTagsCommandInput} params - params for getTags request
+   * @returns {Promise<import("@aws-sdk/client-glue").GetTagsCommandOutput>} - getTags response
+   */
+  async getTags(params) {
+    return await this.glue.send(new AWS.GetTagsCommand(params));
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-glue").TagResourceCommandInput} params - params for tagResource request
+   * @returns {Promise<import("@aws-sdk/client-glue").TagResourceCommandOutput>} - tagResource response
+   */
+  async tagResource(params) {
+    return await this.glue.send(new AWS.TagResourceCommand(params));
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-glue").UntagResourceCommandInput} params - params for untagResource request
+   * @returns {Promise<import("@aws-sdk/client-glue").UntagResourceCommandOutput>} - untagResource response
+   */
+  async untagResource(params) {
+    return await this.glue.send(new AWS.UntagResourceCommand(params));
   }
 
   /**
@@ -353,11 +401,9 @@ class Glue {
       }
       // eslint-disable-next-line no-empty
     } catch (e) {}
-    const base_location =
-      resource.destination_properties.TableInput.StorageDescriptor.Location.replace(
-        '/references/',
-        '/'
-      ).replace('/migrate-references/', '/');
+    const base_location = (resource.destination_properties.location || '')
+      .replace('/references/', '/')
+      .replace('/migrate-references/', '/');
     await this.createTable({
       DatabaseName: databaseName,
       TableInput: {

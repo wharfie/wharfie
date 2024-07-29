@@ -125,6 +125,30 @@ class Athena {
   }
 
   /**
+   * @param {import("@aws-sdk/client-athena").CreateWorkGroupCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-athena").CreateWorkGroupCommandOutput>} -
+   */
+  async createWorkGroup(params) {
+    return await this.athena.send(new AWS.CreateWorkGroupCommand(params));
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-athena").UpdateWorkGroupCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-athena").UpdateWorkGroupCommandOutput>} -
+   */
+  async updateWorkGroup(params) {
+    return await this.athena.send(new AWS.UpdateWorkGroupCommand(params));
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-athena").DeleteWorkGroupCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-athena").DeleteWorkGroupCommandOutput>} -
+   */
+  async deleteWorkGroup(params) {
+    return await this.athena.send(new AWS.DeleteWorkGroupCommand(params));
+  }
+
+  /**
    * @param {import("@aws-sdk/client-athena").StartQueryExecutionInput} params - Athena StartQueryExecution parameters
    * @returns {Promise<import("@aws-sdk/client-athena").StartQueryExecutionOutput>} - Athena StartQueryExecution result
    */
