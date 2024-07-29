@@ -112,6 +112,7 @@ describe('event source mapping IaC', () => {
         "EventSourceMappings": [
           {
             "BatchSize": 1,
+            "Enabled": true,
             "EventSourceArn": "test-event-source-arn",
             "FunctionName": "test-function",
             "MaximumBatchingWindowInSeconds": 0,

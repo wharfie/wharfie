@@ -2725,7 +2725,7 @@ describe('deployment IaC', () => {
                       "AttributeType": "S",
                     },
                   ],
-                  "billingMode": "PROVISIONED",
+                  "billingMode": "PAY_PER_REQUEST",
                   "deployment": {
                     "accountId": "",
                     "envPaths": {
