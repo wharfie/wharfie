@@ -1,9 +1,13 @@
 'use strict';
 
+const ansiEscapes = require('ansi-escapes');
+const chalk = require('chalk');
+const Table = require('cli-table3');
+
 const loadProject = require('../../project/load');
 const loadEnvironment = require('../../project/load-environment');
 const ProjectCostEstimator = require('../../project/cost');
-const { displayFailure, displayInfo, displaySuccess } = require('../../output');
+const { displayFailure, displayInfo } = require('../../output');
 
 const cost = async (path, environmentName) => {
   displayInfo(`calculating cost estimates for project...`);
@@ -17,32 +21,52 @@ const cost = async (path, environmentName) => {
   });
 
   const cost = await costEstimator.calculateProjectCost();
-  console.table(
-    cost
-      .filter((c) => c.monthly_cost_estimate > 0 && c.type === 'model')
-      .map((c) => ({
-        name: c.name,
-        montly_cost_estimate: costEstimator.currencyFormatter.format(
-          c.monthly_cost_estimate
-        ),
-      }))
-  );
-  console.table(
-    cost
-      .filter((c) => c.monthly_cost_estimate > 0 && c.type === 'source')
-      .map((c) => ({
-        name: c.name,
-        montly_cost_estimate: costEstimator.currencyFormatter.format(
-          c.monthly_cost_estimate
-        ),
-      }))
-  );
+  process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
 
-  displaySuccess(
-    `Total monthly project cost estimate: ${costEstimator.currencyFormatter.format(
-      cost.reduce((acc, c) => acc + c.monthly_cost_estimate, 0)
-    )}`
+  let output = '';
+  output += `${chalk.white('Models:')}\n`;
+  const models = cost.filter(
+    (c) => c.monthly_cost_estimate > 0 && c.type === 'model'
   );
+  const modelTable = new Table({
+    head: ['Name', 'Monthy Cost Estimate'],
+    style: { head: [] },
+  });
+  models.forEach((model) => {
+    modelTable.push([
+      model.name,
+      chalk.green(
+        costEstimator.currencyFormatter.format(model.monthly_cost_estimate)
+      ),
+    ]);
+  });
+  output += `${modelTable.toString()}\n`;
+
+  output += `${chalk.white('Sources:')}\n`;
+  const sources = cost.filter(
+    (c) => c.monthly_cost_estimate > 0 && c.type === 'source'
+  );
+  const sourceTable = new Table({
+    head: ['Name', 'Monthy Cost Estimate'],
+    style: { head: [] },
+  });
+  sources.forEach((model) => {
+    sourceTable.push([
+      model.name,
+      chalk.green(
+        costEstimator.currencyFormatter.format(model.monthly_cost_estimate)
+      ),
+    ]);
+  });
+  output += `${sourceTable.toString()}\n`;
+  output += `${chalk.white.bold(
+    'Total monthly project cost estimate:'
+  )} ${chalk.green.bold(
+    costEstimator.currencyFormatter.format(
+      cost.reduce((acc, c) => acc + c.monthly_cost_estimate, 0)
+    )
+  )}`;
+  console.log(output);
 };
 
 exports.command = 'cost [path]';
