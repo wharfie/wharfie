@@ -1,5 +1,6 @@
 'use strict';
 const chokidar = require('chokidar');
+const ansiEscapes = require('ansi-escapes');
 
 const loadProject = require('../../project/load');
 const loadEnvironment = require('../../project/load-environment');
@@ -30,59 +31,81 @@ function debounceAsync(func, wait) {
   };
 }
 
-const { displayFailure, displayInfo, displaySuccess } = require('../../output');
+const {
+  displayFailure,
+  displayInfo,
+  displaySuccess,
+  monitorProjectApplyReconcilables,
+} = require('../../output/');
 
 const dev = async (projectPath, environmentName) => {
-  const project = await loadProject({
-    path: projectPath,
-  });
-  displayInfo(`Starting dev server for ${project.name}...`);
-
-  const environment = loadEnvironment(project, environmentName);
+  console.clear();
+  displayInfo(`Starting dev server...`);
   const deployment = await load({
     deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME,
   });
-  let projectResources;
-  try {
-    projectResources = await load({
-      deploymentName: deployment.name,
-      resourceName: project.name,
-    });
-  } catch (error) {
-    if (error.message !== 'No resource found') throw error;
-    projectResources = new WharfieProject({
-      deployment,
-      name: project.name,
-    });
-  }
 
-  let pendingChanges = [];
   const handleBatchChanges = debounceAsync(async () => {
-    const project = await loadProject({
-      path: projectPath,
-    });
-    const resourceOptions = getResourceOptions(environment, project);
-    projectResources.registerWharfieResources(resourceOptions);
-    await projectResources.reconcile();
-    displaySuccess('Changes applied');
-    pendingChanges = [];
+    let project, environment;
+    try {
+      project = await loadProject({
+        path: projectPath,
+      });
+      environment = loadEnvironment(project, environmentName);
+    } catch (error) {
+      displayFailure(error);
+      return;
+    }
+    console.clear();
+    process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
+    displayInfo(`applying changes to ${project.name}...`);
+    let projectResources;
+    try {
+      projectResources = await load({
+        deploymentName: deployment.name,
+        resourceName: project.name,
+      });
+    } catch (error) {
+      if (error.message !== 'No resource found') {
+        displayFailure(error);
+        return;
+      }
+      projectResources = new WharfieProject({
+        deployment,
+        name: project.name,
+      });
+    }
+    try {
+      const project = await loadProject({
+        path: projectPath,
+      });
+      const resourceOptions = getResourceOptions(environment, project);
+      projectResources.registerWharfieResources(resourceOptions);
+      const multibar = monitorProjectApplyReconcilables(projectResources);
+      await projectResources.reconcile();
+      multibar.stop();
+      process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
+      process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
+      displaySuccess(`project ${project.name} is up to date`);
+    } catch (error) {
+      displayFailure(error);
+    }
   }, 200);
+
+  /**
+   *
+   * @param {string} path -
+   */
+  function handleWatch(path) {
+    handleBatchChanges();
+  }
 
   const watcher = chokidar.watch('.');
   // Add event listeners.
   watcher
-    .on('add', (path) => {
-      pendingChanges.push(path);
-      handleBatchChanges();
-    })
-    .on('change', (path) => {
-      pendingChanges.push(path);
-      handleBatchChanges();
-    })
-    .on('unlink', (path) => {
-      pendingChanges.push(path);
-      handleBatchChanges();
-    })
+    .on('add', handleWatch)
+    .on('change', handleWatch)
+    .on('unlink', handleWatch)
     .on('error', (error) => {
       displayFailure(`Watcher error: ${error}`);
     });
