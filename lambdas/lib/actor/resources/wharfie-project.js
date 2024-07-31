@@ -338,7 +338,12 @@ class WharfieProject extends BaseResourceGroup {
 
     this.getWharfieResources().forEach((resource) => {
       if (!resourceNames.has(resource.name)) {
-        resource.markForDestruction();
+        if (resource.isDestroyed()) {
+          delete this.resources[resource.name];
+        } else {
+          resource.markForDestruction();
+          this.setStatus(Reconcilable.Status.DRIFTED);
+        }
       }
     });
     resourceOptions.forEach((options) => {
