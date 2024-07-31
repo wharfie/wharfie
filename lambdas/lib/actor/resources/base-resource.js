@@ -87,11 +87,11 @@ class BaseResource extends Reconcilable {
    * @returns {boolean} -
    */
   checkPropertyEquality(other) {
-    Object.keys(this.properties).forEach((key) => {
+    for (const key in this.properties) {
       if (!this.assert(key, other[key])) {
         return false;
       }
-    });
+    }
     return true;
   }
 
@@ -141,7 +141,7 @@ class BaseResource extends Reconcilable {
     if (this.get('_INTERNAL_STATE_RESOURCE')) {
       return;
     }
-    await this.save();
+    await this.delete();
   }
 
   async save() {
