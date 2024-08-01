@@ -4,7 +4,7 @@ const ansiEscapes = require('ansi-escapes');
 const chalk = require('chalk');
 const Table = require('cli-table3');
 
-const loadProject = require('../../project/load');
+const { loadProject } = require('../../project/load');
 const loadEnvironment = require('../../project/load-environment');
 const ProjectCostEstimator = require('../../project/cost');
 const { displayFailure, displayInfo } = require('../../output');

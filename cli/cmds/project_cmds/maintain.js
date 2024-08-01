@@ -1,6 +1,6 @@
 'use strict';
 
-const loadProject = require('../../project/load');
+const { loadProject } = require('../../project/load');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
 const SQS = require('../../../lambdas/lib/sqs');
 const loadEnvironment = require('../../project/load-environment');

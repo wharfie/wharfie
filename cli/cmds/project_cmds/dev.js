@@ -1,8 +1,9 @@
 'use strict';
 const chokidar = require('chokidar');
 const ansiEscapes = require('ansi-escapes');
+const joi = require('joi');
 
-const loadProject = require('../../project/load');
+const { loadProject } = require('../../project/load');
 const loadEnvironment = require('../../project/load-environment');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
 const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
@@ -36,6 +37,7 @@ const {
   displayInfo,
   displaySuccess,
   monitorProjectApplyReconcilables,
+  displayValidationError,
 } = require('../../output/');
 
 const dev = async (projectPath, environmentName) => {
@@ -46,6 +48,7 @@ const dev = async (projectPath, environmentName) => {
   });
 
   const handleBatchChanges = debounceAsync(async () => {
+    console.clear();
     let project, environment;
     try {
       project = await loadProject({
@@ -53,11 +56,13 @@ const dev = async (projectPath, environmentName) => {
       });
       environment = loadEnvironment(project, environmentName);
     } catch (error) {
-      displayFailure(error);
+      if (error instanceof joi.ValidationError) {
+        displayValidationError(error);
+      } else {
+        displayFailure(error);
+      }
       return;
     }
-    console.clear();
-    process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
     displayInfo(`applying changes to ${project.name}...`);
     let projectResources;
     try {
@@ -76,9 +81,6 @@ const dev = async (projectPath, environmentName) => {
       });
     }
     try {
-      const project = await loadProject({
-        path: projectPath,
-      });
       const resourceOptions = getResourceOptions(environment, project);
       projectResources.registerWharfieResources(resourceOptions);
       const multibar = monitorProjectApplyReconcilables(projectResources);
