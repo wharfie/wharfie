@@ -1,8 +1,9 @@
 'use strict';
 
 const ansiEscapes = require('ansi-escapes');
+const joi = require('joi');
 
-const loadProject = require('../../project/load');
+const { loadProject } = require('../../project/load');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
 const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
 const loadEnvironment = require('../../project/load-environment');
@@ -13,6 +14,7 @@ const {
   displayInfo,
   displaySuccess,
   monitorProjectApplyReconcilables,
+  displayValidationError,
 } = require('../../output/');
 
 const apply = async (path, environmentName) => {
@@ -75,7 +77,10 @@ exports.handler = async function ({ path, environment }) {
   try {
     await apply(path, environment);
   } catch (err) {
-    displayFailure(err);
-    console.trace(err);
+    if (err instanceof joi.ValidationError) {
+      displayValidationError(err);
+    } else {
+      displayFailure(err);
+    }
   }
 };

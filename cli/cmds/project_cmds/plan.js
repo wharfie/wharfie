@@ -1,7 +1,7 @@
 'use strict';
 
 const diffProject = require('../../project/diff');
-const loadProject = require('../../project/load');
+const { loadProject } = require('../../project/load');
 const loadEnvironment = require('../../project/load-environment');
 const { displayFailure, displayInfo } = require('../../output');
 const Diff = require('diff');

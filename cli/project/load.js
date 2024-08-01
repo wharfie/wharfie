@@ -108,8 +108,9 @@ async function loadProject(options) {
     models: await loadModels(options),
     sources: await loadSources(options),
   };
+
   const validatedProject = validateProject(project);
   return validatedProject;
 }
 
-module.exports = loadProject;
+module.exports = { loadProject };

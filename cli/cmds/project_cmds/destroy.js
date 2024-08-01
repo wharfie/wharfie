@@ -2,7 +2,7 @@
 const inquirer = require('inquirer');
 const ansiEscapes = require('ansi-escapes');
 
-const loadProject = require('../../project/load');
+const { loadProject } = require('../../project/load');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
 const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
 const loadEnvironment = require('../../project/load-environment');

@@ -11,7 +11,7 @@ jest.mock('../../lambdas/lib/env-paths');
 const WharfieProject = require('../../lambdas/lib/actor/resources/wharfie-project');
 const WharfieDeployment = require('../../lambdas/lib/actor/wharfie-deployment');
 const { getResourceOptions } = require('../../cli/project/template-actor');
-const loadProject = require('../../cli/project/load');
+const { loadProject } = require('../../cli/project/load');
 const { deserialize } = require('../../lambdas/lib/actor/deserialize');
 
 describe('wharfie project IaC', () => {
