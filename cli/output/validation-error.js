@@ -1,5 +1,4 @@
 const joi = require('joi');
-const chalk = require('chalk');
 
 /**
  *
