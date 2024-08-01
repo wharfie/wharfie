@@ -12,7 +12,7 @@ const {
   displayFailure,
   displayInfo,
   displayValidationError,
-} = require('../../output');
+} = require('../../output/');
 
 const cost = async (path, environmentName) => {
   displayInfo(`calculating cost estimates for project...`);
