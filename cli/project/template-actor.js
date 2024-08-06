@@ -1,4 +1,5 @@
 const getTableInput = require('../../client/formats');
+const { validateModelSql, WharfieModelSQLError } = require('./model-validator');
 
 /**
  * @param {import('./typedefs').Environment} environment -
@@ -11,6 +12,7 @@ function getResourceOptions(environment, project) {
     db: project.name,
   };
   const resourceOptions = [];
+  const modelsForValidation = {};
   for (const model of project.models) {
     const templatedSQL = JSON.stringify({
       originalSql: model.sql,
@@ -53,6 +55,10 @@ function getResourceOptions(environment, project) {
         viewExpandedText: '/* Presto View */',
       },
     });
+    modelsForValidation[model.name] = model.sql.replace(
+      /\${(\w+)}/g,
+      (match, key) => SQLTemplateVariables[key] || ''
+    );
   }
   for (const source of project.sources) {
     const tableInput = getTableInput({
@@ -97,6 +103,13 @@ function getResourceOptions(environment, project) {
         compressed: tableInput.StorageDescriptor.Compressed,
       },
     });
+  }
+
+  const errors = validateModelSql(modelsForValidation, project, environment);
+  if (errors.length > 0) {
+    throw new WharfieModelSQLError(
+      `${errors.map((error) => error.message).join('\n\n')}`
+    );
   }
   return resourceOptions;
 }

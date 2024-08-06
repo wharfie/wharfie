@@ -1,7 +1,6 @@
 'use strict';
 
 const ansiEscapes = require('ansi-escapes');
-const joi = require('joi');
 
 const { loadProject } = require('../../project/load');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
@@ -14,8 +13,12 @@ const {
   displayInfo,
   displaySuccess,
   monitorProjectApplyReconcilables,
-  displayValidationError,
 } = require('../../output/');
+
+const {
+  displayValidationError,
+  isValidationError,
+} = require('../../output/validation-error');
 
 const apply = async (path, environmentName) => {
   const project = await loadProject({
@@ -77,7 +80,7 @@ exports.handler = async function ({ path, environment }) {
   try {
     await apply(path, environment);
   } catch (err) {
-    if (err instanceof joi.ValidationError) {
+    if (isValidationError(err)) {
       displayValidationError(err);
     } else {
       displayFailure(err);

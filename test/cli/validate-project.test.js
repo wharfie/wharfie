@@ -8,8 +8,8 @@ describe('validate project', () => {
     expect.assertions(1);
 
     const project = {
-      name: 'project-fixture',
-      path: '/Users/Dev/Documents/workspace/wharfie/wharfie/test/fixtures/project-fixture',
+      name: 'project_fixture',
+      path: '/Users/Dev/Documents/workspace/wharfie/wharfie/test/fixtures/project_fixture',
       environments: [{ name: '__wharfie_default_environment__' }],
       models: [
         {
@@ -229,8 +229,8 @@ describe('validate project', () => {
       ",
           },
         ],
-        "name": "project-fixture",
-        "path": "/Users/Dev/Documents/workspace/wharfie/wharfie/test/fixtures/project-fixture",
+        "name": "project_fixture",
+        "path": "/Users/Dev/Documents/workspace/wharfie/wharfie/test/fixtures/project_fixture",
         "sources": [
           {
             "columns": [
