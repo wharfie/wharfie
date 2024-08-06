@@ -434,4 +434,6 @@ class Glue {
   }
 }
 
+Glue.EntityNotFoundException = AWS.EntityNotFoundException;
+
 module.exports = Glue;

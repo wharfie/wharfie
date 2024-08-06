@@ -15,6 +15,11 @@ const {
   monitorProjectDestroyReconcilables,
 } = require('../../output/');
 
+const {
+  displayValidationError,
+  isValidationError,
+} = require('../../output/validation-error');
+
 const destroy = async (path, environmentName) => {
   const project = await loadProject({
     path,
@@ -97,7 +102,10 @@ exports.handler = async function ({ path, environment }) {
   try {
     await destroy(path, environment);
   } catch (err) {
-    console.trace(err);
-    displayFailure(err);
+    if (isValidationError(err)) {
+      displayValidationError(err);
+    } else {
+      displayFailure(err);
+    }
   }
 };

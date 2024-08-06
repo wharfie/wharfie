@@ -1,7 +1,6 @@
 'use strict';
 const chokidar = require('chokidar');
 const ansiEscapes = require('ansi-escapes');
-const joi = require('joi');
 
 const { loadProject } = require('../../project/load');
 const loadEnvironment = require('../../project/load-environment');
@@ -37,8 +36,12 @@ const {
   displayInfo,
   displaySuccess,
   monitorProjectApplyReconcilables,
-  displayValidationError,
 } = require('../../output/');
+
+const {
+  displayValidationError,
+  isValidationError,
+} = require('../../output/validation-error');
 
 const dev = async (projectPath, environmentName) => {
   console.clear();
@@ -56,7 +59,7 @@ const dev = async (projectPath, environmentName) => {
       });
       environment = loadEnvironment(project, environmentName);
     } catch (error) {
-      if (error instanceof joi.ValidationError) {
+      if (isValidationError(error)) {
         displayValidationError(error);
       } else {
         displayFailure(error);
@@ -71,7 +74,11 @@ const dev = async (projectPath, environmentName) => {
         resourceName: project.name,
       });
     } catch (error) {
-      if (error.message !== 'No resource found') {
+      if (
+        !['No resource found', 'Resource was not stored'].includes(
+          error.message
+        )
+      ) {
         displayFailure(error);
         return;
       }
@@ -90,7 +97,12 @@ const dev = async (projectPath, environmentName) => {
       process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
       displaySuccess(`project ${project.name} is up to date`);
     } catch (error) {
-      displayFailure(error);
+      if (isValidationError(error)) {
+        process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
+        displayValidationError(error);
+      } else {
+        displayFailure(error);
+      }
     }
   }, 200);
 
@@ -145,6 +157,7 @@ exports.handler = async function ({ path, environment }) {
   try {
     await dev(path, environment);
   } catch (err) {
+    console.trace(err);
     displayFailure(err);
   }
 };

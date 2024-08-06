@@ -3,16 +3,16 @@
 const ansiEscapes = require('ansi-escapes');
 const chalk = require('chalk');
 const Table = require('cli-table3');
-const joi = require('joi');
 
 const { loadProject } = require('../../project/load');
 const loadEnvironment = require('../../project/load-environment');
 const ProjectCostEstimator = require('../../project/cost');
+const { displayFailure, displayInfo } = require('../../output/');
+
 const {
-  displayFailure,
-  displayInfo,
   displayValidationError,
-} = require('../../output/');
+  isValidationError,
+} = require('../../output/validation-error');
 
 const cost = async (path, environmentName) => {
   displayInfo(`calculating cost estimates for project...`);
@@ -96,7 +96,7 @@ exports.handler = async function ({ path, environment }) {
   try {
     await cost(path, environment);
   } catch (err) {
-    if (err instanceof joi.ValidationError) {
+    if (isValidationError(err)) {
       displayValidationError(err);
     } else {
       displayFailure(err);
