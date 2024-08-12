@@ -145,6 +145,27 @@ describe('tests for S3', () => {
     );
   });
 
+  it('parseS3Uri throws on unterminated bucket uri', () => {
+    expect.assertions(1);
+    const s3 = new S3({ region: 'us-east-1' });
+    expect(() =>
+      s3.parseS3Uri('s3://example-bucket')
+    ).toThrowErrorMatchingInlineSnapshot(
+      `"s3://example-bucket is not of form s3://bucket/key or s3://bucket/"`
+    );
+  });
+
+  it('parseS3Uri works with bucket only', () => {
+    expect.assertions(1);
+    const s3 = new S3({});
+    const result = s3.parseS3Uri('s3://example-bucket/');
+    expect(result).toStrictEqual({
+      bucket: 'example-bucket',
+      prefix: '',
+      arn: 'arn:aws:s3:::example-bucket/',
+    });
+  });
+
   it('deletePath', async () => {
     expect.assertions(10);
     AWS.S3Mock.on(AWS.ListObjectsV2Command)
@@ -217,14 +238,6 @@ describe('tests for S3', () => {
           ],
         },
       }
-    );
-  });
-
-  it('parseS3Uri throws on invalid uri', () => {
-    expect.assertions(1);
-    const s3 = new S3({});
-    expect(() => s3.parseS3Uri('s3:00000')).toThrowErrorMatchingInlineSnapshot(
-      `"s3:00000 is not of form s3://bucket/key"`
     );
   });
 

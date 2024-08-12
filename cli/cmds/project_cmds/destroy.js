@@ -69,6 +69,7 @@ const destroy = async (path, environmentName) => {
     return;
   }
   process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
+  process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
   displayInfo(`destroying wharfie project ${project.name}...`);
 
   const multibar = monitorProjectDestroyReconcilables(projectResources);
