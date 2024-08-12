@@ -174,14 +174,14 @@ class S3 {
   parseS3Uri(uri) {
     if (typeof uri !== 'string')
       throw new TypeError(`uri (${uri}) is not a string`);
-    const match = uri.match(/^s3:\/\/([^/]+)\/(.+?)(\/*)$/);
-    if (!match) throw new Error(uri + ' is not of form s3://bucket/key');
-    const trailingSlashes = match[3];
-    const key = match[2];
+    const match = uri.match(/^s3:\/\/([^/]+)\/(.+?)*(\/*)$/);
+    if (!match)
+      throw new Error(uri + ' is not of form s3://bucket/key or s3://bucket/');
+    const parts = uri.split('//')[1].split('/');
     return {
-      bucket: match[1],
-      prefix: key + trailingSlashes,
-      arn: `arn:aws:s3:::${match[1]}/${key + trailingSlashes}`,
+      bucket: parts[0],
+      prefix: parts.slice(1).join('/'),
+      arn: `arn:aws:s3:::${parts[0]}/${parts.slice(1).join('/')}`,
     };
   }
 
