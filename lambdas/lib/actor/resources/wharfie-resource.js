@@ -215,7 +215,7 @@ class WharfieResource extends BaseResourceGroup {
             data: {
               region: this.get('region'),
               wharfie_version: version,
-              status: 'CREATING',
+              resource_status: 'CREATING',
               athena_workgroup: workgroup.name,
               daemon_config: {
                 Role: () => this.get('roleArn'),
