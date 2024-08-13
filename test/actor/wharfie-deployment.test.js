@@ -2287,6 +2287,7 @@ describe('deployment IaC', () => {
                             "tableType": "EXTERNAL_TABLE",
                             "tags": [],
                           },
+                          "resource_status": "CREATING",
                           "source_properties": {
                             "arn": "arn:aws:glue:undefined:undefined:table/test-deployment/logs_raw",
                             "columns": [
@@ -2398,7 +2399,6 @@ describe('deployment IaC', () => {
                             "tableType": "EXTERNAL_TABLE",
                             "tags": [],
                           },
-                          "status": "CREATING",
                           "wharfie_version": "0.0.1",
                         },
                       },
