@@ -703,6 +703,10 @@ class S3 {
    * @returns {Promise<string>} -
    */
   async findBucketRegion(params) {
+    const key = JSON.stringify(params);
+    if (S3.findBucketRegionCache.has(key)) {
+      return S3.findBucketRegionCache.get(key);
+    }
     try {
       const { LocationConstraint } = await this.getBucketLocation(params);
       // If the LocationConstraint is null or not present, the bucket is in us-east-1
@@ -748,4 +752,7 @@ class S3 {
     return byteSize;
   }
 }
+
+S3.findBucketRegionCache = new Map();
+
 module.exports = S3;
