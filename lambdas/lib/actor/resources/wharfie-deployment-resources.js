@@ -9,10 +9,15 @@ const Policy = require('./aws/policy');
 const Database = require('./aws/glue-database');
 
 /**
+ * @typedef WharfieDeploymentResourcesProperties
+ * @property {string} loggingLevel -
+ */
+
+/**
  * @typedef WharfieDeploymentResourcesOptions
  * @property {string} name -
  * @property {import('./reconcilable').Status} [status] -
- * @property {import('../typedefs').SharedProperties} properties -
+ * @property {WharfieDeploymentResourcesProperties &  import('../typedefs').SharedProperties} properties -
  * @property {Object<string, import('./base-resource') | BaseResourceGroup>} [resources] -
  * @property {import('./reconcilable')[]} [dependsOn] -
  */

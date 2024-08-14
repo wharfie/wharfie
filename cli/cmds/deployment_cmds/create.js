@@ -31,7 +31,6 @@ exports.handler = async function ({ development }) {
   try {
     await create(development);
   } catch (err) {
-    console.trace(err);
-    displayFailure(err);
+    displayFailure(err.stack);
   }
 };

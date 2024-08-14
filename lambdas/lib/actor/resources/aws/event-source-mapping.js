@@ -66,21 +66,39 @@ class EventSourceMapping extends BaseResource {
   }
 
   async _destroy() {
-    const { EventSourceMappings } = await this.lambda.listEventSourceMappings({
-      FunctionName: this.get('functionName'),
-    });
-    const existingMapping = (EventSourceMappings || []).find(
-      (mapping) => mapping.EventSourceArn === this.get('eventSourceArn')
-    );
-    if (existingMapping) {
-      try {
-        await this.lambda.deleteEventSourceMapping({
-          UUID: existingMapping.UUID,
-        });
-      } catch (error) {
-        if (!(error instanceof ResourceNotFoundException)) throw error;
-      }
+    if (!this.get('uuid')) return;
+    try {
+      await this.lambda.updateEventSourceMapping({
+        UUID: this.get('uuid'),
+        Enabled: false,
+      });
+      await this.lambda.deleteEventSourceMapping({
+        UUID: this.get('uuid'),
+      });
+      // this will throw and be caught
+      this.waitForEventSourceMappingStatus('DELETED');
+    } catch (error) {
+      if (!(error instanceof ResourceNotFoundException)) throw error;
     }
+  }
+
+  /**
+   * @param {string} status -
+   */
+  async waitForEventSourceMappingStatus(status) {
+    let currentStatus = '';
+    do {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const { EventSourceMappings } = await this.lambda.listEventSourceMappings(
+        {
+          FunctionName: this.get('functionName'),
+        }
+      );
+      const existingMapping = (EventSourceMappings || []).find(
+        (mapping) => mapping.UUID === this.get('uuid')
+      );
+      currentStatus = existingMapping?.State || '';
+    } while (currentStatus !== status);
   }
 }
 

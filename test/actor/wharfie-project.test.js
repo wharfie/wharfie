@@ -4,6 +4,7 @@
 const path = require('path');
 
 process.env.AWS_MOCKS = true;
+jest.requireMock('@aws-sdk/client-s3');
 
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
@@ -14,8 +15,11 @@ const { getResourceOptions } = require('../../cli/project/template-actor');
 const { loadProject } = require('../../cli/project/load');
 const { deserialize } = require('../../lambdas/lib/actor/deserialize');
 
+const { S3 } = require('@aws-sdk/client-s3');
+const s3 = new S3();
+
 describe('wharfie project IaC', () => {
-  it('empty project', async () => {
+  it.only('empty project', async () => {
     expect.assertions(4);
     const deployment = new WharfieDeployment({
       name: 'test-deployment',
@@ -245,6 +249,11 @@ describe('wharfie project IaC', () => {
 
   it('normal project', async () => {
     expect.assertions(4);
+    // setting up buckets for mock
+    s3.__setMockState({
+      's3://amazon-berkeley-objects/empty.json': '',
+      's3://utility-079185815456-us-west-2/empty.json': '',
+    });
     const deployment = new WharfieDeployment({
       name: 'test-deployment',
       properties: {},

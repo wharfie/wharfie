@@ -104,6 +104,7 @@ class WharfieDeployment extends ActorDeployment {
       name: `${this.name}-deployment-resources`,
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
+        loggingLevel: this.get('loggingLevel'),
       },
     });
 

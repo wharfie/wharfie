@@ -57,6 +57,6 @@ exports.handler = async function ({ path, environment }) {
   try {
     await plan(path, environment);
   } catch (err) {
-    displayFailure(err);
+    displayFailure(err.stack);
   }
 };

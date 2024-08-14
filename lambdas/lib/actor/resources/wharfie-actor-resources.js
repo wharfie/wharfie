@@ -65,21 +65,12 @@ class WharfieActorResources extends BaseResourceGroup {
               Principal: {
                 Service: 's3.amazonaws.com',
               },
-              Action: ['sqs:SendMessage', 'SQS:SendMessage'],
+              Action: ['sqs:SendMessage'],
               Condition: {
                 StringEquals: {
                   'aws:SourceAccount': this.get('deployment').accountId,
                 },
               },
-              Resource: queue.get('arn'),
-            },
-            {
-              Sid: 'accept-s3-events',
-              Effect: 'Allow',
-              Principal: {
-                AWS: '*',
-              },
-              Action: ['sqs:SendMessage', 'SQS:SendMessage'],
               Resource: queue.get('arn'),
             },
           ],

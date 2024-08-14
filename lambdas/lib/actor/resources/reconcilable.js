@@ -195,6 +195,7 @@ class Reconcilable {
         this.setStatus(Status.DESTROYED);
         break;
       } catch (error) {
+        // console.log(error);
         Reconcilable.Emitter.emit(Events.WHARFIE_ERROR, {
           name: this.name,
           constructor: this.constructor.name,

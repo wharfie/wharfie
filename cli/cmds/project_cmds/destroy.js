@@ -106,7 +106,7 @@ exports.handler = async function ({ path, environment }) {
     if (isValidationError(err)) {
       displayValidationError(err);
     } else {
-      displayFailure(err);
+      displayFailure(err.stack);
     }
   }
 };

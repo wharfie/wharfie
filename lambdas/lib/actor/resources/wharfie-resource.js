@@ -5,9 +5,11 @@ const TableRecord = require('./aws/table-record');
 const BaseResourceGroup = require('./base-resource-group');
 const { generateSchedule } = require('../../../resources/wharfie/lib/cron');
 const Athena = require('../../athena/');
+const S3 = require('../../s3');
 const { version } = require('../../../../package.json');
 
 const _athena = new Athena({});
+const s3 = new S3({});
 
 /**
  * @typedef WharfieResourceProperties
@@ -204,16 +206,18 @@ class WharfieResource extends BaseResourceGroup {
           'resourceName'
         )}-resource-record`,
         dependsOn: [],
-        properties: {
-          deployment: () => this.get('deployment'),
-          tableName: this.get('resourceTable'),
-          keyValue: this.get('resourceName'),
-          keyName: 'resource_id',
-          sortKeyValue: this.get('resourceName'),
-          sortKeyName: 'sort_key',
-          data: {
+        dataResolver: async () => {
+          let source_region;
+          if (this.get('inputLocation')) {
+            const { bucket } = s3.parseS3Uri(this.get('inputLocation'));
+            source_region = await s3.findBucketRegion({
+              Bucket: bucket,
+            });
+          }
+          return {
             data: {
               region: this.get('region'),
+              source_region,
               wharfie_version: version,
               resource_status: 'CREATING',
               athena_workgroup: workgroup.name,
@@ -229,7 +233,15 @@ class WharfieResource extends BaseResourceGroup {
                 ...outputTable.resolveProperties(),
               },
             },
-          },
+          };
+        },
+        properties: {
+          deployment: () => this.get('deployment'),
+          tableName: this.get('resourceTable'),
+          keyValue: this.get('resourceName'),
+          keyName: 'resource_id',
+          sortKeyValue: this.get('resourceName'),
+          sortKeyName: 'sort_key',
         },
       })
     );

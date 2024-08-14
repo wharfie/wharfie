@@ -16,7 +16,21 @@ async function run(event, context, resource) {
   const region = resource.region;
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
-  const s3 = new S3({ region, credentials });
+
+  let s3;
+  event_log.error(`source_region: ${resource.source_region}`);
+  if (resource.source_region) {
+    const sts = new STS({ region: resource.source_region });
+    const source_region_credentials = await sts.getCredentials(
+      resource.daemon_config.Role
+    );
+    s3 = new S3({
+      region: resource.source_region,
+      credentials: source_region_credentials,
+    });
+  } else {
+    s3 = new S3({ region, credentials });
+  }
   const glue = new Glue({ region, credentials });
   const partition = new Partition({ s3, glue });
 

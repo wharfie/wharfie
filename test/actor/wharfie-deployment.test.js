@@ -333,7 +333,6 @@ describe('deployment IaC', () => {
                           {
                             "Action": [
                               "sqs:SendMessage",
-                              "SQS:SendMessage",
                             ],
                             "Condition": {
                               "StringEquals": {},
@@ -344,18 +343,6 @@ describe('deployment IaC', () => {
                             },
                             "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-cleanup-queue",
                             "Sid": "accept-events",
-                          },
-                          {
-                            "Action": [
-                              "sqs:SendMessage",
-                              "SQS:SendMessage",
-                            ],
-                            "Effect": "Allow",
-                            "Principal": {
-                              "AWS": "*",
-                            },
-                            "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-cleanup-queue",
-                            "Sid": "accept-s3-events",
                           },
                         ],
                         "Version": "2012-10-17",
@@ -663,7 +650,6 @@ describe('deployment IaC', () => {
                           {
                             "Action": [
                               "sqs:SendMessage",
-                              "SQS:SendMessage",
                             ],
                             "Condition": {
                               "StringEquals": {},
@@ -674,18 +660,6 @@ describe('deployment IaC', () => {
                             },
                             "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-queue",
                             "Sid": "accept-events",
-                          },
-                          {
-                            "Action": [
-                              "sqs:SendMessage",
-                              "SQS:SendMessage",
-                            ],
-                            "Effect": "Allow",
-                            "Principal": {
-                              "AWS": "*",
-                            },
-                            "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-queue",
-                            "Sid": "accept-s3-events",
                           },
                         ],
                         "Version": "2012-10-17",
@@ -993,7 +967,6 @@ describe('deployment IaC', () => {
                           {
                             "Action": [
                               "sqs:SendMessage",
-                              "SQS:SendMessage",
                             ],
                             "Condition": {
                               "StringEquals": {},
@@ -1004,18 +977,6 @@ describe('deployment IaC', () => {
                             },
                             "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
                             "Sid": "accept-events",
-                          },
-                          {
-                            "Action": [
-                              "sqs:SendMessage",
-                              "SQS:SendMessage",
-                            ],
-                            "Effect": "Allow",
-                            "Principal": {
-                              "AWS": "*",
-                            },
-                            "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
-                            "Sid": "accept-s3-events",
                           },
                         ],
                         "Version": "2012-10-17",
@@ -1323,7 +1284,6 @@ describe('deployment IaC', () => {
                           {
                             "Action": [
                               "sqs:SendMessage",
-                              "SQS:SendMessage",
                             ],
                             "Condition": {
                               "StringEquals": {},
@@ -1334,18 +1294,6 @@ describe('deployment IaC', () => {
                             },
                             "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-queue",
                             "Sid": "accept-events",
-                          },
-                          {
-                            "Action": [
-                              "sqs:SendMessage",
-                              "SQS:SendMessage",
-                            ],
-                            "Effect": "Allow",
-                            "Principal": {
-                              "AWS": "*",
-                            },
-                            "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-queue",
-                            "Sid": "accept-s3-events",
                           },
                         ],
                         "Version": "2012-10-17",
@@ -1511,6 +1459,7 @@ describe('deployment IaC', () => {
                 "stateTable": "test-deployment-state",
                 "version": "0.0.1",
               },
+              "loggingLevel": "info",
             },
             "resourceType": "WharfieDeploymentResources",
             "resources": {
@@ -2176,7 +2125,8 @@ describe('deployment IaC', () => {
                             "Role": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-role",
                           },
                           "destination_properties": {
-                            "arn": "arn:aws:glue:undefined:undefined:table/test-deployment/logs",
+                            "arn": "arn:aws:glue:us-west-2::table/test-deployment/logs",
+                            "catalogId": "",
                             "columns": [
                               {
                                 "name": "action_id",
@@ -2238,6 +2188,7 @@ describe('deployment IaC', () => {
                             "compressed": true,
                             "databaseName": "test-deployment",
                             "deployment": {
+                              "accountId": "",
                               "envPaths": {
                                 "cache": "mock",
                                 "config": "mock",
@@ -2246,6 +2197,7 @@ describe('deployment IaC', () => {
                                 "temp": "mock",
                               },
                               "name": "test-deployment",
+                              "region": "us-west-2",
                               "stateTable": "test-deployment-state",
                               "version": "0.0.1",
                             },
@@ -2277,6 +2229,7 @@ describe('deployment IaC', () => {
                                 "type": "string",
                               },
                             ],
+                            "region": "us-west-2",
                             "serdeInfo": {
                               "Parameters": {
                                 "parquet.compress": "GZIP",
@@ -2287,9 +2240,11 @@ describe('deployment IaC', () => {
                             "tableType": "EXTERNAL_TABLE",
                             "tags": [],
                           },
+                          "region": "us-west-2",
                           "resource_status": "CREATING",
                           "source_properties": {
-                            "arn": "arn:aws:glue:undefined:undefined:table/test-deployment/logs_raw",
+                            "arn": "arn:aws:glue:us-west-2::table/test-deployment/logs_raw",
+                            "catalogId": "",
                             "columns": [
                               {
                                 "name": "action_id",
@@ -2351,6 +2306,7 @@ describe('deployment IaC', () => {
                             "compressed": false,
                             "databaseName": "test-deployment",
                             "deployment": {
+                              "accountId": "",
                               "envPaths": {
                                 "cache": "mock",
                                 "config": "mock",
@@ -2359,6 +2315,7 @@ describe('deployment IaC', () => {
                                 "temp": "mock",
                               },
                               "name": "test-deployment",
+                              "region": "us-west-2",
                               "stateTable": "test-deployment-state",
                               "version": "0.0.1",
                             },
@@ -2389,6 +2346,7 @@ describe('deployment IaC', () => {
                                 "type": "string",
                               },
                             ],
+                            "region": "us-west-2",
                             "serdeInfo": {
                               "Parameters": {
                                 "ignore.malformed.json": "true",
@@ -2399,6 +2357,7 @@ describe('deployment IaC', () => {
                             "tableType": "EXTERNAL_TABLE",
                             "tags": [],
                           },
+                          "source_region": "us-east-1",
                           "wharfie_version": "0.0.1",
                         },
                       },

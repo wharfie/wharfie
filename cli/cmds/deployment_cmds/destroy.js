@@ -48,6 +48,7 @@ const destroy = async () => {
   await deployment.destroy();
   multibar.stop();
   process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
+  // process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
   displaySuccess(`Destroyed wharfie deployment`);
 };
 
@@ -58,7 +59,6 @@ exports.handler = async function () {
   try {
     await destroy();
   } catch (err) {
-    displayFailure(err);
-    console.trace(err);
+    displayFailure(err.stack);
   }
 };
