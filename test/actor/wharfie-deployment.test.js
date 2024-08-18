@@ -94,7 +94,7 @@ describe('deployment IaC', () => {
             "version": "0.0.1",
           },
           "globalQueryConcurrency": 10,
-          "loggingLevel": "info",
+          "loggingLevel": "debug",
           "maxQueriesPerAction": 10000,
           "region": "us-west-2",
           "resourceQueryConcurrency": 10,
@@ -150,7 +150,8 @@ describe('deployment IaC', () => {
                     "EVENT_TABLE": "test-deployment-events",
                     "GLOBAL_QUERY_CONCURRENCY": "10",
                     "LOCATION_TABLE": "test-deployment-locations",
-                    "LOGGING_LEVEL": "info",
+                    "LOGGING_LEVEL": "debug",
+                    "MAX_QUERIES_PER_ACTION": "10000",
                     "MONITOR_QUEUE_URL": "test-deployment-monitor-queue",
                     "RESOURCE_QUERY_CONCURRENCY": "10",
                     "RESOURCE_TABLE": "test-deployment-resource",
@@ -283,7 +284,8 @@ describe('deployment IaC', () => {
                           "EVENT_TABLE": "test-deployment-events",
                           "GLOBAL_QUERY_CONCURRENCY": "10",
                           "LOCATION_TABLE": "test-deployment-locations",
-                          "LOGGING_LEVEL": "info",
+                          "LOGGING_LEVEL": "debug",
+                          "MAX_QUERIES_PER_ACTION": "10000",
                           "MONITOR_QUEUE_URL": "test-deployment-monitor-queue",
                           "NODE_OPTIONS": "--enable-source-maps",
                           "RESOURCE_QUERY_CONCURRENCY": "10",
@@ -333,7 +335,6 @@ describe('deployment IaC', () => {
                           {
                             "Action": [
                               "sqs:SendMessage",
-                              "SQS:SendMessage",
                             ],
                             "Condition": {
                               "StringEquals": {},
@@ -343,19 +344,21 @@ describe('deployment IaC', () => {
                               "Service": "s3.amazonaws.com",
                             },
                             "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-cleanup-queue",
-                            "Sid": "accept-events",
+                            "Sid": "accept-s3-events",
                           },
                           {
                             "Action": [
                               "sqs:SendMessage",
-                              "SQS:SendMessage",
                             ],
+                            "Condition": {
+                              "StringEquals": {},
+                            },
                             "Effect": "Allow",
                             "Principal": {
-                              "AWS": "*",
+                              "Service": "events.amazonaws.com",
                             },
                             "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-cleanup-queue",
-                            "Sid": "accept-s3-events",
+                            "Sid": "accept-cloudwatch-events",
                           },
                         ],
                         "Version": "2012-10-17",
@@ -480,7 +483,8 @@ describe('deployment IaC', () => {
                     "EVENT_TABLE": "test-deployment-events",
                     "GLOBAL_QUERY_CONCURRENCY": "10",
                     "LOCATION_TABLE": "test-deployment-locations",
-                    "LOGGING_LEVEL": "info",
+                    "LOGGING_LEVEL": "debug",
+                    "MAX_QUERIES_PER_ACTION": "10000",
                     "MONITOR_QUEUE_URL": "test-deployment-monitor-queue",
                     "RESOURCE_QUERY_CONCURRENCY": "10",
                     "RESOURCE_TABLE": "test-deployment-resource",
@@ -613,7 +617,8 @@ describe('deployment IaC', () => {
                           "EVENT_TABLE": "test-deployment-events",
                           "GLOBAL_QUERY_CONCURRENCY": "10",
                           "LOCATION_TABLE": "test-deployment-locations",
-                          "LOGGING_LEVEL": "info",
+                          "LOGGING_LEVEL": "debug",
+                          "MAX_QUERIES_PER_ACTION": "10000",
                           "MONITOR_QUEUE_URL": "test-deployment-monitor-queue",
                           "NODE_OPTIONS": "--enable-source-maps",
                           "RESOURCE_QUERY_CONCURRENCY": "10",
@@ -663,7 +668,6 @@ describe('deployment IaC', () => {
                           {
                             "Action": [
                               "sqs:SendMessage",
-                              "SQS:SendMessage",
                             ],
                             "Condition": {
                               "StringEquals": {},
@@ -673,19 +677,21 @@ describe('deployment IaC', () => {
                               "Service": "s3.amazonaws.com",
                             },
                             "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-queue",
-                            "Sid": "accept-events",
+                            "Sid": "accept-s3-events",
                           },
                           {
                             "Action": [
                               "sqs:SendMessage",
-                              "SQS:SendMessage",
                             ],
+                            "Condition": {
+                              "StringEquals": {},
+                            },
                             "Effect": "Allow",
                             "Principal": {
-                              "AWS": "*",
+                              "Service": "events.amazonaws.com",
                             },
                             "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-queue",
-                            "Sid": "accept-s3-events",
+                            "Sid": "accept-cloudwatch-events",
                           },
                         ],
                         "Version": "2012-10-17",
@@ -810,7 +816,8 @@ describe('deployment IaC', () => {
                     "EVENT_TABLE": "test-deployment-events",
                     "GLOBAL_QUERY_CONCURRENCY": "10",
                     "LOCATION_TABLE": "test-deployment-locations",
-                    "LOGGING_LEVEL": "info",
+                    "LOGGING_LEVEL": "debug",
+                    "MAX_QUERIES_PER_ACTION": "10000",
                     "MONITOR_QUEUE_URL": "test-deployment-monitor-queue",
                     "RESOURCE_QUERY_CONCURRENCY": "10",
                     "RESOURCE_TABLE": "test-deployment-resource",
@@ -943,7 +950,8 @@ describe('deployment IaC', () => {
                           "EVENT_TABLE": "test-deployment-events",
                           "GLOBAL_QUERY_CONCURRENCY": "10",
                           "LOCATION_TABLE": "test-deployment-locations",
-                          "LOGGING_LEVEL": "info",
+                          "LOGGING_LEVEL": "debug",
+                          "MAX_QUERIES_PER_ACTION": "10000",
                           "MONITOR_QUEUE_URL": "test-deployment-monitor-queue",
                           "NODE_OPTIONS": "--enable-source-maps",
                           "RESOURCE_QUERY_CONCURRENCY": "10",
@@ -993,7 +1001,6 @@ describe('deployment IaC', () => {
                           {
                             "Action": [
                               "sqs:SendMessage",
-                              "SQS:SendMessage",
                             ],
                             "Condition": {
                               "StringEquals": {},
@@ -1003,19 +1010,21 @@ describe('deployment IaC', () => {
                               "Service": "s3.amazonaws.com",
                             },
                             "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
-                            "Sid": "accept-events",
+                            "Sid": "accept-s3-events",
                           },
                           {
                             "Action": [
                               "sqs:SendMessage",
-                              "SQS:SendMessage",
                             ],
+                            "Condition": {
+                              "StringEquals": {},
+                            },
                             "Effect": "Allow",
                             "Principal": {
-                              "AWS": "*",
+                              "Service": "events.amazonaws.com",
                             },
                             "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
-                            "Sid": "accept-s3-events",
+                            "Sid": "accept-cloudwatch-events",
                           },
                         ],
                         "Version": "2012-10-17",
@@ -1140,7 +1149,8 @@ describe('deployment IaC', () => {
                     "EVENT_TABLE": "test-deployment-events",
                     "GLOBAL_QUERY_CONCURRENCY": "10",
                     "LOCATION_TABLE": "test-deployment-locations",
-                    "LOGGING_LEVEL": "info",
+                    "LOGGING_LEVEL": "debug",
+                    "MAX_QUERIES_PER_ACTION": "10000",
                     "MONITOR_QUEUE_URL": "test-deployment-monitor-queue",
                     "RESOURCE_QUERY_CONCURRENCY": "10",
                     "RESOURCE_TABLE": "test-deployment-resource",
@@ -1273,7 +1283,8 @@ describe('deployment IaC', () => {
                           "EVENT_TABLE": "test-deployment-events",
                           "GLOBAL_QUERY_CONCURRENCY": "10",
                           "LOCATION_TABLE": "test-deployment-locations",
-                          "LOGGING_LEVEL": "info",
+                          "LOGGING_LEVEL": "debug",
+                          "MAX_QUERIES_PER_ACTION": "10000",
                           "MONITOR_QUEUE_URL": "test-deployment-monitor-queue",
                           "NODE_OPTIONS": "--enable-source-maps",
                           "RESOURCE_QUERY_CONCURRENCY": "10",
@@ -1323,7 +1334,6 @@ describe('deployment IaC', () => {
                           {
                             "Action": [
                               "sqs:SendMessage",
-                              "SQS:SendMessage",
                             ],
                             "Condition": {
                               "StringEquals": {},
@@ -1333,19 +1343,21 @@ describe('deployment IaC', () => {
                               "Service": "s3.amazonaws.com",
                             },
                             "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-queue",
-                            "Sid": "accept-events",
+                            "Sid": "accept-s3-events",
                           },
                           {
                             "Action": [
                               "sqs:SendMessage",
-                              "SQS:SendMessage",
                             ],
+                            "Condition": {
+                              "StringEquals": {},
+                            },
                             "Effect": "Allow",
                             "Principal": {
-                              "AWS": "*",
+                              "Service": "events.amazonaws.com",
                             },
                             "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-queue",
-                            "Sid": "accept-s3-events",
+                            "Sid": "accept-cloudwatch-events",
                           },
                         ],
                         "Version": "2012-10-17",
@@ -1418,46 +1430,8 @@ describe('deployment IaC', () => {
                 },
                 "status": "STABLE",
               },
-              "monitor-athena-events-role": {
-                "dependsOn": [],
-                "name": "monitor-athena-events-role",
-                "properties": {
-                  "arn": "arn:aws:iam::123456789012:role/monitor-athena-events-role",
-                  "assumeRolePolicyDocument": {
-                    "Statement": [
-                      {
-                        "Action": "sts:AssumeRole",
-                        "Effect": "Allow",
-                        "Principal": {
-                          "Service": [
-                            "events.amazonaws.com",
-                            "sqs.amazonaws.com",
-                          ],
-                        },
-                      },
-                    ],
-                    "Version": "2012-10-17",
-                  },
-                  "deployment": {
-                    "envPaths": {
-                      "cache": "mock",
-                      "config": "mock",
-                      "data": "mock",
-                      "log": "mock",
-                      "temp": "mock",
-                    },
-                    "name": "test-deployment",
-                    "stateTable": "test-deployment-state",
-                    "version": "0.0.1",
-                  },
-                  "description": "monitor athena events role",
-                },
-                "resourceType": "Role",
-                "status": "STABLE",
-              },
               "monitor-athena-events-rule": {
                 "dependsOn": [
-                  "monitor-athena-events-role",
                   "test-deployment-monitor-queue",
                 ],
                 "name": "monitor-athena-events-rule",
@@ -1476,11 +1450,13 @@ describe('deployment IaC', () => {
                   },
                   "description": "monitor athena events rule",
                   "eventPattern": "{"source":["aws.athena"],"detail-type":["Athena Query State Change"]}",
-                  "roleArn": "arn:aws:iam::123456789012:role/monitor-athena-events-role",
                   "state": "ENABLED",
                   "targets": [
                     {
                       "Arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-queue",
+                      "DeadLetterConfig": {
+                        "Arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-dlq",
+                      },
                       "Id": "monitor-athena-events-rule-target",
                     },
                   ],
@@ -1511,6 +1487,7 @@ describe('deployment IaC', () => {
                 "stateTable": "test-deployment-state",
                 "version": "0.0.1",
               },
+              "loggingLevel": "debug",
             },
             "resourceType": "WharfieDeploymentResources",
             "resources": {
@@ -1847,12 +1824,12 @@ describe('deployment IaC', () => {
                     "stateTable": "test-deployment-state",
                     "version": "0.0.1",
                   },
-                  "deploymentBucket": "test-deployment-bucket",
                   "description": "test-deployment-deployment-resources wharfie logs",
                   "inputFormat": "org.apache.hadoop.mapred.TextInputFormat",
                   "inputLocation": "s3://test-deployment-bucket/logs/raw/",
                   "interval": 300,
                   "locationTable": "test-deployment-locations",
+                  "migrationResource": false,
                   "numberOfBuckets": 0,
                   "outputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
                   "outputLocation": "s3://test-deployment-bucket/logs/processed/",
@@ -1877,6 +1854,7 @@ describe('deployment IaC', () => {
                       "type": "string",
                     },
                   ],
+                  "projectBucket": "test-deployment-bucket",
                   "projectName": "test-deployment",
                   "region": "us-west-2",
                   "resourceName": "logs",
@@ -1976,7 +1954,7 @@ describe('deployment IaC', () => {
                       },
                       "description": "test-deployment-deployment-resources wharfie logs",
                       "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                      "location": "s3://test-deployment-bucket/logs/processed/",
+                      "location": "s3://test-deployment-bucket/logs/processed/references/",
                       "numberOfBuckets": 0,
                       "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
                       "parameters": {
@@ -2176,7 +2154,8 @@ describe('deployment IaC', () => {
                             "Role": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-role",
                           },
                           "destination_properties": {
-                            "arn": "arn:aws:glue:undefined:undefined:table/test-deployment/logs",
+                            "arn": "arn:aws:glue:us-west-2::table/test-deployment/logs",
+                            "catalogId": "",
                             "columns": [
                               {
                                 "name": "action_id",
@@ -2238,6 +2217,7 @@ describe('deployment IaC', () => {
                             "compressed": true,
                             "databaseName": "test-deployment",
                             "deployment": {
+                              "accountId": "",
                               "envPaths": {
                                 "cache": "mock",
                                 "config": "mock",
@@ -2246,12 +2226,13 @@ describe('deployment IaC', () => {
                                 "temp": "mock",
                               },
                               "name": "test-deployment",
+                              "region": "us-west-2",
                               "stateTable": "test-deployment-state",
                               "version": "0.0.1",
                             },
                             "description": "test-deployment-deployment-resources wharfie logs",
                             "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                            "location": "s3://test-deployment-bucket/logs/processed/",
+                            "location": "s3://test-deployment-bucket/logs/processed/references/",
                             "name": "logs",
                             "numberOfBuckets": 0,
                             "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
@@ -2277,6 +2258,7 @@ describe('deployment IaC', () => {
                                 "type": "string",
                               },
                             ],
+                            "region": "us-west-2",
                             "serdeInfo": {
                               "Parameters": {
                                 "parquet.compress": "GZIP",
@@ -2287,9 +2269,11 @@ describe('deployment IaC', () => {
                             "tableType": "EXTERNAL_TABLE",
                             "tags": [],
                           },
+                          "region": "us-west-2",
                           "resource_status": "CREATING",
                           "source_properties": {
-                            "arn": "arn:aws:glue:undefined:undefined:table/test-deployment/logs_raw",
+                            "arn": "arn:aws:glue:us-west-2::table/test-deployment/logs_raw",
+                            "catalogId": "",
                             "columns": [
                               {
                                 "name": "action_id",
@@ -2351,6 +2335,7 @@ describe('deployment IaC', () => {
                             "compressed": false,
                             "databaseName": "test-deployment",
                             "deployment": {
+                              "accountId": "",
                               "envPaths": {
                                 "cache": "mock",
                                 "config": "mock",
@@ -2359,6 +2344,7 @@ describe('deployment IaC', () => {
                                 "temp": "mock",
                               },
                               "name": "test-deployment",
+                              "region": "us-west-2",
                               "stateTable": "test-deployment-state",
                               "version": "0.0.1",
                             },
@@ -2389,6 +2375,7 @@ describe('deployment IaC', () => {
                                 "type": "string",
                               },
                             ],
+                            "region": "us-west-2",
                             "serdeInfo": {
                               "Parameters": {
                                 "ignore.malformed.json": "true",
@@ -2399,6 +2386,7 @@ describe('deployment IaC', () => {
                             "tableType": "EXTERNAL_TABLE",
                             "tags": [],
                           },
+                          "source_region": "us-east-1",
                           "wharfie_version": "0.0.1",
                         },
                       },
@@ -3058,7 +3046,7 @@ describe('deployment IaC', () => {
           "version": "0.0.1",
         },
         "globalQueryConcurrency": 10,
-        "loggingLevel": "info",
+        "loggingLevel": "debug",
         "maxQueriesPerAction": 10000,
         "region": "us-west-2",
         "resourceQueryConcurrency": 10,

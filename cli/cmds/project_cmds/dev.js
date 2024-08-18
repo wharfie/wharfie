@@ -157,7 +157,6 @@ exports.handler = async function ({ path, environment }) {
   try {
     await dev(path, environment);
   } catch (err) {
-    console.trace(err);
-    displayFailure(err);
+    displayFailure(err.stack);
   }
 };

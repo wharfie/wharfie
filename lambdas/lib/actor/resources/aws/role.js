@@ -1,5 +1,7 @@
 'use strict';
 const IAM = require('../../../iam');
+// const STS = require('../../../sts');
+// const { createId } = require('../../../id');
 const BaseResource = require('../base-resource');
 const { NoSuchEntityException } = require('@aws-sdk/client-iam');
 

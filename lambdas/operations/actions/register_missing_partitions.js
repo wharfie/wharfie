@@ -16,7 +16,18 @@ async function run(event, context, resource) {
   const region = resource.region;
   const sts = new STS({ region });
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
-  const s3 = new S3({ region, credentials });
+
+  let s3;
+  if (resource.source_region) {
+    event_log.info(`using source region ${resource.source_region}`);
+    s3 = new S3({
+      region: resource.source_region,
+      credentials,
+      followRegionRedirects: true,
+    });
+  } else {
+    s3 = new S3({ region, credentials });
+  }
   const glue = new Glue({ region, credentials });
   const partition = new Partition({ s3, glue });
 

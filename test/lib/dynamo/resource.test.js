@@ -34,6 +34,8 @@ describe('dynamo resource db', () => {
       source_properties: {},
       destination_properties: {},
       wharfie_version: '1.0.0',
+      region: 'us-east-1',
+      source_region: 'us-west-1',
     });
     expect(put).toHaveBeenCalledTimes(1);
     expect(put.mock.calls[0]).toMatchInlineSnapshot(`
@@ -44,8 +46,10 @@ describe('dynamo resource db', () => {
               "athena_workgroup": "StackName",
               "daemon_config": {},
               "destination_properties": {},
+              "region": "us-east-1",
               "resource_arn": "StackId",
               "source_properties": {},
+              "source_region": "us-west-1",
               "wharfie_version": "1.0.0",
             },
             "resource_id": "StackName",

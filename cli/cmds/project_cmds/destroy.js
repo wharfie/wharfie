@@ -20,7 +20,7 @@ const {
   isValidationError,
 } = require('../../output/validation-error');
 
-const destroy = async (path, environmentName) => {
+const destroy = async (path, environmentName, yes) => {
   const project = await loadProject({
     path,
   });
@@ -48,28 +48,28 @@ const destroy = async (path, environmentName) => {
 
     projectResources.registerWharfieResources(resourceOptions);
   }
-
-  const answers = await new Promise((resolve, reject) => {
-    inquirer
-      .prompt([
-        {
-          type: 'confirm',
-          name: 'confirmation',
-          message: `This will destroy the project including all data in the ${
-            projectResources.getBucket().name
-          } S3 bucket. Are you sure?`,
-          default: false,
-        },
-      ])
-      .then(resolve)
-      .catch(reject);
-  });
-  if (!answers.confirmation) {
-    displayFailure('destroy cancelled');
-    return;
+  if (!yes) {
+    const answers = await new Promise((resolve, reject) => {
+      inquirer
+        .prompt([
+          {
+            type: 'confirm',
+            name: 'confirmation',
+            message: `This will destroy the project including all data in the ${
+              projectResources.getBucket().name
+            } S3 bucket. Are you sure?`,
+            default: false,
+          },
+        ])
+        .then(resolve)
+        .catch(reject);
+    });
+    if (!answers.confirmation) {
+      displayFailure('destroy cancelled');
+      return;
+    }
+    process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
   }
-  process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
-  process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
   displayInfo(`destroying wharfie project ${project.name}...`);
 
   const multibar = monitorProjectDestroyReconcilables(projectResources);
@@ -94,19 +94,24 @@ exports.builder = (yargs) => {
       alias: 'e',
       type: 'string',
       describe: 'the wharfie project environment to use',
+    })
+    .option('yes', {
+      alias: 'y',
+      type: 'boolean',
+      describe: 'approve destruction',
     });
 };
-exports.handler = async function ({ path, environment }) {
+exports.handler = async function ({ path, environment, yes }) {
   if (!path) {
     path = process.cwd();
   }
   try {
-    await destroy(path, environment);
+    await destroy(path, environment, yes);
   } catch (err) {
     if (isValidationError(err)) {
       displayValidationError(err);
     } else {
-      displayFailure(err);
+      displayFailure(err.stack);
     }
   }
 };

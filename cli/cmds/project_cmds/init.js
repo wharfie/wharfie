@@ -70,6 +70,6 @@ exports.handler = async function () {
   try {
     await init();
   } catch (err) {
-    displayFailure(err);
+    displayFailure(err.stack);
   }
 };

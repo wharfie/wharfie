@@ -33,6 +33,8 @@ class LambdaMock {
         return await this.createFunction(command.input);
       case 'DeleteFunctionCommand':
         return await this.deleteFunction(command.input);
+      case 'GetEventSourceMappingCommand':
+        return await this.getEventSourceMapping(command.input);
       case 'ListEventSourceMappingsCommand':
         return await this.listEventSourceMappings(command.input);
       case 'CreateEventSourceMappingCommand':
@@ -125,11 +127,16 @@ class LambdaMock {
     return { EventSourceMappings: eventSourceMappings };
   }
 
+  async getEventSourceMapping(params) {
+    return LambdaMock.__state.mappings[params.UUID];
+  }
+
   async createEventSourceMapping(params) {
     const uuid = createId();
     const eventSourceMapping = {
       ...params,
       UUID: uuid,
+      State: params.Enabled ? 'Enabled' : 'Disabled',
     };
     LambdaMock.__state.mappings[uuid] = eventSourceMapping;
     return eventSourceMapping;
@@ -145,6 +152,7 @@ class LambdaMock {
     LambdaMock.__state.mappings[uuid] = {
       ...LambdaMock.__state.mappings[uuid],
       ...params,
+      State: params.Enabled ? 'Enabled' : 'Disabled',
     };
   }
 

@@ -11,7 +11,7 @@ const {
  * @property {string} description -
  * @property {string} [scheduleExpression] -
  * @property {string} [eventPattern] -
- * @property {string | function} roleArn -
+ * @property {string | function} [roleArn] -
  * @property {import('@aws-sdk/client-cloudwatch-events').RuleState} state -
  * @property {import('@aws-sdk/client-cloudwatch-events').Target[] | function(): import('@aws-sdk/client-cloudwatch-events').Target[]} targets -
  */
@@ -114,7 +114,7 @@ class EventsRule extends BaseResource {
           ...(this.has('eventPattern')
             ? { EventPattern: this.get('eventPattern') }
             : {}),
-          RoleArn: this.get('roleArn'),
+          ...(this.has('roleArn') ? { RoleArn: this.get('roleArn') } : {}),
           State: this.get('state'),
         });
       } else {
@@ -126,6 +126,9 @@ class EventsRule extends BaseResource {
 
   async _destroy() {
     try {
+      await this.cloudwatchEvents.disableRule({
+        Name: this.name,
+      });
       const { Targets } = await this.cloudwatchEvents.listTargetsByRule({
         Rule: this.name,
         Limit: 10,
@@ -151,6 +154,31 @@ class EventsRule extends BaseResource {
         throw error;
       }
     }
+  }
+
+  /**
+   * @param {string} status -
+   */
+  async waitForEventsRuleStatus(status) {
+    let currentStatus = '';
+    let attempts = 0;
+    const MAX_RETRY_TIMEOUT_SECONDS = 10;
+    do {
+      const { State } = await this.cloudwatchEvents.describeRule({
+        Name: this.name,
+      });
+      currentStatus = State || '';
+      await new Promise((resolve) =>
+        setTimeout(
+          resolve,
+          Math.floor(
+            Math.random() *
+              Math.min(MAX_RETRY_TIMEOUT_SECONDS, 1 * Math.pow(2, attempts))
+          ) * 1000
+        )
+      );
+      attempts++;
+    } while (currentStatus !== status);
   }
 }
 

@@ -79,6 +79,9 @@ class WharfieActor extends Actor {
             RESOURCE_QUERY_CONCURRENCY: `${this.deployment.get(
               'resourceQueryConcurrency'
             )}`,
+            MAX_QUERIES_PER_ACTION: `${this.deployment.get(
+              'maxQueriesPerAction'
+            )}`,
             TEMPORARY_GLUE_DATABASE: this.deployment
               .getDeploymentResources()
               .getTemporaryDatabase().name,

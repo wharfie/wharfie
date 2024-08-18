@@ -43,7 +43,7 @@ class WharfieDeployment extends ActorDeployment {
         globalQueryConcurrency: 10,
         resourceQueryConcurrency: 10,
         maxQueriesPerAction: 10000,
-        loggingLevel: 'info',
+        loggingLevel: 'debug',
         _INTERNAL_STATE_RESOURCE: true,
       },
       properties
@@ -104,6 +104,7 @@ class WharfieDeployment extends ActorDeployment {
       name: `${this.name}-deployment-resources`,
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
+        loggingLevel: this.get('loggingLevel'),
       },
     });
 
