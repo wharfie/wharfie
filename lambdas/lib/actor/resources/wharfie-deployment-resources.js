@@ -526,7 +526,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         projectName: this.get('deployment').name,
         databaseName: this.get('deployment').name,
         outputLocation: `s3://${systemBucket.name}/logs/processed/`,
-        deploymentBucket: systemBucket.name,
+        projectBucket: systemBucket.name,
         region: () => this.get('deployment').region,
         catalogId: () => this.get('deployment').accountId,
         roleArn: () => loggingResourceRole.get('arn'),

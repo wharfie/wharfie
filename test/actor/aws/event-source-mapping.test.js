@@ -116,6 +116,7 @@ describe('event source mapping IaC', () => {
             "EventSourceArn": "test-event-source-arn",
             "FunctionName": "test-function",
             "MaximumBatchingWindowInSeconds": 0,
+            "State": "Enabled",
             "UUID": "test-id",
           },
         ],

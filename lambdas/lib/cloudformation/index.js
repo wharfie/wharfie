@@ -40,7 +40,7 @@ class CloudFormation {
       credentials,
       ...options,
     });
-    this.s3 = new S3(options);
+    this.s3 = new S3(S3.formatClientOptions(options));
     this.artifact_bucket = wharfie_options.artifact_bucket;
     this.WAITER_MAX_WAIT_TIME_CONFIG = 600;
   }

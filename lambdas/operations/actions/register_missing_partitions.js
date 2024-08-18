@@ -18,15 +18,12 @@ async function run(event, context, resource) {
   const credentials = await sts.getCredentials(resource.daemon_config.Role);
 
   let s3;
-  event_log.error(`source_region: ${resource.source_region}`);
   if (resource.source_region) {
-    const sts = new STS({ region: resource.source_region });
-    const source_region_credentials = await sts.getCredentials(
-      resource.daemon_config.Role
-    );
+    event_log.info(`using source region ${resource.source_region}`);
     s3 = new S3({
       region: resource.source_region,
-      credentials: source_region_credentials,
+      credentials,
+      followRegionRedirects: true,
     });
   } else {
     s3 = new S3({ region, credentials });

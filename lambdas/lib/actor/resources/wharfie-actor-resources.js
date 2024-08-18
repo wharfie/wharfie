@@ -60,10 +60,24 @@ class WharfieActorResources extends BaseResourceGroup {
           Version: '2012-10-17',
           Statement: [
             {
-              Sid: 'accept-events',
+              Sid: 'accept-s3-events',
               Effect: 'Allow',
               Principal: {
                 Service: 's3.amazonaws.com',
+              },
+              Action: ['sqs:SendMessage'],
+              Condition: {
+                StringEquals: {
+                  'aws:SourceAccount': this.get('deployment').accountId,
+                },
+              },
+              Resource: queue.get('arn'),
+            },
+            {
+              Sid: 'accept-cloudwatch-events',
+              Effect: 'Allow',
+              Principal: {
+                Service: 'events.amazonaws.com',
               },
               Action: ['sqs:SendMessage'],
               Condition: {

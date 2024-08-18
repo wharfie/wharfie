@@ -32,7 +32,7 @@ class BaseAWS {
 
   /**
    * @param {BaseAWSConfig} [options] -
-   * @returns {import("@aws-sdk/client-s3").S3ClientConfig} - sdk options
+   * @returns {import("@aws-sdk/client-sts").STSClientConfig} - sdk options
    */
   static config(options = { maxAttempts: 20 }) {
     const logger = {

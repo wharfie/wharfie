@@ -12,7 +12,7 @@ const { EntityNotFoundException } = require('@aws-sdk/client-glue');
  * @property {any} parameters -
  * @property {import('../../typedefs').WharfieTableColumn[]} partitionKeys -
  * @property {import('../../typedefs').WharfieTableColumn[]} columns -
- * @property {string} location -
+ * @property {string | function(): string} location -
  * @property {number} [numberOfBuckets] -
  * @property {boolean} [storedAsSubDirectories] -
  * @property {string} inputFormat -

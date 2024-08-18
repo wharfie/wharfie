@@ -22,6 +22,16 @@ const AWS_REGIONS = [
   'eu-west-3',
   'sa-east-1',
 ];
+/**
+ * @param {import("@aws-sdk/client-sts").STSClientConfig} options - client configuration
+ * @returns {import("@aws-sdk/client-s3").S3ClientConfig} -
+ */
+function formatClientOptions(options) {
+  // aws-sdk v3 has diverged in options between sdks
+  const recreatedOptions = { ...options, extensions: [] };
+  const { extensions, ...restOptions } = recreatedOptions;
+  return restOptions;
+}
 
 class S3 {
   /**
@@ -30,7 +40,7 @@ class S3 {
   constructor(options = {}) {
     const credentials = fromNodeProviderChain();
     this.client_config = {
-      ...BaseAWS.config(),
+      ...formatClientOptions(BaseAWS.config()),
       credentials,
       ...options,
       useArnRegion: true,
@@ -754,5 +764,6 @@ class S3 {
 }
 
 S3.findBucketRegionCache = new Map();
+S3.formatClientOptions = formatClientOptions;
 
 module.exports = S3;

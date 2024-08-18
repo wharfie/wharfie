@@ -34,7 +34,7 @@ const s3 = new S3({});
  * @property {string} [viewOriginalText] -
  * @property {string} [viewExpandedText] -
  * @property {any} tags -
- * @property {string} deploymentBucket -
+ * @property {string} projectBucket -
  * @property {string | function(): string} region -
  * @property {number} [interval] -
  * @property {string} [scheduleQueueArn] -
@@ -43,6 +43,7 @@ const s3 = new S3({});
  * @property {string} resourceTable -
  * @property {string} dependencyTable -
  * @property {string} locationTable -
+ * @property {boolean} [migrationResource] -
  */
 
 /**
@@ -88,7 +89,7 @@ class WharfieResource extends BaseResourceGroup {
         description: `${this.get('deployment').name} resource ${this.get(
           'resourceName'
         )} workgroup`,
-        outputLocation: `s3://${this.get('deploymentBucket')}/${this.get(
+        outputLocation: `s3://${this.get('projectBucket')}/${this.get(
           'resourceName'
         )}/query_metadata/`,
       },
@@ -134,7 +135,9 @@ class WharfieResource extends BaseResourceGroup {
       properties: {
         deployment: () => this.get('deployment'),
         databaseName: this.get('databaseName'),
-        location: this.get('outputLocation'),
+        location: this.get('migrationResource')
+          ? `${this.get('outputLocation')}migrate-references/`
+          : `${this.get('outputLocation')}references/`,
         description: this.get('description'),
         tableType: 'EXTERNAL_TABLE',
         parameters: { 'parquet.compress': 'GZIP', EXTERNAL: 'TRUE' },
@@ -176,7 +179,7 @@ class WharfieResource extends BaseResourceGroup {
           scheduleExpression: generateSchedule(
             Number(this.get('schedule', 1800))
           ),
-          roleArn: () => this.get('scheduleRoleArn'),
+          // roleArn: () => this.get('scheduleRoleArn'),
           targets: () => [
             {
               Id: `${this.get('projectName')}-${this.get(
@@ -322,6 +325,7 @@ WharfieResource.DefaultProperties = {
   storedAsSubDirectories: false,
   compressed: false,
   interval: 300,
+  migrationResource: false,
 };
 
 module.exports = WharfieResource;
