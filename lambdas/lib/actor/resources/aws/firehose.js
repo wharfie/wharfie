@@ -30,6 +30,8 @@ class Firehose extends BaseResource {
         await this.firehose.describeDeliveryStream({
           DeliveryStreamName: this.name,
         });
+      if (DeliveryStreamDescription?.DeliveryStreamStatus === 'DELETING')
+        throw new Error(`Firehose ${this.name} is currently deleting`);
       this.set('arn', DeliveryStreamDescription?.DeliveryStreamARN);
     } catch (error) {
       if (error instanceof ResourceNotFoundException) {

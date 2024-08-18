@@ -13,7 +13,6 @@ const { createStableHash } = require('../../crypto');
  * @property {string} eventsQueueArn -
  * @property {string[]} actorRoleArns -
  * @property {string} deploymentSharedPolicyArn -
- * @property {string} deploymentBucket -
  * @property {string} scheduleQueueArn -
  * @property {string} scheduleRoleArn -
  * @property {string} resourceTable -
@@ -75,13 +74,6 @@ class WharfieProject extends BaseResourceGroup {
           .getDeploymentResources()
           .getResource(`${deployment.name}-event-role`)
           .get('arn')
-      );
-      this.set(
-        'deploymentBucket',
-        () =>
-          deployment
-            .getDeploymentResources()
-            .getResource(`${deployment.name}-bucket`).name
       );
       this.set(
         'deploymentSharedPolicyArn',
@@ -270,7 +262,7 @@ class WharfieProject extends BaseResourceGroup {
       projectName: this.name,
       databaseName: this.name,
       outputLocation: `s3://${this.getBucket().name}/${options.name}/`,
-      deploymentBucket: this.get('deploymentBucket'),
+      projectBucket: this.getBucket().name,
       region: this.get('deployment').region,
       catalogId: this.get('deployment').accountId,
       scheduleQueueArn: this.get('scheduleQueueArn'),
@@ -300,7 +292,7 @@ class WharfieProject extends BaseResourceGroup {
             projectName: this.name,
             databaseName: this.name,
             outputLocation: `s3://${this.getBucket().name}/${options.name}/`,
-            deploymentBucket: this.get('deploymentBucket'),
+            projectBucket: this.getBucket().name,
             region: this.get('deployment').region,
             catalogId: this.get('deployment').accountId,
             scheduleQueueArn: this.get('scheduleQueueArn'),

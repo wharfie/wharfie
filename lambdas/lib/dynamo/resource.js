@@ -41,6 +41,8 @@ async function putResource(resource) {
         source_properties: resource.source_properties,
         destination_properties: resource.destination_properties,
         wharfie_version: resource.wharfie_version,
+        region: resource.region,
+        source_region: resource.source_region,
       },
     },
     ReturnValues: 'NONE',

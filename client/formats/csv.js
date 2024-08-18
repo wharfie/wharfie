@@ -10,7 +10,10 @@ module.exports = ({
   Name: TableName,
   Description,
   TableType: 'EXTERNAL_TABLE',
-  Parameters: { EXTERNAL: 'true' },
+  Parameters: {
+    'skip.header.line.count': '1',
+    EXTERNAL: 'true',
+  },
   PartitionKeys,
   StorageDescriptor: {
     Location,

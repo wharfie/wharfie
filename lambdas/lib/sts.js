@@ -64,10 +64,19 @@ class STS {
   }
 
   /**
-   * @returns {Promise<import("@aws-sdk/client-sts").GetCallerIdentityCommandOutput>} - STS assumeRole credentials
+   * @returns {Promise<import("@aws-sdk/client-sts").GetCallerIdentityCommandOutput>} - STS getCallerIdentity output
    */
   async getCallerIdentity() {
     return await this.sts.getCallerIdentity({});
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-sts").AssumeRoleCommandInput} params - STS assumeRole params
+   * @returns {Promise<import("@aws-sdk/client-sts").AssumeRoleCommandOutput>} - STS assumeRole output
+   */
+  async assumeRole(params) {
+    const command = new AWS.AssumeRoleCommand(params);
+    return await this.sts.send(command);
   }
 }
 /**

@@ -223,7 +223,6 @@ describe('wharfie actor resources IaC', () => {
                   {
                     "Action": [
                       "sqs:SendMessage",
-                      "SQS:SendMessage",
                     ],
                     "Condition": {
                       "StringEquals": {
@@ -235,19 +234,23 @@ describe('wharfie actor resources IaC', () => {
                       "Service": "s3.amazonaws.com",
                     },
                     "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-test-actor-queue",
-                    "Sid": "accept-events",
+                    "Sid": "accept-s3-events",
                   },
                   {
                     "Action": [
                       "sqs:SendMessage",
-                      "SQS:SendMessage",
                     ],
+                    "Condition": {
+                      "StringEquals": {
+                        "aws:SourceAccount": "123456789012",
+                      },
+                    },
                     "Effect": "Allow",
                     "Principal": {
-                      "AWS": "*",
+                      "Service": "events.amazonaws.com",
                     },
                     "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-test-actor-queue",
-                    "Sid": "accept-s3-events",
+                    "Sid": "accept-cloudwatch-events",
                   },
                 ],
                 "Version": "2012-10-17",

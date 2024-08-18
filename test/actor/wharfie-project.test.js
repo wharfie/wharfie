@@ -4,6 +4,7 @@
 const path = require('path');
 
 process.env.AWS_MOCKS = true;
+jest.requireMock('@aws-sdk/client-s3');
 
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
@@ -13,6 +14,9 @@ const WharfieDeployment = require('../../lambdas/lib/actor/wharfie-deployment');
 const { getResourceOptions } = require('../../cli/project/template-actor');
 const { loadProject } = require('../../cli/project/load');
 const { deserialize } = require('../../lambdas/lib/actor/deserialize');
+
+const { S3 } = require('@aws-sdk/client-s3');
+const s3 = new S3();
 
 describe('wharfie project IaC', () => {
   it('empty project', async () => {
@@ -56,7 +60,6 @@ describe('wharfie project IaC', () => {
             "stateTable": "test-deployment-state",
             "version": "0.0.1",
           },
-          "deploymentBucket": "test-deployment-bucket",
           "deploymentSharedPolicyArn": "arn:aws:iam:::policy/test-deployment-shared-policy",
           "eventsQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
           "locationTable": "test-deployment-locations",
@@ -226,7 +229,6 @@ describe('wharfie project IaC', () => {
           "stateTable": "test-deployment-state",
           "version": "0.0.1",
         },
-        "deploymentBucket": "test-deployment-bucket",
         "deploymentSharedPolicyArn": "arn:aws:iam:::policy/test-deployment-shared-policy",
         "eventsQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
         "locationTable": "test-deployment-locations",
@@ -245,6 +247,11 @@ describe('wharfie project IaC', () => {
 
   it('normal project', async () => {
     expect.assertions(4);
+    // setting up buckets for mock
+    s3.__setMockState({
+      's3://amazon-berkeley-objects/empty.json': '',
+      's3://utility-079185815456-us-west-2/empty.json': '',
+    });
     const deployment = new WharfieDeployment({
       name: 'test-deployment',
       properties: {},
@@ -298,7 +305,6 @@ describe('wharfie project IaC', () => {
             "stateTable": "test-deployment-state",
             "version": "0.0.1",
           },
-          "deploymentBucket": "test-deployment-bucket",
           "deploymentSharedPolicyArn": "arn:aws:iam:::policy/test-deployment-shared-policy",
           "eventsQueueArn": undefined,
           "locationTable": "test-deployment-locations",
@@ -450,12 +456,12 @@ describe('wharfie project IaC', () => {
                 "stateTable": "test-deployment-state",
                 "version": "0.0.1",
               },
-              "deploymentBucket": "test-deployment-bucket",
               "description": "Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html",
               "inputFormat": "org.apache.hadoop.mapred.TextInputFormat",
               "inputLocation": "s3://amazon-berkeley-objects/listings/metadata/",
               "interval": 300,
               "locationTable": "test-deployment-locations",
+              "migrationResource": false,
               "numberOfBuckets": 0,
               "outputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
               "outputLocation": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects/",
@@ -466,6 +472,7 @@ describe('wharfie project IaC', () => {
               "project": {
                 "name": "test-wharife-project",
               },
+              "projectBucket": "test-wharife-project-bucket-lz-fc6bi",
               "projectName": "test-wharife-project",
               "region": "us-west-2",
               "resourceName": "amazon_berkely_objects",
@@ -622,7 +629,7 @@ describe('wharfie project IaC', () => {
                   },
                   "description": "Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html",
                   "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                  "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects/",
+                  "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects/references/",
                   "numberOfBuckets": 0,
                   "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
                   "parameters": {
@@ -822,7 +829,7 @@ describe('wharfie project IaC', () => {
                     "version": "0.0.1",
                   },
                   "description": "test-deployment resource amazon_berkely_objects workgroup",
-                  "outputLocation": "s3://test-deployment-bucket/amazon_berkely_objects/query_metadata/",
+                  "outputLocation": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects/query_metadata/",
                 },
                 "resourceType": "AthenaWorkGroup",
                 "status": "STABLE",
@@ -1002,7 +1009,7 @@ describe('wharfie project IaC', () => {
                         },
                         "description": "Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html",
                         "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                        "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects/",
+                        "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects/references/",
                         "name": "amazon_berkely_objects",
                         "numberOfBuckets": 0,
                         "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
@@ -1178,6 +1185,7 @@ describe('wharfie project IaC', () => {
                         "tableType": "EXTERNAL_TABLE",
                         "tags": [],
                       },
+                      "source_region": "us-east-1",
                       "wharfie_version": "0.0.1",
                     },
                   },
@@ -1246,10 +1254,10 @@ describe('wharfie project IaC', () => {
                 "stateTable": "test-deployment-state",
                 "version": "0.0.1",
               },
-              "deploymentBucket": "test-deployment-bucket",
               "description": "Materialized Table",
               "interval": 300,
               "locationTable": "test-deployment-locations",
+              "migrationResource": false,
               "numberOfBuckets": 0,
               "outputLocation": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_aggregated/",
               "parameters": {
@@ -1260,6 +1268,7 @@ describe('wharfie project IaC', () => {
               "project": {
                 "name": "test-wharife-project",
               },
+              "projectBucket": "test-wharife-project-bucket-lz-fc6bi",
               "projectName": "test-wharife-project",
               "region": "us-west-2",
               "resourceName": "amazon_berkely_objects_aggregated",
@@ -1312,7 +1321,7 @@ describe('wharfie project IaC', () => {
                   },
                   "description": "Materialized Table",
                   "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                  "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_aggregated/",
+                  "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_aggregated/references/",
                   "numberOfBuckets": 0,
                   "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
                   "parameters": {
@@ -1410,7 +1419,7 @@ describe('wharfie project IaC', () => {
                     "version": "0.0.1",
                   },
                   "description": "test-deployment resource amazon_berkely_objects_aggregated workgroup",
-                  "outputLocation": "s3://test-deployment-bucket/amazon_berkely_objects_aggregated/query_metadata/",
+                  "outputLocation": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_aggregated/query_metadata/",
                 },
                 "resourceType": "AthenaWorkGroup",
                 "status": "STABLE",
@@ -1490,7 +1499,7 @@ describe('wharfie project IaC', () => {
                         },
                         "description": "Materialized Table",
                         "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                        "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_aggregated/",
+                        "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_aggregated/references/",
                         "name": "amazon_berkely_objects_aggregated",
                         "numberOfBuckets": 0,
                         "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
@@ -1564,6 +1573,7 @@ describe('wharfie project IaC', () => {
                         "viewExpandedText": "/* Presto View */",
                         "viewOriginalText": "/* Presto View: eyJvcmlnaW5hbFNxbCI6IldJVEggdW5uZXN0ZWRfdGFibGUgQVMgKFxuICBTRUxFQ1QgY291bnRyeSwgYnJhbmRfZWxlbWVudC52YWx1ZSBBUyBicmFuZHNcbiAgRlJPTSBwcm9qZWN0X2ZpeHR1cmUuYW1hem9uX2JlcmtlbHlfb2JqZWN0cyxcbiAgVU5ORVNUKGJyYW5kKSBBUyB0KGJyYW5kX2VsZW1lbnQpXG4pXG5TRUxFQ1QgY291bnRyeSwgYnJhbmRzLCBDT1VOVCgqKSBBUyBjb3VudFxuRlJPTSB1bm5lc3RlZF90YWJsZVxuR1JPVVAgQlkgY291bnRyeSwgYnJhbmRzXG5PUkRFUiBCWSBjb3VudCBERVNDXG4iLCJjYXRhbG9nIjoiYXdzZGF0YWNhdGFsb2ciLCJjb2x1bW5zIjpbeyJuYW1lIjoiY291bnRyeSIsInR5cGUiOiJ2YXJjaGFyIn0seyJuYW1lIjoiYnJhbmRzIiwidHlwZSI6InZhcmNoYXIifSx7Im5hbWUiOiJjb3VudCIsInR5cGUiOiJiaWdpbnQifV19 */",
                       },
+                      "source_region": undefined,
                       "wharfie_version": "0.0.1",
                     },
                   },
@@ -1636,12 +1646,12 @@ describe('wharfie project IaC', () => {
                 "stateTable": "test-deployment-state",
                 "version": "0.0.1",
               },
-              "deploymentBucket": "test-deployment-bucket",
               "description": "Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html",
               "inputFormat": "org.apache.hadoop.mapred.TextInputFormat",
               "inputLocation": "s3://amazon-berkeley-objects/images/metadata/",
               "interval": 300,
               "locationTable": "test-deployment-locations",
+              "migrationResource": false,
               "numberOfBuckets": 0,
               "outputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
               "outputLocation": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_images/",
@@ -1652,6 +1662,7 @@ describe('wharfie project IaC', () => {
               "project": {
                 "name": "test-wharife-project",
               },
+              "projectBucket": "test-wharife-project-bucket-lz-fc6bi",
               "projectName": "test-wharife-project",
               "region": "us-west-2",
               "resourceName": "amazon_berkely_objects_images",
@@ -1714,7 +1725,7 @@ describe('wharfie project IaC', () => {
                   },
                   "description": "Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html",
                   "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                  "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_images/",
+                  "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_images/references/",
                   "numberOfBuckets": 0,
                   "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
                   "parameters": {
@@ -1820,7 +1831,7 @@ describe('wharfie project IaC', () => {
                     "version": "0.0.1",
                   },
                   "description": "test-deployment resource amazon_berkely_objects_images workgroup",
-                  "outputLocation": "s3://test-deployment-bucket/amazon_berkely_objects_images/query_metadata/",
+                  "outputLocation": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_images/query_metadata/",
                 },
                 "resourceType": "AthenaWorkGroup",
                 "status": "STABLE",
@@ -1904,7 +1915,7 @@ describe('wharfie project IaC', () => {
                         },
                         "description": "Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html",
                         "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                        "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_images/",
+                        "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_images/references/",
                         "name": "amazon_berkely_objects_images",
                         "numberOfBuckets": 0,
                         "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
@@ -1986,6 +1997,7 @@ describe('wharfie project IaC', () => {
                         "tableType": "EXTERNAL_TABLE",
                         "tags": [],
                       },
+                      "source_region": "us-east-1",
                       "wharfie_version": "0.0.1",
                     },
                   },
@@ -2054,10 +2066,10 @@ describe('wharfie project IaC', () => {
                 "stateTable": "test-deployment-state",
                 "version": "0.0.1",
               },
-              "deploymentBucket": "test-deployment-bucket",
               "description": "Materialized Table",
               "interval": 300,
               "locationTable": "test-deployment-locations",
+              "migrationResource": false,
               "numberOfBuckets": 0,
               "outputLocation": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_join/",
               "parameters": {
@@ -2068,6 +2080,7 @@ describe('wharfie project IaC', () => {
               "project": {
                 "name": "test-wharife-project",
               },
+              "projectBucket": "test-wharife-project-bucket-lz-fc6bi",
               "projectName": "test-wharife-project",
               "region": "us-west-2",
               "resourceName": "amazon_berkely_objects_join",
@@ -2120,7 +2133,7 @@ describe('wharfie project IaC', () => {
                   },
                   "description": "Materialized Table",
                   "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                  "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_join/",
+                  "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_join/references/",
                   "numberOfBuckets": 0,
                   "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
                   "parameters": {
@@ -2218,7 +2231,7 @@ describe('wharfie project IaC', () => {
                     "version": "0.0.1",
                   },
                   "description": "test-deployment resource amazon_berkely_objects_join workgroup",
-                  "outputLocation": "s3://test-deployment-bucket/amazon_berkely_objects_join/query_metadata/",
+                  "outputLocation": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_join/query_metadata/",
                 },
                 "resourceType": "AthenaWorkGroup",
                 "status": "STABLE",
@@ -2328,7 +2341,7 @@ describe('wharfie project IaC', () => {
                         },
                         "description": "Materialized Table",
                         "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                        "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_join/",
+                        "location": "s3://test-wharife-project-bucket-lz-fc6bi/amazon_berkely_objects_join/references/",
                         "name": "amazon_berkely_objects_join",
                         "numberOfBuckets": 0,
                         "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
@@ -2402,6 +2415,7 @@ describe('wharfie project IaC', () => {
                         "viewExpandedText": "/* Presto View */",
                         "viewOriginalText": "/* Presto View: eyJvcmlnaW5hbFNxbCI6IlNFTEVDVCBvYmplY3RzLml0ZW1faWQsIG9iamVjdHMubWFya2V0cGxhY2UsIGltYWdlcy5wYXRoXG5GUk9NIHByb2plY3RfZml4dHVyZS5hbWF6b25fYmVya2VseV9vYmplY3RzIEFTIG9iamVjdHNcbkxFRlQgSk9JTiBwcm9qZWN0X2ZpeHR1cmUuYW1hem9uX2JlcmtlbHlfb2JqZWN0c19pbWFnZXMgQVMgaW1hZ2VzXG5PTiBvYmplY3RzLm1haW5faW1hZ2VfaWQgPSBpbWFnZXMuaW1hZ2VfaWRcbiIsImNhdGFsb2ciOiJhd3NkYXRhY2F0YWxvZyIsImNvbHVtbnMiOlt7Im5hbWUiOiJpdGVtX2lkIiwidHlwZSI6InZhcmNoYXIifSx7Im5hbWUiOiJtYXJrZXRwbGFjZSIsInR5cGUiOiJ2YXJjaGFyIn0seyJuYW1lIjoicGF0aCIsInR5cGUiOiJ2YXJjaGFyIn1dfQ== */",
                       },
+                      "source_region": undefined,
                       "wharfie_version": "0.0.1",
                     },
                   },
@@ -2470,10 +2484,10 @@ describe('wharfie project IaC', () => {
                 "stateTable": "test-deployment-state",
                 "version": "0.0.1",
               },
-              "deploymentBucket": "test-deployment-bucket",
               "description": "Materialized Table",
               "interval": 300,
               "locationTable": "test-deployment-locations",
+              "migrationResource": false,
               "numberOfBuckets": 0,
               "outputLocation": "s3://test-wharife-project-bucket-lz-fc6bi/inline/",
               "parameters": {
@@ -2484,6 +2498,7 @@ describe('wharfie project IaC', () => {
               "project": {
                 "name": "test-wharife-project",
               },
+              "projectBucket": "test-wharife-project-bucket-lz-fc6bi",
               "projectName": "test-wharife-project",
               "region": "us-west-2",
               "resourceName": "inline",
@@ -2536,7 +2551,7 @@ describe('wharfie project IaC', () => {
                   },
                   "description": "Materialized Table",
                   "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                  "location": "s3://test-wharife-project-bucket-lz-fc6bi/inline/",
+                  "location": "s3://test-wharife-project-bucket-lz-fc6bi/inline/references/",
                   "numberOfBuckets": 0,
                   "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
                   "parameters": {
@@ -2634,7 +2649,7 @@ describe('wharfie project IaC', () => {
                     "version": "0.0.1",
                   },
                   "description": "test-deployment resource inline workgroup",
-                  "outputLocation": "s3://test-deployment-bucket/inline/query_metadata/",
+                  "outputLocation": "s3://test-wharife-project-bucket-lz-fc6bi/inline/query_metadata/",
                 },
                 "resourceType": "AthenaWorkGroup",
                 "status": "STABLE",
@@ -2744,7 +2759,7 @@ describe('wharfie project IaC', () => {
                         },
                         "description": "Materialized Table",
                         "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                        "location": "s3://test-wharife-project-bucket-lz-fc6bi/inline/",
+                        "location": "s3://test-wharife-project-bucket-lz-fc6bi/inline/references/",
                         "name": "inline",
                         "numberOfBuckets": 0,
                         "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
@@ -2818,6 +2833,7 @@ describe('wharfie project IaC', () => {
                         "viewExpandedText": "/* Presto View */",
                         "viewOriginalText": "/* Presto View: eyJvcmlnaW5hbFNxbCI6IlNFTEVDVCBvYmplY3RzLml0ZW1faWQsIG9iamVjdHMubWFya2V0cGxhY2UsIGltYWdlcy5wYXRoIEZST00gcHJvamVjdF9maXh0dXJlLmFtYXpvbl9iZXJrZWx5X29iamVjdHMgQVMgb2JqZWN0cyBMRUZUIEpPSU4gcHJvamVjdF9maXh0dXJlLmFtYXpvbl9iZXJrZWx5X29iamVjdHNfaW1hZ2VzIEFTIGltYWdlcyBPTiBvYmplY3RzLm1haW5faW1hZ2VfaWQgPSBpbWFnZXMuaW1hZ2VfaWQiLCJjYXRhbG9nIjoiYXdzZGF0YWNhdGFsb2ciLCJjb2x1bW5zIjpbeyJuYW1lIjoiaXRlbV9pZCIsInR5cGUiOiJ2YXJjaGFyIn0seyJuYW1lIjoibWFya2V0cGxhY2UiLCJ0eXBlIjoidmFyY2hhciJ9LHsibmFtZSI6InBhdGgiLCJ0eXBlIjoidmFyY2hhciJ9XX0= */",
                       },
+                      "source_region": undefined,
                       "wharfie_version": "0.0.1",
                     },
                   },
@@ -2882,12 +2898,12 @@ describe('wharfie project IaC', () => {
                 "stateTable": "test-deployment-state",
                 "version": "0.0.1",
               },
-              "deploymentBucket": "test-deployment-bucket",
               "description": "nice",
               "inputFormat": "org.apache.hadoop.mapred.TextInputFormat",
               "inputLocation": "s3://utility-079185815456-us-west-2/test/",
               "interval": 300,
               "locationTable": "test-deployment-locations",
+              "migrationResource": false,
               "numberOfBuckets": 0,
               "outputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
               "outputLocation": "s3://test-wharife-project-bucket-lz-fc6bi/test/",
@@ -2898,6 +2914,7 @@ describe('wharfie project IaC', () => {
               "project": {
                 "name": "test-wharife-project",
               },
+              "projectBucket": "test-wharife-project-bucket-lz-fc6bi",
               "projectName": "test-wharife-project",
               "region": "us-west-2",
               "resourceName": "test",
@@ -2950,7 +2967,7 @@ describe('wharfie project IaC', () => {
                   },
                   "description": "nice",
                   "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                  "location": "s3://test-wharife-project-bucket-lz-fc6bi/test/",
+                  "location": "s3://test-wharife-project-bucket-lz-fc6bi/test/references/",
                   "numberOfBuckets": 0,
                   "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
                   "parameters": {
@@ -2991,7 +3008,7 @@ describe('wharfie project IaC', () => {
                     "version": "0.0.1",
                   },
                   "description": "test-deployment resource test workgroup",
-                  "outputLocation": "s3://test-deployment-bucket/test/query_metadata/",
+                  "outputLocation": "s3://test-wharife-project-bucket-lz-fc6bi/test/query_metadata/",
                 },
                 "resourceType": "AthenaWorkGroup",
                 "status": "STABLE",
@@ -3067,7 +3084,7 @@ describe('wharfie project IaC', () => {
                         },
                         "description": "nice",
                         "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                        "location": "s3://test-wharife-project-bucket-lz-fc6bi/test/",
+                        "location": "s3://test-wharife-project-bucket-lz-fc6bi/test/references/",
                         "name": "test",
                         "numberOfBuckets": 0,
                         "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
@@ -3139,6 +3156,7 @@ describe('wharfie project IaC', () => {
                         "tableType": "EXTERNAL_TABLE",
                         "tags": [],
                       },
+                      "source_region": "us-east-1",
                       "wharfie_version": "0.0.1",
                     },
                   },
@@ -3433,7 +3451,6 @@ describe('wharfie project IaC', () => {
           "stateTable": "test-deployment-state",
           "version": "0.0.1",
         },
-        "deploymentBucket": "test-deployment-bucket",
         "deploymentSharedPolicyArn": "arn:aws:iam:::policy/test-deployment-shared-policy",
         "eventsQueueArn": undefined,
         "locationTable": "test-deployment-locations",

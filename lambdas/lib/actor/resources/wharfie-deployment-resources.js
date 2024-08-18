@@ -9,10 +9,15 @@ const Policy = require('./aws/policy');
 const Database = require('./aws/glue-database');
 
 /**
+ * @typedef WharfieDeploymentResourcesProperties
+ * @property {string} loggingLevel -
+ */
+
+/**
  * @typedef WharfieDeploymentResourcesOptions
  * @property {string} name -
  * @property {import('./reconcilable').Status} [status] -
- * @property {import('../typedefs').SharedProperties} properties -
+ * @property {WharfieDeploymentResourcesProperties &  import('../typedefs').SharedProperties} properties -
  * @property {Object<string, import('./base-resource') | BaseResourceGroup>} [resources] -
  * @property {import('./reconcilable')[]} [dependsOn] -
  */
@@ -521,7 +526,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         projectName: this.get('deployment').name,
         databaseName: this.get('deployment').name,
         outputLocation: `s3://${systemBucket.name}/logs/processed/`,
-        deploymentBucket: systemBucket.name,
+        projectBucket: systemBucket.name,
         region: () => this.get('deployment').region,
         catalogId: () => this.get('deployment').accountId,
         roleArn: () => loggingResourceRole.get('arn'),

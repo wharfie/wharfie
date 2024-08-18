@@ -14,7 +14,7 @@ const BaseResource = require('../base-resource');
  * @property {string} [keyName] -
  * @property {string} [sortKeyValue] -
  * @property {string} [sortKeyName] -
- * @property {any} data -
+ * @property {any} [data] -
  */
 
 /**
@@ -22,6 +22,7 @@ const BaseResource = require('../base-resource');
  * @property {string} name -
  * @property {import('../reconcilable').Status} [status] -
  * @property {TableRecordProperties & import('../../typedefs').SharedProperties} properties -
+ * @property {() => Promise<Object<string,any>>} [dataResolver] -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 
@@ -29,7 +30,7 @@ class TableRecord extends BaseResource {
   /**
    * @param {TableRecordOptions} options -
    */
-  constructor({ name, status, dependsOn = [], properties }) {
+  constructor({ name, status, dataResolver, dependsOn = [], properties }) {
     const propertiesWithDefaults = Object.assign(
       {
         keyName: 'key',
@@ -38,6 +39,7 @@ class TableRecord extends BaseResource {
       properties
     );
     super({ name, status, dependsOn, properties: propertiesWithDefaults });
+    this.dataResolver = dataResolver;
     const credentials = fromNodeProviderChain();
     this.dynamo = new Dynamo.DynamoDB({
       ...BaseAWS.config({
@@ -51,6 +53,8 @@ class TableRecord extends BaseResource {
   }
 
   async _reconcile() {
+    const resolvedData = this.dataResolver ? await this.dataResolver() : {};
+    this.set('data', { ...this.get('data', {}), ...resolvedData });
     await this.dynamoDocument.put({
       TableName: this.get('tableName'),
       Item: {

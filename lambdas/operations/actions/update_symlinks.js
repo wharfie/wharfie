@@ -226,7 +226,13 @@ async function update_partitions(
     });
   } catch (error) {
     // @ts-ignore
-    if (error.name === 'NoSuchKey') return;
+    if (error.name === 'NoSuchKey') {
+      event_log.debug(
+        `query metadata missing for ${query_execution_id}`,
+        queryManifestPrefix
+      );
+      return;
+    }
     throw error;
   }
   const references = (body || '').toString().split('\n');

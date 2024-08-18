@@ -8,7 +8,7 @@ const { displayFailure, displayInfo, displaySuccess } = require('../../output');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
 const monitorDeploymentDestroyReconcilables = require('../../output/deployment/destroy');
 
-const destroy = async () => {
+const destroy = async (yes) => {
   let deployment;
   try {
     deployment = await load({
@@ -25,22 +25,25 @@ const destroy = async () => {
     await deployment;
   }
   const bucket = deployment.getBucket();
-  const answers = await new Promise((resolve, reject) => {
-    inquirer
-      .prompt([
-        {
-          type: 'confirm',
-          name: 'confirmation',
-          message: `This will destroy the deployment and all data stored in the ${bucket.name} S3 bucket. Are you sure?`,
-          default: false,
-        },
-      ])
-      .then(resolve)
-      .catch(reject);
-  });
-  if (!answers.confirmation) {
-    displayFailure('destroy cancelled');
-    return;
+  if (!yes) {
+    const answers = await new Promise((resolve, reject) => {
+      inquirer
+        .prompt([
+          {
+            type: 'confirm',
+            name: 'confirmation',
+            message: `This will destroy the deployment and all data stored in the ${bucket.name} S3 bucket. Are you sure?`,
+            default: false,
+          },
+        ])
+        .then(resolve)
+        .catch(reject);
+    });
+    if (!answers.confirmation) {
+      displayFailure('destroy cancelled');
+      return;
+    }
+    process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
   }
   displayInfo(`Destroying wharfie deployment...`);
 
@@ -53,12 +56,17 @@ const destroy = async () => {
 
 exports.command = 'destroy';
 exports.desc = 'destroy wharfie deployment';
-exports.builder = (yargs) => {};
-exports.handler = async function () {
+exports.builder = (yargs) => {
+  yargs.option('yes', {
+    alias: 'y',
+    type: 'boolean',
+    describe: 'approve destruction',
+  });
+};
+exports.handler = async function ({ yes }) {
   try {
-    await destroy();
+    await destroy(yes);
   } catch (err) {
-    displayFailure(err);
-    console.trace(err);
+    displayFailure(err.stack);
   }
 };

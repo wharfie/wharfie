@@ -171,7 +171,9 @@
  * @typedef ResourceRecord
  * @property {string} resource_id - name of the resource
  * @property {string} resource_status -
+ * @property {string} resource_arn -
  * @property {string} region - aws region of the resource
+ * @property {string} [source_region] - aws region of the source data, not set for models
  * @property {string} status - status of the resource
  * @property {string} athena_workgroup - name of the stack's athena workgroup
  * @property {DaemonConfig} daemon_config -
