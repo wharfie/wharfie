@@ -59,7 +59,7 @@ const init = async () => {
   }
 
   displaySuccess(
-    `project ${answers.project_name} initialized successfully! \n\n'cd ${answers.project_name}' and 'wharfie project apply' to get running`
+    `Project ${answers.project_name} initialized successfully! \n\n'cd ${answers.project_name}' and 'wharfie project apply' to get running`
   );
 };
 

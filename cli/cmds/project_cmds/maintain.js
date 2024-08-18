@@ -1,5 +1,7 @@
 'use strict';
 
+const ansiEscapes = require('ansi-escapes');
+
 const { loadProject } = require('../../project/load');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
 const SQS = require('../../../lambdas/lib/sqs');
@@ -35,7 +37,8 @@ const maintain = async (path, environmentName) => {
     })
   );
 
-  displaySuccess(`maintain events dispatched`);
+  process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
+  displaySuccess(`Maintain events dispatched`);
 };
 
 exports.command = 'maintain [path]';
