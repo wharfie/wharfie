@@ -55,7 +55,7 @@ const apply = async (path, environmentName) => {
 
   multibar.stop();
   process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
-  displaySuccess(`apply for ${project.name} completed successfully`);
+  displaySuccess(`Apply for ${project.name} completed successfully`);
 };
 
 exports.command = 'apply [path]';

@@ -78,7 +78,7 @@ const destroy = async (path, environmentName, yes) => {
 
   multibar.stop();
   process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
-  displaySuccess(`destroyed wharfie project ${project.name} successfully`);
+  displaySuccess(`Destroyed wharfie project ${project.name} successfully`);
 };
 
 exports.command = 'destroy [path]';
