@@ -1,0 +1,68 @@
+name: noaa_global_surface_summary_of_the_day
+description: 'NOAA Global Surface Summary of the Day (GSOD) dataset https://registry.opendata.aws/noaa-gsod/'
+format: 'csv'
+input_location:
+  storage: s3
+  path: s3://noaa-gsod-pds/
+service_level_agreement:
+  freshness: 1440
+columns: 
+- name: station
+  type: string
+- name: date
+  type: string
+- name: latitude
+  type: string
+- name: longitude
+  type: string
+- name: elevation
+  type: string
+- name: name
+  type: string
+- name: temp
+  type: string
+- name: temp_attributes
+  type: string
+- name: dewp
+  type: string
+- name: dewp_attributes
+  type: string
+- name: slp
+  type: string
+- name: slp_attributes
+  type: string
+- name: stp
+  type: string
+- name: stp_attributes
+  type: string
+- name: visib
+  type: string
+- name: visib_attributes
+  type: string
+- name: wdsp
+  type: string
+- name: wdsp_attributes
+  type: string
+- name: mxspd
+  type: string
+- name: gust
+  type: string
+- name: max
+  type: string
+- name: max_attributes
+  type: string
+- name: min
+  type: string
+- name: min_attributes
+  type: string
+- name: prcp
+  type: string
+- name: prcp_attributes
+  type: string
+- name: sndp
+  type: string
+- name: frshtt
+  type: string
+partitions:
+- name: year
+  type: int
