@@ -17,7 +17,19 @@ class Compaction {
 
   /**
    *
+   * @typedef getCompactionSelectsParams
+   * @property {import('../../../typedefs').ResourceRecord} resource -
+   * @param {getCompactionSelectsParams} params -
+   * @returns {string} - compaction statement for the given event + partition
+   */
+  getCompactionSelects({ resource }) {
+    return '';
+  }
+
+  /**
+   *
    * @typedef getCompactionQueryParams
+   * @property {import('../../../typedefs').ResourceRecord} resource -
    * @property {string?} PrimaryKey -
    * @property {import('../../../typedefs').Partition[]} partitions - partitions to be compacted
    * @property {string} sourceDatabaseName - raw data to be compacted
@@ -28,6 +40,7 @@ class Compaction {
    * @returns {string} - compaction statement for the given event + partition
    */
   getCompactionQuery({
+    resource,
     PrimaryKey,
     partitions,
     sourceDatabaseName,
@@ -60,7 +73,7 @@ class Compaction {
     }
     return `
   INSERT INTO "${destinationDatabaseName}"."${destinationTableName}"
-  SELECT *
+  SELECT ${this.getCompactionSelects({ resource })}
   FROM "${sourceDatabaseName}"."${sourceTableName}"
   ${compactionStatement ? `WHERE ${compactionStatement}` : ''}`;
   }
@@ -151,6 +164,7 @@ class Compaction {
           const partitionsChunk = partitionGroup.splice(0, 100);
           queries.push({
             query_string: this.getCompactionQuery({
+              resource,
               PrimaryKey,
               partitions: partitionsChunk,
               sourceDatabaseName,
@@ -170,6 +184,7 @@ class Compaction {
     return [
       ...partitions.map((partition) => {
         const query_string = this.getCompactionQuery({
+          resource,
           PrimaryKey,
           partitions: [partition],
           sourceDatabaseName,
@@ -188,6 +203,7 @@ class Compaction {
         ? [
             {
               query_string: this.getCompactionQuery({
+                resource,
                 PrimaryKey,
                 partitions: [
                   {
