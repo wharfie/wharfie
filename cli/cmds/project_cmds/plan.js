@@ -3,10 +3,15 @@
 const diffProject = require('../../project/diff');
 const { loadProject } = require('../../project/load');
 const loadEnvironment = require('../../project/load-environment');
-const { displayFailure, displayInfo } = require('../../output');
+const { displayInfo } = require('../../output');
+const { handleError } = require('../../output/error');
 const Diff = require('diff');
 const chalk = require('chalk');
 
+/**
+ * @param {string} path -
+ * @param {string} environmentName -
+ */
 const plan = async (path, environmentName) => {
   displayInfo(`showing changes to project...`);
   const project = await loadProject({
@@ -37,6 +42,9 @@ const plan = async (path, environmentName) => {
 
 exports.command = 'plan [path]';
 exports.desc = 'plan changes to wharfie project';
+/**
+ * @param {import('yargs').Argv} yargs -
+ */
 exports.builder = (yargs) => {
   yargs
     .positional('path', {
@@ -50,6 +58,12 @@ exports.builder = (yargs) => {
       describe: 'the wharfie project environment to use',
     });
 };
+/**
+ * @typedef projectPlanCLIParams
+ * @property {string} path -
+ * @property {string} environment -
+ * @param {projectPlanCLIParams} params -
+ */
 exports.handler = async function ({ path, environment }) {
   if (!path) {
     path = process.cwd();
@@ -57,6 +71,6 @@ exports.handler = async function ({ path, environment }) {
   try {
     await plan(path, environment);
   } catch (err) {
-    displayFailure(err.stack);
+    handleError(err);
   }
 };

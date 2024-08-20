@@ -7,13 +7,14 @@ const Table = require('cli-table3');
 const { loadProject } = require('../../project/load');
 const loadEnvironment = require('../../project/load-environment');
 const ProjectCostEstimator = require('../../project/cost');
-const { displayFailure, displayInfo } = require('../../output/');
+const { displayInfo } = require('../../output/');
 
-const {
-  displayValidationError,
-  isValidationError,
-} = require('../../output/validation-error');
+const { handleError } = require('../../output/error');
 
+/**
+ * @param {string} path -
+ * @param {string} environmentName -
+ */
 const cost = async (path, environmentName) => {
   displayInfo(`calculating cost estimates for project...`);
   const project = await loadProject({
@@ -76,6 +77,9 @@ const cost = async (path, environmentName) => {
 
 exports.command = 'cost [path]';
 exports.desc = 'show cost estimates for wharfie project';
+/**
+ * @param {import('yargs').Argv} yargs -
+ */
 exports.builder = (yargs) => {
   yargs
     .positional('path', {
@@ -89,6 +93,12 @@ exports.builder = (yargs) => {
       describe: 'the wharfie project environment to use',
     });
 };
+/**
+ * @typedef projectCostCLIParams
+ * @property {string} path -
+ * @property {string} environment -
+ * @param {projectCostCLIParams} params -
+ */
 exports.handler = async function ({ path, environment }) {
   if (!path) {
     path = process.cwd();
@@ -96,10 +106,6 @@ exports.handler = async function ({ path, environment }) {
   try {
     await cost(path, environment);
   } catch (err) {
-    if (isValidationError(err)) {
-      displayValidationError(err);
-    } else {
-      displayFailure(err.stack);
-    }
+    handleError(err);
   }
 };

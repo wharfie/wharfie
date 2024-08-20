@@ -25,7 +25,7 @@ const { createStableHash } = require('../../crypto');
  * @property {import('../wharfie-deployment')} [deployment] -
  * @property {string} name -
  * @property {import('./reconcilable').Status} [status] -
- * @property {WharfieProjectProperties & import('../typedefs').SharedProperties} properties -
+ * @property {WharfieProjectProperties & import('../typedefs').SharedProperties} [properties] -
  * @property {import('./reconcilable')[]} [dependsOn] -
  * @property {Object<string, import('./base-resource') | BaseResourceGroup>} [resources] -
  */

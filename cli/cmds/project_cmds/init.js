@@ -6,6 +6,7 @@ const fs = require('fs/promises');
 const _fs = require('fs');
 
 const { displayFailure, displayInfo, displaySuccess } = require('../../output');
+const { handleError } = require('../../output/error');
 const re = /^[a-zA-Z0-9_ ]*$/;
 
 const init = async () => {
@@ -65,11 +66,14 @@ const init = async () => {
 
 exports.command = 'init';
 exports.desc = 'init wharfie project';
+/**
+ * @param {import('yargs').Argv} yargs -
+ */
 exports.builder = (yargs) => {};
 exports.handler = async function () {
   try {
     await init();
   } catch (err) {
-    displayFailure(err.stack);
+    handleError(err);
   }
 };

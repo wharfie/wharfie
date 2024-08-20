@@ -13,13 +13,16 @@ const {
 const Glue = require('../../../lambdas/lib/glue');
 const S3 = require('../../../lambdas/lib/s3');
 const Clean = require('../../../lambdas/operations/actions/lib/clean');
-const glue = new Glue();
+const glue = new Glue({});
 const s3 = new S3();
 const clean = new Clean({
   s3,
   glue,
 });
 
+/**
+ * @param {string} resource_id -
+ */
 const cleanup_s3 = async (resource_id) => {
   let resources = [];
   if (resource_id) {
@@ -41,20 +44,22 @@ const cleanup_s3 = async (resource_id) => {
 
 exports.command = 'cleanup-s3 [resource_id]';
 exports.desc = 'remove stale s3 data';
+/**
+ * @param {import('yargs').Argv} yargs -
+ */
 exports.builder = (yargs) => {
-  yargs
-    .positional('resource_id', {
-      type: 'string',
-      describe: 'the wharfie resource id',
-    })
-    .option('all', {
-      alias: 'a',
-      type: 'boolean',
-      describe: 'DANGER! runs cleanup-s3 on all wharfie resources',
-    });
+  yargs.positional('resource_id', {
+    type: 'string',
+    describe: 'the wharfie resource id',
+  });
 };
-exports.handler = async function ({ resource_id, all }) {
-  if (!resource_id && !all) {
+/**
+ * @typedef utilCleanupS3CLIParams
+ * @property {string} resource_id -
+ * @param {utilCleanupS3CLIParams} params -
+ */
+exports.handler = async function ({ resource_id }) {
+  if (!resource_id) {
     displayInstruction("Param 'resource_id' Missing 🙁");
     return;
   }

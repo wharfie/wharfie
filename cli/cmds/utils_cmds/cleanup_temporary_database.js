@@ -1,21 +1,24 @@
 'use strict';
 
 const cliProgress = require('cli-progress');
-const progressBar = new cliProgress.Bar();
+const progressBar = new cliProgress.Bar({});
 
 const { displaySuccess, displayFailure, displayInfo } = require('../../output');
 const Glue = require('../../../lambdas/lib/glue');
 
 const cleanupTemporaryDB = async () => {
   const DatabaseName = `${process.env.WHARFIE_DEPLOYMENT_NAME}_temporary_store`;
-  const glue = new Glue();
+  const glue = new Glue({});
   displayInfo('fetching tables...');
   const { TableList } = await glue.getTables({
     DatabaseName,
   });
+  if (!TableList || TableList.length === 0) throw new Error('no tables found');
 
   const tables_to_remove = TableList.filter(
-    (table) => table.CreateTime < new Date().getTime() - 1000 * 60 * 60 * 24
+    (table) =>
+      table.CreateTime &&
+      table.CreateTime.getTime() < new Date().getTime() - 1000 * 60 * 60 * 24
   );
   let delete_count = 0;
   displayInfo('deleting stale tables...');

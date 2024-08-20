@@ -15,11 +15,12 @@ const {
   monitorProjectDestroyReconcilables,
 } = require('../../output/');
 
-const {
-  displayValidationError,
-  isValidationError,
-} = require('../../output/validation-error');
-
+const { handleError } = require('../../output/error');
+/**
+ * @param {string} path -
+ * @param {string} environmentName -
+ * @param {boolean} yes -
+ */
 const destroy = async (path, environmentName, yes) => {
   const project = await loadProject({
     path,
@@ -28,17 +29,20 @@ const destroy = async (path, environmentName, yes) => {
   let projectResources;
   try {
     projectResources = await load({
-      deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME,
+      deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME || '',
       resourceName: project.name,
     });
   } catch (error) {
+    if (!(error instanceof Error)) throw error;
     if (
       !['No resource found', 'Resource was not stored'].includes(error.message)
     )
       throw error;
     const deployment = await load({
-      deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME,
+      deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME || '',
     });
+    if (deployment instanceof WharfieProject)
+      throw new Error('should not have loaded a project');
     projectResources = new WharfieProject({
       deployment,
       name: project.name,
@@ -83,6 +87,9 @@ const destroy = async (path, environmentName, yes) => {
 
 exports.command = 'destroy [path]';
 exports.desc = 'destroy wharfie project';
+/**
+ * @param {import('yargs').Argv} yargs -
+ */
 exports.builder = (yargs) => {
   yargs
     .positional('path', {
@@ -101,6 +108,13 @@ exports.builder = (yargs) => {
       describe: 'approve destruction',
     });
 };
+/**
+ * @typedef projectDestroyCLIParams
+ * @property {string} path -
+ * @property {string} environment -
+ * @property {boolean} yes -
+ * @param {projectDestroyCLIParams} params -
+ */
 exports.handler = async function ({ path, environment, yes }) {
   if (!path) {
     path = process.cwd();
@@ -108,10 +122,6 @@ exports.handler = async function ({ path, environment, yes }) {
   try {
     await destroy(path, environment, yes);
   } catch (err) {
-    if (isValidationError(err)) {
-      displayValidationError(err);
-    } else {
-      displayFailure(err.stack);
-    }
+    handleError(err);
   }
 };

@@ -1,7 +1,7 @@
 'use strict';
 
 const cliProgress = require('cli-progress');
-const progressBar = new cliProgress.Bar();
+const progressBar = new cliProgress.Bar({});
 
 const { displaySuccess, displayFailure, displayInfo } = require('../../output');
 const {

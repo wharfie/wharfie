@@ -8,19 +8,23 @@ const { displayFailure, displayInfo, displaySuccess } = require('../../output');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
 const monitorDeploymentDestroyReconcilables = require('../../output/deployment/destroy');
 
+/**
+ * @param {boolean} yes -
+ */
 const destroy = async (yes) => {
   let deployment;
   try {
     deployment = await load({
-      deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME,
+      deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME || '',
     });
   } catch (error) {
+    if (!(error instanceof Error)) throw error;
     if (
       !['No resource found', 'Resource was not stored'].includes(error.message)
     )
       throw error;
     deployment = new WharfieDeployment({
-      name: process.env.WHARFIE_DEPLOYMENT_NAME,
+      name: process.env.WHARFIE_DEPLOYMENT_NAME || '',
     });
     await deployment;
   }
@@ -56,6 +60,9 @@ const destroy = async (yes) => {
 
 exports.command = 'destroy';
 exports.desc = 'destroy wharfie deployment';
+/**
+ * @param {import('yargs').Argv} yargs -
+ */
 exports.builder = (yargs) => {
   yargs.option('yes', {
     alias: 'y',
@@ -63,10 +70,16 @@ exports.builder = (yargs) => {
     describe: 'approve destruction',
   });
 };
+/**
+ * @typedef deploymentDestroyCLIParams
+ * @property {boolean} yes -
+ * @param {deploymentDestroyCLIParams} params -
+ */
 exports.handler = async function ({ yes }) {
   try {
     await destroy(yes);
   } catch (err) {
-    displayFailure(err.stack);
+    if (err instanceof Error) displayFailure(err?.stack);
+    else displayFailure(err);
   }
 };

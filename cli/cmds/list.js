@@ -7,10 +7,13 @@ const {
   getAllResources,
 } = require('../../lambdas/lib/dynamo/resource');
 
+/**
+ * @param {string} resource_id -
+ * @param {string} operation_id -
+ */
 const list = async (resource_id, operation_id) => {
   if (!resource_id) {
     const resources = await getAllResources();
-    resources.sort((a, b) => b.last_updated_at - a.last_updated_at);
     console.table(
       resources.map(({ resource_id }) => ({
         resource_id,
@@ -38,6 +41,7 @@ const list = async (resource_id, operation_id) => {
       return;
     }
     const graph = OperationActionGraph.deserialize(
+      // @ts-ignore
       records.operations[0].action_graph
     );
     const actions = graph.getSequentialActionOrder();
@@ -55,7 +59,7 @@ const list = async (resource_id, operation_id) => {
         action_id: action.id,
         action_type: action.type,
         action_status: records.actions.find((x) => x.action_id === action.id)
-          .action_status,
+          ?.action_status,
       }))
     );
     console.table(
@@ -73,6 +77,9 @@ exports.command = [
   'ls [resource_id] [operation_id]',
 ];
 exports.desc = 'list wharfie records';
+/**
+ * @param {import('yargs').Argv} yargs -
+ */
 exports.builder = (yargs) => {
   yargs
     .positional('resource_id', {

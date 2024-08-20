@@ -9,7 +9,7 @@ const monitorDeploymentCreateReconcilables = require('../../output/deployment/cr
 const create = async () => {
   displayInfo(`Creating wharfie deployment...`);
   const deployment = new WharfieDeployment({
-    name: process.env.WHARFIE_DEPLOYMENT_NAME,
+    name: process.env.WHARFIE_DEPLOYMENT_NAME || '',
   });
   const multibar = monitorDeploymentCreateReconcilables(deployment);
   await deployment.reconcile();
@@ -20,17 +20,20 @@ const create = async () => {
 
 exports.command = 'create';
 exports.desc = 'create wharfie deployment';
-exports.builder = (yargs) => {
-  yargs.option('development', {
-    type: 'boolean',
-    alias: 'dev',
-    default: false,
-  });
-};
+/**
+ * @param {import('yargs').Argv} yargs -
+ */
+exports.builder = (yargs) => {};
+/**
+ * @typedef deploymentCreateCLIParams
+ * @property {string} development -
+ * @param {deploymentCreateCLIParams} params -
+ */
 exports.handler = async function ({ development }) {
   try {
-    await create(development);
+    await create();
   } catch (err) {
-    displayFailure(err.stack);
+    if (err instanceof Error) displayFailure(err?.stack);
+    else displayFailure(err);
   }
 };

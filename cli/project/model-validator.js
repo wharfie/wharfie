@@ -14,12 +14,12 @@ class WharfieModelSQLError extends Error {}
  * @param {import('./typedefs').Environment} environment -
  * @returns {String} -
  */
-function getStackName(project, environment) {
+function getDatabaseName(project, environment) {
   return `${project.name}${
     environment.name === WHARFIE_DEFAULT_ENVIRONMENT
       ? ''
       : `-${environment.name}`
-  }`.replace(/_/g, '-');
+  }`.replace(/-/g, '_');
 }
 
 /**
@@ -35,10 +35,7 @@ function getStackName(project, environment) {
  */
 function validateModelSql(modelSqls, project, environment) {
   const errors = [];
-  const projectDatabaseName = getStackName(project, environment).replace(
-    /-/g,
-    '_'
-  );
+  const projectDatabaseName = getDatabaseName(project, environment);
   Object.keys(modelSqls).forEach(async (modelSqlKey) => {
     const modelSql = modelSqls[modelSqlKey];
     let sqlReferences;

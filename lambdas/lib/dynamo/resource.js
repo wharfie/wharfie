@@ -583,11 +583,17 @@ async function checkActionPrerequisites(
   }
   return prerequisites_met;
 }
+/**
+ * @typedef getRecordsReturn
+ * @property {import('../../typedefs').OperationRecord[]} operations -
+ * @property {import('../../typedefs').ActionRecord[]} actions -
+ * @property {import('../../typedefs').QueryRecord[]} queries -
+ */
 
 /**
  * @param {string} resource_id -
  * @param {string} operation_id -
- * @returns {Promise<any>} -
+ * @returns {Promise<getRecordsReturn>} -
  */
 async function getRecords(resource_id, operation_id = '') {
   const { Items } = await query({
@@ -600,7 +606,7 @@ async function getRecords(resource_id, operation_id = '') {
       ':sort_key': `${resource_id}#${operation_id}`,
     },
   });
-  /** @type {any} */
+  /** @type {getRecordsReturn} */
   const records = {
     operations: [],
     actions: [],

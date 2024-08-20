@@ -4,6 +4,9 @@ const inquirer = require('inquirer');
 const { displayFailure, displayInfo, displaySuccess } = require('../../output');
 const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
 
+/**
+ * @param {string} development -
+ */
 const config = async (development) => {
   const answers = await new Promise((resolve, reject) => {
     inquirer
@@ -42,7 +45,7 @@ const config = async (development) => {
   });
   displayInfo(`updating wharfie deployment configuration...`);
   const deployment = new WharfieDeployment({
-    name: process.env.WHARFIE_DEPLOYMENT_NAME,
+    name: process.env.WHARFIE_DEPLOYMENT_NAME || '',
     properties: answers,
   });
   await deployment.reconcile();
@@ -51,6 +54,10 @@ const config = async (development) => {
 
 exports.command = 'config';
 exports.desc = 'modify wharfie deployment settings';
+
+/**
+ * @param {import('yargs').Argv} yargs -
+ */
 exports.builder = (yargs) => {
   yargs.option('development', {
     type: 'boolean',
@@ -58,6 +65,11 @@ exports.builder = (yargs) => {
     default: false,
   });
 };
+/**
+ * @typedef deploymentConfigCLIParams
+ * @property {string} development -
+ * @param {deploymentConfigCLIParams} params -
+ */
 exports.handler = async function ({ development }) {
   try {
     await config(development);

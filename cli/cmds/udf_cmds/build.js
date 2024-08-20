@@ -17,6 +17,9 @@ const child_process = require('child_process');
 const s3 = new S3();
 const sts = new STS();
 
+/**
+ * @param {string} dir -
+ */
 const zip = async (dir) => {
   const zipInstance = new JSZip();
   // Read directory
@@ -42,6 +45,11 @@ const zip = async (dir) => {
   });
 };
 
+/**
+ * @param {string} udf_name -
+ * @param {string} entrypoint -
+ * @param {string} label -
+ */
 const build = async (udf_name, entrypoint, label) => {
   // esbuild lambdas
   displayInfo('Building udf...');
@@ -74,7 +82,7 @@ const build = async (udf_name, entrypoint, label) => {
   });
 
   if (result.errors.length) {
-    throw new Error(result.errors);
+    throw new Error(JSON.stringify(result.errors));
   }
   if (result.warnings.length) {
     displayWarning(result.warnings);
@@ -102,6 +110,9 @@ const build = async (udf_name, entrypoint, label) => {
 
 exports.command = 'build [udf_name] [entrypoint] [label]';
 exports.desc = 'build wharfie udf artifact';
+/**
+ * @param {import('yargs').Argv} yargs -
+ */
 exports.builder = (yargs) => {
   yargs
     .positional('udf_name', {
@@ -118,6 +129,13 @@ exports.builder = (yargs) => {
       optional: true,
     });
 };
+/**
+ * @typedef udfBuildCLIParams
+ * @property {string} udf_name -
+ * @property {string} entrypoint -
+ * @property {string} label -
+ * @param {udfBuildCLIParams} params -
+ */
 exports.handler = async function ({ udf_name, entrypoint, label }) {
   try {
     await build(udf_name, entrypoint, label);

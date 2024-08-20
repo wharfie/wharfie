@@ -1,9 +1,10 @@
 const joi = require('joi');
 const { WharfieModelSQLError } = require('../project/model-validator');
 
+const { displayFailure } = require('.');
 /**
  *
- * @param {Error} error -
+ * @param {Error | unknown} error -
  * @returns {boolean} -
  */
 function isValidationError(error) {
@@ -11,13 +12,14 @@ function isValidationError(error) {
     return true;
   } else if (error instanceof WharfieModelSQLError) {
     return true;
+  } else {
+    return false;
   }
-  return false;
 }
 
 /**
  *
- * @param {import('joi').ValidationError} error -
+ * @param {import('joi').ValidationError | WharfieModelSQLError} error -
  */
 function displayValidationError(error) {
   if (!isValidationError(error)) {
@@ -30,4 +32,20 @@ function displayValidationError(error) {
   }
 }
 
-module.exports = { displayValidationError, isValidationError };
+/**
+ *
+ * @param {unknown} error -
+ */
+function handleError(error) {
+  if (
+    error instanceof joi.ValidationError ||
+    error instanceof WharfieModelSQLError
+  ) {
+    displayValidationError(error);
+  } else {
+    if (error instanceof Error) displayFailure(error.stack);
+    else displayFailure(error);
+  }
+}
+
+module.exports = { displayValidationError, isValidationError, handleError };
