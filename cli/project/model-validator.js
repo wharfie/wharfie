@@ -1,12 +1,26 @@
 const { Parser } = require('node-sql-parser/build/athena');
 const chalk = require('chalk');
 
+const { WHARFIE_DEFAULT_ENVIRONMENT } = require('./constants');
 const Glue = require('../../lambdas/lib/glue');
-const { getStackName } = require('./template');
+
 const glue = new Glue({});
 const parser = new Parser();
 
 class WharfieModelSQLError extends Error {}
+
+/**
+ * @param {import('./typedefs').Project} project -
+ * @param {import('./typedefs').Environment} environment -
+ * @returns {String} -
+ */
+function getStackName(project, environment) {
+  return `${project.name}${
+    environment.name === WHARFIE_DEFAULT_ENVIRONMENT
+      ? ''
+      : `-${environment.name}`
+  }`.replace(/_/g, '-');
+}
 
 /**
  * @typedef ValidationError
