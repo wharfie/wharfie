@@ -14,6 +14,7 @@ const s3 = new S3({});
 /**
  * @typedef WharfieResourceProperties
  * @property {string} resourceName -
+ * @property {string} [resourceId] -
  * @property {string} projectName -
  * @property {string} databaseName -
  * @property {string | function(): string} catalogId -
@@ -61,7 +62,9 @@ class WharfieResource extends BaseResourceGroup {
    */
   constructor({ name, status, properties, dependsOn, resources }) {
     const propertiesWithDefaults = Object.assign(
-      {},
+      {
+        resourceId: `${properties.projectName}.${properties.resourceName}`,
+      },
       WharfieResource.DefaultProperties,
       properties
     );
@@ -192,7 +195,7 @@ class WharfieResource extends BaseResourceGroup {
                 },
                 // TODO use a real id
                 InputTemplate: `{"operation_started_at":<time>, "operation_type":"MAINTAIN", "action_type":"START", "resource_id":"${this.get(
-                  'resourceName'
+                  'resourceId'
                 )}"}`,
               },
             },
@@ -241,9 +244,9 @@ class WharfieResource extends BaseResourceGroup {
         properties: {
           deployment: () => this.get('deployment'),
           tableName: this.get('resourceTable'),
-          keyValue: this.get('resourceName'),
+          keyValue: this.get('resourceId'),
           keyName: 'resource_id',
-          sortKeyValue: this.get('resourceName'),
+          sortKeyValue: this.get('resourceId'),
           sortKeyName: 'sort_key',
         },
       })
@@ -274,7 +277,7 @@ class WharfieResource extends BaseResourceGroup {
               tableName: this.get('dependencyTable'),
               keyValue: `${source.DatabaseName}.${source.TableName}`,
               keyName: 'dependency',
-              sortKeyValue: this.get('resourceName'),
+              sortKeyValue: this.get('resourceId'),
               sortKeyName: 'resource_id',
               data: {
                 interval: Number(this.get('interval')),
@@ -297,7 +300,7 @@ class WharfieResource extends BaseResourceGroup {
             tableName: this.get('locationTable'),
             keyValue: this.get('inputLocation'),
             keyName: 'location',
-            sortKeyValue: this.get('resourceName'),
+            sortKeyValue: this.get('resourceId'),
             sortKeyName: 'resource_id',
             data: {
               interval: Number(this.get('interval')),
