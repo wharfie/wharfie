@@ -1,11 +1,15 @@
 'use strict';
-const { displayFailure, displayInfo, displaySuccess } = require('../../output');
+const {
+  displayFailure,
+  displayInfo,
+  displaySuccess,
+} = require('../../output/basic');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
 
 const upgrade = async () => {
   displayInfo(`Upgrading wharfie deployment...`);
   const deployment = await load({
-    deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME,
+    deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME || '',
   });
   await deployment.reconcile();
   displaySuccess(`Upgraded wharfie deployment`);
@@ -13,6 +17,10 @@ const upgrade = async () => {
 
 exports.command = 'upgrade';
 exports.desc = 'upgrade wharfie deployment';
+
+/**
+ * @param {import('yargs').Argv} yargs -
+ */
 exports.builder = (yargs) => {
   yargs.option('development', {
     type: 'boolean',
@@ -20,9 +28,14 @@ exports.builder = (yargs) => {
     default: false,
   });
 };
+/**
+ * @typedef deploymentUpgradeCLIParams
+ * @property {string} development -
+ * @param {deploymentUpgradeCLIParams} params -
+ */
 exports.handler = async function ({ development }) {
   try {
-    await upgrade(development);
+    await upgrade();
   } catch (err) {
     displayFailure(err);
   }

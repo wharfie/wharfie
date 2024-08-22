@@ -5,23 +5,30 @@ const {
   displayFailure,
   displayInstruction,
   displayInfo,
-} = require('../../output');
+} = require('../../output/basic');
 const {
   getRecords,
   deleteOperation,
   getAllResources,
 } = require('../../../lambdas/lib/dynamo/resource');
 
+/**
+ * @param {string} resource_id -
+ * @param {string} [operation_id] -
+ * @param {string} [operation_type] -
+ */
 const cancel = async (resource_id, operation_id, operation_type) => {
   const records = await getRecords(resource_id);
   let operations_to_remove = [];
 
   if (operation_type)
     operations_to_remove = records.operations.filter(
+      // @ts-ignore
       (x) => x.operation_type === operation_type
     );
   else if (operation_id) {
     operations_to_remove = records.operations.filter(
+      // @ts-ignore
       (x) => x.operation_id === operation_id
     );
   } else {
@@ -31,6 +38,7 @@ const cancel = async (resource_id, operation_id, operation_type) => {
   while (operations_to_remove.length > 0) {
     const operationChunk = operations_to_remove.splice(0, 10);
     await Promise.all(
+      // @ts-ignore
       operationChunk.map((operation) =>
         deleteOperation(operation.resource_id, operation.operation_id)
       )
@@ -39,6 +47,9 @@ const cancel = async (resource_id, operation_id, operation_type) => {
   displaySuccess(`${operations_to_remove_count} operations cancelled`);
 };
 
+/**
+ * @param {string} operation_type -
+ */
 const cancel_all = async (operation_type) => {
   const resources = await getAllResources();
   displayInfo(`cancelling operations for ${resources.length} resources`);
@@ -47,18 +58,16 @@ const cancel_all = async (operation_type) => {
     await Promise.all(
       resource_chunk.map((resource) => {
         displayInfo(`cancelling: ${resource.resource_id}`);
-        return cancel(
-          resource.resource_id,
-          undefined,
-          operation_type,
-          undefined
-        );
+        return cancel(resource.resource_id, undefined, operation_type);
       })
     );
   }
 };
 
 exports.command = 'cancel [resource_id] [operation_id]';
+/**
+ * @param {import('yargs').Argv} yargs -
+ */
 exports.builder = (yargs) => {
   yargs
     .positional('resource_id', {
@@ -82,6 +91,14 @@ exports.builder = (yargs) => {
     });
 };
 exports.desc = 'cancel running operations';
+/**
+ * @typedef utilCancelCLIParams
+ * @property {string} resource_id -
+ * @property {string} operation_id -
+ * @property {string} type -
+ * @property {boolean} all -
+ * @param {utilCancelCLIParams} params -
+ */
 exports.handler = async function ({ resource_id, operation_id, type, all }) {
   if (!resource_id && !all) {
     displayInstruction("Param 'resource_id' Missing 🙁");
@@ -95,7 +112,7 @@ exports.handler = async function ({ resource_id, operation_id, type, all }) {
     if (all) {
       await cancel_all(type);
     } else {
-      await cancel(resource_id, operation_id, type, all);
+      await cancel(resource_id, operation_id, type);
     }
   } catch (err) {
     displayFailure(err);

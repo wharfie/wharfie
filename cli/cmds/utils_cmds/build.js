@@ -8,7 +8,7 @@ const {
   displayWarning,
   displayInfo,
   displaySuccess,
-} = require('../../output');
+} = require('../../output/basic');
 const path = require('path');
 const S3 = require('../../../lambdas/lib/s3');
 const STS = require('../../../lambdas/lib/sts');
@@ -19,6 +19,9 @@ const sts = new STS();
 
 const LAMBDAS = ['bootstrap', 'cleanup', 'daemon', 'events', 'monitor'];
 
+/**
+ * @param {string} dir -
+ */
 const zip = async (dir) => {
   const zipInstance = new JSZip();
   zipInstance.file('index.js', await fs.promises.readFile(`${dir}/index.js`));
@@ -31,6 +34,9 @@ const zip = async (dir) => {
   });
 };
 
+/**
+ * @param {string} label -
+ */
 const build = async (label) => {
   // esbuild lambdas
   displayInfo('Building lambdas...');
@@ -59,7 +65,7 @@ const build = async (label) => {
   });
 
   if (result.errors.length) {
-    throw new Error(result.errors);
+    throw new Error(JSON.stringify(result.errors));
   }
   if (result.warnings.length) {
     displayWarning(result.warnings);
@@ -95,6 +101,9 @@ const build = async (label) => {
 
 exports.command = 'build [label]';
 exports.desc = 'build wharfie lambda artifacts';
+/**
+ * @param {import('yargs').Argv} yargs -
+ */
 exports.builder = (yargs) => {
   yargs.positional('label', {
     type: 'string',
@@ -102,6 +111,11 @@ exports.builder = (yargs) => {
     optional: true,
   });
 };
+/**
+ * @typedef utilBuildCLIParams
+ * @property {string} label -
+ * @param {utilBuildCLIParams} params -
+ */
 exports.handler = async function ({ label }) {
   try {
     await build(label);

@@ -1,12 +1,26 @@
 const { Parser } = require('node-sql-parser/build/athena');
 const chalk = require('chalk');
 
+const { WHARFIE_DEFAULT_ENVIRONMENT } = require('./constants');
 const Glue = require('../../lambdas/lib/glue');
-const { getStackName } = require('./template');
+
 const glue = new Glue({});
 const parser = new Parser();
 
 class WharfieModelSQLError extends Error {}
+
+/**
+ * @param {import('./typedefs').Project} project -
+ * @param {import('./typedefs').Environment} environment -
+ * @returns {String} -
+ */
+function getDatabaseName(project, environment) {
+  return `${project.name}${
+    environment.name === WHARFIE_DEFAULT_ENVIRONMENT
+      ? ''
+      : `-${environment.name}`
+  }`.replace(/-/g, '_');
+}
 
 /**
  * @typedef ValidationError
@@ -20,11 +34,11 @@ class WharfieModelSQLError extends Error {}
  * @returns {ValidationError[]} -s
  */
 function validateModelSql(modelSqls, project, environment) {
+  /**
+   * @type {ValidationError[]}
+   */
   const errors = [];
-  const projectDatabaseName = getStackName(project, environment).replace(
-    /-/g,
-    '_'
-  );
+  const projectDatabaseName = getDatabaseName(project, environment);
   Object.keys(modelSqls).forEach(async (modelSqlKey) => {
     const modelSql = modelSqls[modelSqlKey];
     let sqlReferences;
@@ -38,6 +52,9 @@ function validateModelSql(modelSqls, project, environment) {
         };
       });
     } catch (error) {
+      // @ts-ignore
+      if (!error.location) errors.push(error);
+      // @ts-ignore
       const { start, end } = error.location;
       const queryLines = modelSql.split('\n');
       const errorLine = queryLines[start.line - 1];
@@ -80,6 +97,7 @@ function validateModelSql(modelSqls, project, environment) {
               );
             }
           } else {
+            // @ts-ignore
             errors.push(error);
           }
         }

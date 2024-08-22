@@ -1,6 +1,6 @@
 'use strict';
 
-const cron = require('../../../resources/wharfie/lib/cron');
+const cron = require('../../../lib/cron');
 
 class Compaction {
   /**

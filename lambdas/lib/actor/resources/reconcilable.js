@@ -102,6 +102,13 @@ class Reconcilable {
     Reconcilable.Emitter.emit(Events.WHARFIE_STATUS, this.asEvent());
   }
 
+  /**
+   * @typedef ReconcilableEvent
+   * @property {string} name -
+   * @property {string} constructor -
+   * @property {import('./reconcilable').Status} status -
+   * @returns {ReconcilableEvent} -
+   */
   asEvent() {
     return {
       name: this.name,

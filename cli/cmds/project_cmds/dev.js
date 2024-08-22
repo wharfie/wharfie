@@ -1,12 +1,13 @@
 'use strict';
 const chokidar = require('chokidar');
-const ansiEscapes = require('ansi-escapes');
 
 const { loadProject } = require('../../project/load');
 const loadEnvironment = require('../../project/load-environment');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
 const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
+const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
 const { getResourceOptions } = require('../../project/template-actor');
+const ansiEscapes = require('../../output/escapes');
 
 /**
  * @param {function} func -
@@ -14,9 +15,13 @@ const { getResourceOptions } = require('../../project/template-actor');
  * @returns {function} -
  */
 function debounceAsync(func, wait) {
+  // @ts-ignore
   let timeout;
+  // @ts-ignore
   return function (...args) {
+    // @ts-ignore
     const context = this;
+    // @ts-ignore
     clearTimeout(timeout);
     return new Promise((resolve, reject) => {
       timeout = setTimeout(async () => {
@@ -35,20 +40,22 @@ const {
   displayFailure,
   displayInfo,
   displaySuccess,
-  monitorProjectApplyReconcilables,
-} = require('../../output/');
+} = require('../../output/basic');
+const monitorProjectApplyReconcilables = require('../../output/project/apply');
+const { handleError } = require('../../output/error');
 
-const {
-  displayValidationError,
-  isValidationError,
-} = require('../../output/validation-error');
-
+/**
+ * @param {string} projectPath -
+ * @param {string} environmentName -
+ */
 const dev = async (projectPath, environmentName) => {
   console.clear();
   displayInfo(`Starting dev server...`);
   const deployment = await load({
-    deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME,
+    deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME || '',
   });
+  if (deployment instanceof WharfieProject)
+    throw new Error('should not have loaded a project');
 
   const handleBatchChanges = debounceAsync(async () => {
     console.clear();
@@ -59,11 +66,7 @@ const dev = async (projectPath, environmentName) => {
       });
       environment = loadEnvironment(project, environmentName);
     } catch (error) {
-      if (isValidationError(error)) {
-        displayValidationError(error);
-      } else {
-        displayFailure(error);
-      }
+      handleError(error);
       return;
     }
     displayInfo(`applying changes to ${project.name}...`);
@@ -74,6 +77,7 @@ const dev = async (projectPath, environmentName) => {
         resourceName: project.name,
       });
     } catch (error) {
+      if (!(error instanceof Error)) throw error;
       if (
         !['No resource found', 'Resource was not stored'].includes(
           error.message
@@ -89,6 +93,8 @@ const dev = async (projectPath, environmentName) => {
     }
     try {
       const resourceOptions = getResourceOptions(environment, project);
+      if (projectResources instanceof WharfieDeployment)
+        throw new Error('should not have loaded a project');
       projectResources.registerWharfieResources(resourceOptions);
       const multibar = monitorProjectApplyReconcilables(projectResources);
       await projectResources.reconcile();
@@ -97,12 +103,7 @@ const dev = async (projectPath, environmentName) => {
       process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
       displaySuccess(`project ${project.name} is up to date`);
     } catch (error) {
-      if (isValidationError(error)) {
-        process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
-        displayValidationError(error);
-      } else {
-        displayFailure(error);
-      }
+      handleError(error);
     }
   }, 200);
 
@@ -137,6 +138,9 @@ const dev = async (projectPath, environmentName) => {
 
 exports.command = 'dev [path]';
 exports.desc = 'dev server for wharfie project';
+/**
+ * @param {import('yargs').Argv} yargs -
+ */
 exports.builder = (yargs) => {
   yargs
     .positional('path', {
@@ -150,6 +154,12 @@ exports.builder = (yargs) => {
       describe: 'the wharfie project environment to use',
     });
 };
+/**
+ * @typedef projectDevCLIParams
+ * @property {string} path -
+ * @property {string} environment -
+ * @param {projectDevCLIParams} params -
+ */
 exports.handler = async function ({ path, environment }) {
   if (!path) {
     path = process.cwd();
@@ -157,6 +167,6 @@ exports.handler = async function ({ path, environment }) {
   try {
     await dev(path, environment);
   } catch (err) {
-    displayFailure(err.stack);
+    handleError(err);
   }
 };

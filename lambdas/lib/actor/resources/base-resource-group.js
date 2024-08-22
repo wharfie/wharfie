@@ -77,6 +77,14 @@ class BaseResourceGroup extends BaseResource {
     return !!this.resources[name];
   }
 
+  /**
+   * @typedef BaseResourceGroupEvent
+   * @property {string} name -
+   * @property {string} constructor -
+   * @property {import('./reconcilable').Status} status -
+   * @property {string[]} resources -
+   * @returns {BaseResourceGroupEvent} -
+   */
   asEvent() {
     return {
       name: this.name,

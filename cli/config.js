@@ -5,7 +5,15 @@ const configuration = {
   deployment_name: process.env.WHARFIE_DEPLOYMENT_NAME,
   service_bucket: process.env.WHARFIE_SERVICE_BUCKET,
 };
-
+/**
+ * @typedef CLIConfig
+ * @property {string} [region] -
+ * @property {string} [deployment_name] -
+ * @property {string} [service_bucket] -
+ */
+/**
+ * @param {CLIConfig} params -
+ */
 const check = ({ region, deployment_name, service_bucket }) => {
   if (!region) {
     throw new Error(
@@ -25,6 +33,9 @@ const check = ({ region, deployment_name, service_bucket }) => {
 };
 
 module.exports = {
+  /**
+   * @param {CLIConfig} params -
+   */
   setConfig: ({ deployment_name, region, service_bucket }) => {
     check({ deployment_name, region, service_bucket });
     configuration.region = region;

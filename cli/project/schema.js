@@ -129,6 +129,7 @@ function getResourceName(project, path) {
   if (path.length < 3) {
     return project.name;
   }
+  // @ts-ignore
   return project[path[0]][path[1]].name;
 }
 /**
