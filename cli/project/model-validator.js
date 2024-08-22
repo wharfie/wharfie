@@ -62,14 +62,14 @@ function validateModelSql(modelSqls, project, environment) {
         errorLine.substring(0, start.column - 1) +
         chalk.red(errorLine.substring(start.column - 1, end.column)) +
         errorLine.substring(end.column);
-
       errors.push(
         new WharfieModelSQLError(
           `${chalk.bgWhite.black(
             `Model::${modelSqlKey}`
           )} is invalid SQL \n${chalk.bgGrey.bold.white(
             `Ln ${start.line}, Col ${start.column}`
-          )}  ${chalk.bold(highlightedErrorLine)}`
+            // @ts-ignore
+          )}  ${chalk.bold(highlightedErrorLine)} - ${error.message}`
         )
       );
     }
