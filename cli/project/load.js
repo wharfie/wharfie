@@ -14,10 +14,10 @@ const { validateProject } = require('./schema');
 
 /**
  *  @param {LoadProjectOptions} options -
- *  @returns {import('./typedefs').Model[]} -
+ *  @returns {Promise<import('./typedefs').Model[]>} -
  */
 async function loadModels(options) {
-  /** @type {Object<string,import('./typedefs').Model>} */
+  /** @type {Object<string,import('./typedefs').Model | Object<string, any>>} */
   const models = {};
   const files = await fs.readdir(path.join(options.path, 'models'), {
     withFileTypes: true,
@@ -30,6 +30,7 @@ async function loadModels(options) {
     const fileExtension = file.name.split('.').at(-1);
     const fileData = await loadFile(file);
     const modelName = file.name.split('.').at(0);
+    if (!modelName) throw new Error('Invalid model name');
     if (!models[modelName]) {
       models[modelName] = {};
     }
@@ -39,12 +40,13 @@ async function loadModels(options) {
       models[modelName] = { ...models[modelName], ...fileData };
     }
   }
+  // @ts-ignore
   return Object.values(models);
 }
 
 /**
  *  @param {LoadProjectOptions} options -
- *  @returns {import('./typedefs').Source[]} -
+ *  @returns {Promise<import('./typedefs').Source[]>} -
  */
 async function loadSources(options) {
   const sources = [];
@@ -61,7 +63,7 @@ async function loadSources(options) {
 
 /**
  *  @param {LoadProjectOptions} options -
- *  @returns {Object<string,import('./typedefs').Environment>} -
+ *  @returns {Promise<import('./typedefs').Environment[]>} -
  */
 async function loadEnvironments(options) {
   const environments = [];
@@ -101,8 +103,10 @@ async function loadEnvironments(options) {
  *  @returns {Promise<import('./typedefs').Project>} -
  */
 async function loadProject(options) {
+  const project_folder_name = options.path.split('/').at(-1);
+  if (!project_folder_name) throw new Error('Invalid project path');
   const project = {
-    name: options.path.split('/').at(-1).replace(/=+$/, '').toLowerCase(),
+    name: project_folder_name.replace(/=+$/, '').toLowerCase(),
     path: options.path,
     environments: await loadEnvironments(options),
     models: await loadModels(options),

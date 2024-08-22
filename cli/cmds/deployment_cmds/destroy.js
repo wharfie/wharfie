@@ -1,8 +1,8 @@
 'use strict';
 
 const inquirer = require('inquirer');
-const ansiEscapes = require('ansi-escapes');
 
+const ansiEscapes = require('../../output/escapes');
 const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
 const { displayFailure, displayInfo, displaySuccess } = require('../../output');
 const { load } = require('../../../lambdas/lib/actor/deserialize');

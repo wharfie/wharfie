@@ -249,7 +249,7 @@ class WharfieProject extends BaseResourceGroup {
   }
 
   /**
-   * @param {import("./wharfie-resource").WharfieResourceOptions} options -
+   * @param {UserDefinedWharfieResourceOptions} options -
    */
   addWharfieResource(options) {
     const name = `${options.name}-resource`;
@@ -318,9 +318,32 @@ class WharfieProject extends BaseResourceGroup {
     this.resources[`${name}-resource`].markForDestruction();
     this.setStatus(Reconcilable.Status.DRIFTED);
   }
+  /**
+   * @typedef UserDefinedWharfieResourceProperties
+   * @property {string} description -
+   * @property {string} tableType -
+   * @property {any} parameters -
+   * @property {import('../typedefs').WharfieTableColumn[]} partitionKeys -
+   * @property {import('../typedefs').WharfieTableColumn[]} columns -
+   * @property {string} [inputFormat] -
+   * @property {string} [outputFormat] -
+   * @property {any} [serdeInfo] -
+   * @property {any[]} [tags] -
+   * @property {string} [inputLocation] -
+   * @property {number} [numberOfBuckets] -
+   * @property {boolean} [storedAsSubDirectories] -
+   * @property {boolean} [compressed] -
+   * @property {string} [viewOriginalText] -
+   * @property {string} [viewExpandedText] -
+   */
+  /**
+   * @typedef UserDefinedWharfieResourceOptions
+   * @property {string} name -
+   * @property {UserDefinedWharfieResourceProperties} properties -
+   */
 
   /**
-   * @param {import("./wharfie-resource").WharfieResourceOptions[]} resourceOptions -
+   * @param {UserDefinedWharfieResourceOptions[]} resourceOptions -
    */
   registerWharfieResources(resourceOptions) {
     const resourceNames = resourceOptions.reduce((acc, option) => {

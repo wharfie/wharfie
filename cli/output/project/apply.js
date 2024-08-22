@@ -6,7 +6,7 @@ const BaseResourceGroup = require('../../../lambdas/lib/actor/resources/base-res
 
 /**
  *
- * @param {Reconcilable.StatusEnum} status -
+ * @param {Reconcilable.StatusEnum | undefined} status -
  * @returns {number} -
  */
 function statusToProgressReconcile(status) {
@@ -32,9 +32,9 @@ function statusToProgressReconcile(status) {
  * @param {cliProgress.MultiBar} multibar -
  * @param {cliProgress.Bar} [parentBar] -
  */
-function traverseResourceGroup(group, barmap, multibar, parentBar = null) {
+function traverseResourceGroup(group, barmap, multibar, parentBar = undefined) {
   if (!barmap.has(group.name)) {
-    const bar = multibar.create(group.children, 0, {
+    const bar = multibar.create(Object.keys(group.resources).length, 0, {
       name: group.name,
       status: group.status,
     });
@@ -66,7 +66,7 @@ function traverseResourceGroup(group, barmap, multibar, parentBar = null) {
   const childrenCount = Object.keys(group.resources).length;
   totalProgress =
     childrenCount > 0 ? totalProgress / (childrenCount + 1) : totalProgress;
-  bar.update(totalProgress, { status: group.status });
+  if (bar) bar.update(totalProgress, { status: group.status });
 }
 
 /**

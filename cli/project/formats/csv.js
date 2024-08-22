@@ -1,5 +1,8 @@
 'use strict';
-
+/**
+ * @param {import('./').FormatDefinitionParams} params -
+ * @returns {import('./').FormatDefinition} -
+ */
 module.exports = ({
   TableName,
   Description,

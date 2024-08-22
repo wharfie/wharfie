@@ -1,5 +1,19 @@
 'use strict';
 
+/**
+ * @typedef CustomFormatDefinitionParams
+ * @property {string} TableName -
+ * @property {string} Description -
+ * @property {string} Location -
+ * @property {import('./').Column[]} Columns -
+ * @property {import('./').Column[]} PartitionKeys -=
+ * @property {import('./').StorageDescriptor} CustomFormat -
+ */
+
+/**
+ * @param {CustomFormatDefinitionParams} params -
+ * @returns {import('./').FormatDefinition} -
+ */
 module.exports = ({
   TableName,
   Description,

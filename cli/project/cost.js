@@ -1,5 +1,5 @@
 'use strict';
-const { getStackName } = require('./template');
+const { getDatabaseName } = require('./names');
 
 const Athena = require('../../lambdas/lib/athena');
 const S3 = require('../../lambdas/lib/s3');
@@ -28,7 +28,6 @@ class ProjectCostEstimator {
   constructor({ project, environment }) {
     this.project = project;
     this.environment = environment;
-    this.stackName = getStackName(project, environment);
     this.currencyFormatter = new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
@@ -39,7 +38,7 @@ class ProjectCostEstimator {
 
     /** @type {Object<string,CostEstimate>} */
     this.costs = {};
-    this.projectDatabaseName = this.stackName.replace(/-/g, '_');
+    this.projectDatabaseName = getDatabaseName(project, environment);
   }
 
   /**

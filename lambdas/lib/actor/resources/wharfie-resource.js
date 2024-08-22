@@ -23,17 +23,17 @@ const s3 = new S3({});
  * @property {any} parameters -
  * @property {import('../typedefs').WharfieTableColumn[]} partitionKeys -
  * @property {import('../typedefs').WharfieTableColumn[]} columns -
- * @property {string} inputFormat -
- * @property {string} outputFormat -
+ * @property {string} [inputFormat] -
+ * @property {string} [outputFormat] -
  * @property {string} [inputLocation] -
  * @property {string} outputLocation -
  * @property {number} [numberOfBuckets] -
  * @property {boolean} [storedAsSubDirectories] -
- * @property {any} serdeInfo -
+ * @property {any} [serdeInfo] -
  * @property {boolean} [compressed] -
  * @property {string} [viewOriginalText] -
  * @property {string} [viewExpandedText] -
- * @property {any} tags -
+ * @property {any[]} [tags] -
  * @property {string} projectBucket -
  * @property {string | function(): string} region -
  * @property {number} [interval] -

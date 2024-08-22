@@ -8,8 +8,8 @@ const {
 } = require('../../lambdas/lib/dynamo/resource');
 
 /**
- * @param {string} resource_id -
- * @param {string} operation_id -
+ * @param {string} [resource_id] -
+ * @param {string} [operation_id] -
  */
 const list = async (resource_id, operation_id) => {
   if (!resource_id) {
@@ -93,6 +93,12 @@ exports.builder = (yargs) => {
       optional: true,
     });
 };
+/**
+ * @typedef listCLIParams
+ * @property {string} [resource_id] -
+ * @property {string} [operation_id] -
+ * @param {listCLIParams} params -
+ */
 exports.handler = async function ({ resource_id, operation_id }) {
   try {
     await list(resource_id, operation_id);

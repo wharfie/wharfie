@@ -1,5 +1,5 @@
 'use strict';
-const { displayFailure } = require('../../output.js');
+const { displayFailure } = require('../../output/');
 
 const Athena = require('../../../lambdas/lib/athena/index.js');
 const { getAllResources } = require('../../../lambdas/lib/dynamo/resource.js');

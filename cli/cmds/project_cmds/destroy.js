@@ -1,12 +1,12 @@
 'use strict';
 const inquirer = require('inquirer');
-const ansiEscapes = require('ansi-escapes');
 
 const { loadProject } = require('../../project/load');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
 const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
 const loadEnvironment = require('../../project/load-environment');
 const { getResourceOptions } = require('../../project/template-actor');
+const ansiEscapes = require('../../output/escapes');
 
 const {
   displayFailure,

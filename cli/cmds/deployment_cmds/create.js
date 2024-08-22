@@ -1,5 +1,5 @@
 'use strict';
-const ansiEscapes = require('ansi-escapes');
+const ansiEscapes = require('../../output/escapes');
 
 const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
 const { displayFailure, displayInfo, displaySuccess } = require('../../output');

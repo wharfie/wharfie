@@ -1,6 +1,5 @@
 'use strict';
 
-const ansiEscapes = require('ansi-escapes');
 const chalk = require('chalk');
 const Table = require('cli-table3');
 
@@ -8,6 +7,7 @@ const { loadProject } = require('../../project/load');
 const loadEnvironment = require('../../project/load-environment');
 const ProjectCostEstimator = require('../../project/cost');
 const { displayInfo } = require('../../output/');
+const ansiEscapes = require('../../output/escapes');
 
 const { handleError } = require('../../output/error');
 

@@ -1,6 +1,5 @@
 'use strict';
 const chokidar = require('chokidar');
-const ansiEscapes = require('ansi-escapes');
 
 const { loadProject } = require('../../project/load');
 const loadEnvironment = require('../../project/load-environment');
@@ -8,6 +7,7 @@ const { load } = require('../../../lambdas/lib/actor/deserialize');
 const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
 const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
 const { getResourceOptions } = require('../../project/template-actor');
+const ansiEscapes = require('../../output/escapes');
 
 /**
  * @param {function} func -

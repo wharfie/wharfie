@@ -34,6 +34,9 @@ function getDatabaseName(project, environment) {
  * @returns {ValidationError[]} -s
  */
 function validateModelSql(modelSqls, project, environment) {
+  /**
+   * @type {ValidationError[]}
+   */
   const errors = [];
   const projectDatabaseName = getDatabaseName(project, environment);
   Object.keys(modelSqls).forEach(async (modelSqlKey) => {
@@ -49,6 +52,9 @@ function validateModelSql(modelSqls, project, environment) {
         };
       });
     } catch (error) {
+      // @ts-ignore
+      if (!error.location) errors.push(error);
+      // @ts-ignore
       const { start, end } = error.location;
       const queryLines = modelSql.split('\n');
       const errorLine = queryLines[start.line - 1];
@@ -91,6 +97,7 @@ function validateModelSql(modelSqls, project, environment) {
               );
             }
           } else {
+            // @ts-ignore
             errors.push(error);
           }
         }

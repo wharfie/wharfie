@@ -1,7 +1,5 @@
 'use strict';
 
-const ansiEscapes = require('ansi-escapes');
-
 const { loadProject } = require('../../project/load');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
 const SQS = require('../../../lambdas/lib/sqs');
@@ -10,6 +8,7 @@ const { getResourceOptions } = require('../../project/template-actor');
 const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
 
 const { displayInfo, displaySuccess } = require('../../output');
+const ansiEscapes = require('../../output/escapes');
 const { handleError } = require('../../output/error');
 
 const sqs = new SQS({});

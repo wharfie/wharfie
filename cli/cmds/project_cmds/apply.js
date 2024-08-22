@@ -1,7 +1,5 @@
 'use strict';
 
-const ansiEscapes = require('ansi-escapes');
-
 const { loadProject } = require('../../project/load');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
 const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
@@ -13,6 +11,7 @@ const {
   displaySuccess,
   monitorProjectApplyReconcilables,
 } = require('../../output/');
+const ansiEscapes = require('../../output/escapes');
 
 const { handleError } = require('../../output/error');
 const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');

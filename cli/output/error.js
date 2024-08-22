@@ -23,7 +23,7 @@ function isValidationError(error) {
  */
 function displayValidationError(error) {
   if (!isValidationError(error)) {
-    throw new Error('invalid erorr type');
+    throw new Error('invalid error type');
   }
   if (error instanceof joi.ValidationError) {
     console.log(error.details.map((detail) => detail.message).join('\n\n'));
