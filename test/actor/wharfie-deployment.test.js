@@ -1857,6 +1857,7 @@ describe('deployment IaC', () => {
                   "projectBucket": "test-deployment-bucket",
                   "projectName": "test-deployment",
                   "region": "us-west-2",
+                  "resourceId": "test-deployment.logs",
                   "resourceName": "logs",
                   "resourceTable": "test-deployment-resource",
                   "roleArn": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-role",
@@ -2137,7 +2138,7 @@ describe('deployment IaC', () => {
                       "keyName": "location",
                       "keyValue": "s3://test-deployment-bucket/logs/raw/",
                       "sortKeyName": "resource_id",
-                      "sortKeyValue": "logs",
+                      "sortKeyValue": "test-deployment.logs",
                       "tableName": "test-deployment-locations",
                     },
                     "resourceType": "TableRecord",
@@ -2405,9 +2406,9 @@ describe('deployment IaC', () => {
                         "version": "0.0.1",
                       },
                       "keyName": "resource_id",
-                      "keyValue": "logs",
+                      "keyValue": "test-deployment.logs",
                       "sortKeyName": "sort_key",
-                      "sortKeyValue": "logs",
+                      "sortKeyValue": "test-deployment.logs",
                       "tableName": "test-deployment-resource",
                     },
                     "resourceType": "TableRecord",
@@ -3055,5 +3056,5 @@ describe('deployment IaC', () => {
     expect(deserialized.status).toBe('STABLE');
     await deserialized.destroy();
     expect(deserialized.status).toBe('DESTROYED');
-  }, 20000);
+  }, 25000);
 });

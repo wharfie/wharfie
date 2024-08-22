@@ -36,7 +36,7 @@ const maintain = async (path, environmentName) => {
         {
           operation_type: 'MAINTAIN',
           action_type: 'START',
-          resource_id: options.name,
+          resource_id: `${project.name}.${options.name}`,
           operation_started_at: new Date().toISOString(),
         },
         deployment.getDaemonActor().getQueue().get('url')
