@@ -11,28 +11,40 @@ const ansiEscapes = require('../../output/escapes');
 
 /**
  * @param {function} func -
- * @param {number} wait -
+ * @param {number} delay -
  * @returns {function} -
  */
-function debounceAsync(func, wait) {
+function debounceWithQueue(func, delay) {
   // @ts-ignore
-  let timeout;
+  let timeoutId;
+  let inFlight = false;
+  let queuedCall = false;
+
   // @ts-ignore
-  return function (...args) {
+  return async function (...args) {
+    if (inFlight) {
+      // If the function is in-flight, queue the call
+      queuedCall = true;
+      return;
+    }
+
     // @ts-ignore
-    const context = this;
-    // @ts-ignore
-    clearTimeout(timeout);
-    return new Promise((resolve, reject) => {
-      timeout = setTimeout(async () => {
-        try {
-          const result = await func.apply(context, args);
-          resolve(result);
-        } catch (error) {
-          reject(error);
+    clearTimeout(timeoutId);
+
+    timeoutId = setTimeout(async () => {
+      inFlight = true;
+      try {
+        await func(...args); // Execute the original function
+      } finally {
+        inFlight = false; // Function is no longer in-flight
+
+        // If there was a queued call, run it after the current execution completes
+        if (queuedCall) {
+          queuedCall = false; // Reset the queue
+          await func(...args); // Re-run the function with the same arguments
         }
-      }, wait);
-    });
+      }
+    }, delay);
   };
 }
 
@@ -57,7 +69,7 @@ const dev = async (projectPath, environmentName) => {
   if (deployment instanceof WharfieProject)
     throw new Error('should not have loaded a project');
 
-  const handleBatchChanges = debounceAsync(async () => {
+  const handleBatchChanges = debounceWithQueue(async () => {
     console.clear();
     let project, environment;
     try {
