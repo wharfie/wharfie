@@ -2,7 +2,10 @@
 
 exports.command = 'utils';
 exports.desc = 'wharfie utility commands';
+/**
+ * @param {import('yargs').Argv} yargs -
+ */
 exports.builder = function (yargs) {
-  return yargs.commandDir('utils_cmds').demandCommand().showHelpOnFail(true);
+  yargs.commandDir('utils_cmds').demandCommand().showHelpOnFail(true);
 };
 exports.handler = function () {};

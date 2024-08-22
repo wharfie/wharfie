@@ -1,8 +1,14 @@
 'use strict';
 
-const { displayFailure } = require('./output');
+const { displayFailure } = require('./output/basic');
 const fs = require('fs');
 
+// eslint-disable-next-line jsdoc/require-returns-check
+/**
+ * @param {string} jsonString -
+ * @param {string} errorMessage -
+ * @returns {object} -
+ */
 exports.parseJSON = (jsonString, errorMessage) => {
   try {
     return JSON.parse(jsonString);
@@ -13,7 +19,10 @@ exports.parseJSON = (jsonString, errorMessage) => {
     process.exit(1);
   }
 };
-
+/**
+ * @param {string} inputString -
+ * @returns {boolean} -
+ */
 exports.isFilePath = (inputString) => {
   try {
     return fs.lstatSync(inputString).isFile();
@@ -22,6 +31,11 @@ exports.isFilePath = (inputString) => {
   }
 };
 
+// eslint-disable-next-line jsdoc/require-returns-check
+/**
+ * @param {string} path -
+ * @returns {string} -
+ */
 exports.readFile = (path) => {
   try {
     return fs.readFileSync(path).toString();

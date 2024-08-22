@@ -5,7 +5,7 @@ const inquirer = require('inquirer');
 const STS = require('../../lambdas/lib/sts');
 const sts = new STS();
 
-const { displaySuccess, displayFailure } = require('../output');
+const { displaySuccess, displayFailure } = require('../output/basic');
 exports.command = 'config';
 exports.desc = 'configure the cli';
 exports.builder = {};
@@ -37,6 +37,7 @@ exports.handler = async function () {
   config.region = answers.region;
   config.deployment_name = answers.deployment_name;
   config.service_bucket = `${config.deployment_name}-${Account}-${config.region}`;
+  if (!process.env.CONFIG_PATH) throw new Error('CONFIG_PATH not set');
 
   fs.writeFileSync(process.env.CONFIG_PATH, JSON.stringify(config));
   displaySuccess('Configuration Saved 🎉');

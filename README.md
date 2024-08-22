@@ -16,7 +16,7 @@
 
 Wharfie is an experimental table-oriented data application framework built ontop of [AWS Athena](https://aws.amazon.com/athena/). Designed to be fast to develop, confident to modify and cheap to run.
 
-Unlike most data tools, Wharfie has ZERO fixed infrastructure costs. Money is only spent when data is processed. Costs are also proportional to the size of the data processed, averaging around $5 per terabyte.
+Unlike most data tools, Wharfie has ZERO fixed infrastructure costs. Money is only spent when data is processed. Costs are also proportional to the size of the data processed, averaging around $5 per terabyte. Wharfie can tell you how much it will cost to run your application before you run it, and also can make sure that it will output what you expect before you spend time waiting for it to run.
 
 Wharfie can work with data sizes ranging from bytes to petabytes. There are no looming performance cliffs that require a platform switch.
 
@@ -45,10 +45,5 @@ wharfie project init
 ### Reference
 
 - **[Project Structure](./docs/project.md)**
-- **[Shortcuts](./docs/shortcuts.md)**
-- **[API](./docs/API.md)**
-- **[Defining a role for Wharfie](./docs/defining_a_role_for_wharfie.md)**
-- **[Examples](./docs/examples.md)**
 - **[FAQ](./docs/FAQ.md)**
-- **[Monitoring and Metrics](./docs/metrics.md)**
 - **[Contributing](./docs/contributing.md)**

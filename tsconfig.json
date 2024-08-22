@@ -16,6 +16,6 @@
     "noEmit": true,
     "resolveJsonModule": true
   },
-  "include": ["lambdas/**/*.js"],
+  "include": ["lambdas/**/*.js", "cli/**/*.js", "bin/wharfie"],
   "exclude": ["lambdas/udf_entrypoint.js"]
 }

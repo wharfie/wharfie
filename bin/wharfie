@@ -13,7 +13,7 @@ process.env.LOGGING_LEVEL = 'warn';
 
 require('yargonaut').style('cyan');
 
-const { displayFailure } = require('../cli/output');
+const { displayFailure } = require('../cli/output/basic');
 
 const config = require('../cli/config');
 if (fs.existsSync(process.env.CONFIG_PATH)) {

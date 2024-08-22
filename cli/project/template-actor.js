@@ -1,17 +1,47 @@
-const getTableInput = require('../../client/formats');
+const getTableInput = require('./formats');
 const { validateModelSql, WharfieModelSQLError } = require('./model-validator');
+
+/**
+ * @typedef UserDefinedWharfieResourceProperties
+ * @property {string} description -
+ * @property {string} tableType -
+ * @property {any} parameters -
+ * @property {import('../../lambdas/lib/actor/typedefs').WharfieTableColumn[]} partitionKeys -
+ * @property {import('../../lambdas/lib/actor/typedefs').WharfieTableColumn[]} columns -
+ * @property {string} [inputFormat] -
+ * @property {string} [outputFormat] -
+ * @property {any} [serdeInfo] -
+ * @property {any[]} [tags] -
+ * @property {string} [inputLocation] -
+ * @property {number} [numberOfBuckets] -
+ * @property {boolean} [storedAsSubDirectories] -
+ * @property {boolean} [compressed] -
+ * @property {string} [viewOriginalText] -
+ * @property {string} [viewExpandedText] -
+ */
+/**
+ * @typedef UserDefinedWharfieResourceOptions
+ * @property {string} name -
+ * @property {UserDefinedWharfieResourceProperties} properties -
+ */
 
 /**
  * @param {import('./typedefs').Environment} environment -
  * @param {import('./typedefs').Project} project -
- * @returns {import("../../lambdas/lib/actor/resources/wharfie-resource").WharfieResourceOptions[]} -
+ * @returns {UserDefinedWharfieResourceOptions[]} -
  */
 function getResourceOptions(environment, project) {
+  /**
+   * @type {Object<string,string>}
+   */
   const SQLTemplateVariables = {
     ...environment.variables,
     db: project.name,
   };
   const resourceOptions = [];
+  /**
+   * @type {Object<string,string>}
+   */
   const modelsForValidation = {};
   for (const model of project.models) {
     const templatedSQL = JSON.stringify({
@@ -64,13 +94,14 @@ function getResourceOptions(environment, project) {
     const tableInput = getTableInput({
       TableName: source.name,
       Description: source.description,
-      Location: source.location,
-      Columns: source.columns,
-      PartitionKeys: source.partitionKeys,
-      Compression: source.compression,
+      Location: '',
+      Columns: [],
+      PartitionKeys: [],
       Format: source.format === 'custom' ? undefined : source.format,
       CustomFormat: source.custom_format
         ? {
+            Location: '',
+            Columns: [],
             InputFormat: source.custom_format.input_format,
             OutputFormat: source.custom_format.output_format,
             SerdeInfo: {
