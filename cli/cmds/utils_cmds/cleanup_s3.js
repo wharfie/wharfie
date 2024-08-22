@@ -5,7 +5,7 @@ const {
   displayFailure,
   displayInfo,
   displayInstruction,
-} = require('../../output');
+} = require('../../output/basic');
 const {
   getAllResources,
   getResource,

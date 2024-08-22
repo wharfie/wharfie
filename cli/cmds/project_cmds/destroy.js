@@ -12,8 +12,8 @@ const {
   displayFailure,
   displayInfo,
   displaySuccess,
-  monitorProjectDestroyReconcilables,
-} = require('../../output/');
+} = require('../../output/basic');
+const monitorProjectDestroyReconcilables = require('../../output/project/destroy');
 
 const { handleError } = require('../../output/error');
 /**

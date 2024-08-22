@@ -1,7 +1,7 @@
 const joi = require('joi');
 const { WharfieModelSQLError } = require('../project/model-validator');
 
-const { displayFailure } = require('.');
+const { displayFailure } = require('./basic');
 /**
  *
  * @param {Error | unknown} error -

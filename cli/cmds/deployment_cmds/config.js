@@ -1,7 +1,11 @@
 'use strict';
 
 const inquirer = require('inquirer');
-const { displayFailure, displayInfo, displaySuccess } = require('../../output');
+const {
+  displayFailure,
+  displayInfo,
+  displaySuccess,
+} = require('../../output/basic');
 const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
 
 /**

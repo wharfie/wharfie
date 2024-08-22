@@ -7,7 +7,7 @@ const loadEnvironment = require('../../project/load-environment');
 const { getResourceOptions } = require('../../project/template-actor');
 const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
 
-const { displayInfo, displaySuccess } = require('../../output');
+const { displayInfo, displaySuccess } = require('../../output/basic');
 const ansiEscapes = require('../../output/escapes');
 const { handleError } = require('../../output/error');
 

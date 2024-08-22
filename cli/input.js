@@ -1,6 +1,6 @@
 'use strict';
 
-const { displayFailure } = require('./output');
+const { displayFailure } = require('./output/basic');
 const fs = require('fs');
 
 // eslint-disable-next-line jsdoc/require-returns-check

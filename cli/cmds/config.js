@@ -5,7 +5,7 @@ const inquirer = require('inquirer');
 const STS = require('../../lambdas/lib/sts');
 const sts = new STS();
 
-const { displaySuccess, displayFailure } = require('../output');
+const { displaySuccess, displayFailure } = require('../output/basic');
 exports.command = 'config';
 exports.desc = 'configure the cli';
 exports.builder = {};

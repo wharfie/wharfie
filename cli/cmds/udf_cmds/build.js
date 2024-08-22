@@ -8,7 +8,7 @@ const {
   displayWarning,
   displayInfo,
   displaySuccess,
-} = require('../../output');
+} = require('../../output/basic');
 const path = require('path');
 const S3 = require('../../../lambdas/lib/s3');
 const STS = require('../../../lambdas/lib/sts');

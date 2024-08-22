@@ -3,7 +3,11 @@
 const cliProgress = require('cli-progress');
 const progressBar = new cliProgress.Bar({});
 
-const { displaySuccess, displayFailure, displayInfo } = require('../../output');
+const {
+  displaySuccess,
+  displayFailure,
+  displayInfo,
+} = require('../../output/basic');
 const Glue = require('../../../lambdas/lib/glue');
 
 const cleanupTemporaryDB = async () => {

@@ -5,7 +5,7 @@ const {
   displayFailure,
   displayInstruction,
   displayInfo,
-} = require('../../output');
+} = require('../../output/basic');
 const {
   getRecords,
   deleteOperation,

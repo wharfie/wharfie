@@ -6,7 +6,7 @@ const Table = require('cli-table3');
 const { loadProject } = require('../../project/load');
 const loadEnvironment = require('../../project/load-environment');
 const ProjectCostEstimator = require('../../project/cost');
-const { displayInfo } = require('../../output/');
+const { displayInfo } = require('../../output/basic');
 const ansiEscapes = require('../../output/escapes');
 
 const { handleError } = require('../../output/error');

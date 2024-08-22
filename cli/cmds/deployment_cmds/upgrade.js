@@ -1,5 +1,9 @@
 'use strict';
-const { displayFailure, displayInfo, displaySuccess } = require('../../output');
+const {
+  displayFailure,
+  displayInfo,
+  displaySuccess,
+} = require('../../output/basic');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
 
 const upgrade = async () => {

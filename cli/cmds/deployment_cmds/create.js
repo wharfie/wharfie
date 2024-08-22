@@ -2,7 +2,11 @@
 const ansiEscapes = require('../../output/escapes');
 
 const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
-const { displayFailure, displayInfo, displaySuccess } = require('../../output');
+const {
+  displayFailure,
+  displayInfo,
+  displaySuccess,
+} = require('../../output/basic');
 
 const monitorDeploymentCreateReconcilables = require('../../output/deployment/create');
 

@@ -40,9 +40,8 @@ const {
   displayFailure,
   displayInfo,
   displaySuccess,
-  monitorProjectApplyReconcilables,
-} = require('../../output/');
-
+} = require('../../output/basic');
+const monitorProjectApplyReconcilables = require('../../output/project/apply');
 const { handleError } = require('../../output/error');
 
 /**

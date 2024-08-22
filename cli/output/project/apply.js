@@ -34,7 +34,8 @@ function statusToProgressReconcile(status) {
  */
 function traverseResourceGroup(group, barmap, multibar, parentBar = undefined) {
   if (!barmap.has(group.name)) {
-    const bar = multibar.create(Object.keys(group.resources).length, 0, {
+    // @ts-ignore
+    const bar = multibar.create(group.children, 0, {
       name: group.name,
       status: group.status,
     });

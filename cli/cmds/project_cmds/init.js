@@ -5,7 +5,11 @@ const path = require('path');
 const fs = require('fs/promises');
 const _fs = require('fs');
 
-const { displayFailure, displayInfo, displaySuccess } = require('../../output');
+const {
+  displayFailure,
+  displayInfo,
+  displaySuccess,
+} = require('../../output/basic');
 const { handleError } = require('../../output/error');
 const re = /^[a-zA-Z0-9_ ]*$/;
 

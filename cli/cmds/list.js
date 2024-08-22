@@ -1,5 +1,5 @@
 'use strict';
-const { displayFailure, displaySuccess } = require('../output');
+const { displayFailure, displaySuccess } = require('../output/basic');
 const { OperationActionGraph } = require('../../lambdas/lib/graph/');
 
 const {
