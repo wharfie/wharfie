@@ -1,46 +1,51 @@
 const WharfieActorResources = require('./resources/wharfie-actor-resources');
-const Actor = require('./actor');
+const BaseResourceGroup = require('./resources/base-resource-group');
+
+/**
+ * @typedef ExtendedWharfieActorProperties
+ * @property {string | function(): string} actorSharedPolicyArn -
+ * @property {string | function(): string} artifactBucket -
+ * @property {Object<string,string> | function(): Object<string,string>} environmentVariables -
+ */
+
+/**
+ * @typedef ExtendedWharfieActorOptions
+ * @property {import('./resources/reconcilable').Status} [status] -
+ * @property {ExtendedWharfieActorProperties & import('./typedefs').SharedProperties} properties -
+ * @property {import('./resources/reconcilable')[]} [dependsOn] -
+ * @property {Object<string, import('./resources/base-resource') | import('./resources/base-resource-group')>} [resources] -
+ */
 
 /**
  * @typedef WharfieActorProperties
  * @property {string} handler -
+ * @property {string | function(): string} actorSharedPolicyArn -
+ * @property {string | function(): string} artifactBucket -
+ * @property {Object<string,string> | function(): Object<string,string>} environmentVariables -
  */
 
 /**
  * @typedef WharfieActorOptions
- * @property {import("./wharfie-deployment")} deployment -
  * @property {string} name -
  * @property {import('./resources/reconcilable').Status} [status] -
- * @property {Actor} [parentActor] -
  * @property {WharfieActorProperties & import('./typedefs').SharedProperties} properties -
  * @property {import('./resources/reconcilable')[]} [dependsOn] -
  * @property {Object<string, import('./resources/base-resource') | import('./resources/base-resource-group')>} [resources] -
  */
 
-class WharfieActor extends Actor {
+class WharfieActor extends BaseResourceGroup {
   /**
    * @param {WharfieActorOptions} options -
    */
-  constructor({
-    deployment,
-    name,
-    status,
-    parentActor,
-    properties,
-    resources,
-    dependsOn,
-  }) {
+  constructor({ name, status, properties, resources, dependsOn }) {
     if (!properties.handler) throw new Error('No handler defined');
     super({
-      deployment,
       name,
       status,
-      parentActor,
       properties,
       resources,
       dependsOn,
     });
-    this.deployment = deployment;
   }
 
   /**
@@ -53,87 +58,12 @@ class WharfieActor extends Actor {
         deployment: this.get('deployment'),
         handler: this.get('handler'),
         actorName: this.name,
-        actorSharedPolicyArn: () =>
-          this.deployment.getDeploymentResources().getActorPolicyArn(),
-        artifactBucket: () =>
-          this.deployment.getDeploymentResources().getBucket().name,
-        environmentVariables: () => {
-          /**
-           * @type {Record<string, string>}
-           */
-          const actorQueues = {};
-          Object.values(this.deployment.getActors()).forEach((actor) => {
-            actorQueues[`${actor.name.toUpperCase()}_QUEUE_URL`] =
-              // @ts-ignore
-              actor
-                .getActorResources()
-                .getResource(`${this.deployment.name}-${actor.name}-queue`)
-                .get('url');
-          });
-
-          return {
-            LOGGING_LEVEL: this.deployment.get('loggingLevel'),
-            GLOBAL_QUERY_CONCURRENCY: `${this.deployment.get(
-              'globalQueryConcurrency'
-            )}`,
-            RESOURCE_QUERY_CONCURRENCY: `${this.deployment.get(
-              'resourceQueryConcurrency'
-            )}`,
-            MAX_QUERIES_PER_ACTION: `${this.deployment.get(
-              'maxQueriesPerAction'
-            )}`,
-            TEMPORARY_GLUE_DATABASE: this.deployment
-              .getDeploymentResources()
-              .getTemporaryDatabase().name,
-            RESOURCE_TABLE: this.deployment
-              .getDeploymentResources()
-              .getResource(`${this.deployment.name}-resource`).name,
-            SEMAPHORE_TABLE: this.deployment
-              .getDeploymentResources()
-              .getResource(`${this.deployment.name}-semaphore`).name,
-            LOCATION_TABLE: this.deployment
-              .getDeploymentResources()
-              .getResource(`${this.deployment.name}-locations`).name,
-            DEPENDENCY_TABLE: this.deployment
-              .getDeploymentResources()
-              .getResource(`${this.deployment.name}-dependencies`).name,
-            EVENT_TABLE: this.deployment
-              .getDeploymentResources()
-              .getResource(`${this.deployment.name}-events`).name,
-            WHARFIE_SERVICE_BUCKET: this.deployment
-              .getDeploymentResources()
-              .getBucket().name,
-            WHARFIE_LOGGING_FIREHOSE: this.deployment
-              .getDeploymentResources()
-              .getResource(`${this.deployment.name}-firehose`).name,
-            ...actorQueues,
-          };
-        },
+        actorSharedPolicyArn: () => this.get('actorSharedPolicyArn'),
+        artifactBucket: () => this.get('artifactBucket'),
+        environmentVariables: () => this.get('environmentVariables'),
       },
     });
     return [actorResources];
-  }
-
-  /**
-   * @param {any} message -
-   */
-  async send(message) {
-    // @ts-ignore
-    await this.system.sqs.sendMessage({
-      QueueUrl: this.getQueue().get('url'),
-      MessageBody: JSON.stringify(message),
-    });
-  }
-
-  /**
-   * @param {import('aws-lambda').SQSEvent} event -
-   * @param {import('aws-lambda').Context} context -
-   */
-  async run(event, context) {
-    for (const record of event.Records) {
-      const message = JSON.parse(record.body);
-      await this.receive(message);
-    }
   }
 
   /**

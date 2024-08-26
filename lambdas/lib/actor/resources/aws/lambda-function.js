@@ -56,6 +56,23 @@ class LambdaFunction extends BaseResource {
     this.lambda = new Lambda({});
   }
 
+  /**
+   * @param {Object<any,string>} a -
+   * @param {Object<any,string>} b -
+   * @returns {boolean} -
+   */
+  _diffEnvironment(a, b) {
+    const mapA = new Map(Object.entries(a));
+    const mapB = new Map(Object.entries(b));
+
+    for (const [key, value] of mapA) {
+      if (!mapB.has(key) || mapB.get(key) !== value) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   async _reconcile() {
     try {
       const { Configuration, Tags } = await this.lambda.getFunction({
@@ -71,11 +88,10 @@ class LambdaFunction extends BaseResource {
         this.get('memorySize') !== Configuration?.MemorySize ||
         this.get('ephemeralStorage').Size !==
           Configuration?.EphemeralStorage?.Size ||
-        // JSON.stringify(
-        //   this.environment === 'function'
-        //     ? this.environment()
-        //     : this.environment
-        // ) !== JSON.stringify(Configuration?.Environment) ||
+        this._diffEnvironment(
+          this.get('environment').Variables || {},
+          Configuration?.Environment?.Variables || {}
+        ) ||
         this.get('deadLetterConfig').TargetArn !==
           Configuration?.DeadLetterConfig?.TargetArn
       ) {

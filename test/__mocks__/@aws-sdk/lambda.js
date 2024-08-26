@@ -4,6 +4,7 @@ const { ResourceNotFoundException } = jest.requireActual(
 );
 
 const { createId } = require('../../../lambdas/lib/id');
+const { parse } = require('../../../lambdas/lib/arn');
 
 class LambdaMock {
   __setMockState(
@@ -85,15 +86,22 @@ class LambdaMock {
   }
 
   async tagResource(params) {
-    if (!LambdaMock.__state.functions[params.Resource]) {
+    const { resource } = parse(params.Resource);
+
+    const [resourceType, resourceName] = resource.split(':');
+    if (resourceType !== 'function')
+      throw new Error(
+        `mocks don't support taggging this resource type ${resourceType}`
+      );
+    if (!LambdaMock.__state.functions[resourceName]) {
       throw new ResourceNotFoundException({
-        message: `Function not found: ${params.Resource}`,
+        message: `Function not found: ${resourceName}`,
       });
     }
-    LambdaMock.__state.functions[params.Resource] = {
-      ...LambdaMock.__state.functions[params.Resource],
+    LambdaMock.__state.functions[resourceName] = {
+      ...LambdaMock.__state.functions[resourceName],
       Tags: {
-        ...(LambdaMock.__state.functions[params.Resource].Tags || {}),
+        ...(LambdaMock.__state.functions[resourceName].Tags || {}),
         ...params.Tags,
       },
     };

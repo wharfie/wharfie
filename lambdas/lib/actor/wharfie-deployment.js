@@ -6,7 +6,7 @@ const IAM = require('../iam');
 const WharfieDeploymentResources = require('./resources/wharfie-deployment-resources');
 const Table = require('./resources/aws/table');
 const BucketNotificationConfiguration = require('./resources/aws/bucket-notification-configuration');
-const ActorDeployment = require('./actor-deployment');
+const BaseResourceGroup = require('./resources/base-resource-group');
 const { Daemon, Cleanup, Events, Monitor } = require('./wharfie-actors');
 const { putWithThroughputRetry } = require('../dynamo/');
 
@@ -33,7 +33,7 @@ const envPaths = require('../env-paths');
  * @property {Object<string, import('./resources/base-resource') | import('./resources/base-resource-group')>} [resources] -
  */
 
-class WharfieDeployment extends ActorDeployment {
+class WharfieDeployment extends BaseResourceGroup {
   /**
    * @param {WharfieDeploymentOptions} options -
    */
@@ -43,8 +43,9 @@ class WharfieDeployment extends ActorDeployment {
         globalQueryConcurrency: 10,
         resourceQueryConcurrency: 10,
         maxQueriesPerAction: 10000,
-        loggingLevel: 'debug',
+        loggingLevel: 'info',
         _INTERNAL_STATE_RESOURCE: true,
+        deployment: () => this.getDeploymentProperties(),
       },
       properties
     );
@@ -69,6 +70,50 @@ class WharfieDeployment extends ActorDeployment {
       region: this.get('region'),
       accountId: this.get('accountId'),
       name: this.name,
+    };
+  }
+
+  getActorEnvironmentVariables() {
+    /**
+     * @type {Record<string, string>}
+     */
+    const actorQueues = {};
+    Object.values(this.getActors()).forEach((actor) => {
+      actorQueues[`${actor.name.toUpperCase()}_QUEUE_URL`] =
+        // @ts-ignore
+        actor
+          .getActorResources()
+          .getResource(`${this.name}-${actor.name}-queue`)
+          .get('url');
+    });
+
+    return {
+      LOGGING_LEVEL: this.get('loggingLevel'),
+      GLOBAL_QUERY_CONCURRENCY: `${this.get('globalQueryConcurrency')}`,
+      RESOURCE_QUERY_CONCURRENCY: `${this.get('resourceQueryConcurrency')}`,
+      MAX_QUERIES_PER_ACTION: `${this.get('maxQueriesPerAction')}`,
+      TEMPORARY_GLUE_DATABASE:
+        this.getDeploymentResources().getTemporaryDatabase().name,
+      RESOURCE_TABLE: this.getDeploymentResources().getResource(
+        `${this.name}-resource`
+      ).name,
+      SEMAPHORE_TABLE: this.getDeploymentResources().getResource(
+        `${this.name}-semaphore`
+      ).name,
+      LOCATION_TABLE: this.getDeploymentResources().getResource(
+        `${this.name}-locations`
+      ).name,
+      DEPENDENCY_TABLE: this.getDeploymentResources().getResource(
+        `${this.name}-dependencies`
+      ).name,
+      EVENT_TABLE: this.getDeploymentResources().getResource(
+        `${this.name}-events`
+      ).name,
+      WHARFIE_SERVICE_BUCKET: this.getDeploymentResources().getBucket().name,
+      WHARFIE_LOGGING_FIREHOSE: this.getDeploymentResources().getResource(
+        `${this.name}-firehose`
+      ).name,
+      ...actorQueues,
     };
   }
 
@@ -109,37 +154,54 @@ class WharfieDeployment extends ActorDeployment {
     });
 
     // @ts-ignore
-    this.createActor('daemon', Daemon, {
+    const daemonActor = new Daemon({
       dependsOn: [resourceGroup],
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
+        actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
+        artifactBucket: () => resourceGroup.getBucket().name,
+        environmentVariables: this.getActorEnvironmentVariables.bind(this),
       },
     });
-    // @ts-ignore
-    this.createActor('cleanup', Cleanup, {
+
+    const cleanupActor = new Cleanup({
       dependsOn: [resourceGroup],
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
+        actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
+        artifactBucket: () => resourceGroup.getBucket().name,
+        environmentVariables: this.getActorEnvironmentVariables.bind(this),
       },
     });
-    // @ts-ignore
-    this.createActor('events', Events, {
+
+    const eventsActor = new Events({
       dependsOn: [resourceGroup],
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
+        actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
+        artifactBucket: () => resourceGroup.getBucket().name,
+        environmentVariables: this.getActorEnvironmentVariables.bind(this),
       },
     });
-    // @ts-ignore
-    this.createActor('monitor', Monitor, {
+    const monitorActor = new Monitor({
       dependsOn: [resourceGroup],
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
+        actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
+        artifactBucket: () => resourceGroup.getBucket().name,
+        environmentVariables: this.getActorEnvironmentVariables.bind(this),
       },
     });
     const logNotificationBucketNotificationConfiguration =
       new BucketNotificationConfiguration({
         name: `${this.name}-log-notification-bucket-notification-configuration`,
-        dependsOn: [resourceGroup, ...this.getActors()],
+        dependsOn: [
+          resourceGroup,
+          daemonActor,
+          cleanupActor,
+          eventsActor,
+          monitorActor,
+        ],
         properties: {
           deployment: this.getDeploymentProperties.bind(this),
           bucketName: resourceGroup.getBucket().name,
@@ -163,6 +225,10 @@ class WharfieDeployment extends ActorDeployment {
       });
 
     return [
+      daemonActor,
+      cleanupActor,
+      eventsActor,
+      monitorActor,
       resourceGroup,
       systemTable,
       logNotificationBucketNotificationConfiguration,
@@ -229,11 +295,6 @@ class WharfieDeployment extends ActorDeployment {
     return this.getResource(`${this.name}-deployment-resources`).getBucket();
   }
 
-  /**
-   * @param {import("./actor")} actor -
-   */
-  async _declareActorResources(actor) {}
-
   async reconcile() {
     await Promise.all([this.setAccountId(), this.setRegion()]);
     this.set('deployment', this.getDeploymentProperties());
@@ -258,18 +319,6 @@ class WharfieDeployment extends ActorDeployment {
     await systemTable.destroy();
   }
 
-  // async cache() {
-  //   if (!this.reconciled) {
-  //     await this.reconcile();
-  //   }
-  //   await this.resourceGroup.cache();
-  //   await bluebirdPromise.map(
-  //     Object.values(this.actors),
-  //     // @ts-ignore
-  //     async (actor) => await actor.resourceGroup.cache(),
-  //     { concurrency: 5 }
-  //   );
-  // }
   async save() {
     const { stateTable, version } = this.get('deployment');
 

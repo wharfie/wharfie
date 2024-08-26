@@ -2,12 +2,11 @@ const WharfieActor = require('../wharfie-actor');
 
 class Daemon extends WharfieActor {
   /**
-   * @param {import('../wharfie-actor').WharfieActorOptions} options -
+   * @param {import('../wharfie-actor').ExtendedWharfieActorOptions} options -
    */
-  constructor({ deployment, name, status, resources, properties }) {
+  constructor({ status, resources, properties }) {
     super({
-      deployment,
-      name,
+      name: 'daemon',
       status,
       resources,
       properties: {

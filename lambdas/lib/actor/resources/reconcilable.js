@@ -136,7 +136,7 @@ class Reconcilable {
     while (reconcile_attempts < this._MAX_RETRIES) {
       try {
         if (this.dependsOn.find((dependency) => !dependency.isStable())) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
+          await new Promise((resolve) => setTimeout(resolve, 500));
           continue;
         }
         await this._reconcile();
@@ -151,15 +151,6 @@ class Reconcilable {
         });
         // @ts-ignore
         this._reconcileErrors.push(error);
-        // if (
-        //   // @ts-ignore
-        //   error?.name !== last_error?.name ||
-        //   // @ts-ignore
-        //   error?.message !== last_error?.message
-        // ) {
-        //   console.log('error reset');
-        //   reconcile_attempts = 0;
-        // }
         await new Promise((resolve) =>
           setTimeout(
             resolve,
