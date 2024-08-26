@@ -59,7 +59,7 @@ const config = async (development) => {
   const multibar = monitorDeploymentCreateReconcilables(updatedDeployment);
   await updatedDeployment.reconcile();
   multibar.stop();
-  process.stdout.write(ansiEscapes.eraseLines(5));
+  process.stdout.write(ansiEscapes.eraseLines(1));
   displaySuccess(`Wharfie deployment configuration successfully updated`);
 };
 

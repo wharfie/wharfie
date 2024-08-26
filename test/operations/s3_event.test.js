@@ -1,7 +1,7 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
 
-// process.env.LOGGING_LEVEL = 'debug';
+process.env.LOGGING_LEVEL = 'debug';
 const bluebird = require('bluebird');
 
 process.env.AWS_MOCKS = true;
