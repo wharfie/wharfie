@@ -1,5 +1,6 @@
 'use strict';
 const { ConfiguredRetryStrategy } = require('@aws-sdk/util-retry');
+const { stringify } = require('flatted');
 
 const logging = require('./logging');
 const aws_sdk_log = logging.getAWSSDKLogger();
@@ -40,7 +41,7 @@ class BaseAWS {
         content.forEach((value) => {
           if (typeof value === 'object') {
             if (value.input) {
-              const stringifiedInput = JSON.stringify(value.input);
+              const stringifiedInput = stringify(value.input);
               if (stringifiedInput.length > 1000) {
                 value.input = `TRUNCATED: ${stringifiedInput.slice(
                   0,
@@ -54,7 +55,7 @@ class BaseAWS {
                   aws_sdk_log.debug(this.formatJsonLog(value));
                   break;
                 case 'cli':
-                  aws_sdk_log.debug(JSON.stringify(value));
+                  aws_sdk_log.debug(stringify(value));
                   break;
               }
             } catch (e) {
@@ -69,7 +70,7 @@ class BaseAWS {
         content.forEach((value) => {
           if (typeof value === 'object') {
             if (value.input) {
-              const stringifiedInput = JSON.stringify(value.input);
+              const stringifiedInput = stringify(value.input);
               if (stringifiedInput.length > 1000) {
                 value.input = `TRUNCATED: ${stringifiedInput.slice(
                   0,
@@ -83,7 +84,7 @@ class BaseAWS {
                   aws_sdk_log.info(this.formatJsonLog(value));
                   break;
                 case 'cli':
-                  aws_sdk_log.info(JSON.stringify(value));
+                  aws_sdk_log.info(stringify(value));
                   break;
               }
             } catch (e) {
@@ -98,7 +99,7 @@ class BaseAWS {
         content.forEach((value) => {
           if (typeof value === 'object') {
             if (value.input) {
-              const stringifiedInput = JSON.stringify(value.input);
+              const stringifiedInput = stringify(value.input);
               if (stringifiedInput.length > 1000) {
                 value.input = `TRUNCATED: ${stringifiedInput.slice(
                   0,
@@ -112,7 +113,7 @@ class BaseAWS {
                   aws_sdk_log.warn(this.formatJsonLog(value));
                   break;
                 case 'cli':
-                  aws_sdk_log.warn(JSON.stringify(value));
+                  aws_sdk_log.warn(stringify(value));
                   break;
                 default:
                   aws_sdk_log.warn(value);
@@ -130,7 +131,7 @@ class BaseAWS {
         content.forEach((value) => {
           if (typeof value === 'object') {
             if (value.input) {
-              const stringifiedInput = JSON.stringify(value.input);
+              const stringifiedInput = stringify(value.input);
               if (stringifiedInput.length > 1000) {
                 value.input = `TRUNCATED: ${stringifiedInput.slice(
                   0,
@@ -144,7 +145,7 @@ class BaseAWS {
                   aws_sdk_log.error(this.formatJsonLog(value));
                   break;
                 case 'cli':
-                  aws_sdk_log.error(JSON.stringify(value));
+                  aws_sdk_log.error(stringify(value));
                   break;
               }
             } catch (e) {

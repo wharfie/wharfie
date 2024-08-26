@@ -8,6 +8,8 @@ const S3 = require('../../lib/s3');
 const SQS = require('../../lib/sqs');
 const { Readable } = require('stream');
 
+const { NoSuchKey, NotFound } = require('@aws-sdk/client-s3');
+
 const resource_db = require('../../lib/dynamo/resource');
 
 const CLEANUP_QUEUE_URL = process.env.CLEANUP_QUEUE_URL || '';
@@ -225,11 +227,9 @@ async function update_partitions(
       Key: queryManifestPrefix,
     });
   } catch (error) {
-    // @ts-ignore
-    if (error.name === 'NoSuchKey') {
-      event_log.debug(
-        `query metadata missing for ${query_execution_id}`,
-        queryManifestPrefix
+    if (error instanceof NoSuchKey) {
+      event_log.warn(
+        `query metadata missing for ${query_execution_id}, skipping symlink update for ${queryManifestLocation}`
       );
       return;
     }
@@ -408,10 +408,8 @@ async function update_table(event, context, resource, query_execution_id) {
       Key: `${sourcePrefix}query_metadata/${query_execution_id}-manifest.csv`,
     });
   } catch (error) {
-    // @ts-ignore
-    if (error && error.name === 'NotFound') return;
-    // @ts-ignore
-    else if (error && error.name === 'NoSuchKey') return;
+    if (error instanceof NotFound) return;
+    else if (error instanceof NoSuchKey) return;
     else throw error;
   }
 
