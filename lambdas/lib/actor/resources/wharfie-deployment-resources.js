@@ -341,16 +341,20 @@ class WharfieDeploymentResources extends BaseResourceGroup {
               Action: ['cloudwatch:PutMetricData'],
               Resource: '*',
             },
-            {
-              Effect: 'Allow',
-              Action: 'cloudwatch:*',
-              Resource: ['*'],
-            },
-            {
-              Effect: 'Allow',
-              Action: 'logs:*',
-              Resource: ['*'],
-            },
+            ...(this.get('loggingLevel') === 'debug'
+              ? [
+                  {
+                    Effect: 'Allow',
+                    Action: 'cloudwatch:*',
+                    Resource: ['*'],
+                  },
+                  {
+                    Effect: 'Allow',
+                    Action: 'logs:*',
+                    Resource: ['*'],
+                  },
+                ]
+              : []),
             {
               Effect: 'Allow',
               Action: [
