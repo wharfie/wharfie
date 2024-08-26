@@ -2477,7 +2477,7 @@ describe('deployment IaC', () => {
                         "version": "0.0.1",
                       },
                       "description": "test-deployment resource logs workgroup",
-                      "outputLocation": "s3://test-deployment-bucket/logs/query_metadata/",
+                      "outputLocation": "s3://test-deployment-bucket/logs/processed/query_metadata/",
                     },
                     "resourceType": "AthenaWorkGroup",
                     "status": "STABLE",

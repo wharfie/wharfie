@@ -92,9 +92,7 @@ class WharfieResource extends BaseResourceGroup {
         description: `${this.get('deployment').name} resource ${this.get(
           'resourceName'
         )} workgroup`,
-        outputLocation: `s3://${this.get('projectBucket')}/${this.get(
-          'resourceName'
-        )}/query_metadata/`,
+        outputLocation: `${this.get('outputLocation')}query_metadata/`,
       },
     });
     const inputTable = new GlueTable({
