@@ -136,15 +136,6 @@ class Reconcilable {
     while (reconcile_attempts < this._MAX_RETRIES) {
       try {
         if (this.dependsOn.find((dependency) => !dependency.isStable())) {
-          // console.log(
-          //   this.name,
-          //   'WAITING ON',
-          //   JSON.stringify(
-          //     this.dependsOn
-          //       .find((dependency) => !dependency.isStable())
-          //       .serialize()
-          //   )
-          // );
           await new Promise((resolve) => setTimeout(resolve, 500));
           continue;
         }
@@ -153,7 +144,6 @@ class Reconcilable {
         this.setStatus(Status.STABLE);
         break;
       } catch (error) {
-        console.trace(error);
         Reconcilable.Emitter.emit(Events.WHARFIE_ERROR, {
           name: this.name,
           constructor: this.constructor.name,

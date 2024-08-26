@@ -103,7 +103,6 @@ function setDependsOn(resource, resourceMap) {
  * @typedef WharfieDeploymentLoadOptions
  * @property {string} deploymentName -
  * @property {string} [resourceName] -
- * @property {Object<string, any>} [newProperties] -
  */
 /**
  * @param {WharfieDeploymentLoadOptions} options -

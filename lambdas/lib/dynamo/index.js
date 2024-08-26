@@ -3,7 +3,7 @@ const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
 const {
   DynamoDB,
   ProvisionedThroughputExceededException,
-  // ResourceNotFoundException,
+  ResourceNotFoundException,
 } = require('@aws-sdk/client-dynamodb');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 
@@ -72,7 +72,11 @@ async function putWithThroughputRetry(params) {
     try {
       return await docClient.put(params);
     } catch (e) {
-      if (e instanceof ProvisionedThroughputExceededException) {
+      if (
+        e instanceof ProvisionedThroughputExceededException ||
+        // todo this should be handled in the table reconcile method
+        e instanceof ResourceNotFoundException
+      ) {
         await new Promise((resolve) =>
           setTimeout(
             resolve,
@@ -88,6 +92,7 @@ async function putWithThroughputRetry(params) {
         attempts++;
         continue;
       }
+      throw e;
     }
   }
   throw new Error('Max attempts exceeded');

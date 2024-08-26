@@ -25,7 +25,7 @@ const create = async () => {
   const multibar = monitorDeploymentCreateReconcilables(deployment);
   await deployment.reconcile();
   multibar.stop();
-  process.stdout.write(ansiEscapes.eraseLines(1));
+  process.stdout.write(ansiEscapes.eraseLines(2));
   displaySuccess(`Created wharfie deployment`);
 };
 
