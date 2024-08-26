@@ -4,12 +4,11 @@ const WharfieActorResources = require('../resources/wharfie-actor-resources');
 
 class Monitor extends WharfieActor {
   /**
-   * @param {import('../wharfie-actor').WharfieActorOptions} options -
+   * @param {import('../wharfie-actor').ExtendedWharfieActorOptions} options -
    */
-  constructor({ deployment, name, status, resources, properties }) {
+  constructor({ status, resources, properties }) {
     super({
-      deployment,
-      name,
+      name: 'monitor',
       status,
       resources,
       properties: {

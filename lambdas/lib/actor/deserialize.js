@@ -74,10 +74,6 @@ function deserialize(json, resourceMap = {}) {
   }
   const deserializedResource = _deserialize(json, resourceMap);
   setDependsOn(deserializedResource, resourceMap);
-  setParent(deserializedResource, resourceMap);
-  if (deserializedResource instanceof WharfieDeployment) {
-    setDeployment(deserializedResource, resourceMap);
-  }
   return deserializedResource;
 }
 
@@ -104,43 +100,10 @@ function setDependsOn(resource, resourceMap) {
 }
 
 /**
- *
- * @param {import('./resources/reconcilable') | import('./resources/base-resource-group')} resource -
- * @param {Object<string, import('./resources/reconcilable')>} resourceMap -
- */
-function setParent(resource, resourceMap) {
-  // @ts-ignore
-  if (resource.resources) {
-    // @ts-ignore
-    Object.values(resource.resources).forEach((resource) => {
-      setParent(resource, resourceMap);
-    });
-  }
-}
-
-/**
- *
- * @param {import('./resources/reconcilable') | import('./resources/base-resource-group')} resource -
- * @param {Object<string, import('./resources/reconcilable')>} resourceMap -
- */
-function setDeployment(resource, resourceMap) {
-  if (resource instanceof WharfieActor && resource.deployment) {
-    // @ts-ignore
-    resource.parent = resourceMap[resource.parent];
-  }
-  // @ts-ignore
-  if (resource.resources) {
-    // @ts-ignore
-    Object.values(resource.resources).forEach((resource) => {
-      setDeployment(resource, resourceMap);
-    });
-  }
-}
-
-/**
  * @typedef WharfieDeploymentLoadOptions
  * @property {string} deploymentName -
  * @property {string} [resourceName] -
+ * @property {Object<string, any>} [newProperties] -
  */
 /**
  * @param {WharfieDeploymentLoadOptions} options -

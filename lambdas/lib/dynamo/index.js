@@ -1,6 +1,10 @@
 'use strict';
 const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const { DynamoDB } = require('@aws-sdk/client-dynamodb');
+const {
+  DynamoDB,
+  ProvisionedThroughputExceededException,
+  // ResourceNotFoundException,
+} = require('@aws-sdk/client-dynamodb');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 
 const BaseAWS = require('../base');
@@ -68,8 +72,7 @@ async function putWithThroughputRetry(params) {
     try {
       return await docClient.put(params);
     } catch (e) {
-      // @ts-ignore
-      if (e.name === 'ProvisionedThroughputExceededException') {
+      if (e instanceof ProvisionedThroughputExceededException) {
         await new Promise((resolve) =>
           setTimeout(
             resolve,
@@ -85,7 +88,6 @@ async function putWithThroughputRetry(params) {
         attempts++;
         continue;
       }
-      throw e;
     }
   }
   throw new Error('Max attempts exceeded');
