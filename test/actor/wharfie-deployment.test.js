@@ -1614,20 +1614,6 @@ describe('deployment IaC', () => {
                         "Resource": "*",
                       },
                       {
-                        "Action": "cloudwatch:*",
-                        "Effect": "Allow",
-                        "Resource": [
-                          "*",
-                        ],
-                      },
-                      {
-                        "Action": "logs:*",
-                        "Effect": "Allow",
-                        "Resource": [
-                          "*",
-                        ],
-                      },
-                      {
                         "Action": [
                           "sqs:DeleteMessage",
                           "sqs:ReceiveMessage",
