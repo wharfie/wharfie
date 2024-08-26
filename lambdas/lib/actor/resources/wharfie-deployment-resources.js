@@ -421,6 +421,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     });
     const loggingResourceRole = new Role({
       name: `${this.name}-logging-resource-role`,
+      dependsOn: [sharedPolicy],
       properties: {
         deployment: () => this.get('deployment'),
         description: `${this.name} logging resource role`,
@@ -471,9 +472,10 @@ class WharfieDeploymentResources extends BaseResourceGroup {
       },
     });
     const systemGlueDatabase = new GlueDatabase({
-      name: this.get('deployment').name,
+      name: `${this.get('deployment').name}-glue-database`,
       properties: {
         deployment: () => this.get('deployment'),
+        databaseName: this.get('deployment').name,
       },
     });
     const loggingResource = new WharfieResource({

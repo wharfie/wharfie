@@ -182,7 +182,7 @@ class WharfieResource extends BaseResourceGroup {
           scheduleExpression: generateSchedule(
             Number(this.get('schedule', 1800))
           ),
-          // roleArn: () => this.get('scheduleRoleArn'),
+          roleArn: () => this.get('scheduleRoleArn'),
           targets: () => [
             {
               Id: `${this.get('projectName')}-${this.get(
@@ -311,15 +311,6 @@ class WharfieResource extends BaseResourceGroup {
     }
 
     return [workgroup, inputTable, outputTable, ...records, ...resources];
-  }
-
-  async _reconcile() {
-    if (!this.get('roleArn')) {
-      throw new Error('no daemon config role found');
-    }
-    await Promise.all(
-      this.getResources().map((resource) => resource.reconcile())
-    );
   }
 }
 

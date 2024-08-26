@@ -1,17 +1,20 @@
 'use strict';
 
 const inquirer = require('inquirer');
-const {
-  displayFailure,
-  displayInfo,
-  displaySuccess,
-} = require('../../output/basic');
+const { displayInfo, displaySuccess } = require('../../output/basic');
 const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
+const { handleError } = require('../../output/error');
+const ansiEscapes = require('../../output/escapes');
+const { load } = require('../../../lambdas/lib/actor/deserialize');
+const monitorDeploymentCreateReconcilables = require('../../output/deployment/create');
 
 /**
  * @param {string} development -
  */
 const config = async (development) => {
+  const existingDeployment = await load({
+    deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME || '',
+  });
   const answers = await new Promise((resolve, reject) => {
     inquirer
       .prompt([
@@ -20,39 +23,43 @@ const config = async (development) => {
           name: 'globalQueryConcurrency',
           message:
             'enter the maximum number of concurrent queries this deployment can run',
-          default: 10,
+          default: existingDeployment.get('globalQueryConcurrency', 10),
         },
         {
           type: 'number',
           name: 'resourceQueryConcurrency',
           message:
             'enter the maximum number of concurrent queries any resource in this deployment can run',
-          default: 10,
+          default: existingDeployment.get('resourceQueryConcurrency', 10),
         },
         {
           type: 'number',
           name: 'maxQueriesPerAction',
           message:
             'enter the maximum number of total queries any action can request',
-          default: 10000,
+          default: existingDeployment.get('maxQueriesPerAction', 10000),
         },
         {
           type: 'list',
           name: 'loggingLevel',
           message: 'enter the logging level for the deployment',
           choices: ['debug', 'info', 'warn', 'error'],
-          default: 'info',
+          default: existingDeployment.get('loggingLevel', 'info'),
         },
       ])
       .then(resolve)
       .catch(reject);
   });
+  process.stdout.write(ansiEscapes.eraseLines(4));
   displayInfo(`updating wharfie deployment configuration...`);
-  const deployment = new WharfieDeployment({
+  const updatedDeployment = new WharfieDeployment({
     name: process.env.WHARFIE_DEPLOYMENT_NAME || '',
     properties: answers,
   });
-  await deployment.reconcile();
+  const multibar = monitorDeploymentCreateReconcilables(updatedDeployment);
+  await updatedDeployment.reconcile();
+  multibar.stop();
+  process.stdout.write(ansiEscapes.eraseLines(5));
   displaySuccess(`Wharfie deployment configuration successfully updated`);
 };
 
@@ -78,6 +85,6 @@ exports.handler = async function ({ development }) {
   try {
     await config(development);
   } catch (err) {
-    displayFailure(err);
+    handleError(err);
   }
 };
