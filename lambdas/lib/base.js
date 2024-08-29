@@ -1,5 +1,5 @@
 'use strict';
-const { ConfiguredRetryStrategy } = require('@aws-sdk/util-retry');
+const { ConfiguredRetryStrategy } = require('@smithy/util-retry');
 const { stringify } = require('flatted');
 
 const logging = require('./logging');
