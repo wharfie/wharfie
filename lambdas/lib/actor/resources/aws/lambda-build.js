@@ -74,14 +74,16 @@ class LambdaBuild extends BaseResource {
     );
 
     // TODO hydrate shared actor state generally
+    const requirePathParts = resolvedHandler.split('.');
+    const functionName = requirePathParts.pop();
+    const requirePath = requirePathParts.join('.');
     const entryContent = `
-    const { ${resolvedHandler.split('.').pop()}: handler } = require('${
-      resolvedHandler.split('.')[0]
-    }');
+    const { ${functionName}: handler } = require('${requirePath}');
 
     // Lambda handler setup to use actor's handler method
     exports.handler = handler
     `;
+
     await esbuild.build({
       stdin: {
         contents: entryContent,
