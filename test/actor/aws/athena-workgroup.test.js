@@ -41,6 +41,9 @@ describe('athena workgroup IaC', () => {
           "athena": AthenaMock {
             "__queryRunner": QueryRunner {
               "glue": GlueMock {},
+              "parser": QueryParser {
+                "parser": r {},
+              },
               "s3": S3Mock {},
               "sqs": SQSMock {},
             },
@@ -48,6 +51,9 @@ describe('athena workgroup IaC', () => {
           },
           "glue": Glue {
             "glue": GlueMock {},
+          },
+          "parser": QueryParser {
+            "parser": r {},
           },
         },
         "dependsOn": [],
