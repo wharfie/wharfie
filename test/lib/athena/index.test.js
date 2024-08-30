@@ -2,7 +2,7 @@
 'use strict';
 const AWS = require('@aws-sdk/client-athena');
 const AWSGlue = require('@aws-sdk/client-glue');
-const Athena = require('../../../lambdas/lib/athena/');
+const Athena = require('../../../lambdas/lib/athena');
 
 describe('tests for Athena', () => {
   beforeAll(() => {
@@ -21,8 +21,17 @@ describe('tests for Athena', () => {
     );
     expect(result).toMatchInlineSnapshot(`
       {
-        "columns": [],
-        "selectAsColumns": [],
+        "columns": [
+          "(.*)",
+        ],
+        "selectAsColumns": [
+          {
+            "columns": Set {
+              "*",
+            },
+            "identifier": "",
+          },
+        ],
         "sources": [
           {
             "DatabaseName": "test_database",
@@ -50,18 +59,70 @@ describe('tests for Athena', () => {
             "columns": Set {
               "column1",
             },
-            "identifier": "column1",
+            "identifier": "",
           },
           {
             "columns": Set {
               "column_2",
             },
-            "identifier": "column_2",
+            "identifier": "",
           },
         ],
         "sources": [
           {
             "DatabaseName": "test_database",
+            "TableName": "test_table",
+          },
+        ],
+      }
+    `);
+  });
+
+  it('extractSources select as', async () => {
+    expect.assertions(1);
+    const athena = new Athena({ region: 'us-east-1' });
+    const result = await athena.extractSources(
+      'select CONCAT(first_name, " ", last_name) AS full_name, renamed_column as column2, column3, CONCAT(first_name, " ", last_name)  from test_table'
+    );
+    expect(result).toMatchInlineSnapshot(`
+      {
+        "columns": [
+          "first_name",
+          "last_name",
+          "renamed_column",
+          "column3",
+        ],
+        "selectAsColumns": [
+          {
+            "columns": Set {
+              "first_name",
+              "last_name",
+            },
+            "identifier": "full_name",
+          },
+          {
+            "columns": Set {
+              "renamed_column",
+            },
+            "identifier": "column2",
+          },
+          {
+            "columns": Set {
+              "column3",
+            },
+            "identifier": "",
+          },
+          {
+            "columns": Set {
+              "first_name",
+              "last_name",
+            },
+            "identifier": "",
+          },
+        ],
+        "sources": [
+          {
+            "DatabaseName": "",
             "TableName": "test_table",
           },
         ],

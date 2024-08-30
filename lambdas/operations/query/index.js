@@ -8,7 +8,7 @@ const daemon_log = logging.getDaemonLogger();
 const resource_db = require('../../lib/dynamo/resource');
 const semaphore_db = require('../../lib/dynamo/semaphore');
 const { getResource } = require('../../migrations/');
-const Athena = require('../../lib/athena/');
+const Athena = require('../../lib/athena');
 const STS = require('../../lib/sts');
 const SQS = require('../../lib/sqs');
 

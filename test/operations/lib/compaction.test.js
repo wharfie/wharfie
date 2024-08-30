@@ -827,7 +827,10 @@ describe('compaction', () => {
     });
 
     expect(query).toMatchInlineSnapshot(`
-      "SELECT distinct year ,month ,day ,hr FROM sourceDatabaseName.sourceTableName
+      "
+                  SELECT year ,month ,day ,hr
+                  FROM sourceDatabaseName."sourceTableName$partitions"
+                
        WHERE date_diff('minute', from_iso8601_timestamp(timestamp), from_unixtime(1608654677)) <= 4320 + 0
        AND date_diff('minute', from_iso8601_timestamp(timestamp), from_unixtime(1608654677)) >= 0"
     `);

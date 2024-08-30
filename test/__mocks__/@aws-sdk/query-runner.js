@@ -4,26 +4,17 @@ const S3 = require('./s3');
 const Glue = require('./glue');
 const SQS = require('./sqs');
 jest.mock('../../../lambdas/lib/dynamo/resource');
-
-/** @type {any} */
-const antlr4 = require('antlr4');
+const QueryParser = jest.requireActual(
+  '../../../lambdas/lib/athena/query-parser'
+);
 const dynamo_resource = require('../../../lambdas/lib/dynamo/resource');
-
-// @ts-ignore
-/** @type {any} */
-const athenasqlLexer = require('../../../lambdas/lib/athena/antlr-lib/athenasqlLexer.js');
-// @ts-ignore
-/** @type {any} */
-const athenasqlParser = require('../../../lambdas/lib/athena/antlr-lib/athenasqlParser.js');
-// @ts-ignore
-/** @type {any} */
-const athenasqlListener = require('../../../lambdas/lib/athena/antlr-lib/athenasqlListener.js');
 
 class QueryRunner {
   constructor() {
     this.s3 = new S3();
     this.glue = new Glue();
     this.sqs = new SQS();
+    this.parser = new QueryParser();
   }
 
   /**
@@ -194,37 +185,7 @@ class QueryRunner {
    * @returns {ExtractSourcesReturn} -
    */
   extractSources(query) {
-    const stream = new antlr4.CharStreams.fromString(query);
-    const lexer = new athenasqlLexer(stream);
-    const tokens = new antlr4.CommonTokenStream(lexer);
-    /** @type {any} */
-    const parser = new athenasqlParser(tokens);
-    parser.buildParseTrees = true;
-    const tree = parser.program();
-    const printer = new athenasqlListener();
-    antlr4.tree.ParseTreeWalker.DEFAULT.walk(printer, tree);
-
-    return {
-      sources: [
-        ...[...printer.tables].reduce((acc, t) => {
-          const [database, table] = t.split('.');
-          if (!table) {
-            acc.add({
-              DatabaseName: '',
-              TableName: database.replace(/['"]+/g, ''),
-            });
-          } else if (table && database) {
-            acc.add({
-              DatabaseName: database.replace(/['"]+/g, ''),
-              TableName: table.replace(/['"]+/g, ''),
-            });
-          }
-          return acc;
-        }, new Set()),
-      ],
-      columns: [...printer.columns],
-      selectAsColumns: printer.selectedAsColumns,
-    };
+    return this.parser.extractSources(query);
   }
 }
 

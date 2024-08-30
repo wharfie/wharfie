@@ -4,7 +4,7 @@ const EventsRule = require('./aws/events-rule');
 const TableRecord = require('./aws/table-record');
 const BaseResourceGroup = require('./base-resource-group');
 const { generateSchedule } = require('../../cron');
-const Athena = require('../../athena/');
+const Athena = require('../../athena');
 const S3 = require('../../s3');
 const { version } = require('../../../../package.json');
 
