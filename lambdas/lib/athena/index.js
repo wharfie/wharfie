@@ -1,21 +1,10 @@
-/* eslint-disable new-cap */
 'use strict';
 const AWS = require('@aws-sdk/client-athena');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
-/** @type {any} */
-const antlr4 = require('antlr4');
+
 const Glue = require('../glue');
 const BaseAWS = require('../base');
-
-// @ts-ignore
-/** @type {any} */
-const athenasqlLexer = require('./antlr-lib/athenasqlLexer.js');
-// @ts-ignore
-/** @type {any} */
-const athenasqlParser = require('./antlr-lib/athenasqlParser.js');
-// @ts-ignore
-/** @type {any} */
-const athenasqlListener = require('./antlr-lib/athenasqlListener.js');
+const QueryParser = require('./query-parser');
 
 class Athena {
   /**
@@ -29,6 +18,7 @@ class Athena {
       ...options,
     });
     this.glue = new Glue(options);
+    this.parser = new QueryParser();
   }
 
   /**
@@ -49,71 +39,7 @@ class Athena {
    * @returns {ExtractSourcesReturn} -
    */
   extractSources(query) {
-    const stream = new antlr4.CharStreams.fromString(query);
-    const lexer = new athenasqlLexer(stream);
-    const tokens = new antlr4.CommonTokenStream(lexer);
-    /** @type {any} */
-    const parser = new athenasqlParser(tokens);
-    parser.buildParseTrees = true;
-    const tree = parser.program();
-    const printer = new athenasqlListener();
-    antlr4.tree.ParseTreeWalker.DEFAULT.walk(printer, tree);
-
-    return {
-      sources: [
-        ...[...printer.tables].reduce((acc, t) => {
-          const [database, table] = t.split('.');
-          if (!table) {
-            acc.add({
-              DatabaseName: '',
-              TableName: database.replace(/['"]+/g, ''),
-            });
-          } else if (table && database) {
-            acc.add({
-              DatabaseName: database.replace(/['"]+/g, ''),
-              TableName: table.replace(/['"]+/g, ''),
-            });
-          }
-          return acc;
-        }, new Set()),
-      ],
-      columns: [...printer.columns],
-      selectAsColumns: printer.selectedAsColumns,
-    };
-  }
-
-  /**
-   * @param {string} query - query to evaluate
-   * @returns {string[]} -
-   */
-  getQueryDependencies(query) {
-    const stream = new antlr4.CharStreams.fromString(query);
-    const lexer = new athenasqlLexer(stream);
-    const tokens = new antlr4.CommonTokenStream(lexer);
-    /** @type {any} */
-    const parser = new athenasqlParser(tokens);
-    parser.buildParseTrees = true;
-    const tree = parser.program();
-    const printer = new athenasqlListener();
-    antlr4.tree.ParseTreeWalker.DEFAULT.walk(printer, tree);
-
-    return [
-      ...[...printer.tables].reduce((acc, t) => {
-        const [database, table] = t.split('.');
-        if (!table) {
-          acc.add({
-            DatabaseName: '',
-            TableName: database.replace(/['"]+/g, ''),
-          });
-        } else if (table && database) {
-          acc.add({
-            DatabaseName: database.replace(/['"]+/g, ''),
-            TableName: table.replace(/['"]+/g, ''),
-          });
-        }
-        return acc;
-      }, new Set()),
-    ];
+    return this.parser.extractSources(query);
   }
 
   /**
