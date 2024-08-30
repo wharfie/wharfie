@@ -333,7 +333,10 @@ class Compaction {
               `;
             }
           });
-        } else if (engineVersion === 'Athena engine version 2') {
+        } else if (
+          engineVersion === 'Athena engine version 2' ||
+          engineVersion === 'Athena engine version 3'
+        ) {
           QueryString = `
             SELECT ${partitionKeys.map(({ Name }) => Name).join(' ,')}
             FROM ${sourceDatabaseName}."${sourceTableName}$partitions"

@@ -786,7 +786,7 @@ describe('compaction', () => {
           RequesterPaysEnabled: false,
           EngineVersion: {
             SelectedEngineVersion: 'AUTO',
-            EffectiveEngineVersion: 'Athena engine version 2',
+            EffectiveEngineVersion: 'Athena engine version 3',
           },
         },
       },
