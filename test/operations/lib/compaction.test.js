@@ -6,14 +6,26 @@ const Compaction = require('../../../lambdas/operations/actions/lib/compaction')
 const Glue = require('../../../lambdas/lib/glue');
 const Athena = require('../../../lambdas/lib/athena');
 
+const Logger = require('../../../lambdas/lib/logging/logger');
+const ConsoleLogTransport = require('../../../lambdas/lib/logging/console-log-transport');
+let LOGGER;
+
 describe('compaction', () => {
   beforeAll(() => {
     require('aws-sdk-client-mock-jest');
+    LOGGER = new Logger({
+      transports: [new ConsoleLogTransport()],
+    });
   });
 
   afterEach(() => {
     AWSGlue.GlueMock.reset();
     AWSAthena.AthenaMock.reset();
+    LOGGER.flush();
+  });
+
+  afterAll(() => {
+    LOGGER.close();
   });
   it('getCompactionQueries', async () => {
     expect.assertions(1);
@@ -93,6 +105,7 @@ describe('compaction', () => {
       sourceTableName: 'sourceTableName',
       temporaryDatabaseName: 'destinationDatabaseName',
       temporaryTableName: 'destinationTableName',
+      event_log: LOGGER,
     });
 
     expect(queries).toMatchInlineSnapshot(`
@@ -242,6 +255,7 @@ describe('compaction', () => {
       sourceTableName: 'sourceTableName',
       temporaryDatabaseName: 'destinationDatabaseName',
       temporaryTableName: 'destinationTableName',
+      event_log: LOGGER,
     });
 
     expect(queries).toHaveLength(3);
@@ -373,6 +387,7 @@ describe('compaction', () => {
       operationTime: '1608654677',
       sourceDatabaseName: 'sourceDatabaseName',
       sourceTableName: 'sourceTableName',
+      event_log: LOGGER,
     });
 
     expect(query).toMatchInlineSnapshot(`
@@ -454,6 +469,7 @@ describe('compaction', () => {
       operationTime: '1608654677',
       sourceDatabaseName: 'sourceDatabaseName',
       sourceTableName: 'sourceTableName',
+      event_log: LOGGER,
     });
 
     expect(query).toMatchInlineSnapshot(`
@@ -503,6 +519,7 @@ describe('compaction', () => {
       operationTime: '1608654677',
       sourceDatabaseName: 'sourceDatabaseName',
       sourceTableName: 'sourceTableName',
+      event_log: LOGGER,
     });
 
     expect(query).toMatchInlineSnapshot(`
@@ -569,6 +586,7 @@ describe('compaction', () => {
       operationTime: '1608654677',
       sourceDatabaseName: 'sourceDatabaseName',
       sourceTableName: 'sourceTableName',
+      event_log: LOGGER,
     });
 
     expect(query).toMatchInlineSnapshot(`
@@ -635,6 +653,7 @@ describe('compaction', () => {
       operationTime: '1608654677',
       sourceDatabaseName: 'sourceDatabaseName',
       sourceTableName: 'sourceTableName',
+      event_log: LOGGER,
     });
 
     expect(query).toMatchInlineSnapshot(`
@@ -698,6 +717,7 @@ describe('compaction', () => {
       operationTime: '1608654677',
       sourceDatabaseName: 'sourceDatabaseName',
       sourceTableName: 'sourceTableName',
+      event_log: LOGGER,
     });
 
     expect(query).toMatchInlineSnapshot(`
@@ -763,6 +783,7 @@ describe('compaction', () => {
       operationTime: '1608654677',
       sourceDatabaseName: 'sourceDatabaseName',
       sourceTableName: 'sourceTableName',
+      event_log: LOGGER,
     });
 
     expect(query).toMatchInlineSnapshot(`
@@ -786,7 +807,7 @@ describe('compaction', () => {
           RequesterPaysEnabled: false,
           EngineVersion: {
             SelectedEngineVersion: 'AUTO',
-            EffectiveEngineVersion: 'Athena engine version 2',
+            EffectiveEngineVersion: 'Athena engine version 3',
           },
         },
       },
@@ -824,6 +845,7 @@ describe('compaction', () => {
       operationTime: '1608654677',
       sourceDatabaseName: 'sourceDatabaseName',
       sourceTableName: 'sourceTableName',
+      event_log: LOGGER,
     });
 
     expect(query).toMatchInlineSnapshot(`
