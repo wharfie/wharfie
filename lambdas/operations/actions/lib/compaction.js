@@ -216,6 +216,7 @@ class Compaction {
    * @property {string} sourceDatabaseName -
    * @property {string} sourceTableName -
    * @property {string} athenaWorkgroup -
+   * @property {import('../../../lib/logging/logger')} event_log -
    * @param {getCalculateViewPartitionQueriesParams} params -
    * @returns {Promise<string>} -
    */
@@ -226,6 +227,7 @@ class Compaction {
     sourceDatabaseName,
     sourceTableName,
     athenaWorkgroup,
+    event_log,
   }) {
     const { Table } = await this.glue.getTable({
       DatabaseName: sourceDatabaseName,
@@ -267,6 +269,11 @@ class Compaction {
       partitionsOnly = !queryTableReferences.columns.some(
         (column) => !referencePartitionKeys.has(column)
       );
+      if (!partitionsOnly) {
+        event_log.debug(
+          'view partitions refer to source columnns that are not partitions, performance impacted'
+        );
+      }
     }
 
     if (SLA && SLA.ColumnExpression && SLA.MaxDelay) {
@@ -278,15 +285,19 @@ class Compaction {
           if (
             !Table.PartitionKeys?.map((key) => key.Name).includes(slaColumn)
           ) {
+            event_log.debug(
+              'view sla expressions refers to source columnns that are not partitions, performance impacted'
+            );
             partitionsOnly = false;
           }
         });
     }
 
     const partitionKeys = Table.PartitionKeys;
-    let QueryString = `SELECT distinct ${partitionKeys
+    const DEFAULT_QUERY_STRING = `SELECT distinct ${partitionKeys
       .map(({ Name }) => Name)
       .join(' ,')} FROM ${sourceDatabaseName}.${sourceTableName}`;
+    let QueryString = DEFAULT_QUERY_STRING;
 
     if (partitionsOnly) {
       const workGroupConfiguration = await this.athena.getWorkGroup({
@@ -349,7 +360,8 @@ class Compaction {
           );
         }
       } catch (err) {
-        console.warn(`{err} Using default query: ${QueryString}`);
+        event_log.warn(`Using default query unexpectedly due to: ${err}`);
+        QueryString = DEFAULT_QUERY_STRING;
       }
     }
 

@@ -49,6 +49,7 @@ async function run(event, context, resource, operation) {
     sourceDatabaseName: resource.source_properties.databaseName,
     sourceTableName: resource.source_properties.name,
     athenaWorkgroup: resource.athena_workgroup,
+    event_log,
   });
   event_log.info(`FIND_COMPACTION_PARTITIONS:submitting query`);
   if (query_string) await query.enqueue(event, context, [{ query_string }]);
