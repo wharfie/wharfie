@@ -18,6 +18,7 @@ const { validateModelSql, WharfieModelSQLError } = require('./model-validator');
  * @property {boolean} [compressed] -
  * @property {string} [viewOriginalText] -
  * @property {string} [viewExpandedText] -
+ * @property {import('./typedefs').Model | import('./typedefs').Source} userInput -
  */
 /**
  * @typedef UserDefinedWharfieResourceOptions
@@ -83,6 +84,7 @@ function getResourceOptions(environment, project) {
           'base64'
         )} */`,
         viewExpandedText: '/* Presto View */',
+        userInput: model,
       },
     });
     modelsForValidation[model.name] = model.sql.replace(
@@ -132,6 +134,7 @@ function getResourceOptions(environment, project) {
           tableInput.StorageDescriptor.StoredAsSubDirectories,
         serdeInfo: tableInput.StorageDescriptor.SerdeInfo,
         compressed: tableInput.StorageDescriptor.Compressed,
+        userInput: source,
       },
     });
   }

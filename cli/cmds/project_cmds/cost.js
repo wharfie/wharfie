@@ -76,7 +76,7 @@ const cost = async (path, environmentName) => {
 };
 
 exports.command = 'cost [path]';
-exports.desc = 'show cost estimates for wharfie project';
+exports.desc = 'Show cost estimates for wharfie project';
 /**
  * @param {import('yargs').Argv} yargs -
  */

@@ -250,15 +250,16 @@ class WharfieProject extends BaseResourceGroup {
 
   /**
    * @param {UserDefinedWharfieResourceOptions} options -
+   * @returns {import('./wharfie-resource').WharfieResourceProperties & import('../typedefs').SharedProperties} -
    */
-  addWharfieResource(options) {
-    const name = `${options.name}-resource`;
-    const newProperties = {
-      ...options.properties,
+  assembleResourceProperties(options) {
+    return {
       ...WharfieResource.DefaultProperties,
+      ...options.properties,
       deployment: () => this.get('deployment'),
       project: this._getProjectProperties(),
       resourceName: options.name,
+      resourceId: `${this.name}.${options.name}`,
       projectName: this.name,
       databaseName: this.name,
       outputLocation: `s3://${this.getBucket().name}/${options.name}/`,
@@ -272,7 +273,18 @@ class WharfieProject extends BaseResourceGroup {
       dependencyTable: this.get('dependencyTable'),
       locationTable: this.get('locationTable'),
     };
+  }
+
+  /**
+   * @param {UserDefinedWharfieResourceOptions} options -
+   */
+  addWharfieResource(options) {
+    const name = `${options.name}-resource`;
+    const newProperties = this.assembleResourceProperties(options);
     if (this.resources[name]) {
+      if (!(this.resources[name] instanceof WharfieResource)) {
+        throw new Error(`${name} cannot be used for a wharfie resource name`);
+      }
       if (!this.resources[name].checkPropertyEquality(newProperties)) {
         this.resources[name].properties = newProperties;
         this.resources[name].setStatus(Reconcilable.Status.DRIFTED);
@@ -284,24 +296,7 @@ class WharfieProject extends BaseResourceGroup {
           ...options,
           name,
           dependsOn: [this.getRole(), this.getBucket()],
-          properties: {
-            ...options.properties,
-            deployment: () => this.get('deployment'),
-            project: this._getProjectProperties(),
-            resourceName: options.name,
-            projectName: this.name,
-            databaseName: this.name,
-            outputLocation: `s3://${this.getBucket().name}/${options.name}/`,
-            projectBucket: this.getBucket().name,
-            region: this.get('deployment').region,
-            catalogId: this.get('deployment').accountId,
-            scheduleQueueArn: this.get('scheduleQueueArn'),
-            scheduleRoleArn: this.get('scheduleRoleArn'),
-            roleArn: () => this.getRole().get('arn'),
-            resourceTable: this.get('resourceTable'),
-            dependencyTable: this.get('dependencyTable'),
-            locationTable: this.get('locationTable'),
-          },
+          properties: newProperties,
         })
       );
       this.setStatus(Reconcilable.Status.DRIFTED);
@@ -335,6 +330,7 @@ class WharfieProject extends BaseResourceGroup {
    * @property {boolean} [compressed] -
    * @property {string} [viewOriginalText] -
    * @property {string} [viewExpandedText] -
+   * @property {import('../../../../cli/project/typedefs').Model | import('../../../../cli/project/typedefs').Source} userInput -
    */
   /**
    * @typedef UserDefinedWharfieResourceOptions
@@ -364,6 +360,67 @@ class WharfieProject extends BaseResourceGroup {
     resourceOptions.forEach((options) => {
       this.addWharfieResource(options);
     });
+  }
+
+  /**
+   * @typedef WharfieResourceDiff
+   * @property {import('../../../../cli/project/typedefs').Model | import('../../../../cli/project/typedefs').Source} old -
+   * @property {import('../../../../cli/project/typedefs').Model | import('../../../../cli/project/typedefs').Source} new -
+   * @property {import('jsondiffpatch').Delta} delta -
+   */
+
+  /**
+   * @typedef WharfieProjeceDiffs
+   * @property {Object<string,import('../../../../cli/project/typedefs').Model | import('../../../../cli/project/typedefs').Source>} additions -
+   * @property {Object<string,import('../../../../cli/project/typedefs').Model | import('../../../../cli/project/typedefs').Source>} removals -
+   * @property {Object<string,WharfieResourceDiff>} updates -
+   */
+
+  /**
+   * @param {UserDefinedWharfieResourceOptions[]} resourceOptions -
+   * @returns {WharfieProjeceDiffs} -
+   */
+  diffWharfieResources(resourceOptions) {
+    /** @type {WharfieProjeceDiffs} */
+    const diffs = {
+      additions: {},
+      removals: {},
+      updates: {},
+    };
+    const newResourceNames = resourceOptions.reduce((acc, option) => {
+      acc.add(option.name);
+      return acc;
+    }, new Set());
+    const existingResources = this.getWharfieResources();
+    const existingResourceNames = existingResources.reduce((acc, option) => {
+      acc.add(option.get('resourceName'));
+      return acc;
+    }, new Set());
+    existingResources.forEach((resource) => {
+      if (!newResourceNames.has(resource.get('resourceName'))) {
+        diffs.removals[resource.get('resourceName')] =
+          resource.get('userInput');
+      }
+    });
+    resourceOptions.forEach((options) => {
+      if (!existingResourceNames.has(options.name)) {
+        diffs.additions[options.name] = options.properties.userInput;
+      } else {
+        const existingResource = this.resources[`${options.name}-resource`];
+        const diff = existingResource.diffProperty(
+          'userInput',
+          options.properties.userInput
+        );
+        if (diff.delta) {
+          diffs.updates[options.name] = {
+            old: diff.old,
+            new: diff.new,
+            delta: diff.delta,
+          };
+        }
+      }
+    });
+    return diffs;
   }
 
   /**
@@ -412,10 +469,6 @@ class WharfieProject extends BaseResourceGroup {
 
   getRole() {
     return this.getResource(`${this.name}-project-role`);
-  }
-
-  async _post_destroy() {
-    await this.delete();
   }
 
   async save() {

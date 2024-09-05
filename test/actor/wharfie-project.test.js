@@ -489,6 +489,132 @@ describe('wharfie project IaC', () => {
               },
               "storedAsSubDirectories": true,
               "tableType": "EXTERNAL_TABLE",
+              "userInput": {
+                "columns": [
+                  {
+                    "name": "brand",
+                    "type": "array<struct<language_tag:string,value:string>>",
+                  },
+                  {
+                    "name": "bullet_point",
+                    "type": "array<struct<language_tag:string,value:string>>",
+                  },
+                  {
+                    "name": "color",
+                    "type": "array<struct<language_tag:string,value:string>>",
+                  },
+                  {
+                    "name": "color_code",
+                    "type": "array<string>",
+                  },
+                  {
+                    "name": "country",
+                    "type": "string",
+                  },
+                  {
+                    "name": "domain_name",
+                    "type": "string",
+                  },
+                  {
+                    "name": "fabric_type",
+                    "type": "array<struct<language_tag:string,value:string>>",
+                  },
+                  {
+                    "name": "finish_type",
+                    "type": "array<struct<language_tag:string,value:string>>",
+                  },
+                  {
+                    "name": "item_dimensions",
+                    "type": "struct<height:struct<normalized_value:struct<unit:string,value:float>,value:float,unit:string>,length:struct<normalized_value:struct<unit:string,value:float>,value:float,unit:string>,width:struct<normalized_value:struct<unit:string,value:float>,value:float,unit:string>>",
+                  },
+                  {
+                    "name": "item_id",
+                    "type": "string",
+                  },
+                  {
+                    "name": "item_keywords",
+                    "type": "array<struct<language_tag:string,value:string>>",
+                  },
+                  {
+                    "name": "item_name",
+                    "type": "array<struct<language_tag:string,value:string>>",
+                  },
+                  {
+                    "name": "item_shape",
+                    "type": "array<struct<language_tag:string,value:string>>",
+                  },
+                  {
+                    "name": "item_weight",
+                    "type": "array<struct<normalized_value:struct<unit:string,value:float>,value:float,unit:string>>",
+                  },
+                  {
+                    "name": "main_image_id",
+                    "type": "string",
+                  },
+                  {
+                    "name": "marketplace",
+                    "type": "string",
+                  },
+                  {
+                    "name": "material",
+                    "type": "array<struct<language_tag:string,value:string>>",
+                  },
+                  {
+                    "name": "model_name",
+                    "type": "array<struct<language_tag:string,value:string>>",
+                  },
+                  {
+                    "name": "model_number",
+                    "type": "array<struct<language_tag:string,value:string>>",
+                  },
+                  {
+                    "name": "model_year",
+                    "type": "array<struct<language_tag:string,value:string>>",
+                  },
+                  {
+                    "name": "node",
+                    "type": "array<struct<node_id:bigint,path:string>>",
+                  },
+                  {
+                    "name": "other_image_id",
+                    "type": "array<string>",
+                  },
+                  {
+                    "name": "pattern",
+                    "type": "array<struct<language_tag:string,value:string>>",
+                  },
+                  {
+                    "name": "product_description",
+                    "type": "array<struct<language_tag:string,value:string>>",
+                  },
+                  {
+                    "name": "product_type",
+                    "type": "array<struct<value:string>>",
+                  },
+                  {
+                    "name": "spin_id",
+                    "type": "string",
+                  },
+                  {
+                    "name": "style",
+                    "type": "array<struct<language_tag:string,value:string>>",
+                  },
+                  {
+                    "name": "3dmodel_id",
+                    "type": "string",
+                  },
+                ],
+                "description": "Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html",
+                "format": "json",
+                "input_location": {
+                  "path": "s3://amazon-berkeley-objects/listings/metadata/",
+                  "storage": "s3",
+                },
+                "name": "amazon_berkely_objects",
+                "service_level_agreement": {
+                  "freshness": 60,
+                },
+              },
             },
             "resourceType": "WharfieResource",
             "resources": {
@@ -1280,6 +1406,37 @@ describe('wharfie project IaC', () => {
               "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
               "storedAsSubDirectories": false,
               "tableType": "VIRTUAL_VIEW",
+              "userInput": {
+                "columns": [
+                  {
+                    "name": "country",
+                    "type": "string",
+                  },
+                  {
+                    "name": "brands",
+                    "type": "string",
+                  },
+                  {
+                    "name": "count",
+                    "type": "bigint",
+                  },
+                ],
+                "description": "Materialized Table",
+                "name": "amazon_berkely_objects_aggregated",
+                "service_level_agreement": {
+                  "freshness": 60,
+                },
+                "sql": "WITH unnested_table AS (
+        SELECT country, brand_element.value AS brands
+        FROM \${db}.amazon_berkely_objects,
+        UNNEST(brand) AS t(brand_element)
+      )
+      SELECT country, brands, COUNT(*) AS count
+      FROM unnested_table
+      GROUP BY country, brands
+      ORDER BY count DESC
+      ",
+              },
               "viewExpandedText": "/* Presto View */",
               "viewOriginalText": "/* Presto View: eyJvcmlnaW5hbFNxbCI6IldJVEggdW5uZXN0ZWRfdGFibGUgQVMgKFxuICBTRUxFQ1QgY291bnRyeSwgYnJhbmRfZWxlbWVudC52YWx1ZSBBUyBicmFuZHNcbiAgRlJPTSBwcm9qZWN0X2ZpeHR1cmUuYW1hem9uX2JlcmtlbHlfb2JqZWN0cyxcbiAgVU5ORVNUKGJyYW5kKSBBUyB0KGJyYW5kX2VsZW1lbnQpXG4pXG5TRUxFQ1QgY291bnRyeSwgYnJhbmRzLCBDT1VOVCgqKSBBUyBjb3VudFxuRlJPTSB1bm5lc3RlZF90YWJsZVxuR1JPVVAgQlkgY291bnRyeSwgYnJhbmRzXG5PUkRFUiBCWSBjb3VudCBERVNDXG4iLCJjYXRhbG9nIjoiYXdzZGF0YWNhdGFsb2ciLCJjb2x1bW5zIjpbeyJuYW1lIjoiY291bnRyeSIsInR5cGUiOiJ2YXJjaGFyIn0seyJuYW1lIjoiYnJhbmRzIiwidHlwZSI6InZhcmNoYXIifSx7Im5hbWUiOiJjb3VudCIsInR5cGUiOiJiaWdpbnQifV19 */",
             },
@@ -1683,6 +1840,50 @@ describe('wharfie project IaC', () => {
               },
               "storedAsSubDirectories": true,
               "tableType": "EXTERNAL_TABLE",
+              "userInput": {
+                "columns": [
+                  {
+                    "name": "image_id",
+                    "type": "string",
+                  },
+                  {
+                    "name": "height",
+                    "type": "bigint",
+                  },
+                  {
+                    "name": "width",
+                    "type": "bigint",
+                  },
+                  {
+                    "name": "path",
+                    "type": "string",
+                  },
+                ],
+                "custom_format": {
+                  "compressed": false,
+                  "input_format": "org.apache.hadoop.mapred.TextInputFormat",
+                  "number_of_buckets": 0,
+                  "output_format": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+                  "serde_info": {
+                    "parameters": {
+                      "field.delim": ",",
+                      "serialization.format": ",",
+                      "skip.header.line.count": "1",
+                    },
+                    "serialization_library": "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe",
+                  },
+                  "stored_as_sub_directories": true,
+                },
+                "description": "Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html",
+                "input_location": {
+                  "path": "s3://amazon-berkeley-objects/images/metadata/",
+                  "storage": "s3",
+                },
+                "name": "amazon_berkely_objects_images",
+                "service_level_agreement": {
+                  "freshness": 60,
+                },
+              },
             },
             "resourceType": "WharfieResource",
             "resources": {
@@ -2094,6 +2295,32 @@ describe('wharfie project IaC', () => {
               "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
               "storedAsSubDirectories": false,
               "tableType": "VIRTUAL_VIEW",
+              "userInput": {
+                "columns": [
+                  {
+                    "name": "item_id",
+                    "type": "string",
+                  },
+                  {
+                    "name": "marketplace",
+                    "type": "string",
+                  },
+                  {
+                    "name": "path",
+                    "type": "string",
+                  },
+                ],
+                "description": "Materialized Table",
+                "name": "amazon_berkely_objects_join",
+                "service_level_agreement": {
+                  "freshness": 60,
+                },
+                "sql": "SELECT objects.item_id, objects.marketplace, images.path
+      FROM \${db}.amazon_berkely_objects AS objects
+      LEFT JOIN \${db}.amazon_berkely_objects_images AS images
+      ON objects.main_image_id = images.image_id
+      ",
+              },
               "viewExpandedText": "/* Presto View */",
               "viewOriginalText": "/* Presto View: eyJvcmlnaW5hbFNxbCI6IlNFTEVDVCBvYmplY3RzLml0ZW1faWQsIG9iamVjdHMubWFya2V0cGxhY2UsIGltYWdlcy5wYXRoXG5GUk9NIHByb2plY3RfZml4dHVyZS5hbWF6b25fYmVya2VseV9vYmplY3RzIEFTIG9iamVjdHNcbkxFRlQgSk9JTiBwcm9qZWN0X2ZpeHR1cmUuYW1hem9uX2JlcmtlbHlfb2JqZWN0c19pbWFnZXMgQVMgaW1hZ2VzXG5PTiBvYmplY3RzLm1haW5faW1hZ2VfaWQgPSBpbWFnZXMuaW1hZ2VfaWRcbiIsImNhdGFsb2ciOiJhd3NkYXRhY2F0YWxvZyIsImNvbHVtbnMiOlt7Im5hbWUiOiJpdGVtX2lkIiwidHlwZSI6InZhcmNoYXIifSx7Im5hbWUiOiJtYXJrZXRwbGFjZSIsInR5cGUiOiJ2YXJjaGFyIn0seyJuYW1lIjoicGF0aCIsInR5cGUiOiJ2YXJjaGFyIn1dfQ== */",
             },
@@ -2513,6 +2740,28 @@ describe('wharfie project IaC', () => {
               "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
               "storedAsSubDirectories": false,
               "tableType": "VIRTUAL_VIEW",
+              "userInput": {
+                "columns": [
+                  {
+                    "name": "item_id",
+                    "type": "string",
+                  },
+                  {
+                    "name": "marketplace",
+                    "type": "string",
+                  },
+                  {
+                    "name": "path",
+                    "type": "string",
+                  },
+                ],
+                "description": "Materialized Table",
+                "name": "inline",
+                "service_level_agreement": {
+                  "freshness": 60,
+                },
+                "sql": "SELECT objects.item_id, objects.marketplace, images.path FROM \${db}.amazon_berkely_objects AS objects LEFT JOIN \${db}.amazon_berkely_objects_images AS images ON objects.main_image_id = images.image_id",
+              },
               "viewExpandedText": "/* Presto View */",
               "viewOriginalText": "/* Presto View: eyJvcmlnaW5hbFNxbCI6IlNFTEVDVCBvYmplY3RzLml0ZW1faWQsIG9iamVjdHMubWFya2V0cGxhY2UsIGltYWdlcy5wYXRoIEZST00gcHJvamVjdF9maXh0dXJlLmFtYXpvbl9iZXJrZWx5X29iamVjdHMgQVMgb2JqZWN0cyBMRUZUIEpPSU4gcHJvamVjdF9maXh0dXJlLmFtYXpvbl9iZXJrZWx5X29iamVjdHNfaW1hZ2VzIEFTIGltYWdlcyBPTiBvYmplY3RzLm1haW5faW1hZ2VfaWQgPSBpbWFnZXMuaW1hZ2VfaWQiLCJjYXRhbG9nIjoiYXdzZGF0YWNhdGFsb2ciLCJjb2x1bW5zIjpbeyJuYW1lIjoiaXRlbV9pZCIsInR5cGUiOiJ2YXJjaGFyIn0seyJuYW1lIjoibWFya2V0cGxhY2UiLCJ0eXBlIjoidmFyY2hhciJ9LHsibmFtZSI6InBhdGgiLCJ0eXBlIjoidmFyY2hhciJ9XX0= */",
             },
@@ -2936,6 +3185,28 @@ describe('wharfie project IaC', () => {
               },
               "storedAsSubDirectories": true,
               "tableType": "EXTERNAL_TABLE",
+              "userInput": {
+                "columns": [
+                  {
+                    "name": "name",
+                    "type": "string",
+                  },
+                  {
+                    "name": "count",
+                    "type": "bigint",
+                  },
+                ],
+                "description": "nice",
+                "format": "json",
+                "input_location": {
+                  "path": "s3://utility-079185815456-us-west-2/test/",
+                  "storage": "s3",
+                },
+                "name": "test",
+                "service_level_agreement": {
+                  "freshness": 60,
+                },
+              },
             },
             "resourceType": "WharfieResource",
             "resources": {

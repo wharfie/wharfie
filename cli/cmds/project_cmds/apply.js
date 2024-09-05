@@ -63,7 +63,7 @@ const apply = async (path, environmentName) => {
 };
 
 exports.command = 'apply [path]';
-exports.desc = 'apply wharfie project changes';
+exports.desc = 'Create or update wharfie project resources';
 /**
  * @param {import('yargs').Argv} yargs -
  */

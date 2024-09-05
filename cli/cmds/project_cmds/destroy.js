@@ -86,7 +86,7 @@ const destroy = async (path, environmentName, yes) => {
 };
 
 exports.command = 'destroy [path]';
-exports.desc = 'destroy wharfie project';
+exports.desc = 'Destroy previously-created wharfie project';
 /**
  * @param {import('yargs').Argv} yargs -
  */
