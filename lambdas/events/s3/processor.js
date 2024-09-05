@@ -4,7 +4,7 @@ const SQS = require('../../lib/sqs');
 const sqs = new SQS({ region: process.env.AWS_REGION });
 
 const event_db = require('../../lib/dynamo/event');
-const resource_db = require('../../lib/dynamo/resource');
+const resource_db = require('../../lib/dynamo/operations');
 const logging = require('../../lib/logging/');
 const daemon_log = logging.getDaemonLogger();
 

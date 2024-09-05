@@ -3,11 +3,11 @@
 const S3 = require('./s3');
 const Glue = require('./glue');
 const SQS = require('./sqs');
-jest.mock('../../../lambdas/lib/dynamo/resource');
+jest.mock('../../../lambdas/lib/dynamo/operations');
 const QueryParser = jest.requireActual(
   '../../../lambdas/lib/athena/query-parser'
 );
-const dynamo_resource = require('../../../lambdas/lib/dynamo/resource');
+const dynamo_resource = require('../../../lambdas/lib/dynamo/operations');
 
 class QueryRunner {
   constructor() {
@@ -27,21 +27,21 @@ class QueryRunner {
       const query_event = JSON.parse(
         query_string.split('\n').slice(-1)[0].substring(3)
       );
-      const resources_state = dynamo_resource.__getMockState();
+      const operations_state = dynamo_resource.__getMockState();
       const action =
-        resources_state[query_event.resource_id][
+        operations_state[query_event.resource_id][
           `${query_event.resource_id}#${query_event.operation_id}#${query_event.action_id}`
         ];
       const query =
-        resources_state[query_event.resource_id][
+        operations_state[query_event.resource_id][
           `${query_event.resource_id}#${query_event.operation_id}#${query_event.action_id}#${query_event.query_id}`
         ];
       const operation =
-        resources_state[query_event.resource_id][
+        operations_state[query_event.resource_id][
           `${query_event.resource_id}#${query_event.operation_id}`
         ];
       const resource =
-        resources_state[query_event.resource_id][`${query_event.resource_id}`];
+        operations_state[query_event.resource_id][`${query_event.resource_id}`];
 
       switch (query_event.action_type) {
         case 'RUN_SINGLE_COMPACTION':

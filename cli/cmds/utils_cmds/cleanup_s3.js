@@ -9,7 +9,7 @@ const {
 const {
   getAllResources,
   getResource,
-} = require('../../../lambdas/lib/dynamo/resource');
+} = require('../../../lambdas/lib/dynamo/operations');
 const Glue = require('../../../lambdas/lib/glue');
 const S3 = require('../../../lambdas/lib/s3');
 const Clean = require('../../../lambdas/operations/actions/lib/clean');

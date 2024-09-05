@@ -2,7 +2,7 @@
 
 const v0_0_0 = require('./versions/0.0.0');
 
-const resource_db = require('../lib/dynamo/resource');
+const resource_db = require('../lib/dynamo/operations');
 
 /**
  * @param {string} versionA -

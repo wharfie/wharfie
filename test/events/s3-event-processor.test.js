@@ -27,10 +27,10 @@ describe('tests for s3 events processing', () => {
     };
     logging = require('../../lambdas/lib/logging');
     event_db = require('../../lambdas/lib/dynamo/event');
-    resource_db = require('../../lambdas/lib/dynamo/resource');
+    resource_db = require('../../lambdas/lib/dynamo/operations');
     jest.mock('../../lambdas/lib/logging');
     jest.mock('../../lambdas/lib/dynamo/event');
-    jest.mock('../../lambdas/lib/dynamo/resource');
+    jest.mock('../../lambdas/lib/dynamo/operations');
     jest.spyOn(logging, 'getDaemonLogger').mockImplementation(() => ({
       debug: () => {},
       info: () => {},

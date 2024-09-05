@@ -2,7 +2,7 @@
 
 const { Action, OperationActionGraph } = require('../../lib/graph/');
 const logging = require('../../lib/logging');
-const resource_db = require('../../lib/dynamo/resource');
+const resource_db = require('../../lib/dynamo/operations');
 const register_partition = require('../actions/register_partition');
 const run_single_compaction = require('../actions/run_single_compaction');
 const update_symlinks = require('../actions/update_symlinks');

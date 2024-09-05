@@ -5,7 +5,7 @@ const { createId } = require('../../lib/id');
 
 const daemon_log = logging.getDaemonLogger();
 
-const resource_db = require('../../lib/dynamo/resource');
+const resource_db = require('../../lib/dynamo/operations');
 const semaphore_db = require('../../lib/dynamo/semaphore');
 const { getResource } = require('../../migrations/');
 const Athena = require('../../lib/athena');

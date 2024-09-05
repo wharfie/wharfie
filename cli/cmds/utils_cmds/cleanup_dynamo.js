@@ -11,7 +11,7 @@ const {
 const {
   getAllOperations,
   deleteOperation,
-} = require('../../../lambdas/lib/dynamo/resource');
+} = require('../../../lambdas/lib/dynamo/operations');
 
 const list = async () => {
   displayInfo(`fetching operations...`);

@@ -4,7 +4,7 @@ require('./config');
 const bluebirdPromise = require('bluebird');
 
 const SQS = require('./lib/sqs');
-const { getResource } = require('./lib/dynamo/resource');
+const { getResource } = require('./lib/dynamo/operations');
 const Glue = require('./lib/glue');
 const S3 = require('./lib/s3');
 const STS = require('./lib/sts');

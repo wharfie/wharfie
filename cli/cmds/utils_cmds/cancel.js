@@ -10,7 +10,7 @@ const {
   getRecords,
   deleteOperation,
   getAllResources,
-} = require('../../../lambdas/lib/dynamo/resource');
+} = require('../../../lambdas/lib/dynamo/operations');
 
 /**
  * @param {string} resource_id -

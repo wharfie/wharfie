@@ -9,8 +9,8 @@ let lambda, S3, resource_db, getObject, deleteObjects;
 describe('tests for cleanup lambda', () => {
   beforeAll(() => {
     S3 = require('../lambdas/lib/s3');
-    resource_db = require('../lambdas/lib/dynamo/resource');
-    jest.mock('../lambdas/lib/dynamo/resource');
+    resource_db = require('../lambdas/lib/dynamo/operations');
+    jest.mock('../lambdas/lib/dynamo/operations');
     jest.mock('../lambdas/lib/s3');
     jest.mock('../lambdas/lib/logging');
     getObject = jest

@@ -7,7 +7,7 @@ const Logger = require('../../../lambdas/lib/logging/logger');
 
 process.env.QUERY_TABLE = 'query_table';
 
-const resource = jest.requireActual('../../../lambdas/lib/dynamo/resource');
+const resource = jest.requireActual('../../../lambdas/lib/dynamo/operations');
 
 let query, batchWrite, put;
 

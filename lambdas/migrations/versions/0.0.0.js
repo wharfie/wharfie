@@ -1,7 +1,7 @@
 'use strict';
 
 const logging = require('../../lib/logging');
-const resource_db = require('../../lib/dynamo/resource');
+const resource_db = require('../../lib/dynamo/operations');
 const {
   resubmit_running_operations,
 } = require('../resubmit_running_operations');

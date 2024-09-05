@@ -2,7 +2,7 @@
 const { displayFailure } = require('../../output/basic');
 
 const Athena = require('../../../lambdas/lib/athena');
-const { getAllResources } = require('../../../lambdas/lib/dynamo/resource.js');
+const { getAllResources } = require('../../../lambdas/lib/dynamo/operations');
 const view = async () => {
   const athena = new Athena({});
 
