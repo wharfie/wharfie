@@ -68,7 +68,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
       },
     });
     const resourceTable = new Table({
-      name: `${this.get('deployment').name}-resource`,
+      name: `${this.get('deployment').name}-operations`,
       properties: {
         deployment: () => this.get('deployment'),
         attributeDefinitions: [
