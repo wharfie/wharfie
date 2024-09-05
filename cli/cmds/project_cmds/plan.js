@@ -75,15 +75,11 @@ const plan = async (path, environmentName) => {
     return;
   }
 
-  console.log(
-    chalk.green(
-      environment.name === constants.WHARFIE_DEFAULT_ENVIRONMENT
-        ? `Wharfie will perform the following actions for ${project.name}`
-        : `Wharfie will perform the following actions for ${project.name} in ${environment.name}`
-    )
-  );
+  let changePatches =
+    environment.name === constants.WHARFIE_DEFAULT_ENVIRONMENT
+      ? `Wharfie will perform the following actions for ${project.name}:`
+      : `Wharfie will perform the following actions for ${project.name} in ${environment.name}:`;
 
-  let changePatches = 'Wharfie will perform the following actions:';
   Object.values(diffs.additions).forEach((resource) => {
     changePatches += `\n\n ${chalk.bold(resource.name)} will be created \n `;
     const diff = jdf.diff({}, resource);

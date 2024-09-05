@@ -254,8 +254,8 @@ class WharfieProject extends BaseResourceGroup {
    */
   assembleResourceProperties(options) {
     return {
-      ...options.properties,
       ...WharfieResource.DefaultProperties,
+      ...options.properties,
       deployment: () => this.get('deployment'),
       project: this._getProjectProperties(),
       resourceName: options.name,
