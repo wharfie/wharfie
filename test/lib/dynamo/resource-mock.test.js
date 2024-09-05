@@ -2,9 +2,9 @@
 'use strict';
 
 const { OperationActionGraph, Action } = require('../../../lambdas/lib/graph/');
-jest.mock('../../../lambdas/lib/dynamo/resource');
+jest.mock('../../../lambdas/lib/dynamo/operations');
 
-const resource = require('../../../lambdas/lib/dynamo/resource');
+const resource = require('../../../lambdas/lib/dynamo/operations');
 
 describe('dynamo resource db', () => {
   afterEach(() => {

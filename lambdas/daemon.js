@@ -14,7 +14,7 @@ const query = require('./operations/query/');
 const SQS = require('./lib/sqs');
 const SNS = require('./lib/sns');
 const STS = require('./lib/sts');
-const resource_db = require('./lib/dynamo/resource');
+const resource_db = require('./lib/dynamo/operations');
 const { getResource } = require('./migrations/');
 
 const response = require('./lib/cloudformation/cfn-response');

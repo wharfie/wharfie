@@ -3,7 +3,7 @@ require('./config');
 const bluebirdPromise = require('bluebird');
 
 const semaphore_db = require('./lib/dynamo/semaphore');
-const resource_db = require('./lib/dynamo/resource');
+const resource_db = require('./lib/dynamo/operations');
 const { getResource } = require('./migrations/');
 const Athena = require('./lib/athena');
 const SQS = require('./lib/sqs');

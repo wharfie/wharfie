@@ -55,7 +55,7 @@ module.exports = {
     process.env.WHARFIE_REGION = configuration.region;
     process.env.WHARFIE_DEPLOYMENT_NAME = configuration.deployment_name;
     process.env.AWS_REGION = configuration.region;
-    process.env.RESOURCE_TABLE = `${configuration.deployment_name}-resource`;
+    process.env.OPERATIONS_TABLE = `${configuration.deployment_name}-operations`;
     process.env.WHARFIE_SERVICE_BUCKET = configuration.service_bucket;
     process.env.WHARFIE_ARTIFACT_BUCKET = configuration.service_bucket;
   },

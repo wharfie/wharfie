@@ -2,9 +2,9 @@
 'use strict';
 const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
 const { DynamoDB } = require('@aws-sdk/client-dynamodb');
-const { OperationActionGraph } = require('../graph/');
+const { OperationActionGraph } = require('../graph');
 const { createId } = require('../id');
-const { query, batchWrite } = require('./');
+const { query, batchWrite } = require('.');
 const STS = require('../sts');
 const SQS = require('../sqs');
 const Athena = require('../athena');
@@ -23,14 +23,14 @@ const docClient = DynamoDBDocument.from(
   }),
   { marshallOptions: { removeUndefinedValues: true } }
 );
-const RESOURCE_TABLE = process.env.RESOURCE_TABLE || '';
+const OPERATIONS_TABLE = process.env.OPERATIONS_TABLE || '';
 
 /**
  * @param {import('../../typedefs').ResourceRecord} resource -
  */
 async function putResource(resource) {
   await docClient.put({
-    TableName: RESOURCE_TABLE,
+    TableName: OPERATIONS_TABLE,
     Item: {
       resource_id: resource.resource_id,
       sort_key: resource.resource_id,
@@ -55,7 +55,7 @@ async function putResource(resource) {
  */
 async function getResource(resource_id) {
   const { Items } = await query({
-    TableName: RESOURCE_TABLE,
+    TableName: OPERATIONS_TABLE,
     ConsistentRead: true,
     KeyConditionExpression:
       'resource_id = :resource_id AND sort_key = :resource_id',
@@ -75,7 +75,7 @@ async function getResource(resource_id) {
  */
 async function deleteResource(resource_id) {
   const { Items } = await query({
-    TableName: RESOURCE_TABLE,
+    TableName: OPERATIONS_TABLE,
     ProjectionExpression: 'resource_id, sort_key',
     ConsistentRead: true,
     KeyConditionExpression:
@@ -88,7 +88,7 @@ async function deleteResource(resource_id) {
   while (Items.length > 0)
     await batchWrite({
       RequestItems: {
-        [RESOURCE_TABLE]: Items.splice(0, 25).map((Item) => ({
+        [OPERATIONS_TABLE]: Items.splice(0, 25).map((Item) => ({
           DeleteRequest: {
             Key: { resource_id: Item.resource_id, sort_key: Item.sort_key },
           },
@@ -131,7 +131,7 @@ async function createOperation(operation) {
   while (putItems.length > 0)
     await batchWrite({
       RequestItems: {
-        [RESOURCE_TABLE]: putItems.splice(0, 25).map((Item) => ({
+        [OPERATIONS_TABLE]: putItems.splice(0, 25).map((Item) => ({
           PutRequest: {
             Item,
           },
@@ -147,7 +147,7 @@ async function createOperation(operation) {
  */
 async function getOperation(resource_id, operation_id) {
   const { Items } = await query({
-    TableName: RESOURCE_TABLE,
+    TableName: OPERATIONS_TABLE,
     ConsistentRead: true,
     KeyConditionExpression:
       'resource_id = :resource_id AND sort_key = :sort_key',
@@ -175,7 +175,7 @@ async function getOperation(resource_id, operation_id) {
  */
 async function getQuery(resource_id, operation_id, action_id, query_id) {
   const { Items } = await query({
-    TableName: RESOURCE_TABLE,
+    TableName: OPERATIONS_TABLE,
     ConsistentRead: true,
     KeyConditionExpression:
       'resource_id = :resource_id AND sort_key = :sort_key',
@@ -199,7 +199,7 @@ async function getQuery(resource_id, operation_id, action_id, query_id) {
  */
 async function getQueries(resource_id, operation_id, action_id) {
   const { Items } = await query({
-    TableName: RESOURCE_TABLE,
+    TableName: OPERATIONS_TABLE,
     ConsistentRead: true,
     KeyConditionExpression:
       'resource_id = :resource_id AND begins_with(sort_key, :sort_key)',
@@ -223,7 +223,7 @@ async function getQueries(resource_id, operation_id, action_id) {
  */
 async function getAction(resource_id, operation_id, action_id) {
   const { Items } = await query({
-    TableName: RESOURCE_TABLE,
+    TableName: OPERATIONS_TABLE,
     ConsistentRead: true,
     KeyConditionExpression:
       'resource_id = :resource_id AND sort_key = :sort_key',
@@ -244,7 +244,7 @@ async function getAction(resource_id, operation_id, action_id) {
  */
 async function getActionQueries(resource_id, operation_id, action_id) {
   const { Items } = await query({
-    TableName: RESOURCE_TABLE,
+    TableName: OPERATIONS_TABLE,
     ExpressionAttributeNames: { '#data': 'data' },
     ProjectionExpression:
       'resource_id, sort_key, #data.query_id, #data.query_execution_id, #data.query_status',
@@ -266,7 +266,7 @@ async function getActionQueries(resource_id, operation_id, action_id) {
  */
 async function putOperation(resource_id, operation) {
   await docClient.put({
-    TableName: RESOURCE_TABLE,
+    TableName: OPERATIONS_TABLE,
     Item: {
       resource_id,
       sort_key: `${resource_id}#${operation.operation_id}`,
@@ -292,7 +292,7 @@ async function putOperation(resource_id, operation) {
  */
 async function putAction(resource_id, operation_id, action) {
   await docClient.put({
-    TableName: RESOURCE_TABLE,
+    TableName: OPERATIONS_TABLE,
     Item: {
       resource_id,
       sort_key: `${resource_id}#${operation_id}#${action.action_id}`,
@@ -322,7 +322,7 @@ async function updateActionStatus(
 ) {
   try {
     await docClient.update({
-      TableName: RESOURCE_TABLE,
+      TableName: OPERATIONS_TABLE,
       Key: {
         resource_id,
         sort_key: `${resource_id}#${operation_id}#${action_id}`,
@@ -357,7 +357,7 @@ async function updateActionStatus(
  */
 async function putQuery(resource_id, operation_id, action_id, query) {
   await docClient.put({
-    TableName: RESOURCE_TABLE,
+    TableName: OPERATIONS_TABLE,
     Item: {
       resource_id,
       sort_key: `${resource_id}#${operation_id}#${action_id}#${query.query_id}`,
@@ -383,7 +383,7 @@ async function putQueries(resource_id, operation_id, action_id, queries) {
   while (_queries.length > 0)
     await batchWrite({
       RequestItems: {
-        [RESOURCE_TABLE]: _queries.splice(0, 25).map((query) => ({
+        [OPERATIONS_TABLE]: _queries.splice(0, 25).map((query) => ({
           PutRequest: {
             Item: {
               resource_id,
@@ -408,7 +408,7 @@ async function putQueries(resource_id, operation_id, action_id, queries) {
  */
 async function deleteOperation(resource_id, operation_id) {
   const { Items } = await query({
-    TableName: RESOURCE_TABLE,
+    TableName: OPERATIONS_TABLE,
     ProjectionExpression: 'resource_id, sort_key',
     ConsistentRead: true,
     KeyConditionExpression:
@@ -422,7 +422,7 @@ async function deleteOperation(resource_id, operation_id) {
   while (Items.length > 0)
     await batchWrite({
       RequestItems: {
-        [RESOURCE_TABLE]: Items.splice(0, 25).map((Item) => ({
+        [OPERATIONS_TABLE]: Items.splice(0, 25).map((Item) => ({
           DeleteRequest: {
             Key: { resource_id: Item.resource_id, sort_key: Item.sort_key },
           },
@@ -524,7 +524,7 @@ async function checkActionPrerequisites(
     const action = prerequisite_actions.pop();
     if (!action) continue;
     const { Items } = await query({
-      TableName: RESOURCE_TABLE,
+      TableName: OPERATIONS_TABLE,
       ConsistentRead: true,
       KeyConditionExpression:
         'resource_id = :resource_id AND begins_with(sort_key, :sort_key)',
@@ -597,7 +597,7 @@ async function checkActionPrerequisites(
  */
 async function getRecords(resource_id, operation_id = '') {
   const { Items } = await query({
-    TableName: RESOURCE_TABLE,
+    TableName: OPERATIONS_TABLE,
     ConsistentRead: true,
     KeyConditionExpression:
       'resource_id = :resource_id AND begins_with(sort_key, :sort_key)',
@@ -626,7 +626,7 @@ async function getRecords(resource_id, operation_id = '') {
  */
 async function getAllOperations() {
   let response = await docClient.scan({
-    TableName: RESOURCE_TABLE,
+    TableName: OPERATIONS_TABLE,
     ConsistentRead: true,
   });
   /** @type {import('../../typedefs').OperationRecord[]} */
@@ -637,7 +637,7 @@ async function getAllOperations() {
 
   while (response.LastEvaluatedKey) {
     response = await docClient.scan({
-      TableName: RESOURCE_TABLE,
+      TableName: OPERATIONS_TABLE,
       ConsistentRead: true,
       ExclusiveStartKey: response.LastEvaluatedKey,
     });
@@ -654,7 +654,7 @@ async function getAllOperations() {
  */
 async function getAllResources() {
   let response = await docClient.scan({
-    TableName: RESOURCE_TABLE,
+    TableName: OPERATIONS_TABLE,
     ConsistentRead: true,
   });
   /** @type {import('../../typedefs').ResourceRecord[]} */
@@ -670,7 +670,7 @@ async function getAllResources() {
 
   while (response.LastEvaluatedKey) {
     response = await docClient.scan({
-      TableName: RESOURCE_TABLE,
+      TableName: OPERATIONS_TABLE,
       ConsistentRead: true,
       ExclusiveStartKey: response.LastEvaluatedKey,
     });

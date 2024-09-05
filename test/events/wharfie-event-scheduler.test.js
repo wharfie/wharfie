@@ -38,11 +38,11 @@ describe('tests for s3 event scheduling', () => {
     date = jest.spyOn(Date, 'now').mockReturnValue(1466424490000);
     event_db = require('../../lambdas/lib/dynamo/event');
     dependency_db = require('../../lambdas/lib/dynamo/dependency');
-    resource_db = require('../../lambdas/lib/dynamo/resource');
+    resource_db = require('../../lambdas/lib/dynamo/operations');
     logging = require('../../lambdas/lib/logging');
     jest.mock('../../lambdas/lib/dynamo/event');
     jest.mock('../../lambdas/lib/dynamo/dependency');
-    jest.mock('../../lambdas/lib/dynamo/resource');
+    jest.mock('../../lambdas/lib/dynamo/operations');
     jest.mock('../../lambdas/lib/logging');
     jest.spyOn(logging, 'getDaemonLogger').mockImplementation(() => ({
       debug: () => {},

@@ -5,7 +5,7 @@ const { OperationActionGraph } = require('../../lambdas/lib/graph/');
 const {
   getRecords,
   getAllResources,
-} = require('../../lambdas/lib/dynamo/resource');
+} = require('../../lambdas/lib/dynamo/operations');
 
 /**
  * @param {string} [resource_id] -

@@ -6,7 +6,7 @@ const Athena = require('../../lib/athena');
 const Glue = require('../../lib/glue');
 const Compaction = require('./lib/compaction');
 const STS = require('../../lib/sts');
-const resource_db = require('../../lib/dynamo/resource');
+const resource_db = require('../../lib/dynamo/operations');
 const query = require('../query');
 
 const TEMPORARY_GLUE_DATABASE = process.env.TEMPORARY_GLUE_DATABASE || '';

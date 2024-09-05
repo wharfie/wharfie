@@ -10,7 +10,7 @@ const { Readable } = require('stream');
 
 const { NoSuchKey, NotFound } = require('@aws-sdk/client-s3');
 
-const resource_db = require('../../lib/dynamo/resource');
+const resource_db = require('../../lib/dynamo/operations');
 
 const CLEANUP_QUEUE_URL = process.env.CLEANUP_QUEUE_URL || '';
 

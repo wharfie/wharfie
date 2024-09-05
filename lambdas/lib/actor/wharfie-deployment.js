@@ -94,8 +94,8 @@ class WharfieDeployment extends BaseResourceGroup {
       MAX_QUERIES_PER_ACTION: `${this.get('maxQueriesPerAction')}`,
       TEMPORARY_GLUE_DATABASE:
         this.getDeploymentResources().getTemporaryDatabase().name,
-      RESOURCE_TABLE: this.getDeploymentResources().getResource(
-        `${this.name}-resource`
+      OPERATIONS_TABLE: this.getDeploymentResources().getResource(
+        `${this.name}-operations`
       ).name,
       SEMAPHORE_TABLE: this.getDeploymentResources().getResource(
         `${this.name}-semaphore`
