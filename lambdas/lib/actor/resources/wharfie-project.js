@@ -15,7 +15,7 @@ const { createStableHash } = require('../../crypto');
  * @property {string} deploymentSharedPolicyArn -
  * @property {string} scheduleQueueArn -
  * @property {string} scheduleRoleArn -
- * @property {string} resourceTable -
+ * @property {string} operationTable -
  * @property {string} dependencyTable -
  * @property {string} locationTable -
  */
@@ -95,7 +95,7 @@ class WharfieProject extends BaseResourceGroup {
           .get('arn')
       );
       this.set('deployment', deployment.getDeploymentProperties());
-      this.set('resourceTable', `${deployment.name}-resource`);
+      this.set('operationTable', `${deployment.name}-operations`);
       this.set('dependencyTable', `${deployment.name}-dependencies`);
       this.set('locationTable', `${deployment.name}-locations`);
     }
@@ -269,7 +269,7 @@ class WharfieProject extends BaseResourceGroup {
       scheduleQueueArn: this.get('scheduleQueueArn'),
       scheduleRoleArn: this.get('scheduleRoleArn'),
       roleArn: () => this.getRole().get('arn'),
-      resourceTable: this.get('resourceTable'),
+      operationTable: this.get('operationTable'),
       dependencyTable: this.get('dependencyTable'),
       locationTable: this.get('locationTable'),
     };

@@ -1,9 +1,6 @@
 'use strict';
 
-const {
-  getRecords,
-  deleteOperation,
-} = require('../../lambdas/lib/dynamo/resource');
+const { getRecords, deleteOperation } = require('../lib/dynamo/operations');
 const SQS = require('../../lambdas/lib/sqs');
 const sqs = new SQS({ region: process.env.AWS_REGION });
 const DAEMON_QUEUE_URL = process.env.DAEMON_QUEUE_URL || '';

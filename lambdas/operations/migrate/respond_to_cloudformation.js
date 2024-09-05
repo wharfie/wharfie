@@ -5,7 +5,7 @@ const response = require('../../lib/cloudformation/cfn-response');
 const { getImmutableID } = require('../../lib/cloudformation/id');
 const CloudFormation = require('../../lib/cloudformation');
 
-const resource_db = require('../../lib/dynamo/resource');
+const resource_db = require('../../lib/dynamo/operations');
 const sempahore_db = require('../../lib/dynamo/semaphore');
 
 /**

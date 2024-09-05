@@ -1,7 +1,7 @@
 'use strict';
 
 const location_db = require('../../lib/dynamo/location');
-const resource_db = require('../../lib/dynamo/resource');
+const resource_db = require('../../lib/dynamo/operations');
 const event_db = require('../../lib/dynamo/event');
 const SQS = require('../../lib/sqs');
 

@@ -1,7 +1,7 @@
 'use strict';
 process.env.STACK_NAME = 'test-stack';
 process.env.TEMPORARY_GLUE_DATABASE = 'temp-glue-database';
-process.env.RESOURCE_TABLE = 'resource-table';
+process.env.OPERATIONS_TABLE = 'operations-table';
 process.env.SEMAPHORE_TABLE = 'semaphore-table';
 process.env.MONITOR_QUEUE_URL = 'monitor-queue';
 process.env.CLEANUP_QUEUE_URL = 'cleanup-queue';
@@ -17,7 +17,7 @@ const monitor_lambda = require('../../lambdas/monitor');
 const cleanup_lambda = require('../../lambdas/cleanup');
 const events_lambda = require('../../lambdas/events');
 
-jest.mock('../../lambdas/lib/dynamo/resource');
+jest.mock('../../lambdas/lib/dynamo/operations');
 jest.mock('../../lambdas/lib/dynamo/event');
 jest.mock('../../lambdas/lib/dynamo/location');
 jest.mock('../../lambdas/lib/dynamo/semaphore');

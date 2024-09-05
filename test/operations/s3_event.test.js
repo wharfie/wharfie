@@ -20,7 +20,7 @@ const {
 
 const { version } = require('../../package.json');
 
-jest.mock('../../lambdas/lib/dynamo/resource');
+jest.mock('../../lambdas/lib/dynamo/operations');
 jest.mock('../../lambdas/lib/dynamo/event');
 jest.mock('../../lambdas/lib/dynamo/location');
 jest.mock('../../lambdas/lib/dynamo/semaphore');
@@ -34,9 +34,9 @@ const { Athena } = require('@aws-sdk/client-athena');
 const { Glue } = require('@aws-sdk/client-glue');
 const { SQS } = require('@aws-sdk/client-sqs');
 
-const resource = require('../../lambdas/lib/dynamo/resource');
+const resource = require('../../lambdas/lib/dynamo/operations');
 
-const dynamo_resource = require('../../lambdas/lib/dynamo/resource');
+const dynamo_resource = require('../../lambdas/lib/dynamo/operations');
 const semaphore = require('../../lambdas/lib/dynamo/semaphore');
 
 const glue = new Glue();

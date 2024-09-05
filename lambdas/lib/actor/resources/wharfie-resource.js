@@ -41,7 +41,7 @@ const s3 = new S3({});
  * @property {string} [scheduleQueueArn] -
  * @property {string} [scheduleRoleArn] -
  * @property {string | function(): string} roleArn -
- * @property {string} resourceTable -
+ * @property {string} operationTable -
  * @property {string} dependencyTable -
  * @property {string} locationTable -
  * @property {boolean} [migrationResource] -
@@ -242,7 +242,7 @@ class WharfieResource extends BaseResourceGroup {
         },
         properties: {
           deployment: () => this.get('deployment'),
-          tableName: this.get('resourceTable'),
+          tableName: this.get('operationTable'),
           keyValue: this.get('resourceId'),
           keyName: 'resource_id',
           sortKeyValue: this.get('resourceId'),
