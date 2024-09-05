@@ -58,6 +58,8 @@ class EventSourceMapping extends BaseResource {
           if (existingMapping && existingMapping.UUID) {
             await this.destroyMapping(existingMapping.UUID);
           }
+          await this._reconcile();
+          return;
         }
         throw error;
       }

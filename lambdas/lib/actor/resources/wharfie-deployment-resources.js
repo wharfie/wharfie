@@ -67,7 +67,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         },
       },
     });
-    const resourceTable = new Table({
+    const operationTable = new Table({
       name: `${this.get('deployment').name}-operations`,
       properties: {
         deployment: () => this.get('deployment'),
@@ -317,7 +317,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     const actorPolicy = new Policy({
       name: `${this.get('deployment').name}-actor-policy`,
       dependsOn: [
-        resourceTable,
+        operationTable,
         locationTable,
         semaphoreTable,
         eventTable,
@@ -381,7 +381,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
                 'dynamodb:DeleteItem',
               ],
               Resource: [
-                resourceTable.get('arn'),
+                operationTable.get('arn'),
                 locationTable.get('arn'),
                 eventTable.get('arn'),
                 semaphoreTable.get('arn'),
@@ -487,7 +487,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
       dependsOn: [
         systemGlueDatabase,
         loggingResourceRole,
-        resourceTable,
+        operationTable,
         locationTable,
         dependencyTable,
         systemBucket,
@@ -536,7 +536,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         region: () => this.get('deployment').region,
         catalogId: () => this.get('deployment').accountId,
         roleArn: () => loggingResourceRole.get('arn'),
-        resourceTable: `${this.get('deployment').name}-resource`,
+        operationTable: `${this.get('deployment').name}-operations`,
         dependencyTable: `${this.get('deployment').name}-dependencies`,
         locationTable: `${this.get('deployment').name}-locations`,
         tags: [],
@@ -545,7 +545,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
 
     return [
       systemBucket,
-      resourceTable,
+      operationTable,
       locationTable,
       semaphoreTable,
       eventTable,

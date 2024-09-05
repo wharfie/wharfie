@@ -1875,6 +1875,7 @@ describe('deployment IaC', () => {
                   "locationTable": "test-deployment-locations",
                   "migrationResource": false,
                   "numberOfBuckets": 0,
+                  "operationTable": "test-deployment-operations",
                   "outputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
                   "outputLocation": "s3://test-deployment-bucket/logs/processed/",
                   "parameters": {
@@ -1903,7 +1904,6 @@ describe('deployment IaC', () => {
                   "region": "us-west-2",
                   "resourceId": "test-deployment.logs",
                   "resourceName": "logs",
-                  "resourceTable": "test-deployment-resource",
                   "roleArn": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-role",
                   "serdeInfo": {
                     "Parameters": {
@@ -2453,7 +2453,7 @@ describe('deployment IaC', () => {
                       "keyValue": "test-deployment.logs",
                       "sortKeyName": "sort_key",
                       "sortKeyValue": "test-deployment.logs",
-                      "tableName": "test-deployment-resource",
+                      "tableName": "test-deployment-operations",
                     },
                     "resourceType": "TableRecord",
                     "status": "STABLE",
