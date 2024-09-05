@@ -49,7 +49,7 @@ const maintain = async (path, environmentName) => {
 };
 
 exports.command = 'maintain [path]';
-exports.desc = 'maintain wharfie project changes';
+exports.desc = 'Maintain wharfie project changes';
 /**
  * @param {import('yargs').Argv} yargs -
  */

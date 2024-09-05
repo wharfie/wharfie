@@ -69,7 +69,7 @@ const init = async () => {
 };
 
 exports.command = 'init';
-exports.desc = 'init wharfie project';
+exports.desc = 'Initialize new wharfie project directory';
 /**
  * @param {import('yargs').Argv} yargs -
  */

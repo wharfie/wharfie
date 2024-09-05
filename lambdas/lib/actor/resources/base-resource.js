@@ -4,6 +4,7 @@ const Reconcilable = require('./reconcilable');
 const { putWithThroughputRetry, docClient } = require('../../dynamo/');
 
 const { isEqual } = require('es-toolkit');
+const jdf = require('jsondiffpatch');
 
 /**
  * @typedef BaseResourceOptions
@@ -87,12 +88,38 @@ class BaseResource extends Reconcilable {
    * @returns {boolean} -
    */
   checkPropertyEquality(other) {
-    for (const key in this.properties) {
+    const allKeys = new Set([
+      ...Object.keys(other),
+      ...Object.keys(this.properties),
+    ]);
+    for (const key of allKeys) {
       if (!this.assert(key, other[key])) {
         return false;
       }
     }
     return true;
+  }
+
+  /**
+   * @typedef PropertyDiff
+   * @property {any} old -
+   * @property {any} new -
+   * @property {jdf.Delta | undefined} delta -
+   */
+
+  /**
+   * @param {string} key -
+   * @param {any} otherValue -
+   * @returns {PropertyDiff} -
+   */
+  diffProperty(key, otherValue) {
+    const currentPropertyValue = this.get(key);
+    const resolvedOtherProperty = this._resolveProperty(otherValue);
+    return {
+      old: currentPropertyValue,
+      new: resolvedOtherProperty,
+      delta: jdf.diff(currentPropertyValue, resolvedOtherProperty),
+    };
   }
 
   /**
