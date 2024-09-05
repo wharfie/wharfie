@@ -45,6 +45,7 @@ const s3 = new S3({});
  * @property {string} dependencyTable -
  * @property {string} locationTable -
  * @property {boolean} [migrationResource] -
+ * @property {import('../../../../cli/project/typedefs').Model | import('../../../../cli/project/typedefs').Source} [userInput] -
  */
 
 /**

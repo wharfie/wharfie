@@ -149,7 +149,7 @@ const dev = async (projectPath, environmentName) => {
 };
 
 exports.command = 'dev [path]';
-exports.desc = 'dev server for wharfie project';
+exports.desc = 'Development server file watches for wharfie project';
 /**
  * @param {import('yargs').Argv} yargs -
  */
