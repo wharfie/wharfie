@@ -21,32 +21,32 @@ async function start(event, context, resource) {
 
   const action_graph = new OperationActionGraph();
   const start_action = new Action({
-    type: 'START',
+    type: Action.Type.START,
     id: event.action_id,
   });
   const register_partition_action = new Action({
-    type: 'REGISTER_PARTITION',
+    type: Action.Type.REGISTER_PARTITION,
   });
   const find_single_compaction_action = new Action({
-    type: 'RUN_SINGLE_COMPACTION',
+    type: Action.Type.RUN_SINGLE_COMPACTION,
   });
   const update_symlinks_action = new Action({
-    type: 'UPDATE_SYMLINKS',
+    type: Action.Type.UPDATE_SYMLINKS,
   });
   const finish_action = new Action({
-    type: 'FINISH',
+    type: Action.Type.FINISH,
   });
   const side_effect__cloudwatch = new Action({
-    type: 'SIDE_EFFECT__CLOUDWATCH',
+    type: Action.Type.SIDE_EFFECT__CLOUDWATCH,
   });
   const side_effect__dagster = new Action({
-    type: 'SIDE_EFFECT__DAGSTER',
+    type: Action.Type.SIDE_EFFECT__DAGSTER,
   });
   const side_effect__wharfie = new Action({
-    type: 'SIDE_EFFECT__WHARFIE',
+    type: Action.Type.SIDE_EFFECT__WHARFIE,
   });
   const side_effects_finish_action = new Action({
-    type: 'SIDE_EFFECTS__FINISH',
+    type: Action.Type.SIDE_EFFECTS__FINISH,
   });
   action_graph.addActions([
     start_action,
