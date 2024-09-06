@@ -39,9 +39,7 @@ const cancel = async (resource_id, operation_id, operation_type) => {
     const operationChunk = operations_to_remove.splice(0, 10);
     await Promise.all(
       // @ts-ignore
-      operationChunk.map((operation) =>
-        deleteOperation(operation.resource_id, operation.operation_id)
-      )
+      operationChunk.map((operation) => deleteOperation(operation))
     );
   }
   displaySuccess(`${operations_to_remove_count} operations cancelled`);
@@ -57,8 +55,8 @@ const cancel_all = async (operation_type) => {
     const resource_chunk = resources.splice(0, 10);
     await Promise.all(
       resource_chunk.map((resource) => {
-        displayInfo(`cancelling: ${resource.resource_id}`);
-        return cancel(resource.resource_id, undefined, operation_type);
+        displayInfo(`cancelling: ${resource.id}`);
+        return cancel(resource.id, undefined, operation_type);
       })
     );
   }

@@ -81,7 +81,7 @@
 
 /**
  * @typedef ActionProcessingOutput
- * @property {string} status -
+ * @property {import('./lib/graph/action').WharfieActionStatusEnum} status -
  * @property {any} [nextActionInputs] -
  */
 
@@ -118,14 +118,10 @@
 
 /**
  * @typedef DaemonConfig
- * @property {string} MaterializationPartitionQuery -
- * @property {string} Mode -
  * @property {string} Role -
- * @property {string} PrimaryKey -
- * @property {string} Schedule -
- * @property {string} Interval -
- * @property {DaemonConfigSLA} SLA -
- * @property {string[]} AlarmActions -
+ * @property {string} [Schedule] -
+ * @property {DaemonConfigSLA} [SLA] -
+ * @property {string[]} [AlarmActions] -
  */
 
 /**
@@ -157,7 +153,7 @@
  * @property {Column[]} columns -
  * @property {boolean} compressed -
  * @property {string} databaseName -
- * @property {string} description -
+ * @property {string} [description] -
  * @property {string} name -
  * @property {number} numberOfBuckets -
  * @property {Object<string,string>} parameters -
@@ -175,6 +171,7 @@
  */
 
 /**
+<<<<<<< HEAD
  * @typedef ResourceRecord
  * @property {string} resource_id - name of the resource
  * @property {string} resource_status -
@@ -221,6 +218,8 @@
  */
 
 /**
+=======
+>>>>>>> 509a3bd (Improved operation data model for better tracking)
  * @typedef ScheduledEventRecord
  * @property {string} resource_id -
  * @property {string} sort_key -

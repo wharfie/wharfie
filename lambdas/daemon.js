@@ -20,7 +20,7 @@ const { getResource } = require('./migrations/');
 const response = require('./lib/cloudformation/cfn-response');
 const { getImmutableID } = require('./lib/cloudformation/id');
 const { createId } = require('./lib/id');
-const { Action } = require('./lib/graph/');
+const { Action, Operation } = require('./lib/graph/');
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
 
@@ -31,62 +31,56 @@ const MAX_RETRIES = Number(process.env.MAX_RETRIES || 7);
 /**
  * @param {import('./typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('./typedefs').ResourceRecord} resource -
- * @param {import('./typedefs').OperationRecord?} operation -
+ * @param {import('./lib/graph/').Resource} resource -
+ * @param {Operation?} operation -
  * @returns {Promise<import('./typedefs').ActionProcessingOutput>} -
  */
 async function daemonRouter(event, context, resource, operation) {
   // START SPECIAL CASE
-  if (event.action_type === 'START') {
+  if (event.action_type === Action.Type.START) {
     switch (event.operation_type) {
-      case 'MAINTAIN':
+      case Operation.Type.MAINTAIN:
         return await maintain.start(event, context, resource);
-      case 'BACKFILL':
+      case Operation.Type.BACKFILL:
         return await backfill.start(event, context, resource);
-      case 'S3_EVENT':
+      case Operation.Type.S3_EVENT:
         return await s3_event.start(event, context, resource);
-      case 'MIGRATE':
+      case Operation.Type.MIGRATE:
         return await migrate.start(event, context, resource);
       default:
-        throw new Error(
-          "Invalid Operation, must be one of ['MAINTAIN', 'BACKFILL', 'S3_EVENT', 'MIGRATE]"
-        );
+        throw new Error(`Invalid Operation, must be one of ${Operation.Type}`);
     }
   }
   if (!operation)
     throw new Error(`No operation found for event: ${JSON.stringify(event)}`);
   // FINISH SPECIAL CASE
-  if (event.action_type === 'FINISH') {
+  if (event.action_type === Action.Type.FINISH) {
     switch (event.operation_type) {
-      case 'MAINTAIN':
+      case Operation.Type.MAINTAIN:
         return await maintain.finish(event, context, resource, operation);
-      case 'BACKFILL':
+      case Operation.Type.BACKFILL:
         return await backfill.finish(event, context, resource, operation);
-      case 'S3_EVENT':
+      case Operation.Type.S3_EVENT:
         return await s3_event.finish(event, context, resource, operation);
-      case 'MIGRATE':
+      case Operation.Type.MIGRATE:
         return await migrate.finish(event, context, resource, operation);
       default:
-        throw new Error(
-          "Invalid Operation, must be one of ['MAINTAIN', 'BACKFILL', 'S3_EVENT', 'MIGRATE]"
-        );
+        throw new Error(`Invalid Operation, must be one of ${Operation.Type}`);
     }
   }
 
   // OPERATION:ACTION ROUTING
   switch (event.operation_type) {
-    case 'MAINTAIN':
+    case Operation.Type.MAINTAIN:
       return await maintain.route(event, context, resource, operation);
-    case 'BACKFILL':
+    case Operation.Type.BACKFILL:
       return await backfill.route(event, context, resource, operation);
-    case 'S3_EVENT':
+    case Operation.Type.S3_EVENT:
       return await s3_event.route(event, context, resource, operation);
-    case 'MIGRATE':
+    case Operation.Type.MIGRATE:
       return await migrate.route(event, context, resource, operation);
     default:
-      throw new Error(
-        "Invalid Operation, must be one of ['MAINTAIN', 'BACKFILL', 'S3_EVENT', 'MIGRATE]"
-      );
+      throw new Error(`Invalid Operation, must be one of ${Operation.Type}`);
   }
 }
 
@@ -106,7 +100,7 @@ async function daemon(event, context) {
   const event_log = logging.getEventLogger(event, context);
   // _operation will be null when the action is START
   const _operation = await resource_db.getOperation(
-    resource.resource_id,
+    resource.id,
     event.operation_id
   );
 
@@ -147,48 +141,47 @@ async function daemon(event, context) {
   );
 
   const action = await resource_db.getAction(
-    resource.resource_id,
+    resource.id,
     event.operation_id,
     event.action_id
   );
   if (!action) throw new Error('action missing unexpectedly');
   const operation = await resource_db.getOperation(
-    resource.resource_id,
+    resource.id,
     event.operation_id
   );
   if (!operation) throw new Error('operation missing unexpectedly');
 
-  await resource_db.putAction(resource.resource_id, event.operation_id, {
-    action_id: action.action_id,
-    action_type: action.action_type,
-    action_status: action_output.status,
-  });
+  action.status = action_output.status;
+  await resource_db.putAction(action);
 
   if (action_output.status === 'COMPLETED') {
     event_log.info(
       `action ${event.operation_type}:${event.action_type} completed, equeueing next actions`
     );
     // START NEXT ACTIONS
-    const current_action = Action.fromRecord(action);
-    const next_actions =
-      operation.action_graph.getDownstreamActions(current_action) || [];
+    const current_action = action;
+    const next_action_ids =
+      operation.getDownstreamActionIds(current_action.id) || [];
     await Promise.all(
-      next_actions.map(async (action) => {
+      next_action_ids.map(async (action_id) => {
         if (
           !(await resource_db.checkActionPrerequisites(
             operation,
-            action.type,
+            current_action.type,
             event_log,
             false
           ))
         )
           return Promise.resolve();
         const updated_status = resource_db.updateActionStatus(
-          resource.resource_id,
-          operation.operation_id,
-          action.id,
-          'RUNNING',
-          'PENDING'
+          new Action({
+            id: action_id,
+            resource_id: resource.id,
+            operation_id: operation.id,
+            type: operation.getActionTypeById(action_id),
+          }),
+          Action.Status.RUNNING
         );
         if (!updated_status) {
           // status already in RUNNING state, caused by action graph with reduce pattern
@@ -196,11 +189,11 @@ async function daemon(event, context) {
         }
         await sqs.enqueue(
           {
-            operation_id: operation.operation_id,
-            operation_type: operation.operation_type,
-            action_id: action.id,
-            action_type: action.type,
-            resource_id: resource.resource_id,
+            operation_id: operation.id,
+            operation_type: operation.type,
+            action_id,
+            action_type: operation.getActionTypeById(action_id),
+            resource_id: resource.id,
             retries: 0,
             action_inputs: action_output.nextActionInputs || {},
           },
@@ -209,16 +202,13 @@ async function daemon(event, context) {
       })
     );
     if (
-      next_actions.length === 0 &&
-      operation.operation_status === 'COMPLETED'
+      next_action_ids.length === 0 &&
+      operation.status === Operation.Status.COMPLETED
     ) {
       event_log.info(
         `operation ${event.operation_type} completed, cleaning up...`
       );
-      await resource_db.deleteOperation(
-        resource.resource_id,
-        operation.operation_id
-      );
+      await resource_db.deleteOperation(operation);
     }
   }
 }
@@ -250,7 +240,7 @@ async function DLQ(event, context, err) {
 
   const event_log = logging.getEventLogger(event, context);
 
-  if (operation.operation_type === 'MIGRATE') {
+  if (operation.type === Operation.Type.MIGRATE) {
     event_log.error(
       `Migration action has expended its retries, marking update as failure and rolling back`,
       {
@@ -266,15 +256,24 @@ async function DLQ(event, context, err) {
     ...event,
   });
 
+  const action = await resource_db.getAction(
+    event.resource_id,
+    event.operation_id || '',
+    event.action_id
+  );
+  if (!action) {
+    event_log.warn(
+      'properties unexpectedly missing, maybe the action was deleted?'
+    );
+    return;
+  }
+  action.status = Action.Status.FAILED;
+
   await sqs.sendMessage({
     MessageBody: JSON.stringify(event),
     QueueUrl: DLQ_URL,
   });
-  await resource_db.putAction(resource.resource_id, operation.operation_id, {
-    action_id: event.action_id,
-    action_type: event.action_type,
-    action_status: 'FAILED',
-  });
+  await resource_db.putAction(action);
 
   if (
     !resource.daemon_config.AlarmActions ||

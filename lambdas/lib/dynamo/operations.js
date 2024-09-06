@@ -1,8 +1,9 @@
-// @ts-nocheck
 'use strict';
 const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const { DynamoDB } = require('@aws-sdk/client-dynamodb');
-const { OperationActionGraph } = require('../graph');
+const {
+  DynamoDB,
+  ConditionalCheckFailedException,
+} = require('@aws-sdk/client-dynamodb');
 const { createId } = require('../id');
 const { query, batchWrite } = require('.');
 const STS = require('../sts');
@@ -11,6 +12,7 @@ const Athena = require('../athena');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 
 const BaseAWS = require('../base');
+const { Operation, Action, Query, Resource } = require('../graph');
 
 const credentials = fromNodeProviderChain();
 const docClient = DynamoDBDocument.from(
@@ -26,32 +28,19 @@ const docClient = DynamoDBDocument.from(
 const OPERATIONS_TABLE = process.env.OPERATIONS_TABLE || '';
 
 /**
- * @param {import('../../typedefs').ResourceRecord} resource -
+ * @param {Resource} resource -
  */
 async function putResource(resource) {
   await docClient.put({
     TableName: OPERATIONS_TABLE,
-    Item: {
-      resource_id: resource.resource_id,
-      sort_key: resource.resource_id,
-      data: {
-        resource_arn: resource.resource_arn,
-        athena_workgroup: resource.athena_workgroup,
-        daemon_config: resource.daemon_config,
-        source_properties: resource.source_properties,
-        destination_properties: resource.destination_properties,
-        wharfie_version: resource.wharfie_version,
-        region: resource.region,
-        source_region: resource.source_region,
-      },
-    },
+    Item: resource.toRecord(),
     ReturnValues: 'NONE',
   });
 }
 
 /**
  * @param {string} resource_id -
- * @returns {Promise<import('../../typedefs').ResourceRecord?>} - event
+ * @returns {Promise<Resource?>} -
  */
 async function getResource(resource_id) {
   const { Items } = await query({
@@ -60,20 +49,19 @@ async function getResource(resource_id) {
     KeyConditionExpression:
       'resource_id = :resource_id AND sort_key = :resource_id',
     ExpressionAttributeValues: {
+      // @ts-ignore
       ':resource_id': resource_id,
     },
   });
   if (!Items || Items.length === 0) return null;
-  return {
-    resource_id,
-    ...Items[0].data,
-  };
+  // @ts-ignore
+  return Resource.fromRecord(Items[0]);
 }
 
 /**
- * @param {string} resource_id -
+ * @param {Resource} resource -
  */
-async function deleteResource(resource_id) {
+async function deleteResource(resource) {
   const { Items } = await query({
     TableName: OPERATIONS_TABLE,
     ProjectionExpression: 'resource_id, sort_key',
@@ -81,7 +69,8 @@ async function deleteResource(resource_id) {
     KeyConditionExpression:
       'resource_id = :resource_id AND begins_with(sort_key, :resource_id)',
     ExpressionAttributeValues: {
-      ':resource_id': resource_id,
+      // @ts-ignore
+      ':resource_id': resource.id,
     },
   });
   if (!Items || Items.length === 0) return;
@@ -98,38 +87,13 @@ async function deleteResource(resource_id) {
 }
 
 /**
- * @param {import('../../typedefs').OperationRecord} operation -
+ * @param {Operation} operation -
  */
-async function createOperation(operation) {
-  const putItems = [
-    {
-      resource_id: operation.resource_id,
-      sort_key: `${operation.resource_id}#${operation.operation_id}`,
-      data: {
-        resource_id: operation.resource_id,
-        operation_id: operation.operation_id,
-        operation_type: operation.operation_type,
-        operation_status: operation.operation_status,
-        operation_config: operation.operation_config,
-        operation_inputs: operation.operation_inputs,
-        action_graph: operation.action_graph.serialize(),
-        started_at: operation.started_at,
-        last_updated_at: operation.last_updated_at,
-      },
-    },
-    ...(operation.actions || []).map((action) => ({
-      resource_id: operation.resource_id,
-      sort_key: `${operation.resource_id}#${operation.operation_id}#${action.action_id}`,
-      data: {
-        action_id: action.action_id,
-        action_type: action.action_type,
-        action_status: action.action_status,
-      },
-    })),
-  ];
-
+async function putOperation(operation) {
+  const putItems = operation.toRecords();
   while (putItems.length > 0)
     await batchWrite({
+      // @ts-ignore
       RequestItems: {
         [OPERATIONS_TABLE]: putItems.splice(0, 25).map((Item) => ({
           PutRequest: {
@@ -143,7 +107,7 @@ async function createOperation(operation) {
 /**
  * @param {string} resource_id -
  * @param {string} operation_id -
- * @returns {Promise<import('../../typedefs').OperationRecord?>} -
+ * @returns {Promise<Operation?>} -
  */
 async function getOperation(resource_id, operation_id) {
   const { Items } = await query({
@@ -152,18 +116,15 @@ async function getOperation(resource_id, operation_id) {
     KeyConditionExpression:
       'resource_id = :resource_id AND sort_key = :sort_key',
     ExpressionAttributeValues: {
+      // @ts-ignore
       ':resource_id': resource_id,
+      // @ts-ignore
       ':sort_key': `${resource_id}#${operation_id}`,
     },
   });
   if (!Items || Items.length === 0) return null;
-
-  return {
-    ...Items[0].data,
-    action_graph: OperationActionGraph.deserialize(Items[0].data.action_graph),
-    started_at: Number(Items[0].data.started_at || 0),
-    last_updated_at: Number(Items[0].data.last_updated_at || 0),
-  };
+  // @ts-ignore
+  return Operation.fromRecord(Items[0]);
 }
 
 /**
@@ -171,7 +132,7 @@ async function getOperation(resource_id, operation_id) {
  * @param {string} operation_id -
  * @param {string} action_id -
  * @param {string} query_id -
- * @returns {Promise<import('../../typedefs').QueryRecord?>} -
+ * @returns {Promise<Query?>} -
  */
 async function getQuery(resource_id, operation_id, action_id, query_id) {
   const { Items } = await query({
@@ -180,22 +141,22 @@ async function getQuery(resource_id, operation_id, action_id, query_id) {
     KeyConditionExpression:
       'resource_id = :resource_id AND sort_key = :sort_key',
     ExpressionAttributeValues: {
+      // @ts-ignore
       ':resource_id': resource_id,
+      // @ts-ignore
       ':sort_key': `${resource_id}#${operation_id}#${action_id}#${query_id}`,
     },
   });
   if (!Items || Items.length === 0) return null;
-  return {
-    ...Items[0].data,
-    last_updated_at: Number(Items[0].data.last_updated_at || 0),
-  };
+  // @ts-ignore
+  return Query.fromRecord(Items[0]);
 }
 
 /**
  * @param {string} resource_id -
  * @param {string} operation_id -
  * @param {string} action_id -
- * @returns {Promise<import('../../typedefs').QueryRecord[]>} -
+ * @returns {Promise<Query[]>} -
  */
 async function getQueries(resource_id, operation_id, action_id) {
   const { Items } = await query({
@@ -204,22 +165,49 @@ async function getQueries(resource_id, operation_id, action_id) {
     KeyConditionExpression:
       'resource_id = :resource_id AND begins_with(sort_key, :sort_key)',
     ExpressionAttributeValues: {
+      // @ts-ignore
       ':resource_id': resource_id,
+      // @ts-ignore
       ':sort_key': `${resource_id}#${operation_id}#${action_id}#`,
     },
   });
   if (!Items || Items.length === 0) return [];
-  return Items.map((item) => ({
-    ...item.data,
-    last_updated_at: Number(item.data.last_updated_at || 0),
-  }));
+  // @ts-ignore
+  return Items.map(Query.fromRecord);
+}
+
+/**
+ * @param {Operation} operation -
+ * @returns {Promise<Action[]>} -
+ */
+async function getActions(operation) {
+  const { Items } = await query({
+    TableName: OPERATIONS_TABLE,
+    ConsistentRead: true,
+    KeyConditionExpression:
+      'resource_id = :resource_id AND sort_key = :sort_key',
+    ExpressionAttributeValues: {
+      // @ts-ignore
+      ':resource_id': operation.resource_id,
+      // @ts-ignore
+      ':sort_key': `${operation.resource_id}#${operation.id}#`,
+    },
+  });
+  if (!Items || Items.length === 0) return [];
+  // todo: use a less than key condition to filter out all queries that will have ids
+  // longer than what an action's sortkey could possibly be
+  return Items.filter(
+    // @ts-ignore
+    (item) => item?.data?.record_type === Action.RecordType
+    // @ts-ignore
+  ).map(Action.fromRecord);
 }
 
 /**
  * @param {string} resource_id -
  * @param {string} operation_id -
  * @param {string} action_id -
- * @returns {Promise<import('../../typedefs').ActionRecord?>} -
+ * @returns {Promise<Action?>} -
  */
 async function getAction(resource_id, operation_id, action_id) {
   const { Items } = await query({
@@ -228,120 +216,62 @@ async function getAction(resource_id, operation_id, action_id) {
     KeyConditionExpression:
       'resource_id = :resource_id AND sort_key = :sort_key',
     ExpressionAttributeValues: {
+      // @ts-ignore
       ':resource_id': resource_id,
+      // @ts-ignore
       ':sort_key': `${resource_id}#${operation_id}#${action_id}`,
     },
   });
   if (!Items || Items.length === 0) return null;
-  return Items[0].data;
+  // @ts-ignore
+  return Action.fromRecord(Items[0]);
 }
 
 /**
- * @param {string} resource_id -
- * @param {string} operation_id -
- * @param {string} action_id -
- * @returns {Promise<import('../../typedefs').QueryRecord[] | null>} -
+ * @param {Action} action -
  */
-async function getActionQueries(resource_id, operation_id, action_id) {
-  const { Items } = await query({
-    TableName: OPERATIONS_TABLE,
-    ExpressionAttributeNames: { '#data': 'data' },
-    ProjectionExpression:
-      'resource_id, sort_key, #data.query_id, #data.query_execution_id, #data.query_status',
-    ConsistentRead: true,
-    KeyConditionExpression:
-      'resource_id = :resource_id AND begins_with(sort_key, :sort_key)',
-    ExpressionAttributeValues: {
-      ':resource_id': resource_id,
-      ':sort_key': `${resource_id}#${operation_id}#${action_id}#`,
-    },
-  });
-  if (!Items || Items.length === 0) return null;
-  return Items.map(({ data }) => data);
-}
-
-/**
- * @param {string} resource_id -
- * @param {import('../../typedefs').OperationRecord} operation -
- */
-async function putOperation(resource_id, operation) {
-  await docClient.put({
-    TableName: OPERATIONS_TABLE,
-    Item: {
-      resource_id,
-      sort_key: `${resource_id}#${operation.operation_id}`,
-      data: {
-        resource_id,
-        operation_id: operation.operation_id,
-        operation_type: operation.operation_type,
-        operation_status: operation.operation_status,
-        operation_config: operation.operation_config,
-        operation_inputs: operation.operation_inputs,
-        action_graph: operation.action_graph.serialize(),
-        started_at: operation.started_at,
-        last_updated_at: operation.last_updated_at,
+async function putAction(action) {
+  const putItems = action.toRecords();
+  while (putItems.length > 0)
+    await batchWrite({
+      // @ts-ignore
+      RequestItems: {
+        [OPERATIONS_TABLE]: putItems.splice(0, 25).map((Item) => ({
+          PutRequest: {
+            Item,
+          },
+        })),
       },
-    },
-  });
+    });
 }
 
 /**
- * @param {string} resource_id -
- * @param {string} operation_id -
- * @param {import('../../typedefs').ActionRecord} action -
- */
-async function putAction(resource_id, operation_id, action) {
-  await docClient.put({
-    TableName: OPERATIONS_TABLE,
-    Item: {
-      resource_id,
-      sort_key: `${resource_id}#${operation_id}#${action.action_id}`,
-      data: {
-        action_id: action.action_id,
-        action_type: action.action_type,
-        action_status: action.action_status,
-      },
-    },
-  });
-}
-
-/**
- * @param {string} resource_id -
- * @param {string} operation_id -
- * @param {string} action_id -
- * @param {string} new_status -
- * @param {string} old_status -
+ * @param {Action} action -
+ * @param {import('../graph/action').WharfieActionStatusEnum} new_status -
  * @returns {Promise<boolean>} -
  */
-async function updateActionStatus(
-  resource_id,
-  operation_id,
-  action_id,
-  new_status,
-  old_status
-) {
+async function updateActionStatus(action, new_status) {
   try {
     await docClient.update({
       TableName: OPERATIONS_TABLE,
       Key: {
-        resource_id,
-        sort_key: `${resource_id}#${operation_id}#${action_id}`,
+        resource_id: action.resource_id,
+        sort_key: `${action.resource_id}#${action.operation_id}#${action.id}`,
       },
-      UpdateExpression: 'SET #data.#action_status = :new_status',
+      UpdateExpression: 'SET #data.#status = :new_status',
       ExpressionAttributeNames: {
         '#data': 'data',
-        '#action_status': 'action_status',
+        '#status': 'status',
       },
-      ConditionExpression: '#data.#action_status = :old_status',
+      ConditionExpression: '#data.#status = :old_status',
       ExpressionAttributeValues: {
         ':new_status': new_status,
-        ':old_status': old_status,
+        ':old_status': action.status,
       },
       ReturnValues: 'NONE',
     });
   } catch (error) {
-    // @ts-ignore
-    if (error && error.name === 'ConditionalCheckFailedException') {
+    if (error instanceof ConditionalCheckFailedException) {
       return false;
     }
     throw error;
@@ -350,52 +280,28 @@ async function updateActionStatus(
 }
 
 /**
- * @param {string} resource_id -
- * @param {string} operation_id -
- * @param {string} action_id -
- * @param {import('../../typedefs').QueryRecord} query -
+ * @param {Query} query -
  */
-async function putQuery(resource_id, operation_id, action_id, query) {
+async function putQuery(query) {
+  const putItem = query.toRecord();
   await docClient.put({
     TableName: OPERATIONS_TABLE,
-    Item: {
-      resource_id,
-      sort_key: `${resource_id}#${operation_id}#${action_id}#${query.query_id}`,
-      data: {
-        last_updated_at: Date.now(),
-        query_id: query.query_id,
-        query_status: query.query_status,
-        query_execution_id: query.query_execution_id,
-        query_data: query.query_data,
-      },
-    },
+    Item: putItem,
   });
 }
 
 /**
- * @param {string} resource_id -
- * @param {string} operation_id -
- * @param {string} action_id -
- * @param {import('../../typedefs').QueryRecord[]} queries -
+ * @param {Query[]} queries -
  */
-async function putQueries(resource_id, operation_id, action_id, queries) {
-  const _queries = [...queries];
-  while (_queries.length > 0)
+async function putQueries(queries) {
+  const putItems = queries.map((query) => query.toRecord());
+  while (putItems.length > 0)
     await batchWrite({
+      // @ts-ignore
       RequestItems: {
-        [OPERATIONS_TABLE]: _queries.splice(0, 25).map((query) => ({
+        [OPERATIONS_TABLE]: putItems.splice(0, 25).map((Item) => ({
           PutRequest: {
-            Item: {
-              resource_id,
-              sort_key: `${resource_id}#${operation_id}#${action_id}#${query.query_id}`,
-              data: {
-                last_updated_at: Date.now(),
-                query_id: query.query_id,
-                query_status: query.query_status,
-                query_execution_id: query.query_execution_id,
-                query_data: query.query_data,
-              },
-            },
+            Item,
           },
         })),
       },
@@ -403,10 +309,9 @@ async function putQueries(resource_id, operation_id, action_id, queries) {
 }
 
 /**
- * @param {string} resource_id -
- * @param {string} operation_id -
+ * @param {Operation} operation -
  */
-async function deleteOperation(resource_id, operation_id) {
+async function deleteOperation(operation) {
   const { Items } = await query({
     TableName: OPERATIONS_TABLE,
     ProjectionExpression: 'resource_id, sort_key',
@@ -414,8 +319,10 @@ async function deleteOperation(resource_id, operation_id) {
     KeyConditionExpression:
       'resource_id = :resource_id AND begins_with(sort_key, :sort_key)',
     ExpressionAttributeValues: {
-      ':resource_id': resource_id,
-      ':sort_key': `${resource_id}#${operation_id}`,
+      // @ts-ignore
+      ':resource_id': operation.resource_id,
+      // @ts-ignore
+      ':sort_key': `${operation.resource_id}#${operation.id}`,
     },
   });
   if (!Items || Items.length === 0) return;
@@ -433,7 +340,7 @@ async function deleteOperation(resource_id, operation_id) {
 
 /**
  * @param {string} query_execution_id -
- * @param {import('winston').Logger?} logger -
+ * @param {import('../logging/logger')?} logger -
  */
 async function checkForStaleQuery(query_execution_id, logger) {
   const sts = new STS({ region: process.env.AWS_REGION });
@@ -484,7 +391,7 @@ async function checkForStaleQuery(query_execution_id, logger) {
         };
         await sqs.enqueue(
           synthetic_athena_event,
-          process.env.MONITOR_QUEUE_URL,
+          process.env.MONITOR_QUEUE_URL || '',
           0
         );
       }
@@ -498,9 +405,9 @@ async function checkForStaleQuery(query_execution_id, logger) {
 }
 
 /**
- * @param {import('../../typedefs').OperationRecord} operation -
- * @param {string} action_type -
- * @param {import('../logging/logger').Logger?} logger -
+ * @param {Operation} operation -
+ * @param {import('../graph/action').WharfieActionTypeEnum} action_type -
+ * @param {import('../logging/logger')?} logger -
  * @param {boolean} includeQueries -
  * @returns {Promise<boolean>} -
  */
@@ -510,84 +417,108 @@ async function checkActionPrerequisites(
   logger,
   includeQueries = true
 ) {
-  const action_to_check = operation.action_graph.getActionByType(action_type);
-  const prerequisite_actions =
-    operation.action_graph.getUpstreamActions(action_to_check) || [];
+  const action_id_to_check = operation.getActionIdByType(action_type);
+  const prerequisite_action_ids =
+    operation.getUpstreamActionIds(action_id_to_check) || [];
   logger &&
     logger.debug(
       `checking that prerequisite actions are completed ${JSON.stringify(
-        prerequisite_actions
+        prerequisite_action_ids
       )}`
     );
   let prerequisites_met = true;
-  while (prerequisite_actions.length > 0) {
-    const action = prerequisite_actions.pop();
-    if (!action) continue;
+  while (prerequisite_action_ids.length > 0) {
+    const action_id = prerequisite_action_ids.pop();
+    if (!action_id) continue;
     const { Items } = await query({
       TableName: OPERATIONS_TABLE,
       ConsistentRead: true,
       KeyConditionExpression:
         'resource_id = :resource_id AND begins_with(sort_key, :sort_key)',
       ExpressionAttributeValues: {
+        // @ts-ignore
         ':resource_id': operation.resource_id,
-        ':sort_key': `${operation.resource_id}#${operation.operation_id}#${action.id}`,
+        // @ts-ignore
+        ':sort_key': `${operation.resource_id}#${operation.id}#${action_id}`,
       },
     });
     const incompleteQueries = [];
-    while ((Items || []).length > 0) {
-      const { data } = (Items || []).pop() || {};
-      if (data.action_status && data.action_status !== 'COMPLETED') {
-        logger &&
-          logger.info(
-            `prerequisite action ${operation.operation_type}:${data.action_type} hasn't finished running yet`
-          );
-        prerequisites_met = false;
-      }
-      if (data.action_status && data.action_status === 'FAILED') {
-        throw new Error(
-          `prerequisite action ${operation.operation_type}:${data.action_type} failed`
-        );
-      }
-      if (
-        includeQueries &&
-        data.query_status &&
-        data.query_status !== 'COMPLETED'
-      ) {
-        incompleteQueries.push(data.query_id);
-        logger &&
-          logger.debug(`incomplete prerequisite query ${JSON.stringify(data)}`);
-        prerequisites_met = false;
-      }
-      if (
-        includeQueries &&
-        data.query_status &&
-        data.query_status === 'FAILED'
-      ) {
-        throw new Error(`prerequisite query failed ${JSON.stringify(data)}`);
-      }
-      if (
-        includeQueries &&
-        data.query_execution_id &&
-        data.query_status &&
-        data.query_status === 'RUNNING' &&
-        Date.now() - Number(data.last_updated_at || 0) > 55 * 60 * 1000
-      ) {
-        await checkForStaleQuery(data.query_execution_id, logger);
+    if (!Items) return true;
+    while (Items.length > 0) {
+      const _item = Items.pop();
+      if (!_item) continue;
+      const { data } = _item;
+      // @ts-ignore
+      switch (data.record_type) {
+        case Action.RecordType:
+          // @ts-ignore
+          if (data.status !== Action.Status.COMPLETED) {
+            logger &&
+              logger.info(
+                // @ts-ignore
+                `prerequisite action ${operation.type}:${data.type} hasn't finished running yet`
+              );
+            prerequisites_met = false;
+          }
+          // @ts-ignore
+          if (data.status === Action.Status.FAILED) {
+            throw new Error(
+              // @ts-ignore
+              `prerequisite action ${operation.type}:${data.type} failed`
+            );
+          }
+          break;
+        case Query.RecordType:
+          if (
+            includeQueries &&
+            // @ts-ignore
+            data.status !== Query.Status.COMPLETED
+          ) {
+            // @ts-ignore
+            incompleteQueries.push(data.id);
+            logger &&
+              logger.debug(
+                `incomplete prerequisite query ${JSON.stringify(data)}`
+              );
+            prerequisites_met = false;
+          }
+          if (
+            includeQueries &&
+            // @ts-ignore
+            data.status === Query.Status.FAILED
+          ) {
+            throw new Error(
+              `prerequisite query failed ${JSON.stringify(data)}`
+            );
+          }
+          if (
+            includeQueries &&
+            // @ts-ignore
+            data.execution_id &&
+            // @ts-ignore
+            data.status === Query.Status.RUNNING &&
+            // @ts-ignore
+            Date.now() - Number(data.last_updated_at || 0) > 55 * 60 * 1000
+          ) {
+            // @ts-ignore
+            await checkForStaleQuery(data.execution_id, logger);
+          }
+          break;
       }
     }
     incompleteQueries.length > 0 &&
       logger &&
       logger.info(
-        `prerequisite action ${operation.operation_type}:${action_type} has ${incompleteQueries.length} incomplete queries`
+        `prerequisite action ${operation.type}:${action_type} has ${incompleteQueries.length} incomplete queries`
       );
   }
   return prerequisites_met;
 }
 /**
  * @typedef getRecordsReturn
- * @property {import('../../typedefs').OperationRecord[]} operations -
- * @property {import('../../typedefs').ActionRecord[]} actions -
- * @property {import('../../typedefs').QueryRecord[]} queries -
+ * @property {Operation[]} operations -
+ * @property {Action[]} actions -
+ * @property {Query[]} queries -
  */
 
 /**
@@ -602,7 +533,9 @@ async function getRecords(resource_id, operation_id = '') {
     KeyConditionExpression:
       'resource_id = :resource_id AND begins_with(sort_key, :sort_key)',
     ExpressionAttributeValues: {
+      // @ts-ignore
       ':resource_id': resource_id,
+      // @ts-ignore
       ':sort_key': `${resource_id}#${operation_id}`,
     },
   });
@@ -614,25 +547,45 @@ async function getRecords(resource_id, operation_id = '') {
   };
   if (!Items) return records;
   Items.forEach((item) => {
-    if (item.data.operation_type) records.operations.push(item.data);
-    if (item.data.action_id) records.actions.push(item.data);
-    if (item.data.query_id) records.queries.push(item.data);
+    switch (item.record_type) {
+      // @ts-ignore
+      case Operation.RecordType:
+        // @ts-ignore
+        records.operations.push(Operation.fromRecord(item));
+        break;
+      // @ts-ignore
+      case Action.RecordType:
+        // @ts-ignore
+        records.actions.push(Action.fromRecord(item));
+        break;
+      // @ts-ignore
+      case Query.RecordType:
+        // @ts-ignore
+        records.queries.push(Query.fromRecord(item));
+        break;
+      default:
+        throw new Error(
+          `unrecognized record_type ${item.record_type} , in record ${item}`
+        );
+    }
   });
   return records;
 }
 
 /**
- * @returns {Promise<import('../../typedefs').OperationRecord[]>} -
+ * @returns {Promise<Operation[]>} -
  */
 async function getAllOperations() {
   let response = await docClient.scan({
     TableName: OPERATIONS_TABLE,
     ConsistentRead: true,
   });
-  /** @type {import('../../typedefs').OperationRecord[]} */
+  /** @type {Operation[]} */
   const operations = [];
   (response.Items || []).forEach((item) => {
-    if (item.data.operation_type) operations.push(item.data);
+    if (item.data.record_type === 'OPERATION')
+      // @ts-ignore
+      operations.push(Operation.fromRecord(item));
   });
 
   while (response.LastEvaluatedKey) {
@@ -642,7 +595,9 @@ async function getAllOperations() {
       ExclusiveStartKey: response.LastEvaluatedKey,
     });
     (response.Items || []).forEach((item) => {
-      if (item.data.operation_type) operations.push(item.data);
+      if (item.data.record_type === 'OPERATION')
+        // @ts-ignore
+        operations.push(Operation.fromRecord(item));
     });
   }
 
@@ -650,21 +605,19 @@ async function getAllOperations() {
 }
 
 /**
- * @returns {Promise<import('../../typedefs').ResourceRecord[]>} -
+ * @returns {Promise<Resource[]>} -
  */
 async function getAllResources() {
   let response = await docClient.scan({
     TableName: OPERATIONS_TABLE,
     ConsistentRead: true,
   });
-  /** @type {import('../../typedefs').ResourceRecord[]} */
+  /** @type {Resource[]} */
   const resources = [];
   (response.Items || []).forEach((item) => {
-    if (item.data.resource_status) {
-      resources.push({
-        ...item.data,
-        resource_id: item.resource_id,
-      });
+    if (item.data.record_type === Resource.RecordType) {
+      // @ts-ignore
+      resources.push(Resource.fromRecord(item));
     }
   });
 
@@ -675,11 +628,9 @@ async function getAllResources() {
       ExclusiveStartKey: response.LastEvaluatedKey,
     });
     (response.Items || []).forEach((item) => {
-      if (item.data.resource_status) {
-        resources.push({
-          ...item.data,
-          resource_id: item.resource_id,
-        });
+      if (item.data.record_type === Resource.RecordType) {
+        // @ts-ignore
+        resources.push(Resource.fromRecord(item));
       }
     });
   }
@@ -687,15 +638,29 @@ async function getAllResources() {
   return resources;
 }
 
+/**
+ * @param {Object.<string, import('../graph/typedefs').ResourceRecordData | import('../graph/typedefs').OperationRecordData | import('../graph/typedefs').ActionRecordData | import('../graph/typedefs').QueryRecordData >} state -
+ */
+function __setMockState(state = {}) {
+  throw new Error('stub for mock typechecking');
+}
+
+/**
+ * @returns {Object.<string, import('../graph/typedefs').ResourceRecordData | import('../graph/typedefs').OperationRecordData | import('../graph/typedefs').ActionRecordData | import('../graph/typedefs').QueryRecordData >} -
+ */
+function __getMockState() {
+  throw new Error('stub for mock typechecking');
+  // eslint-disable-next-line no-unreachable
+  return {};
+}
 module.exports = {
-  createOperation,
   getRecords,
   getAllOperations,
   getAllResources,
   getResource,
   getOperation,
+  getActions,
   getAction,
-  getActionQueries,
   getQuery,
   getQueries,
   checkActionPrerequisites,
@@ -707,4 +672,6 @@ module.exports = {
   putQueries,
   deleteResource,
   deleteOperation,
+  __getMockState,
+  __setMockState,
 };

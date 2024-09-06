@@ -1,4 +1,5 @@
 'use strict';
+const { Resource } = require('../../lib/graph/');
 
 const logging = require('../../lib/logging');
 const Glue = require('../../lib/glue');
@@ -8,7 +9,7 @@ const STS = require('../../lib/sts');
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
+ * @param {Resource} resource -
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function run(event, context, resource) {

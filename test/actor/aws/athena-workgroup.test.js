@@ -1,13 +1,14 @@
 /* eslint-disable jest/no-large-snapshots */
 'use strict';
 
-process.env.AWS_MOCKS = true;
+process.env.AWS_MOCKS = '1';
 const { Athena } = jest.requireMock('@aws-sdk/client-athena');
 
 const {
   AthenaWorkGroup,
 } = require('../../../lambdas/lib/actor/resources/aws/');
 const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
+const { getMockDeploymentProperties } = require('../util');
 
 describe('athena workgroup IaC', () => {
   it('basic', async () => {
@@ -15,6 +16,11 @@ describe('athena workgroup IaC', () => {
     const athena = new Athena({});
     const workgroup = new AthenaWorkGroup({
       name: 'test-workgroup',
+      properties: {
+        deployment: getMockDeploymentProperties(),
+        outputLocation: 's3://test-bucket/test-prefix/',
+        description: 'test-description',
+      },
     });
     await workgroup.reconcile();
 
@@ -23,7 +29,24 @@ describe('athena workgroup IaC', () => {
       {
         "dependsOn": [],
         "name": "test-workgroup",
-        "properties": {},
+        "properties": {
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
+          "description": "test-description",
+          "outputLocation": "s3://test-bucket/test-prefix/",
+        },
         "resourceType": "AthenaWorkGroup",
         "status": "STABLE",
       }
@@ -58,7 +81,24 @@ describe('athena workgroup IaC', () => {
         },
         "dependsOn": [],
         "name": "test-workgroup",
-        "properties": {},
+        "properties": {
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
+          "description": "test-description",
+          "outputLocation": "s3://test-bucket/test-prefix/",
+        },
         "resourceType": "AthenaWorkGroup",
         "status": "STABLE",
       }
@@ -81,10 +121,10 @@ describe('athena workgroup IaC', () => {
             "EncryptionConfiguration": {
               "EncryptionOption": "SSE_S3",
             },
-            "OutputLocation": undefined,
+            "OutputLocation": "s3://test-bucket/test-prefix/",
           },
         },
-        "Description": undefined,
+        "Description": "test-description",
         "Name": "test-workgroup",
         "Tags": undefined,
         "queries": {},

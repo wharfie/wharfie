@@ -1,13 +1,14 @@
 /* eslint-disable jest/no-large-snapshots */
 'use strict';
 
-process.env.AWS_MOCKS = true;
+process.env.AWS_MOCKS = '1';
 const {
   AutoscalingPolicy,
 } = require('../../../lambdas/lib/actor/resources/aws/');
 const ApplicationAutoScaling = jest.requireMock(
   '@aws-sdk/client-application-auto-scaling'
 );
+const { getMockDeploymentProperties } = require('../util');
 
 const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
 
@@ -19,6 +20,7 @@ describe('autoscaling policy IaC', () => {
     const autoscalingPolicy = new AutoscalingPolicy({
       name: 'test-rule',
       properties: {
+        deployment: getMockDeploymentProperties(),
         resourceId: `table/dynamotable`,
         serviceNamespace: ApplicationAutoScaling.ServiceNamespace.DYNAMODB,
         policyType: ApplicationAutoScaling.PolicyType.TargetTrackingScaling,
@@ -41,6 +43,20 @@ describe('autoscaling policy IaC', () => {
         "dependsOn": [],
         "name": "test-rule",
         "properties": {
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
           "policyType": "TargetTrackingScaling",
           "resourceId": "table/dynamotable",
           "scalableDimension": "dynamodb:table:ReadCapacityUnits",
@@ -73,6 +89,20 @@ describe('autoscaling policy IaC', () => {
         "dependsOn": [],
         "name": "test-rule",
         "properties": {
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
           "policyType": "TargetTrackingScaling",
           "resourceId": "table/dynamotable",
           "scalableDimension": "dynamodb:table:ReadCapacityUnits",

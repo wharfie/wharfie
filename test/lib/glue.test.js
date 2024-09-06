@@ -1,5 +1,6 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
+
 const AWS = require('@aws-sdk/client-glue');
 const Glue = require('../../lambdas/lib/glue');
 

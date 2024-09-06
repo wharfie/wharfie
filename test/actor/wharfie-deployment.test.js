@@ -2,7 +2,7 @@
 /* eslint-disable jest/no-large-snapshots */
 'use strict';
 
-process.env.AWS_MOCKS = true;
+process.env.AWS_MOCKS = '1';
 jest.mock('crypto');
 
 // eslint-disable-next-line jest/no-untyped-mock-factory
@@ -18,6 +18,7 @@ describe('deployment IaC', () => {
   beforeAll(() => {
     const mockUpdate = jest.fn().mockReturnThis();
     const mockDigest = jest.fn().mockReturnValue('mockedHash');
+    // @ts-ignore
     crypto.createHash.mockReturnValue({
       update: mockUpdate,
       digest: mockDigest,
@@ -3097,6 +3098,7 @@ describe('deployment IaC', () => {
     `);
     const deserialized = deserialize(serialized);
     await deserialized.reconcile();
+    // @ts-ignore
     expect(deserialized.properties).toMatchInlineSnapshot(`
       {
         "_INTERNAL_STATE_RESOURCE": true,

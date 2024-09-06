@@ -3,6 +3,7 @@ const AWS = require('@aws-sdk/client-glue');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 
 const BaseAWS = require('./base');
+const { Resource } = require('./graph/');
 
 class Glue {
   /**
@@ -373,7 +374,7 @@ class Glue {
   }
 
   /**
-   * @param {import('../typedefs').ResourceRecord} resource - database to clone table into
+   * @param {Resource} resource - database to clone table into
    * @param {import("@aws-sdk/client-glue").GetTableRequest} params - params for getTable request
    * @param {string} databaseName - database to clone table into
    * @param {string} tableName - name of cloned table

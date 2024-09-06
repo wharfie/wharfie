@@ -1,5 +1,6 @@
 'use strict';
 
+const { Operation, Resource } = require('../../lib/graph/');
 const { createId } = require('../../lib/id');
 const logging = require('../../lib/logging');
 const Athena = require('../../lib/athena');
@@ -13,8 +14,8 @@ const TEMPORARY_GLUE_DATABASE = process.env.TEMPORARY_GLUE_DATABASE || '';
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
- * @param {import('../../typedefs').OperationRecord} operation -
+ * @param {Resource} resource -
+ * @param {Operation} operation -
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function run(event, context, resource, operation) {
@@ -32,10 +33,7 @@ async function run(event, context, resource, operation) {
   const sourceTableName = resource.source_properties.name;
   const temporaryDatabaseName = TEMPORARY_GLUE_DATABASE;
   const storage_id = createId();
-  const temporaryTableName = `${resource.resource_id}-${storage_id}`.replace(
-    '-',
-    '_'
-  );
+  const temporaryTableName = `${resource.id}-${storage_id}`.replace('-', '_');
 
   event_log.info('RUN_TEMP_COMPACTION:cloning_destination_table');
   await glue.cloneDestinationTable(

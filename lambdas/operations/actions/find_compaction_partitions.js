@@ -1,4 +1,5 @@
 'use strict';
+const { Operation, Resource } = require('../../lib/graph/');
 
 const Glue = require('../../lib/glue');
 const Athena = require('../../lib/athena');
@@ -10,8 +11,8 @@ const query = require('../query');
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
- * @param {import('../../typedefs').OperationRecord} operation -
+ * @param {Resource} resource -
+ * @param {Operation} operation -
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function run(event, context, resource, operation) {
@@ -27,18 +28,11 @@ async function run(event, context, resource, operation) {
     athena,
   });
 
-  let SLA;
-  if (operation.operation_type === 'BACKFILL') {
+  const SLA = resource.daemon_config.SLA;
+  if (operation.type === Operation.Type.BACKFILL && SLA) {
     if (!operation.operation_config)
       throw new Error('Backfill operation missing config');
-    SLA = {
-      MaxDelay: operation.operation_config.Duration,
-      ColumnExpression:
-        resource.daemon_config.SLA &&
-        resource.daemon_config.SLA.ColumnExpression,
-    };
-  } else {
-    SLA = resource.daemon_config.SLA;
+    SLA.MaxDelay = operation.operation_config.Duration;
   }
 
   event_log.info('FIND_COMPACTION_PARTITIONS:generate_queries for table');

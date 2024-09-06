@@ -3,7 +3,7 @@
 const logging = require('../../lib/logging');
 const response = require('../../lib/cloudformation/cfn-response');
 const { getImmutableID } = require('../../lib/cloudformation/id');
-const CloudFormation = require('../../lib/cloudformation');
+const { Operation, Resource } = require('../../lib/graph/');
 
 const resource_db = require('../../lib/dynamo/operations');
 const sempahore_db = require('../../lib/dynamo/semaphore');
@@ -11,24 +11,20 @@ const sempahore_db = require('../../lib/dynamo/semaphore');
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
- * @param {import('../../typedefs').OperationRecord} operation -
+ * @param {Resource} resource -
+ * @param {Operation} operation -
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function run(event, context, resource, operation) {
-  const region = resource.region;
-  const cloudformation = new CloudFormation({ region });
   const event_log = logging.getEventLogger(event, context);
   event_log.info('deleting migration temporary resources');
 
   const deletes = [];
-  const StackName = `migrate-${resource.resource_id}`;
-  deletes.push(resource_db.deleteResource(StackName));
-  deletes.push(
-    cloudformation.deleteStack({
-      StackName,
-    })
+  const StackName = `migrate-${resource.id}`;
+  const migrationResource = Resource.fromRecord(
+    operation.operation_inputs.migration_resource
   );
+  deletes.push(resource_db.deleteResource(migrationResource));
   deletes.push(sempahore_db.deleteSemaphore(`wharfie:MAINTAIN:${StackName}`));
   deletes.push(sempahore_db.deleteSemaphore(`wharfie:BACKFILL:${StackName}`));
   const results = await Promise.allSettled(deletes);

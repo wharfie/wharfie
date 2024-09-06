@@ -1,7 +1,8 @@
 'use strict';
 
 const { createId } = require('../../../lambdas/lib/id');
-const { NoSuchBucket, NotFound } = jest.requireActual('@aws-sdk/client-s3');
+const { NoSuchBucket, NotFound, NoSuchKey } =
+  jest.requireActual('@aws-sdk/client-s3');
 
 class S3Mock {
   __setMockState(s3ObjectMap) {
@@ -166,10 +167,9 @@ class S3Mock {
 
   async getObject(params) {
     if (!S3Mock.__state[params.Bucket].objects[params.Key]) {
-      const error = new Error(
+      const error = new NoSuchKey(
         `object does not exist: ${params.Bucket}/${params.Key}`
       );
-      error.name = 'NoSuchKey';
       throw error;
     }
     return {

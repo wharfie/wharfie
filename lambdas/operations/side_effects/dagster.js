@@ -2,6 +2,7 @@
 
 const https = require('https');
 const logging = require('../../lib/logging');
+const { Operation, Resource } = require('../../lib/graph/');
 
 const organization = process.env.SIDE_EFFECT_DAGSTER_ORGANIZATION || '';
 const deployment = process.env.SIDE_EFFECT_DAGSTER_DEPLOYMENT || '';
@@ -10,8 +11,8 @@ const token = process.env.SIDE_EFFECT_DAGSTER_TOKEN || '';
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
- * @param {import('../../typedefs').OperationRecord} operation -
+ * @param {Resource} resource -
+ * @param {Operation} operation -
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function dagster(event, context, resource, operation) {
@@ -38,8 +39,8 @@ async function dagster(event, context, resource, operation) {
   const payload = JSON.stringify({
     metadata: {
       source: 'Wharfie',
-      operation_id: operation.operation_id,
-      operation_type: operation.operation_type,
+      operation_id: operation.id,
+      operation_type: operation.type,
       duration: completed_at - operation.started_at,
     },
   });
