@@ -1,9 +1,48 @@
 'use strict';
 const { createId } = require('../id');
+
+/**
+ * @typedef {('START'|
+ * 'REGISTER_MISSING_PARTITIONS'|
+ * 'FIND_COMPACTION_PARTITIONS'|
+ * 'RUN_COMPACTION'|
+ * 'UPDATE_SYMLINKS'|
+ * 'SWAP_RESOURCE'|
+ * 'RESPOND_TO_CLOUDFORMATION'|
+ * 'REGISTER_PARTITION'|
+ * 'RUN_SINGLE_COMPACTION'|
+ * 'FINISH'|
+ * 'SIDE_EFFECT__CLOUDWATCH'|
+ * 'SIDE_EFFECT__DAGSTER'|
+ * 'SIDE_EFFECT__WHARFIE'|
+ * 'SIDE_EFFECTS__FINISH'
+ * )} WharfieActionTypeEnum
+ */
+
+/**
+ * @type {Object<WharfieActionTypeEnum,WharfieActionTypeEnum>}
+ */
+const Type = {
+  START: 'START',
+  REGISTER_MISSING_PARTITIONS: 'REGISTER_MISSING_PARTITIONS',
+  FIND_COMPACTION_PARTITIONS: 'FIND_COMPACTION_PARTITIONS',
+  RUN_COMPACTION: 'RUN_COMPACTION',
+  UPDATE_SYMLINKS: 'UPDATE_SYMLINKS',
+  SWAP_RESOURCE: 'SWAP_RESOURCE',
+  RESPOND_TO_CLOUDFORMATION: 'RESPOND_TO_CLOUDFORMATION',
+  REGISTER_PARTITION: 'REGISTER_PARTITION',
+  RUN_SINGLE_COMPACTION: 'RUN_SINGLE_COMPACTION',
+  FINISH: 'FINISH',
+  SIDE_EFFECT__CLOUDWATCH: 'SIDE_EFFECT__CLOUDWATCH',
+  SIDE_EFFECT__DAGSTER: 'SIDE_EFFECT__DAGSTER',
+  SIDE_EFFECT__WHARFIE: 'SIDE_EFFECT__WHARFIE',
+  SIDE_EFFECTS__FINISH: 'SIDE_EFFECTS__FINISH',
+};
+
 /**
  * @typedef ActionOptions
  * @property {string} [id] -
- * @property {string} type -
+ * @property {WharfieActionTypeEnum} type -
  * @property {string} [status] -
  * @property {import('./execution').Execution[]} [executions] -
  */
@@ -53,5 +92,6 @@ class Action {
     return new Action(parsed);
   }
 }
+Action.Type = Type;
 
 module.exports = Action;
