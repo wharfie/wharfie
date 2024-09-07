@@ -57,12 +57,19 @@
  */
 
 /**
+ * @typedef {('MAINTAIN'|'MIGRATE'|'S3_EVENT'|'BACKFILL')} WharfieOperationTypeEnum
+ */
+/**
+ * @typedef {('COMPLETED'|'RUNNING')} WharfieOperationStatusEnum
+ */
+
+/**
  * @typedef WharfieEvent
  * @property {string} [operation_started_at] - Timestamp when operation was started
  * @property {string} [operation_id] - Id of the operation being performed
- * @property {string} operation_type - Type of the operation being performed
+ * @property {WharfieOperationTypeEnum} operation_type - Type of the operation being performed
  * @property {string} [action_id] - Id of the action being performed
- * @property {string} action_type - Type of the action being performed
+ * @property {import('./lib/graph/action').WharfieActionTypeEnum} action_type - Type of the action being performed
  * @property {string} resource_id - Id of the Wharfie resource
  * @property {string} [query_id] - Id of the query being run
  * @property {number} [retries] - number of attempts
@@ -186,8 +193,8 @@
  * @typedef OperationRecord
  * @property {string} resource_id - Id of the resource
  * @property {string} operation_id - Id of the operation
- * @property {string} operation_type - type of operation
- * @property {string} operation_status - status of operation
+ * @property {WharfieOperationTypeEnum} operation_type - type of operation
+ * @property {WharfieOperationStatusEnum} operation_status - status of operation
  * @property {number} started_at - start timestamp
  * @property {number} last_updated_at - update_at_timestamp
  * @property {import('./lib/graph/').OperationActionGraph} action_graph - action dependency graph
@@ -199,7 +206,7 @@
 /**
  * @typedef ActionRecord
  * @property {string} action_id - Id of the action associated with that query
- * @property {string} action_type - type of action
+ * @property {import('./lib/graph/action').WharfieActionTypeEnum} action_type - type of action
  * @property {string} action_status - status of the action
  * @property {QueryRecord[]} [queries] -
  */

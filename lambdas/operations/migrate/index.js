@@ -24,41 +24,41 @@ async function start(event, context, resource) {
 
   const action_graph = new OperationActionGraph();
   const start_action = new Action({
-    type: 'START',
+    type: Action.Type.START,
     id: event.action_id,
   });
   const register_missing_partitions_action = new Action({
-    type: 'REGISTER_MISSING_PARTITIONS',
+    type: Action.Type.REGISTER_MISSING_PARTITIONS,
   });
   const find_compaction_partitions_action = new Action({
-    type: 'FIND_COMPACTION_PARTITIONS',
+    type: Action.Type.FIND_COMPACTION_PARTITIONS,
   });
   const run_compaction_action = new Action({
-    type: 'RUN_COMPACTION',
+    type: Action.Type.RUN_COMPACTION,
   });
   const update_symlinks_action = new Action({
-    type: 'UPDATE_SYMLINKS',
+    type: Action.Type.UPDATE_SYMLINKS,
   });
   const swap_resource_action = new Action({
-    type: 'SWAP_RESOURCE',
+    type: Action.Type.SWAP_RESOURCE,
   });
   const respond_to_cloudformation_action = new Action({
-    type: 'RESPOND_TO_CLOUDFORMATION',
+    type: Action.Type.RESPOND_TO_CLOUDFORMATION,
   });
   const finish_action = new Action({
-    type: 'FINISH',
+    type: Action.Type.FINISH,
   });
   const side_effect__cloudwatch = new Action({
-    type: 'SIDE_EFFECT__CLOUDWATCH',
+    type: Action.Type.SIDE_EFFECT__CLOUDWATCH,
   });
   const side_effect__dagster = new Action({
-    type: 'SIDE_EFFECT__DAGSTER',
+    type: Action.Type.SIDE_EFFECT__DAGSTER,
   });
   const side_effect__wharfie = new Action({
-    type: 'SIDE_EFFECT__WHARFIE',
+    type: Action.Type.SIDE_EFFECT__WHARFIE,
   });
   const side_effects_finish_action = new Action({
-    type: 'SIDE_EFFECTS__FINISH',
+    type: Action.Type.SIDE_EFFECTS__FINISH,
   });
   action_graph.addActions([
     start_action,
