@@ -19,39 +19,6 @@ async function start(event, context, resource) {
   if (!event.operation_id || !event.action_id || !event.operation_started_at)
     throw new Error('Event missing fields');
 
-<<<<<<< HEAD
-  const action_graph = new OperationActionGraph();
-  const start_action = new Action({
-    type: Action.Type.START,
-    id: event.action_id,
-  });
-  const register_missing_partitions_action = new Action({
-    type: Action.Type.REGISTER_MISSING_PARTITIONS,
-  });
-  const find_compaction_partitions_action = new Action({
-    type: Action.Type.FIND_COMPACTION_PARTITIONS,
-  });
-  const run_compaction_action = new Action({
-    type: Action.Type.RUN_COMPACTION,
-  });
-  const update_symlinks_action = new Action({
-    type: Action.Type.UPDATE_SYMLINKS,
-  });
-  const finish_action = new Action({
-    type: Action.Type.FINISH,
-  });
-  const side_effect__cloudwatch = new Action({
-    type: Action.Type.SIDE_EFFECT__CLOUDWATCH,
-  });
-  const side_effect__dagster = new Action({
-    type: Action.Type.SIDE_EFFECT__DAGSTER,
-  });
-  const side_effect__wharfie = new Action({
-    type: Action.Type.SIDE_EFFECT__WHARFIE,
-  });
-  const side_effects_finish_action = new Action({
-    type: Action.Type.SIDE_EFFECTS__FINISH,
-=======
   event_log.info('action graph generating');
   const operation = new Operation({
     resource_id: resource.id,
@@ -103,7 +70,6 @@ async function start(event, context, resource) {
       side_effect__dagster,
       side_effect__wharfie,
     ],
->>>>>>> 509a3bd (Improved operation data model for better tracking)
   });
 
   event_log.info('creating MAINTAIN operation and actions...');
