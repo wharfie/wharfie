@@ -1,5 +1,6 @@
 'use strict';
 
+const { Operation, Resource, Query } = require('../../lib/graph/');
 const { createId } = require('../../lib/id');
 const logging = require('../../lib/logging');
 const Glue = require('../../lib/glue');
@@ -23,7 +24,7 @@ const CLEANUP_QUEUE_URL = process.env.CLEANUP_QUEUE_URL || '';
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
+ * @param {Resource} resource -
  * @param {import("@aws-sdk/client-glue").Table} destinationTable -
  * @param {string} temporaryDatabaseName -
  * @param {string} temporaryTableName -
@@ -171,7 +172,7 @@ async function update_partition(
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
+ * @param {Resource} resource -
  * @param {string} temporaryDatabaseName -
  * @param {string} temporaryTableName -
  * @param {import('../../typedefs').Partition[]} partitions -
@@ -308,7 +309,7 @@ async function update_partitions(
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
+ * @param {Resource} resource -
  * @param {string} query_execution_id -
  */
 async function update_table(event, context, resource, query_execution_id) {
@@ -435,8 +436,8 @@ async function update_table(event, context, resource, query_execution_id) {
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
- * @param {import('../../typedefs').OperationRecord} operation -
+ * @param {Resource} resource -
+ * @param {Operation} operation -
  */
 async function update_symlinks(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
@@ -450,28 +451,28 @@ async function update_symlinks(event, context, resource, operation) {
   if (!temporaryDatabaseName || !temporaryTableName)
     throw new Error('missing required action inputs');
 
-  const update_symlinks_action =
-    operation.action_graph.getActionByType('UPDATE_SYMLINKS');
-  const compaction_action =
-    operation.action_graph.getUpstreamActions(update_symlinks_action) || [];
-  if (compaction_action.length === 0)
+  const update_symlinks_action_id =
+    operation.getActionIdByType('UPDATE_SYMLINKS');
+  const compaction_action_id =
+    operation.getUpstreamActionIds(update_symlinks_action_id) || [];
+  if (compaction_action_id.length === 0)
     throw new Error('could not find previous action');
   const queries = await resource_db.getQueries(
-    resource.resource_id,
-    operation.operation_id,
-    compaction_action[0].id
+    resource.id,
+    operation.id,
+    compaction_action_id[0]
   );
   event_log.info(
     `registering data and updating symlinks for ${queries.length} queries`
   );
 
   await Promise.all(
-    queries.map((/** @type {import('../../typedefs').QueryRecord} */ query) => {
-      if (!query.query_execution_id) return Promise.resolve();
+    queries.map((/** @type {Query} */ query) => {
+      if (!query.execution_id) return Promise.resolve();
       const partitions = query.query_data.partitions;
       if (!partitions) {
         event_log.debug('UPDATING TABLE');
-        return update_table(event, context, resource, query.query_execution_id);
+        return update_table(event, context, resource, query.execution_id);
       } else {
         event_log.debug('UPDATING PARTITIONS');
         return update_partitions(
@@ -481,7 +482,7 @@ async function update_symlinks(event, context, resource, operation) {
           temporaryDatabaseName,
           temporaryTableName,
           partitions,
-          query.query_execution_id
+          query.execution_id
         );
       }
     })
@@ -491,8 +492,8 @@ async function update_symlinks(event, context, resource, operation) {
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
- * @param {import('../../typedefs').OperationRecord} operation -
+ * @param {Resource} resource -
+ * @param {Operation} operation -
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function run(event, context, resource, operation) {

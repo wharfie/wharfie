@@ -50,7 +50,7 @@ async function run(ScheduledEventRecord, context) {
       operation_started_at: new Date(Date.now()),
       operation_type: 'MAINTAIN',
       action_type: 'START',
-      resource_id: resource.resource_id,
+      resource_id: resource.id,
     };
   } else {
     /** @type {import('../../typedefs').PartitionValues} */

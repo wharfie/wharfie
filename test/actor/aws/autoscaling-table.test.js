@@ -1,12 +1,13 @@
 /* eslint-disable jest/no-large-snapshots */
 'use strict';
 
-process.env.AWS_MOCKS = true;
+process.env.AWS_MOCKS = '1';
 const {
   AutoscalingTable,
 } = require('../../../lambdas/lib/actor/resources/aws/');
 
 const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
+const { getMockDeploymentProperties } = require('../util');
 
 describe('autoscaling table IaC', () => {
   it('basic', async () => {
@@ -14,6 +15,7 @@ describe('autoscaling table IaC', () => {
     const autoscalingTable = new AutoscalingTable({
       name: 'test-rule',
       properties: {
+        deployment: getMockDeploymentProperties(),
         tableName: `table-name`,
         minReadCapacity: 5,
         maxReadCapacity: 100,
@@ -57,6 +59,20 @@ describe('autoscaling table IaC', () => {
               "AttributeType": "S",
             },
           ],
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
           "keySchema": [
             {
               "AttributeName": "location",
@@ -96,7 +112,20 @@ describe('autoscaling table IaC', () => {
                 },
               ],
               "billingMode": "PROVISIONED",
-              "deployment": undefined,
+              "deployment": {
+                "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
+                "name": "test-deployment",
+                "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
+              },
               "keySchema": [
                 {
                   "AttributeName": "location",
@@ -137,7 +166,20 @@ describe('autoscaling table IaC', () => {
                 ],
                 "Version": "2012-10-17",
               },
-              "deployment": undefined,
+              "deployment": {
+                "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
+                "name": "test-deployment",
+                "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
+              },
               "description": "Role for table-name table autoscaling",
               "rolePolicyDocument": {
                 "Statement": [
@@ -174,7 +216,20 @@ describe('autoscaling table IaC', () => {
             "name": "table-name-readAutoscalingPolicy",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
-              "deployment": undefined,
+              "deployment": {
+                "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
+                "name": "test-deployment",
+                "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
+              },
               "policyType": "TargetTrackingScaling",
               "resourceId": "table/table-name",
               "scalableDimension": "dynamodb:table:ReadCapacityUnits",
@@ -198,7 +253,20 @@ describe('autoscaling table IaC', () => {
             "name": "table-name-readAutoscalingTarget",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
-              "deployment": undefined,
+              "deployment": {
+                "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
+                "name": "test-deployment",
+                "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
+              },
               "maxCapacity": 100,
               "minCapacity": 5,
               "resourceId": "table/table-name",
@@ -216,7 +284,20 @@ describe('autoscaling table IaC', () => {
             "name": "table-name-writeAutoscalingPolicy",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
-              "deployment": undefined,
+              "deployment": {
+                "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
+                "name": "test-deployment",
+                "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
+              },
               "policyType": "TargetTrackingScaling",
               "resourceId": "table/table-name",
               "scalableDimension": "dynamodb:table:WriteCapacityUnits",
@@ -240,7 +321,20 @@ describe('autoscaling table IaC', () => {
             "name": "table-name-writeAutoscalingTarget",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
-              "deployment": undefined,
+              "deployment": {
+                "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
+                "name": "test-deployment",
+                "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
+              },
               "maxCapacity": 50,
               "minCapacity": 1,
               "resourceId": "table/table-name",
@@ -277,6 +371,20 @@ describe('autoscaling table IaC', () => {
               "AttributeType": "S",
             },
           ],
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
           "keySchema": [
             {
               "AttributeName": "location",
@@ -312,7 +420,236 @@ describe('autoscaling table IaC', () => {
               "batchWrite": [MockFunction],
               "delete": [MockFunction],
               "get": [MockFunction],
-              "put": [MockFunction],
+              "put": [MockFunction] {
+                "calls": [
+                  [
+                    {
+                      "Item": {
+                        "name": "test-rule",
+                        "sort_key": "test-deployment",
+                        "status": "RECONCILING",
+                        "version": "0.0.1test",
+                      },
+                      "ReturnValues": "NONE",
+                      "TableName": "_testing_state_table",
+                    },
+                  ],
+                  [
+                    {
+                      "Item": {
+                        "name": "table-name",
+                        "sort_key": "test-deployment",
+                        "status": "RECONCILING",
+                        "version": "0.0.1test",
+                      },
+                      "ReturnValues": "NONE",
+                      "TableName": "_testing_state_table",
+                    },
+                  ],
+                  [
+                    {
+                      "Item": {
+                        "name": "table-name-autoscaling-role",
+                        "sort_key": "test-deployment",
+                        "status": "RECONCILING",
+                        "version": "0.0.1test",
+                      },
+                      "ReturnValues": "NONE",
+                      "TableName": "_testing_state_table",
+                    },
+                  ],
+                  [
+                    {
+                      "Item": {
+                        "name": "table-name-readAutoscalingTarget",
+                        "sort_key": "test-deployment",
+                        "status": "RECONCILING",
+                        "version": "0.0.1test",
+                      },
+                      "ReturnValues": "NONE",
+                      "TableName": "_testing_state_table",
+                    },
+                  ],
+                  [
+                    {
+                      "Item": {
+                        "name": "table-name-readAutoscalingPolicy",
+                        "sort_key": "test-deployment",
+                        "status": "RECONCILING",
+                        "version": "0.0.1test",
+                      },
+                      "ReturnValues": "NONE",
+                      "TableName": "_testing_state_table",
+                    },
+                  ],
+                  [
+                    {
+                      "Item": {
+                        "name": "table-name-writeAutoscalingTarget",
+                        "sort_key": "test-deployment",
+                        "status": "RECONCILING",
+                        "version": "0.0.1test",
+                      },
+                      "ReturnValues": "NONE",
+                      "TableName": "_testing_state_table",
+                    },
+                  ],
+                  [
+                    {
+                      "Item": {
+                        "name": "table-name-writeAutoscalingPolicy",
+                        "sort_key": "test-deployment",
+                        "status": "RECONCILING",
+                        "version": "0.0.1test",
+                      },
+                      "ReturnValues": "NONE",
+                      "TableName": "_testing_state_table",
+                    },
+                  ],
+                  [
+                    {
+                      "Item": {
+                        "name": "table-name",
+                        "sort_key": "test-deployment",
+                        "status": "STABLE",
+                        "version": "0.0.1test",
+                      },
+                      "ReturnValues": "NONE",
+                      "TableName": "_testing_state_table",
+                    },
+                  ],
+                  [
+                    {
+                      "Item": {
+                        "name": "table-name-autoscaling-role",
+                        "sort_key": "test-deployment",
+                        "status": "STABLE",
+                        "version": "0.0.1test",
+                      },
+                      "ReturnValues": "NONE",
+                      "TableName": "_testing_state_table",
+                    },
+                  ],
+                  [
+                    {
+                      "Item": {
+                        "name": "table-name-readAutoscalingTarget",
+                        "sort_key": "test-deployment",
+                        "status": "STABLE",
+                        "version": "0.0.1test",
+                      },
+                      "ReturnValues": "NONE",
+                      "TableName": "_testing_state_table",
+                    },
+                  ],
+                  [
+                    {
+                      "Item": {
+                        "name": "table-name-readAutoscalingPolicy",
+                        "sort_key": "test-deployment",
+                        "status": "STABLE",
+                        "version": "0.0.1test",
+                      },
+                      "ReturnValues": "NONE",
+                      "TableName": "_testing_state_table",
+                    },
+                  ],
+                  [
+                    {
+                      "Item": {
+                        "name": "table-name-writeAutoscalingTarget",
+                        "sort_key": "test-deployment",
+                        "status": "STABLE",
+                        "version": "0.0.1test",
+                      },
+                      "ReturnValues": "NONE",
+                      "TableName": "_testing_state_table",
+                    },
+                  ],
+                  [
+                    {
+                      "Item": {
+                        "name": "table-name-writeAutoscalingPolicy",
+                        "sort_key": "test-deployment",
+                        "status": "STABLE",
+                        "version": "0.0.1test",
+                      },
+                      "ReturnValues": "NONE",
+                      "TableName": "_testing_state_table",
+                    },
+                  ],
+                  [
+                    {
+                      "Item": {
+                        "name": "test-rule",
+                        "sort_key": "test-deployment",
+                        "status": "STABLE",
+                        "version": "0.0.1test",
+                      },
+                      "ReturnValues": "NONE",
+                      "TableName": "_testing_state_table",
+                    },
+                  ],
+                ],
+                "results": [
+                  {
+                    "type": "return",
+                    "value": undefined,
+                  },
+                  {
+                    "type": "return",
+                    "value": undefined,
+                  },
+                  {
+                    "type": "return",
+                    "value": undefined,
+                  },
+                  {
+                    "type": "return",
+                    "value": undefined,
+                  },
+                  {
+                    "type": "return",
+                    "value": undefined,
+                  },
+                  {
+                    "type": "return",
+                    "value": undefined,
+                  },
+                  {
+                    "type": "return",
+                    "value": undefined,
+                  },
+                  {
+                    "type": "return",
+                    "value": undefined,
+                  },
+                  {
+                    "type": "return",
+                    "value": undefined,
+                  },
+                  {
+                    "type": "return",
+                    "value": undefined,
+                  },
+                  {
+                    "type": "return",
+                    "value": undefined,
+                  },
+                  {
+                    "type": "return",
+                    "value": undefined,
+                  },
+                  {
+                    "type": "return",
+                    "value": undefined,
+                  },
+                  {
+                    "type": "return",
+                    "value": undefined,
+                  },
+                ],
+              },
               "query": [MockFunction],
               "update": [MockFunction],
             },
@@ -331,7 +668,20 @@ describe('autoscaling table IaC', () => {
                 },
               ],
               "billingMode": "PROVISIONED",
-              "deployment": undefined,
+              "deployment": {
+                "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
+                "name": "test-deployment",
+                "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
+              },
               "keySchema": [
                 {
                   "AttributeName": "location",
@@ -369,7 +719,236 @@ describe('autoscaling table IaC', () => {
                   "batchWrite": [MockFunction],
                   "delete": [MockFunction],
                   "get": [MockFunction],
-                  "put": [MockFunction],
+                  "put": [MockFunction] {
+                    "calls": [
+                      [
+                        {
+                          "Item": {
+                            "name": "test-rule",
+                            "sort_key": "test-deployment",
+                            "status": "RECONCILING",
+                            "version": "0.0.1test",
+                          },
+                          "ReturnValues": "NONE",
+                          "TableName": "_testing_state_table",
+                        },
+                      ],
+                      [
+                        {
+                          "Item": {
+                            "name": "table-name",
+                            "sort_key": "test-deployment",
+                            "status": "RECONCILING",
+                            "version": "0.0.1test",
+                          },
+                          "ReturnValues": "NONE",
+                          "TableName": "_testing_state_table",
+                        },
+                      ],
+                      [
+                        {
+                          "Item": {
+                            "name": "table-name-autoscaling-role",
+                            "sort_key": "test-deployment",
+                            "status": "RECONCILING",
+                            "version": "0.0.1test",
+                          },
+                          "ReturnValues": "NONE",
+                          "TableName": "_testing_state_table",
+                        },
+                      ],
+                      [
+                        {
+                          "Item": {
+                            "name": "table-name-readAutoscalingTarget",
+                            "sort_key": "test-deployment",
+                            "status": "RECONCILING",
+                            "version": "0.0.1test",
+                          },
+                          "ReturnValues": "NONE",
+                          "TableName": "_testing_state_table",
+                        },
+                      ],
+                      [
+                        {
+                          "Item": {
+                            "name": "table-name-readAutoscalingPolicy",
+                            "sort_key": "test-deployment",
+                            "status": "RECONCILING",
+                            "version": "0.0.1test",
+                          },
+                          "ReturnValues": "NONE",
+                          "TableName": "_testing_state_table",
+                        },
+                      ],
+                      [
+                        {
+                          "Item": {
+                            "name": "table-name-writeAutoscalingTarget",
+                            "sort_key": "test-deployment",
+                            "status": "RECONCILING",
+                            "version": "0.0.1test",
+                          },
+                          "ReturnValues": "NONE",
+                          "TableName": "_testing_state_table",
+                        },
+                      ],
+                      [
+                        {
+                          "Item": {
+                            "name": "table-name-writeAutoscalingPolicy",
+                            "sort_key": "test-deployment",
+                            "status": "RECONCILING",
+                            "version": "0.0.1test",
+                          },
+                          "ReturnValues": "NONE",
+                          "TableName": "_testing_state_table",
+                        },
+                      ],
+                      [
+                        {
+                          "Item": {
+                            "name": "table-name",
+                            "sort_key": "test-deployment",
+                            "status": "STABLE",
+                            "version": "0.0.1test",
+                          },
+                          "ReturnValues": "NONE",
+                          "TableName": "_testing_state_table",
+                        },
+                      ],
+                      [
+                        {
+                          "Item": {
+                            "name": "table-name-autoscaling-role",
+                            "sort_key": "test-deployment",
+                            "status": "STABLE",
+                            "version": "0.0.1test",
+                          },
+                          "ReturnValues": "NONE",
+                          "TableName": "_testing_state_table",
+                        },
+                      ],
+                      [
+                        {
+                          "Item": {
+                            "name": "table-name-readAutoscalingTarget",
+                            "sort_key": "test-deployment",
+                            "status": "STABLE",
+                            "version": "0.0.1test",
+                          },
+                          "ReturnValues": "NONE",
+                          "TableName": "_testing_state_table",
+                        },
+                      ],
+                      [
+                        {
+                          "Item": {
+                            "name": "table-name-readAutoscalingPolicy",
+                            "sort_key": "test-deployment",
+                            "status": "STABLE",
+                            "version": "0.0.1test",
+                          },
+                          "ReturnValues": "NONE",
+                          "TableName": "_testing_state_table",
+                        },
+                      ],
+                      [
+                        {
+                          "Item": {
+                            "name": "table-name-writeAutoscalingTarget",
+                            "sort_key": "test-deployment",
+                            "status": "STABLE",
+                            "version": "0.0.1test",
+                          },
+                          "ReturnValues": "NONE",
+                          "TableName": "_testing_state_table",
+                        },
+                      ],
+                      [
+                        {
+                          "Item": {
+                            "name": "table-name-writeAutoscalingPolicy",
+                            "sort_key": "test-deployment",
+                            "status": "STABLE",
+                            "version": "0.0.1test",
+                          },
+                          "ReturnValues": "NONE",
+                          "TableName": "_testing_state_table",
+                        },
+                      ],
+                      [
+                        {
+                          "Item": {
+                            "name": "test-rule",
+                            "sort_key": "test-deployment",
+                            "status": "STABLE",
+                            "version": "0.0.1test",
+                          },
+                          "ReturnValues": "NONE",
+                          "TableName": "_testing_state_table",
+                        },
+                      ],
+                    ],
+                    "results": [
+                      {
+                        "type": "return",
+                        "value": undefined,
+                      },
+                      {
+                        "type": "return",
+                        "value": undefined,
+                      },
+                      {
+                        "type": "return",
+                        "value": undefined,
+                      },
+                      {
+                        "type": "return",
+                        "value": undefined,
+                      },
+                      {
+                        "type": "return",
+                        "value": undefined,
+                      },
+                      {
+                        "type": "return",
+                        "value": undefined,
+                      },
+                      {
+                        "type": "return",
+                        "value": undefined,
+                      },
+                      {
+                        "type": "return",
+                        "value": undefined,
+                      },
+                      {
+                        "type": "return",
+                        "value": undefined,
+                      },
+                      {
+                        "type": "return",
+                        "value": undefined,
+                      },
+                      {
+                        "type": "return",
+                        "value": undefined,
+                      },
+                      {
+                        "type": "return",
+                        "value": undefined,
+                      },
+                      {
+                        "type": "return",
+                        "value": undefined,
+                      },
+                      {
+                        "type": "return",
+                        "value": undefined,
+                      },
+                    ],
+                  },
                   "query": [MockFunction],
                   "update": [MockFunction],
                 },
@@ -388,7 +967,20 @@ describe('autoscaling table IaC', () => {
                     },
                   ],
                   "billingMode": "PROVISIONED",
-                  "deployment": undefined,
+                  "deployment": {
+                    "accountId": "123456789012",
+                    "envPaths": {
+                      "cache": "",
+                      "config": "",
+                      "data": "",
+                      "log": "",
+                      "temp": "",
+                    },
+                    "name": "test-deployment",
+                    "region": "us-east-1",
+                    "stateTable": "_testing_state_table",
+                    "version": "0.0.1test",
+                  },
                   "keySchema": [
                     {
                       "AttributeName": "location",
@@ -429,7 +1021,20 @@ describe('autoscaling table IaC', () => {
                 ],
                 "Version": "2012-10-17",
               },
-              "deployment": undefined,
+              "deployment": {
+                "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
+                "name": "test-deployment",
+                "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
+              },
               "description": "Role for table-name table autoscaling",
               "rolePolicyDocument": {
                 "Statement": [
@@ -496,7 +1101,236 @@ describe('autoscaling table IaC', () => {
                           "batchWrite": [MockFunction],
                           "delete": [MockFunction],
                           "get": [MockFunction],
-                          "put": [MockFunction],
+                          "put": [MockFunction] {
+                            "calls": [
+                              [
+                                {
+                                  "Item": {
+                                    "name": "test-rule",
+                                    "sort_key": "test-deployment",
+                                    "status": "RECONCILING",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name",
+                                    "sort_key": "test-deployment",
+                                    "status": "RECONCILING",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-autoscaling-role",
+                                    "sort_key": "test-deployment",
+                                    "status": "RECONCILING",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-readAutoscalingTarget",
+                                    "sort_key": "test-deployment",
+                                    "status": "RECONCILING",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-readAutoscalingPolicy",
+                                    "sort_key": "test-deployment",
+                                    "status": "RECONCILING",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-writeAutoscalingTarget",
+                                    "sort_key": "test-deployment",
+                                    "status": "RECONCILING",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-writeAutoscalingPolicy",
+                                    "sort_key": "test-deployment",
+                                    "status": "RECONCILING",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name",
+                                    "sort_key": "test-deployment",
+                                    "status": "STABLE",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-autoscaling-role",
+                                    "sort_key": "test-deployment",
+                                    "status": "STABLE",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-readAutoscalingTarget",
+                                    "sort_key": "test-deployment",
+                                    "status": "STABLE",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-readAutoscalingPolicy",
+                                    "sort_key": "test-deployment",
+                                    "status": "STABLE",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-writeAutoscalingTarget",
+                                    "sort_key": "test-deployment",
+                                    "status": "STABLE",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-writeAutoscalingPolicy",
+                                    "sort_key": "test-deployment",
+                                    "status": "STABLE",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "test-rule",
+                                    "sort_key": "test-deployment",
+                                    "status": "STABLE",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                            ],
+                            "results": [
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                            ],
+                          },
                           "query": [MockFunction],
                           "update": [MockFunction],
                         },
@@ -515,7 +1349,20 @@ describe('autoscaling table IaC', () => {
                             },
                           ],
                           "billingMode": "PROVISIONED",
-                          "deployment": undefined,
+                          "deployment": {
+                            "accountId": "123456789012",
+                            "envPaths": {
+                              "cache": "",
+                              "config": "",
+                              "data": "",
+                              "log": "",
+                              "temp": "",
+                            },
+                            "name": "test-deployment",
+                            "region": "us-east-1",
+                            "stateTable": "_testing_state_table",
+                            "version": "0.0.1test",
+                          },
                           "keySchema": [
                             {
                               "AttributeName": "location",
@@ -556,7 +1403,20 @@ describe('autoscaling table IaC', () => {
                         ],
                         "Version": "2012-10-17",
                       },
-                      "deployment": undefined,
+                      "deployment": {
+                        "accountId": "123456789012",
+                        "envPaths": {
+                          "cache": "",
+                          "config": "",
+                          "data": "",
+                          "log": "",
+                          "temp": "",
+                        },
+                        "name": "test-deployment",
+                        "region": "us-east-1",
+                        "stateTable": "_testing_state_table",
+                        "version": "0.0.1test",
+                      },
                       "description": "Role for table-name table autoscaling",
                       "rolePolicyDocument": {
                         "Statement": [
@@ -590,7 +1450,20 @@ describe('autoscaling table IaC', () => {
                 "name": "table-name-readAutoscalingTarget",
                 "properties": {
                   "_INTERNAL_STATE_RESOURCE": undefined,
-                  "deployment": undefined,
+                  "deployment": {
+                    "accountId": "123456789012",
+                    "envPaths": {
+                      "cache": "",
+                      "config": "",
+                      "data": "",
+                      "log": "",
+                      "temp": "",
+                    },
+                    "name": "test-deployment",
+                    "region": "us-east-1",
+                    "stateTable": "_testing_state_table",
+                    "version": "0.0.1test",
+                  },
                   "maxCapacity": 100,
                   "minCapacity": 5,
                   "resourceId": "table/table-name",
@@ -605,7 +1478,20 @@ describe('autoscaling table IaC', () => {
             "name": "table-name-readAutoscalingPolicy",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
-              "deployment": undefined,
+              "deployment": {
+                "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
+                "name": "test-deployment",
+                "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
+              },
               "policyType": "TargetTrackingScaling",
               "resourceId": "table/table-name",
               "scalableDimension": "dynamodb:table:ReadCapacityUnits",
@@ -650,7 +1536,236 @@ describe('autoscaling table IaC', () => {
                       "batchWrite": [MockFunction],
                       "delete": [MockFunction],
                       "get": [MockFunction],
-                      "put": [MockFunction],
+                      "put": [MockFunction] {
+                        "calls": [
+                          [
+                            {
+                              "Item": {
+                                "name": "test-rule",
+                                "sort_key": "test-deployment",
+                                "status": "RECONCILING",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name",
+                                "sort_key": "test-deployment",
+                                "status": "RECONCILING",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-autoscaling-role",
+                                "sort_key": "test-deployment",
+                                "status": "RECONCILING",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-readAutoscalingTarget",
+                                "sort_key": "test-deployment",
+                                "status": "RECONCILING",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-readAutoscalingPolicy",
+                                "sort_key": "test-deployment",
+                                "status": "RECONCILING",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-writeAutoscalingTarget",
+                                "sort_key": "test-deployment",
+                                "status": "RECONCILING",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-writeAutoscalingPolicy",
+                                "sort_key": "test-deployment",
+                                "status": "RECONCILING",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name",
+                                "sort_key": "test-deployment",
+                                "status": "STABLE",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-autoscaling-role",
+                                "sort_key": "test-deployment",
+                                "status": "STABLE",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-readAutoscalingTarget",
+                                "sort_key": "test-deployment",
+                                "status": "STABLE",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-readAutoscalingPolicy",
+                                "sort_key": "test-deployment",
+                                "status": "STABLE",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-writeAutoscalingTarget",
+                                "sort_key": "test-deployment",
+                                "status": "STABLE",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-writeAutoscalingPolicy",
+                                "sort_key": "test-deployment",
+                                "status": "STABLE",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "test-rule",
+                                "sort_key": "test-deployment",
+                                "status": "STABLE",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                        ],
+                        "results": [
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                        ],
+                      },
                       "query": [MockFunction],
                       "update": [MockFunction],
                     },
@@ -669,7 +1784,20 @@ describe('autoscaling table IaC', () => {
                         },
                       ],
                       "billingMode": "PROVISIONED",
-                      "deployment": undefined,
+                      "deployment": {
+                        "accountId": "123456789012",
+                        "envPaths": {
+                          "cache": "",
+                          "config": "",
+                          "data": "",
+                          "log": "",
+                          "temp": "",
+                        },
+                        "name": "test-deployment",
+                        "region": "us-east-1",
+                        "stateTable": "_testing_state_table",
+                        "version": "0.0.1test",
+                      },
                       "keySchema": [
                         {
                           "AttributeName": "location",
@@ -710,7 +1838,20 @@ describe('autoscaling table IaC', () => {
                     ],
                     "Version": "2012-10-17",
                   },
-                  "deployment": undefined,
+                  "deployment": {
+                    "accountId": "123456789012",
+                    "envPaths": {
+                      "cache": "",
+                      "config": "",
+                      "data": "",
+                      "log": "",
+                      "temp": "",
+                    },
+                    "name": "test-deployment",
+                    "region": "us-east-1",
+                    "stateTable": "_testing_state_table",
+                    "version": "0.0.1test",
+                  },
                   "description": "Role for table-name table autoscaling",
                   "rolePolicyDocument": {
                     "Statement": [
@@ -744,7 +1885,20 @@ describe('autoscaling table IaC', () => {
             "name": "table-name-readAutoscalingTarget",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
-              "deployment": undefined,
+              "deployment": {
+                "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
+                "name": "test-deployment",
+                "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
+              },
               "maxCapacity": 100,
               "minCapacity": 5,
               "resourceId": "table/table-name",
@@ -792,7 +1946,236 @@ describe('autoscaling table IaC', () => {
                           "batchWrite": [MockFunction],
                           "delete": [MockFunction],
                           "get": [MockFunction],
-                          "put": [MockFunction],
+                          "put": [MockFunction] {
+                            "calls": [
+                              [
+                                {
+                                  "Item": {
+                                    "name": "test-rule",
+                                    "sort_key": "test-deployment",
+                                    "status": "RECONCILING",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name",
+                                    "sort_key": "test-deployment",
+                                    "status": "RECONCILING",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-autoscaling-role",
+                                    "sort_key": "test-deployment",
+                                    "status": "RECONCILING",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-readAutoscalingTarget",
+                                    "sort_key": "test-deployment",
+                                    "status": "RECONCILING",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-readAutoscalingPolicy",
+                                    "sort_key": "test-deployment",
+                                    "status": "RECONCILING",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-writeAutoscalingTarget",
+                                    "sort_key": "test-deployment",
+                                    "status": "RECONCILING",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-writeAutoscalingPolicy",
+                                    "sort_key": "test-deployment",
+                                    "status": "RECONCILING",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name",
+                                    "sort_key": "test-deployment",
+                                    "status": "STABLE",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-autoscaling-role",
+                                    "sort_key": "test-deployment",
+                                    "status": "STABLE",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-readAutoscalingTarget",
+                                    "sort_key": "test-deployment",
+                                    "status": "STABLE",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-readAutoscalingPolicy",
+                                    "sort_key": "test-deployment",
+                                    "status": "STABLE",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-writeAutoscalingTarget",
+                                    "sort_key": "test-deployment",
+                                    "status": "STABLE",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "table-name-writeAutoscalingPolicy",
+                                    "sort_key": "test-deployment",
+                                    "status": "STABLE",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                              [
+                                {
+                                  "Item": {
+                                    "name": "test-rule",
+                                    "sort_key": "test-deployment",
+                                    "status": "STABLE",
+                                    "version": "0.0.1test",
+                                  },
+                                  "ReturnValues": "NONE",
+                                  "TableName": "_testing_state_table",
+                                },
+                              ],
+                            ],
+                            "results": [
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                              {
+                                "type": "return",
+                                "value": undefined,
+                              },
+                            ],
+                          },
                           "query": [MockFunction],
                           "update": [MockFunction],
                         },
@@ -811,7 +2194,20 @@ describe('autoscaling table IaC', () => {
                             },
                           ],
                           "billingMode": "PROVISIONED",
-                          "deployment": undefined,
+                          "deployment": {
+                            "accountId": "123456789012",
+                            "envPaths": {
+                              "cache": "",
+                              "config": "",
+                              "data": "",
+                              "log": "",
+                              "temp": "",
+                            },
+                            "name": "test-deployment",
+                            "region": "us-east-1",
+                            "stateTable": "_testing_state_table",
+                            "version": "0.0.1test",
+                          },
                           "keySchema": [
                             {
                               "AttributeName": "location",
@@ -852,7 +2248,20 @@ describe('autoscaling table IaC', () => {
                         ],
                         "Version": "2012-10-17",
                       },
-                      "deployment": undefined,
+                      "deployment": {
+                        "accountId": "123456789012",
+                        "envPaths": {
+                          "cache": "",
+                          "config": "",
+                          "data": "",
+                          "log": "",
+                          "temp": "",
+                        },
+                        "name": "test-deployment",
+                        "region": "us-east-1",
+                        "stateTable": "_testing_state_table",
+                        "version": "0.0.1test",
+                      },
                       "description": "Role for table-name table autoscaling",
                       "rolePolicyDocument": {
                         "Statement": [
@@ -886,7 +2295,20 @@ describe('autoscaling table IaC', () => {
                 "name": "table-name-writeAutoscalingTarget",
                 "properties": {
                   "_INTERNAL_STATE_RESOURCE": undefined,
-                  "deployment": undefined,
+                  "deployment": {
+                    "accountId": "123456789012",
+                    "envPaths": {
+                      "cache": "",
+                      "config": "",
+                      "data": "",
+                      "log": "",
+                      "temp": "",
+                    },
+                    "name": "test-deployment",
+                    "region": "us-east-1",
+                    "stateTable": "_testing_state_table",
+                    "version": "0.0.1test",
+                  },
                   "maxCapacity": 50,
                   "minCapacity": 1,
                   "resourceId": "table/table-name",
@@ -901,7 +2323,20 @@ describe('autoscaling table IaC', () => {
             "name": "table-name-writeAutoscalingPolicy",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
-              "deployment": undefined,
+              "deployment": {
+                "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
+                "name": "test-deployment",
+                "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
+              },
               "policyType": "TargetTrackingScaling",
               "resourceId": "table/table-name",
               "scalableDimension": "dynamodb:table:WriteCapacityUnits",
@@ -946,7 +2381,236 @@ describe('autoscaling table IaC', () => {
                       "batchWrite": [MockFunction],
                       "delete": [MockFunction],
                       "get": [MockFunction],
-                      "put": [MockFunction],
+                      "put": [MockFunction] {
+                        "calls": [
+                          [
+                            {
+                              "Item": {
+                                "name": "test-rule",
+                                "sort_key": "test-deployment",
+                                "status": "RECONCILING",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name",
+                                "sort_key": "test-deployment",
+                                "status": "RECONCILING",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-autoscaling-role",
+                                "sort_key": "test-deployment",
+                                "status": "RECONCILING",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-readAutoscalingTarget",
+                                "sort_key": "test-deployment",
+                                "status": "RECONCILING",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-readAutoscalingPolicy",
+                                "sort_key": "test-deployment",
+                                "status": "RECONCILING",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-writeAutoscalingTarget",
+                                "sort_key": "test-deployment",
+                                "status": "RECONCILING",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-writeAutoscalingPolicy",
+                                "sort_key": "test-deployment",
+                                "status": "RECONCILING",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name",
+                                "sort_key": "test-deployment",
+                                "status": "STABLE",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-autoscaling-role",
+                                "sort_key": "test-deployment",
+                                "status": "STABLE",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-readAutoscalingTarget",
+                                "sort_key": "test-deployment",
+                                "status": "STABLE",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-readAutoscalingPolicy",
+                                "sort_key": "test-deployment",
+                                "status": "STABLE",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-writeAutoscalingTarget",
+                                "sort_key": "test-deployment",
+                                "status": "STABLE",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "table-name-writeAutoscalingPolicy",
+                                "sort_key": "test-deployment",
+                                "status": "STABLE",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                          [
+                            {
+                              "Item": {
+                                "name": "test-rule",
+                                "sort_key": "test-deployment",
+                                "status": "STABLE",
+                                "version": "0.0.1test",
+                              },
+                              "ReturnValues": "NONE",
+                              "TableName": "_testing_state_table",
+                            },
+                          ],
+                        ],
+                        "results": [
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                          {
+                            "type": "return",
+                            "value": undefined,
+                          },
+                        ],
+                      },
                       "query": [MockFunction],
                       "update": [MockFunction],
                     },
@@ -965,7 +2629,20 @@ describe('autoscaling table IaC', () => {
                         },
                       ],
                       "billingMode": "PROVISIONED",
-                      "deployment": undefined,
+                      "deployment": {
+                        "accountId": "123456789012",
+                        "envPaths": {
+                          "cache": "",
+                          "config": "",
+                          "data": "",
+                          "log": "",
+                          "temp": "",
+                        },
+                        "name": "test-deployment",
+                        "region": "us-east-1",
+                        "stateTable": "_testing_state_table",
+                        "version": "0.0.1test",
+                      },
                       "keySchema": [
                         {
                           "AttributeName": "location",
@@ -1006,7 +2683,20 @@ describe('autoscaling table IaC', () => {
                     ],
                     "Version": "2012-10-17",
                   },
-                  "deployment": undefined,
+                  "deployment": {
+                    "accountId": "123456789012",
+                    "envPaths": {
+                      "cache": "",
+                      "config": "",
+                      "data": "",
+                      "log": "",
+                      "temp": "",
+                    },
+                    "name": "test-deployment",
+                    "region": "us-east-1",
+                    "stateTable": "_testing_state_table",
+                    "version": "0.0.1test",
+                  },
                   "description": "Role for table-name table autoscaling",
                   "rolePolicyDocument": {
                     "Statement": [
@@ -1040,7 +2730,20 @@ describe('autoscaling table IaC', () => {
             "name": "table-name-writeAutoscalingTarget",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
-              "deployment": undefined,
+              "deployment": {
+                "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
+                "name": "test-deployment",
+                "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
+              },
               "maxCapacity": 50,
               "minCapacity": 1,
               "resourceId": "table/table-name",

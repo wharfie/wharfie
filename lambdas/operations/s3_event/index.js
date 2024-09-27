@@ -1,6 +1,6 @@
 'use strict';
 
-const { Action, OperationActionGraph } = require('../../lib/graph/');
+const { Action, Operation, Resource } = require('../../lib/graph/');
 const logging = require('../../lib/logging');
 const resource_db = require('../../lib/dynamo/operations');
 const register_partition = require('../actions/register_partition');
@@ -11,7 +11,7 @@ const side_effects = require('../side_effects');
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
+ * @param {Resource} resource -
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function start(event, context, resource) {
@@ -19,88 +19,58 @@ async function start(event, context, resource) {
   if (!event.operation_id || !event.action_id || !event.operation_started_at)
     throw new Error('Event missing fields');
 
-  const action_graph = new OperationActionGraph();
-  const start_action = new Action({
+  event_log.info('action graph generating');
+  const operation = new Operation({
+    resource_id: resource.id,
+    id: event.operation_id,
+    type: event.operation_type,
+    status: Operation.Status.RUNNING,
+    started_at: Date.parse(event.operation_started_at) / 1000,
+    operation_inputs: event.operation_inputs,
+  });
+  const start_action = operation.createAction({
     type: Action.Type.START,
     id: event.action_id,
   });
-  const register_partition_action = new Action({
+  const register_partition_action = operation.createAction({
     type: Action.Type.REGISTER_PARTITION,
+    dependsOn: [start_action],
   });
-  const find_single_compaction_action = new Action({
+  const find_single_compaction_action = operation.createAction({
     type: Action.Type.RUN_SINGLE_COMPACTION,
+    dependsOn: [register_partition_action],
   });
-  const update_symlinks_action = new Action({
+  const update_symlinks_action = operation.createAction({
     type: Action.Type.UPDATE_SYMLINKS,
+    dependsOn: [find_single_compaction_action],
   });
-  const finish_action = new Action({
+  const finish_action = operation.createAction({
     type: Action.Type.FINISH,
+    dependsOn: [update_symlinks_action],
   });
-  const side_effect__cloudwatch = new Action({
+  const side_effect__cloudwatch = operation.createAction({
     type: Action.Type.SIDE_EFFECT__CLOUDWATCH,
+    dependsOn: [finish_action],
   });
-  const side_effect__dagster = new Action({
+  const side_effect__dagster = operation.createAction({
     type: Action.Type.SIDE_EFFECT__DAGSTER,
+    dependsOn: [finish_action],
   });
-  const side_effect__wharfie = new Action({
+  const side_effect__wharfie = operation.createAction({
     type: Action.Type.SIDE_EFFECT__WHARFIE,
+    dependsOn: [finish_action],
   });
-  const side_effects_finish_action = new Action({
+  operation.createAction({
     type: Action.Type.SIDE_EFFECTS__FINISH,
+    dependsOn: [
+      side_effect__cloudwatch,
+      side_effect__dagster,
+      side_effect__wharfie,
+    ],
   });
-  action_graph.addActions([
-    start_action,
-    register_partition_action,
-    find_single_compaction_action,
-    update_symlinks_action,
-    finish_action,
-    side_effect__cloudwatch,
-    side_effect__dagster,
-    side_effect__wharfie,
-    side_effects_finish_action,
-  ]);
-  action_graph.addDependency(start_action, register_partition_action);
-  action_graph.addDependency(
-    register_partition_action,
-    find_single_compaction_action
-  );
-  action_graph.addDependency(
-    find_single_compaction_action,
-    update_symlinks_action
-  );
-  action_graph.addDependency(update_symlinks_action, finish_action);
-  action_graph.addDependency(finish_action, side_effect__cloudwatch);
-  action_graph.addDependency(finish_action, side_effect__dagster);
-  action_graph.addDependency(finish_action, side_effect__wharfie);
-  action_graph.addDependency(
-    side_effect__cloudwatch,
-    side_effects_finish_action
-  );
-  action_graph.addDependency(side_effect__dagster, side_effects_finish_action);
-  action_graph.addDependency(side_effect__wharfie, side_effects_finish_action);
 
-  event_log.info('action graph generating');
-
-  const action_records = action_graph.getActions().map((action) => ({
-    action_id: action.id,
-    action_type: action.type,
-    action_status: 'PENDING',
-  }));
-
-  /** @type {import('../../typedefs').OperationRecord} */
-  const operation = {
-    resource_id: resource.resource_id,
-    operation_id: event.operation_id,
-    operation_type: event.operation_type,
-    operation_inputs: event.operation_inputs,
-    operation_status: 'RUNNING',
-    started_at: Date.parse(event.operation_started_at) / 1000,
-    last_updated_at: Date.parse(event.operation_started_at) / 1000,
-    action_graph,
-    actions: action_records,
-  };
   event_log.info('creating S3_EVENT operation and actions...');
-  await resource_db.createOperation(operation);
+  await resource_db.putOperation(operation);
 
   event_log.info('operation records created');
   return {
@@ -111,8 +81,8 @@ async function start(event, context, resource) {
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
- * @param {import('../../typedefs').OperationRecord} operation -
+ * @param {Resource} resource -
+ * @param {Operation} operation -
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function finish(event, context, resource, operation) {
@@ -120,11 +90,10 @@ async function finish(event, context, resource, operation) {
   event_log.info(`marking as complete`);
 
   const completed_at = Math.floor(Date.now() / 1000);
-  await resource_db.createOperation({
-    ...operation,
-    last_updated_at: completed_at,
-    operation_status: 'COMPLETED',
-  });
+  operation.last_updated_at = completed_at;
+  operation.status = Operation.Status.COMPLETED;
+
+  await resource_db.putOperation(operation);
 
   return {
     status: 'COMPLETED',
@@ -137,8 +106,8 @@ async function finish(event, context, resource, operation) {
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
- * @param {import('../../typedefs').OperationRecord} operation -
+ * @param {Resource} resource -
+ * @param {Operation} operation -
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function route(event, context, resource, operation) {

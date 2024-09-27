@@ -13,7 +13,7 @@ class Clean {
   }
 
   /**
-   * @param {import('../../../typedefs').ResourceRecord} resource -
+   * @param {import('../../../lib/graph/').Resource} resource -
    */
   async cleanup_query_metadata(resource) {
     const dateOffset = 24 * 60 * 60 * 1000; // 24 hours
@@ -33,7 +33,7 @@ class Clean {
   }
 
   /**
-   * @param {import('../../../typedefs').ResourceRecord} resource -
+   * @param {import('../../../lib/graph/').Resource} resource -
    */
   async cleanup_data(resource) {
     const dateOffset = 24 * 60 * 60 * 1000; // 24 hours
@@ -149,7 +149,7 @@ class Clean {
   }
 
   /**
-   * @param {import('../../../typedefs').ResourceRecord} resource -
+   * @param {import('../../../lib/graph/').Resource} resource -
    */
   async cleanAll(resource) {
     await Promise.all([
@@ -159,8 +159,8 @@ class Clean {
   }
 
   /**
-   * @param {import('../../../typedefs').ResourceRecord} resource -
-   * @param {import('../../../typedefs').QueryRecord} query -
+   * @param {import('../../../lib/graph/').Resource} resource -
+   * @param {import('../../../lib/graph/').Query} query -
    */
   async cleanupQueryOutput(resource, query) {
     const destinationDatabaseName =
@@ -183,7 +183,7 @@ class Clean {
     const base_location = location_segments
       .slice(0, location_segments.length - 2)
       .join('/');
-    const queryManifestLocation = `${base_location}/query_metadata/${query.query_execution_id}-manifest.csv`;
+    const queryManifestLocation = `${base_location}/query_metadata/${query.execution_id}-manifest.csv`;
     const { bucket: queryManifestBucket, prefix: queryManifestPrefix } =
       this.s3.parseS3Uri(queryManifestLocation);
     let body;
@@ -221,7 +221,7 @@ class Clean {
   }
 
   /**
-   * @param {import('../../../typedefs').ResourceRecord} resource -
+   * @param {import('../../../lib/graph/').Resource} resource -
    * @param {string} manifest_uri -
    */
   // @ts-ignore

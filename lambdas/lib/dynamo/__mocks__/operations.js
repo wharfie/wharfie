@@ -1,38 +1,45 @@
 'use strict';
+const { Resource, Operation, Action, Query } = require('../../graph/');
 
-/** @type {Object.<string, any>} */
+/** @type {Object.<string, import('../../graph/typedefs').ResourceRecordData | import('../../graph/typedefs').OperationRecordData | import('../../graph/typedefs').ActionRecordData | import('../../graph/typedefs').QueryRecordData >} */
 let __state = {};
 
 /**
- * @param {Object.<string, Object<string, import('../../../typedefs').ResourceRecord>>} state -
+ * @param {Object.<string, import('../../graph/typedefs').ResourceRecordData | import('../../graph/typedefs').OperationRecordData | import('../../graph/typedefs').ActionRecordData | import('../../graph/typedefs').QueryRecordData >} state -
  */
 function __setMockState(state = {}) {
   __state = state;
 }
 
 /**
- * @returns {Object.<string, Object<string, import('../../../typedefs').ResourceRecord>>} -
+ * @returns {Object.<string, import('../../graph/typedefs').ResourceRecordData | import('../../graph/typedefs').OperationRecordData | import('../../graph/typedefs').ActionRecordData | import('../../graph/typedefs').QueryRecordData >} -
  */
 function __getMockState() {
   return __state;
 }
 
 /**
- * @param {import('../../../typedefs').ResourceRecord} resource -
+ * @param {Resource} resource -
  */
 async function putResource(resource) {
-  if (!__state[resource.resource_id]) __state[resource.resource_id] = {};
-  __state[resource.resource_id][resource.resource_id] = resource;
+  const { sort_key, data } = resource.toRecord();
+  __state[sort_key] = data;
 }
 
 /**
  * @param {string} resource_id -
- * @returns {Promise<import('../../../typedefs').ResourceRecord?>} - event
+ * @returns {Promise<Resource?>} - event
  */
 async function getResource(resource_id) {
-  if (!__state[resource_id] || !__state[resource_id][resource_id])
+  if (!__state[resource_id])
     throw new Error(`no resource exists with id: ${resource_id}`);
-  return __state[resource_id][resource_id];
+  if (__state[resource_id].record_type !== Resource.RecordType)
+    throw Error(`record with id ${resource_id} is not of type resource`);
+  return Resource.fromRecord({
+    resource_id,
+    sort_key: resource_id,
+    data: __state[resource_id],
+  });
 }
 
 /**
@@ -43,62 +50,48 @@ async function deleteResource(resource_id) {
 }
 
 /**
- * @param {import('../../../typedefs').OperationRecord} operation -
+ * @param {Operation} operation -
  */
-async function createOperation(operation) {
-  if (!__state[operation.resource_id])
-    throw new Error('resource does not exist');
-  __state[operation.resource_id][
-    `${operation.resource_id}#${operation.operation_id}`
-  ] = {
-    resource_id: operation.resource_id,
-    operation_id: operation.operation_id,
-    operation_type: operation.operation_type,
-    operation_status: operation.operation_status,
-    operation_config: operation.operation_config,
-    operation_inputs: operation.operation_inputs,
-    action_graph: operation.action_graph,
-    started_at: operation.started_at,
-    last_updated_at: operation.last_updated_at,
-  };
-  (operation.actions || []).forEach((action) => {
-    __state[operation.resource_id][
-      `${operation.resource_id}#${operation.operation_id}#${action.action_id}`
-    ] = {
-      action_id: action.action_id,
-      action_type: action.action_type,
-      action_status: action.action_status,
-    };
-    (action.queries || []).forEach((query) => {
-      __state[operation.resource_id][
-        `${operation.resource_id}#${operation.operation_id}#${action.action_id}#${query.query_id}`
-      ] = query;
-    });
+async function putOperation(operation) {
+  const putItems = operation.toRecords();
+  putItems.forEach(({ sort_key, data }) => {
+    __state[sort_key] = data;
   });
 }
 
 /**
  * @param {string} resource_id -
  * @param {string} operation_id -
- * @returns {Promise<import('../../../typedefs').OperationRecord?>} - event
+ * @returns {Promise<Operation?>} - event
  */
 async function getOperation(resource_id, operation_id) {
-  const id = `${resource_id}#${operation_id}`;
-  return __state[resource_id][id];
+  const sort_key = `${resource_id}#${operation_id}`;
+  if (!__state[sort_key]) return null;
+  if (__state[sort_key].record_type !== Operation.RecordType)
+    throw Error(`record with id ${sort_key} is not of type operation`);
+  return Operation.fromRecord({
+    resource_id,
+    sort_key,
+    data: __state[sort_key],
+  });
 }
 
 /**
  * @param {string} resource_id -
  * @param {string} operation_id -
  * @param {string} action_id -
- * @returns {Promise<import('../../../typedefs').ActionRecord?>} -
+ * @returns {Promise<Action?>} -
  */
 async function getAction(resource_id, operation_id, action_id) {
-  const id = `${resource_id}#${operation_id}#${action_id}`;
-  if (!__state[resource_id] || !__state[resource_id][id]) {
-    throw new Error(`no action exists with ID ${id}`);
-  }
-  return __state[resource_id][id];
+  const sort_key = `${resource_id}#${operation_id}#${action_id}`;
+  if (!__state[sort_key]) return null;
+  if (__state[sort_key].record_type !== Action.RecordType)
+    throw Error(`record with id ${sort_key} is not of type action`);
+  return Action.fromRecord({
+    resource_id,
+    sort_key,
+    data: __state[sort_key],
+  });
 }
 
 /**
@@ -106,134 +99,87 @@ async function getAction(resource_id, operation_id, action_id) {
  * @param {string} operation_id -
  * @param {string} action_id -
  * @param {string} query_id -
- * @returns {Promise<import('../../../typedefs').QueryRecord?>} -
+ * @returns {Promise<Query?>} -
  */
 async function getQuery(resource_id, operation_id, action_id, query_id) {
-  const id = `${resource_id}#${operation_id}#${action_id}#${query_id}`;
-  if (!__state[resource_id] || !__state[resource_id][id])
-    throw new Error(`no query exists with id: ${id}`);
-  return __state[resource_id][id];
-}
-
-/**
- * @param {string} resource_id -
- * @param {string} operation_id -
- * @param {string} action_id -
- * @returns {Promise<import('../../../typedefs').QueryRecord[] | null>} -
- */
-async function getActionQueries(resource_id, operation_id, action_id) {
-  if (!__state[resource_id]) throw new Error('resource does not exist');
-  const id = `${resource_id}#${operation_id}#${action_id}#`;
-  return Object.keys(__state[resource_id])
-    .filter((key) => key.startsWith(id))
-    .map((key) => __state[resource_id][key]);
-}
-
-/**
- * @param {string} resource_id -
- * @param {import('../../../typedefs').OperationRecord} operation -
- */
-async function putOperation(resource_id, operation) {
-  if (!__state[resource_id]) throw new Error('resource does not exist');
-  __state[resource_id][`${resource_id}#${operation.operation_id}`] = {
+  const sort_key = `${resource_id}#${operation_id}#${action_id}#${query_id}`;
+  if (!__state[sort_key]) return null;
+  if (__state[sort_key].record_type !== Query.RecordType)
+    throw Error(`record with id ${sort_key} is not of type query`);
+  return Query.fromRecord({
     resource_id,
-    operation_id: operation.operation_id,
-    operation_type: operation.operation_type,
-    operation_status: operation.operation_status,
-    operation_config: operation.operation_config,
-    operation_inputs: operation.operation_inputs,
-    action_graph: operation.action_graph,
-    started_at: operation.started_at,
-    last_updated_at: operation.last_updated_at,
-  };
+    sort_key,
+    data: __state[sort_key],
+  });
 }
 
 /**
- * @param {string} resource_id -
- * @param {string} operation_id -
- * @param {import('../../../typedefs').ActionRecord} action -
+ * @param {Action} action -
  */
-async function putAction(resource_id, operation_id, action) {
-  if (!__state[resource_id]) throw new Error('resource does not exist');
-  __state[resource_id][`${resource_id}#${operation_id}#${action.action_id}`] = {
-    action_id: action.action_id,
-    action_type: action.action_type,
-    action_status: action.action_status,
-  };
+async function putAction(action) {
+  const putItems = action.toRecords();
+  putItems.forEach(({ sort_key, data }) => {
+    __state[sort_key] = data;
+  });
 }
 
 /**
- * @param {string} resource_id -
- * @param {string} operation_id -
- * @param {string} action_id -
- * @param {string} new_status -
- * @param {string} old_status -
+ * @param {Action} action -
+ * @param {import('../../graph/action').WharfieActionStatusEnum} new_status -
  * @returns {Promise<boolean>} -
  */
-async function updateActionStatus(
-  resource_id,
-  operation_id,
-  action_id,
-  new_status,
-  old_status
-) {
-  if (!__state[resource_id]) throw new Error('resource does not exist');
-  if (
-    __state[resource_id][`${resource_id}#${operation_id}#${action_id}`]
-      .status === old_status
-  ) {
-    __state[resource_id][`${resource_id}#${operation_id}#${action_id}`].status =
-      new_status;
+async function updateActionStatus(action, new_status) {
+  const sort_key = `${action.resource_id}#${action.operation_id}#${action.id}`;
+  if (!__state[sort_key])
+    throw new Error(`no action exists with id: ${sort_key}`);
+  if (__state[sort_key].record_type !== Action.RecordType)
+    throw Error(`record with id ${sort_key} is not of type action`);
+  if (__state[sort_key].status === action.status) {
+    __state[sort_key].status = new_status;
     return true;
   }
   return false;
 }
 
 /**
- * @param {string} resource_id -
- * @param {string} operation_id -
- * @param {string} action_id -
- * @param {import('../../../typedefs').QueryRecord} query -
+ * @param {Query} query -
  */
-async function putQuery(resource_id, operation_id, action_id, query) {
-  if (!__state[resource_id]) throw new Error('resource does not exist');
-  __state[resource_id][
-    `${resource_id}#${operation_id}#${action_id}#${query.query_id}`
-  ] = query;
+async function putQuery(query) {
+  const putItem = query.toRecord();
+  __state[putItem.sort_key] = putItem.data;
+}
+
+/**
+ * @param {Query[]} queries -
+ */
+async function putQueries(queries) {
+  queries.forEach(putQuery);
 }
 
 /**
  * @param {string} resource_id -
  * @param {string} operation_id -
  * @param {string} action_id -
- * @param {import('../../../typedefs').QueryRecord[]} queries -
- */
-async function putQueries(resource_id, operation_id, action_id, queries) {
-  if (!__state[resource_id]) throw new Error('resource does not exist');
-  queries.forEach((query) => {
-    __state[resource_id][
-      `${resource_id}#${operation_id}#${action_id}#${query.query_id}`
-    ] = query;
-  });
-}
-
-/**
- * @param {string} resource_id -
- * @param {string} operation_id -
- * @param {string} action_id -
- * @returns {Promise<import('../../../typedefs').QueryRecord[]>} -
+ * @returns {Promise<Query[]>} -
  */
 async function getQueries(resource_id, operation_id, action_id) {
-  if (!__state[resource_id]) throw new Error('resource does not exist');
   const id = `${resource_id}#${operation_id}#${action_id}#`;
-  return Object.keys(__state[resource_id])
+  return Object.keys(__state)
     .filter((key) => key.startsWith(id))
-    .map((key) => __state[resource_id][key]);
+    .map((key) => {
+      if (__state[key].record_type !== Query.RecordType)
+        throw Error(`record with id ${key} is not of type query`);
+      return Query.fromRecord({
+        resource_id,
+        sort_key: key,
+        data: __state[key],
+      });
+    });
 }
 
 /**
- * @param {import('../../../typedefs').OperationRecord} operation -
- * @param {string} action_type -
+ * @param {Operation} operation -
+ * @param {import('../../graph/action').WharfieActionTypeEnum} action_type -
  * @param {import('../../logging/logger')?} logger -
  * @param {boolean} includeQueries -
  * @returns {Promise<boolean>} -
@@ -244,113 +190,259 @@ async function checkActionPrerequisites(
   logger,
   includeQueries = true
 ) {
-  if (!__state[operation.resource_id])
-    throw new Error('resource does not exist');
-  const current_action = operation.action_graph.getActionByType(action_type);
-  const prerequisite_actions =
-    operation.action_graph.getUpstreamActions(current_action) || [];
+  const current_action_id = operation.getActionIdByType(action_type);
+  const prerequisite_action_ids =
+    operation.getUpstreamActionIds(current_action_id) || [];
   logger &&
     logger.debug(
       `checking that prerequisite actions are completed ${JSON.stringify(
-        prerequisite_actions
+        prerequisite_action_ids
       )}`
     );
   let prerequisites_met = true;
-  while (prerequisite_actions.length > 0) {
-    const action = prerequisite_actions.pop();
-    if (!action) continue;
-    const id = `${operation.resource_id}#${operation.operation_id}#${action.id}`;
-    const Items = Object.keys(__state[operation.resource_id])
+  while (prerequisite_action_ids.length > 0) {
+    const action_id = prerequisite_action_ids.pop();
+    if (!action_id) continue;
+    const id = `${operation.resource_id}#${operation.id}#${action_id}`;
+    const Items = Object.keys(__state)
       .filter((key) => key.startsWith(id))
-      .map((key) => __state[operation.resource_id][key]);
+      .map((key) => __state[key]);
     const incompleteQueries = [];
-    while ((Items || []).length > 0) {
-      const data = (Items || []).pop() || {};
-      if (data.action_status && data.action_status !== 'COMPLETED') {
-        logger &&
-          logger.info(
-            `prerequisite action ${operation.operation_type}:${action_type} hasn't finished running yet`
-          );
-        prerequisites_met = false;
-      }
-      if (data.action_status && data.action_status === 'FAILED') {
-        throw new Error(
-          `prerequisite action ${operation.operation_type}:${action_type} failed`
-        );
-      }
-      if (
-        includeQueries &&
-        data.query_status &&
-        data.query_status !== 'COMPLETED'
-      ) {
-        incompleteQueries.push(data.query_id);
-        logger &&
-          logger.debug(`incomplete prerequisite query ${JSON.stringify(data)}`);
-        prerequisites_met = false;
-      }
-      if (
-        includeQueries &&
-        data.query_status &&
-        data.query_status === 'FAILED'
-      ) {
-        throw new Error(`prerequisite query failed ${JSON.stringify(data)}`);
+    while (Items.length > 0) {
+      const data = Items.pop();
+      if (!data) continue;
+      switch (data.record_type) {
+        case Action.RecordType:
+          if (data.status !== Action.Status.COMPLETED) {
+            logger &&
+              logger.info(
+                `prerequisite action ${operation.type}:${data.type} hasn't finished running yet`
+              );
+            prerequisites_met = false;
+          }
+          if (data.status === Action.Status.FAILED) {
+            throw new Error(
+              `prerequisite action ${operation.type}:${data.type} failed`
+            );
+          }
+          break;
+        case Query.RecordType:
+          if (includeQueries && data.status && data.status !== 'COMPLETED') {
+            incompleteQueries.push(data.id);
+            logger &&
+              logger.debug(
+                `incomplete prerequisite query ${JSON.stringify(data)}`
+              );
+            prerequisites_met = false;
+          }
+          if (includeQueries && data.status && data.status === 'FAILED') {
+            throw new Error(
+              `prerequisite query failed ${JSON.stringify(data)}`
+            );
+          }
+          break;
       }
     }
     incompleteQueries.length > 0 &&
       logger &&
       logger.info(
-        `prerequisite action ${operation.operation_type}:${action_type} has ${incompleteQueries.length} incomplete queries`
+        `prerequisite action ${operation.type}:${action_type} has ${incompleteQueries.length} incomplete queries`
       );
   }
   return prerequisites_met;
 }
 
 /**
- * @param {string} resource_id -
- * @param {string} operation_id -
+ * @param {Operation} operation -
  */
-async function deleteOperation(resource_id, operation_id) {
-  const id = `${resource_id}#${operation_id}`;
-  Object.keys(__state[resource_id])
-    .filter((key) => key.startsWith(id))
-    .map((key) => delete __state[resource_id][key]);
+async function deleteOperation(operation) {
+  const sort_key = `${operation.resource_id}#${operation.id}`;
+  Object.keys(__state)
+    .filter((key) => key.startsWith(sort_key))
+    .forEach((key) => delete __state[key]);
 }
+
+/**
+ * @typedef getRecordsReturn
+ * @property {Operation[]} operations -
+ * @property {Action[]} actions -
+ * @property {Query[]} queries -
+ */
 
 /**
  * @param {string} resource_id -
  * @param {string} operation_id -
- * @returns {Promise<any>} -
+ * @returns {Promise<getRecordsReturn>} -
  */
 async function getRecords(resource_id, operation_id = '') {
-  if (!__state[resource_id]) throw new Error('resource does not exist');
   const id = `${resource_id}#${operation_id}`;
-  const Items = Object.keys(__state[resource_id])
+  const Items = Object.keys(__state)
     .filter((key) => key.startsWith(id))
-    .map((key) => __state[resource_id][key]);
-  /** @type {any} */
+    .sort((a, b) => a.localeCompare(b))
+    .map((key) => __state[key])
+    .filter((data) => data.record_type !== Resource.RecordType);
+
+  /** @type {getRecordsReturn} */
   const records = {
     operations: [],
     actions: [],
     queries: [],
   };
   if (!Items) return records;
-  Items.forEach((item) => {
-    if (item.operation_type) records.operations.push(item);
-    if (item.action_id) records.actions.push(item);
-    if (item.query_id) records.queries.push(item);
-  });
+
+  /**
+   * @typedef ActionRecordGroup
+   * @property {import('../../graph/typedefs').ActionRecord} action_record -
+   * @property {import('../../graph/typedefs').QueryRecord[]} query_records -
+   */
+  /** @type {ActionRecordGroup[]} */
+  let operationBatch = [];
+  /** @type {import('../../graph/typedefs').QueryRecord[]} */
+  let actionBatch = [];
+  while (Items.length > 0) {
+    const item = Items.pop();
+    if (!item) continue;
+    switch (item.record_type) {
+      case Operation.RecordType:
+        records.operations.push(
+          Operation.fromRecords(
+            {
+              resource_id: item.resource_id,
+              sort_key: '',
+              data: item,
+            },
+            operationBatch
+          )
+        );
+        operationBatch = [];
+        break;
+      case Action.RecordType:
+        records.actions.push(
+          Action.fromRecords(
+            {
+              resource_id: item.resource_id,
+              sort_key: '',
+              data: item,
+            },
+            actionBatch
+          )
+        );
+        operationBatch.push({
+          action_record: {
+            resource_id: item.resource_id,
+            sort_key: '',
+            data: item,
+          },
+          query_records: actionBatch,
+        });
+        actionBatch = [];
+        break;
+      case Query.RecordType:
+        records.queries.push(
+          Query.fromRecord({
+            resource_id: item.resource_id,
+            sort_key: '',
+            data: item,
+          })
+        );
+        actionBatch.push({
+          resource_id: item.resource_id,
+          sort_key: '',
+          data: item,
+        });
+        break;
+      default:
+        throw new Error(`unrecognized record_type, in record ${item}`);
+    }
+  }
   return records;
 }
 
+/**
+ * @returns {Promise<Operation[]>} -
+ */
+async function getAllOperations() {
+  const Items = Object.values(__state)
+    .filter((data) => data.record_type !== Resource.RecordType)
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  /** @type {Operation[]} */
+  const operations = [];
+  if (!Items) return operations;
+  /**
+   * @typedef ActionRecordGroup
+   * @property {import('../../graph/typedefs').ActionRecord} action_record -
+   * @property {import('../../graph/typedefs').QueryRecord[]} query_records -
+   */
+  /** @type {ActionRecordGroup[]} */
+  let operationBatch = [];
+  /** @type {import('../../graph/typedefs').QueryRecord[]} */
+  let actionBatch = [];
+  while (Items.length > 0) {
+    const item = Items.pop();
+    if (!item) continue;
+    switch (item.record_type) {
+      case Operation.RecordType:
+        operations.push(
+          Operation.fromRecords(
+            {
+              resource_id: item.resource_id,
+              sort_key: '',
+              data: item,
+            },
+            operationBatch
+          )
+        );
+        operationBatch = [];
+        break;
+      case Action.RecordType:
+        operationBatch.push({
+          action_record: {
+            resource_id: item.resource_id,
+            sort_key: '',
+            data: item,
+          },
+          query_records: actionBatch,
+        });
+        actionBatch = [];
+        break;
+      case Query.RecordType:
+        actionBatch.push({
+          resource_id: item.resource_id,
+          sort_key: '',
+          data: item,
+        });
+        break;
+      default:
+        throw new Error(`unrecognized record_type, in record ${item}`);
+    }
+  }
+  return operations;
+}
+
+/**
+ * @returns {Promise<Resource[]>} -
+ */
+async function getAllResources() {
+  const operations = Object.values(__state)
+    .filter((data) => data.record_type === Resource.RecordType)
+    .map((data) =>
+      Resource.fromRecord({
+        resource_id: data.id,
+        sort_key: '',
+        data,
+      })
+    );
+  return operations;
+}
+
 module.exports = {
-  createOperation,
   getRecords,
-  // getAllOperations,
-  // getAllResources,
+  getAllOperations,
+  getAllResources,
   getResource,
   getOperation,
   getAction,
-  getActionQueries,
   getQuery,
   getQueries,
   checkActionPrerequisites,

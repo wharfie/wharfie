@@ -4,7 +4,7 @@
 const { createId } = require('../../../lambdas/lib/id');
 jest.mock('../../../lambdas/lib/id');
 
-process.env.AWS_MOCKS = true;
+process.env.AWS_MOCKS = '1';
 const { Lambda } = jest.requireMock('@aws-sdk/client-lambda');
 
 const {
@@ -12,9 +12,11 @@ const {
   EventSourceMapping,
 } = require('../../../lambdas/lib/actor/resources/aws/');
 const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
+const { getMockDeploymentProperties } = require('../util');
 
 describe('event source mapping IaC', () => {
   beforeAll(async () => {
+    // @ts-ignore
     createId.mockReturnValue('test-id');
   });
   it('basic', async () => {
@@ -23,6 +25,7 @@ describe('event source mapping IaC', () => {
     const lambdaFunction = new LambdaFunction({
       name: 'test-function',
       properties: {
+        deployment: getMockDeploymentProperties(),
         runtime: 'nodejs20.x',
         role: 'test-role',
         handler: `index.handler`,
@@ -52,6 +55,7 @@ describe('event source mapping IaC', () => {
     const eventSourceMapping = new EventSourceMapping({
       name: 'test-event-source-mapping',
       properties: {
+        deployment: getMockDeploymentProperties(),
         functionName: lambdaFunction.name,
         eventSourceArn: 'test-event-source-arn',
         batchSize: 1,
@@ -67,6 +71,20 @@ describe('event source mapping IaC', () => {
         "name": "test-event-source-mapping",
         "properties": {
           "batchSize": 1,
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
           "eventSourceArn": "test-event-source-arn",
           "functionName": "test-function",
           "maximumBatchingWindowInSeconds": 0,
@@ -92,6 +110,20 @@ describe('event source mapping IaC', () => {
         "name": "test-event-source-mapping",
         "properties": {
           "batchSize": 1,
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
           "eventSourceArn": "test-event-source-arn",
           "functionName": "test-function",
           "maximumBatchingWindowInSeconds": 0,

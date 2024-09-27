@@ -1,13 +1,14 @@
 /* eslint-disable jest/no-large-snapshots */
 'use strict';
 
-process.env.AWS_MOCKS = true;
+process.env.AWS_MOCKS = '1';
 const { EventsRule } = require('../../../lambdas/lib/actor/resources/aws/');
 const { CloudWatchEvents } = jest.requireMock(
   '@aws-sdk/client-cloudwatch-events'
 );
 
 const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
+const { getMockDeploymentProperties } = require('../util');
 
 describe('events rule IaC', () => {
   it('basic', async () => {
@@ -16,6 +17,7 @@ describe('events rule IaC', () => {
     const eventsRule = new EventsRule({
       name: 'test-rule',
       properties: {
+        deployment: getMockDeploymentProperties(),
         description: `practice rule`,
         state: EventsRule.ENABLED,
         scheduleExpression: 'rate(1 minute)',
@@ -42,6 +44,20 @@ describe('events rule IaC', () => {
         "dependsOn": [],
         "name": "test-rule",
         "properties": {
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
           "description": "practice rule",
           "roleArn": "arn:aws:iam::123456789012:role/test-role",
           "scheduleExpression": "rate(1 minute)",
@@ -78,6 +94,20 @@ describe('events rule IaC', () => {
         "dependsOn": [],
         "name": "test-rule",
         "properties": {
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
           "description": "practice rule",
           "roleArn": "arn:aws:iam::123456789012:role/test-role",
           "scheduleExpression": "rate(1 minute)",

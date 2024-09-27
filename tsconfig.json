@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "esModuleInterop": true,
     "lib": [
       "es2019",
       "es2020.promise",
@@ -16,6 +17,13 @@
     "noEmit": true,
     "resolveJsonModule": true
   },
-  "include": ["lambdas/**/*.js", "cli/**/*.js", "bin/wharfie"],
+  "include": [
+    "lambdas/**/*.js",
+    "cli/**/*.js",
+    "bin/wharfie",
+    "test/lib/dynamo/operation.test.js",
+    "test/lib/dynamo/operation-mock.test.js"
+    // "test/**/*.js"
+  ],
   "exclude": ["lambdas/udf_entrypoint.js"]
 }

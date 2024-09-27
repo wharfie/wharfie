@@ -2,18 +2,20 @@
 /* eslint-disable jest/no-large-snapshots */
 'use strict';
 
-process.env.AWS_MOCKS = true;
+process.env.AWS_MOCKS = '1';
 jest.mock('crypto');
 
 const crypto = require('crypto');
 const WharfieActorResources = require('../../lambdas/lib/actor/resources/wharfie-actor-resources');
 const { Policy, Bucket } = require('../../lambdas/lib/actor/resources/aws');
+const { getMockDeploymentProperties } = require('./util');
 
 const { deserialize } = require('../../lambdas/lib/actor/deserialize');
 describe('wharfie actor resources IaC', () => {
   beforeAll(() => {
     const mockUpdate = jest.fn().mockReturnThis();
     const mockDigest = jest.fn().mockReturnValue('mockedHash');
+    // @ts-ignore
     crypto.createHash.mockReturnValue({
       update: mockUpdate,
       digest: mockDigest,
@@ -26,16 +28,15 @@ describe('wharfie actor resources IaC', () => {
     expect.assertions(4);
     const bucket = new Bucket({
       name: 'test-bucket',
+      properties: {
+        deployment: getMockDeploymentProperties(),
+      },
     });
     await bucket.reconcile();
     const sharedPolicy = new Policy({
       name: `shared-policy`,
       properties: {
-        deployment: {
-          name: 'test-deployment',
-          accountId: '123456789012',
-          region: 'us-east-1',
-        },
+        deployment: getMockDeploymentProperties(),
         description: `shared policy`,
         document: () => ({
           Version: '2012-10-17',
@@ -53,11 +54,7 @@ describe('wharfie actor resources IaC', () => {
     const wharfieActorResources = new WharfieActorResources({
       name: 'test-actor-resources',
       properties: {
-        deployment: {
-          name: 'test-deployment',
-          accountId: '123456789012',
-          region: 'us-east-1',
-        },
+        deployment: getMockDeploymentProperties(),
         handler: './lambdas/monitor.handler',
         actorName: 'test-actor',
         actorSharedPolicyArn: sharedPolicy.get('arn'),
@@ -88,8 +85,17 @@ describe('wharfie actor resources IaC', () => {
           "artifactBucket": "test-bucket",
           "deployment": {
             "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
             "name": "test-deployment",
             "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
           },
           "environmentVariables": {
             "123": "456",
@@ -109,8 +115,17 @@ describe('wharfie actor resources IaC', () => {
               "batchSize": 1,
               "deployment": {
                 "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
                 "name": "test-deployment",
                 "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
               },
               "eventSourceArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-test-actor-queue",
               "functionName": "test-deployment-test-actor-function",
@@ -127,8 +142,17 @@ describe('wharfie actor resources IaC', () => {
               "artifactKey": "actor-artifacts/test-deployment-test-actor-build/mockedHash.zip",
               "deployment": {
                 "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
                 "name": "test-deployment",
                 "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
               },
               "functionCodeHash": "mockedHash",
               "handler": "./lambdas/monitor.handler",
@@ -144,8 +168,17 @@ describe('wharfie actor resources IaC', () => {
               "delaySeconds": "0",
               "deployment": {
                 "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
                 "name": "test-deployment",
                 "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
               },
               "messageRetentionPeriod": "1209600",
               "receiveMessageWaitTimeSeconds": "0",
@@ -178,8 +211,17 @@ describe('wharfie actor resources IaC', () => {
               },
               "deployment": {
                 "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
                 "name": "test-deployment",
                 "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
               },
               "description": "test-actor lambda",
               "environment": {
@@ -214,8 +256,17 @@ describe('wharfie actor resources IaC', () => {
               "delaySeconds": "0",
               "deployment": {
                 "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
                 "name": "test-deployment",
                 "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
               },
               "messageRetentionPeriod": "1209600",
               "policy": {
@@ -284,8 +335,17 @@ describe('wharfie actor resources IaC', () => {
               },
               "deployment": {
                 "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
                 "name": "test-deployment",
                 "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
               },
               "description": "test-deployment actor test-actor role",
               "managedPolicyArns": [
@@ -320,6 +380,7 @@ describe('wharfie actor resources IaC', () => {
 
     const deserialized = deserialize(serialized);
     await deserialized.reconcile();
+    // @ts-ignore
     expect(deserialized.properties).toMatchInlineSnapshot(`
       {
         "actorName": "test-actor",
@@ -327,8 +388,17 @@ describe('wharfie actor resources IaC', () => {
         "artifactBucket": "test-bucket",
         "deployment": {
           "accountId": "123456789012",
+          "envPaths": {
+            "cache": "",
+            "config": "",
+            "data": "",
+            "log": "",
+            "temp": "",
+          },
           "name": "test-deployment",
           "region": "us-east-1",
+          "stateTable": "_testing_state_table",
+          "version": "0.0.1test",
         },
         "environmentVariables": {
           "123": "456",

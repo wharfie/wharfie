@@ -27,9 +27,7 @@ const list = async () => {
   while (operations_to_remove.length > 0) {
     const operationChunk = operations_to_remove.splice(0, 10);
     await Promise.all(
-      operationChunk.map((operation) =>
-        deleteOperation(operation.resource_id, operation.operation_id)
-      )
+      operationChunk.map((operation) => deleteOperation(operation))
     );
     deletedOperations = deletedOperations + operationChunk.length;
     progressBar.update(deletedOperations);

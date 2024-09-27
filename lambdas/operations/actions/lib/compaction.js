@@ -1,4 +1,5 @@
 'use strict';
+const { Resource } = require('../../../lib/graph/');
 
 const cron = require('../../../lib/cron');
 
@@ -79,7 +80,7 @@ class Compaction {
 
   /**
    * @typedef getCompactionQueriesParams
-   * @property {import('../../../typedefs').ResourceRecord} resource -
+   * @property {Resource} resource -
    * @property {Array<import('../../../typedefs').Partition>} partitions - partitions to be compacted
    * @property {string} sourceDatabaseName - raw data to be compacted
    * @property {string} sourceTableName - raw data to be compacted
@@ -210,8 +211,8 @@ class Compaction {
   /**
    *
    * @typedef getCalculateViewPartitionQueriesParams
-   * @property {import('../../../typedefs').ResourceRecord} resource -
-   * @property {import('../../../typedefs').DaemonConfigSLA} SLA -
+   * @property {Resource} resource -
+   * @property {import('../../../typedefs').DaemonConfigSLA} [SLA] -
    * @property {number} operationTime -
    * @property {string} sourceDatabaseName -
    * @property {string} sourceTableName -

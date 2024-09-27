@@ -27,22 +27,24 @@ class QueryRunner {
       const query_event = JSON.parse(
         query_string.split('\n').slice(-1)[0].substring(3)
       );
-      const operations_state = dynamo_resource.__getMockState();
-      const action =
-        operations_state[query_event.resource_id][
-          `${query_event.resource_id}#${query_event.operation_id}#${query_event.action_id}`
-        ];
-      const query =
-        operations_state[query_event.resource_id][
-          `${query_event.resource_id}#${query_event.operation_id}#${query_event.action_id}#${query_event.query_id}`
-        ];
-      const operation =
-        operations_state[query_event.resource_id][
-          `${query_event.resource_id}#${query_event.operation_id}`
-        ];
-      const resource =
-        operations_state[query_event.resource_id][`${query_event.resource_id}`];
-
+      const action = await dynamo_resource.getAction(
+        query_event.resource_id,
+        query_event.operation_id,
+        query_event.action_id
+      );
+      const query = await dynamo_resource.getQuery(
+        query_event.resource_id,
+        query_event.operation_id,
+        query_event.action_id,
+        query_event.query_id
+      );
+      const operation = await dynamo_resource.getOperation(
+        query_event.resource_id,
+        query_event.operation_id
+      );
+      const resource = await dynamo_resource.getResource(
+        query_event.resource_id
+      );
       switch (query_event.action_type) {
         case 'RUN_SINGLE_COMPACTION':
           this._run_single_compaction_side_effects(
@@ -65,10 +67,10 @@ class QueryRunner {
   /**
    * @param {string} query_execution_id -
    * @param {string} query_string -
-   * @param {import('../../../lambdas/typedefs').ResourceRecord} resource -
-   * @param {import('../../../lambdas/typedefs').OperationRecord} operation -
-   * @param {import('../../../lambdas/typedefs').ActionRecord} _action -
-   * @param {import('../../../lambdas/typedefs').QueryRecord} _query -
+   * @param {import('../../../lambdas/lib/graph/').Resource} resource -
+   * @param {import('../../../lambdas/lib/graph/').Operation} operation -
+   * @param {import('../../../lambdas/lib/graph/').Action} _action -
+   * @param {import('../../../lambdas/lib/graph/').Query} _query -
    */
   async _run_single_compaction_side_effects(
     query_execution_id,
@@ -80,12 +82,13 @@ class QueryRunner {
     // eslint-disable-next-line no-unused-vars
     _query
   ) {
-    if (operation.operation_inputs?.partition) {
+    if (operation?.operation_inputs?.partition) {
       const { bucket, prefix } = this.s3._parseS3Uri(
         resource.destination_properties.location
       );
-      const location_segments =
-        resource.destination_properties.location.split('/');
+      const location_segments = (
+        resource?.destination_properties?.location || ''
+      ).split('/');
       const base_location = location_segments
         .slice(0, location_segments.length - 2)
         .join('/');

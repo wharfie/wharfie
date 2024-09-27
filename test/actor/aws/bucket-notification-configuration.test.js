@@ -1,7 +1,7 @@
 /* eslint-disable jest/no-large-snapshots */
 'use strict';
 
-process.env.AWS_MOCKS = true;
+process.env.AWS_MOCKS = '1';
 const { S3 } = jest.requireMock('@aws-sdk/client-s3');
 
 const {
@@ -9,6 +9,7 @@ const {
   BucketNotificationConfiguration,
 } = require('../../../lambdas/lib/actor/resources/aws/');
 const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
+const { getMockDeploymentProperties } = require('../util');
 
 describe('bucket notification configuration IaC', () => {
   it('basic', async () => {
@@ -17,6 +18,7 @@ describe('bucket notification configuration IaC', () => {
     const bucket = new Bucket({
       name: 'test-bucket',
       properties: {
+        deployment: getMockDeploymentProperties(),
         lifecycleConfiguration: {
           Rules: [
             {
@@ -43,6 +45,7 @@ describe('bucket notification configuration IaC', () => {
     const bucketNotificationConfig = new BucketNotificationConfiguration({
       name: 'test-bucket-notification-config',
       properties: {
+        deployment: getMockDeploymentProperties(),
         bucketName: bucket.name,
         notificationConfiguration: () => ({
           QueueConfigurations: [
@@ -68,6 +71,20 @@ describe('bucket notification configuration IaC', () => {
         "properties": {
           "arn": "arn:aws:s3:::test-bucket-notification-config",
           "bucketName": "test-bucket",
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
           "notificationConfiguration": {
             "QueueConfigurations": [
               {
@@ -92,10 +109,25 @@ describe('bucket notification configuration IaC', () => {
 
     const deserialized = deserialize(serialized);
     await deserialized.reconcile();
+    // @ts-ignore
     expect(deserialized.properties).toMatchInlineSnapshot(`
       {
         "arn": "arn:aws:s3:::test-bucket-notification-config",
         "bucketName": "test-bucket",
+        "deployment": {
+          "accountId": "123456789012",
+          "envPaths": {
+            "cache": "",
+            "config": "",
+            "data": "",
+            "log": "",
+            "temp": "",
+          },
+          "name": "test-deployment",
+          "region": "us-east-1",
+          "stateTable": "_testing_state_table",
+          "version": "0.0.1test",
+        },
         "notificationConfiguration": {
           "QueueConfigurations": [
             {
