@@ -11,6 +11,7 @@ const Database = require('./aws/glue-database');
 /**
  * @typedef WharfieDeploymentResourcesProperties
  * @property {string} loggingLevel -
+ * @property {number} [createdAt] -
  */
 
 /**
@@ -540,6 +541,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         dependencyTable: `${this.get('deployment').name}-dependencies`,
         locationTable: `${this.get('deployment').name}-locations`,
         tags: [],
+        createdAt: this.get('createdAt'),
       },
     });
 

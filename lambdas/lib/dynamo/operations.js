@@ -547,6 +547,7 @@ async function getRecords(resource_id, operation_id = '') {
   };
   if (!Items) return records;
   Items.forEach((item) => {
+    // @ts-ignore
     switch (item?.data?.record_type) {
       // @ts-ignore
       case Operation.RecordType:
@@ -566,7 +567,8 @@ async function getRecords(resource_id, operation_id = '') {
       default:
         console.log(item);
         throw new Error(
-          `unrecognized record_type ${item.data.record_type} , in record ${item}`
+          // @ts-ignore
+          `unrecognized record_type ${item?.data?.record_type} , in record ${item}`
         );
     }
   });
@@ -642,6 +644,7 @@ async function getAllResources() {
 /**
  * @param {Object.<string, import('../graph/typedefs').ResourceRecordData | import('../graph/typedefs').OperationRecordData | import('../graph/typedefs').ActionRecordData | import('../graph/typedefs').QueryRecordData >} state -
  */
+// @ts-ignore
 function __setMockState(state = {}) {
   throw new Error('stub for mock typechecking');
 }
@@ -651,6 +654,7 @@ function __setMockState(state = {}) {
  */
 function __getMockState() {
   throw new Error('stub for mock typechecking');
+  // @ts-ignore
   // eslint-disable-next-line no-unreachable
   return {};
 }
