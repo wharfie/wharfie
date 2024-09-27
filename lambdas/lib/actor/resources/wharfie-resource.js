@@ -6,6 +6,7 @@ const BaseResourceGroup = require('./base-resource-group');
 const { generateSchedule } = require('../../cron');
 const Athena = require('../../athena');
 const S3 = require('../../s3');
+const { Resource } = require('../../graph/');
 const { version } = require('../../../../package.json');
 
 const _athena = new Athena({});
@@ -219,25 +220,27 @@ class WharfieResource extends BaseResourceGroup {
               Bucket: bucket,
             });
           }
-          return {
-            data: {
-              region: this.get('region'),
-              source_region,
-              wharfie_version: version,
-              resource_status: 'CREATING',
-              athena_workgroup: workgroup.name,
-              daemon_config: {
-                Role: () => this.get('roleArn'),
-              },
-              source_properties: {
-                name: inputTable.name,
-                ...inputTable.resolveProperties(),
-              },
-              destination_properties: {
-                name: outputTable.name,
-                ...outputTable.resolveProperties(),
-              },
+          const resource = new Resource({
+            id: this.get('resourceId'),
+            region: this.get('region'),
+            source_region,
+            wharfie_version: version,
+            resource_status: 'CREATING',
+            athena_workgroup: workgroup.name,
+            daemon_config: {
+              Role: this.get('roleArn'),
             },
+            source_properties: {
+              name: inputTable.name,
+              ...inputTable.resolveProperties(),
+            },
+            destination_properties: {
+              name: outputTable.name,
+              ...outputTable.resolveProperties(),
+            },
+          });
+          return {
+            data: resource.toRecord().data,
           };
         },
         properties: {
