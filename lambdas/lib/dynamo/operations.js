@@ -547,7 +547,7 @@ async function getRecords(resource_id, operation_id = '') {
   };
   if (!Items) return records;
   Items.forEach((item) => {
-    switch (item.record_type) {
+    switch (item?.data?.record_type) {
       // @ts-ignore
       case Operation.RecordType:
         // @ts-ignore
@@ -564,8 +564,9 @@ async function getRecords(resource_id, operation_id = '') {
         records.queries.push(Query.fromRecord(item));
         break;
       default:
+        console.log(item);
         throw new Error(
-          `unrecognized record_type ${item.record_type} , in record ${item}`
+          `unrecognized record_type ${item.data.record_type} , in record ${item}`
         );
     }
   });
