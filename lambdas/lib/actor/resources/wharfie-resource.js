@@ -39,6 +39,7 @@ const s3 = new S3({});
  * @property {string} projectBucket -
  * @property {string | function(): string} region -
  * @property {number} [interval] -
+ * @property {number} [createdAt] -
  * @property {string} [scheduleQueueArn] -
  * @property {string} [scheduleRoleArn] -
  * @property {string | function(): string} roleArn -
@@ -222,6 +223,7 @@ class WharfieResource extends BaseResourceGroup {
           }
           const resource = new Resource({
             id: this.get('resourceId'),
+            created_at: this.get('createdAt'),
             region: this.get('region'),
             source_region,
             wharfie_version: version,
@@ -230,10 +232,12 @@ class WharfieResource extends BaseResourceGroup {
             daemon_config: {
               Role: this.get('roleArn'),
             },
+            // @ts-ignore
             source_properties: {
               name: inputTable.name,
               ...inputTable.resolveProperties(),
             },
+            // @ts-ignore
             destination_properties: {
               name: outputTable.name,
               ...outputTable.resolveProperties(),

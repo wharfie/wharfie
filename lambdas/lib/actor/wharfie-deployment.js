@@ -22,6 +22,7 @@ const envPaths = require('../env-paths');
  * @property {number} [resourceQueryConcurrency] -
  * @property {number} [maxQueriesPerAction] -
  * @property {string} [loggingLevel] -
+ * @property {number} [createdAt] -
  */
 
 /**
@@ -46,6 +47,7 @@ class WharfieDeployment extends BaseResourceGroup {
         loggingLevel: 'info',
         _INTERNAL_STATE_RESOURCE: true,
         deployment: () => this.getDeploymentProperties(),
+        createdAt: Date.now(),
       },
       properties
     );
@@ -150,6 +152,7 @@ class WharfieDeployment extends BaseResourceGroup {
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
         loggingLevel: this.get('loggingLevel'),
+        createdAt: this.get('createdAt'),
       },
     });
 

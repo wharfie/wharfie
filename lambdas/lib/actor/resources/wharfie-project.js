@@ -18,6 +18,7 @@ const { createStableHash } = require('../../crypto');
  * @property {string} operationTable -
  * @property {string} dependencyTable -
  * @property {string} locationTable -
+ * @property {number} [createdAt] -
  */
 
 /**
@@ -43,6 +44,7 @@ class WharfieProject extends BaseResourceGroup {
         : {},
       {
         project: { name },
+        createdAt: Date.now(),
       },
       properties
     );
@@ -272,6 +274,7 @@ class WharfieProject extends BaseResourceGroup {
       operationTable: this.get('operationTable'),
       dependencyTable: this.get('dependencyTable'),
       locationTable: this.get('locationTable'),
+      createdAt: this.get('createdAt'),
     };
   }
 

@@ -31,7 +31,9 @@ describe('deployment IaC', () => {
     expect.assertions(4);
     const deployment = new WharfieDeployment({
       name: 'test-deployment',
-      properties: {},
+      properties: {
+        createdAt: 123456789,
+      },
     });
     await deployment.reconcile();
 
@@ -80,6 +82,7 @@ describe('deployment IaC', () => {
         "properties": {
           "_INTERNAL_STATE_RESOURCE": true,
           "accountId": "",
+          "createdAt": 123456789,
           "deployment": {
             "accountId": "",
             "envPaths": {
@@ -1554,6 +1557,7 @@ describe('deployment IaC', () => {
             ],
             "name": "test-deployment-deployment-resources",
             "properties": {
+              "createdAt": 123456789,
               "deployment": {
                 "accountId": "",
                 "envPaths": {
@@ -1853,6 +1857,7 @@ describe('deployment IaC', () => {
                     },
                   ],
                   "compressed": false,
+                  "createdAt": 123456789,
                   "databaseName": "test-deployment",
                   "dependencyTable": "test-deployment-dependencies",
                   "deployment": {
@@ -2196,6 +2201,7 @@ describe('deployment IaC', () => {
                       "data": {
                         "data": {
                           "athena_workgroup": "test-deployment-logs-workgroup",
+                          "created_at": 123456789,
                           "daemon_config": {
                             "Role": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-role",
                           },
@@ -2315,8 +2321,10 @@ describe('deployment IaC', () => {
                             "tableType": "EXTERNAL_TABLE",
                             "tags": [],
                           },
+                          "id": "test-deployment.logs",
+                          "last_updated_at": 123456789,
+                          "record_type": "RESOURCE",
                           "region": "us-west-2",
-                          "resource_status": "CREATING",
                           "source_properties": {
                             "arn": "arn:aws:glue:us-west-2::table/test-deployment/logs_raw",
                             "catalogId": "",
@@ -2433,6 +2441,7 @@ describe('deployment IaC', () => {
                             "tags": [],
                           },
                           "source_region": "us-east-1",
+                          "status": "ACTIVE",
                           "wharfie_version": "0.0.1",
                         },
                       },
@@ -3103,6 +3112,7 @@ describe('deployment IaC', () => {
       {
         "_INTERNAL_STATE_RESOURCE": true,
         "accountId": "",
+        "createdAt": 123456789,
         "deployment": {
           "accountId": "",
           "envPaths": {
