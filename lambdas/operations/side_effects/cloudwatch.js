@@ -1,3 +1,5 @@
+const { Operation, Resource } = require('../../lib/graph/');
+
 const CloudWatch = require('../../lib/cloudwatch');
 const cloudwatchClient = new CloudWatch({
   region: process.env.AWS_REGION,
@@ -7,8 +9,8 @@ const STACK_NAME = process.env.STACK_NAME || '';
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
- * @param {import('../../typedefs').OperationRecord} operation -
+ * @param {Resource} resource -
+ * @param {Operation} operation -
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function cloudwatch(event, context, resource, operation) {
@@ -29,11 +31,11 @@ async function cloudwatch(event, context, resource, operation) {
           },
           {
             Name: 'resource',
-            Value: resource.resource_id,
+            Value: resource.id,
           },
           {
             Name: 'operation_type',
-            Value: operation.operation_type,
+            Value: operation.type,
           },
         ],
         Unit: 'Seconds',
@@ -49,7 +51,7 @@ async function cloudwatch(event, context, resource, operation) {
           },
           {
             Name: 'operation_type',
-            Value: operation.operation_type,
+            Value: operation.type,
           },
         ],
         Unit: 'Count',

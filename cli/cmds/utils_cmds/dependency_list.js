@@ -34,7 +34,7 @@ const view = async () => {
       dependsOn,
       description: resource.destination_properties.description,
       metadata: {
-        wharfie_resource_id: resource.resource_id,
+        wharfie_resource_id: resource.id,
         location: resource.destination_properties.location,
       },
     };

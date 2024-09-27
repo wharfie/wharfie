@@ -1,7 +1,7 @@
 'use strict';
 
 const logging = require('../../lib/logging');
-const { createId } = require('../../lib/id');
+const { Resource, Query } = require('../../lib/graph/');
 
 const daemon_log = logging.getDaemonLogger();
 
@@ -25,37 +25,38 @@ const QUEUE_URL = process.env.DAEMON_QUEUE_URL || '';
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').QueryEnqueueInput[]} queries -
+ * @param {import('../../typedefs').QueryEnqueueInput[]} query_inputs -
  */
-async function enqueue(event, context, queries) {
+async function enqueue(event, context, query_inputs) {
   if (!event.action_id || !event.operation_id)
     throw new Error('enqueue requires event with action_id and operation_id');
   const event_log = logging.getEventLogger(event, context);
-  const query_records = queries.map((query) => ({
-    query_id: createId(),
-    query_status: 'WAITING',
-    query_string: query.query_string,
-    query_data: query.query_data || {},
-  }));
-  event_log.debug(`writing ${query_records.length} query records`);
-  await resource_db.putQueries(
-    event.resource_id,
-    event.operation_id,
-    event.action_id,
-    query_records
-  );
-  event_log.debug(`enqueuing ${query_records.length} query events`);
+  const queries = query_inputs.map((query_input) => {
+    if (!event.action_id || !event.operation_id)
+      throw new Error('enqueue requires event with action_id and operation_id');
+    return new Query({
+      resource_id: event.resource_id,
+      operation_id: event.operation_id,
+      action_id: event.action_id,
+      status: Query.Status.PENDING,
+      query_string: query_input.query_string,
+      query_data: query_input.query_data || {},
+    });
+  });
+  event_log.debug(`writing ${queries.length} query records`);
+  await resource_db.putQueries(queries);
+  event_log.debug(`enqueuing ${queries.length} query events`);
   await sqs.enqueueBatch(
-    query_records.map((query_record) => ({
+    queries.map((query) => ({
       resource_id: event.resource_id,
       operation_id: event.operation_id,
       operation_type: event.operation_type,
       action_id: event.action_id,
       action_type: event.action_type,
-      query_id: query_record.query_id,
+      query_id: query.id,
       retries: 0,
       action_inputs: {
-        query_string: query_record.query_string,
+        query_string: query.query_string,
       },
     })),
     QUEUE_URL
@@ -66,7 +67,7 @@ async function enqueue(event, context, queries) {
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
+ * @param {Resource} resource -
  */
 async function _run(event, context, resource) {
   if (!event.operation_id || !event.action_id || !event.query_id)
@@ -107,17 +108,10 @@ async function _run(event, context, resource) {
   });
   if (!QueryExecutionId) throw new Error('Failed to start query');
 
-  await resource_db.putQuery(
-    resource.resource_id,
-    event.operation_id,
-    event.action_id,
-    {
-      query_id: query.query_id,
-      query_status: 'RUNNING',
-      query_execution_id: QueryExecutionId,
-      query_data: query.query_data,
-    }
-  );
+  query.status = Query.Status.RUNNING;
+  query.execution_id = QueryExecutionId;
+
+  await resource_db.putQuery(query);
 }
 
 /**

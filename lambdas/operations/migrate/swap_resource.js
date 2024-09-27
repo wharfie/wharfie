@@ -4,11 +4,12 @@ const logging = require('../../lib/logging');
 const Glue = require('../../lib/glue');
 const STS = require('../../lib/sts');
 const S3 = require('../../lib/s3');
+const { Operation, Resource } = require('../../lib/graph/');
 
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
+ * @param {Resource} resource -
  * @param {Glue} glue -
  * @param {S3} s3 -
  * @param {import("@aws-sdk/client-glue").Table} migrateTable -
@@ -192,8 +193,8 @@ async function swap_partitions(
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
- * @param {import('../../typedefs').OperationRecord} operation -
+ * @param {Resource} resource -
+ * @param {Operation} operation -
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function run(event, context, resource, operation) {
@@ -208,11 +209,12 @@ async function run(event, context, resource, operation) {
   const destinationDatabaseName = resource.destination_properties.databaseName;
   const destinationTableName = resource.destination_properties.name;
 
+  const migrationResource = Resource.fromRecord(
+    operation.operation_inputs.migration_resource
+  );
   const migrateDatabaseName =
-    operation.operation_inputs.migration_resource.destination_properties
-      .databaseName;
-  const migrateTableName =
-    operation.operation_inputs.migration_resource.destination_properties.name;
+    migrationResource.destination_properties.databaseName;
+  const migrateTableName = migrationResource.destination_properties.name;
 
   const { Table: migrateTable } = await glue.getTable({
     DatabaseName: migrateDatabaseName,

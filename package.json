@@ -106,7 +106,7 @@
     "@types/cli-progress": "^3.11.6",
     "@types/diff": "^5.2.1",
     "@types/inquirer": "^8.0.7",
-    "@types/jest": "^26.0.20",
+    "@types/jest": "^26.0.24",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.11.25",
     "@types/uuid": "^8.3.0",

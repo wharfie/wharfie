@@ -16,6 +16,7 @@ const Clean = require('./operations/actions/lib/clean');
 const logging = require('./lib/logging/');
 const daemon_log = logging.getDaemonLogger();
 const CloudwatchClient = require('@aws-sdk/client-cloudwatch');
+const { Resource, Action, Query } = require('./lib/graph/');
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
 const athena = new Athena({ region: process.env.AWS_REGION });
@@ -85,8 +86,8 @@ async function getWharfieQueryMetadata(queryExecutionId) {
 }
 
 /**
- * @param {import('./typedefs').ResourceRecord} resource -
- * @param {import('./typedefs').QueryRecord} query -
+ * @param {Resource} resource -
+ * @param {Query} query -
  */
 async function _cleanupFailedOrCancelledQuery(resource, query) {
   const region = resource.region;
@@ -146,32 +147,23 @@ async function _monitorWharfie(cloudwatchEvent, queryEvent, context) {
   if (!action) {
     await semaphore_db.release('wharfie');
     await semaphore_db.release(
-      `wharfie:${operation.operation_type}:${operation.resource_id}`
+      `wharfie:${operation.type}:${operation.resource_id}`
     );
     return;
   }
 
   await semaphore_db.release('wharfie');
   await semaphore_db.release(
-    `wharfie:${operation.operation_type}:${operation.resource_id}`
+    `wharfie:${operation.type}:${operation.resource_id}`
   );
   if (cloudwatchEvent.detail.currentState === 'SUCCEEDED') {
     event_log.info(
-      `Wharfie query succeeded with id ${query.query_id} and execution id: ${query.query_execution_id}`
+      `Wharfie query succeeded with id ${query.id} and execution id: ${query.execution_id}`
     );
-    await resource_db.putQuery(
-      operation.resource_id,
-      operation.operation_id,
-      action.action_id,
-      {
-        query_id: query.query_id,
-        query_status: 'COMPLETED',
-        query_execution_id: query.query_execution_id,
-        query_data: query.query_data,
-      }
-    );
+    query.status = Query.Status.COMPLETED;
+    await resource_db.putQuery(query);
   } else if (
-    query.query_status === 'RUNNING' &&
+    query.status === Query.Status.RUNNING &&
     (cloudwatchEvent.detail.currentState === 'FAILED' ||
       cloudwatchEvent.detail.currentState === 'CANCELLED')
   ) {
@@ -189,41 +181,23 @@ async function _monitorWharfie(cloudwatchEvent, queryEvent, context) {
         DAEMON_QUEUE_URL,
         Math.pow(2, retries) + Math.floor(Math.random() * 5)
       );
-      await resource_db.putQuery(
-        operation.resource_id,
-        operation.operation_id,
-        action.action_id,
-        {
-          query_id: query.query_id,
-          query_status: 'RETRYING',
-          query_execution_id: cloudwatchEvent.detail.queryExecutionId,
-          query_data: query.query_data,
-        }
-      );
+      query.status = Query.Status.RETRYING;
+      await resource_db.putQuery(query);
       return;
     }
     event_log.error(
       `wharfie query failed terminally with state: ${cloudwatchEvent.detail.currentState}`,
       { cloudwatchEvent }
     );
-    await resource_db.putQuery(
-      operation.resource_id,
-      operation.operation_id,
-      action.action_id,
-      {
-        query_id: query.query_id,
-        query_status: cloudwatchEvent.detail.currentState,
-        query_execution_id: cloudwatchEvent.detail.queryExecutionId,
-        query_data: query.query_data,
-      }
-    );
+    query.status = cloudwatchEvent.detail.currentState;
+    await resource_db.putQuery(query);
   } else if (
-    query.query_status === 'RETRYING' &&
+    query.status === 'RETRYING' &&
     (cloudwatchEvent.detail.currentState === 'FAILED' ||
       cloudwatchEvent.detail.currentState === 'CANCELLED')
   ) {
     event_log.warn(
-      `DUPLICATE_QUERY_EVENTS: stale query detection and athena produced events for same state change on query_id: ${query.query_id}, this could be caused by athena being slow to publish events`,
+      `DUPLICATE_QUERY_EVENTS: stale query detection and athena produced events for same state change on query_id: ${query.id}, this could be caused by athena being slow to publish events`,
       { cloudwatchEvent }
     );
   }
@@ -419,16 +393,23 @@ async function DLQ(event, context, err) {
     );
     return;
   }
-
+  const action = await resource_db.getAction(
+    wharfieEvent.resource_id,
+    wharfieEvent.operation_id,
+    wharfieEvent.action_id
+  );
+  if (!action) {
+    daemon_log.warn(
+      'properties unexpectedly missing, maybe the resource was deleted?'
+    );
+    return;
+  }
   await sqs.sendMessage({
     MessageBody: JSON.stringify(event),
     QueueUrl: DLQ_URL,
   });
-  await resource_db.putAction(resource.resource_id, operation.operation_id, {
-    action_id: wharfieEvent.action_id,
-    action_type: wharfieEvent.action_type,
-    action_status: 'FAILED',
-  });
+  action.status = Action.Status.FAILED;
+  await resource_db.putAction(action);
 
   if (
     !resource.daemon_config.AlarmActions ||

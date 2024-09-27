@@ -1,11 +1,12 @@
 /* eslint-disable jest/no-large-snapshots */
 'use strict';
 
-process.env.AWS_MOCKS = true;
+process.env.AWS_MOCKS = '1';
 const { Firehose } = require('../../../lambdas/lib/actor/resources/aws/');
 const { Firehose: FirehoseSDK } = jest.requireMock('@aws-sdk/client-firehose');
 
 const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
+const { getMockDeploymentProperties } = require('../util');
 
 describe('firehose IaC', () => {
   it('basic', async () => {
@@ -14,6 +15,7 @@ describe('firehose IaC', () => {
     const firehose = new Firehose({
       name: 'test-table',
       properties: {
+        deployment: getMockDeploymentProperties(),
         s3DestinationConfiguration: {
           BucketARN: 'arn:aws:s3:::test-bucket',
           RoleARN: 'arn:aws:iam::123456789012:role/test-role',
@@ -35,6 +37,20 @@ describe('firehose IaC', () => {
         "name": "test-table",
         "properties": {
           "arn": "arn:aws:firehose:us-east-1:123456789012:deliverystream/test-table",
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
           "s3DestinationConfiguration": {
             "BucketARN": "arn:aws:s3:::test-bucket",
             "BufferingHints": {
@@ -66,6 +82,20 @@ describe('firehose IaC', () => {
         "name": "test-table",
         "properties": {
           "arn": "arn:aws:firehose:us-east-1:123456789012:deliverystream/test-table",
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
           "s3DestinationConfiguration": {
             "BucketARN": "arn:aws:s3:::test-bucket",
             "BufferingHints": {

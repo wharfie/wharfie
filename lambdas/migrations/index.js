@@ -28,7 +28,7 @@ const isVersionLessThan = (versionA, versionB) => {
 };
 
 /**
- * @param {import('../typedefs').ResourceRecord} resource -
+ * @param {import('../lib/graph/').Resource} resource -
  * @param {import('../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  */
@@ -41,7 +41,7 @@ async function run(resource, event, context) {
 /**
  * @param {import('../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @returns {Promise<import('../typedefs').ResourceRecord?>} -
+ * @returns {Promise<import('../lib/graph/').Resource?>} -
  */
 async function getResource(event, context) {
   const resource = await resource_db.getResource(event.resource_id);

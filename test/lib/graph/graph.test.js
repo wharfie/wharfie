@@ -1,13 +1,18 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
 
-const { Action, OperationActionGraph } = require('../../../lambdas/lib/graph');
+const { Action, Operation } = require('../../../lambdas/lib/graph');
 
 const { createId } = require('../../../lambdas/lib/id');
 jest.mock('../../../lambdas/lib/id');
 
 let idCount;
 describe('tests for graph', () => {
+  beforeAll(() => {
+    const mockedDate = new Date(1466424490000);
+    jest.useFakeTimers('modern');
+    jest.setSystemTime(mockedDate);
+  });
   beforeEach(() => {
     idCount = 0;
     createId.mockImplementation(() => {
@@ -17,258 +22,466 @@ describe('tests for graph', () => {
   });
   afterAll(() => {
     createId.mockClear();
+    jest.useRealTimers();
   });
   it('serialization', async () => {
     expect.assertions(2);
-    const graph = new OperationActionGraph();
-    const newAction = new Action({
-      type: 'cloudwatch',
+    const test_operation = new Operation({
+      resource_id: 'resource_id',
+      type: Operation.Type.MAINTAIN,
+      id: 'test_operation',
     });
-    graph.addAction(newAction);
+    const start_action = test_operation.createAction({
+      type: Action.Type.START,
+      id: 'start_action',
+    });
 
-    expect(newAction.serialize()).toMatchInlineSnapshot(
-      `"{"id":"id-1","type":"cloudwatch","executions":[]}"`
-    );
-    expect(graph.serialize()).toMatchInlineSnapshot(
-      `"{"outgoingEdges":[["id-1",[]]],"incomingEdges":[["id-1",[]]],"actions":[{"id":"id-1","type":"cloudwatch","executions":[]}]}"`
-    );
+    expect(start_action.toRecords()).toMatchInlineSnapshot(`
+      [
+        {
+          "data": {
+            "id": "start_action",
+            "last_updated_at": 1466424490000,
+            "operation_id": "test_operation",
+            "record_type": "ACTION",
+            "resource_id": "resource_id",
+            "started_at": 1466424490000,
+            "status": "PENDING",
+            "type": "START",
+            "wharfie_version": "0.0.11",
+          },
+          "resource_id": "resource_id",
+          "sort_key": "resource_id#test_operation#start_action",
+        },
+      ]
+    `);
+    expect(test_operation.toRecords()).toMatchInlineSnapshot(`
+      [
+        {
+          "data": {
+            "id": "start_action",
+            "last_updated_at": 1466424490000,
+            "operation_id": "test_operation",
+            "record_type": "ACTION",
+            "resource_id": "resource_id",
+            "started_at": 1466424490000,
+            "status": "PENDING",
+            "type": "START",
+            "wharfie_version": "0.0.11",
+          },
+          "resource_id": "resource_id",
+          "sort_key": "resource_id#test_operation#start_action",
+        },
+        {
+          "data": {
+            "id": "test_operation",
+            "last_updated_at": 1466424490000,
+            "operation_config": undefined,
+            "operation_inputs": undefined,
+            "record_type": "OPERATION",
+            "resource_id": "resource_id",
+            "serialized_action_graph": "{"outgoingEdges":[],"incomingEdges":[],"actionIdsToTypes":[["start_action","START"]]}",
+            "started_at": 1466424490000,
+            "status": "PENDING",
+            "type": "MAINTAIN",
+            "wharfie_version": "0.0.11",
+          },
+          "resource_id": "resource_id",
+          "sort_key": "resource_id#test_operation",
+        },
+      ]
+    `);
   });
   it('deserialization', async () => {
     expect.assertions(3);
-    const graph = new OperationActionGraph();
-    const first = new Action({
-      type: 'first',
+
+    const test_operation = new Operation({
+      resource_id: 'resource_id',
+      type: Operation.Type.MAINTAIN,
+      id: 'test_operation',
     });
-    const second = new Action({
-      type: 'second',
+    const start_action = test_operation.createAction({
+      type: Action.Type.START,
+      id: 'start_action',
     });
-    const third = new Action({
-      type: 'third',
+    const compaction_action = test_operation.createAction({
+      type: Action.Type.RUN_COMPACTION,
+      id: 'compaction_action',
+      dependsOn: [start_action],
     });
-    graph.addAction(first);
-    graph.addAction(second);
-    graph.addAction(third);
-    graph.addDependency(first, second);
-    graph.addDependency(second, third);
-    const serializedGraph = graph.serialize();
-    expect(serializedGraph).toMatchInlineSnapshot(
-      `"{"outgoingEdges":[["id-1",["id-2"]],["id-2",["id-3"]],["id-3",[]]],"incomingEdges":[["id-1",[]],["id-2",["id-1"]],["id-3",["id-2"]]],"actions":[{"id":"id-1","type":"first","executions":[]},{"id":"id-2","type":"second","executions":[]},{"id":"id-3","type":"third","executions":[]}]}"`
-    );
-    expect(OperationActionGraph.deserialize(serializedGraph))
+    test_operation.createAction({
+      type: Action.Type.FINISH,
+      id: 'finish_action',
+      dependsOn: [compaction_action],
+    });
+
+    const serializedGraph = test_operation.toRecords();
+    // eslint-disable-next-line jest/no-large-snapshots
+    expect(serializedGraph).toMatchInlineSnapshot(`
+      [
+        {
+          "data": {
+            "id": "start_action",
+            "last_updated_at": 1466424490000,
+            "operation_id": "test_operation",
+            "record_type": "ACTION",
+            "resource_id": "resource_id",
+            "started_at": 1466424490000,
+            "status": "PENDING",
+            "type": "START",
+            "wharfie_version": "0.0.11",
+          },
+          "resource_id": "resource_id",
+          "sort_key": "resource_id#test_operation#start_action",
+        },
+        {
+          "data": {
+            "id": "compaction_action",
+            "last_updated_at": 1466424490000,
+            "operation_id": "test_operation",
+            "record_type": "ACTION",
+            "resource_id": "resource_id",
+            "started_at": 1466424490000,
+            "status": "PENDING",
+            "type": "RUN_COMPACTION",
+            "wharfie_version": "0.0.11",
+          },
+          "resource_id": "resource_id",
+          "sort_key": "resource_id#test_operation#compaction_action",
+        },
+        {
+          "data": {
+            "id": "finish_action",
+            "last_updated_at": 1466424490000,
+            "operation_id": "test_operation",
+            "record_type": "ACTION",
+            "resource_id": "resource_id",
+            "started_at": 1466424490000,
+            "status": "PENDING",
+            "type": "FINISH",
+            "wharfie_version": "0.0.11",
+          },
+          "resource_id": "resource_id",
+          "sort_key": "resource_id#test_operation#finish_action",
+        },
+        {
+          "data": {
+            "id": "test_operation",
+            "last_updated_at": 1466424490000,
+            "operation_config": undefined,
+            "operation_inputs": undefined,
+            "record_type": "OPERATION",
+            "resource_id": "resource_id",
+            "serialized_action_graph": "{"outgoingEdges":[["start_action",["compaction_action"]],["compaction_action",["finish_action"]]],"incomingEdges":[["compaction_action",["start_action"]],["finish_action",["compaction_action"]]],"actionIdsToTypes":[["start_action","START"],["compaction_action","RUN_COMPACTION"],["finish_action","FINISH"]]}",
+            "started_at": 1466424490000,
+            "status": "PENDING",
+            "type": "MAINTAIN",
+            "wharfie_version": "0.0.11",
+          },
+          "resource_id": "resource_id",
+          "sort_key": "resource_id#test_operation",
+        },
+      ]
+    `);
+    expect(Operation.fromRecord(serializedGraph[serializedGraph.length - 1]))
       .toMatchInlineSnapshot(`
-      OperationActionGraph {
-        "actions": [
-          Action {
-            "executions": [],
-            "id": "id-1",
-            "type": "first",
-          },
-          Action {
-            "executions": [],
-            "id": "id-2",
-            "type": "second",
-          },
-          Action {
-            "executions": [],
-            "id": "id-3",
-            "type": "third",
-          },
-        ],
+      Operation {
+        "actionIdsToTypes": Map {
+          "start_action" => "START",
+          "compaction_action" => "RUN_COMPACTION",
+          "finish_action" => "FINISH",
+        },
+        "actions": Map {},
+        "id": "test_operation",
         "incomingEdges": Map {
-          "id-1" => [],
-          "id-2" => [
-            "id-1",
+          "compaction_action" => [
+            "start_action",
           ],
-          "id-3" => [
-            "id-2",
+          "finish_action" => [
+            "compaction_action",
           ],
         },
+        "last_updated_at": 1466424490000,
+        "operation_config": undefined,
+        "operation_inputs": undefined,
         "outgoingEdges": Map {
-          "id-1" => [
-            "id-2",
+          "start_action" => [
+            "compaction_action",
           ],
-          "id-2" => [
-            "id-3",
+          "compaction_action" => [
+            "finish_action",
           ],
-          "id-3" => [],
         },
+        "resource_id": "resource_id",
+        "started_at": 1466424490000,
+        "status": "PENDING",
+        "type": "MAINTAIN",
+        "wharfie_version": "0.0.11",
       }
     `);
-    expect(OperationActionGraph.deserialize(serializedGraph)).toStrictEqual(
-      graph
-    );
+    expect(
+      Operation.fromRecords(
+        serializedGraph[serializedGraph.length - 1],
+        serializedGraph.slice(0, -1).map((action) => {
+          return {
+            action_record: action,
+            query_records: [],
+          };
+        })
+      )
+    ).toStrictEqual(test_operation);
   });
   it('toString', async () => {
     expect.assertions(1);
-    const graph = new OperationActionGraph();
-    const first = new Action({
-      type: 'first',
+
+    const test_operation = new Operation({
+      resource_id: 'resource_id',
+      type: Operation.Type.MAINTAIN,
+      id: 'test_operation',
     });
-    const secondA = new Action({
-      type: 'secondA',
+    const start_action = test_operation.createAction({
+      type: Action.Type.START,
+      id: 'start_action',
     });
-    const secondB = new Action({
-      type: 'secondB',
+    const compaction_action = test_operation.createAction({
+      type: Action.Type.RUN_COMPACTION,
+      id: 'compaction_action',
+      dependsOn: [start_action],
     });
-    const third = new Action({
-      type: 'third',
+    const register_partition_action = test_operation.createAction({
+      type: Action.Type.REGISTER_PARTITION,
+      id: 'register_partitions_action',
+      dependsOn: [start_action],
     });
-    graph.addAction(first);
-    graph.addAction(secondA);
-    graph.addAction(secondB);
-    graph.addAction(third);
-    graph.addDependency(first, secondA);
-    graph.addDependency(secondA, third);
-    graph.addDependency(first, secondB);
-    graph.addDependency(secondB, third);
-    expect(graph.toString()).toMatchInlineSnapshot(`
-      "first -> secondA, secondB
-      secondA -> third
-      secondB -> third
-      third
+    test_operation.createAction({
+      type: Action.Type.FINISH,
+      id: 'finish_action',
+      dependsOn: [compaction_action, register_partition_action],
+    });
+    expect(test_operation.toString()).toMatchInlineSnapshot(`
+      "START -> RUN_COMPACTION, REGISTER_PARTITION
+      RUN_COMPACTION -> FINISH
+      REGISTER_PARTITION -> FINISH
       "
     `);
   });
   it('getUpstreamActions', async () => {
     expect.assertions(3);
-    const graph = new OperationActionGraph();
-    const first = new Action({
-      type: 'first',
+    const test_operation = new Operation({
+      resource_id: 'resource_id',
+      type: Operation.Type.MAINTAIN,
+      id: 'test_operation',
     });
-    const secondA = new Action({
-      type: 'secondA',
+    const start_action = test_operation.createAction({
+      type: Action.Type.START,
+      id: 'start_action',
     });
-    const secondB = new Action({
-      type: 'secondB',
+    const compaction_action = test_operation.createAction({
+      type: Action.Type.RUN_COMPACTION,
+      id: 'compaction_action',
+      dependsOn: [start_action],
     });
-    const third = new Action({
-      type: 'third',
+    const register_partition_action = test_operation.createAction({
+      type: Action.Type.REGISTER_PARTITION,
+      id: 'register_partitions_action',
+      dependsOn: [start_action],
     });
-    graph.addAction(first);
-    graph.addAction(secondA);
-    graph.addAction(secondB);
-    graph.addAction(third);
-    graph.addDependency(first, secondA);
-    graph.addDependency(secondA, third);
-    graph.addDependency(first, secondB);
-    graph.addDependency(secondB, third);
-    expect(graph.getUpstreamActions(first)).toMatchInlineSnapshot(`[]`);
-    expect(graph.getUpstreamActions(third)).toMatchInlineSnapshot(`
+    const finish_action = test_operation.createAction({
+      type: Action.Type.FINISH,
+      id: 'finish_action',
+      dependsOn: [compaction_action, register_partition_action],
+    });
+    expect(
+      test_operation.getUpstreamActions(start_action)
+    ).toMatchInlineSnapshot(`[]`);
+    expect(test_operation.getUpstreamActions(finish_action))
+      .toMatchInlineSnapshot(`
       [
         Action {
-          "executions": [],
-          "id": "id-2",
-          "type": "secondA",
+          "id": "compaction_action",
+          "last_updated_at": 1466424490000,
+          "operation_id": "test_operation",
+          "queries": [],
+          "resource_id": "resource_id",
+          "started_at": 1466424490000,
+          "status": "PENDING",
+          "type": "RUN_COMPACTION",
+          "wharfie_version": "0.0.11",
         },
         Action {
-          "executions": [],
-          "id": "id-3",
-          "type": "secondB",
+          "id": "register_partitions_action",
+          "last_updated_at": 1466424490000,
+          "operation_id": "test_operation",
+          "queries": [],
+          "resource_id": "resource_id",
+          "started_at": 1466424490000,
+          "status": "PENDING",
+          "type": "REGISTER_PARTITION",
+          "wharfie_version": "0.0.11",
         },
       ]
     `);
-    expect(graph.getUpstreamActions(secondA)).toMatchInlineSnapshot(`
+    expect(test_operation.getUpstreamActions(compaction_action))
+      .toMatchInlineSnapshot(`
       [
         Action {
-          "executions": [],
-          "id": "id-1",
-          "type": "first",
+          "id": "start_action",
+          "last_updated_at": 1466424490000,
+          "operation_id": "test_operation",
+          "queries": [],
+          "resource_id": "resource_id",
+          "started_at": 1466424490000,
+          "status": "PENDING",
+          "type": "START",
+          "wharfie_version": "0.0.11",
         },
       ]
     `);
   });
   it('getDownstreamActions', async () => {
     expect.assertions(3);
-    const graph = new OperationActionGraph();
-    const first = new Action({
-      type: 'first',
+    const test_operation = new Operation({
+      resource_id: 'resource_id',
+      type: Operation.Type.MAINTAIN,
+      id: 'test_operation',
     });
-    const secondA = new Action({
-      type: 'secondA',
+    const start_action = test_operation.createAction({
+      type: Action.Type.START,
+      id: 'start_action',
     });
-    const secondB = new Action({
-      type: 'secondB',
+    const compaction_action = test_operation.createAction({
+      type: Action.Type.RUN_COMPACTION,
+      id: 'compaction_action',
+      dependsOn: [start_action],
     });
-    const third = new Action({
-      type: 'third',
+    const register_partition_action = test_operation.createAction({
+      type: Action.Type.REGISTER_PARTITION,
+      id: 'register_partitions_action',
+      dependsOn: [start_action],
     });
-    graph.addAction(first);
-    graph.addAction(secondA);
-    graph.addAction(secondB);
-    graph.addAction(third);
-    graph.addDependency(first, secondA);
-    graph.addDependency(secondA, third);
-    graph.addDependency(first, secondB);
-    graph.addDependency(secondB, third);
-    expect(graph.getDownstreamActions(first)).toMatchInlineSnapshot(`
+    const finish_action = test_operation.createAction({
+      type: Action.Type.FINISH,
+      id: 'finish_action',
+      dependsOn: [compaction_action, register_partition_action],
+    });
+    expect(test_operation.getDownstreamActions(start_action))
+      .toMatchInlineSnapshot(`
       [
         Action {
-          "executions": [],
-          "id": "id-2",
-          "type": "secondA",
+          "id": "compaction_action",
+          "last_updated_at": 1466424490000,
+          "operation_id": "test_operation",
+          "queries": [],
+          "resource_id": "resource_id",
+          "started_at": 1466424490000,
+          "status": "PENDING",
+          "type": "RUN_COMPACTION",
+          "wharfie_version": "0.0.11",
         },
         Action {
-          "executions": [],
-          "id": "id-3",
-          "type": "secondB",
+          "id": "register_partitions_action",
+          "last_updated_at": 1466424490000,
+          "operation_id": "test_operation",
+          "queries": [],
+          "resource_id": "resource_id",
+          "started_at": 1466424490000,
+          "status": "PENDING",
+          "type": "REGISTER_PARTITION",
+          "wharfie_version": "0.0.11",
         },
       ]
     `);
-    expect(graph.getDownstreamActions(secondA)).toMatchInlineSnapshot(`
+    expect(test_operation.getDownstreamActions(register_partition_action))
+      .toMatchInlineSnapshot(`
       [
         Action {
-          "executions": [],
-          "id": "id-4",
-          "type": "third",
+          "id": "finish_action",
+          "last_updated_at": 1466424490000,
+          "operation_id": "test_operation",
+          "queries": [],
+          "resource_id": "resource_id",
+          "started_at": 1466424490000,
+          "status": "PENDING",
+          "type": "FINISH",
+          "wharfie_version": "0.0.11",
         },
       ]
     `);
-    expect(graph.getDownstreamActions(third)).toMatchInlineSnapshot(`[]`);
+    expect(
+      test_operation.getDownstreamActions(finish_action)
+    ).toMatchInlineSnapshot(`[]`);
   });
   it('getSequentialActionOrder', async () => {
     expect.assertions(1);
-    const graph = new OperationActionGraph();
-    const first = new Action({
-      type: 'first',
+    const test_operation = new Operation({
+      resource_id: 'resource_id',
+      type: Operation.Type.MAINTAIN,
+      id: 'test_operation',
     });
-    const secondA = new Action({
-      type: 'secondA',
+    const start_action = test_operation.createAction({
+      type: Action.Type.START,
+      id: 'start_action',
     });
-    const secondB = new Action({
-      type: 'secondB',
+    const compaction_action = test_operation.createAction({
+      type: Action.Type.RUN_COMPACTION,
+      id: 'compaction_action',
+      dependsOn: [start_action],
     });
-    const third = new Action({
-      type: 'third',
+    const register_partition_action = test_operation.createAction({
+      type: Action.Type.REGISTER_PARTITION,
+      id: 'register_partitions_action',
+      dependsOn: [start_action],
     });
-    graph.addAction(first);
-    graph.addAction(secondA);
-    graph.addAction(secondB);
-    graph.addAction(third);
-    graph.addDependency(first, secondA);
-    graph.addDependency(secondA, third);
-    graph.addDependency(first, secondB);
-    graph.addDependency(secondB, third);
-    expect(graph.getSequentialActionOrder()).toMatchInlineSnapshot(`
+    test_operation.createAction({
+      type: Action.Type.FINISH,
+      id: 'finish_action',
+      dependsOn: [compaction_action, register_partition_action],
+    });
+    expect(test_operation.getSequentialActionOrder()).toMatchInlineSnapshot(`
       [
         Action {
-          "executions": [],
-          "id": "id-1",
-          "type": "first",
+          "id": "start_action",
+          "last_updated_at": 1466424490000,
+          "operation_id": "test_operation",
+          "queries": [],
+          "resource_id": "resource_id",
+          "started_at": 1466424490000,
+          "status": "PENDING",
+          "type": "START",
+          "wharfie_version": "0.0.11",
         },
         Action {
-          "executions": [],
-          "id": "id-2",
-          "type": "secondA",
+          "id": "compaction_action",
+          "last_updated_at": 1466424490000,
+          "operation_id": "test_operation",
+          "queries": [],
+          "resource_id": "resource_id",
+          "started_at": 1466424490000,
+          "status": "PENDING",
+          "type": "RUN_COMPACTION",
+          "wharfie_version": "0.0.11",
         },
         Action {
-          "executions": [],
-          "id": "id-3",
-          "type": "secondB",
+          "id": "register_partitions_action",
+          "last_updated_at": 1466424490000,
+          "operation_id": "test_operation",
+          "queries": [],
+          "resource_id": "resource_id",
+          "started_at": 1466424490000,
+          "status": "PENDING",
+          "type": "REGISTER_PARTITION",
+          "wharfie_version": "0.0.11",
         },
         Action {
-          "executions": [],
-          "id": "id-4",
-          "type": "third",
+          "id": "finish_action",
+          "last_updated_at": 1466424490000,
+          "operation_id": "test_operation",
+          "queries": [],
+          "resource_id": "resource_id",
+          "started_at": 1466424490000,
+          "status": "PENDING",
+          "type": "FINISH",
+          "wharfie_version": "0.0.11",
         },
       ]
     `);

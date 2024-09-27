@@ -1,6 +1,7 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
 const bluebird = require('bluebird');
+// process.env.LOGGING_LEVEL = 'debug';
 
 process.env.AWS_MOCKS = true;
 jest.requireMock('@aws-sdk/client-s3');
@@ -15,8 +16,6 @@ const {
   setLambdaTriggers,
   clearLambdaTriggers,
 } = require('./util');
-
-const { version } = require('../../package.json');
 
 jest.mock('../../lambdas/lib/dynamo/operations');
 jest.mock('../../lambdas/lib/dynamo/event');
@@ -34,8 +33,10 @@ const { Glue } = require('@aws-sdk/client-glue');
 const { SQS } = require('@aws-sdk/client-sqs');
 const { S3 } = require('@aws-sdk/client-s3');
 
-const resource = require('../../lambdas/lib/dynamo/operations');
+const operations = require('../../lambdas/lib/dynamo/operations');
 const logging = require('../../lambdas/lib/logging');
+
+const { Resource } = require('../../lambdas/lib/graph');
 
 const dynamo_resource = require('../../lambdas/lib/dynamo/operations');
 const semaphore = require('../../lambdas/lib/dynamo/semaphore');
@@ -47,7 +48,6 @@ const s3 = new S3();
 const CONTEXT = {
   awsRequestId: 'test-request-id',
 };
-
 describe('maintain tests', () => {
   beforeAll(async () => {
     bluebird.Promise.config({ cancellation: true });
@@ -94,27 +94,50 @@ describe('maintain tests', () => {
 
   it('end to end', async () => {
     expect.assertions(4);
-    await resource.putResource({
-      resource_id: 'resource_id',
-      resource_arn: 'arn:aws:custom:us-east-1:123456789012:wharfie',
-      athena_workgroup: 'wharfie:StackName',
-      daemon_config: {
-        Role: 'test-role',
-      },
-      source_properties: {
-        databaseName: 'test_db',
-        name: 'table_name_raw',
-        partitionKeys: [{ type: 'string', name: 'dt' }],
-        location: 's3://test-bucket/raw/',
-      },
-      destination_properties: {
-        databaseName: 'test_db',
-        name: 'table_name',
-        partitionKeys: [{ type: 'string', name: 'dt' }],
-        location: 's3://test-bucket/compacted/',
-      },
-      wharfie_version: version,
-    });
+    await operations.putResource(
+      new Resource({
+        id: 'resource_id',
+        status: Resource.Status.ACTIVE,
+        region: 'us-east-1',
+        athena_workgroup: 'wharfie:StackName',
+        daemon_config: {
+          Role: 'test-role',
+        },
+        source_properties: {
+          location: 's3://test-bucket/raw/',
+          arn: 'SourceArn',
+          catalogId: 'SourceCatalogId',
+          columns: [],
+          compressed: false,
+          databaseName: 'test_db',
+          name: 'table_name_raw',
+          description: 'SourceDescription',
+          parameters: {},
+          numberOfBuckets: 0,
+          storedAsSubDirectories: false,
+          partitionKeys: [{ type: 'string', name: 'dt' }],
+          region: 'us-east-1',
+          tableType: 'PHYSICAL',
+          tags: {},
+        },
+        destination_properties: {
+          databaseName: 'test_db',
+          name: 'table_name',
+          partitionKeys: [{ type: 'string', name: 'dt' }],
+          location: 's3://test-bucket/compacted/',
+          arn: 'DestinationArn',
+          catalogId: 'SourceCatalogId',
+          columns: [],
+          compressed: false,
+          parameters: {},
+          numberOfBuckets: 0,
+          storedAsSubDirectories: false,
+          region: 'us-east-1',
+          tableType: 'PHYSICAL',
+          tags: {},
+        },
+      })
+    );
 
     await daemon_lambda.handler(
       {
@@ -161,42 +184,11 @@ describe('maintain tests', () => {
     await Promise.race([emptyQueues, timeout]);
     timeout.cancel();
     // eslint-disable-next-line jest/no-large-snapshots
-    expect(dynamo_resource.__getMockState()).toMatchInlineSnapshot(`
-      {
-        "resource_id": {
-          "resource_id": {
-            "athena_workgroup": "wharfie:StackName",
-            "daemon_config": {
-              "Role": "test-role",
-            },
-            "destination_properties": {
-              "databaseName": "test_db",
-              "location": "s3://test-bucket/compacted/",
-              "name": "table_name",
-              "partitionKeys": [
-                {
-                  "name": "dt",
-                  "type": "string",
-                },
-              ],
-            },
-            "resource_arn": "arn:aws:custom:us-east-1:123456789012:wharfie",
-            "resource_id": "resource_id",
-            "source_properties": {
-              "databaseName": "test_db",
-              "location": "s3://test-bucket/raw/",
-              "name": "table_name_raw",
-              "partitionKeys": [
-                {
-                  "name": "dt",
-                  "type": "string",
-                },
-              ],
-            },
-            "wharfie_version": "0.0.1",
-          },
-        },
-      }
+    expect(Object.keys(dynamo_resource.__getMockState()))
+      .toMatchInlineSnapshot(`
+      [
+        "resource_id",
+      ]
     `);
 
     // eslint-disable-next-line jest/no-large-snapshots

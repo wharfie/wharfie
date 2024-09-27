@@ -1,5 +1,6 @@
 'use strict';
 
+const { Operation, Resource } = require('../../lib/graph/');
 const { createId } = require('../../lib/id');
 const logging = require('../../lib/logging');
 const Athena = require('../../lib/athena');
@@ -15,8 +16,8 @@ const MAX_QUERIES_PER_ACTION = process.env.MAX_QUERIES_PER_ACTION || 0;
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').ResourceRecord} resource -
- * @param {import('../../typedefs').OperationRecord} operation -
+ * @param {Resource} resource -
+ * @param {Operation} operation -
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function run(event, context, resource, operation) {
@@ -35,10 +36,7 @@ async function run(event, context, resource, operation) {
   const sourceTableName = resource.source_properties.name;
   const temporaryDatabaseName = TEMPORARY_GLUE_DATABASE;
   const storage_id = createId();
-  const temporaryTableName = `${resource.resource_id}-${storage_id}`.replace(
-    '-',
-    '_'
-  );
+  const temporaryTableName = `${resource.id}-${storage_id}`.replace('-', '_');
 
   event_log.info('RUN_TEMP_COMPACTION:cloning_destination_table');
   await glue.cloneDestinationTable(
@@ -53,13 +51,11 @@ async function run(event, context, resource, operation) {
   );
 
   event_log.info('RUN_TEMP_COMPACTION:fetching_compaction_partitions');
-  const action = operation.action_graph.getActionByType(
-    'FIND_COMPACTION_PARTITIONS'
-  );
-  const partition_queries = await resource_db.getActionQueries(
-    resource.resource_id,
-    operation.operation_id,
-    action.id
+  const actionId = operation.getActionIdByType('FIND_COMPACTION_PARTITIONS');
+  const partition_queries = await resource_db.getQueries(
+    resource.id,
+    operation.id,
+    actionId
   );
 
   (partition_queries || []).length > 0 &&
@@ -71,10 +67,10 @@ async function run(event, context, resource, operation) {
   const partitions = [];
   while ((partition_queries || []).length > 0) {
     const partition_query = (partition_queries || []).pop();
-    if (!partition_query || !partition_query.query_execution_id) continue;
+    if (!partition_query || !partition_query.execution_id) continue;
 
     const results = await athena.getQueryResults({
-      QueryExecutionId: partition_query.query_execution_id,
+      QueryExecutionId: partition_query.execution_id,
     });
 
     for await (const result of results) {

@@ -81,7 +81,7 @@
 
 /**
  * @typedef ActionProcessingOutput
- * @property {string} status -
+ * @property {import('./lib/graph/action').WharfieActionStatusEnum} status -
  * @property {any} [nextActionInputs] -
  */
 
@@ -118,14 +118,10 @@
 
 /**
  * @typedef DaemonConfig
- * @property {string} MaterializationPartitionQuery -
- * @property {string} Mode -
  * @property {string} Role -
- * @property {string} PrimaryKey -
- * @property {string} Schedule -
- * @property {string} Interval -
- * @property {DaemonConfigSLA} SLA -
- * @property {string[]} AlarmActions -
+ * @property {string} [Schedule] -
+ * @property {DaemonConfigSLA} [SLA] -
+ * @property {string[]} [AlarmActions] -
  */
 
 /**
@@ -157,7 +153,7 @@
  * @property {Column[]} columns -
  * @property {boolean} compressed -
  * @property {string} databaseName -
- * @property {string} description -
+ * @property {string} [description] -
  * @property {string} name -
  * @property {number} numberOfBuckets -
  * @property {Object<string,string>} parameters -
@@ -172,52 +168,6 @@
  * @property {string} [inputFormat] -
  * @property {string} [outputFormat] -
  * @property {SerdeInfo} [serdeInfo] -
- */
-
-/**
- * @typedef ResourceRecord
- * @property {string} resource_id - name of the resource
- * @property {string} resource_status -
- * @property {string} resource_arn -
- * @property {string} region - aws region of the resource
- * @property {string} [source_region] - aws region of the source data, not set for models
- * @property {string} status - status of the resource
- * @property {string} athena_workgroup - name of the stack's athena workgroup
- * @property {DaemonConfig} daemon_config -
- * @property {TableProperties} source_properties -
- * @property {TableProperties} destination_properties -
- * @property {string} wharfie_version -
- */
-
-/**
- * @typedef OperationRecord
- * @property {string} resource_id - Id of the resource
- * @property {string} operation_id - Id of the operation
- * @property {WharfieOperationTypeEnum} operation_type - type of operation
- * @property {WharfieOperationStatusEnum} operation_status - status of operation
- * @property {number} started_at - start timestamp
- * @property {number} last_updated_at - update_at_timestamp
- * @property {import('./lib/graph/').OperationActionGraph} action_graph - action dependency graph
- * @property {any} [operation_config] - configuration Blob for the operation
- * @property {ActionRecord[]} [actions] -
- * @property {any} [operation_inputs] - Input Blob for the operation
- */
-
-/**
- * @typedef ActionRecord
- * @property {string} action_id - Id of the action associated with that query
- * @property {import('./lib/graph/action').WharfieActionTypeEnum} action_type - type of action
- * @property {string} action_status - status of the action
- * @property {QueryRecord[]} [queries] -
- */
-
-/**
- * @typedef QueryRecord
- * @property {string} query_id - Id of the query
- * @property {string} [query_execution_id] - Athena execution id
- * @property {string} query_status - status of the query
- * @property {number} [last_updated_at] - update_at_timestamp
- * @property {any} query_data - query metadata, used by actions
  */
 
 /**

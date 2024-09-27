@@ -3,7 +3,7 @@
 
 const path = require('path');
 
-process.env.AWS_MOCKS = true;
+process.env.AWS_MOCKS = '1';
 jest.requireMock('@aws-sdk/client-s3');
 
 // eslint-disable-next-line jest/no-untyped-mock-factory
@@ -206,6 +206,7 @@ describe('wharfie project IaC', () => {
 
     const deserialized = deserialize(serialized);
     await deserialized.reconcile();
+    // @ts-ignore
     expect(deserialized.properties).toMatchInlineSnapshot(`
       {
         "actorRoleArns": [
@@ -248,6 +249,7 @@ describe('wharfie project IaC', () => {
   it('normal project', async () => {
     expect.assertions(4);
     // setting up buckets for mock
+    // @ts-ignore
     s3.__setMockState({
       's3://amazon-berkeley-objects/empty.json': '',
       's3://utility-079185815456-us-west-2/empty.json': '',
@@ -3705,6 +3707,7 @@ describe('wharfie project IaC', () => {
 
     const deserialized = deserialize(serialized);
     await deserialized.reconcile();
+    // @ts-ignore
     expect(deserialized.properties).toMatchInlineSnapshot(`
       {
         "actorRoleArns": [

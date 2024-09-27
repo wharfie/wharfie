@@ -15,12 +15,12 @@ async function resubmit_running_operations(resource_id) {
     const operationChunk = operations_to_remove.splice(0, 10);
     await Promise.all(
       operationChunk.map(
-        (/** @type {import('../typedefs').OperationRecord} */ operation) =>
+        (/** @type {import('../lib/graph/').Operation} */ operation) =>
           Promise.all([
-            deleteOperation(operation.resource_id, operation.operation_id),
+            deleteOperation(operation),
             sqs.sendMessage({
               MessageBody: JSON.stringify({
-                operation_type: operation.operation_type,
+                operation_type: operation.type,
                 action_type: 'START',
                 resource_id,
                 operation_started_at: new Date(
