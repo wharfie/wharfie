@@ -1,4 +1,5 @@
 /* eslint-disable jest/no-large-snapshots */
+/* eslint-disable jest/no-hooks */
 'use strict';
 
 const path = require('path');
@@ -23,12 +24,17 @@ describe('wharfie project IaC', () => {
     expect.assertions(4);
     const deployment = new WharfieDeployment({
       name: 'test-deployment',
-      properties: {},
+      properties: {
+        createdAt: 123456789,
+      },
     });
     await deployment.reconcile();
     const wharfieProject = new WharfieProject({
       name: 'test-wharife-project',
       deployment,
+      properties: {
+        createdAt: 123456789,
+      },
     });
     await wharfieProject.reconcile();
 
@@ -45,6 +51,7 @@ describe('wharfie project IaC', () => {
             "arn:aws:iam::123456789012:role/test-deployment-events-role",
             "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
           ],
+          "createdAt": 123456789,
           "dependencyTable": "test-deployment-dependencies",
           "deployment": {
             "accountId": "",
@@ -215,6 +222,7 @@ describe('wharfie project IaC', () => {
           "arn:aws:iam::123456789012:role/test-deployment-events-role",
           "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
         ],
+        "createdAt": 123456789,
         "dependencyTable": "test-deployment-dependencies",
         "deployment": {
           "accountId": "",
@@ -256,13 +264,18 @@ describe('wharfie project IaC', () => {
     });
     const deployment = new WharfieDeployment({
       name: 'test-deployment',
-      properties: {},
+      properties: {
+        createdAt: 123456789,
+      },
     });
     await deployment.reconcile();
 
     const wharfieProject = new WharfieProject({
       name: 'test-wharife-project',
       deployment,
+      properties: {
+        createdAt: 123456789,
+      },
     });
 
     const project = await loadProject({
@@ -292,6 +305,7 @@ describe('wharfie project IaC', () => {
             "arn:aws:iam::123456789012:role/test-deployment-events-role",
             "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
           ],
+          "createdAt": 123456789,
           "dependencyTable": "test-deployment-dependencies",
           "deployment": {
             "accountId": "",
@@ -442,6 +456,7 @@ describe('wharfie project IaC', () => {
                 },
               ],
               "compressed": undefined,
+              "createdAt": 123456789,
               "databaseName": "test-wharife-project",
               "dependencyTable": "test-deployment-dependencies",
               "deployment": {
@@ -1000,6 +1015,7 @@ describe('wharfie project IaC', () => {
                   "data": {
                     "data": {
                       "athena_workgroup": "test-deployment-amazon_berkely_objects-workgroup",
+                      "created_at": 123456789,
                       "daemon_config": {
                         "Role": "arn:aws:iam::123456789012:role/test-wharife-project-project-role",
                       },
@@ -1158,8 +1174,10 @@ describe('wharfie project IaC', () => {
                         "tableType": "EXTERNAL_TABLE",
                         "tags": [],
                       },
+                      "id": "test-wharife-project.amazon_berkely_objects",
+                      "last_updated_at": 123456789,
+                      "record_type": "RESOURCE",
                       "region": "us-west-2",
-                      "resource_status": "CREATING",
                       "source_properties": {
                         "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/amazon_berkely_objects_raw",
                         "catalogId": "",
@@ -1315,6 +1333,7 @@ describe('wharfie project IaC', () => {
                         "tags": [],
                       },
                       "source_region": "us-east-1",
+                      "status": "ACTIVE",
                       "wharfie_version": "0.0.1",
                     },
                   },
@@ -1367,6 +1386,7 @@ describe('wharfie project IaC', () => {
                 },
               ],
               "compressed": false,
+              "createdAt": 123456789,
               "databaseName": "test-wharife-project",
               "dependencyTable": "test-deployment-dependencies",
               "deployment": {
@@ -1622,6 +1642,7 @@ describe('wharfie project IaC', () => {
                   "data": {
                     "data": {
                       "athena_workgroup": "test-deployment-amazon_berkely_objects_aggregated-workgroup",
+                      "created_at": 123456789,
                       "daemon_config": {
                         "Role": "arn:aws:iam::123456789012:role/test-wharife-project-project-role",
                       },
@@ -1680,8 +1701,10 @@ describe('wharfie project IaC', () => {
                         "tableType": "EXTERNAL_TABLE",
                         "tags": [],
                       },
+                      "id": "test-wharife-project.amazon_berkely_objects_aggregated",
+                      "last_updated_at": 123456789,
+                      "record_type": "RESOURCE",
                       "region": "us-west-2",
-                      "resource_status": "CREATING",
                       "source_properties": {
                         "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/amazon_berkely_objects_aggregated_raw",
                         "catalogId": "",
@@ -1735,6 +1758,7 @@ describe('wharfie project IaC', () => {
                         "viewOriginalText": "/* Presto View: eyJvcmlnaW5hbFNxbCI6IldJVEggdW5uZXN0ZWRfdGFibGUgQVMgKFxuICBTRUxFQ1QgY291bnRyeSwgYnJhbmRfZWxlbWVudC52YWx1ZSBBUyBicmFuZHNcbiAgRlJPTSBwcm9qZWN0X2ZpeHR1cmUuYW1hem9uX2JlcmtlbHlfb2JqZWN0cyxcbiAgVU5ORVNUKGJyYW5kKSBBUyB0KGJyYW5kX2VsZW1lbnQpXG4pXG5TRUxFQ1QgY291bnRyeSwgYnJhbmRzLCBDT1VOVCgqKSBBUyBjb3VudFxuRlJPTSB1bm5lc3RlZF90YWJsZVxuR1JPVVAgQlkgY291bnRyeSwgYnJhbmRzXG5PUkRFUiBCWSBjb3VudCBERVNDXG4iLCJjYXRhbG9nIjoiYXdzZGF0YWNhdGFsb2ciLCJjb2x1bW5zIjpbeyJuYW1lIjoiY291bnRyeSIsInR5cGUiOiJ2YXJjaGFyIn0seyJuYW1lIjoiYnJhbmRzIiwidHlwZSI6InZhcmNoYXIifSx7Im5hbWUiOiJjb3VudCIsInR5cGUiOiJiaWdpbnQifV19 */",
                       },
                       "source_region": undefined,
+                      "status": "ACTIVE",
                       "wharfie_version": "0.0.1",
                     },
                   },
@@ -1791,6 +1815,7 @@ describe('wharfie project IaC', () => {
                 },
               ],
               "compressed": false,
+              "createdAt": 123456789,
               "databaseName": "test-wharife-project",
               "dependencyTable": "test-deployment-dependencies",
               "deployment": {
@@ -2079,6 +2104,7 @@ describe('wharfie project IaC', () => {
                   "data": {
                     "data": {
                       "athena_workgroup": "test-deployment-amazon_berkely_objects_images-workgroup",
+                      "created_at": 123456789,
                       "daemon_config": {
                         "Role": "arn:aws:iam::123456789012:role/test-wharife-project-project-role",
                       },
@@ -2141,8 +2167,10 @@ describe('wharfie project IaC', () => {
                         "tableType": "EXTERNAL_TABLE",
                         "tags": [],
                       },
+                      "id": "test-wharife-project.amazon_berkely_objects_images",
+                      "last_updated_at": 123456789,
+                      "record_type": "RESOURCE",
                       "region": "us-west-2",
-                      "resource_status": "CREATING",
                       "source_properties": {
                         "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/amazon_berkely_objects_images_raw",
                         "catalogId": "",
@@ -2204,6 +2232,7 @@ describe('wharfie project IaC', () => {
                         "tags": [],
                       },
                       "source_region": "us-east-1",
+                      "status": "ACTIVE",
                       "wharfie_version": "0.0.1",
                     },
                   },
@@ -2256,6 +2285,7 @@ describe('wharfie project IaC', () => {
                 },
               ],
               "compressed": false,
+              "createdAt": 123456789,
               "databaseName": "test-wharife-project",
               "dependencyTable": "test-deployment-dependencies",
               "deployment": {
@@ -2536,6 +2566,7 @@ describe('wharfie project IaC', () => {
                   "data": {
                     "data": {
                       "athena_workgroup": "test-deployment-amazon_berkely_objects_join-workgroup",
+                      "created_at": 123456789,
                       "daemon_config": {
                         "Role": "arn:aws:iam::123456789012:role/test-wharife-project-project-role",
                       },
@@ -2594,8 +2625,10 @@ describe('wharfie project IaC', () => {
                         "tableType": "EXTERNAL_TABLE",
                         "tags": [],
                       },
+                      "id": "test-wharife-project.amazon_berkely_objects_join",
+                      "last_updated_at": 123456789,
+                      "record_type": "RESOURCE",
                       "region": "us-west-2",
-                      "resource_status": "CREATING",
                       "source_properties": {
                         "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/amazon_berkely_objects_join_raw",
                         "catalogId": "",
@@ -2649,6 +2682,7 @@ describe('wharfie project IaC', () => {
                         "viewOriginalText": "/* Presto View: eyJvcmlnaW5hbFNxbCI6IlNFTEVDVCBvYmplY3RzLml0ZW1faWQsIG9iamVjdHMubWFya2V0cGxhY2UsIGltYWdlcy5wYXRoXG5GUk9NIHByb2plY3RfZml4dHVyZS5hbWF6b25fYmVya2VseV9vYmplY3RzIEFTIG9iamVjdHNcbkxFRlQgSk9JTiBwcm9qZWN0X2ZpeHR1cmUuYW1hem9uX2JlcmtlbHlfb2JqZWN0c19pbWFnZXMgQVMgaW1hZ2VzXG5PTiBvYmplY3RzLm1haW5faW1hZ2VfaWQgPSBpbWFnZXMuaW1hZ2VfaWRcbiIsImNhdGFsb2ciOiJhd3NkYXRhY2F0YWxvZyIsImNvbHVtbnMiOlt7Im5hbWUiOiJpdGVtX2lkIiwidHlwZSI6InZhcmNoYXIifSx7Im5hbWUiOiJtYXJrZXRwbGFjZSIsInR5cGUiOiJ2YXJjaGFyIn0seyJuYW1lIjoicGF0aCIsInR5cGUiOiJ2YXJjaGFyIn1dfQ== */",
                       },
                       "source_region": undefined,
+                      "status": "ACTIVE",
                       "wharfie_version": "0.0.1",
                     },
                   },
@@ -2701,6 +2735,7 @@ describe('wharfie project IaC', () => {
                 },
               ],
               "compressed": false,
+              "createdAt": 123456789,
               "databaseName": "test-wharife-project",
               "dependencyTable": "test-deployment-dependencies",
               "deployment": {
@@ -2977,6 +3012,7 @@ describe('wharfie project IaC', () => {
                   "data": {
                     "data": {
                       "athena_workgroup": "test-deployment-inline-workgroup",
+                      "created_at": 123456789,
                       "daemon_config": {
                         "Role": "arn:aws:iam::123456789012:role/test-wharife-project-project-role",
                       },
@@ -3035,8 +3071,10 @@ describe('wharfie project IaC', () => {
                         "tableType": "EXTERNAL_TABLE",
                         "tags": [],
                       },
+                      "id": "test-wharife-project.inline",
+                      "last_updated_at": 123456789,
+                      "record_type": "RESOURCE",
                       "region": "us-west-2",
-                      "resource_status": "CREATING",
                       "source_properties": {
                         "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/inline_raw",
                         "catalogId": "",
@@ -3090,6 +3128,7 @@ describe('wharfie project IaC', () => {
                         "viewOriginalText": "/* Presto View: eyJvcmlnaW5hbFNxbCI6IlNFTEVDVCBvYmplY3RzLml0ZW1faWQsIG9iamVjdHMubWFya2V0cGxhY2UsIGltYWdlcy5wYXRoIEZST00gcHJvamVjdF9maXh0dXJlLmFtYXpvbl9iZXJrZWx5X29iamVjdHMgQVMgb2JqZWN0cyBMRUZUIEpPSU4gcHJvamVjdF9maXh0dXJlLmFtYXpvbl9iZXJrZWx5X29iamVjdHNfaW1hZ2VzIEFTIGltYWdlcyBPTiBvYmplY3RzLm1haW5faW1hZ2VfaWQgPSBpbWFnZXMuaW1hZ2VfaWQiLCJjYXRhbG9nIjoiYXdzZGF0YWNhdGFsb2ciLCJjb2x1bW5zIjpbeyJuYW1lIjoiaXRlbV9pZCIsInR5cGUiOiJ2YXJjaGFyIn0seyJuYW1lIjoibWFya2V0cGxhY2UiLCJ0eXBlIjoidmFyY2hhciJ9LHsibmFtZSI6InBhdGgiLCJ0eXBlIjoidmFyY2hhciJ9XX0= */",
                       },
                       "source_region": undefined,
+                      "status": "ACTIVE",
                       "wharfie_version": "0.0.1",
                     },
                   },
@@ -3138,6 +3177,7 @@ describe('wharfie project IaC', () => {
                 },
               ],
               "compressed": undefined,
+              "createdAt": 123456789,
               "databaseName": "test-wharife-project",
               "dependencyTable": "test-deployment-dependencies",
               "deployment": {
@@ -3329,6 +3369,7 @@ describe('wharfie project IaC', () => {
                   "data": {
                     "data": {
                       "athena_workgroup": "test-deployment-test-workgroup",
+                      "created_at": 123456789,
                       "daemon_config": {
                         "Role": "arn:aws:iam::123456789012:role/test-wharife-project-project-role",
                       },
@@ -3383,8 +3424,10 @@ describe('wharfie project IaC', () => {
                         "tableType": "EXTERNAL_TABLE",
                         "tags": [],
                       },
+                      "id": "test-wharife-project.test",
+                      "last_updated_at": 123456789,
+                      "record_type": "RESOURCE",
                       "region": "us-west-2",
-                      "resource_status": "CREATING",
                       "source_properties": {
                         "arn": "arn:aws:glue:us-west-2::table/test-wharife-project/test_raw",
                         "catalogId": "",
@@ -3436,6 +3479,7 @@ describe('wharfie project IaC', () => {
                         "tags": [],
                       },
                       "source_region": "us-east-1",
+                      "status": "ACTIVE",
                       "wharfie_version": "0.0.1",
                     },
                   },
@@ -3716,6 +3760,7 @@ describe('wharfie project IaC', () => {
           "arn:aws:iam::123456789012:role/test-deployment-events-role",
           "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
         ],
+        "createdAt": 123456789,
         "dependencyTable": "test-deployment-dependencies",
         "deployment": {
           "accountId": "",
