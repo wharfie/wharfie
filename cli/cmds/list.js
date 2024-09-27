@@ -94,6 +94,7 @@ exports.handler = async function ({ resource_id, operation_id }) {
   try {
     await list(resource_id, operation_id);
   } catch (err) {
+    console.trace(err);
     displayFailure(err);
   }
 };
