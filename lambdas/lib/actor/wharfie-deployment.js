@@ -108,8 +108,8 @@ class WharfieDeployment extends BaseResourceGroup {
       DEPENDENCY_TABLE: this.getDeploymentResources().getResource(
         `${this.name}-dependencies`
       ).name,
-      EVENT_TABLE: this.getDeploymentResources().getResource(
-        `${this.name}-events`
+      SCHEDULER_TABLE: this.getDeploymentResources().getResource(
+        `${this.name}-scheduler`
       ).name,
       WHARFIE_SERVICE_BUCKET: this.getDeploymentResources().getBucket().name,
       WHARFIE_LOGGING_FIREHOSE: this.getDeploymentResources().getResource(

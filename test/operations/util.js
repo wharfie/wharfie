@@ -18,7 +18,7 @@ const cleanup_lambda = require('../../lambdas/cleanup');
 const events_lambda = require('../../lambdas/events');
 
 jest.mock('../../lambdas/lib/dynamo/operations');
-jest.mock('../../lambdas/lib/dynamo/event');
+jest.mock('../../lambdas/lib/dynamo/scheduler');
 jest.mock('../../lambdas/lib/dynamo/location');
 jest.mock('../../lambdas/lib/dynamo/semaphore');
 jest.mock('../../lambdas/lib/logging');

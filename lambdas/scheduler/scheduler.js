@@ -1,39 +1,38 @@
 'use strict';
-const SQS = require('../../lib/sqs');
+const SQS = require('../lib/sqs');
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
 
-const event_db = require('../../lib/dynamo/event');
-const resource_db = require('../../lib/dynamo/operations');
-const logging = require('../../lib/logging/');
+const event_db = require('../lib/dynamo/scheduler');
+const resource_db = require('../lib/dynamo/operations');
+const logging = require('../lib/logging');
+const SchedulerEntry = require('./scheduler-entry');
 const daemon_log = logging.getDaemonLogger();
 
 const DAEMON_QUEUE_URL = process.env.DAEMON_QUEUE_URL || '';
 const QUEUE_URL = process.env.EVENTS_QUEUE_URL || '';
 
 /**
- * @param {import('../../typedefs').ScheduledEventRecord} ScheduledEventRecord -
+ * @param {SchedulerEntry} ScheduledEvent -
  * @param {import('aws-lambda').Context} context -
  */
-async function run(ScheduledEventRecord, context) {
+async function run(ScheduledEvent, context) {
   daemon_log.debug(
-    `scheduled event record ${JSON.stringify(
-      ScheduledEventRecord
-    )}, ${JSON.stringify(context)}`
+    `scheduled event record ${JSON.stringify(ScheduledEvent)}, ${JSON.stringify(
+      context
+    )}`
   );
-  const start_time = Number(ScheduledEventRecord.sort_key.split(':')[1] || 0);
+  const start_time = Number(ScheduledEvent.sort_key.split(':')[1] || 0);
   if (Date.now() < start_time) {
     daemon_log.debug('event not ready to start');
     await sqs.sendMessage({
-      MessageBody: JSON.stringify(ScheduledEventRecord),
+      MessageBody: ScheduledEvent.toEvent(),
       QueueUrl: QUEUE_URL,
       DelaySeconds: Math.floor(Math.random() * 30 + 1),
     });
     return;
   }
-  const resource = await resource_db.getResource(
-    ScheduledEventRecord.resource_id
-  );
+  const resource = await resource_db.getResource(ScheduledEvent.resource_id);
   if (!resource) {
     daemon_log.warn('resource unexpectedly missing, maybe it was deleted?');
     return;
@@ -53,26 +52,25 @@ async function run(ScheduledEventRecord, context) {
       resource_id: resource.id,
     };
   } else {
-    /** @type {import('../../typedefs').PartitionValues} */
+    /** @type {import('../typedefs').PartitionValues} */
     const partitionValues = {};
     if (
-      ScheduledEventRecord.partition.partitionValues.filter(
+      ScheduledEvent?.partition?.partitionValues.filter(
         (/** @type {string} */ value) => value.includes('=')
-      ).length === ScheduledEventRecord.partition.partitionValues.length
+      ).length === ScheduledEvent?.partition?.partitionValues.length
     ) {
       (resource.destination_properties?.partitionKeys || [])
         .slice()
         .reverse()
         .forEach(
           (/** @type {any} */ partitionKey, /** @type {number} */ index) => {
-            const partitionValue =
-              ScheduledEventRecord.partition.partitionValues[
-                (resource.destination_properties?.partitionKeys || []).length -
-                  1 -
-                  index
-              ]
-                .replace(`${partitionKey.name}=`, '')
-                .replace(`${partitionKey.name}%3D`, '');
+            const partitionValue = ScheduledEvent?.partition?.partitionValues[
+              (resource.destination_properties?.partitionKeys || []).length -
+                1 -
+                index
+            ]
+              .replace(`${partitionKey.name}=`, '')
+              .replace(`${partitionKey.name}%3D`, '');
 
             if (
               [
@@ -85,8 +83,11 @@ async function run(ScheduledEventRecord, context) {
               ].includes(partitionKey.type)
             ) {
               partitionValues[partitionKey.name] = Number(partitionValue);
-            } else {
+            } else if (partitionValue) {
               partitionValues[partitionKey.name] = partitionValue;
+            } else {
+              daemon_log.warn(`undefined partition value ${ScheduledEvent}`);
+              partitionValues[partitionKey.name] = '';
             }
           }
         );
@@ -97,7 +98,7 @@ async function run(ScheduledEventRecord, context) {
         .forEach(
           (/** @type {any} */ partitionKey, /** @type {number} */ index) => {
             const partitionValue =
-              ScheduledEventRecord.partition.partitionValues[
+              ScheduledEvent?.partition?.partitionValues[
                 (resource.destination_properties?.partitionKeys || []).length -
                   1 -
                   index
@@ -114,8 +115,11 @@ async function run(ScheduledEventRecord, context) {
               ].includes(partitionKey.type)
             ) {
               partitionValues[partitionKey.name] = Number(partitionValue);
-            } else {
+            } else if (partitionValue) {
               partitionValues[partitionKey.name] = partitionValue;
+            } else {
+              daemon_log.warn(`undefined partition value ${ScheduledEvent}`);
+              partitionValues[partitionKey.name] = '';
             }
           }
         );
@@ -129,11 +133,11 @@ async function run(ScheduledEventRecord, context) {
       operation_started_at: new Date(Date.now()),
       operation_type: 'S3_EVENT',
       action_type: 'START',
-      resource_id: ScheduledEventRecord.resource_id,
+      resource_id: ScheduledEvent.resource_id,
       operation_inputs: hasPartitions
         ? {
             partition: {
-              ...ScheduledEventRecord.partition,
+              ...ScheduledEvent.partition,
               partitionValues,
             },
           }
@@ -146,7 +150,7 @@ async function run(ScheduledEventRecord, context) {
     QueueUrl: DAEMON_QUEUE_URL,
   });
 
-  await event_db.update(ScheduledEventRecord, 'started');
+  await event_db.update(ScheduledEvent, SchedulerEntry.Status.STARTED);
 }
 
 module.exports = {

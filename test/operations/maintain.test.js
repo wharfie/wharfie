@@ -18,7 +18,7 @@ const {
 } = require('./util');
 
 jest.mock('../../lambdas/lib/dynamo/operations');
-jest.mock('../../lambdas/lib/dynamo/event');
+jest.mock('../../lambdas/lib/dynamo/scheduler');
 jest.mock('../../lambdas/lib/dynamo/location');
 jest.mock('../../lambdas/lib/dynamo/semaphore');
 jest.mock('../../lambdas/lib/dynamo/dependency');

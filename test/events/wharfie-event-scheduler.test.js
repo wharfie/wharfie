@@ -5,7 +5,7 @@ const AWSSQS = require('@aws-sdk/client-sqs');
 
 let logging,
   date,
-  event_db,
+  scheduler_db,
   dependency_db,
   resource_db,
   router,
@@ -36,11 +36,11 @@ describe('tests for s3 event scheduling', () => {
       },
     };
     date = jest.spyOn(Date, 'now').mockReturnValue(1466424490000);
-    event_db = require('../../lambdas/lib/dynamo/event');
+    scheduler_db = require('../../lambdas/lib/dynamo/scheduler');
     dependency_db = require('../../lambdas/lib/dynamo/dependency');
     resource_db = require('../../lambdas/lib/dynamo/operations');
     logging = require('../../lambdas/lib/logging');
-    jest.mock('../../lambdas/lib/dynamo/event');
+    jest.mock('../../lambdas/lib/dynamo/scheduler');
     jest.mock('../../lambdas/lib/dynamo/dependency');
     jest.mock('../../lambdas/lib/dynamo/operations');
     jest.mock('../../lambdas/lib/logging');
@@ -49,21 +49,21 @@ describe('tests for s3 event scheduling', () => {
       info: () => {},
     }));
     AWSSQS.SQSMock.on(AWSSQS.SendMessageCommand).resolves({});
-    jest.spyOn(event_db, 'query').mockImplementation(() => []);
-    jest.spyOn(event_db, 'schedule').mockImplementation();
+    jest.spyOn(scheduler_db, 'query').mockImplementation(() => []);
+    jest.spyOn(scheduler_db, 'schedule').mockImplementation();
     jest
       .spyOn(dependency_db, 'findDependencies')
       .mockImplementation(() => dependency_return);
     jest
       .spyOn(resource_db, 'getResource')
       .mockImplementation(() => resource_mock);
-    router = require('../../lambdas/events/router');
+    router = require('../../lambdas/scheduler/router');
   });
 
   afterEach(() => {
     date.mockClear();
-    event_db.query.mockClear();
-    event_db.schedule.mockClear();
+    scheduler_db.query.mockClear();
+    scheduler_db.schedule.mockClear();
     dependency_db.findDependencies.mockClear();
     resource_db.getResource.mockClear();
     AWSSQS.SQSMock.reset();
@@ -101,10 +101,10 @@ describe('tests for s3 event scheduling', () => {
     ).toStrictEqual({
       resource_id: '1',
       sort_key: 'unpartitioned:1466424600000',
-      started_at: 1466424490000,
-      updated_at: 1466424490000,
-      status: 'scheduled',
-      partition: {},
+      status: 'SCHEDULED',
+      type: 'SchedulerEntry',
+      version: '0.0.11',
+      retries: 0,
     });
   });
 });

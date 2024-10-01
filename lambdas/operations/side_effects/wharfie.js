@@ -2,8 +2,8 @@
 
 const SQS = require('../../lib/sqs');
 const logging = require('../../lib/logging');
-const { version } = require('../../../package.json');
 const { Operation, Resource } = require('../../lib/graph/');
+const WharfieEvent = require('../../events/wharfie');
 
 const wharfie_db_log = logging.getWharfieDBLogger();
 const sqs = new SQS({ region: process.env.AWS_REGION });
@@ -26,13 +26,15 @@ async function wharfie(event, context, resource, operation) {
     completed_at,
   });
   await sqs.sendMessage({
-    MessageBody: JSON.stringify({
-      type: 'WHARFIE:OPERATION:COMPLETED',
+    MessageBody: new WharfieEvent({
+      type: WharfieEvent.Type['WHARFIE:OPERATION:COMPLETED'],
       resource_id: resource.id,
-      database_name: resource.destination_properties.databaseName,
-      table_name: resource.destination_properties.name,
-      version,
-    }),
+      data: {
+        database_name: resource.destination_properties.databaseName,
+        table_name: resource.destination_properties.name,
+        operation_type: operation.type,
+      },
+    }).serialize(),
     QueueUrl: QUEUE_URL,
   });
   return {

@@ -1,34 +1,34 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
-jest.mock('../../../lambdas/lib/dynamo/event');
+jest.mock('../../../lambdas/lib/dynamo/scheduler');
 
-const event = require('../../../lambdas/lib/dynamo/event');
+const scheduler = require('../../../lambdas/lib/dynamo/scheduler');
 
 describe('dynamo event db', () => {
   afterEach(() => {
-    event.__setMockState();
+    scheduler.__setMockState();
   });
 
   it('query', async () => {
     expect.assertions(1);
 
-    await event.schedule({
+    await scheduler.schedule({
       resource_id: 'test',
       sort_key: 'dt=10:112311',
     });
-    await event.schedule({
+    await scheduler.schedule({
       resource_id: 'test',
       sort_key: 'dt=10:112312',
     });
-    await event.schedule({
+    await scheduler.schedule({
       resource_id: 'test',
       sort_key: 'dt=10:212312',
     });
-    await event.schedule({
+    await scheduler.schedule({
       resource_id: 'test',
       sort_key: 'dt=10:112313',
     });
-    const value = await event.query('test', 'dt=10', ['112312', '212312']);
+    const value = await scheduler.query('test', 'dt=10', ['112312', '212312']);
     expect(value).toMatchInlineSnapshot(`
       [
         {
@@ -49,19 +49,19 @@ describe('dynamo event db', () => {
 
   it('schedule', async () => {
     expect.assertions(1);
-    await event.schedule({
+    await scheduler.schedule({
       resource_id: 'test',
       sort_key: 'dt=10:112312',
     });
-    await event.schedule({
+    await scheduler.schedule({
       resource_id: 'test',
       sort_key: 'dt=10:112312',
     });
-    await event.schedule({
+    await scheduler.schedule({
       resource_id: 'test',
       sort_key: 'dt=10:212312',
     });
-    expect(event.__getMockState()).toMatchInlineSnapshot(`
+    expect(scheduler.__getMockState()).toMatchInlineSnapshot(`
       {
         "test": {
           "dt=10:112312": {
@@ -79,18 +79,18 @@ describe('dynamo event db', () => {
 
   it('update', async () => {
     expect.assertions(1);
-    await event.schedule({
+    await scheduler.schedule({
       resource_id: 'test',
       sort_key: 'dt=10:112312',
     });
-    await event.update(
+    await scheduler.update(
       {
         resource_id: 'test',
         sort_key: 'dt=10:112312',
       },
       'running'
     );
-    expect(event.__getMockState()).toMatchInlineSnapshot(`
+    expect(scheduler.__getMockState()).toMatchInlineSnapshot(`
       {
         "test": {
           "dt=10:112312": {
@@ -105,20 +105,20 @@ describe('dynamo event db', () => {
 
   it('delete_records', async () => {
     expect.assertions(1);
-    await event.schedule({
+    await scheduler.schedule({
       resource_id: 'test',
       sort_key: 'dt=10:112312',
     });
-    await event.schedule({
+    await scheduler.schedule({
       resource_id: 'test',
       sort_key: 'dt=11:112312',
     });
-    await event.schedule({
+    await scheduler.schedule({
       resource_id: 'test-1',
       sort_key: 'dt=10:112312',
     });
-    await event.delete_records('test');
-    expect(event.__getMockState()).toMatchInlineSnapshot(`
+    await scheduler.delete_records('test');
+    expect(scheduler.__getMockState()).toMatchInlineSnapshot(`
       {
         "test-1": {
           "dt=10:112312": {

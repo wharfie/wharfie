@@ -1,11 +1,12 @@
 'use strict';
 
-const dependency_db = require('../../lib/dynamo/dependency');
-const resource_db = require('../../lib/dynamo/operations');
-const event_db = require('../../lib/dynamo/event');
-const SQS = require('../../lib/sqs');
+const dependency_db = require('../../../lib/dynamo/dependency');
+const resource_db = require('../../../lib/dynamo/operations');
+const event_db = require('../../../lib/dynamo/scheduler');
+const SQS = require('../../../lib/sqs');
+const SchedulerEntry = require('../../scheduler-entry');
 
-const logging = require('../../lib/logging');
+const logging = require('../../../lib/logging');
 const daemon_log = logging.getDaemonLogger();
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
@@ -13,7 +14,7 @@ const sqs = new SQS({ region: process.env.AWS_REGION });
 const QUEUE_URL = process.env.EVENTS_QUEUE_URL || '';
 
 /**
- * @param {import('../../typedefs').DependencyRecord} dependency_record -
+ * @param {import('../../../typedefs').DependencyRecord} dependency_record -
  * @param {number[]} window -
  */
 async function schedule_event(dependency_record, window) {
@@ -45,16 +46,12 @@ async function schedule_event(dependency_record, window) {
     ]);
     return;
   }
-  const item = {
+  const schedulerEntry = new SchedulerEntry({
     resource_id: dependency_record.resource_id,
     sort_key: `${partition_prefix}:${before}`,
-    started_at: now,
-    updated_at: now,
-    status: 'scheduled',
-    partition: {},
-  };
+  });
   try {
-    await event_db.schedule(item);
+    await event_db.schedule(schedulerEntry);
   } catch (error) {
     // @ts-ignore
     if (error && error.name === 'ConditionalCheckFailedException') {
@@ -66,13 +63,13 @@ async function schedule_event(dependency_record, window) {
   }
 
   await sqs.sendMessage({
-    MessageBody: JSON.stringify(item),
+    MessageBody: JSON.stringify(schedulerEntry.toEvent()),
     QueueUrl: QUEUE_URL,
   });
 }
 
 /**
- * @param {import('../../typedefs').WharfieEventRecord} wharfieEvent -
+ * @param {import('../../typedefs').InputEvent} wharfieEvent -
  * @param {import('aws-lambda').Context} context -
  */
 async function run(wharfieEvent, context) {

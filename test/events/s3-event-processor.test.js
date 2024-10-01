@@ -3,7 +3,7 @@
 
 const AWSSQS = require('@aws-sdk/client-sqs');
 
-let router, event_db, resource_db, logging, date, resource_mock;
+let router, scheduler_db, resource_db, logging, date, resource_mock;
 
 describe('tests for s3 events processing', () => {
   beforeAll(() => {
@@ -26,10 +26,9 @@ describe('tests for s3 events processing', () => {
       },
     };
     logging = require('../../lambdas/lib/logging');
-    event_db = require('../../lambdas/lib/dynamo/event');
+    scheduler_db = require('../../lambdas/lib/dynamo/scheduler');
     resource_db = require('../../lambdas/lib/dynamo/operations');
-    jest.mock('../../lambdas/lib/logging');
-    jest.mock('../../lambdas/lib/dynamo/event');
+    jest.mock('../../lambdas/lib/dynamo/scheduler');
     jest.mock('../../lambdas/lib/dynamo/operations');
     jest.spyOn(logging, 'getDaemonLogger').mockImplementation(() => ({
       debug: () => {},
@@ -39,13 +38,13 @@ describe('tests for s3 events processing', () => {
     jest
       .spyOn(resource_db, 'getResource')
       .mockImplementation(() => resource_mock);
-    jest.spyOn(event_db, 'update').mockImplementation();
+    jest.spyOn(scheduler_db, 'update').mockImplementation();
     date = jest.spyOn(Date, 'now').mockReturnValue(1466424490000);
-    router = require('../../lambdas/events/router');
+    router = require('../../lambdas/scheduler/router');
   });
 
   afterEach(() => {
-    event_db.update.mockClear();
+    scheduler_db.update.mockClear();
     resource_db.getResource.mockClear();
     logging.getDaemonLogger.mockClear();
     AWSSQS.SQSMock.reset();
@@ -62,9 +61,10 @@ describe('tests for s3 events processing', () => {
       {
         sort_key: 'a=1/b=abc:1',
         resource_id: '1',
-        started_at: 1466424490000,
-        updated_at: 1466424490000,
-        status: 'queued',
+        status: 'SCHEDULED',
+        type: 'SchedulerEntry',
+        version: '0.0.11',
+        retries: 0,
         partition: {
           location: 's3://bucket/prefix/a=1/b=abc/',
           partitionValues: ['a=1', 'b=abc'],
@@ -73,7 +73,7 @@ describe('tests for s3 events processing', () => {
       {}
     );
 
-    expect(event_db.update).toHaveBeenCalledTimes(1);
+    expect(scheduler_db.update).toHaveBeenCalledTimes(1);
     expect(AWSSQS.SQSMock).toHaveReceivedCommandTimes(
       AWSSQS.SendMessageCommand,
       1
@@ -122,9 +122,10 @@ describe('tests for s3 events processing', () => {
       {
         sort_key: 'a=1/b=abc:1',
         resource_id: '1',
-        started_at: 1466424490000,
-        updated_at: 1466424490000,
-        status: 'queued',
+        status: 'SCHEDULED',
+        type: 'SchedulerEntry',
+        version: '0.0.11',
+        retries: 0,
         partition: {
           location:
             's3://bucket/prefix/123123123/a=1/1231231/b=abc/1231123123/',
@@ -134,7 +135,7 @@ describe('tests for s3 events processing', () => {
       {}
     );
 
-    expect(event_db.update).toHaveBeenCalledTimes(1);
+    expect(scheduler_db.update).toHaveBeenCalledTimes(1);
     expect(AWSSQS.SQSMock).toHaveReceivedCommandTimes(
       AWSSQS.SendMessageCommand,
       1
@@ -188,9 +189,10 @@ describe('tests for s3 events processing', () => {
       {
         sort_key: 'a=1/b=abc:1',
         resource_id: '1',
-        started_at: 1466424490000,
-        updated_at: 1466424490000,
-        status: 'queued',
+        status: 'SCHEDULED',
+        type: 'SchedulerEntry',
+        version: '0.0.11',
+        retries: 0,
         partition: {
           location: 's3://bucket/prefix/2021/10/25/',
           partitionValues: ['2021', '10', '25'],
@@ -199,7 +201,7 @@ describe('tests for s3 events processing', () => {
       {}
     );
 
-    expect(event_db.update).toHaveBeenCalledTimes(1);
+    expect(scheduler_db.update).toHaveBeenCalledTimes(1);
     expect(AWSSQS.SQSMock).toHaveReceivedCommandTimes(
       AWSSQS.SendMessageCommand,
       1
@@ -248,9 +250,10 @@ describe('tests for s3 events processing', () => {
       {
         sort_key: 'a=1/b=abc:1',
         resource_id: '1',
-        started_at: 1466424490000,
-        updated_at: 1466424490000,
-        status: 'queued',
+        status: 'SCHEDULED',
+        type: 'SchedulerEntry',
+        version: '0.0.11',
+        retries: 0,
         partition: {
           location: 's3://bucket/prefix/a=1/b=abc/',
           partitionValues: ['a=1', 'b=abc'],
@@ -259,7 +262,7 @@ describe('tests for s3 events processing', () => {
       {}
     );
 
-    expect(event_db.update).toHaveBeenCalledTimes(1);
+    expect(scheduler_db.update).toHaveBeenCalledTimes(1);
     expect(AWSSQS.SQSMock).toHaveReceivedCommandTimes(
       AWSSQS.SendMessageCommand,
       1
