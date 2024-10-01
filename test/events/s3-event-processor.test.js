@@ -3,7 +3,7 @@
 
 const AWSSQS = require('@aws-sdk/client-sqs');
 
-let router, scheduler_db, resource_db, logging, date, resource_mock;
+let router, scheduler_db, resource_db, date, resource_mock;
 
 describe('tests for s3 events processing', () => {
   beforeAll(() => {
@@ -25,15 +25,10 @@ describe('tests for s3 events processing', () => {
         ],
       },
     };
-    logging = require('../../lambdas/lib/logging');
     scheduler_db = require('../../lambdas/lib/dynamo/scheduler');
     resource_db = require('../../lambdas/lib/dynamo/operations');
     jest.mock('../../lambdas/lib/dynamo/scheduler');
     jest.mock('../../lambdas/lib/dynamo/operations');
-    jest.spyOn(logging, 'getDaemonLogger').mockImplementation(() => ({
-      debug: () => {},
-      info: () => {},
-    }));
     AWSSQS.SQSMock.on(AWSSQS.SendMessageCommand).resolves({});
     jest
       .spyOn(resource_db, 'getResource')
@@ -46,7 +41,6 @@ describe('tests for s3 events processing', () => {
   afterEach(() => {
     scheduler_db.update.mockClear();
     resource_db.getResource.mockClear();
-    logging.getDaemonLogger.mockClear();
     AWSSQS.SQSMock.reset();
     date.mockClear();
   });

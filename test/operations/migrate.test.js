@@ -1,6 +1,6 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
-// process.env.LOGGING_LEVEL = 'debug';
+process.env.LOGGING_LEVEL = 'debug';
 const bluebird = require('bluebird');
 const nock = require('nock');
 
@@ -26,7 +26,6 @@ jest.mock('../../lambdas/lib/dynamo/scheduler');
 jest.mock('../../lambdas/lib/dynamo/location');
 jest.mock('../../lambdas/lib/dynamo/semaphore');
 jest.mock('../../lambdas/lib/dynamo/dependency');
-jest.mock('../../lambdas/lib/logging');
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 
@@ -37,7 +36,6 @@ const { S3 } = require('@aws-sdk/client-s3');
 const { CloudFormation } = require('@aws-sdk/client-cloudformation');
 
 const operations = require('../../lambdas/lib/dynamo/operations');
-const logging = require('../../lambdas/lib/logging');
 
 const { Resource } = require('../../lambdas/lib/graph');
 
@@ -161,7 +159,6 @@ describe('migrate tests', () => {
 
   afterEach(() => {
     clearLambdaTriggers();
-    logging.flush();
   });
 
   it('end to end', async () => {

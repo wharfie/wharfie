@@ -21,7 +21,6 @@ jest.mock('../../lambdas/lib/dynamo/operations');
 jest.mock('../../lambdas/lib/dynamo/scheduler');
 jest.mock('../../lambdas/lib/dynamo/location');
 jest.mock('../../lambdas/lib/dynamo/semaphore');
-jest.mock('../../lambdas/lib/logging');
 
 const { SQS } = require('@aws-sdk/client-sqs');
 

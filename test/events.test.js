@@ -54,7 +54,6 @@ describe('tests for events lambda', () => {
     scheduler = require('../lambdas/scheduler/scheduler');
     processor = require('../lambdas/scheduler/input/s3/processor');
     jest.mock('../lambdas/lib/sqs');
-    jest.mock('../lambdas/lib/logging');
     jest.mock('../lambdas/scheduler/scheduler');
     jest.mock('../lambdas/scheduler/input/s3/processor');
     sendMessage = jest.fn().mockImplementation(() => {});
