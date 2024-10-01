@@ -1,5 +1,8 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
+const SchedulerEntry = require('../lambdas/scheduler/scheduler-entry');
+// eslint-disable-next-line jest/no-untyped-mock-factory
+jest.mock('../package.json', () => ({ version: '0.0.1' }));
 
 let lambda, SQS, sendMessage, processor, scheduler;
 
@@ -48,12 +51,11 @@ const eventbridge_event = JSON.stringify({
 describe('tests for events lambda', () => {
   beforeAll(() => {
     SQS = require('../lambdas/lib/sqs');
-    scheduler = require('../lambdas/events/s3/scheduler');
-    processor = require('../lambdas/events/s3/processor');
+    scheduler = require('../lambdas/scheduler/scheduler');
+    processor = require('../lambdas/scheduler/input/s3/processor');
     jest.mock('../lambdas/lib/sqs');
-    jest.mock('../lambdas/lib/logging');
-    jest.mock('../lambdas/events/s3/scheduler');
-    jest.mock('../lambdas/events/s3/processor');
+    jest.mock('../lambdas/scheduler/scheduler');
+    jest.mock('../lambdas/scheduler/input/s3/processor');
     sendMessage = jest.fn().mockImplementation(() => {});
     SQS.mockImplementation(() => {
       return {
@@ -87,8 +89,8 @@ describe('tests for events lambda', () => {
       {}
     );
 
-    expect(scheduler.run).toHaveBeenCalledTimes(1);
-    expect(scheduler.run.mock.calls[0][0]).toMatchInlineSnapshot(`
+    expect(processor.run).toHaveBeenCalledTimes(1);
+    expect(processor.run.mock.calls[0][0]).toMatchInlineSnapshot(`
       {
         "bucket": "bucket-name",
         "key": "object-key",
@@ -109,8 +111,8 @@ describe('tests for events lambda', () => {
       {}
     );
 
-    expect(scheduler.run).toHaveBeenCalledTimes(1);
-    expect(scheduler.run.mock.calls[0][0]).toMatchInlineSnapshot(`
+    expect(processor.run).toHaveBeenCalledTimes(1);
+    expect(processor.run.mock.calls[0][0]).toMatchInlineSnapshot(`
       {
         "bucket": "bucket-name",
         "key": "object-key",
@@ -131,8 +133,8 @@ describe('tests for events lambda', () => {
       {}
     );
 
-    expect(scheduler.run).toHaveBeenCalledTimes(1);
-    expect(scheduler.run.mock.calls[0][0]).toMatchInlineSnapshot(`
+    expect(processor.run).toHaveBeenCalledTimes(1);
+    expect(processor.run.mock.calls[0][0]).toMatchInlineSnapshot(`
       {
         "bucket": "utility-079185815456-us-west-2",
         "key": "test/hello.json",
@@ -146,19 +148,28 @@ describe('tests for events lambda', () => {
       {
         Records: [
           {
-            body: JSON.stringify({
-              resource_id: 'resource_id',
-            }),
+            body: JSON.stringify(
+              new SchedulerEntry({
+                resource_id: 'resource_id',
+                sort_key: 'sort_key',
+              }).toEvent()
+            ),
           },
         ],
       },
       {}
     );
 
-    expect(processor.run).toHaveBeenCalledTimes(1);
-    expect(processor.run.mock.calls[0][0]).toMatchInlineSnapshot(`
-      {
+    expect(scheduler.run).toHaveBeenCalledTimes(1);
+    expect(scheduler.run.mock.calls[0][0]).toMatchInlineSnapshot(`
+      SchedulerEntry {
+        "partition": undefined,
         "resource_id": "resource_id",
+        "retries": 0,
+        "sort_key": "sort_key",
+        "status": "SCHEDULED",
+        "ttl": undefined,
+        "version": "0.0.1",
       }
     `);
   });

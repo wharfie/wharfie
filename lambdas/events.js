@@ -1,7 +1,7 @@
 'use strict';
 require('./config');
 
-const router = require('./events/router');
+const router = require('./scheduler/router');
 
 const SQS = require('./lib/sqs');
 
@@ -15,7 +15,7 @@ const DLQ_URL = process.env.DLQ_URL || '';
 const MAX_RETRIES = Number(process.env.MAX_RETRIES || 7);
 
 /**
- * @param {import('./typedefs').InputEvent} event -
+ * @param {import('./scheduler/typedefs').InputEvent} event -
  */
 async function DLQ(event) {
   daemon_log.error(`Record has expended its retries, sending to DLQ`, {
@@ -28,7 +28,7 @@ async function DLQ(event) {
 }
 
 /**
- * @param {import('./typedefs').InputEvent} event -
+ * @param {import('./scheduler/typedefs').InputEvent} event -
  */
 async function retry(event) {
   if ((event.retries || 0) >= MAX_RETRIES) {
@@ -59,18 +59,15 @@ async function retry(event) {
  * @param {import('aws-lambda').Context} context -
  */
 async function processRecord(record, context) {
-  /** @type {import('./typedefs').InputEvent & import('aws-lambda').SNSMessage} */
+  /** @type {import('./scheduler/typedefs').InputEvent & import('aws-lambda').SNSMessage} */
   const event = JSON.parse(record.body);
 
   try {
     if (event.Type === 'Notification') {
       // handle S3 -> SNS -> SQS
-      /** @type {import('./typedefs').InputEvent} */
+      /** @type {import('./scheduler/typedefs').InputEvent} */
       const SnsEvent = JSON.parse(event.Message);
       await router(SnsEvent, context);
-    } else if (event.Records) {
-      // handle S3 -> SQS
-      await router(event, context);
     } else {
       // handle regular SQS
       await router(event, context);

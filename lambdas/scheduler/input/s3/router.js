@@ -1,28 +1,21 @@
 'use strict';
-const s3Events = require('./s3');
-const wharfieEvents = require('./wharfie');
+const process = require('./processor');
+const logging = require('../../../lib/logging');
+const daemon_log = logging.getDaemonLogger();
 
 /**
- * @param {import('../typedefs').InputEvent} event -
+ * @param {import('../../typedefs').InputEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @returns {Promise<void>}
  */
 async function router(event, context) {
-  if (event.resource_id && event.type !== 'WHARFIE:OPERATION:COMPLETED') {
-    // handle starting scheduled operations
-    await s3Events.processor(event, context);
-  } else if (
-    event.resource_id &&
-    event.type === 'WHARFIE:OPERATION:COMPLETED'
-  ) {
-    // handle finishing scheduled operations
-    await wharfieEvents.scheduler(event, context);
-  } else if (event.Records) {
+  daemon_log.info(`Event received ${JSON.stringify({ event, context })}`);
+  if (event.Records) {
     await Promise.all(
       event.Records.map((record) => {
         if (record.eventSource === 'aws:s3') {
           // handle s3 events from s3 service
-          return s3Events.scheduler(
+          return process.run(
             {
               bucket: record.s3.bucket.name,
               key: record.s3.object.key,
@@ -35,7 +28,7 @@ async function router(event, context) {
       })
     );
   } else if (event.source === 'aws.s3') {
-    return s3Events.scheduler(
+    await process.run(
       {
         bucket: event.detail.bucket.name,
         key: event.detail.object.key,
@@ -43,7 +36,7 @@ async function router(event, context) {
       context
     );
   } else if (event.Event !== 's3:TestEvent') {
-    throw new Error('Event not recognized');
+    throw new Error(`Unknown event type ${JSON.stringify(event)}`);
   }
 }
 

@@ -129,8 +129,8 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         billingMode: Table.BillingMode.PAY_PER_REQUEST,
       },
     });
-    const eventTable = new Table({
-      name: `${this.get('deployment').name}-events`,
+    const schedulerTable = new Table({
+      name: `${this.get('deployment').name}-scheduler`,
       properties: {
         deployment: () => this.get('deployment'),
         attributeDefinitions: [
@@ -321,7 +321,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         operationTable,
         locationTable,
         semaphoreTable,
-        eventTable,
+        schedulerTable,
         dependencyTable,
       ],
       properties: {
@@ -384,7 +384,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
               Resource: [
                 operationTable.get('arn'),
                 locationTable.get('arn'),
-                eventTable.get('arn'),
+                schedulerTable.get('arn'),
                 semaphoreTable.get('arn'),
                 dependencyTable.get('arn'),
               ],
@@ -550,7 +550,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
       operationTable,
       locationTable,
       semaphoreTable,
-      eventTable,
+      schedulerTable,
       dependencyTable,
       systemFirehoseRole,
       systemFirehose,
