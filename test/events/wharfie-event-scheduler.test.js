@@ -2,6 +2,12 @@
 'use strict';
 
 const AWSSQS = require('@aws-sdk/client-sqs');
+jest.mock('../../lambdas/lib/dynamo/scheduler');
+jest.mock('../../lambdas/lib/dynamo/dependency');
+jest.mock('../../lambdas/lib/dynamo/operations');
+const {
+  WharfieOperationCompleted,
+} = require('../../lambdas/scheduler/events/');
 
 let date,
   scheduler_db,
@@ -38,9 +44,6 @@ describe('tests for s3 event scheduling', () => {
     scheduler_db = require('../../lambdas/lib/dynamo/scheduler');
     dependency_db = require('../../lambdas/lib/dynamo/dependency');
     resource_db = require('../../lambdas/lib/dynamo/operations');
-    jest.mock('../../lambdas/lib/dynamo/scheduler');
-    jest.mock('../../lambdas/lib/dynamo/dependency');
-    jest.mock('../../lambdas/lib/dynamo/operations');
     AWSSQS.SQSMock.on(AWSSQS.SendMessageCommand).resolves({});
     jest.spyOn(scheduler_db, 'query').mockImplementation(() => []);
     jest.spyOn(scheduler_db, 'schedule').mockImplementation();
@@ -77,14 +80,11 @@ describe('tests for s3 event scheduling', () => {
       },
     ];
 
-    const wharfieEvent = {
-      type: 'WHARFIE:OPERATION:COMPLETED',
+    const wharfieEvent = new WharfieOperationCompleted({
       resource_id: '1',
-      database_name: 'test_db',
-      table_name: 'test_table',
-      version: '0.0.1',
-    };
-    await router(wharfieEvent, {});
+      operation_id: '1',
+    });
+    await router(JSON.parse(wharfieEvent.serialize()), {});
 
     expect(
       JSON.parse(
