@@ -3,7 +3,7 @@ const SQS = require('../lib/sqs');
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
 
-const event_db = require('../lib/dynamo/scheduler');
+const scheduler_db = require('../lib/dynamo/scheduler');
 const resource_db = require('../lib/dynamo/operations');
 const logging = require('../lib/logging');
 const SchedulerEntry = require('./scheduler-entry');
@@ -150,7 +150,7 @@ async function run(ScheduledEvent, context) {
     QueueUrl: DAEMON_QUEUE_URL,
   });
 
-  await event_db.update(ScheduledEvent, SchedulerEntry.Status.STARTED);
+  await scheduler_db.update(ScheduledEvent, SchedulerEntry.Status.STARTED);
 }
 
 module.exports = {
