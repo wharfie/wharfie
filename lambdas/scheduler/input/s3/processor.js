@@ -1,19 +1,20 @@
 'use strict';
 
-const location_db = require('../../lib/dynamo/location');
-const resource_db = require('../../lib/dynamo/operations');
-const event_db = require('../../lib/dynamo/event');
-const SQS = require('../../lib/sqs');
+const location_db = require('../../../lib/dynamo/location');
+const resource_db = require('../../../lib/dynamo/operations');
+const event_db = require('../../../lib/dynamo/scheduler');
+const SQS = require('../../../lib/sqs');
+const SchedulerEntry = require('../../scheduler-entry');
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
 
-const logging = require('../../lib/logging');
+const logging = require('../../../lib/logging');
 const daemon_log = logging.getDaemonLogger();
 
 const QUEUE_URL = process.env.EVENTS_QUEUE_URL || '';
 
 /**
- * @param {import('../../typedefs').LocationRecord} location_record -
+ * @param {import('../../../typedefs').LocationRecord} location_record -
  * @param {string[]} partition_parts -
  * @param {number[]} window -
  */
@@ -46,22 +47,19 @@ async function schedule_event(location_record, partition_parts, window) {
     ]);
     return;
   }
-  const item = {
+  const schedulerEntry = new SchedulerEntry({
     resource_id: location_record.resource_id,
     sort_key: `${partition_prefix}:${before}`,
-    started_at: now,
-    updated_at: now,
-    status: 'scheduled',
     partition:
       partition_prefix !== 'unpartitioned'
         ? {
             location: `${location_record.location}${partition_prefix}/`,
             partitionValues: partition_parts,
           }
-        : {},
-  };
+        : undefined,
+  });
   try {
-    await event_db.schedule(item);
+    await event_db.schedule(schedulerEntry);
   } catch (error) {
     // @ts-ignore
     if (error && error.name === 'ConditionalCheckFailedException') {
@@ -71,9 +69,8 @@ async function schedule_event(location_record, partition_parts, window) {
     }
     throw error;
   }
-
   await sqs.sendMessage({
-    MessageBody: JSON.stringify(item),
+    MessageBody: JSON.stringify(schedulerEntry.toEvent()),
     QueueUrl: QUEUE_URL,
   });
 }

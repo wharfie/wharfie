@@ -12,7 +12,6 @@ describe('tests for cleanup lambda', () => {
     resource_db = require('../lambdas/lib/dynamo/operations');
     jest.mock('../lambdas/lib/dynamo/operations');
     jest.mock('../lambdas/lib/s3');
-    jest.mock('../lambdas/lib/logging');
     getObject = jest
       .fn()
       .mockResolvedValue('s3://a-bucket/prefix/data/somefile.json');

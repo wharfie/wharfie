@@ -1,9 +1,9 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
 
-const AWSSQS = require('@aws-sdk/client-sqs');
+const AWS = require('@aws-sdk/client-sqs');
 let date,
-  event_db,
+  scheduler_db,
   location_db,
   resource_db,
   router,
@@ -32,32 +32,30 @@ describe('tests for s3 event scheduling', () => {
       },
     };
     date = jest.spyOn(Date, 'now').mockReturnValue(1466424490000);
-    event_db = require('../../lambdas/lib/dynamo/event');
+    scheduler_db = require('../../lambdas/lib/dynamo/scheduler');
     location_db = require('../../lambdas/lib/dynamo/location');
     resource_db = require('../../lambdas/lib/dynamo/operations');
-    jest.mock('../../lambdas/lib/dynamo/event');
+    jest.mock('../../lambdas/lib/dynamo/scheduler');
     jest.mock('../../lambdas/lib/dynamo/location');
     jest.mock('../../lambdas/lib/dynamo/operations');
-    jest.mock('../../lambdas/lib/logging');
-    AWSSQS.SQSMock.on(AWSSQS.SendMessageCommand).resolves({});
-    jest.spyOn(event_db, 'query').mockImplementation(() => []);
-    jest.spyOn(event_db, 'schedule').mockImplementation();
+    jest.spyOn(scheduler_db, 'query').mockImplementation(() => []);
+    jest.spyOn(scheduler_db, 'schedule').mockImplementation();
     jest
       .spyOn(location_db, 'findLocations')
       .mockImplementation(() => location_return);
     jest
       .spyOn(resource_db, 'getResource')
       .mockImplementation(() => resource_mock);
-    router = require('../../lambdas/events/router');
+    router = require('../../lambdas/scheduler/router');
   });
 
   afterEach(() => {
     date.mockClear();
-    event_db.query.mockClear();
-    event_db.schedule.mockClear();
+    scheduler_db.query.mockClear();
+    scheduler_db.schedule.mockClear();
     location_db.findLocations.mockClear();
     resource_db.getResource.mockClear();
-    AWSSQS.SQSMock.reset();
+    AWS.SQSMock.reset();
   });
 
   afterAll(() => {
@@ -88,12 +86,9 @@ describe('tests for s3 event scheduling', () => {
     await router({ Records: [s3Event] }, {});
 
     expect(location_db.findLocations).toHaveBeenCalledTimes(0);
-    expect(event_db.schedule).toHaveBeenCalledTimes(0);
-    expect(event_db.query).toHaveBeenCalledTimes(0);
-    expect(AWSSQS.SQSMock).toHaveReceivedCommandTimes(
-      AWSSQS.SendMessageCommand,
-      0
-    );
+    expect(scheduler_db.schedule).toHaveBeenCalledTimes(0);
+    expect(scheduler_db.query).toHaveBeenCalledTimes(0);
+    expect(AWS.SQSMock).toHaveReceivedCommandTimes(AWS.SendMessageCommand, 0);
   });
 
   it('ignore patition count mis-matches', async () => {
@@ -120,12 +115,9 @@ describe('tests for s3 event scheduling', () => {
     await router({ Records: [s3Event] }, {});
 
     expect(location_db.findLocations).toHaveBeenCalledTimes(1);
-    expect(event_db.schedule).toHaveBeenCalledTimes(0);
-    expect(event_db.query).toHaveBeenCalledTimes(0);
-    expect(AWSSQS.SQSMock).toHaveReceivedCommandTimes(
-      AWSSQS.SendMessageCommand,
-      0
-    );
+    expect(scheduler_db.schedule).toHaveBeenCalledTimes(0);
+    expect(scheduler_db.query).toHaveBeenCalledTimes(0);
+    expect(AWS.SQSMock).toHaveReceivedCommandTimes(AWS.SendMessageCommand, 0);
   });
 
   it('run complete', async () => {
@@ -154,15 +146,16 @@ describe('tests for s3 event scheduling', () => {
 
     expect(
       JSON.parse(
-        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+        AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
           .MessageBody
       )
     ).toStrictEqual({
       resource_id: '1',
       sort_key: 'a=10/b=20:1466424600000',
-      started_at: 1466424490000,
-      updated_at: 1466424490000,
-      status: 'scheduled',
+      status: 'SCHEDULED',
+      type: 'SchedulerEntry',
+      version: '0.0.11',
+      retries: 0,
       partition: {
         location: 's3://bucket/prefix/a=10/b=20/',
         partitionValues: ['a=10', 'b=20'],
@@ -196,15 +189,16 @@ describe('tests for s3 event scheduling', () => {
 
     expect(
       JSON.parse(
-        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+        AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
           .MessageBody
       )
     ).toStrictEqual({
       resource_id: '1',
       sort_key: 'a=1/b=abc:1466424600000',
-      started_at: 1466424490000,
-      updated_at: 1466424490000,
-      status: 'scheduled',
+      status: 'SCHEDULED',
+      type: 'SchedulerEntry',
+      version: '0.0.11',
+      retries: 0,
       partition: {
         location: 's3://bucket/prefix/a=1/b=abc/',
         partitionValues: ['a=1', 'b=abc'],
@@ -238,15 +232,16 @@ describe('tests for s3 event scheduling', () => {
 
     expect(
       JSON.parse(
-        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+        AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
           .MessageBody
       )
     ).toStrictEqual({
       resource_id: '1',
       sort_key: 'a=1/b=abc:1466424600000',
-      started_at: 1466424490000,
-      updated_at: 1466424490000,
-      status: 'scheduled',
+      status: 'SCHEDULED',
+      type: 'SchedulerEntry',
+      version: '0.0.11',
+      retries: 0,
       partition: {
         location: 's3://bucket/prefix/a=1/b=abc/',
         partitionValues: ['a=1', 'b=abc'],
@@ -280,15 +275,16 @@ describe('tests for s3 event scheduling', () => {
 
     expect(
       JSON.parse(
-        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+        AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
           .MessageBody
       )
     ).toStrictEqual({
       resource_id: '1',
       sort_key: '2021/10:1466424480000',
-      started_at: 1466424490000,
-      updated_at: 1466424490000,
-      status: 'scheduled',
+      status: 'SCHEDULED',
+      type: 'SchedulerEntry',
+      version: '0.0.11',
+      retries: 0,
       partition: {
         location: 's3://bucket/prefix/2021/10/',
         partitionValues: ['2021', '10'],
@@ -363,16 +359,17 @@ describe('tests for s3 event scheduling', () => {
 
     expect(
       JSON.parse(
-        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+        AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
           .MessageBody
       )
     ).toStrictEqual({
       resource_id: '1',
       sort_key:
         'dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon:1466424480000',
-      started_at: 1466424490000,
-      updated_at: 1466424490000,
-      status: 'scheduled',
+      status: 'SCHEDULED',
+      type: 'SchedulerEntry',
+      version: '0.0.11',
+      retries: 0,
       partition: {
         location:
           's3://wharfie-testing-079185815456-us-west-2/wharfie-testing/dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon/',
@@ -448,16 +445,17 @@ describe('tests for s3 event scheduling', () => {
 
     expect(
       JSON.parse(
-        AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
+        AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
           .MessageBody
       )
     ).toStrictEqual({
       resource_id: '1',
       sort_key:
         'dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon:1466424480000',
-      started_at: 1466424490000,
-      updated_at: 1466424490000,
-      status: 'scheduled',
+      status: 'SCHEDULED',
+      type: 'SchedulerEntry',
+      version: '0.0.11',
+      retries: 0,
       partition: {
         location:
           's3://wharfie-testing-079185815456-us-west-2/wharfie-testing/dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon/',

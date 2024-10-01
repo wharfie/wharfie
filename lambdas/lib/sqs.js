@@ -24,7 +24,7 @@ class SQS {
    */
   async sendMessage(params) {
     const command = new AWS.SendMessageCommand(params);
-    return await this.sqs.send(command);
+    return this.sqs.send(command);
   }
 
   /**

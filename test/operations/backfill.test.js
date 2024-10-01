@@ -19,11 +19,10 @@ const {
 const daemon_lambda = require('../../lambdas/daemon');
 
 jest.mock('../../lambdas/lib/dynamo/operations');
-jest.mock('../../lambdas/lib/dynamo/event');
+jest.mock('../../lambdas/lib/dynamo/scheduler');
 jest.mock('../../lambdas/lib/dynamo/location');
 jest.mock('../../lambdas/lib/dynamo/semaphore');
 jest.mock('../../lambdas/lib/dynamo/dependency');
-jest.mock('../../lambdas/lib/logging');
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 
@@ -33,7 +32,6 @@ const { SQS } = require('@aws-sdk/client-sqs');
 const { S3 } = require('@aws-sdk/client-s3');
 
 const operations = require('../../lambdas/lib/dynamo/operations');
-const logging = require('../../lambdas/lib/logging');
 const { Resource } = require('../../lambdas/lib/graph');
 
 const dynamo_resource = require('../../lambdas/lib/dynamo/operations');
@@ -90,7 +88,6 @@ describe('backfill tests', () => {
 
   afterEach(() => {
     clearLambdaTriggers();
-    logging.flush();
   });
 
   it('end to end', async () => {

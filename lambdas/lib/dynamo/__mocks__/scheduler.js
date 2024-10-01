@@ -1,17 +1,19 @@
 'use strict';
 
-/** @type {Object.<string, Object<string, any>>} */
+const SchedulerEntry = require('../../../scheduler/scheduler-entry');
+
+/** @type {Object.<string, Object<string, SchedulerEntry>>} */
 let __state = {};
 
 /**
- * @param {Object.<string, Object<string, any>>} state -
+ * @param {Object.<string, Object<string, SchedulerEntry>>} state -
  */
 function __setMockState(state = {}) {
   __state = state;
 }
 
 /**
- * @returns {Object.<string, Object<string, any>>} -
+ * @returns {Object.<string, Object<string, SchedulerEntry>>} -
  */
 function __getMockState() {
   return __state;
@@ -21,7 +23,7 @@ function __getMockState() {
  * @param {string} resource_id -
  * @param {string} partition -
  * @param {Array<number>} window -
- * @returns {Promise<any>} -
+ * @returns {Promise<SchedulerEntry[]>} -
  */
 async function query(resource_id, partition, window) {
   const [start_by, end_by] = window;
@@ -38,17 +40,18 @@ async function query(resource_id, partition, window) {
 }
 
 /**
- * @param {import('../../../typedefs').ScheduledEventRecord} item -
+ * @param {SchedulerEntry} schedulerEvent -
  */
-async function schedule(item) {
-  if (!__state[item.resource_id]) __state[item.resource_id] = {};
-  if (__state[item.resource_id][item.sort_key]) return;
-  __state[item.resource_id][item.sort_key] = item;
+async function schedule(schedulerEvent) {
+  if (!__state[schedulerEvent.resource_id])
+    __state[schedulerEvent.resource_id] = {};
+  if (__state[schedulerEvent.resource_id][schedulerEvent.sort_key]) return;
+  __state[schedulerEvent.resource_id][schedulerEvent.sort_key] = schedulerEvent;
 }
 
 /**
- * @param {import('../../../typedefs').ScheduledEventRecord} item -
- * @param {string} status -
+ * @param {SchedulerEntry} item -
+ * @param {SchedulerEntry.SchedulerEntryStatusEnum} status -
  */
 async function update(item, status) {
   if (!__state[item.resource_id]) __state[item.resource_id] = {};
