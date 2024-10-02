@@ -37,6 +37,7 @@ const list = async (resource_id, operation_id) => {
       return;
     }
     const actions = records.operations[0].getSequentialActionOrder();
+    console.log(records.operations[0].getSequentialActionOrder());
     records.queries.sort((a, b) => {
       if (a.status < b.status) {
         return -1;

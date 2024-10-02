@@ -38,6 +38,10 @@ const maintain = async (path, environmentName) => {
           action_type: 'START',
           resource_id: `${project.name}.${options.name}`,
           operation_started_at: new Date().toISOString(),
+          action_inputs: {
+            Version: `cli`,
+            Duration: Infinity,
+          },
         },
         deployment.getDaemonActor().getQueue().get('url')
       );

@@ -132,8 +132,8 @@ class Action {
   }
 
   /**
-   * @param {import('./typedefs').ActionRecord} action_record -
-   * @param {import('./typedefs').QueryRecord[]} query_records -
+   * @param {Record<string,any>} action_record -
+   * @param {Record<string,any>[]} query_records -
    * @returns {Action} -
    */
   static fromRecords(action_record, query_records) {
@@ -154,7 +154,7 @@ class Action {
   }
 
   /**
-   * @param {import('./typedefs').ActionRecord} action_record -
+   * @param {Record<string,any>} action_record -
    * @returns {Action} -
    */
   static fromRecord(action_record) {

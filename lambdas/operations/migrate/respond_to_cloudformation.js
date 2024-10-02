@@ -6,7 +6,7 @@ const { getImmutableID } = require('../../lib/cloudformation/id');
 const { Operation, Resource } = require('../../lib/graph/');
 
 const resource_db = require('../../lib/dynamo/operations');
-const sempahore_db = require('../../lib/dynamo/semaphore');
+const semaphore_db = require('../../lib/dynamo/semaphore');
 
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
@@ -25,8 +25,8 @@ async function run(event, context, resource, operation) {
     operation.operation_inputs.migration_resource
   );
   deletes.push(resource_db.deleteResource(migrationResource));
-  deletes.push(sempahore_db.deleteSemaphore(`wharfie:BACKFILL:${StackName}`));
-  deletes.push(sempahore_db.deleteSemaphore(`wharfie:LOAD:${StackName}`));
+  deletes.push(semaphore_db.deleteSemaphore(`wharfie:BACKFILL:${StackName}`));
+  deletes.push(semaphore_db.deleteSemaphore(`wharfie:LOAD:${StackName}`));
   const results = await Promise.allSettled(deletes);
   results.forEach((result) => {
     if (result.status === 'rejected') {
