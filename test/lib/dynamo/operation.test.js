@@ -382,7 +382,7 @@ describe('dynamo resource db', () => {
 
     const test_operation = new Operation({
       resource_id: 'resource_id',
-      type: Operation.Type.MAINTAIN,
+      type: Operation.Type.BACKFILL,
       id: 'test_operation',
     });
     const start_action = test_operation.createAction({
@@ -452,7 +452,7 @@ describe('dynamo resource db', () => {
                       "serialized_action_graph": "{"outgoingEdges":[["start_action",["finish_action"]]],"incomingEdges":[["finish_action",["start_action"]]],"actionIdsToTypes":[["start_action","START"],["finish_action","FINISH"]]}",
                       "started_at": 1466424490000,
                       "status": "PENDING",
-                      "type": "MAINTAIN",
+                      "type": "BACKFILL",
                       "wharfie_version": "0.0.11",
                     },
                     "resource_id": "resource_id",
@@ -482,7 +482,7 @@ describe('dynamo resource db', () => {
             serialized_action_graph: `{"outgoingEdges":[["start_action",["finish_action"]],["finish_action",[]]],"incomingEdges":[["start_action",[]],["finish_action",["start_action"]]],"actionIdsToTypes":[["start_action","START"],["finish_action","FINISH"]]}`,
             started_at: 1466424490000,
             status: 'PENDING',
-            type: 'MAINTAIN',
+            type: 'BACKFILL',
             wharfie_version: '0.0.11',
           },
         },
@@ -527,7 +527,7 @@ describe('dynamo resource db', () => {
         "resource_id": "resource_id",
         "started_at": 1466424490000,
         "status": "PENDING",
-        "type": "MAINTAIN",
+        "type": "BACKFILL",
         "wharfie_version": "0.0.11",
       }
     `);
@@ -656,7 +656,7 @@ describe('dynamo resource db', () => {
     const test_operation = new Operation({
       resource_id: 'resource_id',
       id: 'operation_id',
-      type: Operation.Type.MAINTAIN,
+      type: Operation.Type.BACKFILL,
     });
     const test_action = test_operation.createAction({
       type: Action.Type.START,
@@ -852,7 +852,7 @@ describe('dynamo resource db', () => {
 
     const test_operation = new Operation({
       resource_id: 'resource_id',
-      type: Operation.Type.MAINTAIN,
+      type: Operation.Type.BACKFILL,
       id: 'operation_id',
     });
     await operation.deleteOperation(test_operation);
@@ -949,7 +949,7 @@ describe('dynamo resource db', () => {
     });
     const test_operation = new Operation({
       resource_id: 'resource_id',
-      type: Operation.Type.MAINTAIN,
+      type: Operation.Type.BACKFILL,
       id: 'test_operation',
     });
     const start_action = test_operation.createAction({

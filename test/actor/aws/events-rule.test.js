@@ -30,7 +30,7 @@ describe('events rule IaC', () => {
               InputPathsMap: {
                 time: '$.time',
               },
-              InputTemplate: `{"operation_started_at":<time>, "operation_type":"MAINTAIN", "action_type":"START", "resource_id":"test-id"}`,
+              InputTemplate: `{"operation_started_at":<time>, "operation_type":"BACKFILL", "action_type":"START", "resource_id":"test-id"}`,
             },
           },
         ],
@@ -70,7 +70,7 @@ describe('events rule IaC', () => {
                 "InputPathsMap": {
                   "time": "$.time",
                 },
-                "InputTemplate": "{"operation_started_at":<time>, "operation_type":"MAINTAIN", "action_type":"START", "resource_id":"test-id"}",
+                "InputTemplate": "{"operation_started_at":<time>, "operation_type":"BACKFILL", "action_type":"START", "resource_id":"test-id"}",
               },
             },
           ],
@@ -120,7 +120,7 @@ describe('events rule IaC', () => {
                 "InputPathsMap": {
                   "time": "$.time",
                 },
-                "InputTemplate": "{"operation_started_at":<time>, "operation_type":"MAINTAIN", "action_type":"START", "resource_id":"test-id"}",
+                "InputTemplate": "{"operation_started_at":<time>, "operation_type":"BACKFILL", "action_type":"START", "resource_id":"test-id"}",
               },
             },
           ],
@@ -150,7 +150,7 @@ describe('events rule IaC', () => {
               "InputPathsMap": {
                 "time": "$.time",
               },
-              "InputTemplate": "{"operation_started_at":<time>, "operation_type":"MAINTAIN", "action_type":"START", "resource_id":"test-id"}",
+              "InputTemplate": "{"operation_started_at":<time>, "operation_type":"BACKFILL", "action_type":"START", "resource_id":"test-id"}",
             },
           },
         ],

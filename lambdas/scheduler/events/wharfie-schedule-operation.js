@@ -1,5 +1,10 @@
 const { version: WHARFIE_VERSION } = require('../../../package.json');
 
+const resource_db = require('../../lib/dynamo/operations');
+const { schedule } = require('../schedule');
+
+const logging = require('../../lib/logging');
+const daemon_log = logging.getDaemonLogger();
 /**
  * @type {'WHARFIE:OPERATION:SCHEDULE'}
  */
@@ -65,6 +70,25 @@ class WharfieScheduleOperation {
       return record.type === TYPE;
     }
     return false;
+  }
+
+  async process() {
+    const resource = await resource_db.getResource(this.resource_id);
+    if (!resource) {
+      daemon_log.debug(`no resource found for ${this.resource_id}`);
+      return;
+    }
+    const now = Date.now();
+    const interval = resource.daemon_config?.SLA?.MaxDelay || 300;
+    const ms = 1000 * interval; // convert s to ms
+    const nowInterval = Math.round(now / ms) * ms;
+    const before = nowInterval - 1000 * interval;
+
+    await schedule({
+      resource_id: this.resource_id,
+      interval,
+      window: [before, nowInterval],
+    });
   }
 }
 WharfieScheduleOperation.Type = TYPE;

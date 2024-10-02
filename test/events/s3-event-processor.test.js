@@ -78,9 +78,9 @@ describe('tests for s3 events processing', () => {
           .MessageBody
       )
     ).toStrictEqual({
-      source: 'wharfie:s3-event-processor',
+      source: 'wharfie:scheduler',
       operation_started_at: '2016-06-20T12:08:10.000Z',
-      operation_type: 'S3_EVENT',
+      operation_type: 'LOAD',
       action_type: 'START',
       resource_id: '1',
       operation_inputs: {
@@ -140,9 +140,9 @@ describe('tests for s3 events processing', () => {
           .MessageBody
       )
     ).toStrictEqual({
-      source: 'wharfie:s3-event-processor',
+      source: 'wharfie:scheduler',
       operation_started_at: '2016-06-20T12:08:10.000Z',
-      operation_type: 'S3_EVENT',
+      operation_type: 'LOAD',
       action_type: 'START',
       resource_id: '1',
       operation_inputs: {
@@ -206,9 +206,9 @@ describe('tests for s3 events processing', () => {
           .MessageBody
       )
     ).toStrictEqual({
-      source: 'wharfie:s3-event-processor',
+      source: 'wharfie:scheduler',
       operation_started_at: '2016-06-20T12:08:10.000Z',
-      operation_type: 'S3_EVENT',
+      operation_type: 'LOAD',
       action_type: 'START',
       resource_id: '1',
       operation_inputs: {
@@ -267,9 +267,9 @@ describe('tests for s3 events processing', () => {
           .MessageBody
       )
     ).toStrictEqual({
-      source: 'wharfie:s3-event-processor',
+      source: 'wharfie:scheduler',
       operation_started_at: '2016-06-20T12:08:10.000Z',
-      operation_type: 'MAINTAIN',
+      operation_type: 'BACKFILL',
       action_type: 'START',
     });
   });

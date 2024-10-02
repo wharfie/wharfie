@@ -195,7 +195,7 @@ class WharfieResource extends BaseResourceGroup {
                   time: '$.time',
                 },
                 // TODO use a real id
-                InputTemplate: `{"operation_started_at":<time>, "operation_type":"MAINTAIN", "action_type":"START", "resource_id":"${this.get(
+                InputTemplate: `{"operation_started_at":<time>, "operation_type":"BACKFILL", "action_type":"START", "resource_id":"${this.get(
                   'resourceId'
                 )}"}`,
               },
