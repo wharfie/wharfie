@@ -267,6 +267,7 @@ class Operation {
    */
   getSequentialActionOrder() {
     const actions = this.getActions();
+    console.log(actions);
     /**
      * @type {Action[]}
      */
@@ -325,7 +326,7 @@ class Operation {
   }
 
   /**
-   * @returns {(import('./typedefs').OperationRecord | import('./typedefs').ActionRecord | import('./typedefs').QueryRecord)[]} -
+   * @returns {Record<string, any>[]} -
    */
   toRecords() {
     const records = [];
@@ -353,7 +354,7 @@ class Operation {
   }
 
   /**
-   * @param {import('./typedefs').OperationRecord} operation_record -
+   * @param {Record<string, any>} operation_record -
    * @returns {Operation} -
    */
   static fromRecord(operation_record) {
@@ -374,12 +375,12 @@ class Operation {
 
   /**
    * @typedef ActionRecordGroup
-   * @property {import('./typedefs').ActionRecord} action_record -
-   * @property {import('./typedefs').QueryRecord[]} query_records -
+   * @property {Record<string, any>} action_record -
+   * @property {Record<string, any>[]} query_records -
    */
 
   /**
-   * @param {import('./typedefs').OperationRecord} operation_record -
+   * @param {Record<string, any>} operation_record -
    * @param {ActionRecordGroup[]} action_records -
    * @returns {Operation} -
    */

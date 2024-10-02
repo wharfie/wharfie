@@ -1,6 +1,7 @@
 const { version: WHARFIE_VERSION } = require('../../../package.json');
 
 const resource_db = require('../../lib/dynamo/operations');
+const Operation = require('../../lib/graph/operation');
 const { schedule } = require('../schedule');
 
 const logging = require('../../lib/logging');
@@ -13,7 +14,8 @@ const TYPE = 'WHARFIE:OPERATION:SCHEDULE';
 /**
  * @typedef WharfieEventProperties
  * @property {string} resource_id -
- * @property {string} operation_type -
+ * @property {Operation.WharfieOperationTypeEnum} operation_type -
+ * @property {any} operation_input -
  * @property {string} [status] -
  * @property {string} [version] -
  * @property {number} [retries] -
@@ -26,11 +28,13 @@ class WharfieScheduleOperation {
   constructor({
     resource_id,
     operation_type,
+    operation_input,
     version = WHARFIE_VERSION,
     retries = 0,
   }) {
     this.resource_id = resource_id;
     this.operation_type = operation_type;
+    this.operation_input = operation_input;
     this.version = version;
     this.retries = retries;
   }
@@ -42,6 +46,7 @@ class WharfieScheduleOperation {
     return JSON.stringify({
       resource_id: this.resource_id,
       operation_type: this.operation_type,
+      operation_input: this.operation_input,
       type: TYPE,
       version: this.version,
       retries: this.retries,
@@ -56,6 +61,7 @@ class WharfieScheduleOperation {
     return new WharfieScheduleOperation({
       resource_id: record.resource_id,
       operation_type: record.operation_type,
+      operation_input: record.operation_input,
       version: record.version,
       retries: record.retries,
     });
@@ -84,11 +90,24 @@ class WharfieScheduleOperation {
     const nowInterval = Math.round(now / ms) * ms;
     const before = nowInterval - 1000 * interval;
 
-    await schedule({
-      resource_id: this.resource_id,
-      interval,
-      window: [before, nowInterval],
-    });
+    if (this.operation_type === Operation.Type.BACKFILL) {
+      await schedule({
+        resource_id: this.resource_id,
+        interval,
+        window: [before, nowInterval],
+      });
+    } else if (this.operation_type === Operation.Type.LOAD) {
+      await schedule({
+        resource_id: this.resource_id,
+        interval,
+        window: [before, nowInterval],
+        partition: this.operation_input.partition,
+      });
+    } else if (this.operation_type === Operation.Type.MIGRATE) {
+      daemon_log.warn('migrations can not be scheduled');
+    } else {
+      throw new Error(`operation type unrecognized ${this.operation_type}`);
+    }
   }
 }
 WharfieScheduleOperation.Type = TYPE;

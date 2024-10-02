@@ -89,7 +89,7 @@ class Resource {
   }
 
   /**
-   * @param {import('./typedefs').ResourceRecord} resource_record -
+   * @param {Record<string, any>} resource_record -
    * @returns {Resource} -
    */
   static fromRecord(resource_record) {

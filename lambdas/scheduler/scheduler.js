@@ -40,16 +40,20 @@ async function run(ScheduledEvent, context) {
 
   const isView = resource.source_properties.tableType === 'VIRTUAL_VIEW';
 
-  const isPartitioned =
-    (resource.destination_properties?.partitionKeys || []).length > 0;
+  const unpartitioned =
+    ScheduledEvent.sort_key.split(':')[0] === 'unpartitioned';
   let wharfieEvent;
-  if (isView || !isPartitioned) {
+  if (isView || unpartitioned) {
     wharfieEvent = {
       source: 'wharfie:scheduler',
       operation_started_at: new Date(Date.now()),
       operation_type: 'BACKFILL',
       action_type: 'START',
       resource_id: resource.id,
+      action_inputs: {
+        Version: `scheduler`,
+        Duration: Infinity,
+      },
     };
   } else {
     /** @type {import('../typedefs').PartitionValues} */

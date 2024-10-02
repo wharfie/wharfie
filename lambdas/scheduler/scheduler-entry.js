@@ -1,6 +1,4 @@
 const { version: WHARFIE_VERSION } = require('../../package.json');
-const { AttributeValue } = require('@aws-sdk/client-dynamodb');
-const { marshall, unmarshall } = require('@aws-sdk/util-dynamodb');
 
 /**
  * @typedef {(
@@ -102,10 +100,10 @@ class SchedulerEntry {
   }
 
   /**
-   * @returns {Record<string, AttributeValue>} -
+   * @returns {Record<string, any>} -
    */
   toRecord() {
-    return marshall({
+    return {
       resource_id: this.resource_id,
       sort_key: this.sort_key,
       partition: this.partition,
@@ -113,23 +111,22 @@ class SchedulerEntry {
       version: this.version,
       retries: this.retries,
       ttl: this.ttl,
-    });
+    };
   }
 
   /**
-   * @param {Record<string, AttributeValue>} record -
+   * @param {Record<string, any>} record -
    * @returns {SchedulerEntry} -
    */
   static fromRecord(record) {
-    const unmarshalledRecord = unmarshall(record);
     return new SchedulerEntry({
-      resource_id: unmarshalledRecord.resource_id,
-      sort_key: unmarshalledRecord.sort_key,
-      partition: unmarshalledRecord.partition,
-      status: unmarshalledRecord.status,
-      version: unmarshalledRecord.version,
-      retries: unmarshalledRecord.retries,
-      ttl: unmarshalledRecord.ttl,
+      resource_id: record.resource_id,
+      sort_key: record.sort_key,
+      partition: record.partition,
+      status: record.status,
+      version: record.version,
+      retries: record.retries,
+      ttl: record.ttl,
     });
   }
 

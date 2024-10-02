@@ -35,7 +35,7 @@ describe('dynamo semaphore db', () => {
           },
           "ExpressionAttributeValues": {
             ":incr": 1,
-            ":threshold": NaN,
+            ":threshold": 0,
             ":zero": 0,
           },
           "Key": {

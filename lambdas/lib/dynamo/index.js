@@ -22,15 +22,16 @@ const docClient = DynamoDBDocument.from(
 );
 
 /**
- * @param {import("@aws-sdk/client-dynamodb").QueryInput} params -
- * @returns {Promise<import("@aws-sdk/client-dynamodb").QueryOutput>} -
+ * @param {import("@aws-sdk/lib-dynamodb").QueryCommandInput} params -
+ * @returns {Promise<import("@aws-sdk/lib-dynamodb").QueryCommandOutput>} -
  */
 async function query(params) {
   /** @type {Object<string, import("@aws-sdk/client-dynamodb").AttributeValue>[]} */
   let results = [];
   let response = await docClient.query(params);
 
-  if (!response.Items || response.Items.length === 0) return { Items: results };
+  if (!response.Items || response.Items.length === 0)
+    return { Items: results, $metadata: response.$metadata };
   results = results.concat(response.Items);
 
   while (response.LastEvaluatedKey !== undefined) {
@@ -39,15 +40,15 @@ async function query(params) {
       ExclusiveStartKey: response.LastEvaluatedKey,
     });
     if (!response.Items || response.Items.length === 0)
-      return { Items: results };
+      return { Items: results, $metadata: response.$metadata };
     results = results.concat(response.Items);
   }
 
-  return { Items: results };
+  return { Items: results, $metadata: response.$metadata };
 }
 
 /**
- * @param {import("@aws-sdk/client-dynamodb").BatchWriteItemInput} params -
+ * @param {import("@aws-sdk/lib-dynamodb").BatchWriteCommandInput} params -
  */
 async function batchWrite(params) {
   let { UnprocessedItems: items } = await docClient.batchWrite(params);

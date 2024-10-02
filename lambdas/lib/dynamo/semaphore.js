@@ -1,6 +1,9 @@
 'use strict';
 const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const { DynamoDB } = require('@aws-sdk/client-dynamodb');
+const {
+  DynamoDB,
+  ConditionalCheckFailedException,
+} = require('@aws-sdk/client-dynamodb');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 
 const BaseAWS = require('../base');
@@ -24,7 +27,7 @@ const SEMAPHORE_TABLE = process.env.SEMAPHORE_TABLE || '';
  * @param {number} threshold - threshold that the semaphore needs to be <= in order to increment
  * @returns {Promise<boolean>} - if the semaphore was successfully entered
  */
-async function increase(semaphore, threshold) {
+async function increase(semaphore, threshold = 1) {
   // `limit` is a number that can be manually managed in dynamodb in order to
   // override the resource's athena query concurrency.  Global concurrency is
   // still enforced if this limit value is set.
@@ -47,8 +50,7 @@ async function increase(semaphore, threshold) {
     });
     return true;
   } catch (error) {
-    // @ts-ignore
-    if (error && error.name === 'ConditionalCheckFailedException') {
+    if (error instanceof ConditionalCheckFailedException) {
       return false;
     }
     throw error;
@@ -76,8 +78,7 @@ async function release(semaphore) {
       ReturnValues: 'NONE',
     });
   } catch (error) {
-    // @ts-ignore
-    if (error && error.name === 'ConditionalCheckFailedException') {
+    if (error instanceof ConditionalCheckFailedException) {
       return;
     }
     throw error;
