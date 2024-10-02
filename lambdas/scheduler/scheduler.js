@@ -45,9 +45,9 @@ async function run(ScheduledEvent, context) {
   let wharfieEvent;
   if (isView || !isPartitioned) {
     wharfieEvent = {
-      source: 'wharfie:s3-event-processor',
+      source: 'wharfie:scheduler',
       operation_started_at: new Date(Date.now()),
-      operation_type: 'MAINTAIN',
+      operation_type: 'BACKFILL',
       action_type: 'START',
       resource_id: resource.id,
     };
@@ -129,9 +129,9 @@ async function run(ScheduledEvent, context) {
       (resource.destination_properties?.partitionKeys || []).length > 0;
 
     wharfieEvent = {
-      source: 'wharfie:s3-event-processor',
+      source: 'wharfie:scheduler',
       operation_started_at: new Date(Date.now()),
-      operation_type: 'S3_EVENT',
+      operation_type: 'LOAD',
       action_type: 'START',
       resource_id: ScheduledEvent.resource_id,
       operation_inputs: hasPartitions

@@ -57,7 +57,7 @@
  */
 
 /**
- * @typedef {('MAINTAIN'|'MIGRATE'|'S3_EVENT'|'BACKFILL')} WharfieOperationTypeEnum
+ * @typedef {('MIGRATE'|'LOAD'|'BACKFILL')} WharfieOperationTypeEnum
  */
 /**
  * @typedef {('COMPLETED'|'RUNNING')} WharfieOperationStatusEnum

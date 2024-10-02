@@ -25,8 +25,8 @@ async function run(event, context, resource, operation) {
     operation.operation_inputs.migration_resource
   );
   deletes.push(resource_db.deleteResource(migrationResource));
-  deletes.push(sempahore_db.deleteSemaphore(`wharfie:MAINTAIN:${StackName}`));
   deletes.push(sempahore_db.deleteSemaphore(`wharfie:BACKFILL:${StackName}`));
+  deletes.push(sempahore_db.deleteSemaphore(`wharfie:LOAD:${StackName}`));
   const results = await Promise.allSettled(deletes);
   results.forEach((result) => {
     if (result.status === 'rejected') {

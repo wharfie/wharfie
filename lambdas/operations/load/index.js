@@ -1,13 +1,13 @@
 'use strict';
 
-const { Action, Operation, Resource } = require('../../lib/graph/');
+const { Action, Operation, Resource } = require('../../lib/graph');
 const logging = require('../../lib/logging');
 const resource_db = require('../../lib/dynamo/operations');
-const register_missing_partitions = require('../actions/register_missing_partitions');
-const find_compaction_partitions = require('../actions/find_compaction_partitions');
-const run_compaction = require('../actions/run_compaction');
+const register_partition = require('../actions/register_partition');
+const run_single_compaction = require('../actions/run_single_compaction');
 const update_symlinks = require('../actions/update_symlinks');
 const side_effects = require('../side_effects');
+
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
@@ -26,26 +26,23 @@ async function start(event, context, resource) {
     type: event.operation_type,
     status: Operation.Status.RUNNING,
     started_at: Date.parse(event.operation_started_at) / 1000,
+    operation_inputs: event.operation_inputs,
   });
   const start_action = operation.createAction({
     type: Action.Type.START,
     id: event.action_id,
   });
-  const register_missing_partitions_action = operation.createAction({
-    type: Action.Type.REGISTER_MISSING_PARTITIONS,
+  const register_partition_action = operation.createAction({
+    type: Action.Type.REGISTER_PARTITION,
     dependsOn: [start_action],
   });
-  const find_compaction_partitions_action = operation.createAction({
-    type: Action.Type.FIND_COMPACTION_PARTITIONS,
-    dependsOn: [register_missing_partitions_action],
-  });
-  const run_compaction_action = operation.createAction({
-    type: Action.Type.RUN_COMPACTION,
-    dependsOn: [find_compaction_partitions_action],
+  const find_single_compaction_action = operation.createAction({
+    type: Action.Type.RUN_SINGLE_COMPACTION,
+    dependsOn: [register_partition_action],
   });
   const update_symlinks_action = operation.createAction({
     type: Action.Type.UPDATE_SYMLINKS,
-    dependsOn: [run_compaction_action],
+    dependsOn: [find_single_compaction_action],
   });
   const finish_action = operation.createAction({
     type: Action.Type.FINISH,
@@ -72,7 +69,7 @@ async function start(event, context, resource) {
     ],
   });
 
-  event_log.info('creating MAINTAIN operation and actions...');
+  event_log.info('creating LOAD operation and actions...');
   await resource_db.putOperation(operation);
 
   event_log.info('operation records created');
@@ -115,17 +112,15 @@ async function finish(event, context, resource, operation) {
  */
 async function route(event, context, resource, operation) {
   switch (event.action_type) {
-    case 'REGISTER_MISSING_PARTITIONS':
-      return await register_missing_partitions.run(event, context, resource);
-    case 'FIND_COMPACTION_PARTITIONS':
-      return await find_compaction_partitions.run(
+    case 'REGISTER_PARTITION':
+      return await register_partition.run(event, context, resource, operation);
+    case 'RUN_SINGLE_COMPACTION':
+      return await run_single_compaction.run(
         event,
         context,
         resource,
         operation
       );
-    case 'RUN_COMPACTION':
-      return await run_compaction.run(event, context, resource, operation);
     case 'UPDATE_SYMLINKS':
       return await update_symlinks.run(event, context, resource, operation);
     case 'SIDE_EFFECT__CLOUDWATCH':
@@ -137,7 +132,7 @@ async function route(event, context, resource, operation) {
     case 'SIDE_EFFECTS__FINISH':
       return await side_effects.finish(event, context, resource, operation);
     default:
-      throw new Error('Invalid Action, must be valid MAINTAIN action');
+      throw new Error('Invalid Action, must be valid LOAD action');
   }
 }
 

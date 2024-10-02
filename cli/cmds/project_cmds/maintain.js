@@ -34,7 +34,7 @@ const maintain = async (path, environmentName) => {
     resourceOptions.map((options) => {
       return sqs.enqueue(
         {
-          operation_type: 'MAINTAIN',
+          operation_type: 'BACKFILL',
           action_type: 'START',
           resource_id: `${project.name}.${options.name}`,
           operation_started_at: new Date().toISOString(),

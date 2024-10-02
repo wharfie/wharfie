@@ -149,7 +149,7 @@ describe('s3 event tests', () => {
         Records: [
           {
             body: JSON.stringify({
-              operation_type: 'S3_EVENT',
+              operation_type: 'LOAD',
               operation_started_at: '2016-06-20T12:08:10.000Z',
               action_type: 'START',
               resource_id: 'resource_id',
@@ -211,7 +211,7 @@ describe('s3 event tests', () => {
           "limit": Infinity,
           "value": 0,
         },
-        "wharfie:S3_EVENT:resource_id": {
+        "wharfie:LOAD:resource_id": {
           "limit": Infinity,
           "value": 0,
         },

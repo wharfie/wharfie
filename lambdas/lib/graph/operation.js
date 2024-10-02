@@ -4,9 +4,9 @@ const { createId } = require('../id');
 const { version: WHARFIE_VERSION } = require('../../../package.json');
 
 /**
- * @typedef {('MAINTAIN'|
+ * @typedef {(
  * 'BACKFILL'|
- * 'S3_EVENT'|
+ * 'LOAD'|
  * 'MIGRATE'
  * )} WharfieOperationTypeEnum
  */
@@ -15,9 +15,8 @@ const { version: WHARFIE_VERSION } = require('../../../package.json');
  * @type {Object<WharfieOperationTypeEnum,WharfieOperationTypeEnum>}
  */
 const Type = {
-  MAINTAIN: 'MAINTAIN',
   BACKFILL: 'BACKFILL',
-  S3_EVENT: 'S3_EVENT',
+  LOAD: 'LOAD',
   MIGRATE: 'MIGRATE',
 };
 
