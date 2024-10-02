@@ -2,7 +2,7 @@
 
 const location_db = require('../../../lib/dynamo/location');
 const resource_db = require('../../../lib/dynamo/operations');
-const { schedule } = require('../util');
+const { schedule } = require('../../schedule');
 
 const logging = require('../../../lib/logging');
 const daemon_log = logging.getDaemonLogger();

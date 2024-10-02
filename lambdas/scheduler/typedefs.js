@@ -15,13 +15,11 @@
 /**
  * @typedef WharfieEventRecord
  * @property {string} resource_id -
- * @property {string} database_name -
- * @property {string} table_name -
- * @property {string} version -
+ * @property {string} operation_id -
  * @property {string} type -
- * @property {number} [retries] -
+ * @property {string} version -
+ * @property {number} retries -
  */
-
 /**
  * @typedef S3EventUserIdentity
  * @property {string} principalId -
