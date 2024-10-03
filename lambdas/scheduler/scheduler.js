@@ -50,6 +50,10 @@ async function run(ScheduledEvent, context) {
       operation_type: 'BACKFILL',
       action_type: 'START',
       resource_id: resource.id,
+      action_inputs: {
+        Version: `scheduler`,
+        Duration: Infinity,
+      },
     };
   } else {
     /** @type {import('../typedefs').PartitionValues} */
