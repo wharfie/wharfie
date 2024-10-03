@@ -1,6 +1,9 @@
 'use strict';
 const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const { DynamoDB } = require('@aws-sdk/client-dynamodb');
+const {
+  DynamoDB,
+  ConditionalCheckFailedException,
+} = require('@aws-sdk/client-dynamodb');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 
 const BaseAWS = require('../base');
@@ -47,8 +50,7 @@ async function increase(semaphore, threshold = 1) {
     });
     return true;
   } catch (error) {
-    // @ts-ignore
-    if (error && error.name === 'ConditionalCheckFailedException') {
+    if (error instanceof ConditionalCheckFailedException) {
       return false;
     }
     throw error;
@@ -76,8 +78,7 @@ async function release(semaphore) {
       ReturnValues: 'NONE',
     });
   } catch (error) {
-    // @ts-ignore
-    if (error && error.name === 'ConditionalCheckFailedException') {
+    if (error instanceof ConditionalCheckFailedException) {
       return;
     }
     throw error;

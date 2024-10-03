@@ -4,7 +4,6 @@ const { DynamoDB } = require('@aws-sdk/client-dynamodb');
 const { query: queryDb, batchWrite } = require('.');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 const SchedulerEntry = require('../../scheduler/scheduler-entry');
-const { marshall } = require('@aws-sdk/util-dynamodb');
 
 const BaseAWS = require('../base');
 
@@ -36,9 +35,9 @@ async function query(resource_id, partition, window) {
     KeyConditionExpression:
       '#resource_id = :id AND #sort_key BETWEEN :start_by AND :end_by',
     ExpressionAttributeValues: {
-      ':id': marshall(resource_id),
-      ':start_by': marshall(`${partition}:${start_by}`),
-      ':end_by': marshall(`${partition}:${end_by}`),
+      ':id': resource_id,
+      ':start_by': `${partition}:${start_by}`,
+      ':end_by': `${partition}:${end_by}`,
     },
     ExpressionAttributeNames: {
       '#resource_id': 'resource_id',
@@ -86,7 +85,7 @@ async function delete_records(resource_id) {
     ConsistentRead: true,
     KeyConditionExpression: '#resource_id = :resource_id',
     ExpressionAttributeValues: {
-      ':resource_id': marshall(resource_id),
+      ':resource_id': resource_id,
     },
     ExpressionAttributeNames: {
       '#resource_id': 'resource_id',

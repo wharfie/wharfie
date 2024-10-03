@@ -46,7 +46,6 @@ async function findLocations(location) {
     ConsistentRead: true,
     KeyConditionExpression: '#location = :location',
     ExpressionAttributeValues: {
-      // @ts-ignore
       ':location': location,
     },
     ExpressionAttributeNames: {
@@ -62,7 +61,6 @@ async function findLocations(location) {
           )
         : location.substring(0, location.lastIndexOf('/') + 1)
     );
-  // @ts-ignore
   return Items.map((item) => ({
     location,
     resource_id: item.resource_id,

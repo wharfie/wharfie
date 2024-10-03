@@ -46,14 +46,13 @@ async function findDependencies(dependency) {
     ConsistentRead: true,
     KeyConditionExpression: '#dependency = :dependency',
     ExpressionAttributeValues: {
-      // @ts-ignore
       ':dependency': dependency,
     },
     ExpressionAttributeNames: {
       '#dependency': 'dependency',
     },
   });
-  // @ts-ignore
+  if (!Items) return [];
   return Items.map((item) => ({
     dependency,
     resource_id: item.resource_id,
