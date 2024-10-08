@@ -133,11 +133,14 @@ async function load({ deploymentName, resourceName, sortKey }) {
   if (!resourceName) {
     resourceName = deploymentName;
   }
+  if (!sortKey) {
+    sortKey = resourceName;
+  }
   const { Items } = await query({
     TableName: `${deploymentName}-state`,
     ConsistentRead: true,
     KeyConditionExpression:
-      '#name = :name AND begins_with(sort_key, :sort_key)',
+      '#name = :name AND begins_with(#sort_key, :sort_key)',
     ExpressionAttributeValues: {
       ':name': resourceName,
       ':sort_key': sortKey,
