@@ -122,40 +122,37 @@ function setDependsOn(resource, resourceMap) {
 /**
  * @typedef WharfieDeploymentLoadOptions
  * @property {string} deploymentName -
- * @property {string} [resourceName] -
- * @property {string} [sortKey] -
+ * @property {string} [resourceKey] -
  */
 /**
  * @param {WharfieDeploymentLoadOptions} options -
  * @returns {Promise<WharfieDeployment | WharfieProject>} -
  */
-async function load({ deploymentName, resourceName, sortKey }) {
-  if (!resourceName) {
-    resourceName = deploymentName;
+async function load({ deploymentName, resourceKey }) {
+  if (!resourceKey) {
+    resourceKey = deploymentName;
   }
-  if (!sortKey) {
-    sortKey = resourceName;
-  }
+
   const { Items } = await query({
     TableName: `${deploymentName}-state`,
     ConsistentRead: true,
     KeyConditionExpression:
-      '#name = :name AND begins_with(#sort_key, :sort_key)',
+      '#deployment = :deployment AND begins_with(#resource_key, :resource_key)',
     ExpressionAttributeValues: {
-      ':name': resourceName,
-      ':sort_key': sortKey,
+      ':deployment': deploymentName,
+      ':resource_key': resourceKey,
     },
     ExpressionAttributeNames: {
-      '#name': 'name',
-      '#sort_key': 'sort_key',
+      '#resource_key': 'resource_key',
+      '#deployment': 'deployment',
     },
   });
   if (!Items || Items.length === 0) throw new Error('No resources found');
   const processedItems = Items.sort((a, b) =>
-    a.sort_key.localeCompare(b.sort_key)
+    a.resource_key.localeCompare(b.resource_key)
   );
   const resourceMap = processedItems.slice(1).reduce((acc, item) => {
-    acc[item.name] = item.serialized;
+    acc[item.serialized.name] = item.serialized;
     return acc;
   }, {});
 

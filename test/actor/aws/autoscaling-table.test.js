@@ -71,7 +71,8 @@ describe('autoscaling table IaC', () => {
     expect(stableStatusUpdate).toMatchInlineSnapshot(`
       [
         {
-          "name": "table-name",
+          "deployment": "test-deployment",
+          "resource_key": "test-table#table-name",
           "serialized": {
             "dependsOn": [],
             "name": "table-name",
@@ -122,12 +123,12 @@ describe('autoscaling table IaC', () => {
             "resourceType": "Table",
             "status": "STABLE",
           },
-          "sort_key": "test-table#table-name",
           "status": "STABLE",
           "version": "0.0.1test",
         },
         {
-          "name": "table-name-autoscaling-role",
+          "deployment": "test-deployment",
+          "resource_key": "test-table#table-name-autoscaling-role",
           "serialized": {
             "dependsOn": [
               "table-name",
@@ -194,12 +195,12 @@ describe('autoscaling table IaC', () => {
             "resourceType": "Role",
             "status": "STABLE",
           },
-          "sort_key": "test-table#table-name-autoscaling-role",
           "status": "STABLE",
           "version": "0.0.1test",
         },
         {
-          "name": "table-name-readAutoscalingTarget",
+          "deployment": "test-deployment",
+          "resource_key": "test-table#table-name-readAutoscalingTarget",
           "serialized": {
             "dependsOn": [
               "table-name-autoscaling-role",
@@ -232,12 +233,12 @@ describe('autoscaling table IaC', () => {
             "resourceType": "AutoscalingTarget",
             "status": "STABLE",
           },
-          "sort_key": "test-table#table-name-readAutoscalingTarget",
           "status": "STABLE",
           "version": "0.0.1test",
         },
         {
-          "name": "table-name-readAutoscalingPolicy",
+          "deployment": "test-deployment",
+          "resource_key": "test-table#table-name-readAutoscalingPolicy",
           "serialized": {
             "dependsOn": [
               "table-name-readAutoscalingTarget",
@@ -276,12 +277,12 @@ describe('autoscaling table IaC', () => {
             "resourceType": "AutoscalingPolicy",
             "status": "STABLE",
           },
-          "sort_key": "test-table#table-name-readAutoscalingPolicy",
           "status": "STABLE",
           "version": "0.0.1test",
         },
         {
-          "name": "table-name-writeAutoscalingTarget",
+          "deployment": "test-deployment",
+          "resource_key": "test-table#table-name-writeAutoscalingTarget",
           "serialized": {
             "dependsOn": [
               "table-name-autoscaling-role",
@@ -314,12 +315,12 @@ describe('autoscaling table IaC', () => {
             "resourceType": "AutoscalingTarget",
             "status": "STABLE",
           },
-          "sort_key": "test-table#table-name-writeAutoscalingTarget",
           "status": "STABLE",
           "version": "0.0.1test",
         },
         {
-          "name": "table-name-writeAutoscalingPolicy",
+          "deployment": "test-deployment",
+          "resource_key": "test-table#table-name-writeAutoscalingPolicy",
           "serialized": {
             "dependsOn": [
               "table-name-writeAutoscalingTarget",
@@ -358,12 +359,12 @@ describe('autoscaling table IaC', () => {
             "resourceType": "AutoscalingPolicy",
             "status": "STABLE",
           },
-          "sort_key": "test-table#table-name-writeAutoscalingPolicy",
           "status": "STABLE",
           "version": "0.0.1test",
         },
         {
-          "name": "test-table",
+          "deployment": "test-deployment",
+          "resource_key": "test-table",
           "serialized": {
             "dependsOn": [],
             "name": "test-table",
@@ -424,7 +425,6 @@ describe('autoscaling table IaC', () => {
             ],
             "status": "STABLE",
           },
-          "sort_key": "test-table",
           "status": "STABLE",
           "version": "0.0.1test",
         },
@@ -495,6 +495,11 @@ describe('autoscaling table IaC', () => {
       }
     `);
 
+    console.log(
+      put.mock.calls
+        .filter(([{ Item }]) => Item.status === Reconcilable.Status.STABLE)
+        .map((call) => call[0].Item)
+    );
     query.mockResolvedValueOnce({
       Items: put.mock.calls
         .filter(([{ Item }]) => Item.status === Reconcilable.Status.STABLE)
@@ -502,8 +507,7 @@ describe('autoscaling table IaC', () => {
     });
     const deserialized = await load({
       deploymentName: 'test-deployment',
-      name: 'test-table',
-      sortKey: 'test-table',
+      resourceKey: 'test-table',
     });
     await deserialized.reconcile();
     expect(deserialized.resolveProperties()).toMatchInlineSnapshot(`
@@ -576,8 +580,8 @@ describe('autoscaling table IaC', () => {
         [
           {
             "Key": {
-              "name": "table-name-readAutoscalingTarget",
-              "sort_key": "test-table#table-name-readAutoscalingTarget",
+              "deployment": "test-deployment",
+              "resource_key": "test-table#table-name-readAutoscalingTarget",
             },
             "TableName": "_testing_state_table",
           },
@@ -585,8 +589,8 @@ describe('autoscaling table IaC', () => {
         [
           {
             "Key": {
-              "name": "table-name-readAutoscalingPolicy",
-              "sort_key": "test-table#table-name-readAutoscalingPolicy",
+              "deployment": "test-deployment",
+              "resource_key": "test-table#table-name-readAutoscalingPolicy",
             },
             "TableName": "_testing_state_table",
           },
@@ -594,8 +598,8 @@ describe('autoscaling table IaC', () => {
         [
           {
             "Key": {
-              "name": "table-name-writeAutoscalingTarget",
-              "sort_key": "test-table#table-name-writeAutoscalingTarget",
+              "deployment": "test-deployment",
+              "resource_key": "test-table#table-name-writeAutoscalingTarget",
             },
             "TableName": "_testing_state_table",
           },
@@ -603,8 +607,8 @@ describe('autoscaling table IaC', () => {
         [
           {
             "Key": {
-              "name": "table-name-writeAutoscalingPolicy",
-              "sort_key": "test-table#table-name-writeAutoscalingPolicy",
+              "deployment": "test-deployment",
+              "resource_key": "test-table#table-name-writeAutoscalingPolicy",
             },
             "TableName": "_testing_state_table",
           },
@@ -612,8 +616,8 @@ describe('autoscaling table IaC', () => {
         [
           {
             "Key": {
-              "name": "table-name",
-              "sort_key": "test-table#table-name",
+              "deployment": "test-deployment",
+              "resource_key": "test-table#table-name",
             },
             "TableName": "_testing_state_table",
           },
@@ -621,8 +625,8 @@ describe('autoscaling table IaC', () => {
         [
           {
             "Key": {
-              "name": "table-name-autoscaling-role",
-              "sort_key": "test-table#table-name-autoscaling-role",
+              "deployment": "test-deployment",
+              "resource_key": "test-table#table-name-autoscaling-role",
             },
             "TableName": "_testing_state_table",
           },
@@ -630,8 +634,8 @@ describe('autoscaling table IaC', () => {
         [
           {
             "Key": {
-              "name": "test-table",
-              "sort_key": "test-table",
+              "deployment": "test-deployment",
+              "resource_key": "test-table",
             },
             "TableName": "_testing_state_table",
           },
