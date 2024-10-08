@@ -28,6 +28,7 @@ const { EntityNotFoundException } = require('@aws-sdk/client-glue');
 /**
  * @typedef GlueTableOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {GlueTableProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
@@ -37,8 +38,8 @@ class GlueTable extends BaseResource {
   /**
    * @param {GlueTableOptions} options -
    */
-  constructor({ name, status, properties, dependsOn = [] }) {
-    super({ name, status, properties, dependsOn });
+  constructor({ name, parent, status, properties, dependsOn = [] }) {
+    super({ name, parent, status, properties, dependsOn });
     this.glue = new Glue({});
     this.set(
       'arn',

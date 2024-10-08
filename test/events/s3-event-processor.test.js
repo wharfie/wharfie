@@ -267,6 +267,10 @@ describe('tests for s3 events processing', () => {
           .MessageBody
       )
     ).toStrictEqual({
+      action_inputs: {
+        Duration: null,
+        Version: 'scheduler',
+      },
       source: 'wharfie:scheduler',
       operation_started_at: '2016-06-20T12:08:10.000Z',
       operation_type: 'BACKFILL',

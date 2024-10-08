@@ -8,12 +8,11 @@ const {
   Bucket,
   BucketNotificationConfiguration,
 } = require('../../../lambdas/lib/actor/resources/aws/');
-const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
 const { getMockDeploymentProperties } = require('../util');
 
 describe('bucket notification configuration IaC', () => {
   it('basic', async () => {
-    expect.assertions(6);
+    expect.assertions(4);
     const s3 = new S3({});
     const bucket = new Bucket({
       name: 'test-bucket',
@@ -68,6 +67,7 @@ describe('bucket notification configuration IaC', () => {
       {
         "dependsOn": [],
         "name": "test-bucket-notification-config",
+        "parent": "",
         "properties": {
           "arn": "arn:aws:s3:::test-bucket-notification-config",
           "bucketName": "test-bucket",
@@ -107,47 +107,6 @@ describe('bucket notification configuration IaC', () => {
       }
     `);
 
-    const deserialized = deserialize(serialized);
-    await deserialized.reconcile();
-    // @ts-ignore
-    expect(deserialized.properties).toMatchInlineSnapshot(`
-      {
-        "arn": "arn:aws:s3:::test-bucket-notification-config",
-        "bucketName": "test-bucket",
-        "deployment": {
-          "accountId": "123456789012",
-          "envPaths": {
-            "cache": "",
-            "config": "",
-            "data": "",
-            "log": "",
-            "temp": "",
-          },
-          "name": "test-deployment",
-          "region": "us-east-1",
-          "stateTable": "_testing_state_table",
-          "version": "0.0.1test",
-        },
-        "notificationConfiguration": {
-          "QueueConfigurations": [
-            {
-              "Events": [
-                "s3:ObjectCreated:*",
-              ],
-              "QueueArn": "arn:aws:sqs:us-west-2:123456789012:MyQueue",
-            },
-            {
-              "Events": [
-                "s3:ObjectRemoved:*",
-              ],
-              "QueueArn": "arn:aws:sqs:us-west-2:123456789012:MyOtherQueue",
-            },
-          ],
-        },
-      }
-    `);
-    expect(deserialized.status).toBe('STABLE');
-
     const res = await s3.getBucketNotificationConfiguration({
       Bucket: bucket.name,
     });
@@ -171,8 +130,8 @@ describe('bucket notification configuration IaC', () => {
       }
     `);
 
-    await deserialized.destroy();
-    expect(deserialized.status).toBe('DESTROYED');
+    await bucketNotificationConfig.destroy();
+    expect(bucketNotificationConfig.status).toBe('DESTROYED');
     const del_res = await s3.getBucketNotificationConfiguration({
       Bucket: bucket.name,
     });

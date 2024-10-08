@@ -5,7 +5,6 @@ const GlueDatabase = require('./aws/glue-database');
 const Bucket = require('./aws/bucket');
 const Role = require('./aws/role');
 const S3 = require('../../s3');
-const { putWithThroughputRetry } = require('../../dynamo/');
 const { createStableHash } = require('../../crypto');
 
 /**
@@ -14,6 +13,7 @@ const { createStableHash } = require('../../crypto');
  * @property {string[]} actorRoleArns -
  * @property {string} deploymentSharedPolicyArn -
  * @property {string} scheduleQueueArn -
+ * @property {string} daemonQueueArn -
  * @property {string} scheduleRoleArn -
  * @property {string} operationTable -
  * @property {string} dependencyTable -
@@ -25,6 +25,7 @@ const { createStableHash } = require('../../crypto');
  * @typedef WharfieProjectOptions
  * @property {import('../wharfie-deployment')} [deployment] -
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('./reconcilable').Status} [status] -
  * @property {WharfieProjectProperties & import('../typedefs').SharedProperties} [properties] -
  * @property {import('./reconcilable')[]} [dependsOn] -
@@ -35,7 +36,15 @@ class WharfieProject extends BaseResourceGroup {
   /**
    * @param {WharfieProjectOptions} options -
    */
-  constructor({ deployment, name, status, properties, dependsOn, resources }) {
+  constructor({
+    deployment,
+    name,
+    parent,
+    status,
+    properties,
+    dependsOn,
+    resources,
+  }) {
     const propertiesWithDefaults = Object.assign(
       deployment
         ? {
@@ -50,6 +59,7 @@ class WharfieProject extends BaseResourceGroup {
     );
     super({
       name,
+      parent,
       status,
       properties: propertiesWithDefaults,
       dependsOn,
@@ -68,6 +78,10 @@ class WharfieProject extends BaseResourceGroup {
         deployment.getEventsActor().getQueue().get('arn')
       );
       this.set('scheduleQueueArn', () =>
+        // @ts-ignore
+        deployment.getEventsActor().getQueue().get('arn')
+      );
+      this.set('daemonQueueArn', () =>
         // @ts-ignore
         deployment.getDaemonActor().getQueue().get('arn')
       );
@@ -113,11 +127,13 @@ class WharfieProject extends BaseResourceGroup {
   }
 
   /**
+   * @param {string} parent -
    * @returns {(import('./base-resource') | BaseResourceGroup)[]} -
    */
-  _defineGroupResources() {
+  _defineGroupResources(parent) {
     const database = new GlueDatabase({
       name: `${this.name}`,
+      parent,
       properties: {
         deployment: () => this.get('deployment'),
         project: this._getProjectProperties(),
@@ -127,6 +143,7 @@ class WharfieProject extends BaseResourceGroup {
       name: `${this.name.replace(/[\s_]/g, '-')}-bucket-${createStableHash(
         this.name
       )}`,
+      parent,
       properties: {
         deployment: () => this.get('deployment'),
         project: this._getProjectProperties(),
@@ -159,6 +176,7 @@ class WharfieProject extends BaseResourceGroup {
     });
     const role = new Role({
       name: `${this.name}-project-role`,
+      parent,
       properties: {
         deployment: () => this.get('deployment'),
         project: this._getProjectProperties(),
@@ -269,6 +287,7 @@ class WharfieProject extends BaseResourceGroup {
       region: this.get('deployment').region,
       catalogId: this.get('deployment').accountId,
       scheduleQueueArn: this.get('scheduleQueueArn'),
+      daemonQueueArn: this.get('daemonQueueArn'),
       scheduleRoleArn: this.get('scheduleRoleArn'),
       roleArn: () => this.getRole().get('arn'),
       operationTable: this.get('operationTable'),
@@ -298,6 +317,7 @@ class WharfieProject extends BaseResourceGroup {
         new WharfieResource({
           ...options,
           name,
+          parent: this._getParentName(),
           dependsOn: [this.getRole(), this.getBucket()],
           properties: newProperties,
         })
@@ -472,23 +492,6 @@ class WharfieProject extends BaseResourceGroup {
 
   getRole() {
     return this.getResource(`${this.name}-project-role`);
-  }
-
-  async save() {
-    const { stateTable, version } = this.get('deployment');
-
-    const serialized = this.serialize();
-    await putWithThroughputRetry({
-      TableName: stateTable,
-      Item: {
-        name: this.name,
-        sort_key: this.name,
-        serialized,
-        status: this.status,
-        version,
-      },
-      ReturnValues: 'NONE',
-    });
   }
 }
 

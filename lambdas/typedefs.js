@@ -148,7 +148,6 @@
 
 /**
  * @typedef TableProperties
- * @property {string} arn -
  * @property {string} catalogId -
  * @property {Column[]} columns -
  * @property {boolean} compressed -
