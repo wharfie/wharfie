@@ -120,11 +120,13 @@ class WharfieDeployment extends BaseResourceGroup {
   }
 
   /**
+   * @param {string} parent -
    * @returns {(import('./resources/base-resource') | import('./resources/base-resource-group'))[]} -
    */
-  _defineGroupResources() {
+  _defineGroupResources(parent) {
     const systemTable = new Table({
       name: `${this.name}-state`,
+      parent,
       properties: {
         _INTERNAL_STATE_RESOURCE: true,
         deployment: this.getDeploymentProperties.bind(this),
@@ -148,6 +150,7 @@ class WharfieDeployment extends BaseResourceGroup {
 
     const resourceGroup = new WharfieDeploymentResources({
       dependsOn: [systemTable],
+      parent,
       name: `${this.name}-deployment-resources`,
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
@@ -159,6 +162,7 @@ class WharfieDeployment extends BaseResourceGroup {
     // @ts-ignore
     const daemonActor = new Daemon({
       dependsOn: [resourceGroup],
+      parent,
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
         actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
@@ -169,6 +173,7 @@ class WharfieDeployment extends BaseResourceGroup {
 
     const cleanupActor = new Cleanup({
       dependsOn: [resourceGroup],
+      parent,
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
         actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
@@ -179,6 +184,7 @@ class WharfieDeployment extends BaseResourceGroup {
 
     const eventsActor = new Events({
       dependsOn: [resourceGroup],
+      parent,
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
         actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
@@ -188,6 +194,7 @@ class WharfieDeployment extends BaseResourceGroup {
     });
     const monitorActor = new Monitor({
       dependsOn: [resourceGroup],
+      parent,
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
         actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
@@ -198,6 +205,7 @@ class WharfieDeployment extends BaseResourceGroup {
     const logNotificationBucketNotificationConfiguration =
       new BucketNotificationConfiguration({
         name: `${this.name}-log-notification-bucket-notification-configuration`,
+        parent,
         dependsOn: [
           resourceGroup,
           daemonActor,

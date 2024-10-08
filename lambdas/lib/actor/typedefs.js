@@ -31,4 +31,29 @@
  * @property {boolean} [_INTERNAL_STATE_RESOURCE] -
  */
 
+/**
+ * @typedef SerializedBaseResource
+ * @property {string} name -
+ * @property {string} parent -
+ * @property {import('./resources/reconcilable').StatusEnum} [status] -
+ * @property {string[]} dependsOn -
+ * @property {Object<string,any>} properties -
+ * @property {string} resourceType -
+ */
+
+/**
+ * @typedef SerializedBaseResourceGroup
+ * @property {string} name -
+ * @property {string} parent -
+ * @property {import('./resources/reconcilable').StatusEnum} [status] -
+ * @property {string[]} dependsOn -
+ * @property {Object<string,any>} properties -
+ * @property {string} resourceType -
+ * @property {string[]} resources -
+ */
+
+/**
+ * @typedef {import('./typedefs').SerializedBaseResource & import('./typedefs').SerializedBaseResourceGroup} SerializedResource
+ */
+
 module.exports = {};

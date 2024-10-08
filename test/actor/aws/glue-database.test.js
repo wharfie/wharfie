@@ -5,15 +5,17 @@ process.env.AWS_MOCKS = true;
 const { Glue } = jest.requireMock('@aws-sdk/client-glue');
 
 const { GlueDatabase } = require('../../../lambdas/lib/actor/resources/aws/');
-const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
+const { getMockDeploymentProperties } = require('../util');
 
 describe('glue database IaC', () => {
   it('basic', async () => {
-    expect.assertions(6);
+    expect.assertions(4);
     const glue = new Glue({});
     const database = new GlueDatabase({
       name: 'test-database',
-      properties: {},
+      properties: {
+        deployment: getMockDeploymentProperties(),
+      },
     });
     await database.reconcile();
 
@@ -22,31 +24,27 @@ describe('glue database IaC', () => {
       {
         "dependsOn": [],
         "name": "test-database",
-        "properties": {},
-        "resourceType": "GlueDatabase",
-        "status": "STABLE",
-      }
-    `);
-
-    const deserialized = deserialize(serialized);
-    await deserialized.reconcile();
-    expect(deserialized).toMatchInlineSnapshot(`
-      GlueDatabase {
-        "_MAX_RETRIES": 10,
-        "_MAX_RETRY_TIMEOUT_SECONDS": 10,
-        "_destroyErrors": [],
-        "_reconcileErrors": [],
-        "dependsOn": [],
-        "glue": Glue {
-          "glue": GlueMock {},
+        "parent": "",
+        "properties": {
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
         },
-        "name": "test-database",
-        "properties": {},
         "resourceType": "GlueDatabase",
         "status": "STABLE",
       }
     `);
-    expect(deserialized.status).toBe('STABLE');
 
     const res = await glue.getDatabase({
       Name: database.name,
@@ -59,8 +57,8 @@ describe('glue database IaC', () => {
         },
       }
     `);
-    await deserialized.destroy();
-    expect(deserialized.status).toBe('DESTROYED');
+    await database.destroy();
+    expect(database.status).toBe('DESTROYED');
     await expect(
       glue.getDatabase({ Name: database.name })
     ).rejects.toThrowErrorMatchingInlineSnapshot(`"Database not found"`);

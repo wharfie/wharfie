@@ -15,7 +15,7 @@ const TYPE = 'WHARFIE:OPERATION:SCHEDULE';
  * @typedef WharfieEventProperties
  * @property {string} resource_id -
  * @property {Operation.WharfieOperationTypeEnum} operation_type -
- * @property {any} operation_input -
+ * @property {any} [operation_input] -
  * @property {string} [status] -
  * @property {string} [version] -
  * @property {number} [retries] -

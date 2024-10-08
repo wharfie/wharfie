@@ -4,15 +4,18 @@
 process.env.AWS_MOCKS = true;
 const { IAM } = jest.requireMock('@aws-sdk/client-iam');
 
+const { getMockDeploymentProperties } = require('../util');
 const { Role } = require('../../../lambdas/lib/actor/resources/aws/');
-const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
 
 describe('iam role IaC', () => {
   it('basic', async () => {
-    expect.assertions(6);
+    expect.assertions(4);
     const iam = new IAM({});
     const role = new Role({
       name: 'test-role',
+      properties: {
+        deployment: getMockDeploymentProperties(),
+      },
     });
     await role.reconcile();
 
@@ -21,35 +24,28 @@ describe('iam role IaC', () => {
       {
         "dependsOn": [],
         "name": "test-role",
+        "parent": "",
         "properties": {
           "arn": "arn:aws:iam::123456789012:role/test-role",
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
         },
         "resourceType": "Role",
         "status": "STABLE",
       }
     `);
-
-    const deserialized = deserialize(serialized);
-    await deserialized.reconcile();
-    expect(deserialized).toMatchInlineSnapshot(`
-      Role {
-        "_MAX_RETRIES": 10,
-        "_MAX_RETRY_TIMEOUT_SECONDS": 10,
-        "_destroyErrors": [],
-        "_reconcileErrors": [],
-        "dependsOn": [],
-        "iam": IAM {
-          "iam": IAMMock {},
-        },
-        "name": "test-role",
-        "properties": {
-          "arn": "arn:aws:iam::123456789012:role/test-role",
-        },
-        "resourceType": "Role",
-        "status": "STABLE",
-      }
-    `);
-    expect(deserialized.status).toBe('STABLE');
 
     const res = await iam.getRole({
       RoleName: 'test-role',
@@ -67,8 +63,8 @@ describe('iam role IaC', () => {
         },
       }
     `);
-    await deserialized.destroy();
-    expect(deserialized.status).toBe('DESTROYED');
+    await role.destroy();
+    expect(role.status).toBe('DESTROYED');
     await expect(
       iam.getRole({ RoleName: 'test-role' })
     ).rejects.toThrowErrorMatchingInlineSnapshot(
@@ -77,11 +73,12 @@ describe('iam role IaC', () => {
   });
 
   it('complex', async () => {
-    expect.assertions(6);
+    expect.assertions(4);
     const iam = new IAM({});
     const role = new Role({
       name: 'test-role',
       properties: {
+        deployment: getMockDeploymentProperties(),
         description: `some role description`,
         assumeRolePolicyDocument: {
           Version: '2012-10-17',
@@ -119,6 +116,7 @@ describe('iam role IaC', () => {
       {
         "dependsOn": [],
         "name": "test-role",
+        "parent": "",
         "properties": {
           "arn": "arn:aws:iam::123456789012:role/test-role",
           "assumeRolePolicyDocument": {
@@ -132,6 +130,20 @@ describe('iam role IaC', () => {
               },
             ],
             "Version": "2012-10-17",
+          },
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
           },
           "description": "some role description",
           "rolePolicyDocument": {
@@ -156,58 +168,6 @@ describe('iam role IaC', () => {
         "status": "STABLE",
       }
     `);
-
-    const deserialized = deserialize(serialized);
-    await deserialized.reconcile();
-    expect(deserialized).toMatchInlineSnapshot(`
-      Role {
-        "_MAX_RETRIES": 10,
-        "_MAX_RETRY_TIMEOUT_SECONDS": 10,
-        "_destroyErrors": [],
-        "_reconcileErrors": [],
-        "dependsOn": [],
-        "iam": IAM {
-          "iam": IAMMock {},
-        },
-        "name": "test-role",
-        "properties": {
-          "arn": "arn:aws:iam::123456789012:role/test-role",
-          "assumeRolePolicyDocument": {
-            "Statement": [
-              {
-                "Action": "sts:AssumeRole",
-                "Effect": "Allow",
-                "Principal": {
-                  "Service": "lambda.amazonaws.com",
-                },
-              },
-            ],
-            "Version": "2012-10-17",
-          },
-          "description": "some role description",
-          "rolePolicyDocument": {
-            "Statement": [
-              {
-                "Action": [
-                  "sqs:DeleteMessage",
-                  "sqs:ReceiveMessage",
-                  "sqs:GetQueueAttributes",
-                  "sqs:SendMessage",
-                ],
-                "Effect": "Allow",
-                "Resource": [
-                  "*",
-                ],
-              },
-            ],
-            "Version": "2012-10-17",
-          },
-        },
-        "resourceType": "Role",
-        "status": "STABLE",
-      }
-    `);
-    expect(deserialized.status).toBe('STABLE');
 
     const res = await iam.getRole({
       RoleName: 'test-role',
@@ -230,8 +190,8 @@ describe('iam role IaC', () => {
         },
       }
     `);
-    await deserialized.destroy();
-    expect(deserialized.status).toBe('DESTROYED');
+    await role.destroy();
+    expect(role.status).toBe('DESTROYED');
     await expect(
       iam.getRole({ RoleName: 'test-role' })
     ).rejects.toThrowErrorMatchingInlineSnapshot(

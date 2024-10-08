@@ -12,6 +12,7 @@ const { NoSuchEntityException } = require('@aws-sdk/client-iam');
 /**
  * @typedef PolicyOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {PolicyProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
@@ -21,8 +22,8 @@ class Policy extends BaseResource {
   /**
    * @param {PolicyOptions} options -
    */
-  constructor({ name, status, properties, dependsOn = [] }) {
-    super({ name, status, properties, dependsOn });
+  constructor({ name, parent, status, properties, dependsOn = [] }) {
+    super({ name, parent, status, properties, dependsOn });
     this.iam = new IAM({});
     this.set(
       'arn',

@@ -13,6 +13,7 @@ const { NoSuchBucket } = require('@aws-sdk/client-s3');
 /**
  * @typedef BucketOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {BucketProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
@@ -22,8 +23,8 @@ class Bucket extends BaseResource {
   /**
    * @param {BucketOptions} options -
    */
-  constructor({ name, status, properties, dependsOn = [] }) {
-    super({ name, status, dependsOn, properties });
+  constructor({ name, parent, status, properties, dependsOn = [] }) {
+    super({ name, parent, status, dependsOn, properties });
     this.s3 = new S3();
     this.set('arn', `arn:aws:s3:::${this.name}`);
   }

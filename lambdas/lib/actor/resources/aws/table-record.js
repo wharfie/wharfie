@@ -20,6 +20,7 @@ const BaseResource = require('../base-resource');
 /**
  * @typedef TableRecordOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {TableRecordProperties & import('../../typedefs').SharedProperties} properties -
  * @property {() => Promise<Object<string,any>>} [dataResolver] -
@@ -30,7 +31,14 @@ class TableRecord extends BaseResource {
   /**
    * @param {TableRecordOptions} options -
    */
-  constructor({ name, status, dataResolver, dependsOn = [], properties }) {
+  constructor({
+    name,
+    parent,
+    status,
+    dataResolver,
+    dependsOn = [],
+    properties,
+  }) {
     const propertiesWithDefaults = Object.assign(
       {
         keyName: 'key',
@@ -38,7 +46,13 @@ class TableRecord extends BaseResource {
       },
       properties
     );
-    super({ name, status, dependsOn, properties: propertiesWithDefaults });
+    super({
+      name,
+      parent,
+      status,
+      dependsOn,
+      properties: propertiesWithDefaults,
+    });
     this.dataResolver = dataResolver;
     const credentials = fromNodeProviderChain();
     this.dynamo = new Dynamo.DynamoDB({

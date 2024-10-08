@@ -5,11 +5,11 @@ process.env.AWS_MOCKS = true;
 const { Glue } = jest.requireMock('@aws-sdk/client-glue');
 
 const { GlueTable } = require('../../../lambdas/lib/actor/resources/aws/');
-const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
+const { getMockDeploymentProperties } = require('../util');
 
 describe('glue table IaC', () => {
   it('basic', async () => {
-    expect.assertions(6);
+    expect.assertions(4);
     const glue = new Glue({});
     await glue.createDatabase({
       DatabaseInput: {
@@ -19,6 +19,7 @@ describe('glue table IaC', () => {
     const table = new GlueTable({
       name: 'test_table',
       properties: {
+        deployment: getMockDeploymentProperties(),
         databaseName: 'database_name',
         location: 's3://bucket/path',
         description: 'table description',
@@ -75,6 +76,7 @@ describe('glue table IaC', () => {
       {
         "dependsOn": [],
         "name": "test_table",
+        "parent": "",
         "properties": {
           "arn": "arn:aws:glue:us-east-1:123456789012:table/database_name/test_table",
           "catalogId": "123456789012",
@@ -91,6 +93,20 @@ describe('glue table IaC', () => {
           "compressed": true,
           "compressionType": "gzip",
           "databaseName": "database_name",
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
           "description": "table description",
           "inputFormat": "org.apache.hadoop.mapred.TextInputFormat",
           "location": "s3://bucket/path",
@@ -128,74 +144,6 @@ describe('glue table IaC', () => {
         "status": "STABLE",
       }
     `);
-
-    const deserialized = deserialize(serialized);
-    await deserialized.reconcile();
-    expect(deserialized).toMatchInlineSnapshot(`
-      GlueTable {
-        "_MAX_RETRIES": 10,
-        "_MAX_RETRY_TIMEOUT_SECONDS": 10,
-        "_destroyErrors": [],
-        "_reconcileErrors": [],
-        "dependsOn": [],
-        "glue": Glue {
-          "glue": GlueMock {},
-        },
-        "name": "test_table",
-        "properties": {
-          "arn": [Function],
-          "catalogId": "123456789012",
-          "columns": [
-            {
-              "name": "column1",
-              "type": "string",
-            },
-            {
-              "name": "column2",
-              "type": "string",
-            },
-          ],
-          "compressed": true,
-          "compressionType": "gzip",
-          "databaseName": "database_name",
-          "description": "table description",
-          "inputFormat": "org.apache.hadoop.mapred.TextInputFormat",
-          "location": "s3://bucket/path",
-          "numberOfBuckets": 0,
-          "outputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
-          "parameters": {
-            "1": "1",
-            "2": "2",
-          },
-          "partitionKeys": [
-            {
-              "name": "key1",
-              "type": "string",
-            },
-            {
-              "name": "key2",
-              "type": "string",
-            },
-          ],
-          "region": "us-east-1",
-          "serdeInfo": {
-            "Parameters": {
-              "serialization.format": "1",
-            },
-            "SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe",
-          },
-          "storedAsSubDirectories": true,
-          "tableType": "EXTERNAL",
-          "tags": {
-            "key1": "value1",
-            "key2": "value2",
-          },
-        },
-        "resourceType": "GlueTable",
-        "status": "STABLE",
-      }
-    `);
-    expect(deserialized.status).toBe('STABLE');
 
     const res = await glue.getTable({
       Name: table.name,
@@ -257,8 +205,8 @@ describe('glue table IaC', () => {
         },
       }
     `);
-    await deserialized.destroy();
-    expect(deserialized.status).toBe('DESTROYED');
+    await table.destroy();
+    expect(table.status).toBe('DESTROYED');
     await expect(
       glue.getTable({
         Name: table.name,

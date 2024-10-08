@@ -38,7 +38,6 @@ describe('dynamo resource db', () => {
           Role: 'RoleArn',
         },
         source_properties: {
-          arn: 'SourceArn',
           catalogId: 'SourceCatalogId',
           columns: [],
           compressed: false,
@@ -53,7 +52,6 @@ describe('dynamo resource db', () => {
           tags: {},
         },
         destination_properties: {
-          arn: 'DestinationArn',
           catalogId: 'SourceCatalogId',
           columns: [],
           compressed: false,
@@ -78,7 +76,6 @@ describe('dynamo resource db', () => {
             "Role": "RoleArn",
           },
           "destination_properties": {
-            "arn": "DestinationArn",
             "catalogId": "SourceCatalogId",
             "columns": [],
             "compressed": false,
@@ -97,7 +94,6 @@ describe('dynamo resource db', () => {
           "record_type": "RESOURCE",
           "region": "us-east-1",
           "source_properties": {
-            "arn": "SourceArn",
             "catalogId": "SourceCatalogId",
             "columns": [],
             "compressed": false,
@@ -131,7 +127,6 @@ describe('dynamo resource db', () => {
           Role: 'RoleArn',
         },
         source_properties: {
-          arn: 'SourceArn',
           catalogId: 'SourceCatalogId',
           columns: [],
           compressed: false,
@@ -146,7 +141,6 @@ describe('dynamo resource db', () => {
           tags: {},
         },
         destination_properties: {
-          arn: 'DestinationArn',
           catalogId: 'SourceCatalogId',
           columns: [],
           compressed: false,
@@ -171,7 +165,6 @@ describe('dynamo resource db', () => {
           "Role": "RoleArn",
         },
         "destination_properties": {
-          "arn": "DestinationArn",
           "catalogId": "SourceCatalogId",
           "columns": [],
           "compressed": false,
@@ -189,7 +182,6 @@ describe('dynamo resource db', () => {
         "last_updated_at": 1466424490000,
         "region": "us-east-1",
         "source_properties": {
-          "arn": "SourceArn",
           "catalogId": "SourceCatalogId",
           "columns": [],
           "compressed": false,
@@ -221,7 +213,6 @@ describe('dynamo resource db', () => {
         Role: 'RoleArn',
       },
       source_properties: {
-        arn: 'SourceArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,
@@ -236,7 +227,6 @@ describe('dynamo resource db', () => {
         tags: {},
       },
       destination_properties: {
-        arn: 'DestinationArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,
@@ -267,7 +257,6 @@ describe('dynamo resource db', () => {
         Role: 'RoleArn',
       },
       source_properties: {
-        arn: 'SourceArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,
@@ -282,7 +271,6 @@ describe('dynamo resource db', () => {
         tags: {},
       },
       destination_properties: {
-        arn: 'DestinationArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,
@@ -313,7 +301,6 @@ describe('dynamo resource db', () => {
             "Role": "RoleArn",
           },
           "destination_properties": {
-            "arn": "DestinationArn",
             "catalogId": "SourceCatalogId",
             "columns": [],
             "compressed": false,
@@ -332,7 +319,6 @@ describe('dynamo resource db', () => {
           "record_type": "RESOURCE",
           "region": "us-east-1",
           "source_properties": {
-            "arn": "SourceArn",
             "catalogId": "SourceCatalogId",
             "columns": [],
             "compressed": false,
@@ -378,7 +364,6 @@ describe('dynamo resource db', () => {
         Role: 'RoleArn',
       },
       source_properties: {
-        arn: 'SourceArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,
@@ -393,7 +378,6 @@ describe('dynamo resource db', () => {
         tags: {},
       },
       destination_properties: {
-        arn: 'DestinationArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,
@@ -446,7 +430,6 @@ describe('dynamo resource db', () => {
         Role: 'RoleArn',
       },
       source_properties: {
-        arn: 'SourceArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,
@@ -461,7 +444,6 @@ describe('dynamo resource db', () => {
         tags: {},
       },
       destination_properties: {
-        arn: 'DestinationArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,
@@ -518,7 +500,6 @@ describe('dynamo resource db', () => {
         Role: 'RoleArn',
       },
       source_properties: {
-        arn: 'SourceArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,
@@ -533,7 +514,6 @@ describe('dynamo resource db', () => {
         tags: {},
       },
       destination_properties: {
-        arn: 'DestinationArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,
@@ -629,7 +609,6 @@ describe('dynamo resource db', () => {
         Role: 'RoleArn',
       },
       source_properties: {
-        arn: 'SourceArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,
@@ -644,7 +623,6 @@ describe('dynamo resource db', () => {
         tags: {},
       },
       destination_properties: {
-        arn: 'DestinationArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,
@@ -704,7 +682,6 @@ describe('dynamo resource db', () => {
         Role: 'RoleArn',
       },
       source_properties: {
-        arn: 'SourceArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,
@@ -719,7 +696,6 @@ describe('dynamo resource db', () => {
         tags: {},
       },
       destination_properties: {
-        arn: 'DestinationArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,
@@ -789,7 +765,6 @@ describe('dynamo resource db', () => {
         Role: 'RoleArn',
       },
       source_properties: {
-        arn: 'SourceArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,
@@ -804,7 +779,6 @@ describe('dynamo resource db', () => {
         tags: {},
       },
       destination_properties: {
-        arn: 'DestinationArn',
         catalogId: 'SourceCatalogId',
         columns: [],
         compressed: false,

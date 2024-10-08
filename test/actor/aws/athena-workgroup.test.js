@@ -1,18 +1,32 @@
 /* eslint-disable jest/no-large-snapshots */
+/* eslint-disable jest/no-hooks */
 'use strict';
 
 process.env.AWS_MOCKS = '1';
 const { Athena } = jest.requireMock('@aws-sdk/client-athena');
 
+const AWS = require('@aws-sdk/lib-dynamodb');
+let query, _delete, put;
+
 const {
   AthenaWorkGroup,
 } = require('../../../lambdas/lib/actor/resources/aws/');
-const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
+const { load } = require('../../../lambdas/lib/actor/deserialize');
 const { getMockDeploymentProperties } = require('../util');
+const Reconcilable = require('../../../lambdas/lib/actor/resources/reconcilable');
 
 describe('athena workgroup IaC', () => {
+  beforeAll(() => {
+    put = AWS.spyOn('DynamoDBDocument', 'put');
+    query = AWS.spyOn('DynamoDBDocument', 'query');
+    _delete = AWS.spyOn('DynamoDBDocument', 'delete');
+  });
+
+  afterEach(() => {
+    AWS.clearAllMocks();
+  });
   it('basic', async () => {
-    expect.assertions(6);
+    expect.assertions(14);
     const athena = new Athena({});
     const workgroup = new AthenaWorkGroup({
       name: 'test-workgroup',
@@ -24,11 +38,58 @@ describe('athena workgroup IaC', () => {
     });
     await workgroup.reconcile();
 
+    const reconcilingStatusUpdate = put.mock.calls
+      .filter(([{ Item }]) => Item.status === Reconcilable.Status.RECONCILING)
+      .map(([{ Item }]) => Item);
+
+    const stableStatusUpdate = put.mock.calls
+      .filter(([{ Item }]) => Item.status === Reconcilable.Status.STABLE)
+      .map(([{ Item }]) => Item);
+
+    expect(reconcilingStatusUpdate).toHaveLength(1);
+    expect(stableStatusUpdate).toHaveLength(1);
+    expect(stableStatusUpdate).toMatchInlineSnapshot(`
+      [
+        {
+          "name": "test-workgroup",
+          "serialized": {
+            "dependsOn": [],
+            "name": "test-workgroup",
+            "parent": "",
+            "properties": {
+              "deployment": {
+                "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "",
+                  "config": "",
+                  "data": "",
+                  "log": "",
+                  "temp": "",
+                },
+                "name": "test-deployment",
+                "region": "us-east-1",
+                "stateTable": "_testing_state_table",
+                "version": "0.0.1test",
+              },
+              "description": "test-description",
+              "outputLocation": "s3://test-bucket/test-prefix/",
+            },
+            "resourceType": "AthenaWorkGroup",
+            "status": "STABLE",
+          },
+          "sort_key": "test-workgroup",
+          "status": "STABLE",
+          "version": "0.0.1test",
+        },
+      ]
+    `);
+
     const serialized = workgroup.serialize();
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
         "name": "test-workgroup",
+        "parent": "",
         "properties": {
           "deployment": {
             "accountId": "123456789012",
@@ -52,7 +113,16 @@ describe('athena workgroup IaC', () => {
       }
     `);
 
-    const deserialized = deserialize(serialized);
+    query.mockResolvedValueOnce({
+      Items: put.mock.calls
+        .filter(([{ Item }]) => Item.status === Reconcilable.Status.STABLE)
+        .map((call) => call[0].Item),
+    });
+    const deserialized = await load({
+      deploymentName: 'test-deployment',
+      name: 'test-table',
+      sortKey: 'test-table',
+    });
     await deserialized.reconcile();
     expect(deserialized).toMatchInlineSnapshot(`
       AthenaWorkGroup {
@@ -81,6 +151,7 @@ describe('athena workgroup IaC', () => {
         },
         "dependsOn": [],
         "name": "test-workgroup",
+        "parent": "",
         "properties": {
           "deployment": {
             "accountId": "123456789012",
@@ -138,5 +209,32 @@ describe('athena workgroup IaC', () => {
     ).rejects.toThrowErrorMatchingInlineSnapshot(
       `"workgroup: test-workgroup does not exist"`
     );
+
+    const destroyingStatusUpdate = put.mock.calls
+      .filter(([{ Item }]) => Item.status === Reconcilable.Status.DESTROYING)
+      .map(([{ Item }]) => Item);
+
+    const destroyedStatusUpdate = put.mock.calls
+      .filter(([{ Item }]) => Item.status === Reconcilable.Status.DESTROYED)
+      .map(([{ Item }]) => Item);
+
+    expect(destroyingStatusUpdate).toHaveLength(1);
+    expect(destroyedStatusUpdate).toHaveLength(0);
+
+    expect(put).toHaveBeenCalledTimes(3);
+    expect(_delete).toHaveBeenCalledTimes(1);
+    expect(_delete.mock.calls).toMatchInlineSnapshot(`
+      [
+        [
+          {
+            "Key": {
+              "name": "test-workgroup",
+              "sort_key": "test-workgroup",
+            },
+            "TableName": "_testing_state_table",
+          },
+        ],
+      ]
+    `);
   });
 });

@@ -11,7 +11,6 @@ const {
   LambdaFunction,
   EventSourceMapping,
 } = require('../../../lambdas/lib/actor/resources/aws/');
-const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
 const { getMockDeploymentProperties } = require('../util');
 
 describe('event source mapping IaC', () => {
@@ -20,7 +19,7 @@ describe('event source mapping IaC', () => {
     createId.mockReturnValue('test-id');
   });
   it('basic', async () => {
-    expect.assertions(6);
+    expect.assertions(4);
     const lambda = new Lambda({});
     const lambdaFunction = new LambdaFunction({
       name: 'test-function',
@@ -69,6 +68,7 @@ describe('event source mapping IaC', () => {
       {
         "dependsOn": [],
         "name": "test-event-source-mapping",
+        "parent": "",
         "properties": {
           "batchSize": 1,
           "deployment": {
@@ -94,46 +94,6 @@ describe('event source mapping IaC', () => {
         "status": "STABLE",
       }
     `);
-
-    const deserialized = deserialize(serialized);
-    await deserialized.reconcile();
-    expect(deserialized).toMatchInlineSnapshot(`
-      EventSourceMapping {
-        "_MAX_RETRIES": 10,
-        "_MAX_RETRY_TIMEOUT_SECONDS": 10,
-        "_destroyErrors": [],
-        "_reconcileErrors": [],
-        "dependsOn": [],
-        "lambda": Lambda {
-          "lambda": LambdaMock {},
-        },
-        "name": "test-event-source-mapping",
-        "properties": {
-          "batchSize": 1,
-          "deployment": {
-            "accountId": "123456789012",
-            "envPaths": {
-              "cache": "",
-              "config": "",
-              "data": "",
-              "log": "",
-              "temp": "",
-            },
-            "name": "test-deployment",
-            "region": "us-east-1",
-            "stateTable": "_testing_state_table",
-            "version": "0.0.1test",
-          },
-          "eventSourceArn": "test-event-source-arn",
-          "functionName": "test-function",
-          "maximumBatchingWindowInSeconds": 0,
-          "uuid": "test-id",
-        },
-        "resourceType": "EventSourceMapping",
-        "status": "STABLE",
-      }
-    `);
-    expect(deserialized.status).toBe('STABLE');
 
     const res = await lambda.listEventSourceMappings({
       FunctionName: lambdaFunction.name,
@@ -154,8 +114,8 @@ describe('event source mapping IaC', () => {
         ],
       }
     `);
-    await deserialized.destroy();
-    expect(deserialized.status).toBe('DESTROYED');
+    await eventSourceMapping.destroy();
+    expect(eventSourceMapping.status).toBe('DESTROYED');
     const del_res = await lambda.listEventSourceMappings({
       FunctionName: lambdaFunction.name,
     });

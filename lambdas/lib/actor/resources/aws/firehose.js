@@ -10,6 +10,7 @@ const { ResourceNotFoundException } = require('@aws-sdk/client-firehose');
 /**
  * @typedef FirehoseOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {FirehoseProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
@@ -19,8 +20,8 @@ class Firehose extends BaseResource {
   /**
    * @param {FirehoseOptions} options -
    */
-  constructor({ name, status, properties, dependsOn = [] }) {
-    super({ name, status, properties, dependsOn });
+  constructor({ name, parent, status, properties, dependsOn = [] }) {
+    super({ name, parent, status, properties, dependsOn });
     this.firehose = new FirehoseSDK({});
   }
 

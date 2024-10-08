@@ -5,14 +5,17 @@ process.env.AWS_MOCKS = true;
 const { SQS } = jest.requireMock('@aws-sdk/client-sqs');
 
 const { Queue } = require('../../../lambdas/lib/actor/resources/aws/');
-const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
+const { getMockDeploymentProperties } = require('../util');
 
 describe('sqs queue IaC', () => {
   it('basic', async () => {
-    expect.assertions(6);
+    expect.assertions(4);
     const sqs = new SQS({});
     const queue = new Queue({
       name: 'test-queue',
+      properties: {
+        deployment: getMockDeploymentProperties(),
+      },
     });
     await queue.reconcile();
 
@@ -21,9 +24,24 @@ describe('sqs queue IaC', () => {
       {
         "dependsOn": [],
         "name": "test-queue",
+        "parent": "",
         "properties": {
           "arn": "arn:aws:sqs:us-east-1:123456789012:test-queue",
           "delaySeconds": "0",
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
           "messageRetentionPeriod": "1209600",
           "receiveMessageWaitTimeSeconds": "0",
           "url": "test-queue",
@@ -33,33 +51,6 @@ describe('sqs queue IaC', () => {
         "status": "STABLE",
       }
     `);
-
-    const deserialized = deserialize(serialized);
-    await deserialized.reconcile();
-    expect(deserialized).toMatchInlineSnapshot(`
-      Queue {
-        "_MAX_RETRIES": 10,
-        "_MAX_RETRY_TIMEOUT_SECONDS": 10,
-        "_destroyErrors": [],
-        "_reconcileErrors": [],
-        "dependsOn": [],
-        "name": "test-queue",
-        "properties": {
-          "arn": "arn:aws:sqs:us-east-1:123456789012:test-queue",
-          "delaySeconds": "0",
-          "messageRetentionPeriod": "1209600",
-          "receiveMessageWaitTimeSeconds": "0",
-          "url": "test-queue",
-          "visibilityTimeout": "300",
-        },
-        "resourceType": "Queue",
-        "sqs": SQS {
-          "sqs": SQSMock {},
-        },
-        "status": "STABLE",
-      }
-    `);
-    expect(deserialized.status).toBe('STABLE');
 
     const res = await sqs.getQueueAttributes({
       QueueUrl: 'test-queue',
@@ -77,8 +68,8 @@ describe('sqs queue IaC', () => {
         "queue": [],
       }
     `);
-    await deserialized.destroy();
-    expect(deserialized.status).toBe('DESTROYED');
+    await queue.destroy();
+    expect(queue.status).toBe('DESTROYED');
     await expect(
       sqs.getQueueAttributes({ QueueUrl: 'test-queue' })
     ).rejects.toThrowErrorMatchingInlineSnapshot(

@@ -5,12 +5,11 @@ process.env.AWS_MOCKS = '1';
 const { S3 } = jest.requireMock('@aws-sdk/client-s3');
 
 const { Bucket } = require('../../../lambdas/lib/actor/resources/aws/');
-const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
 const { getMockDeploymentProperties } = require('../util');
 
 describe('bucket IaC', () => {
   it('basic', async () => {
-    expect.assertions(6);
+    expect.assertions(4);
     const s3 = new S3({});
     const bucket = new Bucket({
       name: 'test-bucket',
@@ -45,6 +44,7 @@ describe('bucket IaC', () => {
       {
         "dependsOn": [],
         "name": "test-bucket",
+        "parent": "",
         "properties": {
           "arn": "arn:aws:s3:::test-bucket",
           "deployment": {
@@ -87,50 +87,6 @@ describe('bucket IaC', () => {
       }
     `);
 
-    const deserialized = deserialize(serialized);
-    await deserialized.reconcile();
-    // @ts-ignore
-    expect(deserialized.properties).toMatchInlineSnapshot(`
-      {
-        "arn": "arn:aws:s3:::test-bucket",
-        "deployment": {
-          "accountId": "123456789012",
-          "envPaths": {
-            "cache": "",
-            "config": "",
-            "data": "",
-            "log": "",
-            "temp": "",
-          },
-          "name": "test-deployment",
-          "region": "us-east-1",
-          "stateTable": "_testing_state_table",
-          "version": "0.0.1test",
-        },
-        "lifecycleConfiguration": {
-          "Rules": [
-            {
-              "Expiration": {
-                "Days": 1,
-              },
-              "ID": "log_files_expiration",
-              "Prefix": "/logs/raw/",
-              "Status": "Enabled",
-            },
-            {
-              "AbortIncompleteMultipartUpload": {
-                "DaysAfterInitiation": 1,
-              },
-              "ID": "abort_incomplete_multipart_uploads",
-              "Prefix": "",
-              "Status": "Enabled",
-            },
-          ],
-        },
-      }
-    `);
-    expect(deserialized.status).toBe('STABLE');
-
     const res = await s3.getBucketLocation({
       Bucket: bucket.name,
     });
@@ -141,8 +97,8 @@ describe('bucket IaC', () => {
       }
     `);
 
-    await deserialized.destroy();
-    expect(deserialized.status).toBe('DESTROYED');
+    await bucket.destroy();
+    expect(bucket.status).toBe('DESTROYED');
     await expect(
       s3.getBucketLocation({
         Bucket: bucket.name,

@@ -4,9 +4,10 @@ class Events extends WharfieActor {
   /**
    * @param {import('../wharfie-actor').ExtendedWharfieActorOptions} options -
    */
-  constructor({ status, resources, properties }) {
+  constructor({ status, parent, resources, properties }) {
     super({
       name: 'events',
+      parent,
       status,
       resources,
       properties: {

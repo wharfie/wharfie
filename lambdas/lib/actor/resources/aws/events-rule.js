@@ -19,6 +19,7 @@ const {
 /**
  * @typedef EventsRuleOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {EventsRuleProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
@@ -28,8 +29,8 @@ class EventsRule extends BaseResource {
   /**
    * @param {EventsRuleOptions} options -
    */
-  constructor({ name, status, properties, dependsOn = [] }) {
-    super({ name, status, properties, dependsOn });
+  constructor({ name, parent, status, properties, dependsOn = [] }) {
+    super({ name, parent, status, properties, dependsOn });
     this.cloudwatchEvents = new CloudWatchEvents({});
   }
 

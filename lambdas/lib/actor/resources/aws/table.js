@@ -19,6 +19,7 @@ const BaseResource = require('../base-resource');
 /**
  * @typedef TableOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {TableProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
@@ -28,14 +29,20 @@ class Table extends BaseResource {
   /**
    * @param {TableOptions} options -
    */
-  constructor({ name, status, properties, dependsOn = [] }) {
+  constructor({ name, parent, status, properties, dependsOn = [] }) {
     const propertiesWithDefaults = Object.assign(
       {
         billingMode: BillingMode.PROVISIONED,
       },
       properties
     );
-    super({ name, status, properties: propertiesWithDefaults, dependsOn });
+    super({
+      name,
+      parent,
+      status,
+      properties: propertiesWithDefaults,
+      dependsOn,
+    });
     this.dynamo = new DynamoDB({});
     this.dynamoDocument = DynamoDBDocument.from(this.dynamo.dynamodb, {
       marshallOptions: { removeUndefinedValues: true },

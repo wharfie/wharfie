@@ -3,7 +3,7 @@
 const { EntityNotFoundException } = jest.requireActual('@aws-sdk/client-glue');
 
 class GlueMock {
-  __setMockState(state) {
+  __setMockState(state = {}) {
     if (state) {
       GlueMock.__state = state;
     }

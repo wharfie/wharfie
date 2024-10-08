@@ -5,6 +5,7 @@ const BaseResource = require('./base-resource');
 /**
  * @typedef BaseResourceGroupOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('./reconcilable').Status} [status] -
  * @property {import('./reconcilable')[]} [dependsOn] -
  * @property {Object<string, any> & import('../typedefs').SharedProperties} properties -
@@ -14,21 +15,29 @@ class BaseResourceGroup extends BaseResource {
   /**
    * @param {BaseResourceGroupOptions} options - BaseResourceGroup Class Options
    */
-  constructor({ name, status, dependsOn = [], properties, resources }) {
-    super({ name, status, dependsOn, properties });
+  constructor({ name, parent, status, dependsOn = [], properties, resources }) {
+    super({ name, parent, status, dependsOn, properties });
     this.resources = resources;
 
     if (!this.resources) {
       this.resources = {};
-      this.addResources(this._defineGroupResources());
+      this.addResources(this._defineGroupResources(this._getParentName()));
     }
     this.dispatchStatusEvent();
   }
 
   /**
+   * @returns {string} -
+   */
+  _getParentName() {
+    return this.parent ? `${this.parent}#${this.name}` : this.name;
+  }
+
+  /**
+   * @param {string} parent -
    * @returns {(BaseResource | BaseResourceGroup)[]} -
    */
-  _defineGroupResources() {
+  _defineGroupResources(parent) {
     return [];
   }
 
@@ -95,29 +104,18 @@ class BaseResourceGroup extends BaseResource {
   }
 
   /**
-   * @returns {any} -
+   * @returns {import('../typedefs').SerializedBaseResourceGroup} -
    */
   serialize() {
-    /** @type {Object<string, any>} */
-    const serializedResources = {};
-
-    Object.values(this.resources).forEach((resource) => {
-      serializedResources[resource.name] = resource.serialize();
-    });
-
     return {
       name: this.name,
+      parent: this.parent,
       status: this.status,
       dependsOn: this.dependsOn.map((dep) => dep.name),
       properties: this.resolveProperties(),
       resourceType: this.resourceType,
-      resources: serializedResources,
+      resources: Object.keys(this.resources),
     };
-  }
-
-  async delete() {
-    await Promise.all(this.getResources().map((resource) => resource.delete()));
-    await super.delete();
   }
 
   async _destroy() {

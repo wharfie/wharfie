@@ -23,6 +23,7 @@ const BaseResourceGroup = require('../base-resource-group');
 /**
  * @typedef AutoscalingTableOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {AutoscalingTableProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
@@ -33,17 +34,19 @@ class AutoscalingTable extends BaseResourceGroup {
   /**
    * @param {AutoscalingTableOptions} options -
    */
-  constructor({ name, status, properties, dependsOn, resources }) {
-    super({ name, status, properties, dependsOn, resources });
+  constructor({ name, parent, status, properties, dependsOn, resources }) {
+    super({ name, parent, status, properties, dependsOn, resources });
   }
 
   /**
+   * @param {string} parent -
    * @returns {(import('../base-resource') | BaseResourceGroup)[]} -
    */
-  _defineGroupResources() {
+  _defineGroupResources(parent) {
     const table = new Table({
       name: this.get('tableName'),
       dependsOn: this.dependsOn,
+      parent,
       properties: {
         _INTERNAL_STATE_RESOURCE: this.get('_INTERNAL_STATE_RESOURCE'),
         deployment: this.get('deployment'),
@@ -58,6 +61,7 @@ class AutoscalingTable extends BaseResourceGroup {
     const role = new Role({
       name: `${this.get('tableName')}-autoscaling-role`,
       dependsOn: [table],
+      parent,
       properties: {
         _INTERNAL_STATE_RESOURCE: this.get('_INTERNAL_STATE_RESOURCE'),
         deployment: this.get('deployment'),
@@ -100,6 +104,7 @@ class AutoscalingTable extends BaseResourceGroup {
     const readAutoscalingTarget = new AutoScalingTarget({
       name: `${this.get('tableName')}-readAutoscalingTarget`,
       dependsOn: [role],
+      parent,
       properties: {
         _INTERNAL_STATE_RESOURCE: this.get('_INTERNAL_STATE_RESOURCE'),
         deployment: this.get('deployment'),
@@ -114,6 +119,7 @@ class AutoscalingTable extends BaseResourceGroup {
     const readAutoscalingPolicy = new AutoScalingPolicy({
       name: `${this.get('tableName')}-readAutoscalingPolicy`,
       dependsOn: [readAutoscalingTarget],
+      parent,
       properties: {
         _INTERNAL_STATE_RESOURCE: this.get('_INTERNAL_STATE_RESOURCE'),
         deployment: this.get('deployment'),
@@ -134,6 +140,7 @@ class AutoscalingTable extends BaseResourceGroup {
     const writeAutoscalingTarget = new AutoScalingTarget({
       name: `${this.get('tableName')}-writeAutoscalingTarget`,
       dependsOn: [role],
+      parent,
       properties: {
         _INTERNAL_STATE_RESOURCE: this.get('_INTERNAL_STATE_RESOURCE'),
         deployment: this.get('deployment'),
@@ -148,6 +155,7 @@ class AutoscalingTable extends BaseResourceGroup {
     const writeAutoscalingPolicy = new AutoScalingPolicy({
       name: `${this.get('tableName')}-writeAutoscalingPolicy`,
       dependsOn: [writeAutoscalingTarget],
+      parent,
       properties: {
         _INTERNAL_STATE_RESOURCE: this.get('_INTERNAL_STATE_RESOURCE'),
         deployment: this.get('deployment'),

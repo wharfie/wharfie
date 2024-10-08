@@ -14,6 +14,7 @@ const { InvalidRequestException } = require('@aws-sdk/client-athena');
 /**
  * @typedef AthenaWorkgroupOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {AthenaWorkgroupProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
@@ -23,8 +24,8 @@ class AthenaWorkGroup extends BaseResource {
   /**
    * @param {AthenaWorkgroupOptions} options -
    */
-  constructor({ name, status, properties, dependsOn = [] }) {
-    super({ name, status, properties, dependsOn });
+  constructor({ name, parent, status, properties, dependsOn = [] }) {
+    super({ name, parent, status, properties, dependsOn });
     this.athena = new Athena({});
   }
 

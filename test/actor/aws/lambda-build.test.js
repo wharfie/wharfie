@@ -12,7 +12,7 @@ const {
   LambdaBuild,
   Bucket,
 } = require('../../../lambdas/lib/actor/resources/aws/');
-const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
+const { getMockDeploymentProperties } = require('../util');
 
 describe('lambda function IaC', () => {
   beforeAll(() => {
@@ -27,15 +27,19 @@ describe('lambda function IaC', () => {
     jest.restoreAllMocks();
   });
   it('basic', async () => {
-    expect.assertions(6);
+    expect.assertions(4);
     const s3 = new S3({});
     const bucket = new Bucket({
       name: 'test-bucket',
+      properties: {
+        deployment: getMockDeploymentProperties(),
+      },
     });
     await bucket.reconcile();
     const lambdaBuild = new LambdaBuild({
       name: 'test-function',
       properties: {
+        deployment: getMockDeploymentProperties(),
         handler: './test/fixtures/lambda-build-test-handler.handler',
         artifactBucket: bucket.name,
       },
@@ -48,9 +52,24 @@ describe('lambda function IaC', () => {
       {
         "dependsOn": [],
         "name": "test-function",
+        "parent": "",
         "properties": {
           "artifactBucket": "test-bucket",
           "artifactKey": "actor-artifacts/test-function/mockedHash.zip",
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
+          },
           "functionCodeHash": "mockedHash",
           "handler": "./test/fixtures/lambda-build-test-handler.handler",
         },
@@ -58,18 +77,6 @@ describe('lambda function IaC', () => {
         "status": "STABLE",
       }
     `);
-
-    const deserialized = deserialize(serialized);
-    await deserialized.reconcile();
-    expect(deserialized.properties).toMatchInlineSnapshot(`
-      {
-        "artifactBucket": "test-bucket",
-        "artifactKey": "actor-artifacts/test-function/mockedHash.zip",
-        "functionCodeHash": "mockedHash",
-        "handler": "./test/fixtures/lambda-build-test-handler.handler",
-      }
-    `);
-    expect(deserialized.status).toBe('STABLE');
 
     const res = await s3.listObjectsV2({
       Bucket: bucket.name,
@@ -86,8 +93,8 @@ describe('lambda function IaC', () => {
         ],
       }
     `);
-    await deserialized.destroy();
-    expect(deserialized.status).toBe('DESTROYED');
+    await lambdaBuild.destroy();
+    expect(lambdaBuild.status).toBe('DESTROYED');
     const del_res = await s3.listObjectsV2({
       Bucket: bucket.name,
     });

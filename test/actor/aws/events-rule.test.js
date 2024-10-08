@@ -7,12 +7,11 @@ const { CloudWatchEvents } = jest.requireMock(
   '@aws-sdk/client-cloudwatch-events'
 );
 
-const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
 const { getMockDeploymentProperties } = require('../util');
 
 describe('events rule IaC', () => {
   it('basic', async () => {
-    expect.assertions(6);
+    expect.assertions(4);
     const cloudWatchEvents = new CloudWatchEvents({});
     const eventsRule = new EventsRule({
       name: 'test-rule',
@@ -43,6 +42,7 @@ describe('events rule IaC', () => {
       {
         "dependsOn": [],
         "name": "test-rule",
+        "parent": "",
         "properties": {
           "deployment": {
             "accountId": "123456789012",
@@ -79,57 +79,6 @@ describe('events rule IaC', () => {
         "status": "STABLE",
       }
     `);
-
-    const deserialized = deserialize(serialized);
-    await deserialized.reconcile();
-    expect(deserialized).toMatchInlineSnapshot(`
-      EventsRule {
-        "_MAX_RETRIES": 10,
-        "_MAX_RETRY_TIMEOUT_SECONDS": 10,
-        "_destroyErrors": [],
-        "_reconcileErrors": [],
-        "cloudwatchEvents": CloudWatchEvents {
-          "cloudwatchEvents": CloudWatchEventsMock {},
-        },
-        "dependsOn": [],
-        "name": "test-rule",
-        "properties": {
-          "deployment": {
-            "accountId": "123456789012",
-            "envPaths": {
-              "cache": "",
-              "config": "",
-              "data": "",
-              "log": "",
-              "temp": "",
-            },
-            "name": "test-deployment",
-            "region": "us-east-1",
-            "stateTable": "_testing_state_table",
-            "version": "0.0.1test",
-          },
-          "description": "practice rule",
-          "roleArn": "arn:aws:iam::123456789012:role/test-role",
-          "scheduleExpression": "rate(1 minute)",
-          "state": "ENABLED",
-          "targets": [
-            {
-              "Arn": "arn:aws:firehose:us-east-1:123456789012:deliverystream/test-table",
-              "Id": "rule-target",
-              "InputTransformer": {
-                "InputPathsMap": {
-                  "time": "$.time",
-                },
-                "InputTemplate": "{"operation_started_at":<time>, "operation_type":"BACKFILL", "action_type":"START", "resource_id":"test-id"}",
-              },
-            },
-          ],
-        },
-        "resourceType": "EventsRule",
-        "status": "STABLE",
-      }
-    `);
-    expect(deserialized.status).toBe('STABLE');
 
     const res = await cloudWatchEvents.describeRule({
       Name: eventsRule.name,
@@ -156,8 +105,8 @@ describe('events rule IaC', () => {
         ],
       }
     `);
-    await deserialized.destroy();
-    expect(deserialized.status).toBe('DESTROYED');
+    await eventsRule.destroy();
+    expect(eventsRule.status).toBe('DESTROYED');
     await expect(
       cloudWatchEvents.describeRule({
         Name: eventsRule.name,

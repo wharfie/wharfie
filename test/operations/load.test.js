@@ -35,8 +35,6 @@ const { Resource } = require('../../lambdas/lib/graph');
 const { S3 } = require('@aws-sdk/client-s3');
 
 const operations = require('../../lambdas/lib/dynamo/operations');
-
-const dynamo_resource = require('../../lambdas/lib/dynamo/operations');
 const semaphore = require('../../lambdas/lib/dynamo/semaphore');
 
 const glue = new Glue();
@@ -197,8 +195,7 @@ describe('s3 event tests', () => {
     await Promise.race([emptyQueues, timeout]);
     timeout.cancel();
     // eslint-disable-next-line jest/no-large-snapshots
-    expect(Object.keys(dynamo_resource.__getMockState()))
-      .toMatchInlineSnapshot(`
+    expect(Object.keys(operations.__getMockState())).toMatchInlineSnapshot(`
       [
         "resource_id",
       ]

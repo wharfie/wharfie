@@ -5,7 +5,7 @@ const { NoSuchBucket, NotFound, NoSuchKey } =
   jest.requireActual('@aws-sdk/client-s3');
 
 class S3Mock {
-  __setMockState(s3ObjectMap) {
+  __setMockState(s3ObjectMap = {}) {
     S3Mock.__state = {};
     Object.keys(s3ObjectMap).forEach((s3Key) => {
       const { bucket, prefix } = this._parseS3Uri(s3Key);

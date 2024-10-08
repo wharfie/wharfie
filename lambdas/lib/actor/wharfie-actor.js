@@ -10,6 +10,7 @@ const BaseResourceGroup = require('./resources/base-resource-group');
 
 /**
  * @typedef ExtendedWharfieActorOptions
+ * @property {string} parent -
  * @property {import('./resources/reconcilable').Status} [status] -
  * @property {ExtendedWharfieActorProperties & import('./typedefs').SharedProperties} properties -
  * @property {import('./resources/reconcilable')[]} [dependsOn] -
@@ -27,6 +28,7 @@ const BaseResourceGroup = require('./resources/base-resource-group');
 /**
  * @typedef WharfieActorOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('./resources/reconcilable').Status} [status] -
  * @property {WharfieActorProperties & import('./typedefs').SharedProperties} properties -
  * @property {import('./resources/reconcilable')[]} [dependsOn] -
@@ -37,10 +39,11 @@ class WharfieActor extends BaseResourceGroup {
   /**
    * @param {WharfieActorOptions} options -
    */
-  constructor({ name, status, properties, resources, dependsOn }) {
+  constructor({ name, parent, status, properties, resources, dependsOn }) {
     if (!properties.handler) throw new Error('No handler defined');
     super({
       name,
+      parent,
       status,
       properties,
       resources,
@@ -49,11 +52,13 @@ class WharfieActor extends BaseResourceGroup {
   }
 
   /**
+   * @param {string} parent -
    * @returns {(import('./resources/base-resource') | import('./resources/base-resource-group'))[]} -
    */
-  _defineGroupResources() {
+  _defineGroupResources(parent) {
     const actorResources = new WharfieActorResources({
       name: `${this.name}-actor-resources`,
+      parent,
       properties: {
         deployment: this.get('deployment'),
         handler: this.get('handler'),
