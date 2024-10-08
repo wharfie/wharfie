@@ -51,7 +51,8 @@ describe('athena workgroup IaC', () => {
     expect(stableStatusUpdate).toMatchInlineSnapshot(`
       [
         {
-          "name": "test-workgroup",
+          "deployment": "test-deployment",
+          "resource_key": "test-workgroup",
           "serialized": {
             "dependsOn": [],
             "name": "test-workgroup",
@@ -77,7 +78,6 @@ describe('athena workgroup IaC', () => {
             "resourceType": "AthenaWorkGroup",
             "status": "STABLE",
           },
-          "sort_key": "test-workgroup",
           "status": "STABLE",
           "version": "0.0.1test",
         },
@@ -120,8 +120,7 @@ describe('athena workgroup IaC', () => {
     });
     const deserialized = await load({
       deploymentName: 'test-deployment',
-      name: 'test-table',
-      sortKey: 'test-table',
+      resourceKey: 'test-table',
     });
     await deserialized.reconcile();
     expect(deserialized).toMatchInlineSnapshot(`
@@ -228,8 +227,8 @@ describe('athena workgroup IaC', () => {
         [
           {
             "Key": {
-              "name": "test-workgroup",
-              "sort_key": "test-workgroup",
+              "deployment": "test-deployment",
+              "resource_key": "test-workgroup",
             },
             "TableName": "_testing_state_table",
           },

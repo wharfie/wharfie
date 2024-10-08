@@ -63,7 +63,8 @@ describe('autoscaling policy IaC', () => {
     expect(stableStatusUpdate).toMatchInlineSnapshot(`
       [
         {
-          "name": "test-rule",
+          "deployment": "test-deployment",
+          "resource_key": "test-rule",
           "serialized": {
             "dependsOn": [],
             "name": "test-rule",
@@ -99,7 +100,6 @@ describe('autoscaling policy IaC', () => {
             "resourceType": "AutoscalingPolicy",
             "status": "STABLE",
           },
-          "sort_key": "test-rule",
           "status": "STABLE",
           "version": "0.0.1test",
         },
@@ -152,8 +152,7 @@ describe('autoscaling policy IaC', () => {
     });
     const deserialized = await load({
       deploymentName: 'test-deployment',
-      name: 'test-rule',
-      sortKey: 'test-rule',
+      resourceKey: 'test-rule',
     });
     await deserialized.reconcile();
     expect(deserialized).toMatchInlineSnapshot(`
@@ -258,8 +257,8 @@ describe('autoscaling policy IaC', () => {
         [
           {
             "Key": {
-              "name": "test-rule",
-              "sort_key": "test-rule",
+              "deployment": "test-deployment",
+              "resource_key": "test-rule",
             },
             "TableName": "_testing_state_table",
           },

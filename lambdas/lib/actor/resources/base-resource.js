@@ -178,14 +178,16 @@ class BaseResource extends Reconcilable {
   async save() {
     if (!this.has('deployment') || !this.get('deployment'))
       throw new Error('cannot save resource without deployment');
-    const { stateTable, version } = this.get('deployment');
+    const { stateTable, version, name } = this.get('deployment');
 
-    const sort_key = this.parent ? `${this.parent}#${this.name}` : this.name;
+    const resource_key = this.parent
+      ? `${this.parent}#${this.name}`
+      : this.name;
     await putWithThroughputRetry({
       TableName: stateTable,
       Item: {
-        name: this.name,
-        sort_key,
+        deployment: name,
+        resource_key,
         status: this.status,
         serialized: this.serialize(),
         version,
@@ -223,15 +225,17 @@ class BaseResource extends Reconcilable {
   async delete() {
     if (!this.has('deployment') || !this.get('deployment'))
       throw new Error('cannot delete resource without deployment');
-    const { stateTable } = this.get('deployment');
+    const { stateTable, name } = this.get('deployment');
 
-    const sort_key = this.parent ? `${this.parent}#${this.name}` : this.name;
+    const resource_key = this.parent
+      ? `${this.parent}#${this.name}`
+      : this.name;
 
     await docClient.delete({
       TableName: stateTable,
       Key: {
-        name: this.name,
-        sort_key,
+        deployment: name,
+        resource_key,
       },
     });
   }

@@ -108,8 +108,7 @@ describe('deployment IaC', () => {
     });
     const deserialized = await load({
       deploymentName: 'test-deployment',
-      name: 'test-deployment',
-      sortKey: 'test-deployment',
+      resourceKey: 'test-deployment',
     });
     await deserialized.reconcile();
     expect(deserialized.resolveProperties()).toMatchInlineSnapshot(`

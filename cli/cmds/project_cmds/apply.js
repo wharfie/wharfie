@@ -33,12 +33,12 @@ const apply = async (path, environmentName) => {
   try {
     projectResources = await load({
       deploymentName: deployment.name,
-      resourceName: project.name,
+      resourceKey: project.name,
     });
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     if (
-      !['No resource found', 'Resource was not stored'].includes(error.message)
+      !['No resources found', 'Resource was not stored'].includes(error.message)
     )
       throw error;
     projectResources = new WharfieProject({

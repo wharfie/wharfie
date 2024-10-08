@@ -30,8 +30,7 @@ const destroy = async (path, environmentName, yes) => {
   try {
     projectResources = await load({
       deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME || '',
-      resourceName: project.name,
-      sortKey: project.name,
+      resourceKey: project.name,
     });
   } catch (error) {
     if (!(error instanceof Error)) throw error;
