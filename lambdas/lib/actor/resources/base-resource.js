@@ -1,8 +1,12 @@
 'use strict';
 
 const Reconcilable = require('./reconcilable');
-const { putWithThroughputRetry, docClient } = require('../../dynamo/');
-// const { query } = require('../../dynamo/');
+const {
+  putResource,
+  getResource,
+  deleteResource,
+  putResourceStatus,
+} = require('../../dynamo/state');
 
 const { isEqual } = require('es-toolkit');
 const jdf = require('jsondiffpatch');
@@ -64,7 +68,12 @@ class BaseResource extends Reconcilable {
    * @param {any} value -
    */
   set(key, value) {
+    if (this.get(key) === this._resolveProperty(value)) {
+      return;
+    }
     this.properties[key] = value;
+    if (this.status !== Reconcilable.Status.UNPROVISIONED)
+      this.setStatus(Reconcilable.Status.DRIFTED);
   }
 
   /**
@@ -157,7 +166,7 @@ class BaseResource extends Reconcilable {
     if (this.get('_INTERNAL_STATE_RESOURCE')) {
       return;
     }
-    await this.save();
+    await this.saveStatus();
   }
 
   async _post_reconcile() {
@@ -165,7 +174,7 @@ class BaseResource extends Reconcilable {
   }
 
   async _pre_destroy() {
-    await this.save();
+    await this.saveStatus();
   }
 
   async _post_destroy() {
@@ -176,68 +185,22 @@ class BaseResource extends Reconcilable {
   }
 
   async save() {
-    if (!this.has('deployment') || !this.get('deployment'))
-      throw new Error('cannot save resource without deployment');
-    const { stateTable, version, name } = this.get('deployment');
-
-    const resource_key = this.parent
-      ? `${this.parent}#${this.name}`
-      : this.name;
-    await putWithThroughputRetry({
-      TableName: stateTable,
-      Item: {
-        deployment: name,
-        resource_key,
-        status: this.status,
-        serialized: this.serialize(),
-        version,
-      },
-      ReturnValues: 'NONE',
-    });
+    await putResource(this);
   }
 
-  // async load() {
-  //   if (!this.has('deployment') || !this.get('deployment'))
-  //     throw new Error('cannot load resource without deployment');
-  //   const { stateTable } = this.get('deployment');
+  async saveStatus() {
+    await putResourceStatus(this);
+  }
 
-  //   const sort_key = this.parent ? `${this.parent}#${this.name}` : this.name;
-
-  //   const { Items } = await query({
-  //     TableName: stateTable,
-  //     ConsistentRead: true,
-  //     KeyConditionExpression: '#name = :name AND begins_with(sort_key, :sort_key)',
-  //     ExpressionAttributeValues: {
-  //       ':name': this.name,
-  //       ':sort_key': sort_key,
-  //     },
-  //     ExpressionAttributeNames: {
-  //       '#name': 'name',
-  //       '#sort_key': 'sort_key',
-  //     },
-  //   });
-  //   if (!Items || Items.length === 0) throw new Error('No resource found');
-  //   const storedData = Items[0];
-
-  //   return deserialize(storedData?.serialized, {});
-  // }
+  /**
+   * @returns {Promise<import('../typedefs').SerializedBaseResource?>} -
+   */
+  async fetchStoredData() {
+    return await getResource(this);
+  }
 
   async delete() {
-    if (!this.has('deployment') || !this.get('deployment'))
-      throw new Error('cannot delete resource without deployment');
-    const { stateTable, name } = this.get('deployment');
-
-    const resource_key = this.parent
-      ? `${this.parent}#${this.name}`
-      : this.name;
-
-    await docClient.delete({
-      TableName: stateTable,
-      Key: {
-        deployment: name,
-        resource_key,
-      },
-    });
+    await deleteResource(this);
   }
 
   async cache() {}

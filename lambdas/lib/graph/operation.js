@@ -267,7 +267,6 @@ class Operation {
    */
   getSequentialActionOrder() {
     const actions = this.getActions();
-    console.log(actions);
     /**
      * @type {Action[]}
      */

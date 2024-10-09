@@ -30,7 +30,6 @@ const destroy = async (yes) => {
     deployment = new WharfieDeployment({
       name: process.env.WHARFIE_DEPLOYMENT_NAME || '',
     });
-    await deployment;
   }
   const bucket = deployment.getBucket();
   if (!yes) {

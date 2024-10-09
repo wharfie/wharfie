@@ -31,58 +31,68 @@ async function start(event, context, resource) {
     started_at: Date.parse(event.operation_started_at) / 1000,
     operation_inputs: event.operation_inputs,
   });
+
   const start_action = operation.createAction({
     type: Action.Type.START,
     id: event.action_id,
   });
-  const register_missing_partitions_action = operation.createAction({
-    type: Action.Type.REGISTER_MISSING_PARTITIONS,
+  operation.createAction({
+    type: Action.Type.FINISH,
     dependsOn: [start_action],
   });
-  const find_compaction_partitions_action = operation.createAction({
-    type: Action.Type.FIND_COMPACTION_PARTITIONS,
-    dependsOn: [register_missing_partitions_action],
-  });
-  const run_compaction_action = operation.createAction({
-    type: Action.Type.RUN_COMPACTION,
-    dependsOn: [find_compaction_partitions_action],
-  });
-  const update_symlinks_action = operation.createAction({
-    type: Action.Type.UPDATE_SYMLINKS,
-    dependsOn: [run_compaction_action],
-  });
-  const swap_resource_action = operation.createAction({
-    type: Action.Type.SWAP_RESOURCE,
-    dependsOn: [update_symlinks_action],
-  });
-  const respond_to_cloudformation_action = operation.createAction({
-    type: Action.Type.RESPOND_TO_CLOUDFORMATION,
-    dependsOn: [swap_resource_action],
-  });
-  const finish_action = operation.createAction({
-    type: Action.Type.FINISH,
-    dependsOn: [respond_to_cloudformation_action],
-  });
-  const side_effect__cloudwatch = operation.createAction({
-    type: Action.Type.SIDE_EFFECT__CLOUDWATCH,
-    dependsOn: [finish_action],
-  });
-  const side_effect__dagster = operation.createAction({
-    type: Action.Type.SIDE_EFFECT__DAGSTER,
-    dependsOn: [finish_action],
-  });
-  const side_effect__wharfie = operation.createAction({
-    type: Action.Type.SIDE_EFFECT__WHARFIE,
-    dependsOn: [finish_action],
-  });
-  operation.createAction({
-    type: Action.Type.SIDE_EFFECTS__FINISH,
-    dependsOn: [
-      side_effect__cloudwatch,
-      side_effect__dagster,
-      side_effect__wharfie,
-    ],
-  });
+
+  // const start_action = operation.createAction({
+  //   type: Action.Type.START,
+  //   id: event.action_id,
+  // });
+  // const register_missing_partitions_action = operation.createAction({
+  //   type: Action.Type.REGISTER_MISSING_PARTITIONS,
+  //   dependsOn: [start_action],
+  // });
+  // const find_compaction_partitions_action = operation.createAction({
+  //   type: Action.Type.FIND_COMPACTION_PARTITIONS,
+  //   dependsOn: [register_missing_partitions_action],
+  // });
+  // const run_compaction_action = operation.createAction({
+  //   type: Action.Type.RUN_COMPACTION,
+  //   dependsOn: [find_compaction_partitions_action],
+  // });
+  // const update_symlinks_action = operation.createAction({
+  //   type: Action.Type.UPDATE_SYMLINKS,
+  //   dependsOn: [run_compaction_action],
+  // });
+  // const swap_resource_action = operation.createAction({
+  //   type: Action.Type.SWAP_RESOURCE,
+  //   dependsOn: [update_symlinks_action],
+  // });
+  // const respond_to_cloudformation_action = operation.createAction({
+  //   type: Action.Type.RESPOND_TO_CLOUDFORMATION,
+  //   dependsOn: [swap_resource_action],
+  // });
+  // const finish_action = operation.createAction({
+  //   type: Action.Type.FINISH,
+  //   dependsOn: [respond_to_cloudformation_action],
+  // });
+  // const side_effect__cloudwatch = operation.createAction({
+  //   type: Action.Type.SIDE_EFFECT__CLOUDWATCH,
+  //   dependsOn: [finish_action],
+  // });
+  // const side_effect__dagster = operation.createAction({
+  //   type: Action.Type.SIDE_EFFECT__DAGSTER,
+  //   dependsOn: [finish_action],
+  // });
+  // const side_effect__wharfie = operation.createAction({
+  //   type: Action.Type.SIDE_EFFECT__WHARFIE,
+  //   dependsOn: [finish_action],
+  // });
+  // operation.createAction({
+  //   type: Action.Type.SIDE_EFFECTS__FINISH,
+  //   dependsOn: [
+  //     side_effect__cloudwatch,
+  //     side_effect__dagster,
+  //     side_effect__wharfie,
+  //   ],
+  // });
 
   event_log.info('creating MIGRATE operation and actions...');
   await resource_db.putOperation(operation);

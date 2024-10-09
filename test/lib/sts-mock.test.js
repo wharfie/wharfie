@@ -17,7 +17,7 @@ describe('tests for STS mock', () => {
     const response = await sts.getCallerIdentity();
     expect(response).toMatchInlineSnapshot(`
       {
-        "Account": "",
+        "Account": "123456789012",
         "Arn": "",
         "UserId": "",
       }

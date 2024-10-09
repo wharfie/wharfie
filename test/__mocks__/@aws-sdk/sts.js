@@ -54,7 +54,7 @@ class STSMock {
   async getCallerIdentity() {
     return {
       UserId: '',
-      Account: '',
+      Account: '123456789012',
       Arn: '',
     };
   }

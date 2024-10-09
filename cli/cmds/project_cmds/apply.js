@@ -38,7 +38,7 @@ const apply = async (path, environmentName) => {
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     if (
-      !['No resources found', 'Resource was not stored'].includes(error.message)
+      !['No resource found', 'Resource was not stored'].includes(error.message)
     )
       throw error;
     projectResources = new WharfieProject({

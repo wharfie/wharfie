@@ -558,6 +558,18 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         operationTable: `${this.get('deployment').name}-operations`,
         dependencyTable: `${this.get('deployment').name}-dependencies`,
         locationTable: `${this.get('deployment').name}-locations`,
+        scheduleQueueArn: () =>
+          `arn:aws:sqs:${this.get('deployment').region}:${
+            this.get('deployment').accountId
+          }:${this.get('deployment').name}-events-queue`,
+        scheduleQueueUrl: () =>
+          `https://sqs.${this.get('deployment').region}.amazonaws.com/${
+            this.get('deployment').accountId
+          }/${this.get('deployment').name}-events-queue`,
+        daemonQueueUrl: () =>
+          `https://sqs.${this.get('deployment').region}.amazonaws.com/${
+            this.get('deployment').accountId
+          }/${this.get('deployment').name}-daemon-queue`,
         tags: [],
         createdAt: this.get('createdAt'),
       },
@@ -596,6 +608,10 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     return this.getResource(
       `${this.get('deployment').name}-temporary-database`
     );
+  }
+
+  getLoggingResourceRole() {
+    return this.getResource(`${this.name}-logging-resource-role`);
   }
 }
 

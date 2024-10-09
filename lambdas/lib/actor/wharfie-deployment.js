@@ -8,6 +8,7 @@ const Table = require('./resources/aws/table');
 const BucketNotificationConfiguration = require('./resources/aws/bucket-notification-configuration');
 const BaseResourceGroup = require('./resources/base-resource-group');
 const { Daemon, Cleanup, Events, Monitor } = require('./wharfie-actors');
+
 const WharfieActor = require('./wharfie-actor');
 const envPaths = require('../env-paths');
 

@@ -57,10 +57,10 @@ describe('wharfie project IaC', () => {
             "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
           ],
           "createdAt": 123456789,
-          "daemonQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-queue",
+          "daemonQueueUrl": "test-deployment-daemon-queue",
           "dependencyTable": "test-deployment-dependencies",
           "deployment": {
-            "accountId": "",
+            "accountId": "123456789012",
             "envPaths": {
               "cache": "mock",
               "config": "mock",
@@ -73,7 +73,7 @@ describe('wharfie project IaC', () => {
             "stateTable": "test-deployment-state",
             "version": "0.0.1",
           },
-          "deploymentSharedPolicyArn": "arn:aws:iam:::policy/test-deployment-shared-policy",
+          "deploymentSharedPolicyArn": "arn:aws:iam::123456789012:policy/test-deployment-shared-policy",
           "eventsQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
           "locationTable": "test-deployment-locations",
           "operationTable": "test-deployment-operations",
@@ -81,6 +81,7 @@ describe('wharfie project IaC', () => {
             "name": "test-wharife-project",
           },
           "scheduleQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
+          "scheduleQueueUrl": "test-deployment-events-queue",
           "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
         },
         "resourceType": "WharfieProject",
@@ -113,6 +114,10 @@ describe('wharfie project IaC', () => {
       },
     });
     await deployment.reconcile();
+    const SCHEDULE_QUEUE_URL = deployment
+      .getEventsActor()
+      .getQueue()
+      .get('url');
 
     const wharfieProject = new WharfieProject({
       name: 'test-wharife-project',
@@ -151,10 +156,10 @@ describe('wharfie project IaC', () => {
             "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
           ],
           "createdAt": 123456789,
-          "daemonQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-queue",
+          "daemonQueueUrl": "test-deployment-daemon-queue",
           "dependencyTable": "test-deployment-dependencies",
           "deployment": {
-            "accountId": "",
+            "accountId": "123456789012",
             "envPaths": {
               "cache": "mock",
               "config": "mock",
@@ -167,7 +172,7 @@ describe('wharfie project IaC', () => {
             "stateTable": "test-deployment-state",
             "version": "0.0.1",
           },
-          "deploymentSharedPolicyArn": "arn:aws:iam:::policy/test-deployment-shared-policy",
+          "deploymentSharedPolicyArn": "arn:aws:iam::123456789012:policy/test-deployment-shared-policy",
           "eventsQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
           "locationTable": "test-deployment-locations",
           "operationTable": "test-deployment-operations",
@@ -175,6 +180,7 @@ describe('wharfie project IaC', () => {
             "name": "test-wharife-project",
           },
           "scheduleQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
+          "scheduleQueueUrl": "test-deployment-events-queue",
           "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
         },
         "resourceType": "WharfieProject",
@@ -196,10 +202,8 @@ describe('wharfie project IaC', () => {
     await wharfieProject.destroy();
     expect(wharfieProject.status).toBe('DESTROYED');
 
-    expect(
-      sqs.__getMockState().queues[
-        'arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue'
-      ].queue
-    ).toHaveLength(6);
+    expect(sqs.__getMockState().queues[SCHEDULE_QUEUE_URL].queue).toHaveLength(
+      6
+    );
   }, 10000);
 });

@@ -166,6 +166,7 @@ async function daemon(event, context) {
             false
           ))
         )
+          // action has other dependencies that are not met
           return Promise.resolve();
         const updated_status = resource_db.updateActionStatus(
           new Action({
@@ -173,10 +174,14 @@ async function daemon(event, context) {
             resource_id: resource.id,
             operation_id: operation.id,
             type: operation.getActionTypeById(action_id),
+            status: Action.Status.PENDING,
           }),
           Action.Status.RUNNING
         );
         if (!updated_status) {
+          event_log.info(
+            `action ${event.operation_type}:${event.action_type} completed, equeueing next actions`
+          );
           // status already in RUNNING state, caused by action graph with reduce pattern
           return Promise.resolve();
         }

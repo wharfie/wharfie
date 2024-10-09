@@ -17,10 +17,8 @@ const s3 = new S3();
 const sqs = new SQS();
 const glue = new Glue();
 
-const DAEMON_QUEUE_ARN =
-  'arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-queue';
-const SCHEDULE_QUEUE_ARN =
-  'arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue';
+const DAEMON_QUEUE_URL = `https://sqs.us-west-2.amazonaws.com/1234/wharfie-testing-daemon-queue`;
+const SCHEDULE_QUEUE_URL = `https://sqs.us-west-2.amazonaws.com/1234/wharfie-testing-events-queue`;
 
 describe('wharfie resource IaC', () => {
   afterEach(() => {
@@ -37,12 +35,6 @@ describe('wharfie resource IaC', () => {
       DatabaseInput: {
         Name: 'test-wharfie-resource',
       },
-    });
-    await sqs.createQueue({
-      QueueName: DAEMON_QUEUE_ARN,
-    });
-    await sqs.createQueue({
-      QueueName: SCHEDULE_QUEUE_ARN,
     });
     const wharfieResource = new WharfieResource({
       name: 'test-resource',
@@ -64,7 +56,8 @@ describe('wharfie resource IaC', () => {
         ],
         compressed: undefined,
         createdAt: 123456789,
-        daemonQueueArn: DAEMON_QUEUE_ARN,
+        scheduleQueueUrl: SCHEDULE_QUEUE_URL,
+        daemonQueueUrl: DAEMON_QUEUE_URL,
         databaseName: 'test-wharfie-resource',
         dependencyTable: 'test-deployment-dependencies',
         deployment: {
@@ -108,7 +101,8 @@ describe('wharfie resource IaC', () => {
         resourceName: 'amazon_berkely_objects',
         roleArn:
           'arn:aws:iam::123456789012:role/test-wharfie-resource-project-role',
-        scheduleQueueArn: SCHEDULE_QUEUE_ARN,
+        scheduleQueueArn:
+          'arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue',
         scheduleRoleArn:
           'arn:aws:iam::123456789012:role/test-deployment-event-role',
         serdeInfo: {
@@ -148,7 +142,7 @@ describe('wharfie resource IaC', () => {
           ],
           "compressed": undefined,
           "createdAt": 123456789,
-          "daemonQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-queue",
+          "daemonQueueUrl": "https://sqs.us-west-2.amazonaws.com/1234/wharfie-testing-daemon-queue",
           "databaseName": "test-wharfie-resource",
           "dependencyTable": "test-deployment-dependencies",
           "deployment": {
@@ -189,6 +183,7 @@ describe('wharfie resource IaC', () => {
           "resourceName": "amazon_berkely_objects",
           "roleArn": "arn:aws:iam::123456789012:role/test-wharfie-resource-project-role",
           "scheduleQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
+          "scheduleQueueUrl": "https://sqs.us-west-2.amazonaws.com/1234/wharfie-testing-events-queue",
           "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
           "serdeInfo": {
             "Parameters": {
@@ -210,15 +205,12 @@ describe('wharfie resource IaC', () => {
         "status": "STABLE",
       }
     `);
-
     expect(
-      sqs.__getMockState().queues[SCHEDULE_QUEUE_ARN].queue[0].Body
+      sqs.__getMockState().queues[SCHEDULE_QUEUE_URL].queue[0].Body
     ).toMatchInlineSnapshot(
       `"{"resource_id":"test-wharfie-resource.amazon_berkely_objects","operation_type":"BACKFILL","type":"WHARFIE:OPERATION:SCHEDULE","version":"0.0.1","retries":0}"`
     );
-    expect(sqs.__getMockState().queues[DAEMON_QUEUE_ARN].queue).toStrictEqual(
-      []
-    );
+    expect(sqs.__getMockState().queues[DAEMON_QUEUE_URL]).toBeUndefined();
 
     await wharfieResource.destroy();
     expect(wharfieResource.status).toBe('DESTROYED');

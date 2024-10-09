@@ -45,8 +45,9 @@ const sqs = new SQS({});
  * @property {string | function(): string} region -
  * @property {number} [interval] -
  * @property {number} [createdAt] -
- * @property {string} [scheduleQueueArn] -
- * @property {string} [daemonQueueArn] -
+ * @property {string | function(): string} scheduleQueueArn -
+ * @property {string | function(): string} scheduleQueueUrl -
+ * @property {string | function(): string} daemonQueueUrl -
  * @property {string} [scheduleRoleArn] -
  * @property {string | function(): string} roleArn -
  * @property {string} operationTable -
@@ -344,26 +345,97 @@ class WharfieResource extends BaseResourceGroup {
     return resource;
   }
 
+  async needsMigration() {
+    const oldProperties = (await this.fetchStoredData())?.properties;
+    if (!oldProperties) return true;
+    const newProperties = this.serialize().properties;
+
+    // Check if `resourceId` has changed
+    if (oldProperties.resourceId !== newProperties.resourceId) return true;
+    // Check if `catalogId` has changed
+    if (oldProperties.catalogId !== newProperties.catalogId) return true;
+    if (
+      JSON.stringify(oldProperties.serdeInfo) !==
+      JSON.stringify(newProperties.serdeInfo)
+    )
+      return true;
+
+    // Check if `outputFormat` has changed
+    if (oldProperties.outputFormat !== newProperties.outputFormat) return true;
+    if (oldProperties.inputFormat !== newProperties.inputFormat) return true;
+    if (oldProperties.numberOfBuckets !== newProperties.numberOfBuckets)
+      return true;
+    if (
+      oldProperties.storedAsSubDirectories !==
+      newProperties.storedAsSubDirectories
+    )
+      return true;
+    if (oldProperties.compressed !== newProperties.compressed) return true;
+
+    // Check if `inputLocation` has changed
+    if (oldProperties.inputLocation !== newProperties.inputLocation)
+      return true;
+    // Check if `outputLocation` has changed
+    if (oldProperties.outputLocation !== newProperties.outputLocation)
+      return true;
+
+    // Check if columns have changed in name, type, or order
+    const oldColumns = oldProperties.columns || [];
+    const newColumns = newProperties.columns || [];
+
+    if (oldColumns.length !== newColumns.length) return true; // Check if column counts differ
+
+    for (let i = 0; i < oldColumns.length; i++) {
+      if (
+        oldColumns[i].name !== newColumns[i].name || // Check if column names differ
+        oldColumns[i].type !== newColumns[i].type // Check if column types differ
+      ) {
+        return true;
+      }
+    }
+
+    const oldPartitionKeys = oldProperties.partitionKeys || [];
+    const newPartitionKeys = newProperties.partitionKeys || [];
+
+    if (oldPartitionKeys.length !== newPartitionKeys.length) return true; // Check if column counts differ
+
+    for (let i = 0; i < oldPartitionKeys.length; i++) {
+      if (
+        oldPartitionKeys[i].name !== newPartitionKeys[i].name || // Check if column names differ
+        oldPartitionKeys[i].type !== newPartitionKeys[i].type // Check if column types differ
+      ) {
+        return true;
+      }
+    }
+
+    // If none of the targeted properties have changed, no migration is needed
+    return false;
+  }
+
   async _reconcile() {
     let change;
     if (
-      !this.getResources().find(
-        (resource) => resource.status !== Reconcilable.Status.UNPROVISIONED
+      this.getResources().find(
+        (resource) => resource.status !== Reconcilable.Status.STABLE
       )
     ) {
       change = 'CREATED';
+    } else if (await this.needsMigration()) {
+      change = 'UPDATED';
+    } else {
+      change = 'NO_CHANGE';
     }
     await Promise.all(
       this.getResources().map((resource) => resource.reconcile())
     );
-
+    this.change = change;
     if (change === 'CREATED') {
       await sqs.sendMessage({
         MessageBody: new WharfieScheduleOperation({
           resource_id: this.get('resourceId'),
           operation_type: Operation.Type.BACKFILL,
         }).serialize(),
-        QueueUrl: this.get('scheduleQueueArn'),
+        QueueUrl: this.get('scheduleQueueUrl'),
       });
     } else if (change === 'UPDATED') {
       const resource = await this.getResourceDef();
@@ -382,7 +454,7 @@ class WharfieResource extends BaseResourceGroup {
             Duration: Infinity,
           },
         }),
-        QueueUrl: this.get('daemonQueueArn'),
+        QueueUrl: this.get('daemonQueueUrl'),
       });
     }
   }

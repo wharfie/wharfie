@@ -253,6 +253,10 @@ async function updateActionStatus(action, new_status) {
     if (error instanceof ConditionalCheckFailedException) {
       return false;
     }
+    // @ts-ignore
+    else if (error.name === 'ConditionalCheckFailedException') {
+      return false;
+    }
     throw error;
   }
   return true;

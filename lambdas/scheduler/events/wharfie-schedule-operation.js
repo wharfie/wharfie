@@ -72,7 +72,7 @@ class WharfieScheduleOperation {
    * @returns {boolean} -
    */
   static is(record) {
-    if (record.type && record.resource_id && record.operation_id) {
+    if (record.type && record.operation_type) {
       return record.type === TYPE;
     }
     return false;
