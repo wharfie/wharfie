@@ -155,7 +155,6 @@ function validateProject(project) {
       label: false,
     },
   });
-
   if (error) {
     error.details = error.details.map((detail) => {
       const resourceType = getResourceType(detail.path);

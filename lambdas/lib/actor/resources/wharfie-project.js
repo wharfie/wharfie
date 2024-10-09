@@ -365,22 +365,32 @@ class WharfieProject extends BaseResourceGroup {
    * @param {UserDefinedWharfieResourceOptions[]} resourceOptions -
    */
   registerWharfieResources(resourceOptions) {
-    const resourceNames = resourceOptions.reduce((acc, option) => {
-      acc.add(`${option.name}-resource`);
+    /** @type {Object<string,UserDefinedWharfieResourceOptions>} */
+    const resourceOptionsMap = resourceOptions.reduce((acc, option) => {
+      // @ts-ignore
+      acc[`${option.name}-resource`] = option;
       return acc;
-    }, new Set());
+    }, {});
 
     this.getWharfieResources().forEach((resource) => {
-      if (!resourceNames.has(resource.name)) {
+      if (!resourceOptionsMap[resource.name]) {
         if (resource.isDestroyed()) {
           delete this.resources[resource.name];
         } else {
           resource.markForDestruction();
           this.setStatus(Reconcilable.Status.DRIFTED);
         }
+      } else {
+        const opts = resourceOptionsMap[resource.name];
+        Object.keys(opts.properties).forEach((key) => {
+          // @ts-ignore
+          this.resources[resource.name].set(key, opts.properties[key]);
+        });
+        delete resourceOptionsMap[resource.name];
+        this.setStatus(Reconcilable.Status.DRIFTED);
       }
     });
-    resourceOptions.forEach((options) => {
+    Object.values(resourceOptionsMap).forEach((options) => {
       this.addWharfieResource(options);
     });
   }

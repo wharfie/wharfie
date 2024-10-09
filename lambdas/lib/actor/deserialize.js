@@ -6,8 +6,7 @@ const WharfieProject = require('./resources/wharfie-project');
 const WharfieResource = require('./resources/wharfie-resource');
 const WharfieDeployment = require('./wharfie-deployment');
 const WharfieActor = require('./wharfie-actor');
-
-const { query } = require('../dynamo/');
+const { getResources } = require('../dynamo/state');
 
 /**
  * @typedef {new (options: any) => import('./resources/base-resource')} ResourceConstructor
@@ -133,31 +132,16 @@ async function load({ deploymentName, resourceKey }) {
     resourceKey = deploymentName;
   }
 
-  const { Items } = await query({
-    TableName: `${deploymentName}-state`,
-    ConsistentRead: true,
-    KeyConditionExpression:
-      '#deployment = :deployment AND begins_with(#resource_key, :resource_key)',
-    ExpressionAttributeValues: {
-      ':deployment': deploymentName,
-      ':resource_key': resourceKey,
-    },
-    ExpressionAttributeNames: {
-      '#resource_key': 'resource_key',
-      '#deployment': 'deployment',
-    },
-  });
-  if (!Items || Items.length === 0) throw new Error('No resources found');
-  const processedItems = Items.sort((a, b) =>
-    a.resource_key.localeCompare(b.resource_key)
-  );
-  const resourceMap = processedItems.slice(1).reduce((acc, item) => {
-    acc[item.serialized.name] = item.serialized;
+  const serializedResources = await getResources(deploymentName, resourceKey);
+
+  const resourceMap = serializedResources.slice(1).reduce((acc, item) => {
+    // @ts-ignore
+    acc[item.name] = item;
     return acc;
   }, {});
 
   // @ts-ignore
-  return deserialize(processedItems[0].serialized, resourceMap);
+  return deserialize(serializedResources[0], resourceMap);
 }
 
 module.exports = {

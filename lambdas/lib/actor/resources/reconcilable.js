@@ -144,7 +144,7 @@ class Reconcilable {
         this.setStatus(Status.STABLE);
         break;
       } catch (error) {
-        // console.trace(error)
+        console.trace(error);
         Reconcilable.Emitter.emit(Events.WHARFIE_ERROR, {
           name: this.name,
           constructor: this.constructor.name,
@@ -201,14 +201,6 @@ class Reconcilable {
         });
         // @ts-ignore
         this._destroyErrors.push(error);
-        // if (
-        //   // @ts-ignore
-        //   error?.name !== last_error?.name ||
-        //   // @ts-ignore
-        //   error?.message !== last_error?.message
-        // ) {
-        //   destroy_attempts = 0;
-        // }
         await new Promise((resolve) =>
           setTimeout(
             resolve,

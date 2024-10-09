@@ -152,7 +152,7 @@ describe('deployment IaC', () => {
     expect(destroyingStatusUpdate).toHaveLength(56);
     expect(destroyedStatusUpdate).toHaveLength(0);
 
-    expect(put).toHaveBeenCalledTimes(170);
+    expect(put).toHaveBeenCalledTimes(171);
     // one less because the state table can't delete its own record
     expect(_delete).toHaveBeenCalledTimes(56);
   }, 25000);

@@ -344,6 +344,45 @@ class WharfieResource extends BaseResourceGroup {
     return resource;
   }
 
+  needsMigration() {
+    const oldProperties = this.old_serialized?.properties;
+    if (!oldProperties) return true;
+    const newProperties = this.serialize().properties;
+
+    // Check if `name` has changed
+    if (oldProperties.userInput.name !== newProperties.userInput.name)
+      return true;
+
+    // Check if `format` has changed
+    if (oldProperties.userInput.format !== newProperties.userInput.format)
+      return true;
+
+    // Check if `input_location` has changed
+    if (
+      oldProperties.userInput.input_location?.path !==
+      newProperties.userInput.input_location?.path
+    )
+      return true;
+
+    // Check if columns have changed in name, type, or order
+    const oldColumns = oldProperties.userInput.columns;
+    const newColumns = newProperties.userInput.columns;
+
+    if (oldColumns.length !== newColumns.length) return true; // Check if column counts differ
+
+    for (let i = 0; i < oldColumns.length; i++) {
+      if (
+        oldColumns[i].name !== newColumns[i].name || // Check if column names differ
+        oldColumns[i].type !== newColumns[i].type // Check if column types differ
+      ) {
+        return true;
+      }
+    }
+
+    // If none of the targeted properties have changed, no migration is needed
+    return false;
+  }
+
   async _reconcile() {
     let change;
     if (
@@ -352,11 +391,14 @@ class WharfieResource extends BaseResourceGroup {
       )
     ) {
       change = 'CREATED';
+    } else if (this.needsMigration()) {
+      change = 'UPDATED';
+    } else {
+      change = 'NO_CHANGE';
     }
     await Promise.all(
       this.getResources().map((resource) => resource.reconcile())
     );
-
     if (change === 'CREATED') {
       await sqs.sendMessage({
         MessageBody: new WharfieScheduleOperation({

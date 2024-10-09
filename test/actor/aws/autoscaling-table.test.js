@@ -494,12 +494,6 @@ describe('autoscaling table IaC', () => {
         "status": "STABLE",
       }
     `);
-
-    console.log(
-      put.mock.calls
-        .filter(([{ Item }]) => Item.status === Reconcilable.Status.STABLE)
-        .map((call) => call[0].Item)
-    );
     query.mockResolvedValueOnce({
       Items: put.mock.calls
         .filter(([{ Item }]) => Item.status === Reconcilable.Status.STABLE)
