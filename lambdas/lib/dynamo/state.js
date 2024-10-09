@@ -100,6 +100,8 @@ async function getResources(deploymentName, resourceKey) {
   const processedItems = Items.sort((a, b) =>
     a.resource_key.localeCompare(b.resource_key)
   );
+  // the root is missing so we should return nothing
+  if (processedItems[0].resource_key !== resourceKey) return [];
   return processedItems.map((item) => item.serialized);
 }
 

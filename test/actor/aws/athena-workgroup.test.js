@@ -120,7 +120,7 @@ describe('athena workgroup IaC', () => {
     });
     const deserialized = await load({
       deploymentName: 'test-deployment',
-      resourceKey: 'test-table',
+      resourceKey: 'test-workgroup',
     });
     await deserialized.reconcile();
     expect(deserialized).toMatchInlineSnapshot(`

@@ -133,6 +133,9 @@ async function load({ deploymentName, resourceKey }) {
   }
 
   const serializedResources = await getResources(deploymentName, resourceKey);
+  if (!serializedResources || serializedResources.length === 0) {
+    throw new Error('No resource found');
+  }
 
   const resourceMap = serializedResources.slice(1).reduce((acc, item) => {
     // @ts-ignore
