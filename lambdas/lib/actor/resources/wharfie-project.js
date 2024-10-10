@@ -13,7 +13,8 @@ const { createStableHash } = require('../../crypto');
  * @property {string[]} actorRoleArns -
  * @property {string} deploymentSharedPolicyArn -
  * @property {string} scheduleQueueArn -
- * @property {string} daemonQueueArn -
+ * @property {string} scheduleQueueUrl -
+ * @property {string} daemonQueueUrl -
  * @property {string} scheduleRoleArn -
  * @property {string} operationTable -
  * @property {string} dependencyTable -
@@ -81,9 +82,13 @@ class WharfieProject extends BaseResourceGroup {
         // @ts-ignore
         deployment.getEventsActor().getQueue().get('arn')
       );
-      this.set('daemonQueueArn', () =>
+      this.set('scheduleQueueUrl', () =>
         // @ts-ignore
-        deployment.getDaemonActor().getQueue().get('arn')
+        deployment.getEventsActor().getQueue().get('url')
+      );
+      this.set('daemonQueueUrl', () =>
+        // @ts-ignore
+        deployment.getDaemonActor().getQueue().get('url')
       );
       this.set('scheduleRoleArn', () =>
         deployment
@@ -287,7 +292,8 @@ class WharfieProject extends BaseResourceGroup {
       region: this.get('deployment').region,
       catalogId: this.get('deployment').accountId,
       scheduleQueueArn: this.get('scheduleQueueArn'),
-      daemonQueueArn: this.get('daemonQueueArn'),
+      scheduleQueueUrl: this.get('scheduleQueueUrl'),
+      daemonQueueUrl: this.get('daemonQueueUrl'),
       scheduleRoleArn: this.get('scheduleRoleArn'),
       roleArn: () => this.getRole().get('arn'),
       operationTable: this.get('operationTable'),

@@ -16,6 +16,7 @@
  * @typedef WharfieEventRecord
  * @property {string} resource_id -
  * @property {string} operation_id -
+ * @property {import('../lib/graph/operation').WharfieOperationTypeEnum} operation_type -
  * @property {string} type -
  * @property {string} version -
  * @property {number} retries -

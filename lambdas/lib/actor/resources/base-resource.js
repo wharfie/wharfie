@@ -5,6 +5,7 @@ const {
   putResource,
   getResource,
   deleteResource,
+  putResourceStatus,
 } = require('../../dynamo/state');
 
 const { isEqual } = require('es-toolkit');
@@ -165,7 +166,7 @@ class BaseResource extends Reconcilable {
     if (this.get('_INTERNAL_STATE_RESOURCE')) {
       return;
     }
-    await this.save();
+    await this.saveStatus();
   }
 
   async _post_reconcile() {
@@ -173,7 +174,7 @@ class BaseResource extends Reconcilable {
   }
 
   async _pre_destroy() {
-    await this.save();
+    await this.saveStatus();
   }
 
   async _post_destroy() {
@@ -184,8 +185,11 @@ class BaseResource extends Reconcilable {
   }
 
   async save() {
-    const old_serialized_resource = await putResource(this);
-    this.old_serialized = old_serialized_resource;
+    await putResource(this);
+  }
+
+  async saveStatus() {
+    await putResourceStatus(this);
   }
 
   /**

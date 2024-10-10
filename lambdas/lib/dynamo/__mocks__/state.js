@@ -34,6 +34,23 @@ async function putResource(resource) {
   __state[name][resource_key] = resource.serialize();
   return oldValue;
 }
+
+/**
+ * @param {BaseResource} resource -
+ */
+async function putResourceStatus(resource) {
+  if (!resource.has('deployment') || !resource.get('deployment'))
+    throw new Error('cannot save resource without deployment');
+  const { name } = resource.get('deployment');
+
+  // const resource_key = resource.parent
+  //   ? `${resource.parent}#${resource.name}`
+  //   : resource.name;
+
+  if (!__state[name]) __state[name] = {};
+  // __state[name][resource_key] = resource.serialize();
+}
+
 /**
  * @param {BaseResource} resource -
  * @returns {Promise<import("../../actor/typedefs").SerializedBaseResource>} -
@@ -78,6 +95,7 @@ async function deleteResource(resource) {
 
 module.exports = {
   putResource,
+  putResourceStatus,
   getResource,
   getResources,
   deleteResource,

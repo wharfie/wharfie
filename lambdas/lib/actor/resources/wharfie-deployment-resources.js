@@ -562,10 +562,14 @@ class WharfieDeploymentResources extends BaseResourceGroup {
           `arn:aws:sqs:${this.get('deployment').region}:${
             this.get('deployment').accountId
           }:${this.get('deployment').name}-events-queue`,
-        daemonQueueArn: () =>
-          `arn:aws:sqs:${this.get('deployment').region}:${
+        scheduleQueueUrl: () =>
+          `https://sqs.${this.get('deployment').region}.amazonaws.com/${
             this.get('deployment').accountId
-          }:${this.get('deployment').name}-daemon-queue`,
+          }/${this.get('deployment').name}-events-queue`,
+        daemonQueueUrl: () =>
+          `https://sqs.${this.get('deployment').region}.amazonaws.com/${
+            this.get('deployment').accountId
+          }/${this.get('deployment').name}-daemon-queue`,
         tags: [],
         createdAt: this.get('createdAt'),
       },

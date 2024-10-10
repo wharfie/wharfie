@@ -37,6 +37,11 @@ describe('wharfie project IaC', () => {
       },
     });
     await deployment.reconcile();
+    const DAEMON_QUEUE_URL = deployment.getDaemonActor().getQueue().get('url');
+    const SCHEDULE_QUEUE_URL = deployment
+      .getEventsActor()
+      .getQueue()
+      .get('url');
 
     const wharfieProject = new WharfieProject({
       name: 'test-wharife-project',
@@ -105,11 +110,9 @@ describe('wharfie project IaC', () => {
 
     await wharfieProject.reconcile();
 
-    expect(
-      sqs.__getMockState().queues[
-        'arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue'
-      ].queue
-    ).toHaveLength(1);
+    expect(sqs.__getMockState().queues[SCHEDULE_QUEUE_URL].queue).toHaveLength(
+      1
+    );
 
     const deserializedProject = await load({
       deploymentName: 'test-deployment',
@@ -121,36 +124,25 @@ describe('wharfie project IaC', () => {
     deserializedProject.registerWharfieResources([RESOURCE_DEF]);
     expect(deserializedProject.status).toBe('DRIFTED');
     await deserializedProject.reconcile();
-    expect(
-      sqs.__getMockState().queues[
-        'arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue'
-      ].queue
-    ).toHaveLength(1);
+    expect(sqs.__getMockState().queues[SCHEDULE_QUEUE_URL].queue).toHaveLength(
+      1
+    );
     expect(deserializedProject.status).toBe('STABLE');
 
-    expect(
-      sqs.__getMockState().queues[
-        'arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-queue'
-      ]
-    ).toBeUndefined();
+    expect(sqs.__getMockState().queues[DAEMON_QUEUE_URL].queue).toHaveLength(0);
     RESOURCE_DEF.properties.columns[1].name = 'country_of_origin';
     RESOURCE_DEF.properties.userInput.columns[1].name = 'country_of_origin';
     deserializedProject.registerWharfieResources([RESOURCE_DEF]);
     expect(deserializedProject.status).toBe('DRIFTED');
+    console.log('TEST BEGIN');
     await deserializedProject.reconcile();
-    expect(
-      sqs.__getMockState().queues[
-        'arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-queue'
-      ].queue
-    ).toHaveLength(1);
+    expect(sqs.__getMockState().queues[DAEMON_QUEUE_URL].queue).toHaveLength(1);
     expect(deserializedProject.status).toBe('STABLE');
 
     await deserializedProject.destroy();
     expect(deserializedProject.status).toBe('DESTROYED');
-    expect(
-      sqs.__getMockState().queues[
-        'arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue'
-      ].queue
-    ).toHaveLength(1);
+    expect(sqs.__getMockState().queues[SCHEDULE_QUEUE_URL].queue).toHaveLength(
+      1
+    );
   }, 10000);
 });

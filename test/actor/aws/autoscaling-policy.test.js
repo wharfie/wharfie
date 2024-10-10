@@ -14,13 +14,14 @@ const { load } = require('../../../lambdas/lib/actor/deserialize');
 const { getMockDeploymentProperties } = require('../util');
 const Reconcilable = require('../../../lambdas/lib/actor/resources/reconcilable');
 const AWS = require('@aws-sdk/lib-dynamodb');
-let query, _delete, put;
+let query, _delete, put, update;
 
 describe('autoscaling policy IaC', () => {
   beforeAll(() => {
     put = AWS.spyOn('DynamoDBDocument', 'put');
     query = AWS.spyOn('DynamoDBDocument', 'query');
     _delete = AWS.spyOn('DynamoDBDocument', 'delete');
+    update = AWS.spyOn('DynamoDBDocument', 'update');
   });
 
   afterEach(() => {
@@ -50,15 +51,14 @@ describe('autoscaling policy IaC', () => {
     });
     await autoscalingPolicy.reconcile();
 
-    const reconcilingStatusUpdate = put.mock.calls
-      .filter(([{ Item }]) => Item.status === Reconcilable.Status.RECONCILING)
-      .map(([{ Item }]) => Item);
+    const reconcilingStatusUpdate = update.mock.calls;
 
     const stableStatusUpdate = put.mock.calls
       .filter(([{ Item }]) => Item.status === Reconcilable.Status.STABLE)
       .map(([{ Item }]) => Item);
 
     expect(reconcilingStatusUpdate).toHaveLength(1);
+    update.mock.calls = [];
     expect(stableStatusUpdate).toHaveLength(1);
     expect(stableStatusUpdate).toMatchInlineSnapshot(`
       [
@@ -239,9 +239,7 @@ describe('autoscaling policy IaC', () => {
     });
     expect(des_res.ScalingPolicies).toStrictEqual([]);
 
-    const destroyingStatusUpdate = put.mock.calls
-      .filter(([{ Item }]) => Item.status === Reconcilable.Status.DESTROYING)
-      .map(([{ Item }]) => Item);
+    const destroyingStatusUpdate = update.mock.calls;
 
     const destroyedStatusUpdate = put.mock.calls
       .filter(([{ Item }]) => Item.status === Reconcilable.Status.DESTROYED)
@@ -250,7 +248,7 @@ describe('autoscaling policy IaC', () => {
     expect(destroyingStatusUpdate).toHaveLength(1);
     expect(destroyedStatusUpdate).toHaveLength(0);
 
-    expect(put).toHaveBeenCalledTimes(3);
+    expect(put).toHaveBeenCalledTimes(1);
     expect(_delete).toHaveBeenCalledTimes(1);
     expect(_delete.mock.calls).toMatchInlineSnapshot(`
       [

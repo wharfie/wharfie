@@ -46,7 +46,8 @@ const sqs = new SQS({});
  * @property {number} [interval] -
  * @property {number} [createdAt] -
  * @property {string | function(): string} scheduleQueueArn -
- * @property {string | function(): string} daemonQueueArn -
+ * @property {string | function(): string} scheduleQueueUrl -
+ * @property {string | function(): string} daemonQueueUrl -
  * @property {string} [scheduleRoleArn] -
  * @property {string | function(): string} roleArn -
  * @property {string} operationTable -
@@ -344,8 +345,8 @@ class WharfieResource extends BaseResourceGroup {
     return resource;
   }
 
-  needsMigration() {
-    const oldProperties = this.old_serialized?.properties;
+  async needsMigration() {
+    const oldProperties = (await this.fetchStoredData())?.properties;
     if (!oldProperties) return true;
     const newProperties = this.serialize().properties;
 
@@ -414,12 +415,12 @@ class WharfieResource extends BaseResourceGroup {
   async _reconcile() {
     let change;
     if (
-      !this.getResources().find(
-        (resource) => resource.status !== Reconcilable.Status.UNPROVISIONED
+      this.getResources().find(
+        (resource) => resource.status !== Reconcilable.Status.STABLE
       )
     ) {
       change = 'CREATED';
-    } else if (this.needsMigration()) {
+    } else if (await this.needsMigration()) {
       change = 'UPDATED';
     } else {
       change = 'NO_CHANGE';
@@ -427,13 +428,14 @@ class WharfieResource extends BaseResourceGroup {
     await Promise.all(
       this.getResources().map((resource) => resource.reconcile())
     );
+    this.change = change;
     if (change === 'CREATED') {
       await sqs.sendMessage({
         MessageBody: new WharfieScheduleOperation({
           resource_id: this.get('resourceId'),
           operation_type: Operation.Type.BACKFILL,
         }).serialize(),
-        QueueUrl: this.get('scheduleQueueArn'),
+        QueueUrl: this.get('scheduleQueueUrl'),
       });
     } else if (change === 'UPDATED') {
       const resource = await this.getResourceDef();
@@ -452,7 +454,7 @@ class WharfieResource extends BaseResourceGroup {
             Duration: Infinity,
           },
         }),
-        QueueUrl: this.get('daemonQueueArn'),
+        QueueUrl: this.get('daemonQueueUrl'),
       });
     }
   }

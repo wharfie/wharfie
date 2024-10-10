@@ -21,7 +21,6 @@ const docClient = DynamoDBDocument.from(
 
 /**
  * @param {BaseResource} resource -
- * @returns {Promise<import("../actor/typedefs").SerializedBaseResource?>} -
  */
 async function putResource(resource) {
   if (!resource.has('deployment') || !resource.get('deployment'))
@@ -31,7 +30,7 @@ async function putResource(resource) {
   const resource_key = resource.parent
     ? `${resource.parent}#${resource.name}`
     : resource.name;
-  const result = await putWithThroughputRetry({
+  await putWithThroughputRetry({
     TableName: stateTable,
     Item: {
       deployment: name,
@@ -40,10 +39,36 @@ async function putResource(resource) {
       serialized: resource.serialize(),
       version,
     },
-    ReturnValues: 'ALL_OLD',
   });
+}
 
-  return result?.Attributes?.serialized;
+/**
+ * @param {BaseResource} resource -
+ */
+async function putResourceStatus(resource) {
+  if (!resource.has('deployment') || !resource.get('deployment'))
+    throw new Error('cannot save resource without deployment');
+  const { stateTable, name } = resource.get('deployment');
+
+  const resource_key = resource.parent
+    ? `${resource.parent}#${resource.name}`
+    : resource.name;
+
+  await docClient.update({
+    TableName: stateTable,
+    Key: {
+      deployment: name,
+      resource_key,
+    },
+    UpdateExpression: 'SET #status = :new_status',
+    ExpressionAttributeNames: {
+      '#status': 'status',
+    },
+    ExpressionAttributeValues: {
+      ':new_status': resource.status,
+    },
+    ReturnValues: 'NONE',
+  });
 }
 
 /**
@@ -128,6 +153,7 @@ async function deleteResource(resource) {
 
 module.exports = {
   putResource,
+  putResourceStatus,
   getResource,
   getResources,
   deleteResource,

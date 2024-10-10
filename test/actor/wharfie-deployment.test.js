@@ -16,7 +16,7 @@ const Reconcilable = require('../../lambdas/lib/actor/resources/reconcilable');
 const { load } = require('../../lambdas/lib/actor/deserialize');
 
 const AWS = require('@aws-sdk/lib-dynamodb');
-let query, _delete, put;
+let query, _delete, put, update;
 
 describe('deployment IaC', () => {
   beforeAll(() => {
@@ -30,6 +30,7 @@ describe('deployment IaC', () => {
     put = AWS.spyOn('DynamoDBDocument', 'put');
     query = AWS.spyOn('DynamoDBDocument', 'query');
     _delete = AWS.spyOn('DynamoDBDocument', 'delete');
+    update = AWS.spyOn('DynamoDBDocument', 'update');
   });
   afterAll(() => {
     jest.restoreAllMocks();
@@ -45,15 +46,14 @@ describe('deployment IaC', () => {
     });
     await deployment.reconcile();
 
-    const reconcilingStatusUpdate = put.mock.calls
-      .filter(([{ Item }]) => Item.status === Reconcilable.Status.RECONCILING)
-      .map(([{ Item }]) => Item);
+    const reconcilingStatusUpdate = update.mock.calls;
 
     const stableStatusUpdate = put.mock.calls
       .filter(([{ Item }]) => Item.status === Reconcilable.Status.STABLE)
       .map(([{ Item }]) => Item);
 
     expect(reconcilingStatusUpdate).toHaveLength(55);
+    update.mock.calls = [];
     // this is higher b/c deployment-state and deployment are bootstraped before the table exists
     expect(stableStatusUpdate).toHaveLength(57);
 
@@ -65,10 +65,10 @@ describe('deployment IaC', () => {
         "parent": "",
         "properties": {
           "_INTERNAL_STATE_RESOURCE": true,
-          "accountId": "",
+          "accountId": "123456789012",
           "createdAt": 123456789,
           "deployment": {
-            "accountId": "",
+            "accountId": "123456789012",
             "envPaths": {
               "cache": "mock",
               "config": "mock",
@@ -114,10 +114,10 @@ describe('deployment IaC', () => {
     expect(deserialized.resolveProperties()).toMatchInlineSnapshot(`
       {
         "_INTERNAL_STATE_RESOURCE": true,
-        "accountId": "",
+        "accountId": "123456789012",
         "createdAt": 123456789,
         "deployment": {
-          "accountId": "",
+          "accountId": "123456789012",
           "envPaths": {
             "cache": "mock",
             "config": "mock",
@@ -140,9 +140,7 @@ describe('deployment IaC', () => {
     expect(deserialized.status).toBe('STABLE');
     await deserialized.destroy();
     expect(deserialized.status).toBe('DESTROYED');
-    const destroyingStatusUpdate = put.mock.calls
-      .filter(([{ Item }]) => Item.status === Reconcilable.Status.DESTROYING)
-      .map(([{ Item }]) => Item);
+    const destroyingStatusUpdate = update.mock.calls;
 
     const destroyedStatusUpdate = put.mock.calls
       .filter(([{ Item }]) => Item.status === Reconcilable.Status.DESTROYED)
@@ -152,7 +150,7 @@ describe('deployment IaC', () => {
     expect(destroyingStatusUpdate).toHaveLength(56);
     expect(destroyedStatusUpdate).toHaveLength(0);
 
-    expect(put).toHaveBeenCalledTimes(171);
+    expect(put).toHaveBeenCalledTimes(60);
     // one less because the state table can't delete its own record
     expect(_delete).toHaveBeenCalledTimes(56);
   }, 25000);

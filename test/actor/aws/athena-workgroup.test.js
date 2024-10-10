@@ -6,7 +6,7 @@ process.env.AWS_MOCKS = '1';
 const { Athena } = jest.requireMock('@aws-sdk/client-athena');
 
 const AWS = require('@aws-sdk/lib-dynamodb');
-let query, _delete, put;
+let query, _delete, put, update;
 
 const {
   AthenaWorkGroup,
@@ -20,6 +20,7 @@ describe('athena workgroup IaC', () => {
     put = AWS.spyOn('DynamoDBDocument', 'put');
     query = AWS.spyOn('DynamoDBDocument', 'query');
     _delete = AWS.spyOn('DynamoDBDocument', 'delete');
+    update = AWS.spyOn('DynamoDBDocument', 'update');
   });
 
   afterEach(() => {
@@ -38,15 +39,14 @@ describe('athena workgroup IaC', () => {
     });
     await workgroup.reconcile();
 
-    const reconcilingStatusUpdate = put.mock.calls
-      .filter(([{ Item }]) => Item.status === Reconcilable.Status.RECONCILING)
-      .map(([{ Item }]) => Item);
+    const reconcilingStatusUpdate = update.mock.calls;
 
     const stableStatusUpdate = put.mock.calls
       .filter(([{ Item }]) => Item.status === Reconcilable.Status.STABLE)
       .map(([{ Item }]) => Item);
 
     expect(reconcilingStatusUpdate).toHaveLength(1);
+    update.mock.calls = [];
     expect(stableStatusUpdate).toHaveLength(1);
     expect(stableStatusUpdate).toMatchInlineSnapshot(`
       [
@@ -209,10 +209,7 @@ describe('athena workgroup IaC', () => {
       `"workgroup: test-workgroup does not exist"`
     );
 
-    const destroyingStatusUpdate = put.mock.calls
-      .filter(([{ Item }]) => Item.status === Reconcilable.Status.DESTROYING)
-      .map(([{ Item }]) => Item);
-
+    const destroyingStatusUpdate = update.mock.calls;
     const destroyedStatusUpdate = put.mock.calls
       .filter(([{ Item }]) => Item.status === Reconcilable.Status.DESTROYED)
       .map(([{ Item }]) => Item);
@@ -220,7 +217,7 @@ describe('athena workgroup IaC', () => {
     expect(destroyingStatusUpdate).toHaveLength(1);
     expect(destroyedStatusUpdate).toHaveLength(0);
 
-    expect(put).toHaveBeenCalledTimes(3);
+    expect(put).toHaveBeenCalledTimes(1);
     expect(_delete).toHaveBeenCalledTimes(1);
     expect(_delete.mock.calls).toMatchInlineSnapshot(`
       [

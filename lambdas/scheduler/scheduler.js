@@ -26,7 +26,7 @@ async function run(ScheduledEvent, context) {
   if (Date.now() < start_time) {
     daemon_log.debug('event not ready to start');
     await sqs.sendMessage({
-      MessageBody: ScheduledEvent.toEvent(),
+      MessageBody: JSON.stringify(ScheduledEvent.toEvent()),
       QueueUrl: QUEUE_URL,
       DelaySeconds: Math.floor(Math.random() * 30 + 1),
     });
