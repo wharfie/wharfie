@@ -204,7 +204,7 @@
 /**
  * @typedef LocationRecord
  * @property {string} location - location of the wharfie input
- * @property {string} resource_id - name of the wharfie cloudformation stack
+ * @property {string} resource_id -
  * @property {string} interval - interval to deduplicate and process s3 events
  */
 
@@ -223,11 +223,6 @@
  * @property {number} [retries] -
  * @property {number} [delays] -
  * @property {string} manifest_uri -
- */
-
-/**
- * @typedef ResourceRouterResponse
- * @property {boolean} respond - whether the router should respond to the cloudformation api, defaults to true
  */
 
 exports.unused = {};

@@ -75,6 +75,23 @@ async function getOperation(resource_id, operation_id) {
     data: __state[sort_key],
   });
 }
+/**
+ * @param {string} resource_id -
+ * @returns {Promise<Operation[]>} -
+ */
+async function getOperations(resource_id) {
+  const sort_key = `${resource_id}#`;
+  return Object.keys(__state)
+    .filter((key) => key.startsWith(sort_key))
+    .filter((key) => __state[key].record_type === Operation.RecordType)
+    .map((key) => {
+      return Operation.fromRecord({
+        resource_id,
+        sort_key: key,
+        data: __state[key],
+      });
+    });
+}
 
 /**
  * @param {string} resource_id -
@@ -442,6 +459,7 @@ module.exports = {
   getAllResources,
   getResource,
   getOperation,
+  getOperations,
   getAction,
   getQuery,
   getQueries,

@@ -47,4 +47,3 @@ jobs:
           aws-region: us-west-2
       - run: npm link
       - run: wharfie build ${{ github.event.pull_request.head.sha }}
-      - run: wharfie udf build udf_test cloudformation/examples/udf_function.js ${{ github.event.pull_request.head.sha }}
