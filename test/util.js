@@ -9,7 +9,6 @@ const { Firehose } = require('@aws-sdk/client-firehose');
 const { DynamoDB } = require('@aws-sdk/client-dynamodb');
 const { CloudWatch } = require('@aws-sdk/client-cloudwatch');
 const { CloudWatchEvents } = require('@aws-sdk/client-cloudwatch-events');
-const { CloudFormation } = require('@aws-sdk/client-cloudformation');
 const { Athena } = require('@aws-sdk/client-athena');
 
 const s3 = new S3();
@@ -23,7 +22,6 @@ const firehose = new Firehose();
 const dynamodb = new DynamoDB();
 const cloudwatch = new CloudWatch();
 const cloudwatchevents = new CloudWatchEvents();
-const cloudformation = new CloudFormation();
 const athena = new Athena();
 
 /**
@@ -44,7 +42,6 @@ function resetAWSMocks() {
   dynamodb.__setMockState();
   cloudwatch.__setMockState();
   cloudwatchevents.__setMockState();
-  cloudformation.__setMockState();
   athena.__setMockState();
 }
 

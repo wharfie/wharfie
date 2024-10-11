@@ -16,8 +16,6 @@ const STS = require('./lib/sts');
 const resource_db = require('./lib/dynamo/operations');
 const { getResource } = require('./migrations/');
 
-const response = require('./lib/cloudformation/cfn-response');
-const { getImmutableID } = require('./lib/cloudformation/id');
 const { createId } = require('./lib/id');
 const { Action, Operation } = require('./lib/graph/');
 
@@ -237,19 +235,6 @@ async function DLQ(event, context, err) {
   }
 
   const event_log = logging.getEventLogger(event, context);
-
-  if (operation.type === Operation.Type.MIGRATE) {
-    event_log.error(
-      `Migration action has expended its retries, marking update as failure and rolling back`,
-      {
-        ...event,
-      }
-    );
-    await response(err, operation.operation_inputs.cloudformation_event, {
-      id: getImmutableID(operation.operation_inputs.cloudformation_event),
-    });
-    return;
-  }
   event_log.error(`Record has expended its retries, sending to DLQ`, {
     ...event,
   });

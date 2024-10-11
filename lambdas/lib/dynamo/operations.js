@@ -122,6 +122,29 @@ async function getOperation(resource_id, operation_id) {
 
 /**
  * @param {string} resource_id -
+ * @returns {Promise<Operation[]>} -
+ */
+async function getOperations(resource_id) {
+  const { Items } = await query({
+    TableName: OPERATIONS_TABLE,
+    ConsistentRead: true,
+    KeyConditionExpression:
+      'resource_id = :resource_id AND begins_with(sort_key, :sort_key)',
+    ExpressionAttributeValues: {
+      ':resource_id': resource_id,
+      ':sort_key': `${resource_id}#`,
+    },
+  });
+  if (!Items || Items.length === 0) return [];
+  // todo: use a less than key condition to filter out all queries that will have ids
+  // longer than what an action's sortkey could possibly be
+  return Items.filter(
+    (item) => item?.data?.record_type === Operation.RecordType
+  ).map(Operation.fromRecord);
+}
+
+/**
+ * @param {string} resource_id -
  * @param {string} operation_id -
  * @param {string} action_id -
  * @param {string} query_id -
@@ -634,6 +657,7 @@ module.exports = {
   getAllResources,
   getResource,
   getOperation,
+  getOperations,
   getActions,
   getAction,
   getQuery,
