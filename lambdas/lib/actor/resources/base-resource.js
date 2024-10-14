@@ -1,7 +1,12 @@
 'use strict';
 
 const Reconcilable = require('./reconcilable');
-const { putWithThroughputRetry, docClient } = require('../../dynamo/');
+const {
+  putResource,
+  getResource,
+  deleteResource,
+  putResourceStatus,
+} = require('../../dynamo/state');
 
 const { isEqual } = require('es-toolkit');
 const jdf = require('jsondiffpatch');
@@ -9,6 +14,7 @@ const jdf = require('jsondiffpatch');
 /**
  * @typedef BaseResourceOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {Reconcilable.Status} [status] -
  * @property {Reconcilable[]} [dependsOn] -
  * @property {Object<string, any> & import('../typedefs').SharedProperties} properties -
@@ -17,8 +23,9 @@ class BaseResource extends Reconcilable {
   /**
    * @param {BaseResourceOptions} options - BaseResource Class Options
    */
-  constructor({ name, status, dependsOn = [], properties }) {
+  constructor({ name, parent = '', status, dependsOn = [], properties }) {
     super({ name, status, dependsOn });
+    this.parent = parent;
     this.resourceType = this.constructor.name;
     this.properties = properties || {};
   }
@@ -61,7 +68,12 @@ class BaseResource extends Reconcilable {
    * @param {any} value -
    */
   set(key, value) {
+    if (this.get(key) === this._resolveProperty(value)) {
+      return;
+    }
     this.properties[key] = value;
+    if (this.status !== Reconcilable.Status.UNPROVISIONED)
+      this.setStatus(Reconcilable.Status.DRIFTED);
   }
 
   /**
@@ -137,11 +149,12 @@ class BaseResource extends Reconcilable {
   }
 
   /**
-   * @returns {any} -
+   * @returns {import('../typedefs').SerializedBaseResource} -
    */
   serialize() {
     return {
       name: this.name,
+      parent: this.parent,
       status: this.status,
       dependsOn: this.dependsOn.map((dep) => dep.name),
       properties: this.resolveProperties(),
@@ -153,7 +166,7 @@ class BaseResource extends Reconcilable {
     if (this.get('_INTERNAL_STATE_RESOURCE')) {
       return;
     }
-    await this.save();
+    await this.saveStatus();
   }
 
   async _post_reconcile() {
@@ -161,7 +174,7 @@ class BaseResource extends Reconcilable {
   }
 
   async _pre_destroy() {
-    await this.save();
+    await this.saveStatus();
   }
 
   async _post_destroy() {
@@ -172,46 +185,22 @@ class BaseResource extends Reconcilable {
   }
 
   async save() {
-    if (!this.has('deployment') || !this.get('deployment')) return;
-    const { stateTable, version } = this.get('deployment');
+    await putResource(this);
+  }
 
-    let sort_key = this.name;
-    if (this.has('project')) {
-      sort_key = this.get('project').name;
-    } else if (this.has('deployment')) {
-      sort_key = this.get('deployment').name;
-    }
+  async saveStatus() {
+    await putResourceStatus(this);
+  }
 
-    await putWithThroughputRetry({
-      TableName: stateTable,
-      Item: {
-        name: this.name,
-        sort_key,
-        status: this.status,
-        version,
-      },
-      ReturnValues: 'NONE',
-    });
+  /**
+   * @returns {Promise<import('../typedefs').SerializedBaseResource?>} -
+   */
+  async fetchStoredData() {
+    return await getResource(this);
   }
 
   async delete() {
-    if (!this.has('deployment') || !this.get('deployment')) return;
-    const { stateTable } = this.get('deployment');
-
-    let sort_key = this.name;
-    if (this.has('project')) {
-      sort_key = this.get('project').name;
-    } else if (this.has('deployment')) {
-      sort_key = this.get('deployment').name;
-    }
-
-    await docClient.delete({
-      TableName: stateTable,
-      Key: {
-        name: this.name,
-        sort_key,
-      },
-    });
+    await deleteResource(this);
   }
 
   async cache() {}

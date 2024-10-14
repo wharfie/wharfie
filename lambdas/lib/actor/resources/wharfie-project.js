@@ -5,7 +5,6 @@ const GlueDatabase = require('./aws/glue-database');
 const Bucket = require('./aws/bucket');
 const Role = require('./aws/role');
 const S3 = require('../../s3');
-const { putWithThroughputRetry } = require('../../dynamo/');
 const { createStableHash } = require('../../crypto');
 
 /**
@@ -14,6 +13,8 @@ const { createStableHash } = require('../../crypto');
  * @property {string[]} actorRoleArns -
  * @property {string} deploymentSharedPolicyArn -
  * @property {string} scheduleQueueArn -
+ * @property {string} scheduleQueueUrl -
+ * @property {string} daemonQueueUrl -
  * @property {string} scheduleRoleArn -
  * @property {string} operationTable -
  * @property {string} dependencyTable -
@@ -25,6 +26,7 @@ const { createStableHash } = require('../../crypto');
  * @typedef WharfieProjectOptions
  * @property {import('../wharfie-deployment')} [deployment] -
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('./reconcilable').Status} [status] -
  * @property {WharfieProjectProperties & import('../typedefs').SharedProperties} [properties] -
  * @property {import('./reconcilable')[]} [dependsOn] -
@@ -35,7 +37,15 @@ class WharfieProject extends BaseResourceGroup {
   /**
    * @param {WharfieProjectOptions} options -
    */
-  constructor({ deployment, name, status, properties, dependsOn, resources }) {
+  constructor({
+    deployment,
+    name,
+    parent,
+    status,
+    properties,
+    dependsOn,
+    resources,
+  }) {
     const propertiesWithDefaults = Object.assign(
       deployment
         ? {
@@ -50,6 +60,7 @@ class WharfieProject extends BaseResourceGroup {
     );
     super({
       name,
+      parent,
       status,
       properties: propertiesWithDefaults,
       dependsOn,
@@ -69,7 +80,15 @@ class WharfieProject extends BaseResourceGroup {
       );
       this.set('scheduleQueueArn', () =>
         // @ts-ignore
-        deployment.getDaemonActor().getQueue().get('arn')
+        deployment.getEventsActor().getQueue().get('arn')
+      );
+      this.set('scheduleQueueUrl', () =>
+        // @ts-ignore
+        deployment.getEventsActor().getQueue().get('url')
+      );
+      this.set('daemonQueueUrl', () =>
+        // @ts-ignore
+        deployment.getDaemonActor().getQueue().get('url')
       );
       this.set('scheduleRoleArn', () =>
         deployment
@@ -113,11 +132,13 @@ class WharfieProject extends BaseResourceGroup {
   }
 
   /**
+   * @param {string} parent -
    * @returns {(import('./base-resource') | BaseResourceGroup)[]} -
    */
-  _defineGroupResources() {
+  _defineGroupResources(parent) {
     const database = new GlueDatabase({
       name: `${this.name}`,
+      parent,
       properties: {
         deployment: () => this.get('deployment'),
         project: this._getProjectProperties(),
@@ -127,6 +148,7 @@ class WharfieProject extends BaseResourceGroup {
       name: `${this.name.replace(/[\s_]/g, '-')}-bucket-${createStableHash(
         this.name
       )}`,
+      parent,
       properties: {
         deployment: () => this.get('deployment'),
         project: this._getProjectProperties(),
@@ -159,6 +181,7 @@ class WharfieProject extends BaseResourceGroup {
     });
     const role = new Role({
       name: `${this.name}-project-role`,
+      parent,
       properties: {
         deployment: () => this.get('deployment'),
         project: this._getProjectProperties(),
@@ -269,6 +292,8 @@ class WharfieProject extends BaseResourceGroup {
       region: this.get('deployment').region,
       catalogId: this.get('deployment').accountId,
       scheduleQueueArn: this.get('scheduleQueueArn'),
+      scheduleQueueUrl: this.get('scheduleQueueUrl'),
+      daemonQueueUrl: this.get('daemonQueueUrl'),
       scheduleRoleArn: this.get('scheduleRoleArn'),
       roleArn: () => this.getRole().get('arn'),
       operationTable: this.get('operationTable'),
@@ -298,6 +323,7 @@ class WharfieProject extends BaseResourceGroup {
         new WharfieResource({
           ...options,
           name,
+          parent: this._getParentName(),
           dependsOn: [this.getRole(), this.getBucket()],
           properties: newProperties,
         })
@@ -345,22 +371,32 @@ class WharfieProject extends BaseResourceGroup {
    * @param {UserDefinedWharfieResourceOptions[]} resourceOptions -
    */
   registerWharfieResources(resourceOptions) {
-    const resourceNames = resourceOptions.reduce((acc, option) => {
-      acc.add(`${option.name}-resource`);
+    /** @type {Object<string,UserDefinedWharfieResourceOptions>} */
+    const resourceOptionsMap = resourceOptions.reduce((acc, option) => {
+      // @ts-ignore
+      acc[`${option.name}-resource`] = option;
       return acc;
-    }, new Set());
+    }, {});
 
     this.getWharfieResources().forEach((resource) => {
-      if (!resourceNames.has(resource.name)) {
+      if (!resourceOptionsMap[resource.name]) {
         if (resource.isDestroyed()) {
           delete this.resources[resource.name];
         } else {
           resource.markForDestruction();
           this.setStatus(Reconcilable.Status.DRIFTED);
         }
+      } else {
+        const opts = resourceOptionsMap[resource.name];
+        Object.keys(opts.properties).forEach((key) => {
+          // @ts-ignore
+          this.resources[resource.name].set(key, opts.properties[key]);
+        });
+        delete resourceOptionsMap[resource.name];
+        this.setStatus(Reconcilable.Status.DRIFTED);
       }
     });
-    resourceOptions.forEach((options) => {
+    Object.values(resourceOptionsMap).forEach((options) => {
       this.addWharfieResource(options);
     });
   }
@@ -472,23 +508,6 @@ class WharfieProject extends BaseResourceGroup {
 
   getRole() {
     return this.getResource(`${this.name}-project-role`);
-  }
-
-  async save() {
-    const { stateTable, version } = this.get('deployment');
-
-    const serialized = this.serialize();
-    await putWithThroughputRetry({
-      TableName: stateTable,
-      Item: {
-        name: this.name,
-        sort_key: this.name,
-        serialized,
-        status: this.status,
-        version,
-      },
-      ReturnValues: 'NONE',
-    });
   }
 }
 

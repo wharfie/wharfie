@@ -50,7 +50,7 @@ const list = async (resource_id, operation_id) => {
       actions.map((action) => ({
         action_id: action.id,
         action_type: action.type,
-        action_status: records.actions.find((x) => x.id === action.id)?.status,
+        action_status: action.status,
       }))
     );
     console.table(

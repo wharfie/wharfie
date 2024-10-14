@@ -6,9 +6,10 @@ class Monitor extends WharfieActor {
   /**
    * @param {import('../wharfie-actor').ExtendedWharfieActorOptions} options -
    */
-  constructor({ status, resources, properties }) {
+  constructor({ status, parent, resources, properties }) {
     super({
       name: 'monitor',
+      parent,
       status,
       resources,
       properties: {
@@ -19,10 +20,11 @@ class Monitor extends WharfieActor {
   }
 
   /**
+   * @param {string} parent -
    * @returns {(import('../resources/base-resource') | import('../resources/base-resource-group'))[]} -
    */
-  _defineGroupResources() {
-    const resources = super._defineGroupResources();
+  _defineGroupResources(parent) {
+    const resources = super._defineGroupResources(parent);
     const actorResourceGroup = resources.find(
       (resource) => resource instanceof WharfieActorResources
     );
@@ -37,6 +39,7 @@ class Monitor extends WharfieActor {
         ),
       ],
       name: `${this.name}-athena-events-rule`,
+      parent,
       properties: {
         deployment: this.get('deployment'),
         description: `${this.name} athena events rule`,

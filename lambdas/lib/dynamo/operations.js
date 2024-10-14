@@ -49,12 +49,10 @@ async function getResource(resource_id) {
     KeyConditionExpression:
       'resource_id = :resource_id AND sort_key = :resource_id',
     ExpressionAttributeValues: {
-      // @ts-ignore
       ':resource_id': resource_id,
     },
   });
   if (!Items || Items.length === 0) return null;
-  // @ts-ignore
   return Resource.fromRecord(Items[0]);
 }
 
@@ -69,7 +67,6 @@ async function deleteResource(resource) {
     KeyConditionExpression:
       'resource_id = :resource_id AND begins_with(sort_key, :resource_id)',
     ExpressionAttributeValues: {
-      // @ts-ignore
       ':resource_id': resource.id,
     },
   });
@@ -93,7 +90,6 @@ async function putOperation(operation) {
   const putItems = operation.toRecords();
   while (putItems.length > 0)
     await batchWrite({
-      // @ts-ignore
       RequestItems: {
         [OPERATIONS_TABLE]: putItems.splice(0, 25).map((Item) => ({
           PutRequest: {
@@ -116,15 +112,35 @@ async function getOperation(resource_id, operation_id) {
     KeyConditionExpression:
       'resource_id = :resource_id AND sort_key = :sort_key',
     ExpressionAttributeValues: {
-      // @ts-ignore
       ':resource_id': resource_id,
-      // @ts-ignore
       ':sort_key': `${resource_id}#${operation_id}`,
     },
   });
   if (!Items || Items.length === 0) return null;
-  // @ts-ignore
   return Operation.fromRecord(Items[0]);
+}
+
+/**
+ * @param {string} resource_id -
+ * @returns {Promise<Operation[]>} -
+ */
+async function getOperations(resource_id) {
+  const { Items } = await query({
+    TableName: OPERATIONS_TABLE,
+    ConsistentRead: true,
+    KeyConditionExpression:
+      'resource_id = :resource_id AND begins_with(sort_key, :sort_key)',
+    ExpressionAttributeValues: {
+      ':resource_id': resource_id,
+      ':sort_key': `${resource_id}#`,
+    },
+  });
+  if (!Items || Items.length === 0) return [];
+  // todo: use a less than key condition to filter out all queries that will have ids
+  // longer than what an action's sortkey could possibly be
+  return Items.filter(
+    (item) => item?.data?.record_type === Operation.RecordType
+  ).map(Operation.fromRecord);
 }
 
 /**
@@ -141,14 +157,11 @@ async function getQuery(resource_id, operation_id, action_id, query_id) {
     KeyConditionExpression:
       'resource_id = :resource_id AND sort_key = :sort_key',
     ExpressionAttributeValues: {
-      // @ts-ignore
       ':resource_id': resource_id,
-      // @ts-ignore
       ':sort_key': `${resource_id}#${operation_id}#${action_id}#${query_id}`,
     },
   });
   if (!Items || Items.length === 0) return null;
-  // @ts-ignore
   return Query.fromRecord(Items[0]);
 }
 
@@ -165,14 +178,11 @@ async function getQueries(resource_id, operation_id, action_id) {
     KeyConditionExpression:
       'resource_id = :resource_id AND begins_with(sort_key, :sort_key)',
     ExpressionAttributeValues: {
-      // @ts-ignore
       ':resource_id': resource_id,
-      // @ts-ignore
       ':sort_key': `${resource_id}#${operation_id}#${action_id}#`,
     },
   });
   if (!Items || Items.length === 0) return [];
-  // @ts-ignore
   return Items.map(Query.fromRecord);
 }
 
@@ -187,9 +197,7 @@ async function getActions(operation) {
     KeyConditionExpression:
       'resource_id = :resource_id AND sort_key = :sort_key',
     ExpressionAttributeValues: {
-      // @ts-ignore
       ':resource_id': operation.resource_id,
-      // @ts-ignore
       ':sort_key': `${operation.resource_id}#${operation.id}#`,
     },
   });
@@ -197,9 +205,7 @@ async function getActions(operation) {
   // todo: use a less than key condition to filter out all queries that will have ids
   // longer than what an action's sortkey could possibly be
   return Items.filter(
-    // @ts-ignore
     (item) => item?.data?.record_type === Action.RecordType
-    // @ts-ignore
   ).map(Action.fromRecord);
 }
 
@@ -216,14 +222,11 @@ async function getAction(resource_id, operation_id, action_id) {
     KeyConditionExpression:
       'resource_id = :resource_id AND sort_key = :sort_key',
     ExpressionAttributeValues: {
-      // @ts-ignore
       ':resource_id': resource_id,
-      // @ts-ignore
       ':sort_key': `${resource_id}#${operation_id}#${action_id}`,
     },
   });
   if (!Items || Items.length === 0) return null;
-  // @ts-ignore
   return Action.fromRecord(Items[0]);
 }
 
@@ -234,7 +237,6 @@ async function putAction(action) {
   const putItems = action.toRecords();
   while (putItems.length > 0)
     await batchWrite({
-      // @ts-ignore
       RequestItems: {
         [OPERATIONS_TABLE]: putItems.splice(0, 25).map((Item) => ({
           PutRequest: {
@@ -274,6 +276,10 @@ async function updateActionStatus(action, new_status) {
     if (error instanceof ConditionalCheckFailedException) {
       return false;
     }
+    // @ts-ignore
+    else if (error.name === 'ConditionalCheckFailedException') {
+      return false;
+    }
     throw error;
   }
   return true;
@@ -297,7 +303,6 @@ async function putQueries(queries) {
   const putItems = queries.map((query) => query.toRecord());
   while (putItems.length > 0)
     await batchWrite({
-      // @ts-ignore
       RequestItems: {
         [OPERATIONS_TABLE]: putItems.splice(0, 25).map((Item) => ({
           PutRequest: {
@@ -319,9 +324,7 @@ async function deleteOperation(operation) {
     KeyConditionExpression:
       'resource_id = :resource_id AND begins_with(sort_key, :sort_key)',
     ExpressionAttributeValues: {
-      // @ts-ignore
       ':resource_id': operation.resource_id,
-      // @ts-ignore
       ':sort_key': `${operation.resource_id}#${operation.id}`,
     },
   });
@@ -436,9 +439,7 @@ async function checkActionPrerequisites(
       KeyConditionExpression:
         'resource_id = :resource_id AND begins_with(sort_key, :sort_key)',
       ExpressionAttributeValues: {
-        // @ts-ignore
         ':resource_id': operation.resource_id,
-        // @ts-ignore
         ':sort_key': `${operation.resource_id}#${operation.id}#${action_id}`,
       },
     });
@@ -448,33 +449,23 @@ async function checkActionPrerequisites(
       const _item = Items.pop();
       if (!_item) continue;
       const { data } = _item;
-      // @ts-ignore
       switch (data.record_type) {
         case Action.RecordType:
-          // @ts-ignore
           if (data.status !== Action.Status.COMPLETED) {
             logger &&
               logger.info(
-                // @ts-ignore
                 `prerequisite action ${operation.type}:${data.type} hasn't finished running yet`
               );
             prerequisites_met = false;
           }
-          // @ts-ignore
           if (data.status === Action.Status.FAILED) {
             throw new Error(
-              // @ts-ignore
               `prerequisite action ${operation.type}:${data.type} failed`
             );
           }
           break;
         case Query.RecordType:
-          if (
-            includeQueries &&
-            // @ts-ignore
-            data.status !== Query.Status.COMPLETED
-          ) {
-            // @ts-ignore
+          if (includeQueries && data.status !== Query.Status.COMPLETED) {
             incompleteQueries.push(data.id);
             logger &&
               logger.debug(
@@ -482,25 +473,17 @@ async function checkActionPrerequisites(
               );
             prerequisites_met = false;
           }
-          if (
-            includeQueries &&
-            // @ts-ignore
-            data.status === Query.Status.FAILED
-          ) {
+          if (includeQueries && data.status === Query.Status.FAILED) {
             throw new Error(
               `prerequisite query failed ${JSON.stringify(data)}`
             );
           }
           if (
             includeQueries &&
-            // @ts-ignore
             data.execution_id &&
-            // @ts-ignore
             data.status === Query.Status.RUNNING &&
-            // @ts-ignore
             Date.now() - Number(data.last_updated_at || 0) > 55 * 60 * 1000
           ) {
-            // @ts-ignore
             await checkForStaleQuery(data.execution_id, logger);
           }
           break;
@@ -533,9 +516,7 @@ async function getRecords(resource_id, operation_id = '') {
     KeyConditionExpression:
       'resource_id = :resource_id AND begins_with(sort_key, :sort_key)',
     ExpressionAttributeValues: {
-      // @ts-ignore
       ':resource_id': resource_id,
-      // @ts-ignore
       ':sort_key': `${resource_id}#${operation_id}`,
     },
   });
@@ -546,32 +527,48 @@ async function getRecords(resource_id, operation_id = '') {
     queries: [],
   };
   if (!Items) return records;
-  Items.forEach((item) => {
-    // @ts-ignore
-    switch (item?.data?.record_type) {
-      // @ts-ignore
+
+  const processedItems = Items.sort((a, b) =>
+    a.sort_key.localeCompare(b.sort_key)
+  ).filter((item) => item.data.record_type !== Resource.RecordType);
+
+  /**
+   * @typedef ActionRecordGroup
+   * @property {import('../graph/typedefs').ActionRecord} action_record -
+   * @property {import('../graph/typedefs').QueryRecord[]} query_records -
+   */
+  /** @type {ActionRecordGroup[]} */
+  let operationBatch = [];
+  /** @type {import('../graph/typedefs').QueryRecord[]} */
+  let actionBatch = [];
+  while (processedItems.length > 0) {
+    const item = processedItems.pop();
+    if (!item) continue;
+    switch (item.data.record_type) {
       case Operation.RecordType:
-        // @ts-ignore
-        records.operations.push(Operation.fromRecord(item));
+        records.operations.push(Operation.fromRecords(item, operationBatch));
+        operationBatch = [];
         break;
-      // @ts-ignore
       case Action.RecordType:
-        // @ts-ignore
-        records.actions.push(Action.fromRecord(item));
+        records.actions.push(Action.fromRecords(item, actionBatch));
+        operationBatch.push({
+          // @ts-ignore
+          action_record: item,
+          query_records: actionBatch,
+        });
+        actionBatch = [];
         break;
-      // @ts-ignore
       case Query.RecordType:
-        // @ts-ignore
         records.queries.push(Query.fromRecord(item));
+        // @ts-ignore
+        actionBatch.push(item);
         break;
       default:
-        console.log(item);
         throw new Error(
-          // @ts-ignore
-          `unrecognized record_type ${item?.data?.record_type} , in record ${item}`
+          `unrecognized record_type, in record ${JSON.stringify(item)}`
         );
     }
-  });
+  }
   return records;
 }
 
@@ -587,7 +584,6 @@ async function getAllOperations() {
   const operations = [];
   (response.Items || []).forEach((item) => {
     if (item.data.record_type === 'OPERATION')
-      // @ts-ignore
       operations.push(Operation.fromRecord(item));
   });
 
@@ -599,7 +595,6 @@ async function getAllOperations() {
     });
     (response.Items || []).forEach((item) => {
       if (item.data.record_type === 'OPERATION')
-        // @ts-ignore
         operations.push(Operation.fromRecord(item));
     });
   }
@@ -619,7 +614,6 @@ async function getAllResources() {
   const resources = [];
   (response.Items || []).forEach((item) => {
     if (item.data.record_type === Resource.RecordType) {
-      // @ts-ignore
       resources.push(Resource.fromRecord(item));
     }
   });
@@ -632,7 +626,6 @@ async function getAllResources() {
     });
     (response.Items || []).forEach((item) => {
       if (item.data.record_type === Resource.RecordType) {
-        // @ts-ignore
         resources.push(Resource.fromRecord(item));
       }
     });
@@ -664,6 +657,7 @@ module.exports = {
   getAllResources,
   getResource,
   getOperation,
+  getOperations,
   getActions,
   getAction,
   getQuery,

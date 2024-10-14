@@ -52,10 +52,10 @@ describe('tests for events lambda', () => {
   beforeAll(() => {
     SQS = require('../lambdas/lib/sqs');
     scheduler = require('../lambdas/scheduler/scheduler');
-    processor = require('../lambdas/scheduler/input/s3/processor');
+    processor = require('../lambdas/scheduler/events/s3/processor');
     jest.mock('../lambdas/lib/sqs');
     jest.mock('../lambdas/scheduler/scheduler');
-    jest.mock('../lambdas/scheduler/input/s3/processor');
+    jest.mock('../lambdas/scheduler/events/s3/processor');
     sendMessage = jest.fn().mockImplementation(() => {});
     SQS.mockImplementation(() => {
       return {

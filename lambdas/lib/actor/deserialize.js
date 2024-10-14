@@ -6,11 +6,10 @@ const WharfieProject = require('./resources/wharfie-project');
 const WharfieResource = require('./resources/wharfie-resource');
 const WharfieDeployment = require('./wharfie-deployment');
 const WharfieActor = require('./wharfie-actor');
-
-const { query } = require('../dynamo/');
+const { getResources } = require('../dynamo/state');
 
 /**
- * @typedef {new (options: any) => import('./resources/reconcilable')} ResourceConstructor
+ * @typedef {new (options: any) => import('./resources/base-resource')} ResourceConstructor
  */
 
 /**
@@ -35,52 +34,72 @@ const classes = Object.assign({}, AWSResources, WharfieActors, {
  */
 
 /**
- * @param {any} json -
- * @param {Object<string, import('./resources/reconcilable')>} resourceMap -
- * @returns {import('./resources/reconcilable')} -
+ * @param {import('./typedefs').SerializedResource} serialized -
+ * @param {Object<string, import('./typedefs').SerializedResource>} serializedResourceMap -
+ * @param {Object<string, import('./resources/base-resource')>} resourceMap -
+ * @returns {import('./resources/base-resource')} -
  */
-function _deserialize(json, resourceMap) {
-  if (!json || typeof json !== 'object' || !json.resourceType) {
+function _deserialize(serialized, serializedResourceMap, resourceMap) {
+  if (
+    !serialized ||
+    typeof serialized !== 'object' ||
+    !serialized.resourceType
+  ) {
     throw new Error('Invalid serialized resource');
   }
-  const ClassDefinition = classes[json.resourceType];
-  /** @type {Object<string, import('./resources/reconcilable')>} */
+  const ClassDefinition = classes[serialized.resourceType];
+  /** @type {Object<string, import('./resources/base-resource')>} */
   const deserializedResources = {};
 
-  Object.values(json.resources || {}).forEach((resource) => {
-    const deserdResource = _deserialize(resource, resourceMap);
+  (serialized?.resources || []).forEach((resourceName) => {
+    const deserdResource = _deserialize(
+      serializedResourceMap[resourceName],
+      serializedResourceMap,
+      resourceMap
+    );
     deserializedResources[deserdResource.name] = deserdResource;
     resourceMap[deserdResource.name] = deserdResource;
   });
   const resource = new ClassDefinition({
-    name: json.name,
-    dependsOn: json.dependsOn,
-    status: json.status,
+    name: serialized.name,
+    parent: serialized.parent,
+    dependsOn: serialized.dependsOn,
+    status: serialized.status,
     resources: deserializedResources,
-    properties: json.properties,
+    properties: serialized.properties,
   });
   resourceMap[resource.name] = resource;
   return resource;
 }
 
 /**
- * @param {any} json -
- * @param {Object<string, import('./resources/reconcilable')>} [resourceMap] -
- * @returns {import('./resources/reconcilable')} -
+ * @param {import('./typedefs').SerializedResource} serialized -
+ * @param {Object<string, import('./typedefs').SerializedResource>} serializedResourceMap -
+ * @returns {import('./resources/base-resource')} -
  */
-function deserialize(json, resourceMap = {}) {
-  if (!json || typeof json !== 'object' || !json.resourceType) {
+function deserialize(serialized, serializedResourceMap) {
+  if (
+    !serialized ||
+    typeof serialized !== 'object' ||
+    !serialized.resourceType
+  ) {
     throw new Error('Invalid serialized resource');
   }
-  const deserializedResource = _deserialize(json, resourceMap);
+  /** @type {Object<string, import('./resources/base-resource')>} */
+  const resourceMap = {};
+  const deserializedResource = _deserialize(
+    serialized,
+    serializedResourceMap,
+    resourceMap
+  );
   setDependsOn(deserializedResource, resourceMap);
   return deserializedResource;
 }
 
 /**
  *
- * @param {import('./resources/reconcilable') | import('./resources/base-resource-group')} resource -
- * @param {Object<string, import('./resources/reconcilable')>} resourceMap -
+ * @param {import('./resources/base-resource') | import('./resources/base-resource-group')} resource -
+ * @param {Object<string, import('./resources/base-resource')>} resourceMap -
  */
 function setDependsOn(resource, resourceMap) {
   // while deserializing, we don't have access to the resourceMap
@@ -102,34 +121,30 @@ function setDependsOn(resource, resourceMap) {
 /**
  * @typedef WharfieDeploymentLoadOptions
  * @property {string} deploymentName -
- * @property {string} [resourceName] -
+ * @property {string} [resourceKey] -
  */
 /**
  * @param {WharfieDeploymentLoadOptions} options -
  * @returns {Promise<WharfieDeployment | WharfieProject>} -
  */
-async function load({ deploymentName, resourceName }) {
-  if (!resourceName) {
-    resourceName = deploymentName;
+async function load({ deploymentName, resourceKey }) {
+  if (!resourceKey) {
+    resourceKey = deploymentName;
   }
-  const { Items } = await query({
-    TableName: `${deploymentName}-state`,
-    ConsistentRead: true,
-    KeyConditionExpression: '#name = :name AND #sort_key = :name',
-    ExpressionAttributeValues: {
-      // @ts-ignore
-      ':name': resourceName,
-    },
-    ExpressionAttributeNames: {
-      '#name': 'name',
-      '#sort_key': 'sort_key',
-    },
-  });
-  if (!Items || Items.length === 0) throw new Error('No resource found');
-  const storedData = Items[0];
-  if (!storedData.serialized) throw new Error('Resource was not stored');
+
+  const serializedResources = await getResources(deploymentName, resourceKey);
+  if (!serializedResources || serializedResources.length === 0) {
+    throw new Error('No resource found');
+  }
+
+  const resourceMap = serializedResources.slice(1).reduce((acc, item) => {
+    // @ts-ignore
+    acc[item.name] = item;
+    return acc;
+  }, {});
+
   // @ts-ignore
-  return deserialize(storedData?.serialized, {});
+  return deserialize(serializedResources[0], resourceMap);
 }
 
 module.exports = {

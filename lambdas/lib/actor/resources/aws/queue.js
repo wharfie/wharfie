@@ -15,6 +15,7 @@ const { QueueDoesNotExist } = require('@aws-sdk/client-sqs');
 /**
  * @typedef QueueOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {QueueProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
@@ -24,7 +25,7 @@ class Queue extends BaseResource {
   /**
    * @param {QueueOptions} options -
    */
-  constructor({ name, status, properties, dependsOn = [] }) {
+  constructor({ name, parent, status, properties, dependsOn = [] }) {
     const propertiesWithDefaults = Object.assign(
       {
         visibilityTimeout: '300',
@@ -34,7 +35,13 @@ class Queue extends BaseResource {
       },
       properties
     );
-    super({ name, status, properties: propertiesWithDefaults, dependsOn });
+    super({
+      name,
+      parent,
+      status,
+      properties: propertiesWithDefaults,
+      dependsOn,
+    });
     this.sqs = new SQS({});
   }
 

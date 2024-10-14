@@ -6,6 +6,8 @@ const { version: WHARFIE_VERSION } = require('../../../package.json');
 /**
  * @typedef {('START'|
  * 'REGISTER_MISSING_PARTITIONS'|
+ * 'CREATE_MIGRATION_RESOUCE' |
+ * 'DESTROY_MIGRATION_RESOURCE' |
  * 'FIND_COMPACTION_PARTITIONS'|
  * 'RUN_COMPACTION'|
  * 'UPDATE_SYMLINKS'|
@@ -27,6 +29,8 @@ const { version: WHARFIE_VERSION } = require('../../../package.json');
 const Type = {
   START: 'START',
   REGISTER_MISSING_PARTITIONS: 'REGISTER_MISSING_PARTITIONS',
+  CREATE_MIGRATION_RESOUCE: 'CREATE_MIGRATION_RESOUCE',
+  DESTROY_MIGRATION_RESOURCE: 'DESTROY_MIGRATION_RESOURCE',
   FIND_COMPACTION_PARTITIONS: 'FIND_COMPACTION_PARTITIONS',
   RUN_COMPACTION: 'RUN_COMPACTION',
   UPDATE_SYMLINKS: 'UPDATE_SYMLINKS',
@@ -132,8 +136,8 @@ class Action {
   }
 
   /**
-   * @param {import('./typedefs').ActionRecord} action_record -
-   * @param {import('./typedefs').QueryRecord[]} query_records -
+   * @param {Record<string,any>} action_record -
+   * @param {Record<string,any>[]} query_records -
    * @returns {Action} -
    */
   static fromRecords(action_record, query_records) {
@@ -154,7 +158,7 @@ class Action {
   }
 
   /**
-   * @param {import('./typedefs').ActionRecord} action_record -
+   * @param {Record<string,any>} action_record -
    * @returns {Action} -
    */
   static fromRecord(action_record) {

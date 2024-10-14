@@ -35,8 +35,6 @@ const { Resource } = require('../../lambdas/lib/graph');
 const { S3 } = require('@aws-sdk/client-s3');
 
 const operations = require('../../lambdas/lib/dynamo/operations');
-
-const dynamo_resource = require('../../lambdas/lib/dynamo/operations');
 const semaphore = require('../../lambdas/lib/dynamo/semaphore');
 
 const glue = new Glue();
@@ -149,7 +147,7 @@ describe('s3 event tests', () => {
         Records: [
           {
             body: JSON.stringify({
-              operation_type: 'S3_EVENT',
+              operation_type: 'LOAD',
               operation_started_at: '2016-06-20T12:08:10.000Z',
               action_type: 'START',
               resource_id: 'resource_id',
@@ -197,8 +195,7 @@ describe('s3 event tests', () => {
     await Promise.race([emptyQueues, timeout]);
     timeout.cancel();
     // eslint-disable-next-line jest/no-large-snapshots
-    expect(Object.keys(dynamo_resource.__getMockState()))
-      .toMatchInlineSnapshot(`
+    expect(Object.keys(operations.__getMockState())).toMatchInlineSnapshot(`
       [
         "resource_id",
       ]
@@ -211,7 +208,7 @@ describe('s3 event tests', () => {
           "limit": Infinity,
           "value": 0,
         },
-        "wharfie:S3_EVENT:resource_id": {
+        "wharfie:LOAD:resource_id": {
           "limit": Infinity,
           "value": 0,
         },

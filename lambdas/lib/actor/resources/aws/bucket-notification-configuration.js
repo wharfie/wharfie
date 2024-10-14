@@ -12,6 +12,7 @@ const { NoSuchBucket } = require('@aws-sdk/client-s3');
 /**
  * @typedef BucketNotificationConfigurationOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {BucketNotificationConfigurationProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
@@ -21,8 +22,8 @@ class BucketNotificationConfiguration extends BaseResource {
   /**
    * @param {BucketNotificationConfigurationOptions} options -
    */
-  constructor({ name, status, properties, dependsOn = [] }) {
-    super({ name, status, dependsOn, properties });
+  constructor({ name, parent, status, properties, dependsOn = [] }) {
+    super({ name, parent, status, dependsOn, properties });
     this.s3 = new S3();
     this.set('arn', `arn:aws:s3:::${this.name}`);
   }

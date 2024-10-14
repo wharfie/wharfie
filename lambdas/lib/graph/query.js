@@ -97,7 +97,7 @@ class Query {
   }
 
   /**
-   * @param {import('./typedefs').QueryRecord} query_record -
+   * @param {Record<string,any>} query_record -
    * @returns {Query} -
    */
   static fromRecord(query_record) {

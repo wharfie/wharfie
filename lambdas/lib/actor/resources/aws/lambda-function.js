@@ -23,6 +23,7 @@ const { ResourceNotFoundException } = require('@aws-sdk/client-lambda');
 /**
  * @typedef LambdaOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {LambdaProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
@@ -32,7 +33,7 @@ class LambdaFunction extends BaseResource {
   /**
    * @param {LambdaOptions} options -
    */
-  constructor({ name, status, properties, dependsOn = [] }) {
+  constructor({ name, parent, status, properties, dependsOn = [] }) {
     const propertiesWithDefaults = Object.assign(
       {
         runtime: 'nodejs20.x',
@@ -52,7 +53,13 @@ class LambdaFunction extends BaseResource {
       },
       properties
     );
-    super({ name, status, properties: propertiesWithDefaults, dependsOn });
+    super({
+      name,
+      parent,
+      status,
+      properties: propertiesWithDefaults,
+      dependsOn,
+    });
     this.lambda = new Lambda({});
   }
 

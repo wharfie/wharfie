@@ -144,7 +144,7 @@ async function route(event, context, resource, operation) {
     case 'SIDE_EFFECTS__FINISH':
       return await side_effects.finish(event, context, resource, operation);
     default:
-      throw new Error('Invalid Action, must be valid MAINTAIN action');
+      throw new Error('Invalid Action, must be valid BACKFILL action');
   }
 }
 

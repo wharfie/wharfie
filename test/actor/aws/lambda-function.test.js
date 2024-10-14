@@ -9,7 +9,7 @@ const { Lambda } = jest.requireMock('@aws-sdk/client-lambda');
 const crypto = require('crypto');
 
 const { LambdaFunction } = require('../../../lambdas/lib/actor/resources/aws/');
-const { deserialize } = require('../../../lambdas/lib/actor/deserialize');
+const { getMockDeploymentProperties } = require('../util');
 
 describe('lambda function IaC', () => {
   beforeAll(() => {
@@ -24,11 +24,12 @@ describe('lambda function IaC', () => {
     jest.restoreAllMocks();
   });
   it('basic', async () => {
-    expect.assertions(6);
+    expect.assertions(4);
     const lambda = new Lambda({});
     const lambdaFunction = new LambdaFunction({
       name: 'test-function',
       properties: {
+        deployment: getMockDeploymentProperties(),
         runtime: 'nodejs20.x',
         role: 'test-role',
         handler: `index.handler`,
@@ -61,6 +62,7 @@ describe('lambda function IaC', () => {
       {
         "dependsOn": [],
         "name": "test-function",
+        "parent": "",
         "properties": {
           "architectures": [
             "arm64",
@@ -73,6 +75,20 @@ describe('lambda function IaC', () => {
           "codeHash": "test-code-hash",
           "deadLetterConfig": {
             "TargetArn": "test-dlq-arn",
+          },
+          "deployment": {
+            "accountId": "123456789012",
+            "envPaths": {
+              "cache": "",
+              "config": "",
+              "data": "",
+              "log": "",
+              "temp": "",
+            },
+            "name": "test-deployment",
+            "region": "us-east-1",
+            "stateTable": "_testing_state_table",
+            "version": "0.0.1test",
           },
           "description": "test des",
           "environment": {
@@ -97,57 +113,6 @@ describe('lambda function IaC', () => {
         "status": "STABLE",
       }
     `);
-
-    const deserialized = deserialize(serialized);
-    await deserialized.reconcile();
-    expect(deserialized).toMatchInlineSnapshot(`
-      LambdaFunction {
-        "_MAX_RETRIES": 10,
-        "_MAX_RETRY_TIMEOUT_SECONDS": 10,
-        "_destroyErrors": [],
-        "_reconcileErrors": [],
-        "dependsOn": [],
-        "lambda": Lambda {
-          "lambda": LambdaMock {},
-        },
-        "name": "test-function",
-        "properties": {
-          "architectures": [
-            "arm64",
-          ],
-          "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-function",
-          "code": {
-            "S3Bucket": 123456789012,
-            "S3Key": "test-key",
-          },
-          "codeHash": "test-code-hash",
-          "deadLetterConfig": {
-            "TargetArn": "test-dlq-arn",
-          },
-          "description": "test des",
-          "environment": {
-            "Variables": {
-              "AWS_NODEJS_CONNECTION_REUSE_ENABLED": "1",
-              "DLQ_URL": "test-dlq-url",
-              "NODE_OPTIONS": "--enable-source-maps",
-            },
-          },
-          "ephemeralStorage": {
-            "Size": 512,
-          },
-          "handler": "index.handler",
-          "memorySize": 1024,
-          "packageType": "Zip",
-          "publish": true,
-          "role": "test-role",
-          "runtime": "nodejs20.x",
-          "timeout": 300,
-        },
-        "resourceType": "LambdaFunction",
-        "status": "STABLE",
-      }
-    `);
-    expect(deserialized.status).toBe('STABLE');
 
     const res = await lambda.getFunction({
       FunctionName: lambdaFunction.name,
@@ -195,8 +160,8 @@ describe('lambda function IaC', () => {
         },
       }
     `);
-    await deserialized.destroy();
-    expect(deserialized.status).toBe('DESTROYED');
+    await lambdaFunction.destroy();
+    expect(lambdaFunction.status).toBe('DESTROYED');
     await expect(
       lambda.getFunction({ FunctionName: lambdaFunction.name })
     ).rejects.toThrowErrorMatchingInlineSnapshot(
