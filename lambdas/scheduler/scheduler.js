@@ -3,7 +3,7 @@ const SQS = require('../lib/sqs');
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
 
-const event_db = require('../lib/dynamo/scheduler');
+const scheduler_db = require('../lib/dynamo/scheduler');
 const resource_db = require('../lib/dynamo/operations');
 const logging = require('../lib/logging');
 const SchedulerEntry = require('./scheduler-entry');
@@ -26,7 +26,7 @@ async function run(ScheduledEvent, context) {
   if (Date.now() < start_time) {
     daemon_log.debug('event not ready to start');
     await sqs.sendMessage({
-      MessageBody: ScheduledEvent.toEvent(),
+      MessageBody: JSON.stringify(ScheduledEvent.toEvent()),
       QueueUrl: QUEUE_URL,
       DelaySeconds: Math.floor(Math.random() * 30 + 1),
     });
@@ -40,16 +40,20 @@ async function run(ScheduledEvent, context) {
 
   const isView = resource.source_properties.tableType === 'VIRTUAL_VIEW';
 
-  const isPartitioned =
-    (resource.destination_properties?.partitionKeys || []).length > 0;
+  const unpartitioned =
+    ScheduledEvent.sort_key.split(':')[0] === 'unpartitioned';
   let wharfieEvent;
-  if (isView || !isPartitioned) {
+  if (isView || unpartitioned) {
     wharfieEvent = {
-      source: 'wharfie:s3-event-processor',
+      source: 'wharfie:scheduler',
       operation_started_at: new Date(Date.now()),
-      operation_type: 'MAINTAIN',
+      operation_type: 'BACKFILL',
       action_type: 'START',
       resource_id: resource.id,
+      action_inputs: {
+        Version: `scheduler`,
+        Duration: Infinity,
+      },
     };
   } else {
     /** @type {import('../typedefs').PartitionValues} */
@@ -129,9 +133,9 @@ async function run(ScheduledEvent, context) {
       (resource.destination_properties?.partitionKeys || []).length > 0;
 
     wharfieEvent = {
-      source: 'wharfie:s3-event-processor',
+      source: 'wharfie:scheduler',
       operation_started_at: new Date(Date.now()),
-      operation_type: 'S3_EVENT',
+      operation_type: 'LOAD',
       action_type: 'START',
       resource_id: ScheduledEvent.resource_id,
       operation_inputs: hasPartitions
@@ -150,7 +154,7 @@ async function run(ScheduledEvent, context) {
     QueueUrl: DAEMON_QUEUE_URL,
   });
 
-  await event_db.update(ScheduledEvent, SchedulerEntry.Status.STARTED);
+  await scheduler_db.update(ScheduledEvent, SchedulerEntry.Status.STARTED);
 }
 
 module.exports = {

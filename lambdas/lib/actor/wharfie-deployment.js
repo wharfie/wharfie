@@ -8,11 +8,7 @@ const Table = require('./resources/aws/table');
 const BucketNotificationConfiguration = require('./resources/aws/bucket-notification-configuration');
 const BaseResourceGroup = require('./resources/base-resource-group');
 const { Daemon, Cleanup, Events, Monitor } = require('./wharfie-actors');
-const { putWithThroughputRetry } = require('../dynamo/');
 
-// const bluebirdPromise = require('bluebird');
-// const fs = require('fs');
-// const path = require('path');
 const WharfieActor = require('./wharfie-actor');
 const envPaths = require('../env-paths');
 
@@ -120,27 +116,29 @@ class WharfieDeployment extends BaseResourceGroup {
   }
 
   /**
+   * @param {string} parent -
    * @returns {(import('./resources/base-resource') | import('./resources/base-resource-group'))[]} -
    */
-  _defineGroupResources() {
+  _defineGroupResources(parent) {
     const systemTable = new Table({
       name: `${this.name}-state`,
+      parent,
       properties: {
         _INTERNAL_STATE_RESOURCE: true,
         deployment: this.getDeploymentProperties.bind(this),
         attributeDefinitions: [
           {
-            AttributeName: 'name',
+            AttributeName: 'deployment',
             AttributeType: 'S',
           },
-          { AttributeName: 'sort_key', AttributeType: 'S' },
+          { AttributeName: 'resource_key', AttributeType: 'S' },
         ],
         keySchema: [
           {
-            AttributeName: 'name',
+            AttributeName: 'deployment',
             KeyType: 'HASH',
           },
-          { AttributeName: 'sort_key', KeyType: 'RANGE' },
+          { AttributeName: 'resource_key', KeyType: 'RANGE' },
         ],
         billingMode: Table.BillingMode.PAY_PER_REQUEST,
       },
@@ -148,6 +146,7 @@ class WharfieDeployment extends BaseResourceGroup {
 
     const resourceGroup = new WharfieDeploymentResources({
       dependsOn: [systemTable],
+      parent,
       name: `${this.name}-deployment-resources`,
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
@@ -159,6 +158,7 @@ class WharfieDeployment extends BaseResourceGroup {
     // @ts-ignore
     const daemonActor = new Daemon({
       dependsOn: [resourceGroup],
+      parent,
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
         actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
@@ -169,6 +169,7 @@ class WharfieDeployment extends BaseResourceGroup {
 
     const cleanupActor = new Cleanup({
       dependsOn: [resourceGroup],
+      parent,
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
         actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
@@ -179,6 +180,7 @@ class WharfieDeployment extends BaseResourceGroup {
 
     const eventsActor = new Events({
       dependsOn: [resourceGroup],
+      parent,
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
         actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
@@ -188,6 +190,7 @@ class WharfieDeployment extends BaseResourceGroup {
     });
     const monitorActor = new Monitor({
       dependsOn: [resourceGroup],
+      parent,
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
         actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
@@ -198,6 +201,7 @@ class WharfieDeployment extends BaseResourceGroup {
     const logNotificationBucketNotificationConfiguration =
       new BucketNotificationConfiguration({
         name: `${this.name}-log-notification-bucket-notification-configuration`,
+        parent,
         dependsOn: [
           resourceGroup,
           daemonActor,
@@ -320,23 +324,6 @@ class WharfieDeployment extends BaseResourceGroup {
     this.resources = {};
     await super.destroy();
     await systemTable.destroy();
-  }
-
-  async save() {
-    const { stateTable, version } = this.get('deployment');
-
-    const serialized = this.serialize();
-    await putWithThroughputRetry({
-      TableName: stateTable,
-      Item: {
-        name: this.name,
-        sort_key: this.name,
-        serialized,
-        status: this.status,
-        version,
-      },
-      ReturnValues: 'NONE',
-    });
   }
 }
 

@@ -200,14 +200,6 @@ class Reconcilable {
         });
         // @ts-ignore
         this._destroyErrors.push(error);
-        // if (
-        //   // @ts-ignore
-        //   error?.name !== last_error?.name ||
-        //   // @ts-ignore
-        //   error?.message !== last_error?.message
-        // ) {
-        //   destroy_attempts = 0;
-        // }
         await new Promise((resolve) =>
           setTimeout(
             resolve,

@@ -6,9 +6,8 @@ const bluebirdPromise = require('bluebird');
 const logging = require('./lib/logging/');
 const daemon_log = logging.getDaemonLogger();
 
-const maintain = require('./operations/maintain/');
 const backfill = require('./operations/backfill/');
-const s3_event = require('./operations/s3_event/');
+const load = require('./operations/load');
 const migrate = require('./operations/migrate/');
 const query = require('./operations/query/');
 const SQS = require('./lib/sqs');
@@ -17,8 +16,6 @@ const STS = require('./lib/sts');
 const resource_db = require('./lib/dynamo/operations');
 const { getResource } = require('./migrations/');
 
-const response = require('./lib/cloudformation/cfn-response');
-const { getImmutableID } = require('./lib/cloudformation/id');
 const { createId } = require('./lib/id');
 const { Action, Operation } = require('./lib/graph/');
 
@@ -39,12 +36,10 @@ async function daemonRouter(event, context, resource, operation) {
   // START SPECIAL CASE
   if (event.action_type === Action.Type.START) {
     switch (event.operation_type) {
-      case Operation.Type.MAINTAIN:
-        return await maintain.start(event, context, resource);
       case Operation.Type.BACKFILL:
         return await backfill.start(event, context, resource);
-      case Operation.Type.S3_EVENT:
-        return await s3_event.start(event, context, resource);
+      case Operation.Type.LOAD:
+        return await load.start(event, context, resource);
       case Operation.Type.MIGRATE:
         return await migrate.start(event, context, resource);
       default:
@@ -56,12 +51,10 @@ async function daemonRouter(event, context, resource, operation) {
   // FINISH SPECIAL CASE
   if (event.action_type === Action.Type.FINISH) {
     switch (event.operation_type) {
-      case Operation.Type.MAINTAIN:
-        return await maintain.finish(event, context, resource, operation);
       case Operation.Type.BACKFILL:
         return await backfill.finish(event, context, resource, operation);
-      case Operation.Type.S3_EVENT:
-        return await s3_event.finish(event, context, resource, operation);
+      case Operation.Type.LOAD:
+        return await load.finish(event, context, resource, operation);
       case Operation.Type.MIGRATE:
         return await migrate.finish(event, context, resource, operation);
       default:
@@ -71,12 +64,10 @@ async function daemonRouter(event, context, resource, operation) {
 
   // OPERATION:ACTION ROUTING
   switch (event.operation_type) {
-    case Operation.Type.MAINTAIN:
-      return await maintain.route(event, context, resource, operation);
     case Operation.Type.BACKFILL:
       return await backfill.route(event, context, resource, operation);
-    case Operation.Type.S3_EVENT:
-      return await s3_event.route(event, context, resource, operation);
+    case Operation.Type.LOAD:
+      return await load.route(event, context, resource, operation);
     case Operation.Type.MIGRATE:
       return await migrate.route(event, context, resource, operation);
     default:
@@ -173,6 +164,7 @@ async function daemon(event, context) {
             false
           ))
         )
+          // action has other dependencies that are not met
           return Promise.resolve();
         const updated_status = resource_db.updateActionStatus(
           new Action({
@@ -180,10 +172,14 @@ async function daemon(event, context) {
             resource_id: resource.id,
             operation_id: operation.id,
             type: operation.getActionTypeById(action_id),
+            status: Action.Status.PENDING,
           }),
           Action.Status.RUNNING
         );
         if (!updated_status) {
+          event_log.info(
+            `action ${event.operation_type}:${event.action_type} completed, equeueing next actions`
+          );
           // status already in RUNNING state, caused by action graph with reduce pattern
           return Promise.resolve();
         }
@@ -239,19 +235,6 @@ async function DLQ(event, context, err) {
   }
 
   const event_log = logging.getEventLogger(event, context);
-
-  if (operation.type === Operation.Type.MIGRATE) {
-    event_log.error(
-      `Migration action has expended its retries, marking update as failure and rolling back`,
-      {
-        ...event,
-      }
-    );
-    await response(err, operation.operation_inputs.cloudformation_event, {
-      id: getImmutableID(operation.operation_inputs.cloudformation_event),
-    });
-    return;
-  }
   event_log.error(`Record has expended its retries, sending to DLQ`, {
     ...event,
   });

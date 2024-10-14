@@ -18,6 +18,7 @@ const S3 = require('../../s3');
 /**
  * @typedef WharfieActorResourceOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('./reconcilable').Status} [status] -
  * @property {WharfieActorResourceProperties & import('../typedefs').SharedProperties} properties -
  * @property {import('./reconcilable')[]} [dependsOn] -
@@ -28,10 +29,11 @@ class WharfieActorResources extends BaseResourceGroup {
   /**
    * @param {WharfieActorResourceOptions} options -
    */
-  constructor({ name, status, properties, dependsOn, resources }) {
+  constructor({ name, parent, status, properties, dependsOn, resources }) {
     if (!properties.handler) throw new Error('No handler defined');
     super({
       name,
+      parent,
       status,
       properties,
       dependsOn,
@@ -41,11 +43,13 @@ class WharfieActorResources extends BaseResourceGroup {
   }
 
   /**
+   * @param {string} parent -
    * @returns {(import('./base-resource') | BaseResourceGroup)[]} -
    */
-  _defineGroupResources() {
+  _defineGroupResources(parent) {
     const build = new LambdaBuild({
       name: `${this.get('deployment').name}-${this.get('actorName')}-build`,
+      parent,
       properties: {
         deployment: this.get('deployment'),
         handler: () => this.get('handler'),
@@ -54,6 +58,7 @@ class WharfieActorResources extends BaseResourceGroup {
     });
     const queue = new Queue({
       name: `${this.get('deployment').name}-${this.get('actorName')}-queue`,
+      parent,
       properties: {
         deployment: this.get('deployment'),
         policy: () => ({
@@ -93,12 +98,14 @@ class WharfieActorResources extends BaseResourceGroup {
     });
     const dlq = new Queue({
       name: `${this.get('deployment').name}-${this.get('actorName')}-dlq`,
+      parent,
       properties: {
         deployment: this.get('deployment'),
       },
     });
     const role = new Role({
       name: `${this.get('deployment').name}-${this.get('actorName')}-role`,
+      parent,
       dependsOn: [queue, dlq],
       properties: {
         deployment: this.get('deployment'),
@@ -137,6 +144,7 @@ class WharfieActorResources extends BaseResourceGroup {
     });
     const lambda = new LambdaFunction({
       name: `${this.get('deployment').name}-${this.get('actorName')}-function`,
+      parent,
       dependsOn: [role, dlq, queue, build],
       properties: {
         deployment: this.get('deployment'),
@@ -169,6 +177,7 @@ class WharfieActorResources extends BaseResourceGroup {
     });
     const eventSourceMapping = new EventSourceMapping({
       name: `${this.get('actorName')}-mapping`,
+      parent,
       dependsOn: [lambda, queue],
       properties: {
         deployment: this.get('deployment'),

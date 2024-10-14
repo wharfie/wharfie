@@ -80,7 +80,7 @@ exports.builder = (yargs) => {
     .option('type', {
       type: 'string',
       describe: 'operation type',
-      choices: ['MAINTAIN', 'BACKFILL'],
+      choices: ['LOAD', 'BACKFILL', 'MIGRATE'],
     })
     .option('all', {
       alias: 'a',

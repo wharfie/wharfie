@@ -29,7 +29,11 @@ async function run(event, context, resource, operation) {
   });
 
   const SLA = resource.daemon_config.SLA;
-  if (operation.type === Operation.Type.BACKFILL && SLA) {
+  if (
+    operation.type === Operation.Type.BACKFILL &&
+    SLA &&
+    operation.operation_config.Duration
+  ) {
     if (!operation.operation_config)
       throw new Error('Backfill operation missing config');
     SLA.MaxDelay = operation.operation_config.Duration;

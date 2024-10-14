@@ -17,6 +17,7 @@ const {
 /**
  * @typedef EventSourceMappingOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {EventSourceMappingProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
@@ -26,8 +27,8 @@ class EventSourceMapping extends BaseResource {
   /**
    * @param {EventSourceMappingOptions} options -
    */
-  constructor({ name, status, properties, dependsOn = [] }) {
-    super({ name, status, properties, dependsOn });
+  constructor({ name, parent, status, properties, dependsOn = [] }) {
+    super({ name, parent, status, properties, dependsOn });
     this.lambda = new Lambda({});
   }
 

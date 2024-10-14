@@ -33,7 +33,7 @@ const apply = async (path, environmentName) => {
   try {
     projectResources = await load({
       deploymentName: deployment.name,
-      resourceName: project.name,
+      resourceKey: project.name,
     });
   } catch (error) {
     if (!(error instanceof Error)) throw error;

@@ -17,6 +17,7 @@ const Database = require('./aws/glue-database');
 /**
  * @typedef WharfieDeploymentResourcesOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('./reconcilable').Status} [status] -
  * @property {WharfieDeploymentResourcesProperties &  import('../typedefs').SharedProperties} properties -
  * @property {Object<string, import('./base-resource') | BaseResourceGroup>} [resources] -
@@ -27,9 +28,10 @@ class WharfieDeploymentResources extends BaseResourceGroup {
   /**
    * @param {WharfieDeploymentResourcesOptions} options -
    */
-  constructor({ name, status, properties, dependsOn, resources }) {
+  constructor({ name, parent, status, properties, dependsOn, resources }) {
     super({
       name,
+      parent,
       status,
       properties,
       resources,
@@ -38,11 +40,13 @@ class WharfieDeploymentResources extends BaseResourceGroup {
   }
 
   /**
+   * @param {string} parent -
    * @returns {(import('./base-resource') | BaseResourceGroup)[]} -
    */
-  _defineGroupResources() {
+  _defineGroupResources(parent) {
     const systemBucket = new Bucket({
       name: `${this.get('deployment').name}-bucket`,
+      parent,
       properties: {
         deployment: () => this.get('deployment'),
         lifecycleConfiguration: {
@@ -70,6 +74,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     });
     const operationTable = new Table({
       name: `${this.get('deployment').name}-operations`,
+      parent,
       properties: {
         deployment: () => this.get('deployment'),
         attributeDefinitions: [
@@ -91,6 +96,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     });
     const locationTable = new Table({
       name: `${this.get('deployment').name}-locations`,
+      parent,
       properties: {
         deployment: () => this.get('deployment'),
         attributeDefinitions: [
@@ -112,6 +118,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     });
     const semaphoreTable = new Table({
       name: `${this.get('deployment').name}-semaphore`,
+      parent,
       properties: {
         deployment: () => this.get('deployment'),
         attributeDefinitions: [
@@ -131,6 +138,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     });
     const schedulerTable = new Table({
       name: `${this.get('deployment').name}-scheduler`,
+      parent,
       properties: {
         deployment: () => this.get('deployment'),
         attributeDefinitions: [
@@ -156,6 +164,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     });
     const dependencyTable = new Table({
       name: `${this.get('deployment').name}-dependencies`,
+      parent,
       properties: {
         deployment: () => this.get('deployment'),
         attributeDefinitions: [
@@ -177,6 +186,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     });
     const systemFirehoseRole = new Role({
       name: `${this.get('deployment').name}-firehose-role`,
+      parent,
       dependsOn: [systemBucket],
       properties: {
         deployment: () => this.get('deployment'),
@@ -217,6 +227,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     });
     const systemFirehose = new Firehose({
       name: `${this.get('deployment').name}-firehose`,
+      parent,
       dependsOn: [systemFirehoseRole, systemBucket],
       properties: {
         deployment: () => this.get('deployment'),
@@ -234,6 +245,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     });
     const eventRole = new Role({
       name: `${this.get('deployment').name}-event-role`,
+      parent,
       properties: {
         deployment: () => this.get('deployment'),
         description: `${this.get('deployment').name} event role`,
@@ -253,6 +265,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     });
     const sharedPolicy = new Policy({
       name: `${this.get('deployment').name}-shared-policy`,
+      parent,
       dependsOn: [eventRole, systemBucket],
       properties: {
         deployment: () => this.get('deployment'),
@@ -310,6 +323,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     });
     const temporaryDatabase = new Database({
       name: `${this.get('deployment').name}-temporary-database`,
+      parent,
       properties: {
         deployment: () => this.get('deployment'),
       },
@@ -317,6 +331,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
 
     const actorPolicy = new Policy({
       name: `${this.get('deployment').name}-actor-policy`,
+      parent,
       dependsOn: [
         operationTable,
         locationTable,
@@ -426,6 +441,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     });
     const loggingResourceRole = new Role({
       name: `${this.name}-logging-resource-role`,
+      parent,
       dependsOn: [sharedPolicy],
       properties: {
         deployment: () => this.get('deployment'),
@@ -478,6 +494,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     });
     const systemGlueDatabase = new GlueDatabase({
       name: `${this.get('deployment').name}-glue-database`,
+      parent,
       properties: {
         deployment: () => this.get('deployment'),
         databaseName: this.get('deployment').name,
@@ -485,6 +502,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     });
     const loggingResource = new WharfieResource({
       name: `${this.name}-log-resource`,
+      parent,
       dependsOn: [
         systemGlueDatabase,
         loggingResourceRole,
@@ -540,6 +558,18 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         operationTable: `${this.get('deployment').name}-operations`,
         dependencyTable: `${this.get('deployment').name}-dependencies`,
         locationTable: `${this.get('deployment').name}-locations`,
+        scheduleQueueArn: () =>
+          `arn:aws:sqs:${this.get('deployment').region}:${
+            this.get('deployment').accountId
+          }:${this.get('deployment').name}-events-queue`,
+        scheduleQueueUrl: () =>
+          `https://sqs.${this.get('deployment').region}.amazonaws.com/${
+            this.get('deployment').accountId
+          }/${this.get('deployment').name}-events-queue`,
+        daemonQueueUrl: () =>
+          `https://sqs.${this.get('deployment').region}.amazonaws.com/${
+            this.get('deployment').accountId
+          }/${this.get('deployment').name}-daemon-queue`,
         tags: [],
         createdAt: this.get('createdAt'),
       },
@@ -578,6 +608,10 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     return this.getResource(
       `${this.get('deployment').name}-temporary-database`
     );
+  }
+
+  getLoggingResourceRole() {
+    return this.getResource(`${this.name}-logging-resource-role`);
   }
 }
 

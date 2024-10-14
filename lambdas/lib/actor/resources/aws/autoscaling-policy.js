@@ -16,6 +16,7 @@ const ApplicationAutoScaling = require('../../../application-auto-scaling');
 /**
  * @typedef AutoscalingPolicyOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {AutoscalingPolicyProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
@@ -25,8 +26,8 @@ class AutoscalingPolicy extends BaseResource {
   /**
    * @param {AutoscalingPolicyOptions} options -
    */
-  constructor({ name, status, properties, dependsOn = [] }) {
-    super({ name, status, properties, dependsOn });
+  constructor({ name, parent, status, properties, dependsOn = [] }) {
+    super({ name, parent, status, properties, dependsOn });
     this.autoscaling = new ApplicationAutoScaling();
   }
 

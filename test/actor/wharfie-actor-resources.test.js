@@ -10,7 +10,6 @@ const WharfieActorResources = require('../../lambdas/lib/actor/resources/wharfie
 const { Policy, Bucket } = require('../../lambdas/lib/actor/resources/aws');
 const { getMockDeploymentProperties } = require('./util');
 
-const { deserialize } = require('../../lambdas/lib/actor/deserialize');
 describe('wharfie actor resources IaC', () => {
   beforeAll(() => {
     const mockUpdate = jest.fn().mockReturnThis();
@@ -25,7 +24,7 @@ describe('wharfie actor resources IaC', () => {
     jest.restoreAllMocks();
   });
   it('basic', async () => {
-    expect.assertions(4);
+    expect.assertions(3);
     const bucket = new Bucket({
       name: 'test-bucket',
       properties: {
@@ -71,14 +70,11 @@ describe('wharfie actor resources IaC', () => {
 
     const serialized = wharfieActorResources.serialize();
 
-    // remove uuid so snapshots pass
-    const serialized_copy = Object.assign({}, serialized);
-    delete serialized_copy.resources['test-actor-mapping'].properties.uuid;
-
-    expect(serialized_copy).toMatchInlineSnapshot(`
+    expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
         "name": "test-actor-resources",
+        "parent": "",
         "properties": {
           "actorName": "test-actor",
           "actorSharedPolicyArn": "arn:aws:iam::123456789012:policy/shared-policy",
@@ -104,311 +100,20 @@ describe('wharfie actor resources IaC', () => {
           "handler": "./lambdas/monitor.handler",
         },
         "resourceType": "WharfieActorResources",
-        "resources": {
-          "test-actor-mapping": {
-            "dependsOn": [
-              "test-deployment-test-actor-function",
-              "test-deployment-test-actor-queue",
-            ],
-            "name": "test-actor-mapping",
-            "properties": {
-              "batchSize": 1,
-              "deployment": {
-                "accountId": "123456789012",
-                "envPaths": {
-                  "cache": "",
-                  "config": "",
-                  "data": "",
-                  "log": "",
-                  "temp": "",
-                },
-                "name": "test-deployment",
-                "region": "us-east-1",
-                "stateTable": "_testing_state_table",
-                "version": "0.0.1test",
-              },
-              "eventSourceArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-test-actor-queue",
-              "functionName": "test-deployment-test-actor-function",
-              "maximumBatchingWindowInSeconds": 0,
-            },
-            "resourceType": "EventSourceMapping",
-            "status": "STABLE",
-          },
-          "test-deployment-test-actor-build": {
-            "dependsOn": [],
-            "name": "test-deployment-test-actor-build",
-            "properties": {
-              "artifactBucket": "test-bucket",
-              "artifactKey": "actor-artifacts/test-deployment-test-actor-build/mockedHash.zip",
-              "deployment": {
-                "accountId": "123456789012",
-                "envPaths": {
-                  "cache": "",
-                  "config": "",
-                  "data": "",
-                  "log": "",
-                  "temp": "",
-                },
-                "name": "test-deployment",
-                "region": "us-east-1",
-                "stateTable": "_testing_state_table",
-                "version": "0.0.1test",
-              },
-              "functionCodeHash": "mockedHash",
-              "handler": "./lambdas/monitor.handler",
-            },
-            "resourceType": "LambdaBuild",
-            "status": "STABLE",
-          },
-          "test-deployment-test-actor-dlq": {
-            "dependsOn": [],
-            "name": "test-deployment-test-actor-dlq",
-            "properties": {
-              "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-test-actor-dlq",
-              "delaySeconds": "0",
-              "deployment": {
-                "accountId": "123456789012",
-                "envPaths": {
-                  "cache": "",
-                  "config": "",
-                  "data": "",
-                  "log": "",
-                  "temp": "",
-                },
-                "name": "test-deployment",
-                "region": "us-east-1",
-                "stateTable": "_testing_state_table",
-                "version": "0.0.1test",
-              },
-              "messageRetentionPeriod": "1209600",
-              "receiveMessageWaitTimeSeconds": "0",
-              "url": "test-deployment-test-actor-dlq",
-              "visibilityTimeout": "300",
-            },
-            "resourceType": "Queue",
-            "status": "STABLE",
-          },
-          "test-deployment-test-actor-function": {
-            "dependsOn": [
-              "test-deployment-test-actor-role",
-              "test-deployment-test-actor-dlq",
-              "test-deployment-test-actor-queue",
-              "test-deployment-test-actor-build",
-            ],
-            "name": "test-deployment-test-actor-function",
-            "properties": {
-              "architectures": [
-                "arm64",
-              ],
-              "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-test-actor-function",
-              "code": {
-                "S3Bucket": "test-bucket",
-                "S3Key": "actor-artifacts/test-deployment-test-actor-build/mockedHash.zip",
-              },
-              "codeHash": "mockedHash",
-              "deadLetterConfig": {
-                "TargetArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-test-actor-dlq",
-              },
-              "deployment": {
-                "accountId": "123456789012",
-                "envPaths": {
-                  "cache": "",
-                  "config": "",
-                  "data": "",
-                  "log": "",
-                  "temp": "",
-                },
-                "name": "test-deployment",
-                "region": "us-east-1",
-                "stateTable": "_testing_state_table",
-                "version": "0.0.1test",
-              },
-              "description": "test-actor lambda",
-              "environment": {
-                "Variables": {
-                  "123": "456",
-                  "AWS_NODEJS_CONNECTION_REUSE_ENABLED": "1",
-                  "DLQ_URL": "test-deployment-test-actor-dlq",
-                  "NODE_OPTIONS": "--enable-source-maps",
-                  "STACK_NAME": "test-deployment",
-                  "foo": "bar",
-                },
-              },
-              "ephemeralStorage": {
-                "Size": 512,
-              },
-              "handler": "index.handler",
-              "memorySize": 1024,
-              "packageType": "Zip",
-              "publish": true,
-              "role": "arn:aws:iam::123456789012:role/test-deployment-test-actor-role",
-              "runtime": "nodejs20.x",
-              "timeout": 300,
-            },
-            "resourceType": "LambdaFunction",
-            "status": "STABLE",
-          },
-          "test-deployment-test-actor-queue": {
-            "dependsOn": [],
-            "name": "test-deployment-test-actor-queue",
-            "properties": {
-              "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-test-actor-queue",
-              "delaySeconds": "0",
-              "deployment": {
-                "accountId": "123456789012",
-                "envPaths": {
-                  "cache": "",
-                  "config": "",
-                  "data": "",
-                  "log": "",
-                  "temp": "",
-                },
-                "name": "test-deployment",
-                "region": "us-east-1",
-                "stateTable": "_testing_state_table",
-                "version": "0.0.1test",
-              },
-              "messageRetentionPeriod": "1209600",
-              "policy": {
-                "Statement": [
-                  {
-                    "Action": [
-                      "sqs:SendMessage",
-                    ],
-                    "Condition": {
-                      "StringEquals": {
-                        "aws:SourceAccount": "123456789012",
-                      },
-                    },
-                    "Effect": "Allow",
-                    "Principal": {
-                      "Service": "s3.amazonaws.com",
-                    },
-                    "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-test-actor-queue",
-                    "Sid": "accept-s3-events",
-                  },
-                  {
-                    "Action": [
-                      "sqs:SendMessage",
-                    ],
-                    "Condition": {
-                      "StringEquals": {
-                        "aws:SourceAccount": "123456789012",
-                      },
-                    },
-                    "Effect": "Allow",
-                    "Principal": {
-                      "Service": "events.amazonaws.com",
-                    },
-                    "Resource": "arn:aws:sqs:us-east-1:123456789012:test-deployment-test-actor-queue",
-                    "Sid": "accept-cloudwatch-events",
-                  },
-                ],
-                "Version": "2012-10-17",
-              },
-              "receiveMessageWaitTimeSeconds": "0",
-              "url": "test-deployment-test-actor-queue",
-              "visibilityTimeout": "300",
-            },
-            "resourceType": "Queue",
-            "status": "STABLE",
-          },
-          "test-deployment-test-actor-role": {
-            "dependsOn": [
-              "test-deployment-test-actor-queue",
-              "test-deployment-test-actor-dlq",
-            ],
-            "name": "test-deployment-test-actor-role",
-            "properties": {
-              "arn": "arn:aws:iam::123456789012:role/test-deployment-test-actor-role",
-              "assumeRolePolicyDocument": {
-                "Statement": [
-                  {
-                    "Action": "sts:AssumeRole",
-                    "Effect": "Allow",
-                    "Principal": {
-                      "Service": "lambda.amazonaws.com",
-                    },
-                  },
-                ],
-                "Version": "2012-10-17",
-              },
-              "deployment": {
-                "accountId": "123456789012",
-                "envPaths": {
-                  "cache": "",
-                  "config": "",
-                  "data": "",
-                  "log": "",
-                  "temp": "",
-                },
-                "name": "test-deployment",
-                "region": "us-east-1",
-                "stateTable": "_testing_state_table",
-                "version": "0.0.1test",
-              },
-              "description": "test-deployment actor test-actor role",
-              "managedPolicyArns": [
-                "arn:aws:iam::123456789012:policy/shared-policy",
-              ],
-              "rolePolicyDocument": {
-                "Statement": [
-                  {
-                    "Action": [
-                      "sqs:DeleteMessage",
-                      "sqs:ReceiveMessage",
-                      "sqs:GetQueueAttributes",
-                      "sqs:SendMessage",
-                    ],
-                    "Effect": "Allow",
-                    "Resource": [
-                      "arn:aws:sqs:us-east-1:123456789012:test-deployment-test-actor-queue",
-                      "arn:aws:sqs:us-east-1:123456789012:test-deployment-test-actor-dlq",
-                    ],
-                  },
-                ],
-                "Version": "2012-10-17",
-              },
-            },
-            "resourceType": "Role",
-            "status": "STABLE",
-          },
-        },
+        "resources": [
+          "test-deployment-test-actor-build",
+          "test-deployment-test-actor-function",
+          "test-deployment-test-actor-queue",
+          "test-deployment-test-actor-dlq",
+          "test-deployment-test-actor-role",
+          "test-actor-mapping",
+        ],
         "status": "STABLE",
       }
     `);
 
-    const deserialized = deserialize(serialized);
-    await deserialized.reconcile();
-    // @ts-ignore
-    expect(deserialized.properties).toMatchInlineSnapshot(`
-      {
-        "actorName": "test-actor",
-        "actorSharedPolicyArn": "arn:aws:iam::123456789012:policy/shared-policy",
-        "artifactBucket": "test-bucket",
-        "deployment": {
-          "accountId": "123456789012",
-          "envPaths": {
-            "cache": "",
-            "config": "",
-            "data": "",
-            "log": "",
-            "temp": "",
-          },
-          "name": "test-deployment",
-          "region": "us-east-1",
-          "stateTable": "_testing_state_table",
-          "version": "0.0.1test",
-        },
-        "environmentVariables": {
-          "123": "456",
-          "foo": "bar",
-        },
-        "handler": "./lambdas/monitor.handler",
-      }
-    `);
-    expect(deserialized.status).toBe('STABLE');
-    await deserialized.destroy();
-    expect(deserialized.status).toBe('DESTROYED');
+    expect(wharfieActorResources.status).toBe('STABLE');
+    await wharfieActorResources.destroy();
+    expect(wharfieActorResources.status).toBe('DESTROYED');
   });
 });

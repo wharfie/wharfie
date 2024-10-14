@@ -18,6 +18,7 @@ const BaseResource = require('../base-resource');
 /**
  * @typedef LambdaBuildOptions
  * @property {string} name -
+ * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {LambdaBuildProperties & import('../../typedefs').SharedProperties} properties -
  * @property {import('../reconcilable')[]} [dependsOn] -
@@ -27,8 +28,8 @@ class LambdaBuild extends BaseResource {
   /**
    * @param {LambdaBuildOptions} options -
    */
-  constructor({ name, status, dependsOn = [], properties }) {
-    super({ name, status, dependsOn, properties });
+  constructor({ name, parent, status, dependsOn = [], properties }) {
+    super({ name, parent, status, properties, dependsOn });
     this.s3 = new S3({});
   }
 
