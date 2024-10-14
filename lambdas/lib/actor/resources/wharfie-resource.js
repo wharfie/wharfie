@@ -345,6 +345,73 @@ class WharfieResource extends BaseResourceGroup {
     return resource;
   }
 
+  // /**
+  //  * @param {Resource} resourceDef -
+  //  * @returns {WharfieResource} -
+  //  */
+  // static fromResourceDef(resourceDef) {
+  //   return new WharfieResource({
+  //     name: resourceDef.id,
+  //     properties: {
+  //         ...(resourceDef.source_properties.description ? { description: resourceDef.source_properties.description } : {}),
+  //         columns: resourceDef.source_properties.columns,
+  //         ...(resourceDef.source_properties.partitionKeys ? { partitionKeys: resourceDef.source_properties.partitionKeys } : {}),
+  //         ...(resourceDef.source_properties.location ? { inputLocation: resourceDef.source_properties.location } : {}),
+  //         tableType: resourceDef.source_properties.tableType,
+  //         parameters: resourceDef.source_properties.parameters,
+  //         inputFormat: resourceDef.source_properties.inputFormat,
+  //         outputFormat: resourceDef.source_properties.outputFormat,
+  //         serdeInfo: resourceDef.source_properties.serdeInfo,
+  //         resourceName: '<NEEDED>',
+  //         projectName: '<NEEDED>',
+  //         databaseName: resourceDef.destination_properties.databaseName,
+  //         ...(resourceDef.destination_properties.location ? { outputLocation: resourceDef.destination_properties.location } : {}),
+  //         projectBucket: '<NEEDED>',
+  //         region: resourceDef.region,
+  //         catalogId: resourceDef.source_properties.catalogId,
+  //         roleArn: resourceDef.daemon_config.Role,
+  //         interval: resourceDef.daemon_config.SLA?.MaxDelay,
+  //         resourceId: resourceDef.id,
+  //         createdAt: resourceDef.created_at,
+  //         deployment: '<NEEDED>',
+  //         workgroup: resourceDef.athena_workgroup,
+  //         wharfieVersion: resourceDef.wharfie_version,
+  //         sourceRegion: resourceDef.source_region,
+  //         operationTable: resourceDef.destination_properties.name,
+  //         dependencyTable: `${resourceDef.destination_properties.databaseName}-dependencies`,
+  //         locationTable: `${resourceDef.destination_properties.databaseName}-locations`,
+
+  //         // general properties
+  //         deployment: () => this.get('deployment'),
+  //         resourceName: 'logs',
+  //         projectName: this.get('deployment').name,
+  //         databaseName: this.get('deployment').name,
+  //         outputLocation: `s3://${systemBucket.name}/logs/processed/`,
+  //         projectBucket: systemBucket.name,
+  //         region: () => this.get('deployment').region,
+  //         catalogId: () => this.get('deployment').accountId,
+  //         roleArn: () => loggingResourceRole.get('arn'),
+  //         operationTable: `${this.get('deployment').name}-operations`,
+  //         dependencyTable: `${this.get('deployment').name}-dependencies`,
+  //         locationTable: `${this.get('deployment').name}-locations`,
+  //         scheduleQueueArn: () =>
+  //           `arn:aws:sqs:${this.get('deployment').region}:${
+  //             this.get('deployment').accountId
+  //           }:${this.get('deployment').name}-events-queue`,
+  //         scheduleQueueUrl: () =>
+  //           `https://sqs.${this.get('deployment').region}.amazonaws.com/${
+  //             this.get('deployment').accountId
+  //           }/${this.get('deployment').name}-events-queue`,
+  //         daemonQueueUrl: () =>
+  //           `https://sqs.${this.get('deployment').region}.amazonaws.com/${
+  //             this.get('deployment').accountId
+  //           }/${this.get('deployment').name}-daemon-queue`,
+  //         tags: [],
+  //         createdAt: this.get('createdAt'),
+  //     }
+  // })
+  // }
+
   async needsMigration() {
     const oldProperties = (await this.fetchStoredData())?.properties;
     if (!oldProperties) return true;

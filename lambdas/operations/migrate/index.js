@@ -9,6 +9,8 @@ const find_compaction_partitions = require('../actions/find_compaction_partition
 const run_compaction = require('../actions/run_compaction');
 const update_symlinks = require('../actions/update_symlinks');
 const swap_resource = require('./swap_resource');
+const create_migration_resource = require('./create_migration_resource');
+const destroy_migration_resource = require('./destroy_migration_resource');
 const side_effects = require('../side_effects');
 
 /**
@@ -36,9 +38,13 @@ async function start(event, context, resource) {
     type: Action.Type.START,
     id: event.action_id,
   });
+  const create_migration_resource = operation.createAction({
+    type: Action.Type.CREATE_MIGRATION_RESOUCE,
+    dependsOn: [start_action],
+  });
   const register_missing_partitions_action = operation.createAction({
     type: Action.Type.REGISTER_MISSING_PARTITIONS,
-    dependsOn: [start_action],
+    dependsOn: [create_migration_resource],
   });
   const find_compaction_partitions_action = operation.createAction({
     type: Action.Type.FIND_COMPACTION_PARTITIONS,
@@ -56,9 +62,13 @@ async function start(event, context, resource) {
     type: Action.Type.SWAP_RESOURCE,
     dependsOn: [update_symlinks_action],
   });
+  const destroy_migration_resource = operation.createAction({
+    type: Action.Type.CREATE_MIGRATION_RESOUCE,
+    dependsOn: [swap_resource_action],
+  });
   const finish_action = operation.createAction({
     type: Action.Type.FINISH,
-    dependsOn: [swap_resource_action],
+    dependsOn: [destroy_migration_resource],
   });
   const side_effect__cloudwatch = operation.createAction({
     type: Action.Type.SIDE_EFFECT__CLOUDWATCH,
@@ -174,6 +184,20 @@ async function route(event, context, resource, operation) {
     operation.operation_inputs.migration_resource
   );
   switch (event.action_type) {
+    case Action.Type.CREATE_MIGRATION_RESOUCE:
+      return await create_migration_resource.run(
+        event,
+        context,
+        resource,
+        operation
+      );
+    case Action.Type.DESTROY_MIGRATION_RESOURCE:
+      return await destroy_migration_resource.run(
+        event,
+        context,
+        migration_resource,
+        operation
+      );
     case 'REGISTER_MISSING_PARTITIONS':
       return await register_missing_partitions.run(
         event,
@@ -202,12 +226,7 @@ async function route(event, context, resource, operation) {
         operation
       );
     case 'SWAP_RESOURCE':
-      return await swap_resource.run(
-        event,
-        context,
-        migration_resource,
-        operation
-      );
+      return await swap_resource.run(event, context, resource, operation);
     case 'SIDE_EFFECT__CLOUDWATCH':
       return await side_effects.cloudwatch(event, context, resource, operation);
     case 'SIDE_EFFECT__WHARFIE':
