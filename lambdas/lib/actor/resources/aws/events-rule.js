@@ -95,9 +95,6 @@ class EventsRule extends BaseResource {
     });
 
     const desiredTags = this.get('tags') || [];
-
-    console.log(desiredTags);
-
     const tagsToAdd = desiredTags.filter(
       (/** @type {import('@aws-sdk/client-cloudwatch-events').Tag} */ tag) =>
         !Tags?.some((t) => t.Key === tag.Key)
