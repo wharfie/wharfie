@@ -41,7 +41,7 @@ class Monitor extends WharfieActor {
       name: `${this.name}-athena-events-rule`,
       parent,
       properties: {
-        deployment: this.get('deployment'),
+        deployment: () => this.get('deployment'),
         description: `${this.name} athena events rule`,
         state: EventsRule.ENABLED,
         eventPattern: JSON.stringify({

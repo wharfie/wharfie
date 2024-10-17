@@ -30,6 +30,10 @@ class LambdaMock {
         return await this.updateFunctionCode(command.input);
       case 'TagResourceCommand':
         return await this.tagResource(command.input);
+      case 'ListTagsCommand':
+        return await this.listTags(command.input);
+      case 'UntagResourceCommand':
+        return await this.untagResource(command.input);
       case 'CreateFunctionCommand':
         return await this.createFunction(command.input);
       case 'DeleteFunctionCommand':
@@ -89,22 +93,93 @@ class LambdaMock {
     const { resource } = parse(params.Resource);
 
     const [resourceType, resourceName] = resource.split(':');
-    if (resourceType !== 'function')
+    if (resourceType === 'function') {
+      if (!LambdaMock.__state.functions[resourceName]) {
+        throw new ResourceNotFoundException({
+          message: `Function not found: ${resourceName}`,
+        });
+      }
+      LambdaMock.__state.functions[resourceName] = {
+        ...LambdaMock.__state.functions[resourceName],
+        Tags: {
+          ...(LambdaMock.__state.functions[resourceName].Tags || {}),
+          ...params.Tags,
+        },
+      };
+    } else if (resourceType === 'event-source-mapping') {
+      if (!LambdaMock.__state.mappings[resourceName]) {
+        throw new ResourceNotFoundException({
+          message: `Mapping not found: ${resourceName}`,
+        });
+      }
+      LambdaMock.__state.mappings[resourceName] = {
+        ...LambdaMock.__state.mappings[resourceName],
+        Tags: {
+          ...(LambdaMock.__state.mappings[resourceName].Tags || {}),
+          ...params.Tags,
+        },
+      };
+    } else {
       throw new Error(
         `mocks don't support taggging this resource type ${resourceType}`
       );
-    if (!LambdaMock.__state.functions[resourceName]) {
-      throw new ResourceNotFoundException({
-        message: `Function not found: ${resourceName}`,
-      });
     }
-    LambdaMock.__state.functions[resourceName] = {
-      ...LambdaMock.__state.functions[resourceName],
-      Tags: {
-        ...(LambdaMock.__state.functions[resourceName].Tags || {}),
-        ...params.Tags,
-      },
-    };
+  }
+
+  async untagResource(params) {
+    const { resource } = parse(params.Resource);
+
+    const [resourceType, resourceName] = resource.split(':');
+    if (resourceType === 'function') {
+      if (!LambdaMock.__state.functions[resourceName]) {
+        throw new ResourceNotFoundException({
+          message: `Function not found: ${resourceName}`,
+        });
+      }
+      LambdaMock.__state.functions[resourceName].Tags = Object.fromEntries(
+        Object.entries(
+          LambdaMock.__state.functions[resourceName].Tags || {}
+        ).filter(([key]) => !params.TagKeys.includes(key))
+      );
+    } else if (resourceType === 'event-source-mapping') {
+      if (!LambdaMock.__state.mappings[resourceName]) {
+        throw new ResourceNotFoundException({
+          message: `Mapping not found: ${resourceName}`,
+        });
+      }
+      LambdaMock.__state.mappings[resourceName].Tags = Object.fromEntries(
+        Object.entries(
+          LambdaMock.__state.mappings[resourceName].Tags || {}
+        ).filter(([key]) => !params.TagKeys.includes(key))
+      );
+    } else {
+      throw new Error(
+        `mocks don't support taggging this resource type ${resourceType}`
+      );
+    }
+  }
+
+  async listTags(params) {
+    const { resource } = parse(params.Resource);
+    const [resourceType, resourceName] = resource.split(':');
+    if (resourceType === 'function') {
+      if (!LambdaMock.__state.functions[resourceName]) {
+        throw new ResourceNotFoundException({
+          message: `Function not found: ${resourceName}`,
+        });
+      }
+      return {
+        Tags: LambdaMock.__state.functions[resourceName].Tags || {},
+      };
+    } else if (resourceType === 'event-source-mapping') {
+      return {
+        Tags: LambdaMock.__state.mappings[resourceName].Tags || {},
+      };
+    } else {
+      throw new Error(
+        `mocks don't support taggging this resource type ${resourceType}`
+      );
+    }
   }
 
   async createFunction(params) {

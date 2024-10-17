@@ -44,6 +44,7 @@ describe('tests for Glue', () => {
             },
           ],
           "_partitions": {},
+          "tags": {},
         },
       }
     `);
@@ -111,6 +112,7 @@ describe('tests for Glue', () => {
             "OutputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
           },
           "_partitions": {},
+          "tags": {},
         },
       }
     `);

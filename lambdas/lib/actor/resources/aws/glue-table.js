@@ -21,7 +21,7 @@ const { EntityNotFoundException } = require('@aws-sdk/client-glue');
  * @property {boolean} [compressed] -
  * @property {string} [viewOriginalText] -
  * @property {string} [viewExpandedText] -
- * @property {any} [tags] -
+ * @property {Record<string, string>} [tags] -
  * @property {string | function(): string} [region] -
  */
 
@@ -54,38 +54,28 @@ class GlueTable extends BaseResource {
     const { Tags } = await this.glue.getTags({
       ResourceArn: this.get('arn'),
     });
-    /**
-     * @type {Record<string, string>}
-     */
-    const tagsToAdd = {};
-    /**
-     * @type {string[]}
-     */
-    const tagsToRemove = [];
-    Object.keys(this.get('tags')).forEach((tag) => {
-      if (!Tags?.[tag]) {
-        tagsToAdd[tag] = this.get('tags')[tag];
-      }
-    });
-    Object.keys(Tags || {}).forEach((tag) => {
-      if (!this.get('tags')[tag]) {
-        tagsToRemove.push(tag);
-      }
-    });
-    await Promise.all([
-      Object.keys(tagsToAdd).length > 0
-        ? this.glue.tagResource({
-            ResourceArn: this.get('arn'),
-            TagsToAdd: tagsToAdd,
-          })
-        : Promise.resolve(),
-      tagsToRemove.length > 0
-        ? this.glue.untagResource({
-            ResourceArn: this.get('arn'),
-            TagsToRemove: tagsToRemove,
-          })
-        : Promise.resolve(),
-    ]);
+    const currentTags = Tags || {};
+    const desiredTags = this.get('tags') || {};
+
+    const tagsToAdd = Object.entries(desiredTags).filter(
+      ([key, value]) => currentTags[key] !== value
+    );
+    const tagsToRemove = Object.keys(currentTags).filter(
+      (key) => !desiredTags[key]
+    );
+
+    if (tagsToAdd.length > 0) {
+      await this.glue.tagResource({
+        ResourceArn: this.get('arn'),
+        TagsToAdd: Object.fromEntries(tagsToAdd),
+      });
+    }
+    if (tagsToRemove.length > 0) {
+      await this.glue.untagResource({
+        ResourceArn: this.get('arn'),
+        TagsToRemove: tagsToRemove,
+      });
+    }
   }
 
   async _reconcile() {

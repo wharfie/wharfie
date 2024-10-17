@@ -25,7 +25,6 @@ class BucketNotificationConfiguration extends BaseResource {
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     super({ name, parent, status, dependsOn, properties });
     this.s3 = new S3();
-    this.set('arn', `arn:aws:s3:::${this.name}`);
   }
 
   async _reconcile() {

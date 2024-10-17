@@ -16,6 +16,12 @@ describe('iam policy IaC', () => {
         deployment: {
           accountId: '123456789012',
         },
+        tags: [
+          {
+            Key: 'test-tag',
+            Value: 'test-value',
+          },
+        ],
         description: `test policy`,
         document: () => ({
           Version: '2012-10-17',
@@ -69,6 +75,12 @@ describe('iam policy IaC', () => {
             ],
             "Version": "2012-10-17",
           },
+          "tags": [
+            {
+              "Key": "test-tag",
+              "Value": "test-value",
+            },
+          ],
         },
         "resourceType": "Policy",
         "status": "STABLE",
@@ -86,6 +98,12 @@ describe('iam policy IaC', () => {
           "Description": "test policy",
           "PolicyDocument": "{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["athena:GetQueryExecution","athena:*"],"Resource":"*"},{"Effect":"Allow","Action":["glue:GetPartitions","glue:GetPartition"],"Resource":"*"}]}",
           "PolicyName": "test-policy",
+          "Tags": [
+            {
+              "Key": "test-tag",
+              "Value": "test-value",
+            },
+          ],
         },
       }
     `);

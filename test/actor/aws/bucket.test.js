@@ -15,6 +15,12 @@ describe('bucket IaC', () => {
       name: 'test-bucket',
       properties: {
         deployment: getMockDeploymentProperties(),
+        tags: [
+          {
+            Key: 'test-key',
+            Value: 'test-value',
+          },
+        ],
         lifecycleConfiguration: {
           Rules: [
             {
@@ -81,6 +87,12 @@ describe('bucket IaC', () => {
               },
             ],
           },
+          "tags": [
+            {
+              "Key": "test-key",
+              "Value": "test-value",
+            },
+          ],
         },
         "resourceType": "Bucket",
         "status": "STABLE",

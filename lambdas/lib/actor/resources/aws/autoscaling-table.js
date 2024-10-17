@@ -49,7 +49,7 @@ class AutoscalingTable extends BaseResourceGroup {
       parent,
       properties: {
         _INTERNAL_STATE_RESOURCE: this.get('_INTERNAL_STATE_RESOURCE'),
-        deployment: this.get('deployment'),
+        deployment: () => this.get('deployment'),
         attributeDefinitions: this.get('attributeDefinitions'),
         keySchema: this.get('keySchema'),
         provisionedThroughput: this.get('provisionedThroughput'),
@@ -64,7 +64,7 @@ class AutoscalingTable extends BaseResourceGroup {
       parent,
       properties: {
         _INTERNAL_STATE_RESOURCE: this.get('_INTERNAL_STATE_RESOURCE'),
-        deployment: this.get('deployment'),
+        deployment: () => this.get('deployment'),
         description: `Role for ${this.get('tableName')} table autoscaling`,
         assumeRolePolicyDocument: {
           Version: '2012-10-17',
@@ -107,7 +107,7 @@ class AutoscalingTable extends BaseResourceGroup {
       parent,
       properties: {
         _INTERNAL_STATE_RESOURCE: this.get('_INTERNAL_STATE_RESOURCE'),
-        deployment: this.get('deployment'),
+        deployment: () => this.get('deployment'),
         minCapacity: this.get('minReadCapacity'),
         maxCapacity: this.get('maxReadCapacity'),
         resourceId: `table/${this.get('tableName')}`,
@@ -122,7 +122,7 @@ class AutoscalingTable extends BaseResourceGroup {
       parent,
       properties: {
         _INTERNAL_STATE_RESOURCE: this.get('_INTERNAL_STATE_RESOURCE'),
-        deployment: this.get('deployment'),
+        deployment: () => this.get('deployment'),
         resourceId: `table/${this.get('tableName')}`,
         serviceNamespace: ApplicationAutoScaling.ServiceNamespace.DYNAMODB,
         policyType: ApplicationAutoScaling.PolicyType.TargetTrackingScaling,
@@ -143,7 +143,7 @@ class AutoscalingTable extends BaseResourceGroup {
       parent,
       properties: {
         _INTERNAL_STATE_RESOURCE: this.get('_INTERNAL_STATE_RESOURCE'),
-        deployment: this.get('deployment'),
+        deployment: () => this.get('deployment'),
         minCapacity: this.get('minWriteCapacity'),
         maxCapacity: this.get('maxWriteCapacity'),
         resourceId: `table/${this.get('tableName')}`,
@@ -158,7 +158,7 @@ class AutoscalingTable extends BaseResourceGroup {
       parent,
       properties: {
         _INTERNAL_STATE_RESOURCE: this.get('_INTERNAL_STATE_RESOURCE'),
-        deployment: this.get('deployment'),
+        deployment: () => this.get('deployment'),
         resourceId: `table/${this.get('tableName')}`,
         serviceNamespace: ApplicationAutoScaling.ServiceNamespace.DYNAMODB,
         policyType: ApplicationAutoScaling.PolicyType.TargetTrackingScaling,

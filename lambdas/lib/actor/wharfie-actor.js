@@ -60,7 +60,7 @@ class WharfieActor extends BaseResourceGroup {
       name: `${this.name}-actor-resources`,
       parent,
       properties: {
-        deployment: this.get('deployment'),
+        deployment: () => this.get('deployment'),
         handler: this.get('handler'),
         actorName: this.name,
         actorSharedPolicyArn: () => this.get('actorSharedPolicyArn'),

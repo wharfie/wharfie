@@ -15,6 +15,12 @@ describe('iam role IaC', () => {
       name: 'test-role',
       properties: {
         deployment: getMockDeploymentProperties(),
+        tags: [
+          {
+            Key: 'test-key',
+            Value: 'test-value',
+          },
+        ],
       },
     });
     await role.reconcile();
@@ -41,6 +47,12 @@ describe('iam role IaC', () => {
             "stateTable": "_testing_state_table",
             "version": "0.0.1test",
           },
+          "tags": [
+            {
+              "Key": "test-key",
+              "Value": "test-value",
+            },
+          ],
         },
         "resourceType": "Role",
         "status": "STABLE",
@@ -60,6 +72,12 @@ describe('iam role IaC', () => {
           "Description": undefined,
           "Policies": [],
           "RoleName": "test-role",
+          "Tags": [
+            {
+              "Key": "test-key",
+              "Value": "test-value",
+            },
+          ],
         },
       }
     `);
@@ -80,6 +98,12 @@ describe('iam role IaC', () => {
       properties: {
         deployment: getMockDeploymentProperties(),
         description: `some role description`,
+        tags: [
+          {
+            Key: 'test-key',
+            Value: 'test-value',
+          },
+        ],
         assumeRolePolicyDocument: {
           Version: '2012-10-17',
           Statement: [
@@ -163,6 +187,12 @@ describe('iam role IaC', () => {
             ],
             "Version": "2012-10-17",
           },
+          "tags": [
+            {
+              "Key": "test-key",
+              "Value": "test-value",
+            },
+          ],
         },
         "resourceType": "Role",
         "status": "STABLE",
@@ -187,6 +217,12 @@ describe('iam role IaC', () => {
             },
           ],
           "RoleName": "test-role",
+          "Tags": [
+            {
+              "Key": "test-key",
+              "Value": "test-value",
+            },
+          ],
         },
       }
     `);

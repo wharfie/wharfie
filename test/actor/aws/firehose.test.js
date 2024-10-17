@@ -15,6 +15,12 @@ describe('firehose IaC', () => {
       name: 'test-table',
       properties: {
         deployment: getMockDeploymentProperties(),
+        tags: [
+          {
+            Key: 'test',
+            Value: 'test',
+          },
+        ],
         s3DestinationConfiguration: {
           BucketARN: 'arn:aws:s3:::test-bucket',
           RoleARN: 'arn:aws:iam::123456789012:role/test-role',
@@ -61,6 +67,12 @@ describe('firehose IaC', () => {
             "Prefix": "logs/raw/",
             "RoleARN": "arn:aws:iam::123456789012:role/test-role",
           },
+          "tags": [
+            {
+              "Key": "test",
+              "Value": "test",
+            },
+          ],
         },
         "resourceType": "Firehose",
         "status": "STABLE",
@@ -89,6 +101,12 @@ describe('firehose IaC', () => {
             "RoleARN": "arn:aws:iam::123456789012:role/test-role",
           },
           "records": [],
+          "tags": [
+            {
+              "Key": "test",
+              "Value": "test",
+            },
+          ],
         },
       }
     `);

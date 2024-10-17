@@ -117,6 +117,24 @@ class Lambda {
   }
 
   /**
+   * @param {import("@aws-sdk/client-lambda").UntagResourceCommandInput} params - lambda untagResource params
+   * @returns {Promise<import("@aws-sdk/client-lambda").UntagResourceCommandOutput>} - lambda untagResource result
+   */
+  async untagResource(params) {
+    const command = new AWS.UntagResourceCommand(params);
+    return this.lambda.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-lambda").ListTagsCommandInput} params - lambda listTags params
+   * @returns {Promise<import("@aws-sdk/client-lambda").ListTagsCommandOutput>} - lambda listTags result
+   */
+  async listTags(params) {
+    const command = new AWS.ListTagsCommand(params);
+    return this.lambda.send(command);
+  }
+
+  /**
    * @param {import("@aws-sdk/client-lambda").ListFunctionsCommandInput} params - lambda listFunctions params
    * @returns {Promise<import("@aws-sdk/client-lambda").ListFunctionsCommandOutput>} - lambda listFunctions result
    */

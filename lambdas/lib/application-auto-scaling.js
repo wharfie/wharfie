@@ -18,6 +18,33 @@ class ApplicationAutoScaling {
   }
 
   /**
+   * @param {import("@aws-sdk/client-application-auto-scaling").UntagResourceCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-application-auto-scaling").UntagResourceCommandOutput>} -
+   */
+  async untagResource(params) {
+    const command = new AWS.UntagResourceCommand(params);
+    return this.autoscaling.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-application-auto-scaling").TagResourceCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-application-auto-scaling").TagResourceCommandOutput>} -
+   */
+  async tagResource(params) {
+    const command = new AWS.TagResourceCommand(params);
+    return this.autoscaling.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-application-auto-scaling").ListTagsForResourceCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-application-auto-scaling").ListTagsForResourceCommandOutput>} -
+   */
+  async listTagsForResource(params) {
+    const command = new AWS.ListTagsForResourceCommand(params);
+    return this.autoscaling.send(command);
+  }
+
+  /**
    * @param {import("@aws-sdk/client-application-auto-scaling").PutScalingPolicyCommandInput} params -
    * @returns {Promise<import("@aws-sdk/client-application-auto-scaling").PutScalingPolicyCommandOutput>} -
    */

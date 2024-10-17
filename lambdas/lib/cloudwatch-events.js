@@ -87,7 +87,33 @@ class CloudWatchEvents {
     );
   }
 
-  // TODO: add tag commands here and to resource defs
+  /**
+   * @param {import("@aws-sdk/client-cloudwatch-events").ListTagsForResourceCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-cloudwatch-events").ListTagsForResourceCommandOutput>} -
+   */
+  async listTagsForResource(params) {
+    return await this.cloudwatchEvents.send(
+      new AWS.ListTagsForResourceCommand(params)
+    );
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-cloudwatch-events").TagResourceCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-cloudwatch-events").TagResourceCommandOutput>} -
+   */
+  async tagResource(params) {
+    return await this.cloudwatchEvents.send(new AWS.TagResourceCommand(params));
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-cloudwatch-events").UntagResourceCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-cloudwatch-events").UntagResourceCommandOutput>} -
+   */
+  async untagResource(params) {
+    return await this.cloudwatchEvents.send(
+      new AWS.UntagResourceCommand(params)
+    );
+  }
 }
 
 module.exports = CloudWatchEvents;

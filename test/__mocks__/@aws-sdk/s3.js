@@ -12,6 +12,7 @@ class S3Mock {
       if (!S3Mock.__state[bucket]) {
         S3Mock.__state[bucket] = {
           objects: {},
+          tags: [],
         };
       }
       S3Mock.__state[bucket].objects[prefix] = s3ObjectMap[s3Key];
@@ -70,7 +71,42 @@ class S3Mock {
         return await this.uploadPart(command.input);
       case 'UploadPartCopyCommand':
         return await this.uploadPartCopy(command.input);
+      case 'PutBucketTaggingCommand':
+        return await this.putBucketTagging(command.input);
+      case 'GetBucketTaggingCommand':
+        return await this.getBucketTagging(command.input);
+      case 'DeleteBucketTaggingCommand':
+        return await this.deleteBucketTagging(command.input);
     }
+  }
+
+  async putBucketTagging(params) {
+    if (!S3Mock.__state[params.Bucket]) {
+      throw new NoSuchBucket({
+        message: `The specified bucket does not exist: ${params.Bucket}`,
+      });
+    }
+    S3Mock.__state[params.Bucket].tags = params.Tagging.TagSet;
+  }
+
+  async getBucketTagging(params) {
+    if (!S3Mock.__state[params.Bucket]) {
+      throw new NoSuchBucket({
+        message: `The specified bucket does not exist: ${params.Bucket}`,
+      });
+    }
+    return {
+      TagSet: S3Mock.__state[params.Bucket].tags || [],
+    };
+  }
+
+  async deleteBucketTagging(params) {
+    if (!S3Mock.__state[params.Bucket]) {
+      throw new NoSuchBucket({
+        message: `The specified bucket does not exist: ${params.Bucket}`,
+      });
+    }
+    S3Mock.__state[params.Bucket].tags = [];
   }
 
   async getBucketNotificationConfiguration(params) {

@@ -202,6 +202,10 @@ describe('glue table IaC', () => {
           "ViewExpandedText": undefined,
           "ViewOriginalText": undefined,
           "_partitions": {},
+          "tags": {
+            "key1": "value1",
+            "key2": "value2",
+          },
         },
       }
     `);

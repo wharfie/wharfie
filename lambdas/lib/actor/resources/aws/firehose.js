@@ -5,6 +5,7 @@ const { ResourceNotFoundException } = require('@aws-sdk/client-firehose');
 /**
  * @typedef FirehoseProperties
  * @property {import('@aws-sdk/client-firehose').S3DestinationConfiguration | function(): import('@aws-sdk/client-firehose').S3DestinationConfiguration} s3DestinationConfiguration -
+ * @property {import('@aws-sdk/client-firehose').Tag[]} [tags] -
  */
 
 /**
@@ -23,6 +24,42 @@ class Firehose extends BaseResource {
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     super({ name, parent, status, properties, dependsOn });
     this.firehose = new FirehoseSDK({});
+  }
+
+  async _reconcileTags() {
+    const { Tags } = await this.firehose.listTagsForDeliveryStream({
+      DeliveryStreamName: this.name,
+    });
+    const currentTags = Tags || [];
+    const expectedTags = this.get('tags') || [];
+    const tagsToAdd = expectedTags.filter(
+      (/** @type {import('@aws-sdk/client-firehose').Tag} */ expectedTag) =>
+        !currentTags.some(
+          (currentTag) =>
+            currentTag.Key === expectedTag.Key &&
+            currentTag.Value === expectedTag.Value
+        )
+    );
+    const tagsToRemove = currentTags.filter(
+      (currentTag) =>
+        !expectedTags.some(
+          (/** @type {import('@aws-sdk/client-firehose').Tag} */ expectedTag) =>
+            expectedTag.Key === currentTag.Key &&
+            expectedTag.Value === currentTag.Value
+        )
+    );
+    if (tagsToAdd.length > 0) {
+      await this.firehose.tagDeliveryStream({
+        DeliveryStreamName: this.name,
+        Tags: tagsToAdd,
+      });
+    }
+    if (tagsToRemove.length > 0) {
+      await this.firehose.untagDeliveryStream({
+        DeliveryStreamName: this.name,
+        TagKeys: tagsToRemove.map((tag) => tag.Key || ''),
+      });
+    }
   }
 
   async _reconcile() {
@@ -47,6 +84,7 @@ class Firehose extends BaseResource {
         throw error;
       }
     }
+    await this._reconcileTags();
   }
 
   async _destroy() {

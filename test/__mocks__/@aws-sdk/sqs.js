@@ -39,12 +39,50 @@ class SQSMock {
         return await this.deleteMessage(command.input);
       case 'DeleteMessageBatchCommand':
         return await this.deleteMessageBatch(command.input);
+      case 'UntagQueueCommand':
+        return await this.untagQueue(command.input);
+      case 'TagQueueCommand':
+        return await this.tagQueue(command.input);
+      case 'ListQueueTagsCommand':
+        return await this.listQueueTags(command.input);
     }
+  }
+
+  async tagQueue(params) {
+    if (!SQSMock.__state.queues[params.QueueUrl])
+      throw new QueueDoesNotExist({
+        message: `queue ${params.QueueUrl} does not exist`,
+      });
+    SQSMock.__state.queues[params.QueueUrl].Tags = Object.assign(
+      SQSMock.__state.queues[params.QueueUrl].Tags,
+      params.Tags
+    );
+  }
+
+  async untagQueue(params) {
+    if (!SQSMock.__state.queues[params.QueueUrl])
+      throw new QueueDoesNotExist({
+        message: `queue ${params.QueueUrl} does not exist`,
+      });
+    SQSMock.__state.queues[params.QueueUrl].Tags = Object.fromEntries(
+      Object.entries(SQSMock.__state.queues[params.QueueUrl].Tags).filter(
+        ([key]) => !params.TagKeys.includes(key)
+      )
+    );
+  }
+
+  async listQueueTags(params) {
+    if (!SQSMock.__state.queues[params.QueueUrl])
+      throw new QueueDoesNotExist({
+        message: `queue ${params.QueueUrl} does not exist`,
+      });
+    return { Tags: SQSMock.__state.queues[params.QueueUrl].Tags };
   }
 
   async createQueue(params) {
     SQSMock.__state.queues[params.QueueName] = {
       queue: [],
+      Tags: params.tags || {},
       Attributes: {
         QueueArn: `arn:aws:sqs:us-east-1:123456789012:${params.QueueName}`,
         ...(params.Attributes || {}),

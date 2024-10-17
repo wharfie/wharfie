@@ -125,7 +125,7 @@ class WharfieDeployment extends BaseResourceGroup {
       parent,
       properties: {
         _INTERNAL_STATE_RESOURCE: true,
-        deployment: this.getDeploymentProperties.bind(this),
+        deployment: () => this.getDeploymentProperties(),
         attributeDefinitions: [
           {
             AttributeName: 'deployment',
@@ -149,7 +149,7 @@ class WharfieDeployment extends BaseResourceGroup {
       parent,
       name: `${this.name}-deployment-resources`,
       properties: {
-        deployment: this.getDeploymentProperties.bind(this),
+        deployment: () => this.getDeploymentProperties(),
         loggingLevel: this.get('loggingLevel'),
         createdAt: this.get('createdAt'),
       },
@@ -160,7 +160,7 @@ class WharfieDeployment extends BaseResourceGroup {
       dependsOn: [resourceGroup],
       parent,
       properties: {
-        deployment: this.getDeploymentProperties.bind(this),
+        deployment: () => this.getDeploymentProperties(),
         actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
         artifactBucket: () => resourceGroup.getBucket().name,
         environmentVariables: this.getActorEnvironmentVariables.bind(this),
@@ -210,7 +210,7 @@ class WharfieDeployment extends BaseResourceGroup {
           monitorActor,
         ],
         properties: {
-          deployment: this.getDeploymentProperties.bind(this),
+          deployment: () => this.getDeploymentProperties(),
           bucketName: resourceGroup.getBucket().name,
           notificationConfiguration: () => ({
             QueueConfigurations: [

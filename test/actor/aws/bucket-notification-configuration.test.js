@@ -69,7 +69,6 @@ describe('bucket notification configuration IaC', () => {
         "name": "test-bucket-notification-config",
         "parent": "",
         "properties": {
-          "arn": "arn:aws:s3:::test-bucket-notification-config",
           "bucketName": "test-bucket",
           "deployment": {
             "accountId": "123456789012",
