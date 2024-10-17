@@ -777,7 +777,18 @@ class S3 {
    */
   async getBucketTagging(params) {
     const command = new AWS.GetBucketTaggingCommand(params);
-    return await this.s3.send(command);
+    try {
+      return await this.s3.send(command);
+    } catch (err) {
+      // @ts-ignore
+      if (err.name === 'NoSuchTagSet') {
+        return {
+          TagSet: [],
+          $metadata: {},
+        };
+      }
+      throw err;
+    }
   }
 
   /**

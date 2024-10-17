@@ -25,17 +25,11 @@ class AthenaWorkGroup extends BaseResource {
    * @param {AthenaWorkgroupOptions} options -
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
-    const propertiesWithDefaults = Object.assign(
-      {
-        tags: [],
-      },
-      properties
-    );
     super({
       name,
       parent,
       status,
-      properties: propertiesWithDefaults,
+      properties,
       dependsOn,
     });
     this.athena = new Athena({});
@@ -46,13 +40,13 @@ class AthenaWorkGroup extends BaseResource {
       ResourceARN: this.get('arn'),
     });
     const current_tags = Tags || [];
-    const tagsToAdd = this.get('tags').filter(
+    const tagsToAdd = this.get('tags', []).filter(
       (/** @type {import('@aws-sdk/client-athena').Tag} */ tag) =>
         !current_tags.find((t) => t.Key === tag.Key && t.Value === tag.Value)
     );
     const tagsToRemove = current_tags.filter(
       (tag) =>
-        !this.get('tags').find(
+        !this.get('tags', []).find(
           (/** @type  {import('@aws-sdk/client-athena').Tag} */ t) =>
             t.Key === tag.Key && t.Value === tag.Value
         )
@@ -110,7 +104,9 @@ class AthenaWorkGroup extends BaseResource {
               SelectedEngineVersion: 'Athena engine version 3',
             },
           },
-          Tags: this.get('tags'),
+          ...(this.has('tags') && this.get('tags').length > 0
+            ? { Tags: this.get('tags') }
+            : {}),
           Description: this.get('description'),
         });
       } else {
