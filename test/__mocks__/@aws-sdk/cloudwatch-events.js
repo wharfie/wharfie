@@ -4,7 +4,7 @@ const { ResourceNotFoundException, RuleState } = jest.requireActual(
 );
 
 class CloudWatchEventsMock {
-  __setMockState(state = { Rules: {} }) {
+  __setMockState(state = { Rules: {}, Tags: {} }) {
     CloudWatchEventsMock.__state = state;
   }
 
@@ -30,6 +30,12 @@ class CloudWatchEventsMock {
         return await this.putRule(command.input);
       case 'DeleteRuleCommand':
         return await this.deleteRule(command.input);
+      case 'ListTagsForResourceCommand':
+        return await this.listTagsForResource(command.input);
+      case 'TagResourceCommand':
+        return await this.tagResource(command.input);
+      case 'UntagResourceCommand':
+        return await this.untagResource(command.input);
     }
   }
 
@@ -98,9 +104,14 @@ class CloudWatchEventsMock {
     if (CloudWatchEventsMock.__state.Rules[params.Name]) {
       throw new Error('Rule already exists');
     }
+    const RuleArn = `arn:aws:events:us-east-1:123456789012:rule/${params.Name}`;
     CloudWatchEventsMock.__state.Rules[params.Name] = {
       ...params,
+      Arn: RuleArn,
       Targets: [],
+    };
+    return {
+      RuleArn,
     };
   }
 
@@ -112,10 +123,36 @@ class CloudWatchEventsMock {
     }
     delete CloudWatchEventsMock.__state.Rules[params.Name];
   }
+
+  async listTagsForResource(params) {
+    if (!CloudWatchEventsMock.__state.Tags[params.ResourceARN]) {
+      return [];
+    }
+    return CloudWatchEventsMock.__state.Tags[params.ResourceARN];
+  }
+
+  async tagResource(params) {
+    if (!CloudWatchEventsMock.__state.Tags[params.ResourceARN]) {
+      CloudWatchEventsMock.__state.Tags[params.ResourceARN] = [];
+    }
+
+    CloudWatchEventsMock.__state.Tags[params.ResourceARN] = [
+      ...CloudWatchEventsMock.__state.Tags[params.ResourceARN],
+      ...params.Tags,
+    ];
+  }
+
+  async untagResource(params) {
+    CloudWatchEventsMock.__state.Tags[params.ResourceARN] =
+      CloudWatchEventsMock.__state.Tags[params.ResourceARN].filter(
+        (tag) => !params.TagKeys.includes(tag.Key)
+      );
+  }
 }
 
 CloudWatchEventsMock.__state = {
   Rules: {},
+  Tags: {},
 };
 
 module.exports = CloudWatchEventsMock;

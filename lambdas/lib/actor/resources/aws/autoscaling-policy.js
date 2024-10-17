@@ -27,7 +27,13 @@ class AutoscalingPolicy extends BaseResource {
    * @param {AutoscalingPolicyOptions} options -
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
-    super({ name, parent, status, properties, dependsOn });
+    super({
+      name,
+      parent,
+      status,
+      properties,
+      dependsOn,
+    });
     this.autoscaling = new ApplicationAutoScaling();
   }
 

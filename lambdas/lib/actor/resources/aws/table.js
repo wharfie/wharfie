@@ -14,6 +14,7 @@ const BaseResource = require('../base-resource');
  * @property {import("@aws-sdk/client-dynamodb").ProvisionedThroughput} [provisionedThroughput] -
  * @property {import("@aws-sdk/client-dynamodb").TimeToLiveSpecification} [timeToLiveSpecification] -
  * @property {import("@aws-sdk/client-dynamodb").BillingMode} [billingMode] -
+ * @property {import("@aws-sdk/client-dynamodb").Tag[]} [tags] -
  */
 
 /**
@@ -61,6 +62,42 @@ class Table extends BaseResource {
     }
   }
 
+  async _reconcileTags() {
+    const { Tags } = await this.dynamo.listTagsOfResource({
+      ResourceArn: this.get('arn'),
+    });
+    const currentTags = Tags || [];
+    const desiredTags = this.get('tags') || [];
+    const tagsToAdd = desiredTags.filter(
+      (/** @type {import("@aws-sdk/client-dynamodb").Tag} */ desiredTag) =>
+        !currentTags.some(
+          (currentTag) =>
+            currentTag.Key === desiredTag.Key &&
+            currentTag.Value === desiredTag.Value
+        )
+    );
+    const tagsToRemove = currentTags.filter(
+      (currentTag) =>
+        !desiredTags.some(
+          (/** @type {import("@aws-sdk/client-dynamodb").Tag} */ desiredTag) =>
+            desiredTag.Key === currentTag.Key &&
+            desiredTag.Value === currentTag.Value
+        )
+    );
+    if (tagsToAdd.length > 0) {
+      await this.dynamo.tagResource({
+        ResourceArn: this.get('arn'),
+        Tags: tagsToAdd,
+      });
+    }
+    if (tagsToRemove.length > 0) {
+      await this.dynamo.untagResource({
+        ResourceArn: this.get('arn'),
+        TagKeys: tagsToRemove.map((tag) => tag.Key || ''),
+      });
+    }
+  }
+
   async _reconcile() {
     try {
       const { Table } = await this.dynamo.describeTable({
@@ -93,6 +130,7 @@ class Table extends BaseResource {
           KeySchema: this.get('keySchema'),
           ProvisionedThroughput: this.get('provisionedThroughput'),
           BillingMode: this.get('billingMode'),
+          Tags: this.get('tags') || [],
         });
         this.set('arn', TableDescription?.TableArn);
       } else {
@@ -114,6 +152,7 @@ class Table extends BaseResource {
         });
       }
     }
+    await this._reconcileTags();
   }
 
   async _destroy() {

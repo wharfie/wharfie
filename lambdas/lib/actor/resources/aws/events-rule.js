@@ -5,6 +5,7 @@ const {
   ResourceNotFoundException,
   RuleState,
 } = require('@aws-sdk/client-cloudwatch-events');
+const { NoSuchBucket } = require('@aws-sdk/client-s3');
 
 /**
  * @typedef EventsRuleProperties
@@ -14,6 +15,7 @@ const {
  * @property {string | function} [roleArn] -
  * @property {import('@aws-sdk/client-cloudwatch-events').RuleState} state -
  * @property {import('@aws-sdk/client-cloudwatch-events').Target[] | function(): import('@aws-sdk/client-cloudwatch-events').Target[]} targets -
+ * @property {import('@aws-sdk/client-cloudwatch-events').Tag[]} [tags] -
  */
 
 /**
@@ -87,9 +89,42 @@ class EventsRule extends BaseResource {
     ]);
   }
 
+  async _reconcileTags() {
+    const { Tags } = await this.cloudwatchEvents.listTagsForResource({
+      ResourceARN: this.get('arn'),
+    });
+
+    const desiredTags = this.get('tags') || [];
+
+    console.log(desiredTags);
+
+    const tagsToAdd = desiredTags.filter(
+      (/** @type {import('@aws-sdk/client-cloudwatch-events').Tag} */ tag) =>
+        !Tags?.some((t) => t.Key === tag.Key)
+    );
+    const tagsToRemove = (Tags || []).filter(
+      (tag) =>
+        !desiredTags.some(
+          (/** @type {import('@aws-sdk/client-cloudwatch-events').Tag} */ t) =>
+            t.Key === tag.Key
+        )
+    );
+
+    if (tagsToRemove?.length > 0)
+      await this.cloudwatchEvents.untagResource({
+        ResourceARN: this.get('arn'),
+        TagKeys: tagsToRemove.map((tag) => tag.Key || ''),
+      });
+    if (tagsToAdd.length > 0)
+      await this.cloudwatchEvents.tagResource({
+        ResourceARN: this.get('arn'),
+        Tags: tagsToAdd,
+      });
+  }
+
   async _reconcile() {
     try {
-      const { State } = await this.cloudwatchEvents.describeRule({
+      const { State, Arn } = await this.cloudwatchEvents.describeRule({
         Name: this.name,
       });
       if (this.get('state') !== State) {
@@ -103,10 +138,11 @@ class EventsRule extends BaseResource {
           });
         }
       }
+      this.set('arn', Arn);
       // TODO handle target updates
     } catch (error) {
       if (error instanceof ResourceNotFoundException) {
-        await this.cloudwatchEvents.putRule({
+        const { RuleArn } = await this.cloudwatchEvents.putRule({
           Name: this.name,
           Description: this.get('description'),
           ...(this.has('scheduleExpression')
@@ -118,11 +154,13 @@ class EventsRule extends BaseResource {
           ...(this.has('roleArn') ? { RoleArn: this.get('roleArn') } : {}),
           State: this.get('state'),
         });
+        this.set('arn', RuleArn);
       } else {
         throw error;
       }
     }
     await this._reconcileTargets();
+    await this._reconcileTags();
   }
 
   async _destroy() {
@@ -145,8 +183,7 @@ class EventsRule extends BaseResource {
           Name: this.name,
         });
       } catch (error) {
-        // @ts-ignore
-        if (error.name !== 'NoSuchBucket') {
+        if (!(error instanceof NoSuchBucket)) {
           throw error;
         }
       }

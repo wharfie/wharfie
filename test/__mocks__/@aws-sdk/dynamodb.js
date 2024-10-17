@@ -3,6 +3,7 @@
 const { ResourceNotFoundException } = jest.requireActual(
   '@aws-sdk/client-dynamodb'
 );
+const { parse } = require('../../../lambdas/lib/arn');
 
 class DynamoDBMock {
   __setMockState(dynamodbState = {}) {
@@ -27,6 +28,12 @@ class DynamoDBMock {
         return await this.describeTimeToLive(command.input);
       case 'UpdateTimeToLiveCommand':
         return await this.updateTimeToLive(command.input);
+      case 'ListTagsOfResourceCommand':
+        return await this.listTags(command.input);
+      case 'TagResourceCommand':
+        return await this.tagResource(command.input);
+      case 'UntagResourceCommand':
+        return await this.untagResource(command.input);
     }
   }
 
@@ -102,6 +109,52 @@ class DynamoDBMock {
       ...DynamoDBMock.__state[params.TableName],
       TimeToLiveSpecification: params.TimeToLiveSpecification,
     };
+  }
+
+  async listTags(params) {
+    const { resource } = parse(params.ResourceArn);
+    const [type, tableName] = resource.split('/');
+    if (type !== 'table') {
+      throw new Error(`type ${type} not supported`);
+    }
+    if (!DynamoDBMock.__state[tableName])
+      throw new ResourceNotFoundException({
+        message: 'Requested resource not found',
+      });
+    return {
+      Tags: DynamoDBMock.__state[tableName].Tags || [],
+    };
+  }
+
+  async tagResource(params) {
+    const { resource } = parse(params.ResourceArn);
+    const [type, tableName] = resource.split('/');
+    if (type !== 'table') {
+      throw new Error(`type ${type} not supported`);
+    }
+    if (!DynamoDBMock.__state[tableName])
+      throw new ResourceNotFoundException({
+        message: 'Requested resource not found',
+      });
+    DynamoDBMock.__state[tableName].Tags = [
+      ...DynamoDBMock.__state[tableName].Tags,
+      ...params.Tags,
+    ];
+  }
+
+  async untagResource(params) {
+    const { resource } = parse(params.ResourceArn);
+    const [type, tableName] = resource.split('/');
+    if (type !== 'table') {
+      throw new Error(`type ${type} not supported`);
+    }
+    if (!DynamoDBMock.__state[tableName])
+      throw new ResourceNotFoundException({
+        message: 'Requested resource not found',
+      });
+    DynamoDBMock.__state[tableName].Tags = DynamoDBMock.__state[
+      tableName
+    ].Tags.filter((tag) => !params.TagKeys.includes(tag.Key));
   }
 }
 

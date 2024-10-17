@@ -59,6 +59,9 @@ describe('event source mapping IaC', () => {
         eventSourceArn: 'test-event-source-arn',
         batchSize: 1,
         maximumBatchingWindowInSeconds: 0,
+        tags: {
+          test: 'tag',
+        },
       },
     });
     await eventSourceMapping.reconcile();
@@ -70,6 +73,7 @@ describe('event source mapping IaC', () => {
         "name": "test-event-source-mapping",
         "parent": "",
         "properties": {
+          "arn": "arn:aws:lambda:us-east-1:123456789012:event-source-mapping:test-id",
           "batchSize": 1,
           "deployment": {
             "accountId": "123456789012",
@@ -88,6 +92,9 @@ describe('event source mapping IaC', () => {
           "eventSourceArn": "test-event-source-arn",
           "functionName": "test-function",
           "maximumBatchingWindowInSeconds": 0,
+          "tags": {
+            "test": "tag",
+          },
           "uuid": "test-id",
         },
         "resourceType": "EventSourceMapping",
@@ -109,6 +116,9 @@ describe('event source mapping IaC', () => {
             "FunctionName": "test-function",
             "MaximumBatchingWindowInSeconds": 0,
             "State": "Enabled",
+            "Tags": {
+              "test": "tag",
+            },
             "UUID": "test-id",
           },
         ],

@@ -220,6 +220,33 @@ class SQS {
     const command = new AWS.DeleteQueueCommand(params);
     return await this.sqs.send(command);
   }
+
+  /**
+   * @param {import("@aws-sdk/client-sqs").ListQueueTagsCommandInput} params - SQS listQueueTags params
+   * @returns {Promise<import("@aws-sdk/client-sqs").ListQueueTagsCommandOutput>} - SQS listQueueTags result
+   */
+  async listQueueTags(params) {
+    const command = new AWS.ListQueueTagsCommand(params);
+    return await this.sqs.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-sqs").TagQueueCommandInput} params - SQS tagQueue params
+   * @returns {Promise<import("@aws-sdk/client-sqs").TagQueueCommandOutput>} - SQS tagQueue result
+   */
+  async tagQueue(params) {
+    const command = new AWS.TagQueueCommand(params);
+    return await this.sqs.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-sqs").UntagQueueCommandInput} params - SQS untagQueue params
+   * @returns {Promise<import("@aws-sdk/client-sqs").UntagQueueCommandOutput>} - SQS untagQueue result
+   */
+  async untagQueue(params) {
+    const command = new AWS.UntagQueueCommand(params);
+    return await this.sqs.send(command);
+  }
 }
 
 module.exports = SQS;

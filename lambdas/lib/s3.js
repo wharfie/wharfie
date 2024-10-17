@@ -761,6 +761,33 @@ class S3 {
     }
     return byteSize;
   }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").PutBucketTaggingCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketTaggingCommandOutput>} -
+   */
+  async putBucketTagging(params) {
+    const command = new AWS.PutBucketTaggingCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").GetBucketTaggingCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketTaggingCommandOutput>} -
+   */
+  async getBucketTagging(params) {
+    const command = new AWS.GetBucketTaggingCommand(params);
+    return await this.s3.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-s3").DeleteBucketTaggingCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-s3").DeleteBucketTaggingCommandOutput>} -
+   */
+  async deleteBucketTagging(params) {
+    const command = new AWS.DeleteBucketTaggingCommand(params);
+    return await this.s3.send(command);
+  }
 }
 
 S3.findBucketRegionCache = new Map();

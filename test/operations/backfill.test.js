@@ -221,6 +221,7 @@ describe('backfill tests', () => {
               },
             ],
             "_partitions": {},
+            "tags": {},
           },
           "table_name_raw": {
             "DatabaseName": "test_db",
@@ -260,8 +261,10 @@ describe('backfill tests', () => {
                 ],
               },
             },
+            "tags": {},
           },
         },
+        "tags": {},
       }
     `);
     // eslint-disable-next-line jest/no-large-snapshots
@@ -272,24 +275,28 @@ describe('backfill tests', () => {
             "Attributes": {
               "QueueArn": "arn:aws:sqs:us-east-1:123456789012:cleanup-queue",
             },
+            "Tags": {},
             "queue": [],
           },
           "daemon-queue": {
             "Attributes": {
               "QueueArn": "arn:aws:sqs:us-east-1:123456789012:daemon-queue",
             },
+            "Tags": {},
             "queue": [],
           },
           "events-queue": {
             "Attributes": {
               "QueueArn": "arn:aws:sqs:us-east-1:123456789012:events-queue",
             },
+            "Tags": {},
             "queue": [],
           },
           "monitor-queue": {
             "Attributes": {
               "QueueArn": "arn:aws:sqs:us-east-1:123456789012:monitor-queue",
             },
+            "Tags": {},
             "queue": [],
           },
         },

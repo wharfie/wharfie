@@ -25,11 +25,55 @@ class AthenaWorkGroup extends BaseResource {
    * @param {AthenaWorkgroupOptions} options -
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
-    super({ name, parent, status, properties, dependsOn });
+    const propertiesWithDefaults = Object.assign(
+      {
+        tags: [],
+      },
+      properties
+    );
+    super({
+      name,
+      parent,
+      status,
+      properties: propertiesWithDefaults,
+      dependsOn,
+    });
     this.athena = new Athena({});
   }
 
+  async _reconcileTags() {
+    const { Tags } = await this.athena.listTagsForResource({
+      ResourceARN: this.get('arn'),
+    });
+    const current_tags = Tags || [];
+    const tagsToAdd = this.get('tags').filter(
+      (/** @type {import('@aws-sdk/client-athena').Tag} */ tag) =>
+        !current_tags.find((t) => t.Key === tag.Key && t.Value === tag.Value)
+    );
+    const tagsToRemove = current_tags.filter(
+      (tag) =>
+        !this.get('tags').find(
+          (/** @type  {import('@aws-sdk/client-athena').Tag} */ t) =>
+            t.Key === tag.Key && t.Value === tag.Value
+        )
+    );
+    await this.athena.untagResource({
+      ResourceARN: this.get('arn'),
+      TagKeys: tagsToRemove.map((tag) => tag.Key || ''),
+    });
+    await this.athena.tagResource({
+      ResourceARN: this.get('arn'),
+      Tags: tagsToAdd,
+    });
+  }
+
   async _reconcile() {
+    this.set(
+      'arn',
+      `arn:aws:athena:${this.get('deployment').region}:${
+        this.get('deployment').accountId
+      }:workgroup/${this.name}`
+    );
     try {
       const { WorkGroup } = await this.athena.getWorkGroup({
         WorkGroup: this.name,
@@ -73,6 +117,7 @@ class AthenaWorkGroup extends BaseResource {
         throw error;
       }
     }
+    await this._reconcileTags();
   }
 
   async _destroy() {

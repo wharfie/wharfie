@@ -142,6 +142,60 @@ class IAM {
     const command = new AWS.ListEntitiesForPolicyCommand(params);
     return await this.iam.send(command);
   }
+
+  /**
+   * @param {import("@aws-sdk/client-iam").ListPolicyTagsCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-iam").ListPolicyTagsCommandOutput>} -
+   */
+  async listPolicyTags(params) {
+    const command = new AWS.ListPolicyTagsCommand(params);
+    return await this.iam.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-iam").TagPolicyCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-iam").TagPolicyCommandOutput>} -
+   */
+  async tagPolicy(params) {
+    const command = new AWS.TagPolicyCommand(params);
+    return await this.iam.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-iam").UntagPolicyCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-iam").UntagPolicyCommandOutput>} -
+   */
+  async untagPolicy(params) {
+    const command = new AWS.UntagPolicyCommand(params);
+    return await this.iam.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-iam").ListRoleTagsCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-iam").ListRoleTagsCommandOutput>} -
+   */
+  async listRoleTags(params) {
+    const command = new AWS.ListRoleTagsCommand(params);
+    return await this.iam.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-iam").TagRoleCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-iam").TagRoleCommandOutput>} -
+   */
+  async tagRole(params) {
+    const command = new AWS.TagRoleCommand(params);
+    return await this.iam.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-iam").UntagRoleCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-iam").UntagRoleCommandOutput>} -
+   */
+  async untagRole(params) {
+    const command = new AWS.UntagRoleCommand(params);
+    return await this.iam.send(command);
+  }
 }
 
 module.exports = IAM;

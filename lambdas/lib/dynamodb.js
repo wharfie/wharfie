@@ -72,6 +72,33 @@ class DynamoDB {
     const command = new AWS.UpdateTimeToLiveCommand(params);
     return this.dynamodb.send(command);
   }
+
+  /**
+   * @param {import("@aws-sdk/client-dynamodb").ListTagsOfResourceCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-dynamodb").ListTagsOfResourceCommandOutput>} -
+   */
+  async listTagsOfResource(params) {
+    const command = new AWS.ListTagsOfResourceCommand(params);
+    return this.dynamodb.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-dynamodb").TagResourceCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-dynamodb").TagResourceCommandOutput>} -
+   */
+  async tagResource(params) {
+    const command = new AWS.TagResourceCommand(params);
+    return this.dynamodb.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-dynamodb").UntagResourceCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-dynamodb").UntagResourceCommandOutput>} -
+   */
+  async untagResource(params) {
+    const command = new AWS.UntagResourceCommand(params);
+    return this.dynamodb.send(command);
+  }
 }
 
 module.exports = DynamoDB;

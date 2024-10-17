@@ -15,6 +15,9 @@ describe('glue database IaC', () => {
       name: 'test-database',
       properties: {
         deployment: getMockDeploymentProperties(),
+        tags: {
+          testKey: 'test',
+        },
       },
     });
     await database.reconcile();
@@ -26,6 +29,7 @@ describe('glue database IaC', () => {
         "name": "test-database",
         "parent": "",
         "properties": {
+          "arn": "arn:aws:glue:us-east-1:123456789012:database/test-database",
           "deployment": {
             "accountId": "123456789012",
             "envPaths": {
@@ -39,6 +43,9 @@ describe('glue database IaC', () => {
             "region": "us-east-1",
             "stateTable": "_testing_state_table",
             "version": "0.0.1test",
+          },
+          "tags": {
+            "testKey": "test",
           },
         },
         "resourceType": "GlueDatabase",
@@ -54,6 +61,9 @@ describe('glue database IaC', () => {
       {
         "Database": {
           "_tables": {},
+          "tags": {
+            "testKey": "test",
+          },
         },
       }
     `);
