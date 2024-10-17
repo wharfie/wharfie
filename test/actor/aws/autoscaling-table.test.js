@@ -209,6 +209,7 @@ describe('autoscaling table IaC', () => {
             "parent": "test-table",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
+              "arn": "arn:aws:autoscaling:dynamodb:dynamodb:table:ReadCapacityUnits:target/table/table-name",
               "deployment": {
                 "accountId": "123456789012",
                 "envPaths": {
@@ -229,6 +230,7 @@ describe('autoscaling table IaC', () => {
               "roleArn": "arn:aws:iam::123456789012:role/table-name-autoscaling-role",
               "scalableDimension": "dynamodb:table:ReadCapacityUnits",
               "serviceNamespace": "dynamodb",
+              "tags": {},
             },
             "resourceType": "AutoscalingTarget",
             "status": "STABLE",
@@ -291,6 +293,7 @@ describe('autoscaling table IaC', () => {
             "parent": "test-table",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
+              "arn": "arn:aws:autoscaling:dynamodb:dynamodb:table:WriteCapacityUnits:target/table/table-name",
               "deployment": {
                 "accountId": "123456789012",
                 "envPaths": {
@@ -311,6 +314,7 @@ describe('autoscaling table IaC', () => {
               "roleArn": "arn:aws:iam::123456789012:role/table-name-autoscaling-role",
               "scalableDimension": "dynamodb:table:WriteCapacityUnits",
               "serviceNamespace": "dynamodb",
+              "tags": {},
             },
             "resourceType": "AutoscalingTarget",
             "status": "STABLE",

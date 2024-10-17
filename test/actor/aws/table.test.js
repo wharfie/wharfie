@@ -14,6 +14,12 @@ describe('table IaC', () => {
       name: 'test-table',
       properties: {
         deployment: getMockDeploymentProperties(),
+        tags: [
+          {
+            Key: 'test-key',
+            Value: 'test-value',
+          },
+        ],
         attributeDefinitions: [
           {
             AttributeName: 'semaphore',
@@ -73,6 +79,12 @@ describe('table IaC', () => {
             "ReadCapacityUnits": 5,
             "WriteCapacityUnits": 5,
           },
+          "tags": [
+            {
+              "Key": "test-key",
+              "Value": "test-value",
+            },
+          ],
         },
         "resourceType": "Table",
         "status": "STABLE",
@@ -106,6 +118,12 @@ describe('table IaC', () => {
           "TableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-table",
           "TableName": "test-table",
           "TableStatus": "ACTIVE",
+          "Tags": [
+            {
+              "Key": "test-key",
+              "Value": "test-value",
+            },
+          ],
         },
       }
     `);

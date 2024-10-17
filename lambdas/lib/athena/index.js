@@ -264,6 +264,44 @@ class Athena {
       Statistics: QueryExecution && QueryExecution.Statistics,
     };
   }
+
+  /**
+   * @param {import("@aws-sdk/client-athena").ListTagsForResourceCommandInput} params - Athena ListTagsForResource parameters
+   * @returns {Promise<import("@aws-sdk/client-athena").ListTagsForResourceCommandOutput>} - Athena ListTagsForResource result
+   */
+  async listTagsForResource(params) {
+    const returnTags = [];
+    let { Tags, NextToken, $metadata } = await this.athena.send(
+      new AWS.ListTagsForResourceCommand(params)
+    );
+    if (Tags) returnTags.push(...Tags);
+
+    while (NextToken) {
+      const { Tags: nextTags, NextToken: nextNextToken } =
+        await this.athena.send(
+          new AWS.ListTagsForResourceCommand({ ...params, NextToken })
+        );
+      if (nextTags) returnTags.push(...nextTags);
+      NextToken = nextNextToken;
+    }
+    return { Tags: returnTags, $metadata };
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-athena").TagResourceCommandInput} params - Athena tagResource parameters
+   * @returns {Promise<import("@aws-sdk/client-athena").TagResourceCommandOutput>} - Athena tagResource result
+   */
+  async tagResource(params) {
+    return await this.athena.send(new AWS.TagResourceCommand(params));
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-athena").UntagResourceCommandInput} params - Athena tagResource parameters
+   * @returns {Promise<import("@aws-sdk/client-athena").UntagResourceCommandOutput>} - Athena tagResource result
+   */
+  async untagResource(params) {
+    return await this.athena.send(new AWS.UntagResourceCommand(params));
+  }
 }
 
 module.exports = Athena;

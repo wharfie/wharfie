@@ -11,6 +11,7 @@ const { NoSuchEntityException } = require('@aws-sdk/client-iam');
  * @property {any | function } assumeRolePolicyDocument -
  * @property {string[] | (() => string[]) } [managedPolicyArns] -
  * @property {any} [rolePolicyDocument] -
+ * @property {import('@aws-sdk/client-iam').Tag[]} [tags] -
  */
 
 /**
@@ -31,6 +32,45 @@ class Role extends BaseResource {
     this.iam = new IAM({});
   }
 
+  async _reconcileTags() {
+    const { Tags } = await this.iam.listRoleTags({
+      RoleName: this.name,
+    });
+    const currentTags = Tags || [];
+    const desiredTags = this.get('tags') || [];
+    const tagsToAdd = desiredTags.filter(
+      (/** @type {import('@aws-sdk/client-iam').Tag} */ desiredTag) =>
+        !currentTags.some(
+          (/** @type {import('@aws-sdk/client-iam').Tag} */ currentTag) =>
+            currentTag.Key === desiredTag.Key &&
+            currentTag.Value === desiredTag.Value
+        )
+    );
+    const tagsToRemove = currentTags.filter(
+      (/** @type {import('@aws-sdk/client-iam').Tag} */ currentTag) =>
+        !desiredTags.some(
+          (/** @type {import('@aws-sdk/client-iam').Tag} */ desiredTag) =>
+            desiredTag.Key === currentTag.Key &&
+            desiredTag.Value === currentTag.Value
+        )
+    );
+    if (tagsToAdd.length > 0) {
+      await this.iam.tagRole({
+        RoleName: this.name,
+        Tags: tagsToAdd,
+      });
+    }
+    if (tagsToRemove.length > 0) {
+      await this.iam.untagRole({
+        RoleName: this.name,
+        TagKeys: tagsToRemove.map(
+          (/** @type {import('@aws-sdk/client-iam').Tag} */ tag) =>
+            tag.Key || ''
+        ),
+      });
+    }
+  }
+
   async _reconcile() {
     try {
       const { Role } = await this.iam.getRole({
@@ -45,6 +85,7 @@ class Role extends BaseResource {
           AssumeRolePolicyDocument: JSON.stringify(
             this.get('assumeRolePolicyDocument')
           ),
+          Tags: this.get('tags') || [],
         });
         this.set('arn', Role?.Arn);
       } else {
@@ -69,6 +110,7 @@ class Role extends BaseResource {
         )
       );
     }
+    await this._reconcileTags();
   }
 
   async _destroy() {

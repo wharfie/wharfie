@@ -22,7 +22,46 @@ class FirehoseMock {
         return await this.createDeliveryStream(command.input);
       case 'DeleteDeliveryStreamCommand':
         return await this.deleteDeliveryStream(command.input);
+      case 'ListTagsForDeliveryStreamCommand':
+        return await this.listTagsForDeliveryStream(command.input);
+      case 'TagDeliveryStreamCommand':
+        return await this.tagDeliveryStream(command.input);
+      case 'UntagDeliveryStreamCommand':
+        return await this.untagDeliveryStream(command.input);
     }
+  }
+
+  async listTagsForDeliveryStream(params) {
+    if (!FirehoseMock.__state[params.DeliveryStreamName]) {
+      throw new ResourceNotFoundException({
+        message: `DeliveryStream ${params.DeliveryStreamName} does not exist`,
+      });
+    }
+    return {
+      Tags: FirehoseMock.__state[params.DeliveryStreamName].tags || [],
+    };
+  }
+
+  async tagDeliveryStream(params) {
+    if (!FirehoseMock.__state[params.DeliveryStreamName]) {
+      throw new ResourceNotFoundException({
+        message: `DeliveryStream ${params.DeliveryStreamName} does not exist`,
+      });
+    }
+    FirehoseMock.__state[params.DeliveryStreamName].tags.push(...params.Tags);
+  }
+
+  async untagDeliveryStream(params) {
+    if (!FirehoseMock.__state[params.DeliveryStreamName]) {
+      throw new ResourceNotFoundException({
+        message: `DeliveryStream ${params.DeliveryStreamName} does not exist`,
+      });
+    }
+    FirehoseMock.__state[params.DeliveryStreamName].tags = FirehoseMock.__state[
+      params.DeliveryStreamName
+    ].tags.filter((tag) => {
+      return !params.TagKeys.includes(tag.Key);
+    });
   }
 
   async putRecordBatch(params) {
@@ -58,6 +97,7 @@ class FirehoseMock {
     FirehoseMock.__state[params.DeliveryStreamName] = {
       ...params,
       records: [],
+      tags: [],
       DeliveryStreamARN: `arn:aws:firehose:us-east-1:123456789012:deliverystream/${params.DeliveryStreamName}`,
       DeliveryStreamStatus: 'ACTIVE',
     };
@@ -74,7 +114,6 @@ class FirehoseMock {
   }
 }
 
-/** @type {Object<string, string[]>} */
 FirehoseMock.__state = {};
 
 module.exports = FirehoseMock;

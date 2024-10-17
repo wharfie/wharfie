@@ -17,6 +17,12 @@ describe('events rule IaC', () => {
       name: 'test-rule',
       properties: {
         deployment: getMockDeploymentProperties(),
+        tags: [
+          {
+            Key: 'test-key',
+            Value: 'test-value',
+          },
+        ],
         description: `practice rule`,
         state: EventsRule.ENABLED,
         scheduleExpression: 'rate(1 minute)',
@@ -44,6 +50,7 @@ describe('events rule IaC', () => {
         "name": "test-rule",
         "parent": "",
         "properties": {
+          "arn": "arn:aws:events:us-east-1:123456789012:rule/test-rule",
           "deployment": {
             "accountId": "123456789012",
             "envPaths": {
@@ -62,6 +69,12 @@ describe('events rule IaC', () => {
           "roleArn": "arn:aws:iam::123456789012:role/test-role",
           "scheduleExpression": "rate(1 minute)",
           "state": "ENABLED",
+          "tags": [
+            {
+              "Key": "test-key",
+              "Value": "test-value",
+            },
+          ],
           "targets": [
             {
               "Arn": "arn:aws:firehose:us-east-1:123456789012:deliverystream/test-table",
@@ -86,6 +99,7 @@ describe('events rule IaC', () => {
 
     expect(res).toMatchInlineSnapshot(`
       {
+        "Arn": "arn:aws:events:us-east-1:123456789012:rule/test-rule",
         "Description": "practice rule",
         "Name": "test-rule",
         "RoleArn": "arn:aws:iam::123456789012:role/test-role",

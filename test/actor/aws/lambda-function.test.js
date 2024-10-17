@@ -33,6 +33,9 @@ describe('lambda function IaC', () => {
         runtime: 'nodejs20.x',
         role: 'test-role',
         handler: `index.handler`,
+        tags: {
+          test: '123',
+        },
         code: () => ({
           S3Bucket: 123456789012,
           S3Key: 'test-key',
@@ -107,6 +110,9 @@ describe('lambda function IaC', () => {
           "publish": true,
           "role": "test-role",
           "runtime": "nodejs20.x",
+          "tags": {
+            "test": "123",
+          },
           "timeout": 300,
         },
         "resourceType": "LambdaFunction",
@@ -152,11 +158,13 @@ describe('lambda function IaC', () => {
           "Runtime": "nodejs20.x",
           "Tags": {
             "CodeHash": "test-code-hash",
+            "test": "123",
           },
           "Timeout": 300,
         },
         "Tags": {
           "CodeHash": "test-code-hash",
+          "test": "123",
         },
       }
     `);

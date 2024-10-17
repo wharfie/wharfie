@@ -51,7 +51,7 @@ class WharfieActorResources extends BaseResourceGroup {
       name: `${this.get('deployment').name}-${this.get('actorName')}-build`,
       parent,
       properties: {
-        deployment: this.get('deployment'),
+        deployment: () => this.get('deployment'),
         handler: () => this.get('handler'),
         artifactBucket: () => this.get('artifactBucket'),
       },
@@ -60,7 +60,7 @@ class WharfieActorResources extends BaseResourceGroup {
       name: `${this.get('deployment').name}-${this.get('actorName')}-queue`,
       parent,
       properties: {
-        deployment: this.get('deployment'),
+        deployment: () => this.get('deployment'),
         policy: () => ({
           Version: '2012-10-17',
           Statement: [
@@ -100,7 +100,7 @@ class WharfieActorResources extends BaseResourceGroup {
       name: `${this.get('deployment').name}-${this.get('actorName')}-dlq`,
       parent,
       properties: {
-        deployment: this.get('deployment'),
+        deployment: () => this.get('deployment'),
       },
     });
     const role = new Role({
@@ -108,7 +108,7 @@ class WharfieActorResources extends BaseResourceGroup {
       parent,
       dependsOn: [queue, dlq],
       properties: {
-        deployment: this.get('deployment'),
+        deployment: () => this.get('deployment'),
         description: `${this.get('deployment').name} actor ${this.get(
           'actorName'
         )} role`,
@@ -147,7 +147,7 @@ class WharfieActorResources extends BaseResourceGroup {
       parent,
       dependsOn: [role, dlq, queue, build],
       properties: {
-        deployment: this.get('deployment'),
+        deployment: () => this.get('deployment'),
         runtime: 'nodejs20.x',
         role: () => role.get('arn'),
         handler: `index.handler`,
@@ -180,7 +180,7 @@ class WharfieActorResources extends BaseResourceGroup {
       parent,
       dependsOn: [lambda, queue],
       properties: {
-        deployment: this.get('deployment'),
+        deployment: () => this.get('deployment'),
         functionName: lambda.name,
         eventSourceArn: () => queue.get('arn'),
         batchSize: 1,

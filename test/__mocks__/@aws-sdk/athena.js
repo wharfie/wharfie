@@ -33,6 +33,7 @@ class AthenaMock {
       notificationQueue: new SQS(),
       queryMocks: {},
       queryMockSideEffects: {},
+      tags: {},
     }
   ) {
     AthenaMock.__state = athenaState;
@@ -60,7 +61,42 @@ class AthenaMock {
         return await this.batchGetQueryExecution(command.input);
       case 'GetQueryResultsCommand':
         return await this.getQueryResults(command.input);
+      case 'ListTagsForResourceCommand':
+        return await this.ListTagsForResource(command.input);
+      case 'TagResourceCommand':
+        return await this.TagResource(command.input);
+      case 'UntagResourceCommand':
+        return await this.UntagResource(command.input);
     }
+  }
+
+  async UntagResource(params) {
+    if (!AthenaMock.__state.tags[params.ResourceARN]) return;
+    const keySet = new Set(params.TagKeys);
+    AthenaMock.__state.tags[params.ResourceARN] = AthenaMock.__state.tags[
+      params.ResourceARN
+    ].filter((tag) => !keySet.has(tag.Key));
+  }
+
+  async TagResource(params) {
+    if (!AthenaMock.__state.tags[params.ResourceARN])
+      AthenaMock.__state.tags[params.ResourceARN] = {};
+    params.Tags.forEach((tag) => {
+      AthenaMock.__state.tags[params.ResourceARN][tag.Key] = tag.Value;
+    });
+  }
+
+  async ListTagsForResource(params) {
+    if (!AthenaMock.__state.tags[params.ResourceARN]) return [];
+
+    return Object.keys(AthenaMock.__state.tags[params.ResourceARN]).map(
+      (tagKey) => {
+        return {
+          Key: tagKey,
+          Value: AthenaMock.__state.tags[params.ResourceARN][tagKey],
+        };
+      }
+    );
   }
 
   async getWorkGroup(params) {
@@ -350,6 +386,8 @@ AthenaMock.__state = {
   workgroups: {},
   notificationQueue: new SQS(),
   queryMocks: {},
+  queryMockSideEffects: {},
+  tags: {},
 };
 
 module.exports = AthenaMock;

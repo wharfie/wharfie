@@ -12,6 +12,7 @@ const {
  * @property {string | function(): string} eventSourceArn -
  * @property {number} batchSize -
  * @property {number} maximumBatchingWindowInSeconds -
+ * @property {Record<string, string>} [tags] -
  */
 
 /**
@@ -32,6 +33,39 @@ class EventSourceMapping extends BaseResource {
     this.lambda = new Lambda({});
   }
 
+  async _reconcileTags() {
+    const { Tags } = await this.lambda.listTags({
+      Resource: this.get('arn'),
+    });
+    const currentTags = Tags || {};
+
+    const tagsToAdd = Object.entries(this.get('tags') || {}).filter(
+      ([key, value]) =>
+        !Object.entries(currentTags).some(
+          ([tagKey, tagValue]) => tagKey === key && tagValue === value
+        )
+    );
+    const tagsToRemove = Object.entries(currentTags).filter(
+      ([key, value]) =>
+        !Object.entries(this.get('tags', {})).some(
+          ([tagKey, tagValue]) => tagKey === key && tagValue === value
+        )
+    );
+
+    if (tagsToAdd.length > 0) {
+      await this.lambda.tagResource({
+        Resource: this.get('arn'),
+        Tags: Object.fromEntries(tagsToAdd),
+      });
+    }
+    if (tagsToRemove.length > 0) {
+      await this.lambda.untagResource({
+        Resource: this.get('arn'),
+        TagKeys: Object.keys(Object.fromEntries(tagsToRemove)),
+      });
+    }
+  }
+
   async _reconcile() {
     const existingMapping = this.has('uuid');
     if (!existingMapping) {
@@ -46,6 +80,12 @@ class EventSourceMapping extends BaseResource {
           ),
         });
         this.set('uuid', UUID);
+        this.set(
+          'arn',
+          `arn:aws:lambda:${this.get('deployment').region}:${
+            this.get('deployment').accountId
+          }:event-source-mapping:${UUID}`
+        );
         await this.waitForEventSourceMappingStatus('Enabled');
       } catch (error) {
         if (error instanceof ResourceConflictException) {
@@ -83,8 +123,15 @@ class EventSourceMapping extends BaseResource {
         });
       }
       this.set('uuid', existingMapping.UUID);
+      this.set(
+        'arn',
+        `arn:aws:lambda:${this.get('deployment').region}:${
+          this.get('deployment').accountId
+        }:event-source-mapping:${existingMapping.UUID}`
+      );
       await this.waitForEventSourceMappingStatus('Enabled');
     }
+    await this._reconcileTags();
   }
 
   async _destroy() {

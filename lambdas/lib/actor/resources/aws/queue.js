@@ -10,6 +10,7 @@ const { QueueDoesNotExist } = require('@aws-sdk/client-sqs');
  * @property {string} [delaySeconds] -
  * @property {string} [receiveMessageWaitTimeSeconds] -
  * @property {any | function(): Promise<any>} [policy] -
+ * @property {Record<string, string>} [tags] -
  */
 
 /**
@@ -43,6 +44,32 @@ class Queue extends BaseResource {
       dependsOn,
     });
     this.sqs = new SQS({});
+  }
+
+  async _reconcileTags() {
+    const { Tags } = await this.sqs.listQueueTags({
+      QueueUrl: this.get('url'),
+    });
+    const currentTags = Tags || {};
+    const desiredTags = this.get('tags') || {};
+    const tagsToAdd = Object.entries(desiredTags).filter(
+      ([key, value]) => currentTags[key] !== value
+    );
+    const tagsToRemove = Object.keys(currentTags).filter(
+      (key) => !(key in desiredTags)
+    );
+    if (tagsToAdd.length > 0) {
+      await this.sqs.tagQueue({
+        QueueUrl: this.get('url'),
+        Tags: Object.fromEntries(tagsToAdd),
+      });
+    }
+    if (tagsToRemove.length > 0) {
+      await this.sqs.untagQueue({
+        QueueUrl: this.get('url'),
+        TagKeys: tagsToRemove,
+      });
+    }
   }
 
   async _reconcile() {
@@ -92,6 +119,7 @@ class Queue extends BaseResource {
               'receiveMessageWaitTimeSeconds'
             ),
           },
+          tags: this.get('tags') || {},
         });
         const { Attributes } = await this.sqs.getQueueAttributes({
           QueueUrl,
@@ -109,6 +137,7 @@ class Queue extends BaseResource {
         throw error;
       }
     }
+    await this._reconcileTags();
   }
 
   async _destroy() {

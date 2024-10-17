@@ -7,6 +7,7 @@ class ApplicationAutoScalingMock {
     applicationAutoScalingState = {
       targets: [],
       policies: [],
+      tags: {},
     }
   ) {
     ApplicationAutoScalingMock.__state = applicationAutoScalingState;
@@ -30,7 +31,55 @@ class ApplicationAutoScalingMock {
         return await this.putScalingPolicy(command.input);
       case 'DeleteScalingPolicyCommand':
         return await this.deleteScalingPolicy(command.input);
+      case 'UntagResourceCommand':
+        return await this.untagResource(command.input);
+      case 'TagResourceCommand':
+        return await this.tagResource(command.input);
+      case 'ListTagsForResourceCommand':
+        return await this.listTagsForResource(command.input);
     }
+  }
+
+  async untagResource(params) {
+    const { ResourceARN, TagKeys } = params;
+    const tags = ApplicationAutoScalingMock.__state.tags[ResourceARN];
+    if (!tags) {
+      throw new ObjectNotFoundException({
+        message: `Resource with ARN ${ResourceARN} not found.`,
+      });
+    }
+    const newTags = tags.filter((tag) => !TagKeys.includes(tag.Key));
+    ApplicationAutoScalingMock.__state.tags[ResourceARN] = newTags;
+  }
+
+  async tagResource(params) {
+    const { ResourceARN, Tags } = params;
+    const tags = ApplicationAutoScalingMock.__state.tags[ResourceARN];
+    if (!tags) {
+      throw new ObjectNotFoundException({
+        message: `Resource with ARN ${ResourceARN} not found.`,
+      });
+    }
+    ApplicationAutoScalingMock.__state.tags[ResourceARN] = [
+      ...tags,
+      ...Object.keys(Tags).map((key) => ({ Key: key, Value: Tags[key] })),
+    ];
+  }
+
+  async listTagsForResource(params) {
+    const { ResourceARN } = params;
+    const tags = ApplicationAutoScalingMock.__state.tags[ResourceARN];
+    if (!tags) {
+      throw new ObjectNotFoundException({
+        message: `Resource with ARN ${ResourceARN} not found.`,
+      });
+    }
+    return {
+      Tags: tags.reduce((acc, tag) => {
+        acc[tag.key] = tag.value;
+        return acc;
+      }, {}),
+    };
   }
 
   async describeScalableTargets(params) {
@@ -47,10 +96,19 @@ class ApplicationAutoScalingMock {
   }
 
   async registerScalableTarget(params) {
-    ApplicationAutoScalingMock.__state.targets.push(params);
+    const targetARN = `arn:aws:autoscaling:${params.ServiceNamespace}:${params.ScalableDimension}:target/${params.ResourceId}`;
+    ApplicationAutoScalingMock.__state.targets.push({
+      ...params,
+      ScalableTargetARN: targetARN,
+    });
+    ApplicationAutoScalingMock.__state.tags[targetARN] = [];
+    return {
+      ScalableTargetARN: targetARN,
+    };
   }
 
   async deregisterScalableTarget(params) {
+    const targetARN = `arn:aws:autoscaling:${params.ServiceNamespace}:${params.ScalableDimension}:target/${params.ResourceId}`;
     const { ResourceId, ScalableDimension, ServiceNamespace } = params;
     const targetIndex = ApplicationAutoScalingMock.__state.targets.findIndex(
       (target) =>
@@ -64,6 +122,7 @@ class ApplicationAutoScalingMock {
       });
     }
     ApplicationAutoScalingMock.__state.targets.splice(targetIndex, 1);
+    delete ApplicationAutoScalingMock.__state.tags[targetARN];
   }
 
   async describeScalingPolicies(params) {
@@ -121,6 +180,7 @@ class ApplicationAutoScalingMock {
 ApplicationAutoScalingMock.__state = {
   targets: [],
   policies: [],
+  tags: {},
 };
 
 module.exports = ApplicationAutoScalingMock;

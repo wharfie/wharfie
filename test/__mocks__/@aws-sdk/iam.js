@@ -1,6 +1,7 @@
 'use strict';
 
 const { NoSuchEntityException } = jest.requireActual('@aws-sdk/client-iam');
+const { parse } = require('../../../lambdas/lib/arn');
 
 class IAMMock {
   __setMockState(
@@ -44,6 +45,18 @@ class IAMMock {
         return await this.deleteRolePolicy(command.input);
       case 'DeleteRoleCommand':
         return await this.deleteRole(command.input);
+      case 'ListPolicyTagsCommand':
+        return await this.listPolicyTags(command.input);
+      case 'TagPolicyCommand':
+        return await this.tagPolicy(command.input);
+      case 'UntagPolicyCommand':
+        return await this.untagPolicy(command.input);
+      case 'ListRoleTagsCommand':
+        return await this.listRoleTags(command.input);
+      case 'TagRoleCommand':
+        return await this.tagRole(command.input);
+      case 'UntagRoleCommand':
+        return await this.untagRole(command.input);
     }
   }
 
@@ -76,6 +89,7 @@ class IAMMock {
       PolicyName: params.PolicyName,
       PolicyDocument: params.PolicyDocument,
       Description: params.Description,
+      Tags: params.Tags || [],
     };
     return {
       Policy: IAMMock.__state.policies[params.PolicyName],
@@ -111,6 +125,43 @@ class IAMMock {
     delete IAMMock.__state.policies[policyName];
   }
 
+  async listPolicyTags(params) {
+    const { resource } = parse(params.PolicyArn);
+    const [, policyName] = resource.split('/');
+    if (!IAMMock.__state.policies[policyName])
+      throw new NoSuchEntityException({
+        message: `policy ${policyName} does not exist`,
+      });
+    return {
+      Tags: IAMMock.__state.policies[policyName].Tags,
+    };
+  }
+
+  async tagPolicy(params) {
+    const { resource } = parse(params.PolicyArn);
+    const [, policyName] = resource.split('/');
+    if (!IAMMock.__state.policies[policyName])
+      throw new NoSuchEntityException({
+        message: `policy ${policyName} does not exist`,
+      });
+    IAMMock.__state.policies[policyName].Tags = [
+      ...IAMMock.__state.policies[policyName].Tags,
+      ...params.Tags,
+    ];
+  }
+
+  async untagPolicy(params) {
+    const { resource } = parse(params.PolicyArn);
+    const [, policyName] = resource.split('/');
+    if (!IAMMock.__state.policies[policyName])
+      throw new NoSuchEntityException({
+        message: `policy ${policyName} does not exist`,
+      });
+    IAMMock.__state.policies[policyName].Tags = IAMMock.__state.policies[
+      policyName
+    ].Tags.filter((tag) => !params.TagKeys.includes(tag.Key));
+  }
+
   async createRole(params) {
     if (IAMMock.__state.roles[params.RoleName])
       throw new Error('role already exists');
@@ -121,10 +172,36 @@ class IAMMock {
       Policies: [],
       AttachedPolicies: [],
       Description: params.Description,
+      Tags: params.Tags || [],
     };
     return {
       Role: IAMMock.__state.roles[params.RoleName],
     };
+  }
+
+  async listRoleTags(params) {
+    if (!IAMMock.__state.roles[params.RoleName])
+      throw new Error(`role ${params.RoleName} does not exist`);
+    return {
+      Tags: IAMMock.__state.roles[params.RoleName].Tags,
+    };
+  }
+
+  async tagRole(params) {
+    if (!IAMMock.__state.roles[params.RoleName])
+      throw new Error(`role ${params.RoleName} does not exist`);
+    IAMMock.__state.roles[params.RoleName].Tags = [
+      ...IAMMock.__state.roles[params.RoleName].Tags,
+      ...params.Tags,
+    ];
+  }
+
+  async untagRole(params) {
+    if (!IAMMock.__state.roles[params.RoleName])
+      throw new Error(`role ${params.RoleName} does not exist`);
+    IAMMock.__state.policies[params.RoleName].Tags = IAMMock.__state.policies[
+      params.RoleName
+    ].Tags.filter((tag) => !params.TagKeys.includes(tag.Key));
   }
 
   async putRolePolicy(params) {

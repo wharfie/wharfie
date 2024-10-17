@@ -35,6 +35,12 @@ describe('athena workgroup IaC', () => {
         deployment: getMockDeploymentProperties(),
         outputLocation: 's3://test-bucket/test-prefix/',
         description: 'test-description',
+        tags: [
+          {
+            key: 'test-key',
+            value: 'test-value',
+          },
+        ],
       },
     });
     await workgroup.reconcile();
@@ -58,6 +64,7 @@ describe('athena workgroup IaC', () => {
             "name": "test-workgroup",
             "parent": "",
             "properties": {
+              "arn": "arn:aws:athena:us-east-1:123456789012:workgroup/test-workgroup",
               "deployment": {
                 "accountId": "123456789012",
                 "envPaths": {
@@ -74,6 +81,12 @@ describe('athena workgroup IaC', () => {
               },
               "description": "test-description",
               "outputLocation": "s3://test-bucket/test-prefix/",
+              "tags": [
+                {
+                  "key": "test-key",
+                  "value": "test-value",
+                },
+              ],
             },
             "resourceType": "AthenaWorkGroup",
             "status": "STABLE",
@@ -91,6 +104,7 @@ describe('athena workgroup IaC', () => {
         "name": "test-workgroup",
         "parent": "",
         "properties": {
+          "arn": "arn:aws:athena:us-east-1:123456789012:workgroup/test-workgroup",
           "deployment": {
             "accountId": "123456789012",
             "envPaths": {
@@ -107,6 +121,12 @@ describe('athena workgroup IaC', () => {
           },
           "description": "test-description",
           "outputLocation": "s3://test-bucket/test-prefix/",
+          "tags": [
+            {
+              "key": "test-key",
+              "value": "test-value",
+            },
+          ],
         },
         "resourceType": "AthenaWorkGroup",
         "status": "STABLE",
@@ -152,6 +172,7 @@ describe('athena workgroup IaC', () => {
         "name": "test-workgroup",
         "parent": "",
         "properties": {
+          "arn": "arn:aws:athena:us-east-1:123456789012:workgroup/test-workgroup",
           "deployment": {
             "accountId": "123456789012",
             "envPaths": {
@@ -168,6 +189,12 @@ describe('athena workgroup IaC', () => {
           },
           "description": "test-description",
           "outputLocation": "s3://test-bucket/test-prefix/",
+          "tags": [
+            {
+              "key": "test-key",
+              "value": "test-value",
+            },
+          ],
         },
         "resourceType": "AthenaWorkGroup",
         "status": "STABLE",
@@ -196,7 +223,12 @@ describe('athena workgroup IaC', () => {
         },
         "Description": "test-description",
         "Name": "test-workgroup",
-        "Tags": undefined,
+        "Tags": [
+          {
+            "key": "test-key",
+            "value": "test-value",
+          },
+        ],
         "queries": {},
       }
     `);

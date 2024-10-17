@@ -27,6 +27,9 @@ describe('autoscaling target IaC', () => {
         serviceNamespace: ApplicationAutoScaling.ServiceNamespace.DYNAMODB,
         roleArn:
           'arn:aws:iam::123456789012:role/aws-service-role/dynamodb.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_DynamoDBTable',
+        tags: {
+          'test-tag': 'test-value',
+        },
       },
     });
     await autoscalingTarget.reconcile();
@@ -38,6 +41,7 @@ describe('autoscaling target IaC', () => {
         "name": "test-rule",
         "parent": "",
         "properties": {
+          "arn": "arn:aws:autoscaling:dynamodb:dynamodb:table:ReadCapacityUnits:target/table/table",
           "deployment": {
             "accountId": "123456789012",
             "envPaths": {
@@ -58,6 +62,9 @@ describe('autoscaling target IaC', () => {
           "roleArn": "arn:aws:iam::123456789012:role/aws-service-role/dynamodb.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_DynamoDBTable",
           "scalableDimension": "dynamodb:table:ReadCapacityUnits",
           "serviceNamespace": "dynamodb",
+          "tags": {
+            "test-tag": "test-value",
+          },
         },
         "resourceType": "AutoscalingTarget",
         "status": "STABLE",
@@ -79,6 +86,7 @@ describe('autoscaling target IaC', () => {
             "ResourceId": "table/table",
             "RoleARN": "arn:aws:iam::123456789012:role/aws-service-role/dynamodb.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_DynamoDBTable",
             "ScalableDimension": "dynamodb:table:ReadCapacityUnits",
+            "ScalableTargetARN": "arn:aws:autoscaling:dynamodb:dynamodb:table:ReadCapacityUnits:target/table/table",
             "ServiceNamespace": "dynamodb",
           },
         ],

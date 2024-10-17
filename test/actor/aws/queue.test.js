@@ -15,6 +15,9 @@ describe('sqs queue IaC', () => {
       name: 'test-queue',
       properties: {
         deployment: getMockDeploymentProperties(),
+        tags: {
+          test: 'test',
+        },
       },
     });
     await queue.reconcile();
@@ -44,6 +47,9 @@ describe('sqs queue IaC', () => {
           },
           "messageRetentionPeriod": "1209600",
           "receiveMessageWaitTimeSeconds": "0",
+          "tags": {
+            "test": "test",
+          },
           "url": "test-queue",
           "visibilityTimeout": "300",
         },
@@ -64,6 +70,9 @@ describe('sqs queue IaC', () => {
           "QueueArn": "arn:aws:sqs:us-east-1:123456789012:test-queue",
           "ReceiveMessageWaitTimeSeconds": "0",
           "VisibilityTimeout": "300",
+        },
+        "Tags": {
+          "test": "test",
         },
         "queue": [],
       }

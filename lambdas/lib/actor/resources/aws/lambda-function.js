@@ -17,6 +17,7 @@ const { ResourceNotFoundException } = require('@aws-sdk/client-lambda');
  * @property {any} [ephemeralStorage] -
  * @property {any | function} [environment] -
  * @property {any | function} [deadLetterConfig] -
+ * @property {Record<string, string>} [tags] -
  * @property {string | function(): string} codeHash -
  */
 
@@ -78,6 +79,45 @@ class LambdaFunction extends BaseResource {
       }
     }
     return false;
+  }
+
+  async _reconcileTags() {
+    const { Tags } = await this.lambda.listTags({
+      Resource: this.get('arn'),
+    });
+    const currentTags = Tags || {};
+    const desiredTags = Object.assign(
+      {
+        CodeHash: this.get('codeHash'),
+      },
+      this.get('tags', {})
+    );
+
+    const tagsToAdd = Object.entries(desiredTags).filter(
+      ([key, value]) =>
+        !Object.entries(currentTags).some(
+          ([tagKey, tagValue]) => tagKey === key && tagValue === value
+        )
+    );
+    const tagsToRemove = Object.entries(currentTags).filter(
+      ([key, value]) =>
+        !Object.entries(desiredTags).some(
+          ([tagKey, tagValue]) => tagKey === key && tagValue === value
+        )
+    );
+
+    if (tagsToAdd.length > 0) {
+      await this.lambda.tagResource({
+        Resource: this.get('arn'),
+        Tags: Object.fromEntries(tagsToAdd),
+      });
+    }
+    if (tagsToRemove.length > 0) {
+      await this.lambda.untagResource({
+        Resource: this.get('arn'),
+        TagKeys: Object.keys(Object.fromEntries(tagsToRemove)),
+      });
+    }
   }
 
   async _reconcile() {
@@ -146,6 +186,7 @@ class LambdaFunction extends BaseResource {
           Environment: this.get('environment'),
           DeadLetterConfig: this.get('deadLetterConfig'),
           Tags: {
+            ...this.get('tags', {}),
             CodeHash: this.get('codeHash'),
           },
         });
@@ -154,6 +195,7 @@ class LambdaFunction extends BaseResource {
         throw error;
       }
     }
+    await this._reconcileTags();
   }
 
   async _destroy() {

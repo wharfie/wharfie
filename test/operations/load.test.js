@@ -242,6 +242,7 @@ describe('s3 event tests', () => {
                 ],
               },
             },
+            "tags": {},
           },
           "table_name_raw": {
             "DatabaseName": "test_db",
@@ -266,8 +267,10 @@ describe('s3 event tests', () => {
                 ],
               },
             },
+            "tags": {},
           },
         },
+        "tags": {},
       }
     `);
     // eslint-disable-next-line jest/no-large-snapshots
@@ -278,24 +281,28 @@ describe('s3 event tests', () => {
             "Attributes": {
               "QueueArn": "arn:aws:sqs:us-east-1:123456789012:cleanup-queue",
             },
+            "Tags": {},
             "queue": [],
           },
           "daemon-queue": {
             "Attributes": {
               "QueueArn": "arn:aws:sqs:us-east-1:123456789012:daemon-queue",
             },
+            "Tags": {},
             "queue": [],
           },
           "events-queue": {
             "Attributes": {
               "QueueArn": "arn:aws:sqs:us-east-1:123456789012:events-queue",
             },
+            "Tags": {},
             "queue": [],
           },
           "monitor-queue": {
             "Attributes": {
               "QueueArn": "arn:aws:sqs:us-east-1:123456789012:monitor-queue",
             },
+            "Tags": {},
             "queue": [],
           },
         },
@@ -327,6 +334,7 @@ describe('s3 event tests', () => {
             ],
           },
         },
+        "tags": {},
       }
     `);
     // eslint-disable-next-line jest/no-large-snapshots
@@ -355,6 +363,7 @@ describe('s3 event tests', () => {
             ],
           },
         },
+        "tags": {},
       }
     `);
   }, 10000);

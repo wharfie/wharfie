@@ -18,6 +18,33 @@ class Firehose {
   }
 
   /**
+   * @param {import("@aws-sdk/client-firehose").ListTagsForDeliveryStreamCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-firehose").ListTagsForDeliveryStreamCommandOutput>} -
+   */
+  async listTagsForDeliveryStream(params) {
+    const command = new AWS.ListTagsForDeliveryStreamCommand(params);
+    return await this.firehose.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-firehose").TagDeliveryStreamCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-firehose").TagDeliveryStreamCommandOutput>} -
+   */
+  async tagDeliveryStream(params) {
+    const command = new AWS.TagDeliveryStreamCommand(params);
+    return await this.firehose.send(command);
+  }
+
+  /**
+   * @param {import("@aws-sdk/client-firehose").UntagDeliveryStreamCommandInput} params -
+   * @returns {Promise<import("@aws-sdk/client-firehose").UntagDeliveryStreamCommandOutput>} -
+   */
+  async untagDeliveryStream(params) {
+    const command = new AWS.UntagDeliveryStreamCommand(params);
+    return await this.firehose.send(command);
+  }
+
+  /**
    * @param {import("@aws-sdk/client-firehose").CreateDeliveryStreamCommandInput} params -
    * @returns {Promise<import("@aws-sdk/client-firehose").CreateDeliveryStreamCommandOutput>} -
    */

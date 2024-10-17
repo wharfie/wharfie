@@ -8,6 +8,7 @@ const { NoSuchBucket } = require('@aws-sdk/client-s3');
  * @typedef BucketProperties
  * @property {import('@aws-sdk/client-s3').BucketLifecycleConfiguration} [lifecycleConfiguration] -
  * @property {import('@aws-sdk/client-s3').NotificationConfiguration | function(): import('@aws-sdk/client-s3').NotificationConfiguration} [notificationConfiguration] -
+ * @property {import('@aws-sdk/client-s3').Tag[]} [tags] -
  */
 
 /**
@@ -27,6 +28,33 @@ class Bucket extends BaseResource {
     super({ name, parent, status, dependsOn, properties });
     this.s3 = new S3();
     this.set('arn', `arn:aws:s3:::${this.name}`);
+  }
+
+  async _reconcileTags() {
+    const { TagSet } = await this.s3.getBucketTagging({
+      Bucket: this.name,
+    });
+    const tags = this.get('tags') || [];
+    const existingTags =
+      TagSet?.reduce((acc, { Key, Value }) => {
+        // @ts-ignore
+        acc[Key] = Value;
+        return acc;
+      }, {}) || {};
+    const newTags =
+      // @ts-ignore
+      tags.reduce((acc, { Key, Value }) => {
+        acc[Key] = Value;
+        return acc;
+      }, {}) || {};
+    if (JSON.stringify(existingTags) !== JSON.stringify(newTags)) {
+      await this.s3.putBucketTagging({
+        Bucket: this.name,
+        Tagging: {
+          TagSet: this.get('tags') || [],
+        },
+      });
+    }
   }
 
   async _reconcile() {
@@ -83,6 +111,7 @@ class Bucket extends BaseResource {
         });
       }
     }
+    await this._reconcileTags();
   }
 
   async _destroy() {
