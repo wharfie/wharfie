@@ -230,6 +230,7 @@ class WharfieResource extends BaseResourceGroup {
         parent,
         dependsOn: [inputTable, outputTable, workgroup],
         properties: {
+          table_name: this.get('operationTable'),
           deployment: () => this.get('deployment'),
           data: () => {
             const resource = new Resource({
@@ -283,6 +284,7 @@ class WharfieResource extends BaseResourceGroup {
             dependsOn: [],
             properties: {
               deployment: () => this.get('deployment'),
+              table_name: this.get('dependencyTable'),
               data: {
                 resource_id: this.get('resourceId'),
                 dependency: `${source.DatabaseName}.${source.TableName}`,
@@ -303,6 +305,7 @@ class WharfieResource extends BaseResourceGroup {
           dependsOn: [],
           parent,
           properties: {
+            table_name: this.get('locationTable'),
             deployment: () => this.get('deployment'),
             data: {
               resource_id: this.get('resourceId'),

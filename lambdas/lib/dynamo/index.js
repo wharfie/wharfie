@@ -75,7 +75,7 @@ async function putWithThroughputRetry(params) {
     } catch (e) {
       if (
         e instanceof ProvisionedThroughputExceededException ||
-        // todo this should be handled in the table reconcile method
+        // todo this should be handled in the state table reconcile method
         e instanceof ResourceNotFoundException
       ) {
         await new Promise((resolve) =>

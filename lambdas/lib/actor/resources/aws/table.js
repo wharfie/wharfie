@@ -153,6 +153,7 @@ class Table extends BaseResource {
       }
     }
     await this._reconcileTags();
+    console.log('successfully reconciled');
   }
 
   async _destroy() {

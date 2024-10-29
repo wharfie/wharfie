@@ -1,11 +1,11 @@
 'use strict';
 const BaseResource = require('../base-resource');
-const dependency_db = require('../../../../lib/dynamo/dependency');
 const { ResourceNotFoundException } = require('@aws-sdk/client-dynamodb');
 
 /**
  * @typedef DependencyRecordProperties
  * @property {import('../../../../typedefs').DependencyRecord | function(): import('../../../../typedefs').DependencyRecord} data -
+ * @property {string} table_name -
  */
 
 /**
@@ -32,10 +32,14 @@ class DependencyRecord extends BaseResource {
   }
 
   async _reconcile() {
+    process.env.DEPENDENCY_TABLE = this.get('table_name');
+    const dependency_db = require('../../../../lib/dynamo/dependency');
     await dependency_db.putDependency(this.get('data', {}));
   }
 
   async _destroy() {
+    process.env.DEPENDENCY_TABLE = this.get('table_name');
+    const dependency_db = require('../../../../lib/dynamo/dependency');
     try {
       await dependency_db.deleteDependency(this.get('data', {}));
     } catch (error) {

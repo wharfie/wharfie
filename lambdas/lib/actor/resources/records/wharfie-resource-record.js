@@ -1,12 +1,12 @@
 'use strict';
 const BaseResource = require('../base-resource');
-const resource_db = require('../../../../lib/dynamo/operations');
 const Resource = require('../../../../lib/graph/resource');
 const S3 = require('../../../s3');
 
 /**
  * @typedef WharfieResourceRecordProperties
  * @property {import('../../../../lib/graph/typedefs').ResourceRecord | function(): import('../../../../lib/graph/typedefs').ResourceRecord} data -
+ * @property {string} table_name -
  */
 
 /**
@@ -34,6 +34,8 @@ class WharfieResourceRecord extends BaseResource {
   }
 
   async _reconcile() {
+    process.env.OPERATIONS_TABLE = this.get('table_name');
+    const resource_db = require('../../../../lib/dynamo/operations');
     const resource = Resource.fromRecord(this.get('data'));
     if (!resource.source_region && resource.source_properties.location) {
       const { bucket } = this.s3.parseS3Uri(
@@ -47,6 +49,8 @@ class WharfieResourceRecord extends BaseResource {
   }
 
   async _destroy() {
+    process.env.OPERATIONS_TABLE = this.get('table_name');
+    const resource_db = require('../../../../lib/dynamo/operations');
     await resource_db.deleteResource(Resource.fromRecord(this.get('data')));
   }
 }

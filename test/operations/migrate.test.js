@@ -27,7 +27,6 @@ const { S3 } = require('@aws-sdk/client-s3');
 const resource_db = require('../../lambdas/lib/dynamo/operations');
 const semaphore = require('../../lambdas/lib/dynamo/semaphore');
 const state_db = require('../../lambdas/lib/dynamo/state');
-const scheduler_db = require('../../lambdas/lib/dynamo/scheduler');
 
 const WharfieResource = require('../../lambdas/lib/actor/resources/wharfie-resource');
 const Reconcilable = require('../../lambdas/lib/actor/resources/reconcilable');
