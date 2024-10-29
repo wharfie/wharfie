@@ -33,8 +33,10 @@ describe('tests for Athena', () => {
     const result = await athena.getWorkGroup(params);
     expect(result).toMatchInlineSnapshot(`
       {
-        "Name": "default",
-        "queries": {},
+        "WorkGroup": {
+          "Name": "default",
+          "queries": {},
+        },
       }
     `);
   });

@@ -489,7 +489,7 @@ async function processRecord(record, context) {
  * @param {import('aws-lambda').Context} context -
  */
 module.exports.handler = async (event, context) => {
-  daemon_log.debug(`processing ${event.Records.length} records....`);
+  daemon_log.debug(`monitor processing ${event.Records.length} records....`);
   await bluebirdPromise.map(
     event.Records,
     (/** @type {import('aws-lambda').SQSRecord} */ record) => {

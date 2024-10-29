@@ -4,6 +4,7 @@ const Reconcilable = require('./reconcilable');
 const {
   putResource,
   getResource,
+  getResourceStatus,
   deleteResource,
   putResourceStatus,
 } = require('../../dynamo/state');
@@ -64,6 +65,15 @@ class BaseResource extends Reconcilable {
   }
 
   /**
+   * @param {any} properties -
+   */
+  setProperties(properties) {
+    if (this.checkPropertyEquality(properties)) return;
+    this.properties = properties;
+    this.setStatus(Reconcilable.Status.DRIFTED);
+  }
+
+  /**
    * @param {string} key -
    * @param {any} value -
    */
@@ -99,7 +109,7 @@ class BaseResource extends Reconcilable {
    * @param {any} other -
    * @returns {boolean} -
    */
-  checkPropertyEquality(other) {
+  checkPropertyEquality(other = {}) {
     const allKeys = new Set([
       ...Object.keys(other),
       ...Object.keys(this.properties),
@@ -188,6 +198,10 @@ class BaseResource extends Reconcilable {
     await putResource(this);
   }
 
+  async getStatus() {
+    return await getResourceStatus(this);
+  }
+
   async saveStatus() {
     await putResourceStatus(this);
   }
@@ -197,6 +211,15 @@ class BaseResource extends Reconcilable {
    */
   async fetchStoredData() {
     return await getResource(this);
+  }
+
+  /**
+   * @param {import('../typedefs').SerializedBaseResource} [storedResource] -
+   * @returns {Promise<boolean>} -
+   */
+  async needsUpdate(storedResource) {
+    const _storedResource = storedResource || (await this.fetchStoredData());
+    return !this.checkPropertyEquality(_storedResource?.properties);
   }
 
   async delete() {

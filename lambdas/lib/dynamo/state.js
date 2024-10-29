@@ -73,6 +73,40 @@ async function putResourceStatus(resource) {
 
 /**
  * @param {BaseResource} resource -
+ * @returns {Promise<import("../actor/resources/reconcilable").StatusEnum?>} -
+ */
+async function getResourceStatus(resource) {
+  if (!resource.has('deployment') || !resource.get('deployment'))
+    throw new Error('cannot save resource without deployment');
+  const { stateTable, name } = resource.get('deployment');
+
+  const resource_key = resource.parent
+    ? `${resource.parent}#${resource.name}`
+    : resource.name;
+
+  const { Items } = await query({
+    TableName: stateTable,
+    ConsistentRead: true,
+    KeyConditionExpression:
+      '#deployment = :deployment AND #resource_key = :resource_key',
+    ExpressionAttributeValues: {
+      ':deployment': name,
+      ':resource_key': resource_key,
+    },
+    ExpressionAttributeNames: {
+      '#resource_key': 'resource_key',
+      '#deployment': 'deployment',
+      '#status': 'status', // Adding 'status' as an expression attribute name
+    },
+    ProjectionExpression: '#status', // Return only the status field
+  });
+
+  if (!Items || Items.length === 0) return null;
+  return Items[0].status;
+}
+
+/**
+ * @param {BaseResource} resource -
  * @returns {Promise<import("../actor/typedefs").SerializedBaseResource?>} -
  */
 async function getResource(resource) {
@@ -155,6 +189,7 @@ module.exports = {
   putResource,
   putResourceStatus,
   getResource,
+  getResourceStatus,
   getResources,
   deleteResource,
 };

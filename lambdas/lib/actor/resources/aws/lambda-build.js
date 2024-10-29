@@ -98,6 +98,7 @@ class LambdaBuild extends BaseResource {
       platform: 'node',
       target: 'node20',
       outfile: `./dist/${this.name}/index.js`,
+      external: ['esbuild'],
     });
 
     const functionCodeHash = crypto

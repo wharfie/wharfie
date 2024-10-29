@@ -23,6 +23,7 @@ const Status = {
  * @property {string} [source_region] - aws region of the source data, not set for models
  * @property {string} athena_workgroup - name of the stack's athena workgroup
  * @property {import('../../typedefs').DaemonConfig} daemon_config -
+ * @property {import('../actor/resources/wharfie-resource').WharfieResourceProperties & import('../actor/typedefs').SharedProperties} resource_properties -
  * @property {import('../../typedefs').TableProperties} source_properties -
  * @property {import('../../typedefs').TableProperties} destination_properties -
  * @property {number} [created_at] - created timestamp
@@ -41,6 +42,7 @@ class Resource {
     source_region,
     athena_workgroup,
     daemon_config,
+    resource_properties,
     source_properties,
     destination_properties,
     created_at = Date.now(),
@@ -53,6 +55,7 @@ class Resource {
     this.source_region = source_region;
     this.athena_workgroup = athena_workgroup;
     this.daemon_config = daemon_config;
+    this.resource_properties = resource_properties;
     this.source_properties = source_properties;
     this.destination_properties = destination_properties;
     this.created_at = created_at;
@@ -78,6 +81,7 @@ class Resource {
         source_region: this.source_region,
         athena_workgroup: this.athena_workgroup,
         daemon_config: this.daemon_config,
+        resource_properties: this.resource_properties,
         source_properties: this.source_properties,
         destination_properties: this.destination_properties,
         created_at: this.created_at,
@@ -89,7 +93,7 @@ class Resource {
   }
 
   /**
-   * @param {Record<string, any>} resource_record -
+   * @param {import('./typedefs').ResourceRecord} resource_record -
    * @returns {Resource} -
    */
   static fromRecord(resource_record) {
@@ -100,6 +104,7 @@ class Resource {
       source_region: resource_record.data.source_region,
       athena_workgroup: resource_record.data.athena_workgroup,
       daemon_config: resource_record.data.daemon_config,
+      resource_properties: resource_record.data.resource_properties,
       source_properties: resource_record.data.source_properties,
       destination_properties: resource_record.data.destination_properties,
       created_at: resource_record.data.created_at,

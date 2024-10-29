@@ -1,7 +1,9 @@
 const AthenaWorkGroup = require('./aws/athena-workgroup');
 const GlueTable = require('./aws/glue-table');
 const EventsRule = require('./aws/events-rule');
-const TableRecord = require('./aws/table-record');
+const LocationRecord = require('./records/location-record');
+const DependencyRecord = require('./records/dependency-record');
+const WharfieResourceRecord = require('./records/wharfie-resource-record');
 const BaseResourceGroup = require('./base-resource-group');
 const { generateSchedule } = require('../../cron');
 const Athena = require('../../athena');
@@ -11,6 +13,7 @@ const { Resource } = require('../../graph/');
 const { version } = require('../../../../package.json');
 const WharfieScheduleOperation = require('../../../scheduler/events/wharfie-schedule-operation');
 const Operation = require('../../../lib/graph/operation');
+const Action = require('../../../lib/graph/action');
 const Reconcilable = require('./reconcilable');
 
 const _athena = new Athena({});
@@ -96,7 +99,8 @@ class WharfieResource extends BaseResourceGroup {
   _defineGroupResources(parent) {
     const resources = [];
     const workgroup = new AthenaWorkGroup({
-      name: `${this.get('deployment').name}-${this.get(
+      // important to prefix with wharfie, else monitor lambda will ignore notifications
+      name: `wharfie-${this.get('deployment').name}-${this.get(
         'resourceName'
       )}-workgroup`,
       parent,
@@ -219,25 +223,39 @@ class WharfieResource extends BaseResourceGroup {
     const records = [];
 
     records.push(
-      new TableRecord({
+      new WharfieResourceRecord({
         name: `${this.get('projectName')}-${this.get(
           'resourceName'
         )}-resource-record`,
         parent,
-        dependsOn: [],
-        dataResolver: async () => {
-          const resource = await this.getResourceDef();
-          return {
-            data: resource.toRecord().data,
-          };
-        },
+        dependsOn: [inputTable, outputTable, workgroup],
         properties: {
           deployment: () => this.get('deployment'),
-          tableName: this.get('operationTable'),
-          keyValue: this.get('resourceId'),
-          keyName: 'resource_id',
-          sortKeyValue: this.get('resourceId'),
-          sortKeyName: 'sort_key',
+          data: () => {
+            const resource = new Resource({
+              id: this.get('resourceId'),
+              created_at: this.get('createdAt'),
+              region: this.get('region'),
+              wharfie_version: version,
+              athena_workgroup: workgroup.name,
+              daemon_config: {
+                Role: this.get('roleArn'),
+              },
+              // @ts-ignore
+              resource_properties: this.resolveProperties(),
+              // @ts-ignore
+              source_properties: {
+                name: inputTable.name,
+                ...inputTable.resolveProperties(),
+              },
+              // @ts-ignore
+              destination_properties: {
+                name: outputTable.name,
+                ...outputTable.resolveProperties(),
+              },
+            });
+            return resource.toRecord();
+          },
         },
       })
     );
@@ -257,7 +275,7 @@ class WharfieResource extends BaseResourceGroup {
         const source = sources.pop();
         if (!source || !source.DatabaseName || !source.TableName) continue;
         records.push(
-          new TableRecord({
+          new DependencyRecord({
             name: `${this.get('projectName')}-${this.get(
               'resourceName'
             )}-dependency-record-${dependencyCount}`,
@@ -265,13 +283,10 @@ class WharfieResource extends BaseResourceGroup {
             dependsOn: [],
             properties: {
               deployment: () => this.get('deployment'),
-              tableName: this.get('dependencyTable'),
-              keyValue: `${source.DatabaseName}.${source.TableName}`,
-              keyName: 'dependency',
-              sortKeyValue: this.get('resourceId'),
-              sortKeyName: 'resource_id',
               data: {
-                interval: Number(this.get('interval')),
+                resource_id: this.get('resourceId'),
+                dependency: `${source.DatabaseName}.${source.TableName}`,
+                interval: this.get('interval'),
               },
             },
           })
@@ -281,7 +296,7 @@ class WharfieResource extends BaseResourceGroup {
 
     if (this.has('inputLocation')) {
       records.push(
-        new TableRecord({
+        new LocationRecord({
           name: `${this.get('projectName')}-${this.get(
             'resourceName'
           )}-location-record`,
@@ -289,13 +304,10 @@ class WharfieResource extends BaseResourceGroup {
           parent,
           properties: {
             deployment: () => this.get('deployment'),
-            tableName: this.get('locationTable'),
-            keyValue: this.get('inputLocation'),
-            keyName: 'location',
-            sortKeyValue: this.get('resourceId'),
-            sortKeyName: 'resource_id',
             data: {
-              interval: Number(this.get('interval')),
+              resource_id: this.get('resourceId'),
+              location: this.get('inputLocation'),
+              interval: this.get('interval'),
             },
           },
         })
@@ -319,7 +331,9 @@ class WharfieResource extends BaseResourceGroup {
     const inputTable = this.getResource(`${this.get('resourceName')}_raw`);
     const outputTable = this.getResource(this.get('resourceName'));
     const workgroup = this.getResource(
-      `${this.get('deployment').name}-${this.get('resourceName')}-workgroup`
+      `wharfie-${this.get('deployment').name}-${this.get(
+        'resourceName'
+      )}-workgroup`
     );
     const resource = new Resource({
       id: this.get('resourceId'),
@@ -331,6 +345,8 @@ class WharfieResource extends BaseResourceGroup {
       daemon_config: {
         Role: this.get('roleArn'),
       },
+      // @ts-ignore
+      resource_properties: this.resolveProperties(),
       // @ts-ignore
       source_properties: {
         name: inputTable.name,
@@ -345,75 +361,11 @@ class WharfieResource extends BaseResourceGroup {
     return resource;
   }
 
-  // /**
-  //  * @param {Resource} resourceDef -
-  //  * @returns {WharfieResource} -
-  //  */
-  // static fromResourceDef(resourceDef) {
-  //   return new WharfieResource({
-  //     name: resourceDef.id,
-  //     properties: {
-  //         ...(resourceDef.source_properties.description ? { description: resourceDef.source_properties.description } : {}),
-  //         columns: resourceDef.source_properties.columns,
-  //         ...(resourceDef.source_properties.partitionKeys ? { partitionKeys: resourceDef.source_properties.partitionKeys } : {}),
-  //         ...(resourceDef.source_properties.location ? { inputLocation: resourceDef.source_properties.location } : {}),
-  //         tableType: resourceDef.source_properties.tableType,
-  //         parameters: resourceDef.source_properties.parameters,
-  //         inputFormat: resourceDef.source_properties.inputFormat,
-  //         outputFormat: resourceDef.source_properties.outputFormat,
-  //         serdeInfo: resourceDef.source_properties.serdeInfo,
-  //         resourceName: '<NEEDED>',
-  //         projectName: '<NEEDED>',
-  //         databaseName: resourceDef.destination_properties.databaseName,
-  //         ...(resourceDef.destination_properties.location ? { outputLocation: resourceDef.destination_properties.location } : {}),
-  //         projectBucket: '<NEEDED>',
-  //         region: resourceDef.region,
-  //         catalogId: resourceDef.source_properties.catalogId,
-  //         roleArn: resourceDef.daemon_config.Role,
-  //         interval: resourceDef.daemon_config.SLA?.MaxDelay,
-  //         resourceId: resourceDef.id,
-  //         createdAt: resourceDef.created_at,
-  //         deployment: '<NEEDED>',
-  //         workgroup: resourceDef.athena_workgroup,
-  //         wharfieVersion: resourceDef.wharfie_version,
-  //         sourceRegion: resourceDef.source_region,
-  //         operationTable: resourceDef.destination_properties.name,
-  //         dependencyTable: `${resourceDef.destination_properties.databaseName}-dependencies`,
-  //         locationTable: `${resourceDef.destination_properties.databaseName}-locations`,
-
-  //         // general properties
-  //         deployment: () => this.get('deployment'),
-  //         resourceName: 'logs',
-  //         projectName: this.get('deployment').name,
-  //         databaseName: this.get('deployment').name,
-  //         outputLocation: `s3://${systemBucket.name}/logs/processed/`,
-  //         projectBucket: systemBucket.name,
-  //         region: () => this.get('deployment').region,
-  //         catalogId: () => this.get('deployment').accountId,
-  //         roleArn: () => loggingResourceRole.get('arn'),
-  //         operationTable: `${this.get('deployment').name}-operations`,
-  //         dependencyTable: `${this.get('deployment').name}-dependencies`,
-  //         locationTable: `${this.get('deployment').name}-locations`,
-  //         scheduleQueueArn: () =>
-  //           `arn:aws:sqs:${this.get('deployment').region}:${
-  //             this.get('deployment').accountId
-  //           }:${this.get('deployment').name}-events-queue`,
-  //         scheduleQueueUrl: () =>
-  //           `https://sqs.${this.get('deployment').region}.amazonaws.com/${
-  //             this.get('deployment').accountId
-  //           }/${this.get('deployment').name}-events-queue`,
-  //         daemonQueueUrl: () =>
-  //           `https://sqs.${this.get('deployment').region}.amazonaws.com/${
-  //             this.get('deployment').accountId
-  //           }/${this.get('deployment').name}-daemon-queue`,
-  //         tags: [],
-  //         createdAt: this.get('createdAt'),
-  //     }
-  // })
-  // }
-
-  async needsMigration() {
-    const oldProperties = (await this.fetchStoredData())?.properties;
+  /**
+   * @param {Object<string,any>?} oldProperties -
+   * @returns {Promise<boolean>} -
+   */
+  async needsMigration(oldProperties) {
     if (!oldProperties) return true;
     const newProperties = this.serialize().properties;
 
@@ -479,24 +431,39 @@ class WharfieResource extends BaseResourceGroup {
     return false;
   }
 
+  async _wait_for_status() {
+    let current_status = await this.getStatus();
+    while (current_status !== Reconcilable.Status.STABLE) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      current_status = await this.getStatus();
+    }
+  }
+
   async _reconcile() {
     let change;
-    if (
-      this.getResources().find(
-        (resource) => resource.status !== Reconcilable.Status.STABLE
-      )
-    ) {
+    const storedResource = await this.fetchStoredData();
+    const oldProperties = storedResource?.properties;
+    if (!oldProperties) {
       change = 'CREATED';
-    } else if (await this.needsMigration()) {
+    } else if (this.status === Reconcilable.Status.MIGRATING) {
+      change = 'MIGRATING';
+    } else if (await this.needsMigration(storedResource)) {
+      change = 'START_MIGRATION';
+    } else if (await this.needsUpdate(storedResource)) {
       change = 'UPDATED';
     } else {
       change = 'NO_CHANGE';
     }
-    await Promise.all(
-      this.getResources().map((resource) => resource.reconcile())
-    );
+    if (change !== 'UPDATED') {
+      await Promise.all(
+        this.getResources().map((resource) => resource.reconcile())
+      );
+    }
+    if (this.get('migrationResource')) {
+      change = 'INTERNAL_MIGRATION_RESOURCE';
+    }
     this.change = change;
-    if (change === 'CREATED') {
+    if (change === 'CREATED' || change === 'UPDATED') {
       await sqs.sendMessage({
         MessageBody: new WharfieScheduleOperation({
           resource_id: this.get('resourceId'),
@@ -504,25 +471,27 @@ class WharfieResource extends BaseResourceGroup {
         }).serialize(),
         QueueUrl: this.get('scheduleQueueUrl'),
       });
-    } else if (change === 'UPDATED') {
-      const resource = await this.getResourceDef();
+    } else if (change === 'START_MIGRATION') {
+      this.status = Reconcilable.Status.MIGRATING;
+      await this.save();
       await sqs.sendMessage({
         MessageBody: JSON.stringify({
           source: 'cli',
           operation_started_at: new Date(Date.now()),
-          operation_type: 'MIGRATE',
-          action_type: 'START',
+          operation_type: Operation.Type.MIGRATE,
+          action_type: Action.Type.START,
           resource_id: this.get('resourceId'),
-          operation_inputs: {
-            migration_resource: resource.toRecord(),
-          },
           action_inputs: {
             Version: `cli`,
             Duration: Infinity,
           },
+          operation_inputs: {
+            migration_resource_properties: this.resolveProperties(),
+          },
         }),
         QueueUrl: this.get('daemonQueueUrl'),
       });
+      await this._wait_for_status();
     }
   }
 }

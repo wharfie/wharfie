@@ -7,6 +7,7 @@ process.env.AWS_MOCKS = '1';
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 jest.mock('../../lambdas/lib/env-paths');
+jest.mock('../../lambdas/lib/dynamo/state');
 const WharfieResource = require('../../lambdas/lib/actor/resources/wharfie-resource');
 const { resetAWSMocks } = require('../util');
 
@@ -196,7 +197,7 @@ describe('wharfie resource IaC', () => {
         },
         "resourceType": "WharfieResource",
         "resources": [
-          "test-deployment-amazon_berkely_objects-workgroup",
+          "wharfie-test-deployment-amazon_berkely_objects-workgroup",
           "amazon_berkely_objects_raw",
           "amazon_berkely_objects",
           "test-wharfie-resource-amazon_berkely_objects-resource-record",

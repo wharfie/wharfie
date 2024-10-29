@@ -6,6 +6,7 @@
  * @property {string} [source_region] - aws region of the source data, not set for models
  * @property {string} athena_workgroup - name of the stack's athena workgroup
  * @property {import('../../typedefs').DaemonConfig} daemon_config -
+ * @property {import('../actor/resources/wharfie-resource').WharfieResourceProperties & import('../actor/typedefs').SharedProperties} resource_properties -
  * @property {import('../../typedefs').TableProperties} source_properties -
  * @property {import('../../typedefs').TableProperties} destination_properties -
  * @property {number} created_at - created timestamp

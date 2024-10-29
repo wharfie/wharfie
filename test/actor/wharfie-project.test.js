@@ -9,11 +9,14 @@ process.env.AWS_MOCKS = '1';
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 jest.mock('../../lambdas/lib/env-paths');
+jest.mock('../../lambdas/lib/dynamo/state');
 const WharfieProject = require('../../lambdas/lib/actor/resources/wharfie-project');
 const WharfieDeployment = require('../../lambdas/lib/actor/wharfie-deployment');
 const { getResourceOptions } = require('../../cli/project/template-actor');
 const { loadProject } = require('../../cli/project/load');
 const { resetAWSMocks } = require('../util');
+
+const state_db = require('../../lambdas/lib/dynamo/state');
 
 const { S3 } = require('@aws-sdk/client-s3');
 const { SQS } = require('@aws-sdk/client-sqs');
@@ -23,6 +26,7 @@ const sqs = new SQS();
 describe('wharfie project IaC', () => {
   afterEach(() => {
     resetAWSMocks();
+    state_db.__setMockState();
   });
   it('empty project', async () => {
     expect.assertions(3);

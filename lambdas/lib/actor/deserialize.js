@@ -1,4 +1,5 @@
 const AWSResources = require('./resources/aws');
+const RecordResources = require('./resources/records');
 const WharfieActors = require('./wharfie-actors');
 const WharfieActorResources = require('./resources/wharfie-actor-resources');
 const WharfieDeploymentResources = require('./resources/wharfie-deployment-resources');
@@ -15,14 +16,20 @@ const { getResources } = require('../dynamo/state');
 /**
  * @type {Object<string, ResourceConstructor>}
  */
-const classes = Object.assign({}, AWSResources, WharfieActors, {
-  WharfieDeploymentResources,
-  WharfieActorResources,
-  WharfieProject,
-  WharfieResource,
-  WharfieDeployment,
-  WharfieActor,
-});
+const classes = Object.assign(
+  {},
+  AWSResources,
+  RecordResources,
+  WharfieActors,
+  {
+    WharfieDeploymentResources,
+    WharfieActorResources,
+    WharfieProject,
+    WharfieResource,
+    WharfieDeployment,
+    WharfieActor,
+  }
+);
 
 /**
  * @typedef RawUnserializedResourceData
@@ -131,7 +138,6 @@ async function load({ deploymentName, resourceKey }) {
   if (!resourceKey) {
     resourceKey = deploymentName;
   }
-
   const serializedResources = await getResources(deploymentName, resourceKey);
   if (!serializedResources || serializedResources.length === 0) {
     throw new Error('No resource found');

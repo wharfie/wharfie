@@ -203,8 +203,10 @@ class GlueMock {
       throw new EntityNotFoundException({
         message: 'table not found',
       });
-    GlueMock.__state[params.DatabaseName]._tables[params.Name] =
-      params.TableInput;
+    GlueMock.__state[params.DatabaseName]._tables[params.TableInput.Name] = {
+      ...GlueMock.__state[params.DatabaseName]._tables[params.TableInput.Name],
+      ...params.TableInput,
+    };
   }
 
   async deleteTable(params) {
