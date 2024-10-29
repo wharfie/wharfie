@@ -70,7 +70,9 @@ class BaseResource extends Reconcilable {
   setProperties(properties) {
     if (this.checkPropertyEquality(properties)) return;
     this.properties = properties;
-    this.setStatus(Reconcilable.Status.DRIFTED);
+    Object.entries(properties).forEach(([key, value]) => {
+      this.set(key, value);
+    });
   }
 
   /**
@@ -82,8 +84,9 @@ class BaseResource extends Reconcilable {
       return;
     }
     this.properties[key] = value;
-    if (this.status !== Reconcilable.Status.UNPROVISIONED)
+    if (this.status !== Reconcilable.Status.DRIFTED) {
       this.setStatus(Reconcilable.Status.DRIFTED);
+    }
   }
 
   /**

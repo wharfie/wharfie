@@ -123,4 +123,5 @@ module.exports = {
   createLambdaQueues,
   setLambdaTriggers,
   clearLambdaTriggers,
+  clearEventsTrigger: () => clearInterval(events),
 };

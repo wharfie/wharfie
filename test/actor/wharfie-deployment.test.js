@@ -17,6 +17,7 @@ jest.mock('../../lambdas/lib/dynamo/location');
 const crypto = require('crypto');
 
 const WharfieDeployment = require('../../lambdas/lib/actor/wharfie-deployment');
+const Reconcilable = require('../../lambdas/lib/actor/resources/reconcilable');
 const { load } = require('../../lambdas/lib/actor/deserialize');
 
 describe('deployment IaC', () => {
@@ -33,8 +34,13 @@ describe('deployment IaC', () => {
     jest.restoreAllMocks();
   });
   it('basic', async () => {
-    expect.assertions(7);
+    expect.assertions(9);
     const state_db = require('../../lambdas/lib/dynamo/state');
+
+    const events = [];
+    Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
+      events.push(`${event.status} - ${event.constructor}:${event.name}`);
+    });
     const deployment = new WharfieDeployment({
       name: 'test-deployment',
       properties: {
@@ -42,8 +48,10 @@ describe('deployment IaC', () => {
       },
     });
     expect(state_db.__getMockState()).toMatchInlineSnapshot(`{}`);
+    events.push('RECONCILING');
     await deployment.reconcile();
-    expect(state_db.__getMockState()).toMatchInlineSnapshot(`
+    const reconcile_state = state_db.__getMockState();
+    expect(reconcile_state).toMatchInlineSnapshot(`
       {
         "test-deployment": {
           "test-deployment": {
@@ -2358,6 +2366,7 @@ describe('deployment IaC', () => {
                 "stateTable": "test-deployment-state",
                 "version": "0.0.1",
               },
+              "table_name": "test-deployment-locations",
             },
             "resourceType": "LocationRecord",
             "status": "STABLE",
@@ -2762,6 +2771,7 @@ describe('deployment IaC', () => {
                 "stateTable": "test-deployment-state",
                 "version": "0.0.1",
               },
+              "table_name": "test-deployment-operations",
             },
             "resourceType": "WharfieResourceRecord",
             "status": "STABLE",
@@ -3457,11 +3467,13 @@ describe('deployment IaC', () => {
       }
     `);
 
+    events.push('LOADING');
     const deserialized = await load({
       deploymentName: 'test-deployment',
       resourceKey: 'test-deployment',
     });
     await deserialized.reconcile();
+    expect(state_db.__getMockState()).toStrictEqual(reconcile_state);
     expect(deserialized.resolveProperties()).toMatchInlineSnapshot(`
       {
         "_INTERNAL_STATE_RESOURCE": true,
@@ -3489,8 +3501,10 @@ describe('deployment IaC', () => {
       }
     `);
     expect(deserialized.status).toBe('STABLE');
+    events.push('DESTROYING');
     await deserialized.destroy();
     expect(deserialized.status).toBe('DESTROYED');
+    expect(events).toHaveLength(391);
     expect(state_db.__getMockState()).toMatchInlineSnapshot(`
       {
         "test-deployment": {

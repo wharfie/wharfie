@@ -141,7 +141,7 @@ class GlueMock {
     params.Entries.forEach((input) => {
       this.updatePartition({
         ...params,
-        PartitionInput: input,
+        ...input,
       });
     });
   }

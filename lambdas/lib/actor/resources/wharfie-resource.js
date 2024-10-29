@@ -5,6 +5,7 @@ const LocationRecord = require('./records/location-record');
 const DependencyRecord = require('./records/dependency-record');
 const WharfieResourceRecord = require('./records/wharfie-resource-record');
 const BaseResourceGroup = require('./base-resource-group');
+const BaseResource = require('./base-resource');
 const { generateSchedule } = require('../../cron');
 const Athena = require('../../athena');
 const S3 = require('../../s3');
@@ -496,6 +497,43 @@ class WharfieResource extends BaseResourceGroup {
       });
       await this._wait_for_status();
     }
+  }
+
+  /**
+   * @param {BaseResource | BaseResourceGroup} resource -
+   */
+  updateResource(resource) {
+    if (!this.resources[resource.name]) {
+      this.resources[resource.name] = resource;
+      return;
+    }
+    this.resources[resource.name].setProperties(resource.properties);
+  }
+
+  /**
+   * @param {(BaseResource | BaseResourceGroup)[]} resources -
+   */
+  updateResources(resources) {
+    resources.forEach((resource) => {
+      this.updateResource(resource);
+    });
+  }
+
+  /**
+   * @param {any} properties -
+   */
+  async setProperties(properties) {
+    super.setProperties(properties);
+    this.updateResources(this._defineGroupResources(this._getParentName()));
+  }
+
+  /**
+   * @param {string} key -
+   * @param {any} value -
+   */
+  set(key, value) {
+    super.set(key, value);
+    this.updateResources(this._defineGroupResources(this._getParentName()));
   }
 }
 

@@ -24,7 +24,6 @@ class BaseResourceGroup extends BaseResource {
       this.resources = {};
       this.addResources(this._defineGroupResources(this._getParentName()));
     }
-    this.dispatchStatusEvent();
   }
 
   /**
@@ -58,26 +57,6 @@ class BaseResourceGroup extends BaseResource {
   addResources(resources) {
     resources.forEach((resource) => {
       this.addResource(resource);
-    });
-  }
-
-  /**
-   * @param {BaseResource | BaseResourceGroup} resource -
-   */
-  updateResource(resource) {
-    if (!this.resources[resource.name]) {
-      this.resources[resource.name] = resource;
-      return;
-    }
-    this.resources[resource.name].setProperties(resource.properties);
-  }
-
-  /**
-   * @param {(BaseResource | BaseResourceGroup)[]} resources -
-   */
-  updateResources(resources) {
-    resources.forEach((resource) => {
-      this.updateResource(resource);
     });
   }
 
@@ -122,23 +101,6 @@ class BaseResourceGroup extends BaseResource {
       status: this.status,
       resources: Object.keys(this.resources || {}),
     };
-  }
-
-  /**
-   * @param {any} properties -
-   */
-  async setProperties(properties) {
-    super.setProperties(properties);
-    this.updateResources(this._defineGroupResources(this._getParentName()));
-  }
-
-  /**
-   * @param {string} key -
-   * @param {any} value -
-   */
-  set(key, value) {
-    super.set(key, value);
-    this.updateResources(this._defineGroupResources(this._getParentName()));
   }
 
   /**
