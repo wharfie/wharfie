@@ -297,7 +297,7 @@ class Compaction {
     const partitionKeys = Table.PartitionKeys;
     const DEFAULT_QUERY_STRING = `SELECT distinct ${partitionKeys
       .map(({ Name }) => Name)
-      .join(' ,')} FROM ${sourceDatabaseName}.${sourceTableName}`;
+      .join(' ,')} FROM "${sourceDatabaseName}"."${sourceTableName}"`;
     let QueryString = DEFAULT_QUERY_STRING;
 
     if (partitionsOnly) {
@@ -351,7 +351,7 @@ class Compaction {
         ) {
           QueryString = `
             SELECT ${partitionKeys.map(({ Name }) => Name).join(' ,')}
-            FROM ${sourceDatabaseName}."${sourceTableName}$partitions"
+            FROM "${sourceDatabaseName}"."${sourceTableName}$partitions"
           `;
         } else {
           throw new Error(

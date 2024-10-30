@@ -45,7 +45,7 @@ class WharfieResourceRecord extends BaseResource {
         Bucket: bucket,
       });
     }
-    await resource_db.putResource(Resource.fromRecord(this.get('data')));
+    await resource_db.putResource(resource);
   }
 
   async _destroy() {

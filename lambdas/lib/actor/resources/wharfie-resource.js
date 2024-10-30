@@ -370,7 +370,7 @@ class WharfieResource extends BaseResourceGroup {
    * @returns {Promise<boolean>} -
    */
   async needsMigration(oldProperties) {
-    if (!oldProperties) return true;
+    if (!oldProperties) return false;
     const newProperties = this.serialize().properties;
 
     // Check if `resourceId` has changed

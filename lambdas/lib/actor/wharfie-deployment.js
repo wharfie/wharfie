@@ -40,7 +40,7 @@ class WharfieDeployment extends BaseResourceGroup {
         globalQueryConcurrency: 10,
         resourceQueryConcurrency: 10,
         maxQueriesPerAction: 10000,
-        loggingLevel: 'info',
+        loggingLevel: 'debug',
         _INTERNAL_STATE_RESOURCE: true,
         deployment: () => this.getDeploymentProperties(),
         createdAt: Date.now(),
