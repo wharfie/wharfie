@@ -1,6 +1,7 @@
 'use strict';
 
 const BaseResource = require('./base-resource');
+const Reconcilable = require('./reconcilable');
 // const Reconcilable = require('./reconcilable');
 
 /**
@@ -114,7 +115,14 @@ class BaseResourceGroup extends BaseResource {
       dependsOn: this.dependsOn.map((dep) => dep.name),
       properties: this.resolveProperties(),
       resourceType: this.resourceType,
-      resources: Object.keys(this.resources),
+      resources: Object.entries(this.resources).reduce(
+        (/** @type {string[]} */ acc, [name, resource]) => {
+          if (resource.status === Reconcilable.Status.DESTROYED) return acc;
+          acc.push(name);
+          return acc;
+        },
+        []
+      ),
     };
   }
 

@@ -25,6 +25,7 @@ const sqs = new SQS({});
  * @typedef WharfieResourceProperties
  * @property {string} resourceName -
  * @property {string} [resourceId] -
+ * @property {string} [resourceKey] -
  * @property {string} projectName -
  * @property {string} databaseName -
  * @property {string | function(): string} catalogId -
@@ -79,6 +80,7 @@ class WharfieResource extends BaseResourceGroup {
     const propertiesWithDefaults = Object.assign(
       {
         resourceId: `${properties.projectName}.${properties.resourceName}`,
+        resourceKey: parent ? `${parent}#${name}` : name,
       },
       WharfieResource.DefaultProperties,
       properties
@@ -366,73 +368,155 @@ class WharfieResource extends BaseResourceGroup {
   }
 
   /**
-   * @param {Object<string,any>?} oldProperties -
+   * @param {Object<string, any>?} oldProperties -
    * @returns {Promise<boolean>} -
    */
   async needsMigration(oldProperties) {
-    if (!oldProperties) return false;
+    const reasons = [];
+    if (!oldProperties) reasons.push('no old properties');
     const newProperties = this.serialize().properties;
 
     // Check if `resourceId` has changed
-    if (oldProperties.resourceId !== newProperties.resourceId) return true;
-    // Check if `catalogId` has changed
-    if (oldProperties.catalogId !== newProperties.catalogId) return true;
-    if (
-      JSON.stringify(oldProperties.serdeInfo) !==
-      JSON.stringify(newProperties.serdeInfo)
-    )
-      return true;
+    if (oldProperties?.resourceId !== newProperties.resourceId) {
+      reasons.push(
+        `resourceId changed from ${oldProperties?.resourceId} to ${newProperties.resourceId}`
+      );
+    }
 
-    // Check if `outputFormat` has changed
-    if (oldProperties.outputFormat !== newProperties.outputFormat) return true;
-    if (oldProperties.inputFormat !== newProperties.inputFormat) return true;
-    if (oldProperties.numberOfBuckets !== newProperties.numberOfBuckets)
-      return true;
+    // Check if `catalogId` has changed
+    if (oldProperties?.catalogId !== newProperties.catalogId) {
+      reasons.push(
+        `catalogId changed from ${oldProperties?.catalogId} to ${newProperties.catalogId}`
+      );
+    }
+
+    // Check if `SerializationLibrary` has changed
     if (
-      oldProperties.storedAsSubDirectories !==
+      oldProperties?.serdeInfo?.SerializationLibrary !==
+      newProperties?.serdeInfo?.SerializationLibrary
+    ) {
+      reasons.push(
+        `serdeInfo.SerializationLibrary changed from ${oldProperties?.serdeInfo?.SerializationLibrary} to ${newProperties?.serdeInfo?.SerializationLibrary}`
+      );
+    }
+
+    // Check if `serdeInfo.Parameters` has changed
+    const oldParameters = oldProperties?.serdeInfo?.Parameters || {};
+    const newParameters = newProperties?.serdeInfo?.Parameters || {};
+    if (
+      Object.keys(oldParameters).length !== Object.keys(newParameters).length
+    ) {
+      reasons.push(
+        `serdeInfo.Parameters count changed from ${oldParameters.length} to ${newParameters.length}`
+      );
+    } else {
+      Object.keys(oldParameters).forEach((parameterName) => {
+        const oldParameterValue = oldParameters[parameterName];
+        const newParameterValue = newParameters[parameterName];
+        if (oldParameterValue !== newParameterValue) {
+          reasons.push(
+            `serdeInfo.Parameters.${parameterName} changed from ${oldParameterValue} to ${newParameterValue}`
+          );
+        }
+      });
+    }
+    // Check if `outputFormat` has changed
+    if (oldProperties?.outputFormat !== newProperties.outputFormat) {
+      reasons.push(
+        `outputFormat changed from ${oldProperties?.outputFormat} to ${newProperties.outputFormat}`
+      );
+    }
+
+    // Check if `inputFormat` has changed
+    if (oldProperties?.inputFormat !== newProperties.inputFormat) {
+      reasons.push(
+        `inputFormat changed from ${oldProperties?.inputFormat} to ${newProperties.inputFormat}`
+      );
+    }
+
+    // Check if `numberOfBuckets` has changed
+    if (oldProperties?.numberOfBuckets !== newProperties.numberOfBuckets) {
+      reasons.push(
+        `numberOfBuckets changed from ${oldProperties?.numberOfBuckets} to ${newProperties.numberOfBuckets}`
+      );
+    }
+
+    // Check if `storedAsSubDirectories` has changed
+    if (
+      oldProperties?.storedAsSubDirectories !==
       newProperties.storedAsSubDirectories
-    )
-      return true;
-    if (oldProperties.compressed !== newProperties.compressed) return true;
+    ) {
+      reasons.push(
+        `storedAsSubDirectories changed from ${oldProperties?.storedAsSubDirectories} to ${newProperties.storedAsSubDirectories}`
+      );
+    }
+
+    // Check if `compressed` has changed
+    if (oldProperties?.compressed !== newProperties.compressed) {
+      reasons.push(
+        `compressed changed from ${oldProperties?.compressed} to ${newProperties.compressed}`
+      );
+    }
 
     // Check if `inputLocation` has changed
-    if (oldProperties.inputLocation !== newProperties.inputLocation)
-      return true;
+    if (oldProperties?.inputLocation !== newProperties.inputLocation) {
+      reasons.push(
+        `inputLocation changed from ${oldProperties?.inputLocation} to ${newProperties.inputLocation}`
+      );
+    }
+
     // Check if `outputLocation` has changed
-    if (oldProperties.outputLocation !== newProperties.outputLocation)
-      return true;
+    if (oldProperties?.outputLocation !== newProperties.outputLocation) {
+      reasons.push(
+        `outputLocation changed from ${oldProperties?.outputLocation} to ${newProperties.outputLocation}`
+      );
+    }
 
     // Check if columns have changed in name, type, or order
-    const oldColumns = oldProperties.columns || [];
+    const oldColumns = oldProperties?.columns || [];
     const newColumns = newProperties.columns || [];
-
-    if (oldColumns.length !== newColumns.length) return true; // Check if column counts differ
-
-    for (let i = 0; i < oldColumns.length; i++) {
-      if (
-        oldColumns[i].name !== newColumns[i].name || // Check if column names differ
-        oldColumns[i].type !== newColumns[i].type // Check if column types differ
-      ) {
-        return true;
+    if (oldColumns.length !== newColumns.length) {
+      reasons.push(
+        `column count changed from ${oldColumns.length} to ${newColumns.length}`
+      );
+    } else {
+      for (let i = 0; i < oldColumns.length; i++) {
+        if (oldColumns[i].name !== newColumns[i].name) {
+          reasons.push(
+            `column name changed at index ${i} from ${oldColumns[i].name} to ${newColumns[i].name}`
+          );
+        }
+        if (oldColumns[i].type !== newColumns[i].type) {
+          reasons.push(
+            `column type changed at index ${i} from ${oldColumns[i].type} to ${newColumns[i].type}`
+          );
+        }
       }
     }
 
-    const oldPartitionKeys = oldProperties.partitionKeys || [];
+    // Check if partitionKeys have changed in name, type, or order
+    const oldPartitionKeys = oldProperties?.partitionKeys || [];
     const newPartitionKeys = newProperties.partitionKeys || [];
-
-    if (oldPartitionKeys.length !== newPartitionKeys.length) return true; // Check if column counts differ
-
-    for (let i = 0; i < oldPartitionKeys.length; i++) {
-      if (
-        oldPartitionKeys[i].name !== newPartitionKeys[i].name || // Check if column names differ
-        oldPartitionKeys[i].type !== newPartitionKeys[i].type // Check if column types differ
-      ) {
-        return true;
+    if (oldPartitionKeys.length !== newPartitionKeys.length) {
+      reasons.push(
+        `partition key count changed from ${oldPartitionKeys.length} to ${newPartitionKeys.length}`
+      );
+    } else {
+      for (let i = 0; i < oldPartitionKeys.length; i++) {
+        if (oldPartitionKeys[i].name !== newPartitionKeys[i].name) {
+          reasons.push(
+            `partition key name changed at index ${i} from ${oldPartitionKeys[i].name} to ${newPartitionKeys[i].name}`
+          );
+        }
+        if (oldPartitionKeys[i].type !== newPartitionKeys[i].type) {
+          reasons.push(
+            `partition key type changed at index ${i} from ${oldPartitionKeys[i].type} to ${newPartitionKeys[i].type}`
+          );
+        }
       }
     }
-
-    // If none of the targeted properties have changed, no migration is needed
-    return false;
+    console.log(reasons);
+    return reasons.length > 0;
   }
 
   async _wait_for_status() {
@@ -451,7 +535,7 @@ class WharfieResource extends BaseResourceGroup {
       change = 'CREATED';
     } else if (this.status === Reconcilable.Status.MIGRATING) {
       change = 'MIGRATING';
-    } else if (await this.needsMigration(storedResource)) {
+    } else if (await this.needsMigration(oldProperties)) {
       change = 'START_MIGRATION';
     } else if (await this.needsUpdate(storedResource)) {
       change = 'UPDATED';

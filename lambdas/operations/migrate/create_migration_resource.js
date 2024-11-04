@@ -11,7 +11,7 @@ const resource_db = require('../../lib/dynamo/operations');
  */
 async function run(event, context, resource, operation) {
   const migration_db = process.env.TEMPORARY_GLUE_DATABASE || '';
-  const migration_table = `migrate_${resource.resource_properties.resourceName}`;
+  const migration_table = `${resource.resource_properties.resourceName}_migrate`;
   const migrationResource = new WharfieResource({
     name: migration_table,
     properties: {
@@ -19,7 +19,6 @@ async function run(event, context, resource, operation) {
       ...operation.operation_inputs.migration_resource_properties,
       resourceName: migration_table,
       resourceId: `${migration_db}.${migration_table}`,
-      outputLocation: `s3://${resource.resource_properties.projectBucket}/${migration_table}/`,
       databaseName: migration_db,
       migrationResource: true,
     },

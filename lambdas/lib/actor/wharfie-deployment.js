@@ -40,7 +40,7 @@ class WharfieDeployment extends BaseResourceGroup {
         globalQueryConcurrency: 10,
         resourceQueryConcurrency: 10,
         maxQueriesPerAction: 10000,
-        loggingLevel: 'debug',
+        loggingLevel: 'info',
         _INTERNAL_STATE_RESOURCE: true,
         deployment: () => this.getDeploymentProperties(),
         createdAt: Date.now(),
@@ -65,6 +65,7 @@ class WharfieDeployment extends BaseResourceGroup {
       envPaths: this.get('envPaths', envPaths(this.name)),
       version: this.get('version', require('../../../package.json').version),
       stateTable: `${this.name}-state`,
+      stateTableArn: this.get('stateTableArn'),
       region: this.get('region'),
       accountId: this.get('accountId'),
       name: this.name,
@@ -161,7 +162,10 @@ class WharfieDeployment extends BaseResourceGroup {
       parent,
       properties: {
         deployment: () => this.getDeploymentProperties(),
-        actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
+        actorPolicyArns: () => [
+          resourceGroup.getActorPolicyArn(),
+          resourceGroup.getInfraPolicyArn(),
+        ],
         artifactBucket: () => resourceGroup.getBucket().name,
         environmentVariables: this.getActorEnvironmentVariables.bind(this),
       },
@@ -172,7 +176,10 @@ class WharfieDeployment extends BaseResourceGroup {
       parent,
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
-        actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
+        actorPolicyArns: () => [
+          resourceGroup.getActorPolicyArn(),
+          resourceGroup.getInfraPolicyArn(),
+        ],
         artifactBucket: () => resourceGroup.getBucket().name,
         environmentVariables: this.getActorEnvironmentVariables.bind(this),
       },
@@ -183,7 +190,10 @@ class WharfieDeployment extends BaseResourceGroup {
       parent,
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
-        actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
+        actorPolicyArns: () => [
+          resourceGroup.getActorPolicyArn(),
+          resourceGroup.getInfraPolicyArn(),
+        ],
         artifactBucket: () => resourceGroup.getBucket().name,
         environmentVariables: this.getActorEnvironmentVariables.bind(this),
       },
@@ -193,7 +203,10 @@ class WharfieDeployment extends BaseResourceGroup {
       parent,
       properties: {
         deployment: this.getDeploymentProperties.bind(this),
-        actorSharedPolicyArn: () => resourceGroup.getActorPolicyArn(),
+        actorPolicyArns: () => [
+          resourceGroup.getActorPolicyArn(),
+          resourceGroup.getInfraPolicyArn(),
+        ],
         artifactBucket: () => resourceGroup.getBucket().name,
         environmentVariables: this.getActorEnvironmentVariables.bind(this),
       },
@@ -306,6 +319,8 @@ class WharfieDeployment extends BaseResourceGroup {
     await Promise.all([this.setAccountId(), this.setRegion()]);
     this.set('deployment', this.getDeploymentProperties());
     await this.getSystemStateTable().reconcile();
+    this.set('stateTableArn', this.getSystemStateTable().get('arn'));
+    this.set('deployment', this.getDeploymentProperties());
     await super.reconcile();
   }
 

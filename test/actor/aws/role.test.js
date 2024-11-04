@@ -2,6 +2,7 @@
 'use strict';
 
 process.env.AWS_MOCKS = true;
+jest.mock('../../../lambdas/lib/id');
 const { IAM } = jest.requireMock('@aws-sdk/client-iam');
 
 const { getMockDeploymentProperties } = require('../util');
@@ -32,7 +33,7 @@ describe('iam role IaC', () => {
         "name": "test-role",
         "parent": "",
         "properties": {
-          "arn": "arn:aws:iam::123456789012:role/test-role",
+          "arn": "arn:aws:iam::123456789012:role/test-role_111111",
           "deployment": {
             "accountId": "123456789012",
             "envPaths": {
@@ -47,6 +48,7 @@ describe('iam role IaC', () => {
             "stateTable": "_testing_state_table",
             "version": "0.0.1test",
           },
+          "id": "111111",
           "tags": [
             {
               "Key": "test-key",
@@ -60,18 +62,18 @@ describe('iam role IaC', () => {
     `);
 
     const res = await iam.getRole({
-      RoleName: 'test-role',
+      RoleName: 'test-role_111111',
     });
 
     expect(res).toMatchInlineSnapshot(`
       {
         "Role": {
-          "Arn": "arn:aws:iam::123456789012:role/test-role",
+          "Arn": "arn:aws:iam::123456789012:role/test-role_111111",
           "AssumeRolePolicyDocument": undefined,
           "AttachedPolicies": [],
           "Description": undefined,
           "Policies": [],
-          "RoleName": "test-role",
+          "RoleName": "test-role_111111",
           "Tags": [
             {
               "Key": "test-key",
@@ -84,9 +86,9 @@ describe('iam role IaC', () => {
     await role.destroy();
     expect(role.status).toBe('DESTROYED');
     await expect(
-      iam.getRole({ RoleName: 'test-role' })
+      iam.getRole({ RoleName: 'test-role_111111' })
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"role test-role does not exist"`
+      `"role test-role_111111 does not exist"`
     );
   });
 
@@ -142,7 +144,7 @@ describe('iam role IaC', () => {
         "name": "test-role",
         "parent": "",
         "properties": {
-          "arn": "arn:aws:iam::123456789012:role/test-role",
+          "arn": "arn:aws:iam::123456789012:role/test-role_111111",
           "assumeRolePolicyDocument": {
             "Statement": [
               {
@@ -170,6 +172,7 @@ describe('iam role IaC', () => {
             "version": "0.0.1test",
           },
           "description": "some role description",
+          "id": "111111",
           "rolePolicyDocument": {
             "Statement": [
               {
@@ -200,23 +203,23 @@ describe('iam role IaC', () => {
     `);
 
     const res = await iam.getRole({
-      RoleName: 'test-role',
+      RoleName: 'test-role_111111',
     });
 
     expect(res).toMatchInlineSnapshot(`
       {
         "Role": {
-          "Arn": "arn:aws:iam::123456789012:role/test-role",
+          "Arn": "arn:aws:iam::123456789012:role/test-role_111111",
           "AssumeRolePolicyDocument": "{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"lambda.amazonaws.com"},"Action":"sts:AssumeRole"}]}",
           "AttachedPolicies": [],
           "Description": "some role description",
           "Policies": [
             {
               "PolicyDocument": "{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["sqs:DeleteMessage","sqs:ReceiveMessage","sqs:GetQueueAttributes","sqs:SendMessage"],"Resource":["*"]}]}",
-              "PolicyName": "test-role_policy",
+              "PolicyName": "test-role_111111_policy",
             },
           ],
-          "RoleName": "test-role",
+          "RoleName": "test-role_111111",
           "Tags": [
             {
               "Key": "test-key",
@@ -229,9 +232,9 @@ describe('iam role IaC', () => {
     await role.destroy();
     expect(role.status).toBe('DESTROYED');
     await expect(
-      iam.getRole({ RoleName: 'test-role' })
+      iam.getRole({ RoleName: 'test-role_111111' })
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"role test-role does not exist"`
+      `"role test-role_111111 does not exist"`
     );
   });
 });

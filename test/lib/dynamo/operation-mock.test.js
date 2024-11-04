@@ -33,6 +33,7 @@ const FIXTURED_RESOURCE_PROPERTIES = {
   databaseName: 'test-wharfie-resource',
   dependencyTable: 'test-deployment-dependencies',
   deployment: {
+    stateTableArn: 'state-table',
     accountId: '1234',
     envPaths: {
       cache: 'mock',

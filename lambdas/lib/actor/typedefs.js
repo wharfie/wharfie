@@ -15,6 +15,7 @@
  * @property {import('../env-paths').EnvPaths} envPaths -
  * @property {string} version -
  * @property {string} stateTable -
+ * @property {string} stateTableArn -
  * @property {string} accountId -
  * @property {string} region -
  * @property {string} name -

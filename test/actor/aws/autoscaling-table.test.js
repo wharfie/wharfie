@@ -4,6 +4,7 @@
 
 process.env.AWS_MOCKS = '1';
 jest.mock('../../../lambdas/lib/dynamo/state');
+jest.mock('../../../lambdas/lib/id');
 const {
   AutoscalingTable,
 } = require('../../../lambdas/lib/actor/resources/aws/');
@@ -173,7 +174,7 @@ describe('autoscaling table IaC', () => {
             "parent": "test-table",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
-              "arn": "arn:aws:iam::123456789012:role/table-name-autoscaling-role",
+              "arn": "arn:aws:iam::123456789012:role/table-name-autoscaling-role_111111",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -203,6 +204,7 @@ describe('autoscaling table IaC', () => {
                 "version": "0.0.1test",
               },
               "description": "Role for table-name table autoscaling",
+              "id": "111111",
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -295,7 +297,7 @@ describe('autoscaling table IaC', () => {
               "maxCapacity": 100,
               "minCapacity": 5,
               "resourceId": "table/table-name",
-              "roleArn": "arn:aws:iam::123456789012:role/table-name-autoscaling-role",
+              "roleArn": "arn:aws:iam::123456789012:role/table-name-autoscaling-role_111111",
               "scalableDimension": "dynamodb:table:ReadCapacityUnits",
               "serviceNamespace": "dynamodb",
               "tags": {},
@@ -367,7 +369,7 @@ describe('autoscaling table IaC', () => {
               "maxCapacity": 50,
               "minCapacity": 1,
               "resourceId": "table/table-name",
-              "roleArn": "arn:aws:iam::123456789012:role/table-name-autoscaling-role",
+              "roleArn": "arn:aws:iam::123456789012:role/table-name-autoscaling-role_111111",
               "scalableDimension": "dynamodb:table:WriteCapacityUnits",
               "serviceNamespace": "dynamodb",
               "tags": {},

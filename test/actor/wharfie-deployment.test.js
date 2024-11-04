@@ -74,6 +74,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "globalQueryConcurrency": 10,
@@ -81,6 +82,7 @@ describe('deployment IaC', () => {
               "maxQueriesPerAction": 10000,
               "region": "us-west-2",
               "resourceQueryConcurrency": 10,
+              "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
             },
             "resourceType": "WharfieDeployment",
             "resources": [
@@ -99,7 +101,10 @@ describe('deployment IaC', () => {
             "name": "cleanup",
             "parent": "test-deployment",
             "properties": {
-              "actorSharedPolicyArn": "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+              "actorPolicyArns": [
+                "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
+              ],
               "artifactBucket": "test-deployment-bucket",
               "deployment": {
                 "accountId": "123456789012",
@@ -113,6 +118,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "environmentVariables": {
@@ -147,7 +153,10 @@ describe('deployment IaC', () => {
             "parent": "test-deployment#cleanup",
             "properties": {
               "actorName": "cleanup",
-              "actorSharedPolicyArn": "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+              "actorPolicyArns": [
+                "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
+              ],
               "artifactBucket": "test-deployment-bucket",
               "deployment": {
                 "accountId": "123456789012",
@@ -161,6 +170,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "environmentVariables": {
@@ -216,6 +226,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "eventSourceArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-cleanup-queue",
@@ -245,6 +256,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "functionCodeHash": "mockedHash",
@@ -272,6 +284,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "messageRetentionPeriod": "1209600",
@@ -316,6 +329,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "cleanup lambda",
@@ -350,7 +364,7 @@ describe('deployment IaC', () => {
               "memorySize": 1024,
               "packageType": "Zip",
               "publish": true,
-              "role": "arn:aws:iam::123456789012:role/test-deployment-cleanup-role",
+              "role": "arn:aws:iam::123456789012:role/test-deployment-cleanup-role_111111",
               "runtime": "nodejs20.x",
               "timeout": 300,
             },
@@ -376,6 +390,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "messageRetentionPeriod": "1209600",
@@ -431,7 +446,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-cleanup-role",
             "parent": "test-deployment#cleanup#cleanup-actor-resources",
             "properties": {
-              "arn": "arn:aws:iam::123456789012:role/test-deployment-cleanup-role",
+              "arn": "arn:aws:iam::123456789012:role/test-deployment-cleanup-role_111111",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -456,11 +471,14 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "test-deployment actor cleanup role",
+              "id": "111111",
               "managedPolicyArns": [
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
               "rolePolicyDocument": {
                 "Statement": [
@@ -489,7 +507,10 @@ describe('deployment IaC', () => {
             "name": "daemon",
             "parent": "test-deployment",
             "properties": {
-              "actorSharedPolicyArn": "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+              "actorPolicyArns": [
+                "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
+              ],
               "artifactBucket": "test-deployment-bucket",
               "deployment": {
                 "accountId": "123456789012",
@@ -503,6 +524,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "environmentVariables": {
@@ -537,7 +559,10 @@ describe('deployment IaC', () => {
             "parent": "test-deployment#daemon",
             "properties": {
               "actorName": "daemon",
-              "actorSharedPolicyArn": "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+              "actorPolicyArns": [
+                "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
+              ],
               "artifactBucket": "test-deployment-bucket",
               "deployment": {
                 "accountId": "123456789012",
@@ -551,6 +576,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "environmentVariables": {
@@ -606,6 +632,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "eventSourceArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-queue",
@@ -635,6 +662,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "functionCodeHash": "mockedHash",
@@ -662,6 +690,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "messageRetentionPeriod": "1209600",
@@ -706,6 +735,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "daemon lambda",
@@ -740,7 +770,7 @@ describe('deployment IaC', () => {
               "memorySize": 1024,
               "packageType": "Zip",
               "publish": true,
-              "role": "arn:aws:iam::123456789012:role/test-deployment-daemon-role",
+              "role": "arn:aws:iam::123456789012:role/test-deployment-daemon-role_111111",
               "runtime": "nodejs20.x",
               "timeout": 300,
             },
@@ -766,6 +796,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "messageRetentionPeriod": "1209600",
@@ -821,7 +852,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-daemon-role",
             "parent": "test-deployment#daemon#daemon-actor-resources",
             "properties": {
-              "arn": "arn:aws:iam::123456789012:role/test-deployment-daemon-role",
+              "arn": "arn:aws:iam::123456789012:role/test-deployment-daemon-role_111111",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -846,11 +877,14 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "test-deployment actor daemon role",
+              "id": "111111",
               "managedPolicyArns": [
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
               "rolePolicyDocument": {
                 "Statement": [
@@ -879,7 +913,10 @@ describe('deployment IaC', () => {
             "name": "events",
             "parent": "test-deployment",
             "properties": {
-              "actorSharedPolicyArn": "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+              "actorPolicyArns": [
+                "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
+              ],
               "artifactBucket": "test-deployment-bucket",
               "deployment": {
                 "accountId": "123456789012",
@@ -893,6 +930,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "environmentVariables": {
@@ -927,7 +965,10 @@ describe('deployment IaC', () => {
             "parent": "test-deployment#events",
             "properties": {
               "actorName": "events",
-              "actorSharedPolicyArn": "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+              "actorPolicyArns": [
+                "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
+              ],
               "artifactBucket": "test-deployment-bucket",
               "deployment": {
                 "accountId": "123456789012",
@@ -941,6 +982,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "environmentVariables": {
@@ -996,6 +1038,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "eventSourceArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
@@ -1025,6 +1068,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "functionCodeHash": "mockedHash",
@@ -1052,6 +1096,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "messageRetentionPeriod": "1209600",
@@ -1096,6 +1141,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "events lambda",
@@ -1130,7 +1176,7 @@ describe('deployment IaC', () => {
               "memorySize": 1024,
               "packageType": "Zip",
               "publish": true,
-              "role": "arn:aws:iam::123456789012:role/test-deployment-events-role",
+              "role": "arn:aws:iam::123456789012:role/test-deployment-events-role_111111",
               "runtime": "nodejs20.x",
               "timeout": 300,
             },
@@ -1156,6 +1202,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "messageRetentionPeriod": "1209600",
@@ -1211,7 +1258,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-events-role",
             "parent": "test-deployment#events#events-actor-resources",
             "properties": {
-              "arn": "arn:aws:iam::123456789012:role/test-deployment-events-role",
+              "arn": "arn:aws:iam::123456789012:role/test-deployment-events-role_111111",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -1236,11 +1283,14 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "test-deployment actor events role",
+              "id": "111111",
               "managedPolicyArns": [
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
               "rolePolicyDocument": {
                 "Statement": [
@@ -1269,7 +1319,10 @@ describe('deployment IaC', () => {
             "name": "monitor",
             "parent": "test-deployment",
             "properties": {
-              "actorSharedPolicyArn": "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+              "actorPolicyArns": [
+                "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
+              ],
               "artifactBucket": "test-deployment-bucket",
               "deployment": {
                 "accountId": "123456789012",
@@ -1283,6 +1336,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "environmentVariables": {
@@ -1318,7 +1372,10 @@ describe('deployment IaC', () => {
             "parent": "test-deployment#monitor",
             "properties": {
               "actorName": "monitor",
-              "actorSharedPolicyArn": "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+              "actorPolicyArns": [
+                "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
+              ],
               "artifactBucket": "test-deployment-bucket",
               "deployment": {
                 "accountId": "123456789012",
@@ -1332,6 +1389,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "environmentVariables": {
@@ -1387,6 +1445,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "eventSourceArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-queue",
@@ -1416,6 +1475,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "functionCodeHash": "mockedHash",
@@ -1443,6 +1503,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "messageRetentionPeriod": "1209600",
@@ -1487,6 +1548,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "monitor lambda",
@@ -1521,7 +1583,7 @@ describe('deployment IaC', () => {
               "memorySize": 1024,
               "packageType": "Zip",
               "publish": true,
-              "role": "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
+              "role": "arn:aws:iam::123456789012:role/test-deployment-monitor-role_111111",
               "runtime": "nodejs20.x",
               "timeout": 300,
             },
@@ -1547,6 +1609,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "messageRetentionPeriod": "1209600",
@@ -1602,7 +1665,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-monitor-role",
             "parent": "test-deployment#monitor#monitor-actor-resources",
             "properties": {
-              "arn": "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
+              "arn": "arn:aws:iam::123456789012:role/test-deployment-monitor-role_111111",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -1627,11 +1690,14 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "test-deployment actor monitor role",
+              "id": "111111",
               "managedPolicyArns": [
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
+                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
               "rolePolicyDocument": {
                 "Statement": [
@@ -1675,6 +1741,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "monitor athena events rule",
@@ -1713,6 +1780,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "loggingLevel": "info",
@@ -1731,6 +1799,7 @@ describe('deployment IaC', () => {
               "test-deployment-event-role",
               "test-deployment-temporary-database",
               "test-deployment-actor-policy",
+              "test-deployment-infra-policy",
               "test-deployment-glue-database",
               "test-deployment-deployment-resources-log-resource",
               "test-deployment-deployment-resources-logging-resource-role",
@@ -1761,6 +1830,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "test-deployment actor test-deployment policy",
@@ -1879,6 +1949,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "lifecycleConfiguration": {
@@ -1934,6 +2005,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "keySchema": [
@@ -2038,6 +2110,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "test-deployment-deployment-resources wharfie logs",
@@ -2075,8 +2148,9 @@ describe('deployment IaC', () => {
               "projectName": "test-deployment",
               "region": "us-west-2",
               "resourceId": "test-deployment.logs",
+              "resourceKey": "test-deployment#test-deployment-deployment-resources#test-deployment-deployment-resources-log-resource",
               "resourceName": "logs",
-              "roleArn": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-role",
+              "roleArn": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-rol_111111",
               "scheduleQueueArn": "arn:aws:sqs:us-west-2:123456789012:test-deployment-events-queue",
               "scheduleQueueUrl": "https://sqs.us-west-2.amazonaws.com/123456789012/test-deployment-events-queue",
               "serdeInfo": {
@@ -2178,6 +2252,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "test-deployment-deployment-resources wharfie logs",
@@ -2300,6 +2375,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "test-deployment-deployment-resources wharfie logs",
@@ -2364,6 +2440,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "table_name": "test-deployment-locations",
@@ -2385,7 +2462,7 @@ describe('deployment IaC', () => {
                   "athena_workgroup": "wharfie-test-deployment-logs-workgroup",
                   "created_at": 123456789,
                   "daemon_config": {
-                    "Role": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-role",
+                    "Role": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-rol_111111",
                   },
                   "destination_properties": {
                     "arn": "arn:aws:glue:us-west-2:123456789012:table/test-deployment/logs",
@@ -2462,6 +2539,7 @@ describe('deployment IaC', () => {
                       "name": "test-deployment",
                       "region": "us-west-2",
                       "stateTable": "test-deployment-state",
+                      "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                       "version": "0.0.1",
                     },
                     "description": "test-deployment-deployment-resources wharfie logs",
@@ -2584,6 +2662,7 @@ describe('deployment IaC', () => {
                       "name": "test-deployment",
                       "region": "us-west-2",
                       "stateTable": "test-deployment-state",
+                      "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                       "version": "0.0.1",
                     },
                     "description": "test-deployment-deployment-resources wharfie logs",
@@ -2621,8 +2700,9 @@ describe('deployment IaC', () => {
                     "projectName": "test-deployment",
                     "region": "us-west-2",
                     "resourceId": "test-deployment.logs",
+                    "resourceKey": "test-deployment#test-deployment-deployment-resources#test-deployment-deployment-resources-log-resource",
                     "resourceName": "logs",
-                    "roleArn": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-role",
+                    "roleArn": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-rol_111111",
                     "scheduleQueueArn": "arn:aws:sqs:us-west-2:123456789012:test-deployment-events-queue",
                     "scheduleQueueUrl": "https://sqs.us-west-2.amazonaws.com/123456789012/test-deployment-events-queue",
                     "serdeInfo": {
@@ -2710,6 +2790,7 @@ describe('deployment IaC', () => {
                       "name": "test-deployment",
                       "region": "us-west-2",
                       "stateTable": "test-deployment-state",
+                      "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                       "version": "0.0.1",
                     },
                     "description": "test-deployment-deployment-resources wharfie logs",
@@ -2769,6 +2850,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "table_name": "test-deployment-operations",
@@ -2794,6 +2876,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "test-deployment resource logs workgroup",
@@ -2809,7 +2892,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-deployment-resources-logging-resource-role",
             "parent": "test-deployment#test-deployment-deployment-resources",
             "properties": {
-              "arn": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-role",
+              "arn": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-rol_111111",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -2834,9 +2917,11 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "test-deployment-deployment-resources logging resource role",
+              "id": "111111",
               "managedPolicyArns": [
                 "arn:aws:iam::123456789012:policy/test-deployment-shared-policy",
               ],
@@ -2884,7 +2969,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-event-role",
             "parent": "test-deployment#test-deployment-deployment-resources",
             "properties": {
-              "arn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
+              "arn": "arn:aws:iam::123456789012:role/test-deployment-event-role_111111",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -2912,9 +2997,11 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "test-deployment event role",
+              "id": "111111",
             },
             "resourceType": "Role",
             "status": "STABLE",
@@ -2940,6 +3027,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "s3DestinationConfiguration": {
@@ -2950,7 +3038,7 @@ describe('deployment IaC', () => {
                 },
                 "CompressionFormat": "GZIP",
                 "Prefix": "logs/raw/",
-                "RoleARN": "arn:aws:iam::123456789012:role/test-deployment-firehose-role",
+                "RoleARN": "arn:aws:iam::123456789012:role/test-deployment-firehose-role_111111",
               },
             },
             "resourceType": "Firehose",
@@ -2963,7 +3051,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-firehose-role",
             "parent": "test-deployment#test-deployment-deployment-resources",
             "properties": {
-              "arn": "arn:aws:iam::123456789012:role/test-deployment-firehose-role",
+              "arn": "arn:aws:iam::123456789012:role/test-deployment-firehose-role_111111",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -2988,9 +3076,11 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "test-deployment firehose role",
+              "id": "111111",
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -3037,10 +3127,148 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
             },
             "resourceType": "GlueDatabase",
+            "status": "STABLE",
+          },
+          "test-deployment#test-deployment-deployment-resources#test-deployment-infra-policy": {
+            "dependsOn": [
+              "test-deployment-operations",
+              "test-deployment-locations",
+              "test-deployment-dependencies",
+            ],
+            "name": "test-deployment-infra-policy",
+            "parent": "test-deployment#test-deployment-deployment-resources",
+            "properties": {
+              "arn": "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
+              "deployment": {
+                "accountId": "123456789012",
+                "envPaths": {
+                  "cache": "mock",
+                  "config": "mock",
+                  "data": "mock",
+                  "log": "mock",
+                  "temp": "mock",
+                },
+                "name": "test-deployment",
+                "region": "us-west-2",
+                "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
+                "version": "0.0.1",
+              },
+              "description": "test-deployment infra test-deployment policy",
+              "document": {
+                "Statement": [
+                  {
+                    "Action": [
+                      "athena:ListTagsForResource",
+                      "athena:UntagResource",
+                      "athena:TagResource",
+                      "athena:GetWorkGroup",
+                      "athena:UpdateWorkGroup",
+                      "athena:CreateWorkGroup",
+                      "athena:DeleteWorkGroup",
+                    ],
+                    "Effect": "Allow",
+                    "Resource": "*",
+                    "Sid": "AthenaWorkgroupIAC",
+                  },
+                  {
+                    "Action": [
+                      "glue:CreateTable",
+                      "glue:DeleteTable",
+                      "glue:GetTable",
+                      "glue:UpdateTable",
+                      "glue:GetTags",
+                      "glue:TagResource",
+                      "glue:UntagResource",
+                    ],
+                    "Effect": "Allow",
+                    "Resource": "*",
+                    "Sid": "GlueTableIAC",
+                  },
+                  {
+                    "Action": [
+                      "events:ListTargetsByRule",
+                      "events:PutTargets",
+                      "events:RemoveTargets",
+                      "events:ListTagsForResource",
+                      "events:UntagResource",
+                      "events:TagResource",
+                      "events:DescribeRule",
+                      "events:EnableRule",
+                      "events:DisableRule",
+                      "events:PutRule",
+                      "events:DeleteRule",
+                    ],
+                    "Effect": "Allow",
+                    "Resource": "*",
+                    "Sid": "EventsRuleIAC",
+                  },
+                  {
+                    "Action": [
+                      "dynamodb:PutItem",
+                      "dynamodb:DeleteItem",
+                    ],
+                    "Effect": "Allow",
+                    "Resource": [
+                      "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-operations",
+                    ],
+                    "Sid": "WharfieResourceRecordIAC",
+                  },
+                  {
+                    "Action": [
+                      "s3:GetBucketLocation",
+                    ],
+                    "Effect": "Allow",
+                    "Resource": "*",
+                    "Sid": "WharfieResourceRecordS3GetBucketLocation",
+                  },
+                  {
+                    "Action": [
+                      "dynamodb:PutItem",
+                      "dynamodb:DeleteItem",
+                    ],
+                    "Effect": "Allow",
+                    "Resource": [
+                      "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-locations",
+                    ],
+                    "Sid": "LocationRecordIAC",
+                  },
+                  {
+                    "Action": [
+                      "dynamodb:PutItem",
+                      "dynamodb:DeleteItem",
+                    ],
+                    "Effect": "Allow",
+                    "Resource": [
+                      "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-dependencies",
+                    ],
+                    "Sid": "DependencyRecordIAC",
+                  },
+                  {
+                    "Action": [
+                      "dynamodb:PutItem",
+                      "dynamodb:Query",
+                      "dynamodb:BatchWriteItem",
+                      "dynamodb:UpdateItem",
+                      "dynamodb:GetItem",
+                      "dynamodb:DeleteItem",
+                    ],
+                    "Effect": "Allow",
+                    "Resource": [
+                      "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
+                    ],
+                    "Sid": "IACState",
+                  },
+                ],
+                "Version": "2012-10-17",
+              },
+            },
+            "resourceType": "Policy",
             "status": "STABLE",
           },
           "test-deployment#test-deployment-deployment-resources#test-deployment-locations": {
@@ -3072,6 +3300,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "keySchema": [
@@ -3117,6 +3346,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "keySchema": [
@@ -3162,6 +3392,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "keySchema": [
@@ -3207,6 +3438,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "keySchema": [
@@ -3240,6 +3472,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "description": "test-deployment shared policy",
@@ -3293,7 +3526,7 @@ describe('deployment IaC', () => {
                     ],
                     "Effect": "Allow",
                     "Resource": [
-                      "arn:aws:iam::123456789012:role/test-deployment-event-role",
+                      "arn:aws:iam::123456789012:role/test-deployment-event-role_111111",
                     ],
                   },
                 ],
@@ -3321,6 +3554,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
             },
@@ -3351,6 +3585,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "notificationConfiguration": {
@@ -3403,6 +3638,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": undefined,
                 "version": "0.0.1",
               },
               "keySchema": [
@@ -3445,6 +3681,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment",
             "region": "us-west-2",
             "stateTable": "test-deployment-state",
+            "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
             "version": "0.0.1",
           },
           "globalQueryConcurrency": 10,
@@ -3452,6 +3689,7 @@ describe('deployment IaC', () => {
           "maxQueriesPerAction": 10000,
           "region": "us-west-2",
           "resourceQueryConcurrency": 10,
+          "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
         },
         "resourceType": "WharfieDeployment",
         "resources": [
@@ -3491,6 +3729,7 @@ describe('deployment IaC', () => {
           "name": "test-deployment",
           "region": "us-west-2",
           "stateTable": "test-deployment-state",
+          "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
           "version": "0.0.1",
         },
         "globalQueryConcurrency": 10,
@@ -3498,13 +3737,14 @@ describe('deployment IaC', () => {
         "maxQueriesPerAction": 10000,
         "region": "us-west-2",
         "resourceQueryConcurrency": 10,
+        "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
       }
     `);
     expect(deserialized.status).toBe('STABLE');
     events.push('DESTROYING');
     await deserialized.destroy();
     expect(deserialized.status).toBe('DESTROYED');
-    expect(events).toHaveLength(391);
+    expect(events).toHaveLength(398);
     expect(state_db.__getMockState()).toMatchInlineSnapshot(`
       {
         "test-deployment": {
@@ -3528,6 +3768,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "globalQueryConcurrency": 10,
@@ -3535,6 +3776,7 @@ describe('deployment IaC', () => {
               "maxQueriesPerAction": 10000,
               "region": "us-west-2",
               "resourceQueryConcurrency": 10,
+              "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
             },
             "resourceType": "WharfieDeployment",
             "resources": [
@@ -3572,6 +3814,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
               "notificationConfiguration": {
@@ -3624,6 +3867,7 @@ describe('deployment IaC', () => {
                 "name": "test-deployment",
                 "region": "us-west-2",
                 "stateTable": "test-deployment-state",
+                "stateTableArn": undefined,
                 "version": "0.0.1",
               },
               "keySchema": [

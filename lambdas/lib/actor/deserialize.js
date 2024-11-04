@@ -59,6 +59,7 @@ function _deserialize(serialized, serializedResourceMap, resourceMap) {
   const deserializedResources = {};
 
   (serialized?.resources || []).forEach((resourceName) => {
+    if (!serializedResourceMap[resourceName]) return;
     const deserdResource = _deserialize(
       serializedResourceMap[resourceName],
       serializedResourceMap,
@@ -115,6 +116,9 @@ function setDependsOn(resource, resourceMap) {
   if (resource.dependsOn) {
     // @ts-ignore
     resource.dependsOn = resource.dependsOn.map((name) => resourceMap[name]);
+    // not all dependendents will be in the returned resourceMap, ie if we are selecting a subset of a resource within a large group
+    // so we filter out the ones that are not in the map
+    resource.dependsOn = resource.dependsOn.filter((resource) => !!resource);
   }
   // @ts-ignore
   if (resource.resources) {
@@ -148,7 +152,6 @@ async function load({ deploymentName, resourceKey }) {
     acc[item.name] = item;
     return acc;
   }, {});
-
   // @ts-ignore
   return deserialize(serializedResources[0], resourceMap);
 }

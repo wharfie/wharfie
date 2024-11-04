@@ -61,10 +61,10 @@ describe('wharfie project IaC', () => {
         "parent": "",
         "properties": {
           "actorRoleArns": [
-            "arn:aws:iam::123456789012:role/test-deployment-daemon-role",
-            "arn:aws:iam::123456789012:role/test-deployment-cleanup-role",
-            "arn:aws:iam::123456789012:role/test-deployment-events-role",
-            "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
+            "arn:aws:iam::123456789012:role/test-deployment-daemon-role_111111",
+            "arn:aws:iam::123456789012:role/test-deployment-cleanup-role_111111",
+            "arn:aws:iam::123456789012:role/test-deployment-events-role_111111",
+            "arn:aws:iam::123456789012:role/test-deployment-monitor-role_111111",
           ],
           "createdAt": 123456789,
           "daemonQueueUrl": "test-deployment-daemon-queue",
@@ -81,6 +81,7 @@ describe('wharfie project IaC', () => {
             "name": "test-deployment",
             "region": "us-west-2",
             "stateTable": "test-deployment-state",
+            "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
             "version": "0.0.1",
           },
           "deploymentSharedPolicyArn": "arn:aws:iam::123456789012:policy/test-deployment-shared-policy",
@@ -92,7 +93,7 @@ describe('wharfie project IaC', () => {
           },
           "scheduleQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
           "scheduleQueueUrl": "test-deployment-events-queue",
-          "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
+          "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role_111111",
         },
         "resourceType": "WharfieProject",
         "resources": [
@@ -167,10 +168,10 @@ describe('wharfie project IaC', () => {
         "parent": "",
         "properties": {
           "actorRoleArns": [
-            "arn:aws:iam::123456789012:role/test-deployment-daemon-role",
-            "arn:aws:iam::123456789012:role/test-deployment-cleanup-role",
-            "arn:aws:iam::123456789012:role/test-deployment-events-role",
-            "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
+            "arn:aws:iam::123456789012:role/test-deployment-daemon-role_111111",
+            "arn:aws:iam::123456789012:role/test-deployment-cleanup-role_111111",
+            "arn:aws:iam::123456789012:role/test-deployment-events-role_111111",
+            "arn:aws:iam::123456789012:role/test-deployment-monitor-role_111111",
           ],
           "createdAt": 123456789,
           "daemonQueueUrl": "test-deployment-daemon-queue",
@@ -187,6 +188,7 @@ describe('wharfie project IaC', () => {
             "name": "test-deployment",
             "region": "us-west-2",
             "stateTable": "test-deployment-state",
+            "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
             "version": "0.0.1",
           },
           "deploymentSharedPolicyArn": "arn:aws:iam::123456789012:policy/test-deployment-shared-policy",
@@ -198,7 +200,7 @@ describe('wharfie project IaC', () => {
           },
           "scheduleQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
           "scheduleQueueUrl": "test-deployment-events-queue",
-          "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
+          "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role_111111",
         },
         "resourceType": "WharfieProject",
         "resources": [

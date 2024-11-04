@@ -94,6 +94,7 @@ class LambdaBuild extends BaseResource {
       },
       bundle: true,
       minify: true,
+      keepNames: true,
       sourcemap: 'inline',
       platform: 'node',
       target: 'node20',
