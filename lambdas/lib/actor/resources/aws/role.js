@@ -1,10 +1,8 @@
 'use strict';
 const IAM = require('../../../iam');
-// const STS = require('../../../sts');
-// const { createId } = require('../../../id');
 const BaseResource = require('../base-resource');
 const { NoSuchEntityException } = require('@aws-sdk/client-iam');
-
+const { createShortId } = require('../../../id');
 /**
  * @typedef RoleProperties
  * @property {string} description -
@@ -34,7 +32,7 @@ class Role extends BaseResource {
 
   async _reconcileTags() {
     const { Tags } = await this.iam.listRoleTags({
-      RoleName: this.name,
+      RoleName: this.getRoleName(),
     });
     const currentTags = Tags || [];
     const desiredTags = this.get('tags') || [];
@@ -56,13 +54,13 @@ class Role extends BaseResource {
     );
     if (tagsToAdd.length > 0) {
       await this.iam.tagRole({
-        RoleName: this.name,
+        RoleName: this.getRoleName(),
         Tags: tagsToAdd,
       });
     }
     if (tagsToRemove.length > 0) {
       await this.iam.untagRole({
-        RoleName: this.name,
+        RoleName: this.getRoleName(),
         TagKeys: tagsToRemove.map(
           (/** @type {import('@aws-sdk/client-iam').Tag} */ tag) =>
             tag.Key || ''
@@ -71,16 +69,24 @@ class Role extends BaseResource {
     }
   }
 
+  getRoleName() {
+    return `${this.name.substring(0, 57)}_${this.get('id')}`;
+  }
+
   async _reconcile() {
+    const existingId = this.has('id');
+    if (!existingId) {
+      this.set('id', createShortId());
+    }
     try {
       const { Role } = await this.iam.getRole({
-        RoleName: this.name,
+        RoleName: this.getRoleName(),
       });
       this.set('arn', Role?.Arn);
     } catch (error) {
       if (error instanceof NoSuchEntityException) {
         const { Role } = await this.iam.createRole({
-          RoleName: this.name,
+          RoleName: this.getRoleName(),
           Description: this.get('description'),
           AssumeRolePolicyDocument: JSON.stringify(
             this.get('assumeRolePolicyDocument')
@@ -94,8 +100,8 @@ class Role extends BaseResource {
     }
     if (this.has('rolePolicyDocument') && this.get('rolePolicyDocument')) {
       await this.iam.putRolePolicy({
-        RoleName: this.name,
-        PolicyName: `${this.name}_policy`,
+        RoleName: this.getRoleName(),
+        PolicyName: `${this.getRoleName()}_policy`,
         PolicyDocument: JSON.stringify(this.get('rolePolicyDocument')),
       });
     }
@@ -104,7 +110,7 @@ class Role extends BaseResource {
         this.get('managedPolicyArns').map(
           (/** @type {string} */ managedPolicyArn) =>
             this.iam.attachRolePolicy({
-              RoleName: this.name,
+              RoleName: this.getRoleName(),
               PolicyArn: managedPolicyArn,
             })
         )
@@ -116,11 +122,11 @@ class Role extends BaseResource {
   async _destroy() {
     try {
       const { AttachedPolicies } = await this.iam.listAttachedRolePolicies({
-        RoleName: this.name,
+        RoleName: this.getRoleName(),
       });
       for (const AttachedPolicy of AttachedPolicies || []) {
         await this.iam.detachRolePolicy({
-          RoleName: this.name,
+          RoleName: this.getRoleName(),
           PolicyArn: AttachedPolicy.PolicyArn,
         });
       }
@@ -130,11 +136,11 @@ class Role extends BaseResource {
 
     try {
       const { PolicyNames } = await this.iam.listRolePolicies({
-        RoleName: this.name,
+        RoleName: this.getRoleName(),
       });
       for (const policyName of PolicyNames || []) {
         await this.iam.deleteRolePolicy({
-          RoleName: this.name,
+          RoleName: this.getRoleName(),
           PolicyName: policyName,
         });
       }
@@ -144,7 +150,7 @@ class Role extends BaseResource {
 
     try {
       await this.iam.deleteRole({
-        RoleName: this.name,
+        RoleName: this.getRoleName(),
       });
     } catch (error) {
       if (!(error instanceof NoSuchEntityException)) throw error;

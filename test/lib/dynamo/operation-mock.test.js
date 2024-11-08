@@ -10,6 +10,80 @@ const {
 } = require('../../../lambdas/lib/graph');
 const Logger = require('../../../lambdas/lib/logging/logger');
 jest.mock('../../../lambdas/lib/dynamo/operations');
+const FIXTURED_RESOURCE_PROPERTIES = {
+  catalogId: '1234',
+  columns: [
+    {
+      name: 'brand',
+      type: 'array<struct<language_tag:string,value:string>>',
+    },
+    {
+      name: 'country',
+      type: 'string',
+    },
+    {
+      name: 'domain_name',
+      type: 'string',
+    },
+  ],
+  compressed: undefined,
+  createdAt: 123456789,
+  scheduleQueueUrl: 'schedule_queue_url',
+  daemonQueueUrl: 'daemon_queue_url',
+  databaseName: 'test-wharfie-resource',
+  dependencyTable: 'test-deployment-dependencies',
+  deployment: {
+    stateTableArn: 'state-table',
+    accountId: '1234',
+    envPaths: {
+      cache: 'mock',
+      config: 'mock',
+      data: 'mock',
+      log: 'mock',
+      temp: 'mock',
+    },
+    name: 'test-deployment',
+    region: 'us-west-2',
+    stateTable: 'test-deployment-state',
+    version: '0.0.1',
+  },
+  description:
+    'Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html',
+  inputFormat: 'org.apache.hadoop.mapred.TextInputFormat',
+  inputLocation: 's3://amazon-berkeley-objects/listings/metadata/',
+  interval: 300,
+  locationTable: 'test-deployment-locations',
+  migrationResource: false,
+  numberOfBuckets: 0,
+  operationTable: 'test-deployment-operations',
+  outputFormat: 'org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat',
+  outputLocation:
+    's3://test-wharfie-resource-bucket-lz-fc6bi/amazon_berkely_objects/',
+  parameters: {
+    EXTERNAL: 'true',
+  },
+  partitionKeys: [],
+  project: {
+    name: 'test-wharfie-resource',
+  },
+  projectBucket: 'test-wharfie-resource-bucket-lz-fc6bi',
+  projectName: 'test-wharfie-resource',
+  region: 'us-west-2',
+  resourceId: 'test-wharfie-resource.amazon_berkely_objects',
+  resourceName: 'amazon_berkely_objects',
+  roleArn: 'arn:aws:iam::123456789012:role/test-wharfie-resource-project-role',
+  scheduleQueueArn:
+    'arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue',
+  scheduleRoleArn: 'arn:aws:iam::123456789012:role/test-deployment-event-role',
+  serdeInfo: {
+    Parameters: {
+      'ignore.malformed.json': 'true',
+    },
+    SerializationLibrary: 'org.openx.data.jsonserde.JsonSerDe',
+  },
+  storedAsSubDirectories: true,
+  tableType: 'EXTERNAL_TABLE',
+};
 
 const operations = require('../../../lambdas/lib/dynamo/operations');
 
@@ -37,6 +111,7 @@ describe('dynamo resource db', () => {
         daemon_config: {
           Role: 'RoleArn',
         },
+        resource_properties: FIXTURED_RESOURCE_PROPERTIES,
         source_properties: {
           catalogId: 'SourceCatalogId',
           columns: [],
@@ -93,6 +168,77 @@ describe('dynamo resource db', () => {
           "last_updated_at": 1466424490000,
           "record_type": "RESOURCE",
           "region": "us-east-1",
+          "resource_properties": {
+            "catalogId": "1234",
+            "columns": [
+              {
+                "name": "brand",
+                "type": "array<struct<language_tag:string,value:string>>",
+              },
+              {
+                "name": "country",
+                "type": "string",
+              },
+              {
+                "name": "domain_name",
+                "type": "string",
+              },
+            ],
+            "compressed": undefined,
+            "createdAt": 123456789,
+            "daemonQueueUrl": "daemon_queue_url",
+            "databaseName": "test-wharfie-resource",
+            "dependencyTable": "test-deployment-dependencies",
+            "deployment": {
+              "accountId": "1234",
+              "envPaths": {
+                "cache": "mock",
+                "config": "mock",
+                "data": "mock",
+                "log": "mock",
+                "temp": "mock",
+              },
+              "name": "test-deployment",
+              "region": "us-west-2",
+              "stateTable": "test-deployment-state",
+              "stateTableArn": "state-table",
+              "version": "0.0.1",
+            },
+            "description": "Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html",
+            "inputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+            "inputLocation": "s3://amazon-berkeley-objects/listings/metadata/",
+            "interval": 300,
+            "locationTable": "test-deployment-locations",
+            "migrationResource": false,
+            "numberOfBuckets": 0,
+            "operationTable": "test-deployment-operations",
+            "outputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+            "outputLocation": "s3://test-wharfie-resource-bucket-lz-fc6bi/amazon_berkely_objects/",
+            "parameters": {
+              "EXTERNAL": "true",
+            },
+            "partitionKeys": [],
+            "project": {
+              "name": "test-wharfie-resource",
+            },
+            "projectBucket": "test-wharfie-resource-bucket-lz-fc6bi",
+            "projectName": "test-wharfie-resource",
+            "region": "us-west-2",
+            "resourceId": "test-wharfie-resource.amazon_berkely_objects",
+            "resourceName": "amazon_berkely_objects",
+            "roleArn": "arn:aws:iam::123456789012:role/test-wharfie-resource-project-role",
+            "scheduleQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
+            "scheduleQueueUrl": "schedule_queue_url",
+            "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
+            "serdeInfo": {
+              "Parameters": {
+                "ignore.malformed.json": "true",
+              },
+              "SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe",
+            },
+            "storedAsSubDirectories": true,
+            "tableType": "EXTERNAL_TABLE",
+          },
           "source_properties": {
             "catalogId": "SourceCatalogId",
             "columns": [],
@@ -126,6 +272,7 @@ describe('dynamo resource db', () => {
         daemon_config: {
           Role: 'RoleArn',
         },
+        resource_properties: FIXTURED_RESOURCE_PROPERTIES,
         source_properties: {
           catalogId: 'SourceCatalogId',
           columns: [],
@@ -181,6 +328,77 @@ describe('dynamo resource db', () => {
         "id": "StackName",
         "last_updated_at": 1466424490000,
         "region": "us-east-1",
+        "resource_properties": {
+          "catalogId": "1234",
+          "columns": [
+            {
+              "name": "brand",
+              "type": "array<struct<language_tag:string,value:string>>",
+            },
+            {
+              "name": "country",
+              "type": "string",
+            },
+            {
+              "name": "domain_name",
+              "type": "string",
+            },
+          ],
+          "compressed": undefined,
+          "createdAt": 123456789,
+          "daemonQueueUrl": "daemon_queue_url",
+          "databaseName": "test-wharfie-resource",
+          "dependencyTable": "test-deployment-dependencies",
+          "deployment": {
+            "accountId": "1234",
+            "envPaths": {
+              "cache": "mock",
+              "config": "mock",
+              "data": "mock",
+              "log": "mock",
+              "temp": "mock",
+            },
+            "name": "test-deployment",
+            "region": "us-west-2",
+            "stateTable": "test-deployment-state",
+            "stateTableArn": "state-table",
+            "version": "0.0.1",
+          },
+          "description": "Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html",
+          "inputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+          "inputLocation": "s3://amazon-berkeley-objects/listings/metadata/",
+          "interval": 300,
+          "locationTable": "test-deployment-locations",
+          "migrationResource": false,
+          "numberOfBuckets": 0,
+          "operationTable": "test-deployment-operations",
+          "outputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+          "outputLocation": "s3://test-wharfie-resource-bucket-lz-fc6bi/amazon_berkely_objects/",
+          "parameters": {
+            "EXTERNAL": "true",
+          },
+          "partitionKeys": [],
+          "project": {
+            "name": "test-wharfie-resource",
+          },
+          "projectBucket": "test-wharfie-resource-bucket-lz-fc6bi",
+          "projectName": "test-wharfie-resource",
+          "region": "us-west-2",
+          "resourceId": "test-wharfie-resource.amazon_berkely_objects",
+          "resourceName": "amazon_berkely_objects",
+          "roleArn": "arn:aws:iam::123456789012:role/test-wharfie-resource-project-role",
+          "scheduleQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
+          "scheduleQueueUrl": "schedule_queue_url",
+          "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
+          "serdeInfo": {
+            "Parameters": {
+              "ignore.malformed.json": "true",
+            },
+            "SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe",
+          },
+          "storedAsSubDirectories": true,
+          "tableType": "EXTERNAL_TABLE",
+        },
         "source_properties": {
           "catalogId": "SourceCatalogId",
           "columns": [],
@@ -212,6 +430,7 @@ describe('dynamo resource db', () => {
       daemon_config: {
         Role: 'RoleArn',
       },
+      resource_properties: FIXTURED_RESOURCE_PROPERTIES,
       source_properties: {
         catalogId: 'SourceCatalogId',
         columns: [],
@@ -256,6 +475,7 @@ describe('dynamo resource db', () => {
       daemon_config: {
         Role: 'RoleArn',
       },
+      resource_properties: FIXTURED_RESOURCE_PROPERTIES,
       source_properties: {
         catalogId: 'SourceCatalogId',
         columns: [],
@@ -318,6 +538,77 @@ describe('dynamo resource db', () => {
           "last_updated_at": 1466424490000,
           "record_type": "RESOURCE",
           "region": "us-east-1",
+          "resource_properties": {
+            "catalogId": "1234",
+            "columns": [
+              {
+                "name": "brand",
+                "type": "array<struct<language_tag:string,value:string>>",
+              },
+              {
+                "name": "country",
+                "type": "string",
+              },
+              {
+                "name": "domain_name",
+                "type": "string",
+              },
+            ],
+            "compressed": undefined,
+            "createdAt": 123456789,
+            "daemonQueueUrl": "daemon_queue_url",
+            "databaseName": "test-wharfie-resource",
+            "dependencyTable": "test-deployment-dependencies",
+            "deployment": {
+              "accountId": "1234",
+              "envPaths": {
+                "cache": "mock",
+                "config": "mock",
+                "data": "mock",
+                "log": "mock",
+                "temp": "mock",
+              },
+              "name": "test-deployment",
+              "region": "us-west-2",
+              "stateTable": "test-deployment-state",
+              "stateTableArn": "state-table",
+              "version": "0.0.1",
+            },
+            "description": "Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html",
+            "inputFormat": "org.apache.hadoop.mapred.TextInputFormat",
+            "inputLocation": "s3://amazon-berkeley-objects/listings/metadata/",
+            "interval": 300,
+            "locationTable": "test-deployment-locations",
+            "migrationResource": false,
+            "numberOfBuckets": 0,
+            "operationTable": "test-deployment-operations",
+            "outputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
+            "outputLocation": "s3://test-wharfie-resource-bucket-lz-fc6bi/amazon_berkely_objects/",
+            "parameters": {
+              "EXTERNAL": "true",
+            },
+            "partitionKeys": [],
+            "project": {
+              "name": "test-wharfie-resource",
+            },
+            "projectBucket": "test-wharfie-resource-bucket-lz-fc6bi",
+            "projectName": "test-wharfie-resource",
+            "region": "us-west-2",
+            "resourceId": "test-wharfie-resource.amazon_berkely_objects",
+            "resourceName": "amazon_berkely_objects",
+            "roleArn": "arn:aws:iam::123456789012:role/test-wharfie-resource-project-role",
+            "scheduleQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
+            "scheduleQueueUrl": "schedule_queue_url",
+            "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
+            "serdeInfo": {
+              "Parameters": {
+                "ignore.malformed.json": "true",
+              },
+              "SerializationLibrary": "org.openx.data.jsonserde.JsonSerDe",
+            },
+            "storedAsSubDirectories": true,
+            "tableType": "EXTERNAL_TABLE",
+          },
           "source_properties": {
             "catalogId": "SourceCatalogId",
             "columns": [],
@@ -363,6 +654,7 @@ describe('dynamo resource db', () => {
       daemon_config: {
         Role: 'RoleArn',
       },
+      resource_properties: FIXTURED_RESOURCE_PROPERTIES,
       source_properties: {
         catalogId: 'SourceCatalogId',
         columns: [],
@@ -429,6 +721,7 @@ describe('dynamo resource db', () => {
       daemon_config: {
         Role: 'RoleArn',
       },
+      resource_properties: FIXTURED_RESOURCE_PROPERTIES,
       source_properties: {
         catalogId: 'SourceCatalogId',
         columns: [],
@@ -499,6 +792,7 @@ describe('dynamo resource db', () => {
       daemon_config: {
         Role: 'RoleArn',
       },
+      resource_properties: FIXTURED_RESOURCE_PROPERTIES,
       source_properties: {
         catalogId: 'SourceCatalogId',
         columns: [],
@@ -608,6 +902,7 @@ describe('dynamo resource db', () => {
       daemon_config: {
         Role: 'RoleArn',
       },
+      resource_properties: FIXTURED_RESOURCE_PROPERTIES,
       source_properties: {
         catalogId: 'SourceCatalogId',
         columns: [],
@@ -681,6 +976,7 @@ describe('dynamo resource db', () => {
       daemon_config: {
         Role: 'RoleArn',
       },
+      resource_properties: FIXTURED_RESOURCE_PROPERTIES,
       source_properties: {
         catalogId: 'SourceCatalogId',
         columns: [],
@@ -764,6 +1060,7 @@ describe('dynamo resource db', () => {
       daemon_config: {
         Role: 'RoleArn',
       },
+      resource_properties: FIXTURED_RESOURCE_PROPERTIES,
       source_properties: {
         catalogId: 'SourceCatalogId',
         columns: [],

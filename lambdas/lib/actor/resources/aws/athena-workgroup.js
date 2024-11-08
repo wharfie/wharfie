@@ -51,14 +51,16 @@ class AthenaWorkGroup extends BaseResource {
             t.Key === tag.Key && t.Value === tag.Value
         )
     );
-    await this.athena.untagResource({
-      ResourceARN: this.get('arn'),
-      TagKeys: tagsToRemove.map((tag) => tag.Key || ''),
-    });
-    await this.athena.tagResource({
-      ResourceARN: this.get('arn'),
-      Tags: tagsToAdd,
-    });
+    if (tagsToRemove.length > 0)
+      await this.athena.untagResource({
+        ResourceARN: this.get('arn'),
+        TagKeys: tagsToRemove.map((tag) => tag.Key || ''),
+      });
+    if (tagsToAdd.length > 0)
+      await this.athena.tagResource({
+        ResourceARN: this.get('arn'),
+        Tags: tagsToAdd,
+      });
   }
 
   async _reconcile() {

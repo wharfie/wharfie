@@ -53,6 +53,7 @@ async function getResource(resource_id) {
     },
   });
   if (!Items || Items.length === 0) return null;
+  // @ts-ignore
   return Resource.fromRecord(Items[0]);
 }
 
@@ -614,6 +615,7 @@ async function getAllResources() {
   const resources = [];
   (response.Items || []).forEach((item) => {
     if (item.data.record_type === Resource.RecordType) {
+      // @ts-ignore
       resources.push(Resource.fromRecord(item));
     }
   });
@@ -626,6 +628,7 @@ async function getAllResources() {
     });
     (response.Items || []).forEach((item) => {
       if (item.data.record_type === Resource.RecordType) {
+        // @ts-ignore
         resources.push(Resource.fromRecord(item));
       }
     });

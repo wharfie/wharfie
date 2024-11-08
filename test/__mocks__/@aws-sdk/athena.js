@@ -104,7 +104,9 @@ class AthenaMock {
       throw new InvalidRequestException({
         message: `workgroup: ${params.WorkGroup} does not exist`,
       });
-    return AthenaMock.__state.workgroups[params.WorkGroup];
+    return {
+      WorkGroup: AthenaMock.__state.workgroups[params.WorkGroup],
+    };
   }
 
   async deleteWorkGroup(params) {
@@ -119,13 +121,25 @@ class AthenaMock {
   async createWorkGroup(params) {
     if (AthenaMock.__state.workgroups[params.Name])
       throw new InvalidRequestException({
-        message: `workgroup: ${params.WorkGroup} already exists`,
+        message: `workgroup: ${params.Name} already exists`,
       });
 
     AthenaMock.__state.workgroups[params.Name] = {
       ...params,
       queries: {},
     };
+    if (
+      AthenaMock.__state.workgroups[params.Name]?.Configuration?.EngineVersion
+        ?.SelectedEngineVersion
+    ) {
+      AthenaMock.__state.workgroups[
+        params.Name
+      ].Configuration.EngineVersion.EffectiveEngineVersion =
+        AthenaMock.__state.workgroups[
+          params.Name
+        ].Configuration.EngineVersion.SelectedEngineVersion;
+    }
+
     return AthenaMock.__state.workgroups[params.WorkGroup];
   }
 

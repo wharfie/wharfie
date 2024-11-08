@@ -1,8 +1,10 @@
 'use strict';
 process.env.STACK_NAME = 'test-stack';
 process.env.TEMPORARY_GLUE_DATABASE = 'temp-glue-database';
-process.env.OPERATIONS_TABLE = 'operations-table';
-process.env.SEMAPHORE_TABLE = 'semaphore-table';
+process.env.OPERATIONS_TABLE = 'test-deployment-operations';
+process.env.SEMAPHORE_TABLE = 'test-deployment-semaphore';
+process.env.DEPENDENCY_TABLE = 'test-deployment-dependencies';
+process.env.LOCATION_TABLE = 'test-deployment-locations';
 process.env.MONITOR_QUEUE_URL = 'monitor-queue';
 process.env.CLEANUP_QUEUE_URL = 'cleanup-queue';
 process.env.DAEMON_QUEUE_URL = 'daemon-queue';
@@ -121,4 +123,5 @@ module.exports = {
   createLambdaQueues,
   setLambdaTriggers,
   clearLambdaTriggers,
+  clearEventsTrigger: () => clearInterval(events),
 };

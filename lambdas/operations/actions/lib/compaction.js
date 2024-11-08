@@ -219,7 +219,7 @@ class Compaction {
    * @property {string} athenaWorkgroup -
    * @property {import('../../../lib/logging/logger')} event_log -
    * @param {getCalculateViewPartitionQueriesParams} params -
-   * @returns {Promise<string>} -
+   * @returns {Promise<string?>} -
    */
   async getCalculatePartitionQueries({
     resource,
@@ -235,7 +235,7 @@ class Compaction {
       Name: sourceTableName,
     });
     if (!Table) throw new Error(`No Table returned from glue`);
-    if (!Table.PartitionKeys || Table.PartitionKeys.length === 0) return '';
+    if (!Table.PartitionKeys || Table.PartitionKeys.length === 0) return null;
 
     let partitionsOnly = true;
     const isView = resource.source_properties.tableType === 'VIRTUAL_VIEW';
@@ -297,7 +297,7 @@ class Compaction {
     const partitionKeys = Table.PartitionKeys;
     const DEFAULT_QUERY_STRING = `SELECT distinct ${partitionKeys
       .map(({ Name }) => Name)
-      .join(' ,')} FROM ${sourceDatabaseName}.${sourceTableName}`;
+      .join(' ,')} FROM "${sourceDatabaseName}"."${sourceTableName}"`;
     let QueryString = DEFAULT_QUERY_STRING;
 
     if (partitionsOnly) {
@@ -351,7 +351,7 @@ class Compaction {
         ) {
           QueryString = `
             SELECT ${partitionKeys.map(({ Name }) => Name).join(' ,')}
-            FROM ${sourceDatabaseName}."${sourceTableName}$partitions"
+            FROM "${sourceDatabaseName}"."${sourceTableName}$partitions"
           `;
         } else {
           throw new Error(

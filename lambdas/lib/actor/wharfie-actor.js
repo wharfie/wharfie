@@ -3,7 +3,7 @@ const BaseResourceGroup = require('./resources/base-resource-group');
 
 /**
  * @typedef ExtendedWharfieActorProperties
- * @property {string | function(): string} actorSharedPolicyArn -
+ * @property {string[] | function(): string[]} actorPolicyArns -
  * @property {string | function(): string} artifactBucket -
  * @property {Object<string,string> | function(): Object<string,string>} environmentVariables -
  */
@@ -20,7 +20,7 @@ const BaseResourceGroup = require('./resources/base-resource-group');
 /**
  * @typedef WharfieActorProperties
  * @property {string} handler -
- * @property {string | function(): string} actorSharedPolicyArn -
+ * @property {string[] | function(): string[]} actorPolicyArns -
  * @property {string | function(): string} artifactBucket -
  * @property {Object<string,string> | function(): Object<string,string>} environmentVariables -
  */
@@ -63,7 +63,7 @@ class WharfieActor extends BaseResourceGroup {
         deployment: () => this.get('deployment'),
         handler: this.get('handler'),
         actorName: this.name,
-        actorSharedPolicyArn: () => this.get('actorSharedPolicyArn'),
+        actorPolicyArns: () => this.get('actorPolicyArns'),
         artifactBucket: () => this.get('artifactBucket'),
         environmentVariables: () => this.get('environmentVariables'),
       },

@@ -208,28 +208,31 @@ describe('athena workgroup IaC', () => {
 
     expect(res).toMatchInlineSnapshot(`
       {
-        "Configuration": {
-          "EnforceWorkGroupConfiguration": true,
-          "EngineVersion": {
-            "SelectedEngineVersion": "Athena engine version 3",
-          },
-          "PublishCloudWatchMetricsEnabled": true,
-          "ResultConfiguration": {
-            "EncryptionConfiguration": {
-              "EncryptionOption": "SSE_S3",
+        "WorkGroup": {
+          "Configuration": {
+            "EnforceWorkGroupConfiguration": true,
+            "EngineVersion": {
+              "EffectiveEngineVersion": "Athena engine version 3",
+              "SelectedEngineVersion": "Athena engine version 3",
             },
-            "OutputLocation": "s3://test-bucket/test-prefix/",
+            "PublishCloudWatchMetricsEnabled": true,
+            "ResultConfiguration": {
+              "EncryptionConfiguration": {
+                "EncryptionOption": "SSE_S3",
+              },
+              "OutputLocation": "s3://test-bucket/test-prefix/",
+            },
           },
+          "Description": "test-description",
+          "Name": "test-workgroup",
+          "Tags": [
+            {
+              "key": "test-key",
+              "value": "test-value",
+            },
+          ],
+          "queries": {},
         },
-        "Description": "test-description",
-        "Name": "test-workgroup",
-        "Tags": [
-          {
-            "key": "test-key",
-            "value": "test-value",
-          },
-        ],
-        "queries": {},
       }
     `);
 

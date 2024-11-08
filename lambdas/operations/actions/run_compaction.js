@@ -57,6 +57,11 @@ async function run(event, context, resource, operation) {
     operation.id,
     actionId
   );
+  if (operation.type === Operation.Type.MIGRATE) {
+    resource = Resource.fromRecord(
+      operation.operation_inputs.migration_resource
+    );
+  }
 
   (partition_queries || []).length > 0 &&
     event_log.info(

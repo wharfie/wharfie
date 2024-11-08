@@ -13,7 +13,7 @@ const { Operation, Resource } = require('../../lib/graph/');
  * @param {Glue} glue -
  * @param {S3} s3 -
  * @param {import("@aws-sdk/client-glue").Table} migrateTable -
- * @param {import("@aws-sdk/client-glue").Table} destinationtable -
+ * @param {import("@aws-sdk/client-glue").Table} destinationTable -
  */
 async function swap_partitions(
   event,
@@ -22,7 +22,7 @@ async function swap_partitions(
   glue,
   s3,
   migrateTable,
-  destinationtable
+  destinationTable
 ) {
   const event_log = logging.getEventLogger(event, context);
   event_log.info("MIGRATE_SWAP_RESOURCE: updating table's partitions");
@@ -32,17 +32,17 @@ async function swap_partitions(
     TableName: migrateTable.Name,
   });
   event_log.info(`migration table: ${JSON.stringify(migrateTable)}`);
-  event_log.info(`existing table: ${JSON.stringify(destinationtable)}`);
+  event_log.info(`existing table: ${JSON.stringify(destinationTable)}`);
   event_log.info(`migration partitions: ${migratePartitions.length}`);
   const existingPartitions = await glue.getPartitions({
     DatabaseName: resource.destination_properties.databaseName,
     TableName: resource.destination_properties.name,
   });
   event_log.info(`existing partitions: ${existingPartitions.length}`);
-  if (!destinationtable?.StorageDescriptor?.Location)
+  if (!destinationTable?.StorageDescriptor?.Location)
     throw new Error('Table has no storage location');
   const { bucket: destinationBucket, prefix: destinationPrefix } =
-    s3.parseS3Uri(destinationtable.StorageDescriptor.Location);
+    s3.parseS3Uri(destinationTable.StorageDescriptor.Location);
 
   /** @type {import("@aws-sdk/client-glue").PartitionInput[]} */
   const partitionCreateOps = [];
@@ -91,13 +91,16 @@ async function swap_partitions(
         },
         Parameters: migrateTable.Parameters,
       });
+      const { bucket, prefix } = s3.parseS3Uri(
+        `${migrateTable.StorageDescriptor?.Location}`
+      );
       partitionUpdateReferenceOps.push({
-        CopySource: `${migrateTable.StorageDescriptor?.Location}${partitionLookup}/files`,
+        CopySource: `/${bucket}/${prefix}${partitionLookup}/files`,
         Bucket: destinationBucket,
         Key: `${destinationPrefix}${partitionLookup}/files`,
       });
     }
-    if (existingPartitionsLookup[partitionLookup].location !== p.location) {
+    if (existingPartitionsLookup[partitionLookup]?.location !== p.location) {
       const partitionValues = migrationTablePartitionKeys.map(
         (partitionKey) => `${p.partitionValues[partitionKey.Name || '']}`
       );
@@ -112,8 +115,11 @@ async function swap_partitions(
           Parameters: migrateTable.Parameters,
         },
       });
+      const { bucket, prefix } = s3.parseS3Uri(
+        `${migrateTable.StorageDescriptor?.Location}`
+      );
       partitionUpdateReferenceOps.push({
-        CopySource: `${migrateTable.StorageDescriptor?.Location}${partitionLookup}/files`,
+        CopySource: `/${bucket}/${prefix}${partitionLookup}/files`,
         Bucket: destinationBucket,
         Key: `${destinationPrefix}${partitionLookup}/files`,
       });
@@ -243,6 +249,8 @@ async function run(event, context, resource, operation) {
       destinationTable
     );
   }
+  event_log.info(`destinationTable ${JSON.stringify(destinationTable)}`);
+  event_log.info(`migrateTable ${JSON.stringify(migrateTable)}`);
   event_log.info("MIGRATE_SWAP_RESOURCE: updating table's location");
   await glue.updateTable({
     DatabaseName: destinationDatabaseName,

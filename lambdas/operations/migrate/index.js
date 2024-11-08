@@ -11,6 +11,7 @@ const update_symlinks = require('../actions/update_symlinks');
 const swap_resource = require('./swap_resource');
 const create_migration_resource = require('./create_migration_resource');
 const destroy_migration_resource = require('./destroy_migration_resource');
+const reconcile_resource = require('./reconcile_resource');
 const side_effects = require('../side_effects');
 
 /**
@@ -62,9 +63,13 @@ async function start(event, context, resource) {
     type: Action.Type.SWAP_RESOURCE,
     dependsOn: [update_symlinks_action],
   });
-  const destroy_migration_resource = operation.createAction({
-    type: Action.Type.CREATE_MIGRATION_RESOUCE,
+  const reconcile_resource = operation.createAction({
+    type: Action.Type.RECONCILE_RESOURCE,
     dependsOn: [swap_resource_action],
+  });
+  const destroy_migration_resource = operation.createAction({
+    type: Action.Type.DESTROY_MIGRATION_RESOURCE,
+    dependsOn: [reconcile_resource],
   });
   const finish_action = operation.createAction({
     type: Action.Type.FINISH,
@@ -137,6 +142,7 @@ async function cleanup(event, context, resource, migration_to_cleanup) {
   deletes.push(resource_db.deleteResource(migrationResource));
   deletes.push(semaphore_db.deleteSemaphore(`wharfie:BACKFILL:${StackName}`));
   deletes.push(semaphore_db.deleteSemaphore(`wharfie:LOAD:${StackName}`));
+  deletes.push(semaphore_db.deleteSemaphore(`wharfie:MIGRATE:${StackName}`));
   const results = await Promise.allSettled(deletes);
   results.forEach((result) => {
     if (result.status === 'rejected') {
@@ -180,9 +186,6 @@ async function finish(event, context, resource, operation) {
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function route(event, context, resource, operation) {
-  const migration_resource = Resource.fromRecord(
-    operation.operation_inputs.migration_resource
-  );
   switch (event.action_type) {
     case Action.Type.CREATE_MIGRATION_RESOUCE:
       return await create_migration_resource.run(
@@ -195,45 +198,37 @@ async function route(event, context, resource, operation) {
       return await destroy_migration_resource.run(
         event,
         context,
-        migration_resource,
+        Resource.fromRecord(operation.operation_inputs.migration_resource),
         operation
       );
-    case 'REGISTER_MISSING_PARTITIONS':
+    case Action.Type.RECONCILE_RESOURCE:
+      return await reconcile_resource.run(event, context, resource, operation);
+    case Action.Type.REGISTER_MISSING_PARTITIONS:
       return await register_missing_partitions.run(
         event,
         context,
-        migration_resource
+        Resource.fromRecord(operation.operation_inputs.migration_resource)
       );
-    case 'FIND_COMPACTION_PARTITIONS':
+    case Action.Type.FIND_COMPACTION_PARTITIONS:
       return await find_compaction_partitions.run(
         event,
         context,
-        migration_resource,
+        Resource.fromRecord(operation.operation_inputs.migration_resource),
         operation
       );
-    case 'RUN_COMPACTION':
-      return await run_compaction.run(
-        event,
-        context,
-        migration_resource,
-        operation
-      );
-    case 'UPDATE_SYMLINKS':
-      return await update_symlinks.run(
-        event,
-        context,
-        migration_resource,
-        operation
-      );
-    case 'SWAP_RESOURCE':
+    case Action.Type.RUN_COMPACTION:
+      return await run_compaction.run(event, context, resource, operation);
+    case Action.Type.UPDATE_SYMLINKS:
+      return await update_symlinks.run(event, context, resource, operation);
+    case Action.Type.SWAP_RESOURCE:
       return await swap_resource.run(event, context, resource, operation);
-    case 'SIDE_EFFECT__CLOUDWATCH':
+    case Action.Type.SIDE_EFFECT__CLOUDWATCH:
       return await side_effects.cloudwatch(event, context, resource, operation);
-    case 'SIDE_EFFECT__WHARFIE':
+    case Action.Type.SIDE_EFFECT__WHARFIE:
       return await side_effects.wharfie(event, context, resource, operation);
-    case 'SIDE_EFFECT__DAGSTER':
+    case Action.Type.SIDE_EFFECT__DAGSTER:
       return await side_effects.dagster(event, context, resource, operation);
-    case 'SIDE_EFFECTS__FINISH':
+    case Action.Type.SIDE_EFFECTS__FINISH:
       return await side_effects.finish(event, context, resource, operation);
     default:
       throw new Error('Invalid Action, must be valid MIGRATE action');

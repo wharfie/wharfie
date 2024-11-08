@@ -317,6 +317,7 @@ class WharfieProject extends BaseResourceGroup {
         this.resources[name].properties = newProperties;
         this.resources[name].setStatus(Reconcilable.Status.DRIFTED);
         this.setStatus(Reconcilable.Status.DRIFTED);
+        this.getRole().setStatus(Reconcilable.Status.DRIFTED);
       }
     } else {
       this.addResource(
@@ -329,6 +330,7 @@ class WharfieProject extends BaseResourceGroup {
         })
       );
       this.setStatus(Reconcilable.Status.DRIFTED);
+      this.getRole().setStatus(Reconcilable.Status.DRIFTED);
     }
   }
 
@@ -341,6 +343,7 @@ class WharfieProject extends BaseResourceGroup {
       throw new Error('cannot remove non-wharfie resource');
     this.resources[`${name}-resource`].markForDestruction();
     this.setStatus(Reconcilable.Status.DRIFTED);
+    this.getRole().setStatus(Reconcilable.Status.DRIFTED);
   }
   /**
    * @typedef UserDefinedWharfieResourceProperties
@@ -385,6 +388,7 @@ class WharfieProject extends BaseResourceGroup {
         } else {
           resource.markForDestruction();
           this.setStatus(Reconcilable.Status.DRIFTED);
+          this.getRole().setStatus(Reconcilable.Status.DRIFTED);
         }
       } else {
         const opts = resourceOptionsMap[resource.name];
@@ -394,6 +398,7 @@ class WharfieProject extends BaseResourceGroup {
         });
         delete resourceOptionsMap[resource.name];
         this.setStatus(Reconcilable.Status.DRIFTED);
+        this.getRole().setStatus(Reconcilable.Status.DRIFTED);
       }
     });
     Object.values(resourceOptionsMap).forEach((options) => {

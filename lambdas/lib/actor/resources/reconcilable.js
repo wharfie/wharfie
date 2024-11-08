@@ -16,6 +16,8 @@ const Status = {
   DESTROYING: 'DESTROYING',
   STABLE: 'STABLE',
   RECONCILING: 'RECONCILING',
+  // special status just for wharfie-resources
+  MIGRATING: 'MIGRATING',
   UNPROVISIONED: 'UNPROVISIONED',
   DRIFTED: 'DRIFTED',
 };
@@ -130,7 +132,8 @@ class Reconcilable {
     }
     let reconcile_attempts = 0;
     let last_error = null;
-    this.setStatus(Status.RECONCILING);
+    if (this.status !== Reconcilable.Status.MIGRATING)
+      this.setStatus(Status.RECONCILING);
     await this._pre_reconcile();
     this.reconcile_start = Date.now();
     while (reconcile_attempts < this._MAX_RETRIES) {
@@ -144,7 +147,6 @@ class Reconcilable {
         this.setStatus(Status.STABLE);
         break;
       } catch (error) {
-        console.trace(error);
         Reconcilable.Emitter.emit(Events.WHARFIE_ERROR, {
           name: this.name,
           constructor: this.constructor.name,

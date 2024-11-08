@@ -14,7 +14,6 @@ const Policy = require('./policy');
 const Queue = require('./queue');
 const Role = require('./role');
 const Table = require('./table');
-const TableRecord = require('./table-record');
 const BucketNotificationConfiguration = require('./bucket-notification-configuration');
 
 module.exports = {
@@ -34,6 +33,5 @@ module.exports = {
   Queue,
   Role,
   Table,
-  TableRecord,
   BucketNotificationConfiguration,
 };
