@@ -8,7 +8,7 @@ const BaseAWS = require('../../../base');
 const BaseResource = require('../base-resource');
 
 /**
- * @typedef TableRecordProperties
+ * @typedef GenericRecordProperties
  * @property {string} tableName -
  * @property {string} keyValue -
  * @property {string} [keyName] -
@@ -18,18 +18,18 @@ const BaseResource = require('../base-resource');
  */
 
 /**
- * @typedef TableRecordOptions
+ * @typedef GenericRecordOptions
  * @property {string} name -
  * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
- * @property {TableRecordProperties & import('../../typedefs').SharedProperties} properties -
+ * @property {GenericRecordProperties & import('../../typedefs').SharedProperties} properties -
  * @property {() => Promise<Object<string,any>>} [dataResolver] -
  * @property {import('../reconcilable')[]} [dependsOn] -
  */
 
-class TableRecord extends BaseResource {
+class GenericRecord extends BaseResource {
   /**
-   * @param {TableRecordOptions} options -
+   * @param {GenericRecordOptions} options -
    */
   constructor({
     name,
@@ -102,4 +102,4 @@ class TableRecord extends BaseResource {
   }
 }
 
-module.exports = TableRecord;
+module.exports = GenericRecord;

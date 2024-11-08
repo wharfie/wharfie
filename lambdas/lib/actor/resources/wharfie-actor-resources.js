@@ -10,7 +10,7 @@ const S3 = require('../../s3');
  * @typedef WharfieActorResourceProperties
  * @property {string | function(): string} handler -
  * @property {string} actorName -
- * @property {string | function(): string} actorSharedPolicyArn -
+ * @property {string[] | function(): string[]} actorPolicyArns -
  * @property {string | function(): string} artifactBucket -
  * @property {Object<string,string> | function(): Object<string,string>} environmentVariables -
  */
@@ -124,7 +124,7 @@ class WharfieActorResources extends BaseResourceGroup {
             },
           ],
         },
-        managedPolicyArns: () => [this.get('actorSharedPolicyArn')],
+        managedPolicyArns: () => this.get('actorPolicyArns'),
         rolePolicyDocument: () => ({
           Version: '2012-10-17',
           Statement: [

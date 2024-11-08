@@ -317,9 +317,13 @@ class S3 {
    * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput[]} params -
    */
   async copyObjectsWithMultiPartFallback(params) {
-    await bluebirdPromise.map(params, this.copyObjectWithMultiPartFallback, {
-      concurrency: 10,
-    });
+    await bluebirdPromise.map(
+      params,
+      this.copyObjectWithMultiPartFallback.bind(this),
+      {
+        concurrency: 10,
+      }
+    );
   }
 
   /**

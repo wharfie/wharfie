@@ -56,7 +56,7 @@ describe('wharfie actor resources IaC', () => {
         deployment: getMockDeploymentProperties(),
         handler: './lambdas/monitor.handler',
         actorName: 'test-actor',
-        actorSharedPolicyArn: sharedPolicy.get('arn'),
+        actorPolicyArns: [sharedPolicy.get('arn')],
         artifactBucket: bucket.name,
         environmentVariables: () => {
           return {
@@ -77,7 +77,9 @@ describe('wharfie actor resources IaC', () => {
         "parent": "",
         "properties": {
           "actorName": "test-actor",
-          "actorSharedPolicyArn": "arn:aws:iam::123456789012:policy/shared-policy",
+          "actorPolicyArns": [
+            "arn:aws:iam::123456789012:policy/shared-policy",
+          ],
           "artifactBucket": "test-bucket",
           "deployment": {
             "accountId": "123456789012",

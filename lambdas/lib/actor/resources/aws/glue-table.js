@@ -164,12 +164,6 @@ class GlueTable extends BaseResource {
             ViewExpandedText: this.get('viewExpandedText'),
           },
         });
-        if (this.get('tags') && Object.keys(this.get('tags')).length > 0) {
-          await this.glue.tagResource({
-            ResourceArn: this.get('arn'),
-            TagsToAdd: this.get('tags'),
-          });
-        }
       } else {
         throw error;
       }

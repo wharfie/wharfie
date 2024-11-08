@@ -1,6 +1,6 @@
 const { Operation, Resource } = require('../../lib/graph/');
-// const { load } = require('../../lib/actor/deserialize');
-// const WharfieProject = require('../../lib/actor/resources/wharfie-project');
+const WharfieResource = require('../../lib/actor/resources/wharfie-resource');
+const resource_db = require('../../lib/dynamo/operations');
 
 /**
  * @param {import('../../typedefs').WharfieEvent} event -
@@ -10,24 +10,26 @@ const { Operation, Resource } = require('../../lib/graph/');
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function run(event, context, resource, operation) {
-  // let projectResources;
-  // try {
-  // projectResources = await load({
-  //     deploymentName: deployment.name,
-  //     resourceKey: resource.,
-  // });
-  // } catch (error) {
-  // if (!(error instanceof Error)) throw error;
-  // if (
-  //     !['No resource found', 'Resource was not stored'].includes(error.message)
-  // )
-  //     throw error;
-  // projectResources = new WharfieProject({
-  //     deployment,
-  //     name: project.name,
-  // });
-  // }
-
+  const migration_db = process.env.TEMPORARY_GLUE_DATABASE || '';
+  const migration_table = `${resource.resource_properties.resourceName}_migrate`;
+  const migrationResource = new WharfieResource({
+    name: migration_table,
+    properties: {
+      ...resource.resource_properties,
+      ...operation.operation_inputs.migration_resource_properties,
+      resourceName: migration_table,
+      resourceId: `${migration_db}.${migration_table}`,
+      databaseName: migration_db,
+      migrationResource: true,
+    },
+  });
+  await migrationResource.reconcile();
+  const def = await migrationResource.getResourceDef();
+  operation.operation_inputs = {
+    ...operation.operation_inputs,
+    migration_resource: def.toRecord(),
+  };
+  await resource_db.putOperation(operation);
   return {
     status: 'COMPLETED',
   };

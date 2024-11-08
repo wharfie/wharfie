@@ -25,6 +25,47 @@ describe('tests for S3 Mock', () => {
     expect(result).toMatchInlineSnapshot(`"{"foo":"bar"}"`);
   });
 
+  it('copyObjectsWithMultiPartFallback', async () => {
+    expect.assertions(1);
+    const s3 = new S3({ region: 'us-east-1' });
+    s3.s3.__setMockState({
+      's3://bucket/prefix_a/files': 'abc',
+      's3://bucket/prefix_b/files': 'dfg',
+      's3://bucket_foo/prefix_c/files': '123',
+    });
+    await s3.copyObjectsWithMultiPartFallback([
+      {
+        CopySource: '/bucket/prefix_a/files',
+        Bucket: 'bucket_foo',
+        Key: 'prefix_a/files',
+      },
+      {
+        CopySource: '/bucket_foo/prefix_c/files',
+        Bucket: 'bucket',
+        Key: 'prefix_c/files',
+      },
+    ]);
+    expect(s3.s3.__getMockState()).toMatchInlineSnapshot(`
+      {
+        "bucket": {
+          "objects": {
+            "prefix_a/files": "abc",
+            "prefix_b/files": "dfg",
+            "prefix_c/files": "123",
+          },
+          "tags": [],
+        },
+        "bucket_foo": {
+          "objects": {
+            "prefix_a/files": "abc",
+            "prefix_c/files": "123",
+          },
+          "tags": [],
+        },
+      }
+    `);
+  });
+
   it('findPartitions mock test', async () => {
     expect.assertions(1);
     const s3 = new S3({ region: 'us-east-1' });

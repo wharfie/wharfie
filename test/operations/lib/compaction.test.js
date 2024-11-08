@@ -475,7 +475,7 @@ describe('compaction', () => {
     expect(query).toMatchInlineSnapshot(`
       "
                   SELECT a ,b
-                  FROM sourceDatabaseName."sourceTableName$partitions"
+                  FROM "sourceDatabaseName"."sourceTableName$partitions"
                 
        WHERE date_diff('minute', date_parse(concat(a,'-', cast(b as varchar)), '%Y-%m-%d-%k'), from_unixtime(1608654677)) <= 4320 + 991
        AND date_diff('minute', date_parse(concat(a,'-', cast(b as varchar)), '%Y-%m-%d-%k'), from_unixtime(1608654677)) >= 0"
@@ -523,7 +523,7 @@ describe('compaction', () => {
     });
 
     expect(query).toMatchInlineSnapshot(`
-      "SELECT distinct a ,b FROM sourceDatabaseName.sourceTableName
+      "SELECT distinct a ,b FROM "sourceDatabaseName"."sourceTableName"
        WHERE date_diff('minute', date_parse(concat(a,'-', cast(b as varchar)), '%Y-%m-%d-%k'), from_unixtime(1608654677)) <= 4320 + 12511
        AND date_diff('minute', date_parse(concat(a,'-', cast(b as varchar)), '%Y-%m-%d-%k'), from_unixtime(1608654677)) >= 0"
     `);
@@ -590,7 +590,7 @@ describe('compaction', () => {
     });
 
     expect(query).toMatchInlineSnapshot(`
-      "SELECT distinct a ,b FROM sourceDatabaseName.sourceTableName
+      "SELECT distinct a ,b FROM "sourceDatabaseName"."sourceTableName"
        WHERE date_diff('minute', date_parse(concat(dt,'-', cast(hr as varchar)), '%Y-%m-%d-%k'), from_unixtime(1608654677)) <= 4320 + 0
        AND date_diff('minute', date_parse(concat(dt,'-', cast(hr as varchar)), '%Y-%m-%d-%k'), from_unixtime(1608654677)) >= 0"
     `);
@@ -657,7 +657,7 @@ describe('compaction', () => {
     });
 
     expect(query).toMatchInlineSnapshot(`
-      "SELECT distinct a ,b FROM sourceDatabaseName.sourceTableName
+      "SELECT distinct a ,b FROM "sourceDatabaseName"."sourceTableName"
        WHERE date_diff('minute', date_parse(concat(dt,'-', cast(hr as varchar)), '%Y-%m-%d-%k'), from_unixtime(1608654677)) <= 4320 + 0
        AND date_diff('minute', date_parse(concat(dt,'-', cast(hr as varchar)), '%Y-%m-%d-%k'), from_unixtime(1608654677)) >= 0"
     `);
@@ -723,7 +723,7 @@ describe('compaction', () => {
     expect(query).toMatchInlineSnapshot(`
       "
                   SELECT a ,b
-                  FROM sourceDatabaseName."sourceTableName$partitions"
+                  FROM "sourceDatabaseName"."sourceTableName$partitions"
                 
        WHERE date_diff('minute', date_parse(concat(a,'-', cast(b as varchar)), '%Y-%m-%d-%k'), from_unixtime(1608654677)) <= 4320 + 0
        AND date_diff('minute', date_parse(concat(a,'-', cast(b as varchar)), '%Y-%m-%d-%k'), from_unixtime(1608654677)) >= 0"
@@ -789,7 +789,7 @@ describe('compaction', () => {
     expect(query).toMatchInlineSnapshot(`
       "
                   SELECT a ,b
-                  FROM sourceDatabaseName."sourceTableName$partitions"
+                  FROM "sourceDatabaseName"."sourceTableName$partitions"
                 "
     `);
   });
@@ -851,7 +851,7 @@ describe('compaction', () => {
     expect(query).toMatchInlineSnapshot(`
       "
                   SELECT year ,month ,day ,hr
-                  FROM sourceDatabaseName."sourceTableName$partitions"
+                  FROM "sourceDatabaseName"."sourceTableName$partitions"
                 
        WHERE date_diff('minute', from_iso8601_timestamp(timestamp), from_unixtime(1608654677)) <= 4320 + 0
        AND date_diff('minute', from_iso8601_timestamp(timestamp), from_unixtime(1608654677)) >= 0"

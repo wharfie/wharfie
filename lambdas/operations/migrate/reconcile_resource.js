@@ -11,29 +11,12 @@ const logging = require('../../lib/logging');
  */
 async function run(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
-  event_log.info({
+  event_log.info('RECONCILING RESOURCE');
+  const migrationResource = await load({
     deploymentName: resource.resource_properties.deployment.name,
-    resourceKey: resource.resource_properties.resourceName,
+    resourceKey: resource.resource_properties.resourceKey,
   });
-  let migrationResource;
-  try {
-    migrationResource = await load({
-      deploymentName: resource.resource_properties.deployment.name,
-      resourceKey: resource.resource_properties.resourceName,
-    });
-  } catch (error) {
-    if (!(error instanceof Error)) throw error;
-    if (
-      !['No resource found', 'Resource was not stored'].includes(error.message)
-    )
-      throw error;
-    event_log.warn('No migration resource found to destroy');
-    return {
-      status: 'COMPLETED',
-    };
-  }
-  await migrationResource.destroy();
-
+  await migrationResource.reconcile();
   return {
     status: 'COMPLETED',
   };

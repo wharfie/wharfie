@@ -30,7 +30,7 @@ async function putResource(resource) {
     ? `${resource.parent}#${resource.name}`
     : resource.name;
   if (!__state[name]) __state[name] = {};
-  const oldValue = __state[name][resource_key] || null;
+  const oldValue = { ...__state[name][resource_key] } || null;
   __state[name][resource_key] = resource.serialize();
   return oldValue;
 }
@@ -42,13 +42,27 @@ async function putResourceStatus(resource) {
   if (!resource.has('deployment') || !resource.get('deployment'))
     throw new Error('cannot save resource without deployment');
   const { name } = resource.get('deployment');
-
-  // const resource_key = resource.parent
-  //   ? `${resource.parent}#${resource.name}`
-  //   : resource.name;
-
+  const resource_key = resource.parent
+    ? `${resource.parent}#${resource.name}`
+    : resource.name;
   if (!__state[name]) __state[name] = {};
-  // __state[name][resource_key] = resource.serialize();
+  // @ts-ignore
+  if (!__state[name][resource_key]) __state[name][resource_key] = {};
+  __state[name][resource_key].status = resource.status;
+}
+
+/**
+ * @param {BaseResource} resource -
+ * @returns {Promise<import("../../actor/resources/reconcilable").StatusEnum?>} -
+ */
+async function getResourceStatus(resource) {
+  if (!resource.has('deployment') || !resource.get('deployment'))
+    throw new Error('cannot save resource without deployment');
+  const { name } = resource.get('deployment');
+  const resource_key = resource.parent
+    ? `${resource.parent}#${resource.name}`
+    : resource.name;
+  return __state[name][resource_key].status || null;
 }
 
 /**
@@ -63,7 +77,7 @@ async function getResource(resource) {
     ? `${resource.parent}#${resource.name}`
     : resource.name;
 
-  return __state[name][resource_key] || null;
+  return { ...__state[name][resource_key] } || null;
 }
 
 /**
@@ -72,10 +86,10 @@ async function getResource(resource) {
  * @returns {Promise<import("../../actor/typedefs").SerializedBaseResource[]>} -
  */
 async function getResources(deploymentName, resourceKey) {
-  return Object.keys(__state[deploymentName])
+  return Object.keys(__state[deploymentName] || {})
     .filter((key) => key.startsWith(resourceKey))
     .sort((a, b) => a.localeCompare(b))
-    .map((key) => __state[deploymentName][key]);
+    .map((key) => ({ ...__state[deploymentName][key] }));
 }
 
 /**
@@ -96,6 +110,7 @@ async function deleteResource(resource) {
 module.exports = {
   putResource,
   putResourceStatus,
+  getResourceStatus,
   getResource,
   getResources,
   deleteResource,

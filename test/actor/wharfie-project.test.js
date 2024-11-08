@@ -9,11 +9,20 @@ process.env.AWS_MOCKS = '1';
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 jest.mock('../../lambdas/lib/env-paths');
+jest.mock('../../lambdas/lib/id');
+jest.mock('../../lambdas/lib/dynamo/state');
+jest.mock('../../lambdas/lib/dynamo/operations');
+jest.mock('../../lambdas/lib/dynamo/dependency');
+jest.mock('../../lambdas/lib/dynamo/location');
 const WharfieProject = require('../../lambdas/lib/actor/resources/wharfie-project');
 const WharfieDeployment = require('../../lambdas/lib/actor/wharfie-deployment');
+const Reconcilable = require('../../lambdas/lib/actor/resources/reconcilable');
+const { load } = require('../../lambdas/lib/actor/deserialize');
 const { getResourceOptions } = require('../../cli/project/template-actor');
 const { loadProject } = require('../../cli/project/load');
 const { resetAWSMocks } = require('../util');
+
+const state_db = require('../../lambdas/lib/dynamo/state');
 
 const { S3 } = require('@aws-sdk/client-s3');
 const { SQS } = require('@aws-sdk/client-sqs');
@@ -23,6 +32,7 @@ const sqs = new SQS();
 describe('wharfie project IaC', () => {
   afterEach(() => {
     resetAWSMocks();
+    state_db.__setMockState();
   });
   it('empty project', async () => {
     expect.assertions(3);
@@ -51,10 +61,10 @@ describe('wharfie project IaC', () => {
         "parent": "",
         "properties": {
           "actorRoleArns": [
-            "arn:aws:iam::123456789012:role/test-deployment-daemon-role",
-            "arn:aws:iam::123456789012:role/test-deployment-cleanup-role",
-            "arn:aws:iam::123456789012:role/test-deployment-events-role",
-            "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
+            "arn:aws:iam::123456789012:role/test-deployment-daemon-role_111111",
+            "arn:aws:iam::123456789012:role/test-deployment-cleanup-role_111111",
+            "arn:aws:iam::123456789012:role/test-deployment-events-role_111111",
+            "arn:aws:iam::123456789012:role/test-deployment-monitor-role_111111",
           ],
           "createdAt": 123456789,
           "daemonQueueUrl": "test-deployment-daemon-queue",
@@ -71,6 +81,7 @@ describe('wharfie project IaC', () => {
             "name": "test-deployment",
             "region": "us-west-2",
             "stateTable": "test-deployment-state",
+            "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
             "version": "0.0.1",
           },
           "deploymentSharedPolicyArn": "arn:aws:iam::123456789012:policy/test-deployment-shared-policy",
@@ -82,7 +93,7 @@ describe('wharfie project IaC', () => {
           },
           "scheduleQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
           "scheduleQueueUrl": "test-deployment-events-queue",
-          "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
+          "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role_111111",
         },
         "resourceType": "WharfieProject",
         "resources": [
@@ -100,7 +111,7 @@ describe('wharfie project IaC', () => {
   }, 10000);
 
   it('normal project', async () => {
-    expect.assertions(4);
+    expect.assertions(6);
     // setting up buckets for mock
     // @ts-ignore
     s3.__setMockState({
@@ -119,6 +130,10 @@ describe('wharfie project IaC', () => {
       .getQueue()
       .get('url');
 
+    const events = [];
+    Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
+      events.push(`${event.status} - ${event.constructor}:${event.name}`);
+    });
     const wharfieProject = new WharfieProject({
       name: 'test-wharife-project',
       deployment,
@@ -137,9 +152,12 @@ describe('wharfie project IaC', () => {
 
     const resourceOptions = getResourceOptions(environment, project);
 
+    events.push('REGISTERING');
     wharfieProject.registerWharfieResources(resourceOptions);
 
+    events.push('RECONCILING');
     await wharfieProject.reconcile();
+    const reconcile_state = state_db.__getMockState();
 
     const serialized = wharfieProject.serialize();
 
@@ -150,10 +168,10 @@ describe('wharfie project IaC', () => {
         "parent": "",
         "properties": {
           "actorRoleArns": [
-            "arn:aws:iam::123456789012:role/test-deployment-daemon-role",
-            "arn:aws:iam::123456789012:role/test-deployment-cleanup-role",
-            "arn:aws:iam::123456789012:role/test-deployment-events-role",
-            "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
+            "arn:aws:iam::123456789012:role/test-deployment-daemon-role_111111",
+            "arn:aws:iam::123456789012:role/test-deployment-cleanup-role_111111",
+            "arn:aws:iam::123456789012:role/test-deployment-events-role_111111",
+            "arn:aws:iam::123456789012:role/test-deployment-monitor-role_111111",
           ],
           "createdAt": 123456789,
           "daemonQueueUrl": "test-deployment-daemon-queue",
@@ -170,6 +188,7 @@ describe('wharfie project IaC', () => {
             "name": "test-deployment",
             "region": "us-west-2",
             "stateTable": "test-deployment-state",
+            "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
             "version": "0.0.1",
           },
           "deploymentSharedPolicyArn": "arn:aws:iam::123456789012:policy/test-deployment-shared-policy",
@@ -181,7 +200,7 @@ describe('wharfie project IaC', () => {
           },
           "scheduleQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
           "scheduleQueueUrl": "test-deployment-events-queue",
-          "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
+          "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role_111111",
         },
         "resourceType": "WharfieProject",
         "resources": [
@@ -198,10 +217,19 @@ describe('wharfie project IaC', () => {
         "status": "STABLE",
       }
     `);
-    expect(wharfieProject.status).toBe('STABLE');
-    await wharfieProject.destroy();
-    expect(wharfieProject.status).toBe('DESTROYED');
 
+    events.push('LOADING');
+    const deserialized = await load({
+      deploymentName: 'test-deployment',
+      resourceKey: 'test-wharife-project',
+    });
+
+    expect(deserialized.status).toBe('STABLE');
+    expect(state_db.__getMockState()).toStrictEqual(reconcile_state);
+    events.push('DESTROYING');
+    await deserialized.destroy();
+    expect(deserialized.status).toBe('DESTROYED');
+    expect(events).toHaveLength(290);
     expect(sqs.__getMockState().queues[SCHEDULE_QUEUE_URL].queue).toHaveLength(
       6
     );

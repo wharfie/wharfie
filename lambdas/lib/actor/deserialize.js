@@ -1,4 +1,5 @@
 const AWSResources = require('./resources/aws');
+const RecordResources = require('./resources/records');
 const WharfieActors = require('./wharfie-actors');
 const WharfieActorResources = require('./resources/wharfie-actor-resources');
 const WharfieDeploymentResources = require('./resources/wharfie-deployment-resources');
@@ -15,14 +16,20 @@ const { getResources } = require('../dynamo/state');
 /**
  * @type {Object<string, ResourceConstructor>}
  */
-const classes = Object.assign({}, AWSResources, WharfieActors, {
-  WharfieDeploymentResources,
-  WharfieActorResources,
-  WharfieProject,
-  WharfieResource,
-  WharfieDeployment,
-  WharfieActor,
-});
+const classes = Object.assign(
+  {},
+  AWSResources,
+  RecordResources,
+  WharfieActors,
+  {
+    WharfieDeploymentResources,
+    WharfieActorResources,
+    WharfieProject,
+    WharfieResource,
+    WharfieDeployment,
+    WharfieActor,
+  }
+);
 
 /**
  * @typedef RawUnserializedResourceData
@@ -52,6 +59,7 @@ function _deserialize(serialized, serializedResourceMap, resourceMap) {
   const deserializedResources = {};
 
   (serialized?.resources || []).forEach((resourceName) => {
+    if (!serializedResourceMap[resourceName]) return;
     const deserdResource = _deserialize(
       serializedResourceMap[resourceName],
       serializedResourceMap,
@@ -108,6 +116,9 @@ function setDependsOn(resource, resourceMap) {
   if (resource.dependsOn) {
     // @ts-ignore
     resource.dependsOn = resource.dependsOn.map((name) => resourceMap[name]);
+    // not all dependendents will be in the returned resourceMap, ie if we are selecting a subset of a resource within a large group
+    // so we filter out the ones that are not in the map
+    resource.dependsOn = resource.dependsOn.filter((resource) => !!resource);
   }
   // @ts-ignore
   if (resource.resources) {
@@ -131,7 +142,6 @@ async function load({ deploymentName, resourceKey }) {
   if (!resourceKey) {
     resourceKey = deploymentName;
   }
-
   const serializedResources = await getResources(deploymentName, resourceKey);
   if (!serializedResources || serializedResources.length === 0) {
     throw new Error('No resource found');
@@ -142,7 +152,6 @@ async function load({ deploymentName, resourceKey }) {
     acc[item.name] = item;
     return acc;
   }, {});
-
   // @ts-ignore
   return deserialize(serializedResources[0], resourceMap);
 }

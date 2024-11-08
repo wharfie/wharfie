@@ -462,6 +462,11 @@ async function update_symlinks(event, context, resource, operation) {
     operation.id,
     compaction_action_id[0]
   );
+  if (operation.type === Operation.Type.MIGRATE) {
+    resource = Resource.fromRecord(
+      operation.operation_inputs.migration_resource
+    );
+  }
   event_log.info(
     `registering data and updating symlinks for ${queries.length} queries`
   );

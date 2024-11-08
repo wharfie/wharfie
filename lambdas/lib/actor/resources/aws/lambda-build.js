@@ -1,5 +1,4 @@
 'use strict';
-const esbuild = require('esbuild');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -84,7 +83,8 @@ class LambdaBuild extends BaseResource {
     // Lambda handler setup to use actor's handler method
     exports.handler = handler
     `;
-
+    // require here to avoid runtime errors when bundled (without esbuild)
+    const esbuild = require('esbuild');
     await esbuild.build({
       stdin: {
         contents: entryContent,
@@ -94,10 +94,12 @@ class LambdaBuild extends BaseResource {
       },
       bundle: true,
       minify: true,
+      keepNames: true,
       sourcemap: 'inline',
       platform: 'node',
       target: 'node20',
       outfile: `./dist/${this.name}/index.js`,
+      external: ['esbuild'],
     });
 
     const functionCodeHash = crypto

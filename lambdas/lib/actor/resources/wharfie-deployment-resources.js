@@ -439,6 +439,105 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         }),
       },
     });
+    const infraPolicy = new Policy({
+      name: `${this.get('deployment').name}-infra-policy`,
+      parent,
+      dependsOn: [operationTable, locationTable, dependencyTable],
+      properties: {
+        deployment: () => this.get('deployment'),
+        description: `${this.get('deployment').name} infra ${
+          this.get('deployment').name
+        } policy`,
+        document: () => ({
+          Version: '2012-10-17',
+          Statement: [
+            {
+              Sid: 'AthenaWorkgroupIAC',
+              Effect: 'Allow',
+              Action: [
+                'athena:ListTagsForResource',
+                'athena:UntagResource',
+                'athena:TagResource',
+                'athena:GetWorkGroup',
+                'athena:UpdateWorkGroup',
+                'athena:CreateWorkGroup',
+                'athena:DeleteWorkGroup',
+              ],
+              Resource: '*',
+            },
+            {
+              Sid: 'GlueTableIAC',
+              Effect: 'Allow',
+              Action: [
+                'glue:CreateTable',
+                'glue:DeleteTable',
+                'glue:GetTable',
+                'glue:UpdateTable',
+                'glue:GetTags',
+                'glue:TagResource',
+                'glue:UntagResource',
+              ],
+              Resource: '*',
+            },
+            {
+              Sid: 'EventsRuleIAC',
+              Effect: 'Allow',
+              Action: [
+                'events:ListTargetsByRule',
+                'events:PutTargets',
+                'events:RemoveTargets',
+                'events:ListTagsForResource',
+                'events:UntagResource',
+                'events:TagResource',
+                'events:DescribeRule',
+                'events:EnableRule',
+                'events:DisableRule',
+                'events:PutRule',
+                'events:DeleteRule',
+              ],
+              Resource: '*',
+            },
+            {
+              Sid: 'WharfieResourceRecordIAC',
+              Effect: 'Allow',
+              Action: ['dynamodb:PutItem', 'dynamodb:DeleteItem'],
+              Resource: [operationTable.get('arn')],
+            },
+            {
+              Sid: 'WharfieResourceRecordS3GetBucketLocation',
+              Effect: 'Allow',
+              Action: ['s3:GetBucketLocation'],
+              Resource: '*',
+            },
+            {
+              Sid: 'LocationRecordIAC',
+              Effect: 'Allow',
+              Action: ['dynamodb:PutItem', 'dynamodb:DeleteItem'],
+              Resource: [locationTable.get('arn')],
+            },
+            {
+              Sid: 'DependencyRecordIAC',
+              Effect: 'Allow',
+              Action: ['dynamodb:PutItem', 'dynamodb:DeleteItem'],
+              Resource: [dependencyTable.get('arn')],
+            },
+            {
+              Sid: 'IACState',
+              Effect: 'Allow',
+              Action: [
+                'dynamodb:PutItem',
+                'dynamodb:Query',
+                'dynamodb:BatchWriteItem',
+                'dynamodb:UpdateItem',
+                'dynamodb:GetItem',
+                'dynamodb:DeleteItem',
+              ],
+              Resource: [this.get('deployment').stateTableArn],
+            },
+          ],
+        }),
+      },
+    });
     const loggingResourceRole = new Role({
       name: `${this.name}-logging-resource-role`,
       parent,
@@ -588,6 +687,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
       eventRole,
       temporaryDatabase,
       actorPolicy,
+      infraPolicy,
       systemGlueDatabase,
       loggingResource,
       loggingResourceRole,
@@ -604,14 +704,16 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     );
   }
 
+  getInfraPolicyArn() {
+    return this.getResource(`${this.get('deployment').name}-infra-policy`).get(
+      'arn'
+    );
+  }
+
   getTemporaryDatabase() {
     return this.getResource(
       `${this.get('deployment').name}-temporary-database`
     );
-  }
-
-  getLoggingResourceRole() {
-    return this.getResource(`${this.name}-logging-resource-role`);
   }
 }
 
