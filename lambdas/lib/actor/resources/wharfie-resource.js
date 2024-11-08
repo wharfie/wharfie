@@ -515,7 +515,7 @@ class WharfieResource extends BaseResourceGroup {
         }
       }
     }
-    console.log(reasons);
+    // console.log(reasons);
     return reasons.length > 0;
   }
 

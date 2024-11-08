@@ -91,8 +91,11 @@ async function swap_partitions(
         },
         Parameters: migrateTable.Parameters,
       });
+      const { bucket, prefix } = s3.parseS3Uri(
+        `${migrateTable.StorageDescriptor?.Location}`
+      );
       partitionUpdateReferenceOps.push({
-        CopySource: `${migrateTable.StorageDescriptor?.Location}${partitionLookup}/files`,
+        CopySource: `/${bucket}/${prefix}${partitionLookup}/files`,
         Bucket: destinationBucket,
         Key: `${destinationPrefix}${partitionLookup}/files`,
       });
@@ -112,8 +115,11 @@ async function swap_partitions(
           Parameters: migrateTable.Parameters,
         },
       });
+      const { bucket, prefix } = s3.parseS3Uri(
+        `${migrateTable.StorageDescriptor?.Location}`
+      );
       partitionUpdateReferenceOps.push({
-        CopySource: `${migrateTable.StorageDescriptor?.Location}${partitionLookup}/files`,
+        CopySource: `/${bucket}/${prefix}${partitionLookup}/files`,
         Bucket: destinationBucket,
         Key: `${destinationPrefix}${partitionLookup}/files`,
       });
@@ -243,6 +249,8 @@ async function run(event, context, resource, operation) {
       destinationTable
     );
   }
+  event_log.info(`destinationTable ${JSON.stringify(destinationTable)}`);
+  event_log.info(`migrateTable ${JSON.stringify(migrateTable)}`);
   event_log.info("MIGRATE_SWAP_RESOURCE: updating table's location");
   await glue.updateTable({
     DatabaseName: destinationDatabaseName,

@@ -235,6 +235,7 @@ describe('dynamo resource db', () => {
                   "name": "test-deployment",
                   "region": "us-west-2",
                   "stateTable": "test-deployment-state",
+                  "stateTableArn": "state-table",
                   "version": "0.0.1",
                 },
                 "description": "Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html",

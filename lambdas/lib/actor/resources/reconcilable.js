@@ -147,7 +147,6 @@ class Reconcilable {
         this.setStatus(Status.STABLE);
         break;
       } catch (error) {
-        console.trace(error);
         Reconcilable.Emitter.emit(Events.WHARFIE_ERROR, {
           name: this.name,
           constructor: this.constructor.name,

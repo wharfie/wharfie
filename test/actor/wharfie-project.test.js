@@ -229,7 +229,7 @@ describe('wharfie project IaC', () => {
     events.push('DESTROYING');
     await deserialized.destroy();
     expect(deserialized.status).toBe('DESTROYED');
-    expect(events).toHaveLength(284);
+    expect(events).toHaveLength(290);
     expect(sqs.__getMockState().queues[SCHEDULE_QUEUE_URL].queue).toHaveLength(
       6
     );

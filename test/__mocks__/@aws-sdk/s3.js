@@ -234,11 +234,15 @@ class S3Mock {
   }
 
   async copyObject(params) {
-    const { bucket, prefix } = this._parseS3Uri(`s3://${params.CopySource}`);
+    const parts = params.CopySource.split('/');
+    const { bucket, prefix } =
+      parts[0] === ''
+        ? { bucket: parts[1], prefix: parts.slice(2).join('/') }
+        : { bucket: parts[0], prefix: parts.slice(1).join('/') };
     if (!S3Mock.__state[bucket].objects[prefix])
       throw new Error('copy source does not exist');
     S3Mock.__state[params.Bucket].objects[params.Key] =
-      S3Mock.__state[bucket][prefix];
+      S3Mock.__state[bucket].objects[prefix];
   }
 
   async listObjectsV2(params) {

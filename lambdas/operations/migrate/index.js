@@ -217,19 +217,9 @@ async function route(event, context, resource, operation) {
         operation
       );
     case Action.Type.RUN_COMPACTION:
-      return await run_compaction.run(
-        event,
-        context,
-        Resource.fromRecord(operation.operation_inputs.migration_resource),
-        operation
-      );
+      return await run_compaction.run(event, context, resource, operation);
     case Action.Type.UPDATE_SYMLINKS:
-      return await update_symlinks.run(
-        event,
-        context,
-        Resource.fromRecord(operation.operation_inputs.migration_resource),
-        operation
-      );
+      return await update_symlinks.run(event, context, resource, operation);
     case Action.Type.SWAP_RESOURCE:
       return await swap_resource.run(event, context, resource, operation);
     case Action.Type.SIDE_EFFECT__CLOUDWATCH:

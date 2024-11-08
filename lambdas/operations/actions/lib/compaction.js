@@ -219,7 +219,7 @@ class Compaction {
    * @property {string} athenaWorkgroup -
    * @property {import('../../../lib/logging/logger')} event_log -
    * @param {getCalculateViewPartitionQueriesParams} params -
-   * @returns {Promise<string>} -
+   * @returns {Promise<string?>} -
    */
   async getCalculatePartitionQueries({
     resource,
@@ -235,7 +235,7 @@ class Compaction {
       Name: sourceTableName,
     });
     if (!Table) throw new Error(`No Table returned from glue`);
-    if (!Table.PartitionKeys || Table.PartitionKeys.length === 0) return '';
+    if (!Table.PartitionKeys || Table.PartitionKeys.length === 0) return null;
 
     let partitionsOnly = true;
     const isView = resource.source_properties.tableType === 'VIRTUAL_VIEW';
