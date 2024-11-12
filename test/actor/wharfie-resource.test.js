@@ -205,6 +205,7 @@ describe('wharfie resource IaC', () => {
               },
               "storedAsSubDirectories": true,
               "tableType": "EXTERNAL_TABLE",
+              "version": 0,
             },
             "resourceType": "WharfieResource",
             "resources": [
@@ -511,6 +512,7 @@ describe('wharfie resource IaC', () => {
                     },
                     "storedAsSubDirectories": true,
                     "tableType": "EXTERNAL_TABLE",
+                    "version": 0,
                   },
                   "source_properties": {
                     "arn": "arn:aws:glue:us-west-2:1234:table/test-wharfie-resource/amazon_berkely_objects_raw",
@@ -568,6 +570,7 @@ describe('wharfie resource IaC', () => {
                   },
                   "source_region": undefined,
                   "status": "ACTIVE",
+                  "version": 0,
                   "wharfie_version": "0.0.1",
                 },
                 "resource_id": "test-wharfie-resource.amazon_berkely_objects",

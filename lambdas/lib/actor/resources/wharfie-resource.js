@@ -15,6 +15,8 @@ const { version } = require('../../../../package.json');
 const WharfieScheduleOperation = require('../../../scheduler/events/wharfie-schedule-operation');
 const Operation = require('../../../lib/graph/operation');
 const Action = require('../../../lib/graph/action');
+const { createId } = require('../../../lib/id');
+const operation_db = require('../../../lib/dynamo/operations');
 const Reconcilable = require('./reconcilable');
 
 const _athena = new Athena({});
@@ -26,6 +28,7 @@ const sqs = new SQS({});
  * @property {string} resourceName -
  * @property {string} [resourceId] -
  * @property {string} [resourceKey] -
+ * @property {number} [version] -
  * @property {string} projectName -
  * @property {string} databaseName -
  * @property {string | function(): string} catalogId -
@@ -519,39 +522,53 @@ class WharfieResource extends BaseResourceGroup {
     return reasons.length > 0;
   }
 
-  async _wait_for_status() {
-    let current_status = await this.getStatus();
-    while (current_status !== Reconcilable.Status.STABLE) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      current_status = await this.getStatus();
+  /**
+   * @param {string} operation_id -
+   */
+  async _wait_for_op_complete(operation_id) {
+    let operation = await operation_db.getOperation(
+      this.get('resourceId'),
+      operation_id
+    );
+    while (operation && operation.status !== Operation.Status.COMPLETED) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      operation = await operation_db.getOperation(
+        this.get('resourceId'),
+        operation_id
+      );
     }
   }
 
-  async _reconcile() {
-    let change;
+  async _getChange() {
     const storedResource = await this.fetchStoredData();
     const oldProperties = storedResource?.properties;
+
     if (!oldProperties) {
-      change = 'CREATED';
-    } else if (this.status === Reconcilable.Status.MIGRATING) {
-      change = 'MIGRATING';
-    } else if (await this.needsMigration(oldProperties)) {
+      return 'CREATED';
+    }
+    let change;
+    if (await this.needsMigration(oldProperties)) {
       change = 'START_MIGRATION';
     } else if (await this.needsUpdate(storedResource)) {
       change = 'UPDATED';
     } else {
       change = 'NO_CHANGE';
     }
+    return change;
+  }
+
+  async _reconcile() {
+    const change = await this._getChange();
     if (change !== 'UPDATED') {
       await Promise.all(
         this.getResources().map((resource) => resource.reconcile())
       );
     }
-    if (this.get('migrationResource')) {
-      change = 'INTERNAL_MIGRATION_RESOURCE';
-    }
     this.change = change;
-    if (change === 'CREATED' || change === 'UPDATED') {
+    if (
+      (change === 'CREATED' || change === 'UPDATED') &&
+      !this.get('migrationResource', false)
+    ) {
       await sqs.sendMessage({
         MessageBody: new WharfieScheduleOperation({
           resource_id: this.get('resourceId'),
@@ -559,9 +576,14 @@ class WharfieResource extends BaseResourceGroup {
         }).serialize(),
         QueueUrl: this.get('scheduleQueueUrl'),
       });
-    } else if (change === 'START_MIGRATION') {
+    } else if (
+      change === 'START_MIGRATION' &&
+      !this.get('migrationResource', false)
+    ) {
       this.status = Reconcilable.Status.MIGRATING;
+      this.set('version', this.get('version') + 1);
       await this.save();
+      const migration_op_id = createId();
       await sqs.sendMessage({
         MessageBody: JSON.stringify({
           source: 'cli',
@@ -569,6 +591,7 @@ class WharfieResource extends BaseResourceGroup {
           operation_type: Operation.Type.MIGRATE,
           action_type: Action.Type.START,
           resource_id: this.get('resourceId'),
+          operation_id: migration_op_id,
           action_inputs: {
             Version: `cli`,
             Duration: Infinity,
@@ -579,7 +602,7 @@ class WharfieResource extends BaseResourceGroup {
         }),
         QueueUrl: this.get('daemonQueueUrl'),
       });
-      await this._wait_for_status();
+      await this._wait_for_op_complete(migration_op_id);
     }
   }
 
@@ -622,6 +645,7 @@ class WharfieResource extends BaseResourceGroup {
 }
 
 WharfieResource.DefaultProperties = {
+  version: 0,
   numberOfBuckets: 0,
   storedAsSubDirectories: false,
   compressed: false,

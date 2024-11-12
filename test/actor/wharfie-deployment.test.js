@@ -2162,6 +2162,7 @@ describe('deployment IaC', () => {
               "storedAsSubDirectories": false,
               "tableType": "EXTERNAL_TABLE",
               "tags": [],
+              "version": 0,
             },
             "resourceType": "WharfieResource",
             "resources": [
@@ -2714,6 +2715,7 @@ describe('deployment IaC', () => {
                     "storedAsSubDirectories": false,
                     "tableType": "EXTERNAL_TABLE",
                     "tags": [],
+                    "version": 0,
                   },
                   "source_properties": {
                     "arn": "arn:aws:glue:us-west-2:123456789012:table/test-deployment/logs_raw",
@@ -2833,6 +2835,7 @@ describe('deployment IaC', () => {
                   },
                   "source_region": undefined,
                   "status": "ACTIVE",
+                  "version": 0,
                   "wharfie_version": "0.0.1",
                 },
                 "resource_id": "test-deployment.logs",

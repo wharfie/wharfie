@@ -71,6 +71,7 @@
  * @property {string} [action_id] - Id of the action being performed
  * @property {import('./lib/graph/action').WharfieActionTypeEnum} action_type - Type of the action being performed
  * @property {string} resource_id - Id of the Wharfie resource
+ * @property {number} [resource_version] - version of the Wharfie resource
  * @property {string} [query_id] - Id of the query being run
  * @property {number} [retries] - number of attempts
  * @property {number} [run_query_retries] - number of attempts at starting a query

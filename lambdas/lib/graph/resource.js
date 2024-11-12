@@ -18,6 +18,7 @@ const Status = {
 /**
  * @typedef ResourceOptions
  * @property {string} [id] - Id of the resource
+ * @property {number} [version] - Id of the resource
  * @property {WharfieResourceStatusEnum} [status] - status of the resource
  * @property {string} region - aws region of the resource
  * @property {string} [source_region] - aws region of the source data, not set for models
@@ -37,6 +38,7 @@ class Resource {
    */
   constructor({
     id = createId(),
+    version = 0,
     status = Status.ACTIVE,
     region,
     source_region,
@@ -50,6 +52,7 @@ class Resource {
     wharfie_version = WHARFIE_VERSION,
   }) {
     this.id = id;
+    this.version = version;
     this.status = status;
     this.region = region;
     this.source_region = source_region;
@@ -76,6 +79,7 @@ class Resource {
       sort_key: `${this.id}`,
       data: {
         id: this.id,
+        version: this.version,
         status: this.status,
         region: this.region,
         source_region: this.source_region,
@@ -99,6 +103,7 @@ class Resource {
   static fromRecord(resource_record) {
     return new Resource({
       id: resource_record.data.id,
+      version: resource_record.data.version,
       status: resource_record.data.status,
       region: resource_record.data.region,
       source_region: resource_record.data.source_region,
