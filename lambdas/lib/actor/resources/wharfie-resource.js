@@ -564,7 +564,6 @@ class WharfieResource extends BaseResourceGroup {
         this.getResources().map((resource) => resource.reconcile())
       );
     }
-    this.change = change;
     if (
       (change === 'CREATED' || change === 'UPDATED') &&
       !this.get('migrationResource', false)
