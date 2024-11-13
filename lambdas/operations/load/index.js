@@ -22,6 +22,7 @@ async function start(event, context, resource) {
   event_log.info('action graph generating');
   const operation = new Operation({
     resource_id: resource.id,
+    resource_version: resource.version,
     id: event.operation_id,
     type: event.operation_type,
     status: Operation.Status.RUNNING,
@@ -111,6 +112,15 @@ async function finish(event, context, resource, operation) {
  * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
  */
 async function route(event, context, resource, operation) {
+  if (operation.resource_version !== resource.version) {
+    const event_log = logging.getEventLogger(event, context);
+    event_log.warn(
+      `resource version (${resource.version}) does not match operation's version (${operation.resource_version})`
+    );
+    return {
+      status: 'COMPLETED',
+    };
+  }
   switch (event.action_type) {
     case 'REGISTER_PARTITION':
       return await register_partition.run(event, context, resource, operation);

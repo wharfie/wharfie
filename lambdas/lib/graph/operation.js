@@ -39,6 +39,7 @@ const Status = {
 /**
  * @typedef OperationOptions
  * @property {string} resource_id -
+ * @property {number} resource_version -
  * @property {string} [id] -
  * @property {WharfieOperationTypeEnum} type -
  * @property {WharfieOperationStatusEnum} [status] -
@@ -55,6 +56,7 @@ class Operation {
    */
   constructor({
     resource_id,
+    resource_version,
     id = createId(),
     type,
     status = Status.PENDING,
@@ -65,6 +67,7 @@ class Operation {
     wharfie_version = WHARFIE_VERSION,
   }) {
     this.resource_id = resource_id;
+    this.resource_version = resource_version;
     this.id = id;
     this.type = type;
     this.status = status;
@@ -337,6 +340,7 @@ class Operation {
       sort_key: `${this.resource_id}#${this.id}`,
       data: {
         resource_id: this.resource_id,
+        resource_version: this.resource_version,
         id: this.id,
         type: this.type,
         status: this.status,
@@ -359,6 +363,7 @@ class Operation {
   static fromRecord(operation_record) {
     const operation = new Operation({
       resource_id: operation_record.data.resource_id,
+      resource_version: operation_record.data.resource_version,
       id: operation_record.data.id,
       type: operation_record.data.type,
       status: operation_record.data.status,
@@ -386,6 +391,7 @@ class Operation {
   static fromRecords(operation_record, action_records) {
     const operation = new Operation({
       resource_id: operation_record.resource_id,
+      resource_version: operation_record.data.resource_version,
       id: operation_record.data.id,
       type: operation_record.data.type,
       status: operation_record.data.status,

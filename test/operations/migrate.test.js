@@ -10,7 +10,7 @@ const {
   clearLambdaTriggers,
   clearEventsTrigger,
 } = require('./util');
-const { resetAWSMocks } = require('../util');
+const { resetAWSMocks, resetDBMocks } = require('../util');
 
 jest.mock('../../lambdas/lib/dynamo/operations');
 jest.mock('../../lambdas/lib/dynamo/scheduler');
@@ -70,6 +70,7 @@ describe('migrate tests', () => {
   afterEach(() => {
     clearLambdaTriggers();
     resetAWSMocks();
+    resetDBMocks();
   });
 
   it('no-partitions', async () => {
@@ -176,7 +177,7 @@ describe('migrate tests', () => {
             .length === 0
         ) {
           completed_checks += 1;
-          if (completed_checks >= 5) {
+          if (completed_checks >= 10) {
             clearInterval(pollInterval);
             resolve();
           }
@@ -237,6 +238,16 @@ describe('migrate tests', () => {
         "STABLE - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects-workgroup",
         "STABLE - GlueTable:amazon_berkely_objects_raw",
         "STABLE - GlueTable:amazon_berkely_objects",
+        "DRIFTED - WharfieResource:amazon_berkely_objects",
+        "UNPROVISIONED - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects-workgroup",
+        "UNPROVISIONED - GlueTable:amazon_berkely_objects_raw",
+        "DRIFTED - GlueTable:amazon_berkely_objects_raw",
+        "UNPROVISIONED - GlueTable:amazon_berkely_objects",
+        "DRIFTED - GlueTable:amazon_berkely_objects",
+        "UNPROVISIONED - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects-resource-record",
+        "UNPROVISIONED - LocationRecord:test-wharfie-resource-amazon_berkely_objects-location-record",
+        "DRIFTED - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects-workgroup",
+        "STABLE - WharfieResource:amazon_berkely_objects",
         "UNPROVISIONED - WharfieResource:amazon_berkely_objects_migrate",
         "UNPROVISIONED - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects_migrate-workgroup",
         "UNPROVISIONED - GlueTable:amazon_berkely_objects_migrate_raw",
@@ -263,7 +274,6 @@ describe('migrate tests', () => {
         "STABLE - GlueTable:amazon_berkely_objects",
         "STABLE - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects-resource-record",
         "STABLE - LocationRecord:test-wharfie-resource-amazon_berkely_objects-location-record",
-        "MIGRATING - WharfieResource:amazon_berkely_objects",
         "STABLE - WharfieResource:amazon_berkely_objects",
         "STABLE - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects_migrate-workgroup",
         "STABLE - GlueTable:amazon_berkely_objects_migrate_raw",
@@ -283,7 +293,6 @@ describe('migrate tests', () => {
         "DESTROYED - GlueTable:amazon_berkely_objects_migrate_raw",
         "DESTROYED - GlueTable:amazon_berkely_objects_migrate",
         "DESTROYED - WharfieResource:amazon_berkely_objects_migrate",
-        "STABLE - WharfieResource:amazon_berkely_objects",
       ]
     `);
 
@@ -543,7 +552,7 @@ describe('migrate tests', () => {
             .length === 0
         ) {
           completed_checks += 1;
-          if (completed_checks >= 5) {
+          if (completed_checks >= 10) {
             clearInterval(pollInterval);
             resolve();
           }
@@ -582,52 +591,6 @@ describe('migrate tests', () => {
         "STABLE - GlueTable:amazon_berkely_objects_raw",
         "STABLE - GlueTable:amazon_berkely_objects",
         "STABLE - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects-resource-record",
-        "UNPROVISIONED - WharfieResource:amazon_berkely_objects_migrate",
-        "UNPROVISIONED - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects_migrate-workgroup",
-        "UNPROVISIONED - GlueTable:amazon_berkely_objects_migrate_raw",
-        "DRIFTED - GlueTable:amazon_berkely_objects_migrate_raw",
-        "UNPROVISIONED - GlueTable:amazon_berkely_objects_migrate",
-        "DRIFTED - GlueTable:amazon_berkely_objects_migrate",
-        "UNPROVISIONED - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects_migrate-resource-record",
-        "UNPROVISIONED - LocationRecord:test-wharfie-resource-amazon_berkely_objects_migrate-location-record",
-        "RECONCILING - WharfieResource:amazon_berkely_objects_migrate",
-        "RECONCILING - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects_migrate-workgroup",
-        "RECONCILING - GlueTable:amazon_berkely_objects_migrate_raw",
-        "RECONCILING - GlueTable:amazon_berkely_objects_migrate",
-        "RECONCILING - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects_migrate-resource-record",
-        "RECONCILING - LocationRecord:test-wharfie-resource-amazon_berkely_objects_migrate-location-record",
-        "DRIFTED - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects_migrate-workgroup",
-        "STABLE - LocationRecord:test-wharfie-resource-amazon_berkely_objects_migrate-location-record",
-        "STABLE - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects_migrate-workgroup",
-        "STABLE - GlueTable:amazon_berkely_objects_migrate_raw",
-        "STABLE - GlueTable:amazon_berkely_objects_migrate",
-        "STABLE - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects_migrate-resource-record",
-        "STABLE - WharfieResource:amazon_berkely_objects_migrate",
-        "STABLE - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects-workgroup",
-        "STABLE - GlueTable:amazon_berkely_objects_raw",
-        "STABLE - GlueTable:amazon_berkely_objects",
-        "STABLE - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects-resource-record",
-        "STABLE - LocationRecord:test-wharfie-resource-amazon_berkely_objects-location-record",
-        "MIGRATING - WharfieResource:amazon_berkely_objects",
-        "STABLE - WharfieResource:amazon_berkely_objects",
-        "STABLE - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects_migrate-workgroup",
-        "STABLE - GlueTable:amazon_berkely_objects_migrate_raw",
-        "STABLE - GlueTable:amazon_berkely_objects_migrate",
-        "STABLE - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects_migrate-resource-record",
-        "STABLE - LocationRecord:test-wharfie-resource-amazon_berkely_objects_migrate-location-record",
-        "STABLE - WharfieResource:amazon_berkely_objects_migrate",
-        "DESTROYING - WharfieResource:amazon_berkely_objects_migrate",
-        "DESTROYING - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects_migrate-workgroup",
-        "DESTROYING - GlueTable:amazon_berkely_objects_migrate_raw",
-        "DESTROYING - GlueTable:amazon_berkely_objects_migrate",
-        "DESTROYING - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects_migrate-resource-record",
-        "DESTROYING - LocationRecord:test-wharfie-resource-amazon_berkely_objects_migrate-location-record",
-        "DESTROYED - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects_migrate-resource-record",
-        "DESTROYED - LocationRecord:test-wharfie-resource-amazon_berkely_objects_migrate-location-record",
-        "DESTROYED - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects_migrate-workgroup",
-        "DESTROYED - GlueTable:amazon_berkely_objects_migrate_raw",
-        "DESTROYED - GlueTable:amazon_berkely_objects_migrate",
-        "DESTROYED - WharfieResource:amazon_berkely_objects_migrate",
         "STABLE - WharfieResource:amazon_berkely_objects",
         "MODIFYING",
         "DRIFTED - WharfieResource:amazon_berkely_objects",
@@ -650,6 +613,16 @@ describe('migrate tests', () => {
         "STABLE - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects-workgroup",
         "STABLE - GlueTable:amazon_berkely_objects_raw",
         "STABLE - GlueTable:amazon_berkely_objects",
+        "DRIFTED - WharfieResource:amazon_berkely_objects",
+        "UNPROVISIONED - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects-workgroup",
+        "UNPROVISIONED - GlueTable:amazon_berkely_objects_raw",
+        "DRIFTED - GlueTable:amazon_berkely_objects_raw",
+        "UNPROVISIONED - GlueTable:amazon_berkely_objects",
+        "DRIFTED - GlueTable:amazon_berkely_objects",
+        "UNPROVISIONED - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects-resource-record",
+        "UNPROVISIONED - LocationRecord:test-wharfie-resource-amazon_berkely_objects-location-record",
+        "DRIFTED - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects-workgroup",
+        "STABLE - WharfieResource:amazon_berkely_objects",
         "UNPROVISIONED - WharfieResource:amazon_berkely_objects_migrate",
         "UNPROVISIONED - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects_migrate-workgroup",
         "UNPROVISIONED - GlueTable:amazon_berkely_objects_migrate_raw",
@@ -676,7 +649,6 @@ describe('migrate tests', () => {
         "STABLE - GlueTable:amazon_berkely_objects",
         "STABLE - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects-resource-record",
         "STABLE - LocationRecord:test-wharfie-resource-amazon_berkely_objects-location-record",
-        "MIGRATING - WharfieResource:amazon_berkely_objects",
         "STABLE - WharfieResource:amazon_berkely_objects",
         "STABLE - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects_migrate-workgroup",
         "STABLE - GlueTable:amazon_berkely_objects_migrate_raw",
@@ -696,7 +668,6 @@ describe('migrate tests', () => {
         "DESTROYED - GlueTable:amazon_berkely_objects_migrate_raw",
         "DESTROYED - GlueTable:amazon_berkely_objects_migrate",
         "DESTROYED - WharfieResource:amazon_berkely_objects_migrate",
-        "STABLE - WharfieResource:amazon_berkely_objects",
       ]
     `);
 
