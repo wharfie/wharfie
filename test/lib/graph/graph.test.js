@@ -28,6 +28,7 @@ describe('tests for graph', () => {
     expect.assertions(2);
     const test_operation = new Operation({
       resource_id: 'resource_id',
+      resource_version: 0,
       type: Operation.Type.BACKFILL,
       id: 'test_operation',
     });
@@ -80,6 +81,7 @@ describe('tests for graph', () => {
             "operation_inputs": undefined,
             "record_type": "OPERATION",
             "resource_id": "resource_id",
+            "resource_version": 0,
             "serialized_action_graph": "{"outgoingEdges":[],"incomingEdges":[],"actionIdsToTypes":[["start_action","START"]]}",
             "started_at": 1466424490000,
             "status": "PENDING",
@@ -97,6 +99,7 @@ describe('tests for graph', () => {
 
     const test_operation = new Operation({
       resource_id: 'resource_id',
+      resource_version: 0,
       type: Operation.Type.BACKFILL,
       id: 'test_operation',
     });
@@ -172,6 +175,7 @@ describe('tests for graph', () => {
             "operation_inputs": undefined,
             "record_type": "OPERATION",
             "resource_id": "resource_id",
+            "resource_version": 0,
             "serialized_action_graph": "{"outgoingEdges":[["start_action",["compaction_action"]],["compaction_action",["finish_action"]]],"incomingEdges":[["compaction_action",["start_action"]],["finish_action",["compaction_action"]]],"actionIdsToTypes":[["start_action","START"],["compaction_action","RUN_COMPACTION"],["finish_action","FINISH"]]}",
             "started_at": 1466424490000,
             "status": "PENDING",
@@ -213,6 +217,7 @@ describe('tests for graph', () => {
           ],
         },
         "resource_id": "resource_id",
+        "resource_version": 0,
         "started_at": 1466424490000,
         "status": "PENDING",
         "type": "BACKFILL",

@@ -28,6 +28,7 @@ async function start(event, context, resource) {
   event_log.info('action graph generating');
   const operation = new Operation({
     resource_id: resource.id,
+    resource_version: event.resource_version || resource.version + 1,
     id: event.operation_id,
     type: event.operation_type,
     status: Operation.Status.RUNNING,
@@ -95,24 +96,6 @@ async function start(event, context, resource) {
       side_effect__wharfie,
     ],
   });
-  const operations = await resource_db.getOperations(resource.id);
-
-  const migration_operations = operations.filter(
-    (operation) => operation.type === Operation.Type.MIGRATE
-  );
-
-  if (migration_operations.length > 0) {
-    event_log.info(
-      `cancelling ${migration_operations.length} inflight migrations...`
-    );
-    for (const migration_operation of migration_operations) {
-      await cleanup(event, context, resource, migration_operation);
-      await resource_db.deleteOperation(migration_operation);
-      event_log.info(
-        `canceled inflight migration with id ${migration_operation.id}`
-      );
-    }
-  }
 
   event_log.info('creating MIGRATE operation and actions...');
   await resource_db.putOperation(operation);
@@ -187,6 +170,27 @@ async function finish(event, context, resource, operation) {
  */
 async function route(event, context, resource, operation) {
   switch (event.action_type) {
+    case Action.Type.SIDE_EFFECT__CLOUDWATCH:
+      return await side_effects.cloudwatch(event, context, resource, operation);
+    case Action.Type.SIDE_EFFECT__WHARFIE:
+      return await side_effects.wharfie(event, context, resource, operation);
+    case Action.Type.SIDE_EFFECT__DAGSTER:
+      return await side_effects.dagster(event, context, resource, operation);
+    case Action.Type.SIDE_EFFECTS__FINISH:
+      return await side_effects.finish(event, context, resource, operation);
+    case Action.Type.RECONCILE_RESOURCE:
+      return await reconcile_resource.run(event, context, resource, operation);
+  }
+  if (operation.resource_version <= resource.version) {
+    const event_log = logging.getEventLogger(event, context);
+    event_log.warn(
+      `resource version${resource.version} is ahead of operation's version ${operation.resource_version}`
+    );
+    return {
+      status: 'COMPLETED',
+    };
+  }
+  switch (event.action_type) {
     case Action.Type.CREATE_MIGRATION_RESOUCE:
       return await create_migration_resource.run(
         event,
@@ -201,8 +205,6 @@ async function route(event, context, resource, operation) {
         Resource.fromRecord(operation.operation_inputs.migration_resource),
         operation
       );
-    case Action.Type.RECONCILE_RESOURCE:
-      return await reconcile_resource.run(event, context, resource, operation);
     case Action.Type.REGISTER_MISSING_PARTITIONS:
       return await register_missing_partitions.run(
         event,
@@ -222,14 +224,6 @@ async function route(event, context, resource, operation) {
       return await update_symlinks.run(event, context, resource, operation);
     case Action.Type.SWAP_RESOURCE:
       return await swap_resource.run(event, context, resource, operation);
-    case Action.Type.SIDE_EFFECT__CLOUDWATCH:
-      return await side_effects.cloudwatch(event, context, resource, operation);
-    case Action.Type.SIDE_EFFECT__WHARFIE:
-      return await side_effects.wharfie(event, context, resource, operation);
-    case Action.Type.SIDE_EFFECT__DAGSTER:
-      return await side_effects.dagster(event, context, resource, operation);
-    case Action.Type.SIDE_EFFECTS__FINISH:
-      return await side_effects.finish(event, context, resource, operation);
     default:
       throw new Error('Invalid Action, must be valid MIGRATE action');
   }

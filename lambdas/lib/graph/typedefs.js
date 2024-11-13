@@ -1,6 +1,7 @@
 /**
  * @typedef ResourceRecordData
  * @property {string} id - Id of the resource
+ * @property {number} version - version of the resource
  * @property {import('./resource').WharfieResourceStatusEnum} status - status of the resource
  * @property {string} region - aws region of the resource
  * @property {string} [source_region] - aws region of the source data, not set for models

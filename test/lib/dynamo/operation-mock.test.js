@@ -255,6 +255,7 @@ describe('dynamo resource db', () => {
           },
           "source_region": undefined,
           "status": "ACTIVE",
+          "version": 0,
           "wharfie_version": "0.0.11",
         },
       }
@@ -415,6 +416,7 @@ describe('dynamo resource db', () => {
         },
         "source_region": undefined,
         "status": "ACTIVE",
+        "version": 0,
         "wharfie_version": "0.0.11",
       }
     `);
@@ -507,6 +509,7 @@ describe('dynamo resource db', () => {
     });
     const test_operation = new Operation({
       resource_id: 'resource_id',
+      resource_version: 0,
       type: Operation.Type.BACKFILL,
       id: 'test_operation',
     });
@@ -625,6 +628,7 @@ describe('dynamo resource db', () => {
           },
           "source_region": undefined,
           "status": "ACTIVE",
+          "version": 0,
           "wharfie_version": "0.0.11",
         },
         "resource_id#test_operation": {
@@ -634,6 +638,7 @@ describe('dynamo resource db', () => {
           "operation_inputs": undefined,
           "record_type": "OPERATION",
           "resource_id": "resource_id",
+          "resource_version": 0,
           "serialized_action_graph": "{"outgoingEdges":[],"incomingEdges":[],"actionIdsToTypes":[]}",
           "started_at": 1466424490000,
           "status": "PENDING",
@@ -686,6 +691,7 @@ describe('dynamo resource db', () => {
     });
     const test_operation = new Operation({
       resource_id: 'resource_id',
+      resource_version: 0,
       id: 'operation_id',
       type: Operation.Type.BACKFILL,
     });
@@ -703,6 +709,7 @@ describe('dynamo resource db', () => {
         "operation_inputs": undefined,
         "outgoingEdges": Map {},
         "resource_id": "resource_id",
+        "resource_version": 0,
         "started_at": 1466424490000,
         "status": "PENDING",
         "type": "BACKFILL",
@@ -753,6 +760,7 @@ describe('dynamo resource db', () => {
     });
     const test_operation = new Operation({
       resource_id: 'resource_id',
+      resource_version: 0,
       id: 'operation_id',
       type: Operation.Type.BACKFILL,
     });
@@ -824,6 +832,7 @@ describe('dynamo resource db', () => {
     });
     const test_operation = new Operation({
       resource_id: 'resource_id',
+      resource_version: 0,
       id: 'operation_id',
       type: Operation.Type.BACKFILL,
     });
@@ -934,6 +943,7 @@ describe('dynamo resource db', () => {
     });
     const test_operation = new Operation({
       resource_id: 'resource_id',
+      resource_version: 0,
       id: 'operation_id',
       type: Operation.Type.BACKFILL,
     });
@@ -1008,6 +1018,7 @@ describe('dynamo resource db', () => {
     });
     const test_operation = new Operation({
       resource_id: 'resource_id',
+      resource_version: 0,
       id: 'operation_id',
       type: Operation.Type.BACKFILL,
     });
@@ -1092,6 +1103,7 @@ describe('dynamo resource db', () => {
     });
     const test_operation = new Operation({
       resource_id: 'resource_id',
+      resource_version: 0,
       id: 'operation_id',
       type: Operation.Type.BACKFILL,
     });
@@ -1162,6 +1174,7 @@ describe('dynamo resource db', () => {
 
     const test_operation = new Operation({
       resource_id: 'resource_id',
+      resource_version: 0,
       id: 'operation_id',
       type: Operation.Type.BACKFILL,
     });
@@ -1196,6 +1209,7 @@ describe('dynamo resource db', () => {
 
     const test_operation = new Operation({
       resource_id: 'resource_id',
+      resource_version: 0,
       id: 'operation_id',
       type: Operation.Type.BACKFILL,
     });
@@ -1227,6 +1241,7 @@ describe('dynamo resource db', () => {
     expect.assertions(1);
     const test_operation = new Operation({
       resource_id: 'resource_id',
+      resource_version: 0,
       id: 'operation_id',
       type: Operation.Type.BACKFILL,
     });
@@ -1280,6 +1295,7 @@ describe('dynamo resource db', () => {
     expect.assertions(1);
     const test_operation = new Operation({
       resource_id: 'resource_id',
+      resource_version: 0,
       id: 'operation_id',
       type: Operation.Type.BACKFILL,
     });
@@ -1304,6 +1320,7 @@ describe('dynamo resource db', () => {
 
     const test_operation = new Operation({
       resource_id: 'resource_id',
+      resource_version: 0,
       id: 'operation_id',
       type: Operation.Type.BACKFILL,
     });
@@ -1466,6 +1483,7 @@ describe('dynamo resource db', () => {
               ],
             },
             "resource_id": "resource_id",
+            "resource_version": 0,
             "started_at": 1466424490000,
             "status": "PENDING",
             "type": "BACKFILL",
