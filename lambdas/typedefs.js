@@ -83,7 +83,8 @@
 /**
  * @typedef ActionProcessingOutput
  * @property {import('./lib/graph/action').WharfieActionStatusEnum} status -
- * @property {any} [nextActionInputs] -
+ * @property {any} [outputs] -
+ * @property {boolean} [inflightQuery] -
  */
 
 /**

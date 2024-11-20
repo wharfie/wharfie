@@ -162,6 +162,49 @@ async function _monitorWharfie(cloudwatchEvent, queryEvent, context) {
     );
     query.status = Query.Status.COMPLETED;
     await resource_db.putQuery(query);
+    // START NEXT ACTIONS
+    const current_action = action;
+    const next_action_ids =
+      operation.getDownstreamActionIds(current_action.id) || [];
+    await Promise.all(
+      next_action_ids.map(async (action_id) => {
+        if (
+          !(await resource_db.checkActionPrerequisites(
+            operation,
+            operation.getActionTypeById(action_id),
+            event_log
+          ))
+        )
+          // action has other dependencies that are not met
+          return Promise.resolve();
+        const updated_status = resource_db.updateActionStatus(
+          new Action({
+            id: action_id,
+            resource_id: resource.id,
+            operation_id: operation.id,
+            type: operation.getActionTypeById(action_id),
+            status: Action.Status.PENDING,
+          }),
+          Action.Status.RUNNING
+        );
+        if (!updated_status) {
+          // status already in RUNNING state, caused by action graph with reduce pattern
+          return Promise.resolve();
+        }
+        await sqs.enqueue(
+          {
+            operation_id: operation.id,
+            operation_type: operation.type,
+            action_id,
+            action_type: operation.getActionTypeById(action_id),
+            resource_id: resource.id,
+            retries: 0,
+            action_inputs: action.outputs || {},
+          },
+          DAEMON_QUEUE_URL
+        );
+      })
+    );
   } else if (
     query.status === Query.Status.RUNNING &&
     (cloudwatchEvent.detail.currentState === 'FAILED' ||

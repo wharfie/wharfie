@@ -471,6 +471,7 @@ async function update_symlinks(event, context, resource, operation) {
     `registering data and updating symlinks for ${queries.length} queries`
   );
 
+  // this is slow
   await Promise.all(
     queries.map((/** @type {Query} */ query) => {
       if (!query.execution_id) return Promise.resolve();
