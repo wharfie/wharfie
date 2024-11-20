@@ -780,6 +780,7 @@ describe('dynamo resource db', () => {
         "id": "start_action",
         "last_updated_at": 1466424490000,
         "operation_id": "operation_id",
+        "outputs": {},
         "queries": [],
         "resource_id": "resource_id",
         "started_at": 1466424490000,
@@ -965,6 +966,7 @@ describe('dynamo resource db', () => {
         "id": "action_id",
         "last_updated_at": 1466424490000,
         "operation_id": "operation_id",
+        "outputs": {},
         "queries": [],
         "resource_id": "resource_id",
         "started_at": 1466424490000,
@@ -1365,6 +1367,7 @@ describe('dynamo resource db', () => {
             "id": "start_action",
             "last_updated_at": 1466424490000,
             "operation_id": "operation_id",
+            "outputs": {},
             "queries": [
               Query {
                 "action_id": "start_action",
@@ -1403,6 +1406,7 @@ describe('dynamo resource db', () => {
             "id": "finish_action",
             "last_updated_at": 1466424490000,
             "operation_id": "operation_id",
+            "outputs": {},
             "queries": [],
             "resource_id": "resource_id",
             "started_at": 1466424490000,
@@ -1422,6 +1426,7 @@ describe('dynamo resource db', () => {
                 "id": "start_action",
                 "last_updated_at": 1466424490000,
                 "operation_id": "operation_id",
+                "outputs": {},
                 "queries": [
                   Query {
                     "action_id": "start_action",
@@ -1460,6 +1465,7 @@ describe('dynamo resource db', () => {
                 "id": "finish_action",
                 "last_updated_at": 1466424490000,
                 "operation_id": "operation_id",
+                "outputs": {},
                 "queries": [],
                 "resource_id": "resource_id",
                 "started_at": 1466424490000,
