@@ -50,7 +50,13 @@ async function run(event, context, resource, operation) {
     event_log,
   });
   event_log.info(`FIND_COMPACTION_PARTITIONS:submitting query`);
-  if (query_string) await query.enqueue(event, context, [{ query_string }]);
+  if (query_string) {
+    await query.enqueue(event, context, [{ query_string }]);
+    return {
+      status: 'COMPLETED',
+      inflightQuery: true,
+    };
+  }
 
   return {
     status: 'COMPLETED',

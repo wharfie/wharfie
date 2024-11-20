@@ -75,6 +75,7 @@ const Status = {
  * @property {number} [started_at] - start timestamp
  * @property {number} [last_updated_at] - update_at_timestamp
  * @property {string} [wharfie_version] -
+ * @property {any} [outputs] -
  */
 
 class Action {
@@ -91,6 +92,7 @@ class Action {
     started_at = Date.now(),
     last_updated_at = started_at,
     wharfie_version = WHARFIE_VERSION,
+    outputs = {},
   }) {
     this.id = id;
     this.resource_id = resource_id;
@@ -101,6 +103,7 @@ class Action {
     this.started_at = started_at;
     this.last_updated_at = last_updated_at;
     this.wharfie_version = wharfie_version;
+    this.outputs = outputs;
   }
 
   /**
@@ -128,6 +131,7 @@ class Action {
         last_updated_at: this.last_updated_at,
         wharfie_version: this.wharfie_version,
         record_type: Action.RecordType,
+        outputs: this.outputs,
       },
     });
     for (const query of this.queries) {
@@ -151,6 +155,7 @@ class Action {
       started_at: action_record.data.started_at,
       last_updated_at: action_record.data.last_updated_at,
       wharfie_version: action_record.data.wharfie_version,
+      outputs: action_record.data.outputs,
     });
     for (const query_record of query_records) {
       new_action.queries.push(Query.fromRecord(query_record));
@@ -172,6 +177,7 @@ class Action {
       started_at: action_record.data.started_at,
       last_updated_at: action_record.data.last_updated_at,
       wharfie_version: action_record.data.wharfie_version,
+      outputs: action_record.data.outputs,
     });
   }
 }

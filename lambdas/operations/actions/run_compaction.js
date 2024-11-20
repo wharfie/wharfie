@@ -104,7 +104,7 @@ async function run(event, context, resource, operation) {
     );
     return {
       status: 'COMPLETED',
-      nextActionInputs: {
+      outputs: {
         temporaryDatabaseName,
         temporaryTableName,
       },
@@ -128,10 +128,11 @@ async function run(event, context, resource, operation) {
 
   return {
     status: 'COMPLETED',
-    nextActionInputs: {
+    outputs: {
       temporaryDatabaseName,
       temporaryTableName,
     },
+    inflightQuery: true,
   };
 }
 

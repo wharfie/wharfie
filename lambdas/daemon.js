@@ -144,12 +144,13 @@ async function daemon(event, context) {
   if (!operation) throw new Error('operation missing unexpectedly');
 
   action.status = action_output.status;
+  action.outputs = action_output.outputs;
   await resource_db.putAction(action);
 
-  if (action_output.status === 'COMPLETED') {
-    event_log.info(
-      `action ${event.operation_type}:${event.action_type} completed, equeueing next actions`
-    );
+  if (
+    action_output.status === 'COMPLETED' &&
+    action_output.inflightQuery !== true
+  ) {
     // START NEXT ACTIONS
     const current_action = action;
     const next_action_ids =
@@ -159,9 +160,8 @@ async function daemon(event, context) {
         if (
           !(await resource_db.checkActionPrerequisites(
             operation,
-            current_action.type,
-            event_log,
-            false
+            operation.getActionTypeById(action_id),
+            event_log
           ))
         )
           // action has other dependencies that are not met
@@ -177,9 +177,6 @@ async function daemon(event, context) {
           Action.Status.RUNNING
         );
         if (!updated_status) {
-          event_log.info(
-            `action ${event.operation_type}:${event.action_type} completed, equeueing next actions`
-          );
           // status already in RUNNING state, caused by action graph with reduce pattern
           return Promise.resolve();
         }
@@ -191,7 +188,7 @@ async function daemon(event, context) {
             action_type: operation.getActionTypeById(action_id),
             resource_id: resource.id,
             retries: 0,
-            action_inputs: action_output.nextActionInputs || {},
+            action_inputs: action_output.outputs || {},
           },
           QUEUE_URL
         );

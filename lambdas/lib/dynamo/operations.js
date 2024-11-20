@@ -277,10 +277,6 @@ async function updateActionStatus(action, new_status) {
     if (error instanceof ConditionalCheckFailedException) {
       return false;
     }
-    // @ts-ignore
-    else if (error.name === 'ConditionalCheckFailedException') {
-      return false;
-    }
     throw error;
   }
   return true;
@@ -446,6 +442,7 @@ async function checkActionPrerequisites(
     });
     const incompleteQueries = [];
     if (!Items) return true;
+
     while (Items.length > 0) {
       const _item = Items.pop();
       if (!_item) continue;

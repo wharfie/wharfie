@@ -98,7 +98,7 @@ async function finish(event, context, resource, operation) {
 
   return {
     status: 'COMPLETED',
-    nextActionInputs: {
+    outputs: {
       completed_at,
     },
   };
