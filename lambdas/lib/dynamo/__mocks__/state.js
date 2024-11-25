@@ -30,7 +30,9 @@ async function putResource(resource) {
     ? `${resource.parent}#${resource.name}`
     : resource.name;
   if (!__state[name]) __state[name] = {};
-  const oldValue = { ...__state[name][resource_key] } || null;
+  const oldValue = __state[name][resource_key]
+    ? { ...__state[name][resource_key] }
+    : null;
   __state[name][resource_key] = resource.serialize();
   return oldValue;
 }
@@ -77,7 +79,7 @@ async function getResource(resource) {
     ? `${resource.parent}#${resource.name}`
     : resource.name;
 
-  return { ...__state[name][resource_key] } || null;
+  return { ...__state[name][resource_key] };
 }
 
 /**
