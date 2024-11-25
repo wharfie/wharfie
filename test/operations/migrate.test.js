@@ -1,3 +1,4 @@
+/* eslint-disable jest/no-large-snapshots */
 /* eslint-disable jest/no-hooks */
 'use strict';
 // process.env.LOGGING_LEVEL = 'debug';
@@ -192,7 +193,7 @@ describe('migrate tests', () => {
     await Promise.race([emptyQueues, timeout]);
     timeout.cancel();
     await reconcilePromise;
-    // eslint-disable-next-line jest/no-large-snapshots
+
     expect(events).toMatchInlineSnapshot(`
       [
         "UNPROVISIONED - WharfieResource:amazon_berkely_objects",
@@ -247,7 +248,6 @@ describe('migrate tests', () => {
         "UNPROVISIONED - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects-resource-record",
         "UNPROVISIONED - LocationRecord:test-wharfie-resource-amazon_berkely_objects-location-record",
         "DRIFTED - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects-workgroup",
-        "STABLE - WharfieResource:amazon_berkely_objects",
         "UNPROVISIONED - WharfieResource:amazon_berkely_objects_migrate",
         "UNPROVISIONED - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects_migrate-workgroup",
         "UNPROVISIONED - GlueTable:amazon_berkely_objects_migrate_raw",
@@ -274,6 +274,8 @@ describe('migrate tests', () => {
         "STABLE - GlueTable:amazon_berkely_objects",
         "STABLE - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects-resource-record",
         "STABLE - LocationRecord:test-wharfie-resource-amazon_berkely_objects-location-record",
+        "DRIFTED - WharfieResource:amazon_berkely_objects",
+        "RECONCILING - WharfieResource:amazon_berkely_objects",
         "STABLE - WharfieResource:amazon_berkely_objects",
         "STABLE - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects_migrate-workgroup",
         "STABLE - GlueTable:amazon_berkely_objects_migrate_raw",
@@ -293,6 +295,7 @@ describe('migrate tests', () => {
         "DESTROYED - GlueTable:amazon_berkely_objects_migrate_raw",
         "DESTROYED - GlueTable:amazon_berkely_objects_migrate",
         "DESTROYED - WharfieResource:amazon_berkely_objects_migrate",
+        "STABLE - WharfieResource:amazon_berkely_objects",
       ]
     `);
 
@@ -312,7 +315,7 @@ describe('migrate tests', () => {
         "amazon_berkely_objects#test-wharfie-resource-amazon_berkely_objects-location-record",
       ]
     `);
-    // eslint-disable-next-line jest/no-large-snapshots
+
     expect(semaphore.__getMockState()).toMatchInlineSnapshot(`
       {
         "wharfie": {
@@ -325,7 +328,7 @@ describe('migrate tests', () => {
         },
       }
     `);
-    // eslint-disable-next-line jest/no-large-snapshots
+
     expect(Glue.__state).toMatchInlineSnapshot(`
       {
         "temp-glue-database": {
@@ -422,7 +425,7 @@ describe('migrate tests', () => {
         },
       }
     `);
-    // eslint-disable-next-line jest/no-large-snapshots
+
     expect(SQS.__state.queues['monitor-queue']).toMatchInlineSnapshot(`
       {
         "Attributes": {
@@ -567,7 +570,7 @@ describe('migrate tests', () => {
     await Promise.race([emptyQueues, timeout]);
     timeout.cancel();
     await reconcilePromise;
-    // eslint-disable-next-line jest/no-large-snapshots
+
     expect(events).toMatchInlineSnapshot(`
       [
         "UNPROVISIONED - WharfieResource:amazon_berkely_objects",
@@ -622,7 +625,6 @@ describe('migrate tests', () => {
         "UNPROVISIONED - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects-resource-record",
         "UNPROVISIONED - LocationRecord:test-wharfie-resource-amazon_berkely_objects-location-record",
         "DRIFTED - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects-workgroup",
-        "STABLE - WharfieResource:amazon_berkely_objects",
         "UNPROVISIONED - WharfieResource:amazon_berkely_objects_migrate",
         "UNPROVISIONED - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects_migrate-workgroup",
         "UNPROVISIONED - GlueTable:amazon_berkely_objects_migrate_raw",
@@ -649,6 +651,8 @@ describe('migrate tests', () => {
         "STABLE - GlueTable:amazon_berkely_objects",
         "STABLE - WharfieResourceRecord:test-wharfie-resource-amazon_berkely_objects-resource-record",
         "STABLE - LocationRecord:test-wharfie-resource-amazon_berkely_objects-location-record",
+        "DRIFTED - WharfieResource:amazon_berkely_objects",
+        "RECONCILING - WharfieResource:amazon_berkely_objects",
         "STABLE - WharfieResource:amazon_berkely_objects",
         "STABLE - AthenaWorkGroup:wharfie-test-deployment-amazon_berkely_objects_migrate-workgroup",
         "STABLE - GlueTable:amazon_berkely_objects_migrate_raw",
@@ -668,6 +672,7 @@ describe('migrate tests', () => {
         "DESTROYED - GlueTable:amazon_berkely_objects_migrate_raw",
         "DESTROYED - GlueTable:amazon_berkely_objects_migrate",
         "DESTROYED - WharfieResource:amazon_berkely_objects_migrate",
+        "STABLE - WharfieResource:amazon_berkely_objects",
       ]
     `);
 
@@ -687,7 +692,7 @@ describe('migrate tests', () => {
         "amazon_berkely_objects#test-wharfie-resource-amazon_berkely_objects-location-record",
       ]
     `);
-    // eslint-disable-next-line jest/no-large-snapshots
+
     expect(semaphore.__getMockState()).toMatchInlineSnapshot(`
       {
         "wharfie": {
@@ -700,7 +705,6 @@ describe('migrate tests', () => {
         },
       }
     `);
-    // eslint-disable-next-line jest/no-large-snapshots
     expect(Glue.__state).toMatchInlineSnapshot(`
       {
         "temp-glue-database": {
@@ -785,7 +789,6 @@ describe('migrate tests', () => {
         },
       }
     `);
-    // eslint-disable-next-line jest/no-large-snapshots
     expect(SQS.__state.queues['monitor-queue']).toMatchInlineSnapshot(`
       {
         "Attributes": {
