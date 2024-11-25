@@ -582,26 +582,34 @@ class WharfieResource extends BaseResourceGroup {
       this.status = Reconcilable.Status.MIGRATING;
       this.set('version', this.get('version') + 1);
       await this.save();
-      const migration_op_id = createId();
+      const migration_op = new Operation({
+        resource_id: this.get('resourceId'),
+        resource_version: this.get('version'),
+        id: createId(),
+        type: Operation.Type.MIGRATE,
+        status: Operation.Status.PENDING,
+        operation_inputs: {
+          migration_resource_properties: this.resolveProperties(),
+        },
+      });
+      await operation_db.putOperation(migration_op);
       await sqs.sendMessage({
         MessageBody: JSON.stringify({
           source: 'cli',
           operation_started_at: new Date(Date.now()),
-          operation_type: Operation.Type.MIGRATE,
+          operation_type: migration_op.type,
           action_type: Action.Type.START,
-          resource_id: this.get('resourceId'),
-          operation_id: migration_op_id,
+          resource_id: migration_op.resource_id,
+          operation_id: migration_op.id,
           action_inputs: {
             Version: `cli`,
             Duration: Infinity,
           },
-          operation_inputs: {
-            migration_resource_properties: this.resolveProperties(),
-          },
+          operation_inputs: migration_op.operation_inputs,
         }),
         QueueUrl: this.get('daemonQueueUrl'),
       });
-      await this._wait_for_op_complete(migration_op_id);
+      await this._wait_for_op_complete(migration_op.id);
     }
   }
 
