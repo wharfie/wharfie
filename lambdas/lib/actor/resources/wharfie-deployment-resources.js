@@ -572,19 +572,23 @@ class WharfieDeploymentResources extends BaseResourceGroup {
                   's3:ListBucketMultipartUploads',
                   's3:AbortMultipartUpload',
                 ],
-                Resource: [`arn:aws:s3:::${systemBucket.name}`],
+                Resource: [`arn:aws:s3:::${systemBucket.get('bucketName')}`],
               },
               {
                 Sid: 'OutputWrite',
                 Effect: 'Allow',
                 Action: ['s3:*'],
-                Resource: `arn:aws:s3:::${systemBucket.name}/logs/processed/*`,
+                Resource: `arn:aws:s3:::${systemBucket.get(
+                  'bucketName'
+                )}/logs/processed/*`,
               },
               {
                 Sid: 'InputRead',
                 Effect: 'Allow',
                 Action: ['s3:GetObject'],
-                Resource: `arn:aws:s3:::${systemBucket.name}/logs/raw/*`,
+                Resource: `arn:aws:s3:::${systemBucket.get(
+                  'bucketName'
+                )}/logs/raw/*`,
               },
             ],
           };
@@ -634,7 +638,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
           { name: 'day', type: 'string' },
           { name: 'hr', type: 'string' },
         ],
-        inputLocation: `s3://${systemBucket.name}/logs/raw/`,
+        inputLocation: `s3://${systemBucket.get('bucketName')}/logs/raw/`,
         tableType: 'EXTERNAL_TABLE',
         parameters: { EXTERNAL: 'true' },
         inputFormat: 'org.apache.hadoop.mapred.TextInputFormat',
@@ -649,8 +653,10 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         resourceName: 'logs',
         projectName: this.get('deployment').name,
         databaseName: this.get('deployment').name,
-        outputLocation: `s3://${systemBucket.name}/logs/processed/`,
-        projectBucket: systemBucket.name,
+        outputLocation: `s3://${systemBucket.get(
+          'bucketName'
+        )}/logs/processed/`,
+        projectBucket: systemBucket.get('bucketName'),
         region: () => this.get('deployment').region,
         catalogId: () => this.get('deployment').accountId,
         roleArn: () => loggingResourceRole.get('arn'),

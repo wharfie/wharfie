@@ -204,7 +204,7 @@ describe('autoscaling table IaC', () => {
                 "version": "0.0.1test",
               },
               "description": "Role for table-name table autoscaling",
-              "id": "111111",
+              "roleName": "table-name-autoscaling-role_111111",
               "rolePolicyDocument": {
                 "Statement": [
                   {

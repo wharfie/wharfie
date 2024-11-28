@@ -148,7 +148,7 @@ class WharfieActorResources extends BaseResourceGroup {
       dependsOn: [role, dlq, queue, build],
       properties: {
         deployment: () => this.get('deployment'),
-        runtime: 'nodejs20.x',
+        runtime: 'nodejs22.x',
         role: () => role.get('arn'),
         handler: `index.handler`,
         code: () => ({
