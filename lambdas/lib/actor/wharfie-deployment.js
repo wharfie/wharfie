@@ -108,7 +108,9 @@ class WharfieDeployment extends BaseResourceGroup {
       SCHEDULER_TABLE: this.getDeploymentResources().getResource(
         `${this.name}-scheduler`
       ).name,
-      WHARFIE_SERVICE_BUCKET: this.getDeploymentResources().getBucket().name,
+      WHARFIE_SERVICE_BUCKET: this.getDeploymentResources()
+        .getBucket()
+        .get('bucketName'),
       WHARFIE_LOGGING_FIREHOSE: this.getDeploymentResources().getResource(
         `${this.name}-firehose`
       ).name,
@@ -166,7 +168,7 @@ class WharfieDeployment extends BaseResourceGroup {
           resourceGroup.getActorPolicyArn(),
           resourceGroup.getInfraPolicyArn(),
         ],
-        artifactBucket: () => resourceGroup.getBucket().name,
+        artifactBucket: () => resourceGroup.getBucket().get('bucketName'),
         environmentVariables: this.getActorEnvironmentVariables.bind(this),
       },
     });
@@ -180,7 +182,7 @@ class WharfieDeployment extends BaseResourceGroup {
           resourceGroup.getActorPolicyArn(),
           resourceGroup.getInfraPolicyArn(),
         ],
-        artifactBucket: () => resourceGroup.getBucket().name,
+        artifactBucket: () => resourceGroup.getBucket().get('bucketName'),
         environmentVariables: this.getActorEnvironmentVariables.bind(this),
       },
     });
@@ -194,7 +196,7 @@ class WharfieDeployment extends BaseResourceGroup {
           resourceGroup.getActorPolicyArn(),
           resourceGroup.getInfraPolicyArn(),
         ],
-        artifactBucket: () => resourceGroup.getBucket().name,
+        artifactBucket: () => resourceGroup.getBucket().get('bucketName'),
         environmentVariables: this.getActorEnvironmentVariables.bind(this),
       },
     });
@@ -207,7 +209,7 @@ class WharfieDeployment extends BaseResourceGroup {
           resourceGroup.getActorPolicyArn(),
           resourceGroup.getInfraPolicyArn(),
         ],
-        artifactBucket: () => resourceGroup.getBucket().name,
+        artifactBucket: () => resourceGroup.getBucket().get('bucketName'),
         environmentVariables: this.getActorEnvironmentVariables.bind(this),
       },
     });
@@ -224,7 +226,7 @@ class WharfieDeployment extends BaseResourceGroup {
         ],
         properties: {
           deployment: () => this.getDeploymentProperties(),
-          bucketName: resourceGroup.getBucket().name,
+          bucketName: resourceGroup.getBucket().get('bucketName'),
           notificationConfiguration: () => ({
             QueueConfigurations: [
               {

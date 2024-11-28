@@ -37,7 +37,7 @@ class LambdaFunction extends BaseResource {
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     const propertiesWithDefaults = Object.assign(
       {
-        runtime: 'nodejs20.x',
+        runtime: 'nodejs22.x',
         handler: 'index.handler',
         memorySize: 128,
         timeout: 300,

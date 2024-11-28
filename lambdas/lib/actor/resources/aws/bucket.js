@@ -1,11 +1,13 @@
 'use strict';
 const S3 = require('../../../s3');
 const BaseResource = require('../base-resource');
+const { createShortId } = require('../../../id');
 
 const { NoSuchBucket } = require('@aws-sdk/client-s3');
 
 /**
  * @typedef BucketProperties
+ * @property {string} [bucketName] -
  * @property {import('@aws-sdk/client-s3').BucketLifecycleConfiguration} [lifecycleConfiguration] -
  * @property {import('@aws-sdk/client-s3').NotificationConfiguration | function(): import('@aws-sdk/client-s3').NotificationConfiguration} [notificationConfiguration] -
  * @property {import('@aws-sdk/client-s3').Tag[]} [tags] -
@@ -25,14 +27,30 @@ class Bucket extends BaseResource {
    * @param {BucketOptions} options -
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
-    super({ name, parent, status, dependsOn, properties });
+    if (!properties.bucketName) {
+      const propertiesWithDefaults = Object.assign(
+        {
+          bucketName: `${name.substring(0, 57)}-${createShortId()}`,
+        },
+        properties
+      );
+      super({
+        name,
+        parent,
+        status,
+        dependsOn,
+        properties: propertiesWithDefaults,
+      });
+    } else {
+      super({ name, parent, status, dependsOn, properties });
+    }
     this.s3 = new S3();
-    this.set('arn', `arn:aws:s3:::${this.name}`);
+    this.set('arn', `arn:aws:s3:::${this.get('bucketName')}`);
   }
 
   async _reconcileTags() {
     const { TagSet } = await this.s3.getBucketTagging({
-      Bucket: this.name,
+      Bucket: this.get('bucketName'),
     });
     const tags = this.get('tags') || [];
     const existingTags =
@@ -49,7 +67,7 @@ class Bucket extends BaseResource {
       }, {}) || {};
     if (JSON.stringify(existingTags) !== JSON.stringify(newTags)) {
       await this.s3.putBucketTagging({
-        Bucket: this.name,
+        Bucket: this.get('bucketName'),
         Tagging: {
           TagSet: this.get('tags') || [],
         },
@@ -60,12 +78,12 @@ class Bucket extends BaseResource {
   async _reconcile() {
     try {
       await this.s3.getBucketLocation({
-        Bucket: this.name,
+        Bucket: this.get('bucketName'),
       });
     } catch (error) {
       if (error instanceof NoSuchBucket) {
         await this.s3.createBucket({
-          Bucket: this.name,
+          Bucket: this.get('bucketName'),
         });
       } else {
         throw error;
@@ -74,12 +92,12 @@ class Bucket extends BaseResource {
     if (this.has('lifecycleConfiguration')) {
       try {
         const { Rules } = await this.s3.getBucketLifecycleConfigutation({
-          Bucket: this.name,
+          Bucket: this.get('bucketName'),
         });
         if (Rules?.length !== this.get('lifecycleConfiguration').Rules.length) {
           // TODO actually check for equality
           await this.s3.putBucketLifecycleConfigutation({
-            Bucket: this.name,
+            Bucket: this.get('bucketName'),
             LifecycleConfiguration: this.get('lifecycleConfiguration'),
           });
         }
@@ -87,7 +105,7 @@ class Bucket extends BaseResource {
         // @ts-ignore
         if (error.name === 'NoSuchLifecycleConfiguration') {
           await this.s3.putBucketLifecycleConfigutation({
-            Bucket: this.name,
+            Bucket: this.get('bucketName'),
             LifecycleConfiguration: this.get('lifecycleConfiguration'),
           });
         } else {
@@ -98,7 +116,7 @@ class Bucket extends BaseResource {
     if (this.has('notificationConfiguration')) {
       const { QueueConfigurations } =
         await this.s3.getBucketNotificationConfiguration({
-          Bucket: this.name,
+          Bucket: this.get('bucketName'),
         });
       if (
         QueueConfigurations?.length !==
@@ -106,7 +124,7 @@ class Bucket extends BaseResource {
       ) {
         // TODO actually check for equality
         await this.s3.putBucketNotificationConfiguration({
-          Bucket: this.name,
+          Bucket: this.get('bucketName'),
           NotificationConfiguration: this.get('notificationConfiguration'),
         });
       }
@@ -117,10 +135,10 @@ class Bucket extends BaseResource {
   async _destroy() {
     try {
       await this.s3.deletePath({
-        Bucket: this.name,
+        Bucket: this.get('bucketName'),
       });
       await this.s3.deleteBucket({
-        Bucket: this.name,
+        Bucket: this.get('bucketName'),
       });
     } catch (error) {
       if (!(error instanceof NoSuchBucket)) {
@@ -134,7 +152,7 @@ class Bucket extends BaseResource {
    */
   async upload({ Key, Body }) {
     await this.s3.putObject({
-      Bucket: this.name,
+      Bucket: this.get('bucketName'),
       Key,
       Body,
     });
@@ -146,7 +164,7 @@ class Bucket extends BaseResource {
    */
   async headObject({ Key }) {
     return await this.s3.headObject({
-      Bucket: this.name,
+      Bucket: this.get('bucketName'),
       Key,
     });
   }

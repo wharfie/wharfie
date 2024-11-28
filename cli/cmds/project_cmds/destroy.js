@@ -59,9 +59,9 @@ const destroy = async (path, environmentName, yes) => {
           {
             type: 'confirm',
             name: 'confirmation',
-            message: `This will destroy the project including all data in the ${
-              projectResources.getBucket().name
-            } S3 bucket. Are you sure?`,
+            message: `This will destroy the project including all data in the ${projectResources
+              .getBucket()
+              .get('bucketName')} S3 bucket. Are you sure?`,
             default: false,
           },
         ])

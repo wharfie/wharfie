@@ -48,7 +48,7 @@ describe('iam role IaC', () => {
             "stateTable": "_testing_state_table",
             "version": "0.0.1test",
           },
-          "id": "111111",
+          "roleName": "test-role_111111",
           "tags": [
             {
               "Key": "test-key",
@@ -172,7 +172,7 @@ describe('iam role IaC', () => {
             "version": "0.0.1test",
           },
           "description": "some role description",
-          "id": "111111",
+          "roleName": "test-role_111111",
           "rolePolicyDocument": {
             "Statement": [
               {

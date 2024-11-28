@@ -3,6 +3,7 @@
 'use strict';
 
 process.env.AWS_MOCKS = '1';
+jest.mock('../../lambdas/lib/id');
 jest.mock('crypto');
 
 const crypto = require('crypto');
@@ -57,7 +58,7 @@ describe('wharfie actor resources IaC', () => {
         handler: './lambdas/monitor.handler',
         actorName: 'test-actor',
         actorPolicyArns: [sharedPolicy.get('arn')],
-        artifactBucket: bucket.name,
+        artifactBucket: bucket.get('bucketName'),
         environmentVariables: () => {
           return {
             foo: 'bar',
@@ -80,7 +81,7 @@ describe('wharfie actor resources IaC', () => {
           "actorPolicyArns": [
             "arn:aws:iam::123456789012:policy/shared-policy",
           ],
-          "artifactBucket": "test-bucket",
+          "artifactBucket": "test-bucket-111111",
           "deployment": {
             "accountId": "123456789012",
             "envPaths": {

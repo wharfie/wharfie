@@ -2,6 +2,7 @@
 'use strict';
 
 process.env.AWS_MOCKS = '1';
+jest.mock('../../../lambdas/lib/id');
 const { S3 } = jest.requireMock('@aws-sdk/client-s3');
 
 const {
@@ -45,7 +46,7 @@ describe('bucket notification configuration IaC', () => {
       name: 'test-bucket-notification-config',
       properties: {
         deployment: getMockDeploymentProperties(),
-        bucketName: bucket.name,
+        bucketName: bucket.get('bucketName'),
         notificationConfiguration: () => ({
           QueueConfigurations: [
             {
@@ -69,7 +70,7 @@ describe('bucket notification configuration IaC', () => {
         "name": "test-bucket-notification-config",
         "parent": "",
         "properties": {
-          "bucketName": "test-bucket",
+          "bucketName": "test-bucket-111111",
           "deployment": {
             "accountId": "123456789012",
             "envPaths": {
@@ -107,7 +108,7 @@ describe('bucket notification configuration IaC', () => {
     `);
 
     const res = await s3.getBucketNotificationConfiguration({
-      Bucket: bucket.name,
+      Bucket: bucket.get('bucketName'),
     });
 
     expect(res).toMatchInlineSnapshot(`
@@ -132,7 +133,7 @@ describe('bucket notification configuration IaC', () => {
     await bucketNotificationConfig.destroy();
     expect(bucketNotificationConfig.status).toBe('DESTROYED');
     const del_res = await s3.getBucketNotificationConfiguration({
-      Bucket: bucket.name,
+      Bucket: bucket.get('bucketName'),
     });
     expect(del_res.QueueConfigurations).toStrictEqual([]);
   });

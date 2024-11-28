@@ -97,7 +97,7 @@ class LambdaBuild extends BaseResource {
       keepNames: true,
       sourcemap: 'inline',
       platform: 'node',
-      target: 'node20',
+      target: 'node22',
       outfile: `./dist/${this.name}/index.js`,
       external: ['esbuild'],
     });

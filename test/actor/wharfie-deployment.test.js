@@ -105,7 +105,7 @@ describe('deployment IaC', () => {
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
-              "artifactBucket": "test-deployment-bucket",
+              "artifactBucket": "test-deployment-bucket-111111",
               "deployment": {
                 "accountId": "123456789012",
                 "envPaths": {
@@ -137,7 +137,7 @@ describe('deployment IaC', () => {
                 "SEMAPHORE_TABLE": "test-deployment-semaphore",
                 "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
                 "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
+                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
               },
               "handler": "./lambdas/cleanup.handler",
             },
@@ -157,7 +157,7 @@ describe('deployment IaC', () => {
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
-              "artifactBucket": "test-deployment-bucket",
+              "artifactBucket": "test-deployment-bucket-111111",
               "deployment": {
                 "accountId": "123456789012",
                 "envPaths": {
@@ -189,7 +189,7 @@ describe('deployment IaC', () => {
                 "SEMAPHORE_TABLE": "test-deployment-semaphore",
                 "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
                 "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
+                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
               },
               "handler": "./lambdas/cleanup.handler",
             },
@@ -242,7 +242,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-cleanup-build",
             "parent": "test-deployment#cleanup#cleanup-actor-resources",
             "properties": {
-              "artifactBucket": "test-deployment-bucket",
+              "artifactBucket": "test-deployment-bucket-111111",
               "artifactKey": "actor-artifacts/test-deployment-cleanup-build/mockedHash.zip",
               "deployment": {
                 "accountId": "123456789012",
@@ -310,7 +310,7 @@ describe('deployment IaC', () => {
               ],
               "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-cleanup-function",
               "code": {
-                "S3Bucket": "test-deployment-bucket",
+                "S3Bucket": "test-deployment-bucket-111111",
                 "S3Key": "actor-artifacts/test-deployment-cleanup-build/mockedHash.zip",
               },
               "codeHash": "mockedHash",
@@ -354,7 +354,7 @@ describe('deployment IaC', () => {
                   "STACK_NAME": "test-deployment",
                   "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
                   "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                  "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
+                  "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
                 },
               },
               "ephemeralStorage": {
@@ -365,7 +365,7 @@ describe('deployment IaC', () => {
               "packageType": "Zip",
               "publish": true,
               "role": "arn:aws:iam::123456789012:role/test-deployment-cleanup-role_111111",
-              "runtime": "nodejs20.x",
+              "runtime": "nodejs22.x",
               "timeout": 300,
             },
             "resourceType": "LambdaFunction",
@@ -475,11 +475,11 @@ describe('deployment IaC', () => {
                 "version": "0.0.1",
               },
               "description": "test-deployment actor cleanup role",
-              "id": "111111",
               "managedPolicyArns": [
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
+              "roleName": "test-deployment-cleanup-role_111111",
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -511,7 +511,7 @@ describe('deployment IaC', () => {
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
-              "artifactBucket": "test-deployment-bucket",
+              "artifactBucket": "test-deployment-bucket-111111",
               "deployment": {
                 "accountId": "123456789012",
                 "envPaths": {
@@ -543,7 +543,7 @@ describe('deployment IaC', () => {
                 "SEMAPHORE_TABLE": "test-deployment-semaphore",
                 "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
                 "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
+                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
               },
               "handler": "./lambdas/daemon.handler",
             },
@@ -563,7 +563,7 @@ describe('deployment IaC', () => {
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
-              "artifactBucket": "test-deployment-bucket",
+              "artifactBucket": "test-deployment-bucket-111111",
               "deployment": {
                 "accountId": "123456789012",
                 "envPaths": {
@@ -595,7 +595,7 @@ describe('deployment IaC', () => {
                 "SEMAPHORE_TABLE": "test-deployment-semaphore",
                 "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
                 "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
+                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
               },
               "handler": "./lambdas/daemon.handler",
             },
@@ -648,7 +648,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-daemon-build",
             "parent": "test-deployment#daemon#daemon-actor-resources",
             "properties": {
-              "artifactBucket": "test-deployment-bucket",
+              "artifactBucket": "test-deployment-bucket-111111",
               "artifactKey": "actor-artifacts/test-deployment-daemon-build/mockedHash.zip",
               "deployment": {
                 "accountId": "123456789012",
@@ -716,7 +716,7 @@ describe('deployment IaC', () => {
               ],
               "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-daemon-function",
               "code": {
-                "S3Bucket": "test-deployment-bucket",
+                "S3Bucket": "test-deployment-bucket-111111",
                 "S3Key": "actor-artifacts/test-deployment-daemon-build/mockedHash.zip",
               },
               "codeHash": "mockedHash",
@@ -760,7 +760,7 @@ describe('deployment IaC', () => {
                   "STACK_NAME": "test-deployment",
                   "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
                   "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                  "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
+                  "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
                 },
               },
               "ephemeralStorage": {
@@ -771,7 +771,7 @@ describe('deployment IaC', () => {
               "packageType": "Zip",
               "publish": true,
               "role": "arn:aws:iam::123456789012:role/test-deployment-daemon-role_111111",
-              "runtime": "nodejs20.x",
+              "runtime": "nodejs22.x",
               "timeout": 300,
             },
             "resourceType": "LambdaFunction",
@@ -881,11 +881,11 @@ describe('deployment IaC', () => {
                 "version": "0.0.1",
               },
               "description": "test-deployment actor daemon role",
-              "id": "111111",
               "managedPolicyArns": [
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
+              "roleName": "test-deployment-daemon-role_111111",
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -917,7 +917,7 @@ describe('deployment IaC', () => {
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
-              "artifactBucket": "test-deployment-bucket",
+              "artifactBucket": "test-deployment-bucket-111111",
               "deployment": {
                 "accountId": "123456789012",
                 "envPaths": {
@@ -949,7 +949,7 @@ describe('deployment IaC', () => {
                 "SEMAPHORE_TABLE": "test-deployment-semaphore",
                 "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
                 "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
+                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
               },
               "handler": "./lambdas/events.handler",
             },
@@ -969,7 +969,7 @@ describe('deployment IaC', () => {
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
-              "artifactBucket": "test-deployment-bucket",
+              "artifactBucket": "test-deployment-bucket-111111",
               "deployment": {
                 "accountId": "123456789012",
                 "envPaths": {
@@ -1001,7 +1001,7 @@ describe('deployment IaC', () => {
                 "SEMAPHORE_TABLE": "test-deployment-semaphore",
                 "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
                 "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
+                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
               },
               "handler": "./lambdas/events.handler",
             },
@@ -1054,7 +1054,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-events-build",
             "parent": "test-deployment#events#events-actor-resources",
             "properties": {
-              "artifactBucket": "test-deployment-bucket",
+              "artifactBucket": "test-deployment-bucket-111111",
               "artifactKey": "actor-artifacts/test-deployment-events-build/mockedHash.zip",
               "deployment": {
                 "accountId": "123456789012",
@@ -1122,7 +1122,7 @@ describe('deployment IaC', () => {
               ],
               "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-events-function",
               "code": {
-                "S3Bucket": "test-deployment-bucket",
+                "S3Bucket": "test-deployment-bucket-111111",
                 "S3Key": "actor-artifacts/test-deployment-events-build/mockedHash.zip",
               },
               "codeHash": "mockedHash",
@@ -1166,7 +1166,7 @@ describe('deployment IaC', () => {
                   "STACK_NAME": "test-deployment",
                   "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
                   "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                  "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
+                  "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
                 },
               },
               "ephemeralStorage": {
@@ -1177,7 +1177,7 @@ describe('deployment IaC', () => {
               "packageType": "Zip",
               "publish": true,
               "role": "arn:aws:iam::123456789012:role/test-deployment-events-role_111111",
-              "runtime": "nodejs20.x",
+              "runtime": "nodejs22.x",
               "timeout": 300,
             },
             "resourceType": "LambdaFunction",
@@ -1287,11 +1287,11 @@ describe('deployment IaC', () => {
                 "version": "0.0.1",
               },
               "description": "test-deployment actor events role",
-              "id": "111111",
               "managedPolicyArns": [
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
+              "roleName": "test-deployment-events-role_111111",
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -1323,7 +1323,7 @@ describe('deployment IaC', () => {
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
-              "artifactBucket": "test-deployment-bucket",
+              "artifactBucket": "test-deployment-bucket-111111",
               "deployment": {
                 "accountId": "123456789012",
                 "envPaths": {
@@ -1355,7 +1355,7 @@ describe('deployment IaC', () => {
                 "SEMAPHORE_TABLE": "test-deployment-semaphore",
                 "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
                 "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
+                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
               },
               "handler": "./lambdas/monitor.handler",
             },
@@ -1376,7 +1376,7 @@ describe('deployment IaC', () => {
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
-              "artifactBucket": "test-deployment-bucket",
+              "artifactBucket": "test-deployment-bucket-111111",
               "deployment": {
                 "accountId": "123456789012",
                 "envPaths": {
@@ -1408,7 +1408,7 @@ describe('deployment IaC', () => {
                 "SEMAPHORE_TABLE": "test-deployment-semaphore",
                 "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
                 "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
+                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
               },
               "handler": "./lambdas/monitor.handler",
             },
@@ -1461,7 +1461,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-monitor-build",
             "parent": "test-deployment#monitor#monitor-actor-resources",
             "properties": {
-              "artifactBucket": "test-deployment-bucket",
+              "artifactBucket": "test-deployment-bucket-111111",
               "artifactKey": "actor-artifacts/test-deployment-monitor-build/mockedHash.zip",
               "deployment": {
                 "accountId": "123456789012",
@@ -1529,7 +1529,7 @@ describe('deployment IaC', () => {
               ],
               "arn": "arn:aws:lambda:us-west-2:123456789012:function:test-deployment-monitor-function",
               "code": {
-                "S3Bucket": "test-deployment-bucket",
+                "S3Bucket": "test-deployment-bucket-111111",
                 "S3Key": "actor-artifacts/test-deployment-monitor-build/mockedHash.zip",
               },
               "codeHash": "mockedHash",
@@ -1573,7 +1573,7 @@ describe('deployment IaC', () => {
                   "STACK_NAME": "test-deployment",
                   "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
                   "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                  "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket",
+                  "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
                 },
               },
               "ephemeralStorage": {
@@ -1584,7 +1584,7 @@ describe('deployment IaC', () => {
               "packageType": "Zip",
               "publish": true,
               "role": "arn:aws:iam::123456789012:role/test-deployment-monitor-role_111111",
-              "runtime": "nodejs20.x",
+              "runtime": "nodejs22.x",
               "timeout": 300,
             },
             "resourceType": "LambdaFunction",
@@ -1694,11 +1694,11 @@ describe('deployment IaC', () => {
                 "version": "0.0.1",
               },
               "description": "test-deployment actor monitor role",
-              "id": "111111",
               "managedPolicyArns": [
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
+              "roleName": "test-deployment-monitor-role_111111",
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -1897,7 +1897,7 @@ describe('deployment IaC', () => {
                     ],
                     "Effect": "Allow",
                     "Resource": [
-                      "arn:aws:s3:::test-deployment-bucket/*",
+                      "arn:aws:s3:::test-deployment-bucket-111111/*",
                     ],
                   },
                   {
@@ -1909,7 +1909,7 @@ describe('deployment IaC', () => {
                     ],
                     "Effect": "Allow",
                     "Resource": [
-                      "arn:aws:s3:::test-deployment-bucket",
+                      "arn:aws:s3:::test-deployment-bucket-111111",
                     ],
                   },
                   {
@@ -1936,7 +1936,8 @@ describe('deployment IaC', () => {
             "name": "test-deployment-bucket",
             "parent": "test-deployment#test-deployment-deployment-resources",
             "properties": {
-              "arn": "arn:aws:s3:::test-deployment-bucket",
+              "arn": "arn:aws:s3:::test-deployment-bucket-111111",
+              "bucketName": "test-deployment-bucket-111111",
               "deployment": {
                 "accountId": "123456789012",
                 "envPaths": {
@@ -2115,14 +2116,14 @@ describe('deployment IaC', () => {
               },
               "description": "test-deployment-deployment-resources wharfie logs",
               "inputFormat": "org.apache.hadoop.mapred.TextInputFormat",
-              "inputLocation": "s3://test-deployment-bucket/logs/raw/",
+              "inputLocation": "s3://test-deployment-bucket-111111/logs/raw/",
               "interval": 300,
               "locationTable": "test-deployment-locations",
               "migrationResource": false,
               "numberOfBuckets": 0,
               "operationTable": "test-deployment-operations",
               "outputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
-              "outputLocation": "s3://test-deployment-bucket/logs/processed/",
+              "outputLocation": "s3://test-deployment-bucket-111111/logs/processed/",
               "parameters": {
                 "EXTERNAL": "true",
               },
@@ -2144,7 +2145,7 @@ describe('deployment IaC', () => {
                   "type": "string",
                 },
               ],
-              "projectBucket": "test-deployment-bucket",
+              "projectBucket": "test-deployment-bucket-111111",
               "projectName": "test-deployment",
               "region": "us-west-2",
               "resourceId": "test-deployment.logs",
@@ -2258,7 +2259,7 @@ describe('deployment IaC', () => {
               },
               "description": "test-deployment-deployment-resources wharfie logs",
               "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-              "location": "s3://test-deployment-bucket/logs/processed/references/",
+              "location": "s3://test-deployment-bucket-111111/logs/processed/references/",
               "numberOfBuckets": 0,
               "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
               "parameters": {
@@ -2381,7 +2382,7 @@ describe('deployment IaC', () => {
               },
               "description": "test-deployment-deployment-resources wharfie logs",
               "inputFormat": "org.apache.hadoop.mapred.TextInputFormat",
-              "location": "s3://test-deployment-bucket/logs/raw/",
+              "location": "s3://test-deployment-bucket-111111/logs/raw/",
               "numberOfBuckets": 0,
               "outputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
               "parameters": {
@@ -2426,7 +2427,7 @@ describe('deployment IaC', () => {
             "properties": {
               "data": {
                 "interval": 300,
-                "location": "s3://test-deployment-bucket/logs/raw/",
+                "location": "s3://test-deployment-bucket-111111/logs/raw/",
                 "resource_id": "test-deployment.logs",
               },
               "deployment": {
@@ -2545,7 +2546,7 @@ describe('deployment IaC', () => {
                     },
                     "description": "test-deployment-deployment-resources wharfie logs",
                     "inputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
-                    "location": "s3://test-deployment-bucket/logs/processed/references/",
+                    "location": "s3://test-deployment-bucket-111111/logs/processed/references/",
                     "name": "logs",
                     "numberOfBuckets": 0,
                     "outputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
@@ -2668,14 +2669,14 @@ describe('deployment IaC', () => {
                     },
                     "description": "test-deployment-deployment-resources wharfie logs",
                     "inputFormat": "org.apache.hadoop.mapred.TextInputFormat",
-                    "inputLocation": "s3://test-deployment-bucket/logs/raw/",
+                    "inputLocation": "s3://test-deployment-bucket-111111/logs/raw/",
                     "interval": 300,
                     "locationTable": "test-deployment-locations",
                     "migrationResource": false,
                     "numberOfBuckets": 0,
                     "operationTable": "test-deployment-operations",
                     "outputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
-                    "outputLocation": "s3://test-deployment-bucket/logs/processed/",
+                    "outputLocation": "s3://test-deployment-bucket-111111/logs/processed/",
                     "parameters": {
                       "EXTERNAL": "true",
                     },
@@ -2697,7 +2698,7 @@ describe('deployment IaC', () => {
                         "type": "string",
                       },
                     ],
-                    "projectBucket": "test-deployment-bucket",
+                    "projectBucket": "test-deployment-bucket-111111",
                     "projectName": "test-deployment",
                     "region": "us-west-2",
                     "resourceId": "test-deployment.logs",
@@ -2797,7 +2798,7 @@ describe('deployment IaC', () => {
                     },
                     "description": "test-deployment-deployment-resources wharfie logs",
                     "inputFormat": "org.apache.hadoop.mapred.TextInputFormat",
-                    "location": "s3://test-deployment-bucket/logs/raw/",
+                    "location": "s3://test-deployment-bucket-111111/logs/raw/",
                     "name": "logs_raw",
                     "numberOfBuckets": 0,
                     "outputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
@@ -2883,7 +2884,7 @@ describe('deployment IaC', () => {
                 "version": "0.0.1",
               },
               "description": "test-deployment resource logs workgroup",
-              "outputLocation": "s3://test-deployment-bucket/logs/processed/query_metadata/",
+              "outputLocation": "s3://test-deployment-bucket-111111/logs/processed/query_metadata/",
             },
             "resourceType": "AthenaWorkGroup",
             "status": "STABLE",
@@ -2924,10 +2925,10 @@ describe('deployment IaC', () => {
                 "version": "0.0.1",
               },
               "description": "test-deployment-deployment-resources logging resource role",
-              "id": "111111",
               "managedPolicyArns": [
                 "arn:aws:iam::123456789012:policy/test-deployment-shared-policy",
               ],
+              "roleName": "test-deployment-deployment-resources-logging-resource-rol_111111",
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -2940,7 +2941,7 @@ describe('deployment IaC', () => {
                     ],
                     "Effect": "Allow",
                     "Resource": [
-                      "arn:aws:s3:::test-deployment-bucket",
+                      "arn:aws:s3:::test-deployment-bucket-111111",
                     ],
                     "Sid": "Bucket",
                   },
@@ -2949,7 +2950,7 @@ describe('deployment IaC', () => {
                       "s3:*",
                     ],
                     "Effect": "Allow",
-                    "Resource": "arn:aws:s3:::test-deployment-bucket/logs/processed/*",
+                    "Resource": "arn:aws:s3:::test-deployment-bucket-111111/logs/processed/*",
                     "Sid": "OutputWrite",
                   },
                   {
@@ -2957,7 +2958,7 @@ describe('deployment IaC', () => {
                       "s3:GetObject",
                     ],
                     "Effect": "Allow",
-                    "Resource": "arn:aws:s3:::test-deployment-bucket/logs/raw/*",
+                    "Resource": "arn:aws:s3:::test-deployment-bucket-111111/logs/raw/*",
                     "Sid": "InputRead",
                   },
                 ],
@@ -3004,7 +3005,7 @@ describe('deployment IaC', () => {
                 "version": "0.0.1",
               },
               "description": "test-deployment event role",
-              "id": "111111",
+              "roleName": "test-deployment-event-role_111111",
             },
             "resourceType": "Role",
             "status": "STABLE",
@@ -3034,7 +3035,7 @@ describe('deployment IaC', () => {
                 "version": "0.0.1",
               },
               "s3DestinationConfiguration": {
-                "BucketARN": "arn:aws:s3:::test-deployment-bucket",
+                "BucketARN": "arn:aws:s3:::test-deployment-bucket-111111",
                 "BufferingHints": {
                   "IntervalInSeconds": 60,
                   "SizeInMBs": 32,
@@ -3083,7 +3084,7 @@ describe('deployment IaC', () => {
                 "version": "0.0.1",
               },
               "description": "test-deployment firehose role",
-              "id": "111111",
+              "roleName": "test-deployment-firehose-role_111111",
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -3092,7 +3093,7 @@ describe('deployment IaC', () => {
                       "s3:GetObject",
                     ],
                     "Effect": "Allow",
-                    "Resource": "arn:aws:s3:::test-deployment-bucket/logs/raw/*",
+                    "Resource": "arn:aws:s3:::test-deployment-bucket-111111/logs/raw/*",
                   },
                   {
                     "Action": [
@@ -3102,7 +3103,7 @@ describe('deployment IaC', () => {
                       "s3:ListBucketMultipartUploads",
                     ],
                     "Effect": "Allow",
-                    "Resource": "arn:aws:s3:::test-deployment-bucket",
+                    "Resource": "arn:aws:s3:::test-deployment-bucket-111111",
                   },
                 ],
                 "Version": "2012-10-17",
@@ -3502,8 +3503,8 @@ describe('deployment IaC', () => {
                     ],
                     "Effect": "Allow",
                     "Resource": [
-                      "arn:aws:s3:::test-deployment-bucket",
-                      "arn:aws:s3:::test-deployment-bucket/*",
+                      "arn:aws:s3:::test-deployment-bucket-111111",
+                      "arn:aws:s3:::test-deployment-bucket-111111/*",
                     ],
                   },
                   {
@@ -3575,7 +3576,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-log-notification-bucket-notification-configuration",
             "parent": "test-deployment",
             "properties": {
-              "bucketName": "test-deployment-bucket",
+              "bucketName": "test-deployment-bucket-111111",
               "deployment": {
                 "accountId": "123456789012",
                 "envPaths": {
@@ -3804,7 +3805,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-log-notification-bucket-notification-configuration",
             "parent": "test-deployment",
             "properties": {
-              "bucketName": "test-deployment-bucket",
+              "bucketName": "test-deployment-bucket-111111",
               "deployment": {
                 "accountId": "123456789012",
                 "envPaths": {
