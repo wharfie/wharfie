@@ -98,7 +98,7 @@ describe('wharfie project IaC', () => {
         "resourceType": "WharfieProject",
         "resources": [
           "test-wharife-project",
-          "test-wharife-project-bucket-lz-fc6bi",
+          "test-wharife-project-bucket",
           "test-wharife-project-project-role",
         ],
         "status": "STABLE",
@@ -205,7 +205,7 @@ describe('wharfie project IaC', () => {
         "resourceType": "WharfieProject",
         "resources": [
           "test-wharife-project",
-          "test-wharife-project-bucket-lz-fc6bi",
+          "test-wharife-project-bucket",
           "test-wharife-project-project-role",
           "amazon_berkely_objects_aggregated-resource",
           "amazon_berkely_objects_join-resource",

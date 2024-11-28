@@ -5,7 +5,6 @@ const GlueDatabase = require('./aws/glue-database');
 const Bucket = require('./aws/bucket');
 const Role = require('./aws/role');
 const S3 = require('../../s3');
-const { createStableHash } = require('../../crypto');
 
 /**
  * @typedef WharfieProjectProperties
@@ -145,9 +144,7 @@ class WharfieProject extends BaseResourceGroup {
       },
     });
     const bucket = new Bucket({
-      name: `${this.name.replace(/[\s_]/g, '-')}-bucket-${createStableHash(
-        this.name
-      )}`,
+      name: `${this.name.replace(/[\s_]/g, '-')}-bucket`,
       parent,
       properties: {
         deployment: () => this.get('deployment'),
@@ -287,8 +284,10 @@ class WharfieProject extends BaseResourceGroup {
       resourceId: `${this.name}.${options.name}`,
       projectName: this.name,
       databaseName: this.name,
-      outputLocation: `s3://${this.getBucket().name}/${options.name}/`,
-      projectBucket: this.getBucket().name,
+      outputLocation: `s3://${this.getBucket().get('bucketName')}/${
+        options.name
+      }/`,
+      projectBucket: this.getBucket().get('bucketName'),
       region: this.get('deployment').region,
       catalogId: this.get('deployment').accountId,
       scheduleQueueArn: this.get('scheduleQueueArn'),
@@ -504,11 +503,7 @@ class WharfieProject extends BaseResourceGroup {
   }
 
   getBucket() {
-    return this.getResource(
-      `${this.name.replace(/[\s_]/g, '-')}-bucket-${createStableHash(
-        this.name
-      )}`
-    );
+    return this.getResource(`${this.name.replace(/[\s_]/g, '-')}-bucket`);
   }
 
   getRole() {

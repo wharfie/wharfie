@@ -2,6 +2,7 @@
 'use strict';
 
 process.env.AWS_MOCKS = '1';
+jest.mock('../../../lambdas/lib/id');
 const { S3 } = jest.requireMock('@aws-sdk/client-s3');
 
 const { Bucket } = require('../../../lambdas/lib/actor/resources/aws/');
@@ -52,7 +53,8 @@ describe('bucket IaC', () => {
         "name": "test-bucket",
         "parent": "",
         "properties": {
-          "arn": "arn:aws:s3:::test-bucket",
+          "arn": "arn:aws:s3:::test-bucket-111111",
+          "bucketName": "test-bucket-111111",
           "deployment": {
             "accountId": "123456789012",
             "envPaths": {
@@ -100,7 +102,7 @@ describe('bucket IaC', () => {
     `);
 
     const res = await s3.getBucketLocation({
-      Bucket: bucket.name,
+      Bucket: bucket.get('bucketName'),
     });
 
     expect(res).toMatchInlineSnapshot(`
@@ -113,10 +115,10 @@ describe('bucket IaC', () => {
     expect(bucket.status).toBe('DESTROYED');
     await expect(
       s3.getBucketLocation({
-        Bucket: bucket.name,
+        Bucket: bucket.get('bucketName'),
       })
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"The specified bucket does not exist: test-bucket"`
+      `"The specified bucket does not exist: test-bucket-111111"`
     );
   });
 });

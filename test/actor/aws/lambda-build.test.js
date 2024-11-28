@@ -3,6 +3,7 @@
 'use strict';
 
 process.env.AWS_MOCKS = true;
+jest.mock('../../../lambdas/lib/id');
 jest.mock('crypto');
 
 const crypto = require('crypto');
@@ -41,7 +42,7 @@ describe('lambda function IaC', () => {
       properties: {
         deployment: getMockDeploymentProperties(),
         handler: './test/fixtures/lambda-build-test-handler.handler',
-        artifactBucket: bucket.name,
+        artifactBucket: bucket.get('bucketName'),
       },
     });
     await lambdaBuild.reconcile();
@@ -54,7 +55,7 @@ describe('lambda function IaC', () => {
         "name": "test-function",
         "parent": "",
         "properties": {
-          "artifactBucket": "test-bucket",
+          "artifactBucket": "test-bucket-111111",
           "artifactKey": "actor-artifacts/test-function/mockedHash.zip",
           "deployment": {
             "accountId": "123456789012",
@@ -79,12 +80,12 @@ describe('lambda function IaC', () => {
     `);
 
     const res = await s3.listObjectsV2({
-      Bucket: bucket.name,
+      Bucket: bucket.get('bucketName'),
     });
 
     expect(res).toMatchInlineSnapshot(`
       {
-        "Bucket": "test-bucket",
+        "Bucket": "test-bucket-111111",
         "Contents": [
           {
             "Key": "actor-artifacts/test-function/mockedHash.zip",
@@ -96,11 +97,11 @@ describe('lambda function IaC', () => {
     await lambdaBuild.destroy();
     expect(lambdaBuild.status).toBe('DESTROYED');
     const del_res = await s3.listObjectsV2({
-      Bucket: bucket.name,
+      Bucket: bucket.get('bucketName'),
     });
     expect(del_res).toMatchInlineSnapshot(`
       {
-        "Bucket": "test-bucket",
+        "Bucket": "test-bucket-111111",
         "Contents": [
           {
             "Key": "actor-artifacts/test-function/mockedHash.zip",

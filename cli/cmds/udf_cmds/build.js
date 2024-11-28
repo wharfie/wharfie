@@ -77,7 +77,7 @@ const build = async (udf_name, entrypoint, label) => {
     minify: true,
     sourcemap: 'inline',
     platform: 'node',
-    target: 'node20',
+    target: 'node22',
     outdir: `dist/udf/${udf_name}/${label}`,
   });
 
