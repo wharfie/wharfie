@@ -1,6 +1,7 @@
 'use strict';
-const { displayFailure, displaySuccess } = require('../output/basic');
 
+const { Command } = require('commander');
+const { displayFailure, displaySuccess } = require('../output/basic');
 const {
   getRecords,
   getAllResources,
@@ -63,38 +64,17 @@ const list = async (resource_id, operation_id) => {
   }
 };
 
-exports.command = [
-  'list [resource_id] [operation_id]',
-  'ls [resource_id] [operation_id]',
-];
-exports.desc = 'list wharfie records';
-/**
- * @param {import('yargs').Argv} yargs -
- */
-exports.builder = (yargs) => {
-  yargs
-    .positional('resource_id', {
-      type: 'string',
-      describe: 'the wharfie resource id',
-      optional: true,
-    })
-    .positional('operation_id', {
-      type: 'string',
-      describe: 'the wharfie operation id',
-      optional: true,
-    });
-};
-/**
- * @typedef listCLIParams
- * @property {string} [resource_id] -
- * @property {string} [operation_id] -
- * @param {listCLIParams} params -
- */
-exports.handler = async function ({ resource_id, operation_id }) {
-  try {
-    await list(resource_id, operation_id);
-  } catch (err) {
-    console.trace(err);
-    displayFailure(err);
-  }
-};
+const listCommand = new Command('list')
+  .aliases(['ls'])
+  .description('List wharfie records')
+  .argument('[resource_id]', 'The wharfie resource ID', null)
+  .argument('[operation_id]', 'The wharfie operation ID', null)
+  .action(async (resource_id, operation_id) => {
+    try {
+      await list(resource_id, operation_id);
+    } catch (err) {
+      displayFailure(err);
+    }
+  });
+
+module.exports = listCommand;

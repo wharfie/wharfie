@@ -1,7 +1,7 @@
 'use strict';
 
+const { Command } = require('commander');
 const inquirer = require('inquirer');
-
 const ansiEscapes = require('../../output/escapes');
 const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
 const {
@@ -13,10 +13,12 @@ const { load } = require('../../../lambdas/lib/actor/deserialize');
 const monitorDeploymentDestroyReconcilables = require('../../output/deployment/destroy');
 
 /**
- * @param {boolean} yes -
+ * Destroys the Wharfie deployment and associated resources.
+ * @param {boolean} yes - Flag to skip confirmation prompt.
  */
 const destroy = async (yes) => {
   let deployment;
+
   try {
     deployment = await load({
       deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME || '',
@@ -25,64 +27,56 @@ const destroy = async (yes) => {
     if (!(error instanceof Error)) throw error;
     if (
       !['No resource found', 'Resource was not stored'].includes(error.message)
-    )
+    ) {
       throw error;
+    }
     deployment = new WharfieDeployment({
       name: process.env.WHARFIE_DEPLOYMENT_NAME || '',
     });
   }
+
   const bucket = deployment.getBucket();
+
   if (!yes) {
-    const answers = await new Promise((resolve, reject) => {
-      inquirer
-        .prompt([
-          {
-            type: 'confirm',
-            name: 'confirmation',
-            message: `This will destroy the deployment and all data stored in the ${bucket.name} S3 bucket. Are you sure?`,
-            default: false,
-          },
-        ])
-        .then(resolve)
-        .catch(reject);
-    });
+    const answers = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'confirmation',
+        message: `This will destroy the deployment and all data stored in the ${bucket.name} S3 bucket. Are you sure?`,
+        default: false,
+      },
+    ]);
+
     if (!answers.confirmation) {
-      displayFailure('destroy cancelled');
+      displayFailure('Destroy cancelled');
       return;
     }
+
     process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
   }
-  displayInfo(`Destroying wharfie deployment...`);
+
+  displayInfo('Destroying Wharfie deployment...');
 
   const multibar = monitorDeploymentDestroyReconcilables(deployment);
   await deployment.destroy();
   multibar.stop();
+
   process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
-  displaySuccess(`Destroyed wharfie deployment`);
+  displaySuccess('Destroyed Wharfie deployment.');
 };
 
-exports.command = 'destroy';
-exports.desc = 'destroy wharfie deployment';
-/**
- * @param {import('yargs').Argv} yargs -
- */
-exports.builder = (yargs) => {
-  yargs.option('yes', {
-    alias: 'y',
-    type: 'boolean',
-    describe: 'approve destruction',
+const destroyCommand = new Command('destroy')
+  .description('Destroy Wharfie deployment')
+  .option('-y, --yes', 'Approve destruction without confirmation prompt')
+  .action(async (options) => {
+    const { yes } = options;
+    try {
+      await destroy(yes);
+    } catch (err) {
+      if (err instanceof Error)
+        displayFailure(err.stack || 'An error occurred.');
+      else displayFailure(err);
+    }
   });
-};
-/**
- * @typedef deploymentDestroyCLIParams
- * @property {boolean} yes -
- * @param {deploymentDestroyCLIParams} params -
- */
-exports.handler = async function ({ yes }) {
-  try {
-    await destroy(yes);
-  } catch (err) {
-    if (err instanceof Error) displayFailure(err?.stack);
-    else displayFailure(err);
-  }
-};
+
+module.exports = destroyCommand;

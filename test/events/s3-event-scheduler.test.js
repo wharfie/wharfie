@@ -1,6 +1,8 @@
 /* eslint-disable jest/no-hooks */
 'use strict';
 
+// eslint-disable-next-line jest/no-untyped-mock-factory
+jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 const AWS = require('@aws-sdk/client-sqs');
 let date,
   scheduler_db,
@@ -154,7 +156,7 @@ describe('tests for s3 event scheduling', () => {
       sort_key: 'a=10/b=20:1466424600000',
       status: 'SCHEDULED',
       type: 'SchedulerEntry',
-      version: '0.0.11',
+      version: '0.0.1',
       retries: 0,
       partition: {
         location: 's3://bucket/prefix/a=10/b=20/',
@@ -197,7 +199,7 @@ describe('tests for s3 event scheduling', () => {
       sort_key: 'a=1/b=abc:1466424600000',
       status: 'SCHEDULED',
       type: 'SchedulerEntry',
-      version: '0.0.11',
+      version: '0.0.1',
       retries: 0,
       partition: {
         location: 's3://bucket/prefix/a=1/b=abc/',
@@ -240,7 +242,7 @@ describe('tests for s3 event scheduling', () => {
       sort_key: 'a=1/b=abc:1466424600000',
       status: 'SCHEDULED',
       type: 'SchedulerEntry',
-      version: '0.0.11',
+      version: '0.0.1',
       retries: 0,
       partition: {
         location: 's3://bucket/prefix/a=1/b=abc/',
@@ -283,7 +285,7 @@ describe('tests for s3 event scheduling', () => {
       sort_key: '2021/10:1466424480000',
       status: 'SCHEDULED',
       type: 'SchedulerEntry',
-      version: '0.0.11',
+      version: '0.0.1',
       retries: 0,
       partition: {
         location: 's3://bucket/prefix/2021/10/',
@@ -368,7 +370,7 @@ describe('tests for s3 event scheduling', () => {
         'dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon:1466424480000',
       status: 'SCHEDULED',
       type: 'SchedulerEntry',
-      version: '0.0.11',
+      version: '0.0.1',
       retries: 0,
       partition: {
         location:
@@ -454,7 +456,7 @@ describe('tests for s3 event scheduling', () => {
         'dt=2023-09-04/hr=19/lambda=wharfie-testing-daemon:1466424480000',
       status: 'SCHEDULED',
       type: 'SchedulerEntry',
-      version: '0.0.11',
+      version: '0.0.1',
       retries: 0,
       partition: {
         location:

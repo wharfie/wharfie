@@ -1,8 +1,7 @@
 'use strict';
 
+const { Command } = require('commander');
 const cliProgress = require('cli-progress');
-const progressBar = new cliProgress.Bar({});
-
 const {
   displaySuccess,
   displayFailure,
@@ -13,35 +12,49 @@ const {
   deleteOperation,
 } = require('../../../lambdas/lib/dynamo/operations');
 
-const list = async () => {
-  displayInfo(`fetching operations...`);
+const cleanupDynamo = async () => {
+  displayInfo('Fetching operations...');
   const operations = await getAllOperations();
 
-  const operations_to_remove = operations.filter(
+  const operationsToRemove = operations.filter(
     (x) => x.started_at * 1000 < new Date().getTime() - 1000 * 60 * 60 * 24
   );
-  const operations_to_remove_count = operations_to_remove.length;
-  displayInfo(`deleting stale operations...`);
-  progressBar.start(operations_to_remove_count, 0);
+
+  const operationsToRemoveCount = operationsToRemove.length;
+  if (operationsToRemoveCount === 0) {
+    displayInfo('No stale operations to delete.');
+    return;
+  }
+
+  displayInfo('Deleting stale operations...');
+  const progressBar = new cliProgress.Bar(
+    {},
+    cliProgress.Presets.shades_classic
+  );
+  progressBar.start(operationsToRemoveCount, 0);
+
   let deletedOperations = 0;
-  while (operations_to_remove.length > 0) {
-    const operationChunk = operations_to_remove.splice(0, 10);
+  while (operationsToRemove.length > 0) {
+    const operationChunk = operationsToRemove.splice(0, 10);
     await Promise.all(
       operationChunk.map((operation) => deleteOperation(operation))
     );
-    deletedOperations = deletedOperations + operationChunk.length;
+    deletedOperations += operationChunk.length;
     progressBar.update(deletedOperations);
   }
+
   progressBar.stop();
-  displaySuccess(`${operations_to_remove_count} expired operations removed`);
+  displaySuccess(`${operationsToRemoveCount} expired operations removed.`);
 };
 
-exports.command = 'cleanup-dynamo';
-exports.desc = 'remove stale operation/action/query records';
-exports.handler = async function () {
-  try {
-    await list();
-  } catch (err) {
-    displayFailure(err);
-  }
-};
+const cleanupDynamoCommand = new Command('cleanup-dynamo')
+  .description('Remove stale operation/action/query records')
+  .action(async () => {
+    try {
+      await cleanupDynamo();
+    } catch (err) {
+      displayFailure(err);
+    }
+  });
+
+module.exports = cleanupDynamoCommand;

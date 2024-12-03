@@ -28,8 +28,10 @@ function load_entrypoint() {
   // Dynamically import the module
   let handlerModule;
   if (path.isAbsolute(fileName)) {
+    // eslint-disable-next-line import/no-dynamic-require
     handlerModule = require(fileName);
   } else {
+    // eslint-disable-next-line import/no-dynamic-require
     handlerModule = require(path.resolve(__dirname, fileName));
   }
   // Get the handler function

@@ -1,34 +1,39 @@
 'use strict';
-const { displayFailure } = require('../../output/basic');
 
+const { Command } = require('commander');
+const { displayFailure } = require('../../output/basic');
 const Athena = require('../../../lambdas/lib/athena');
 const { getAllResources } = require('../../../lambdas/lib/dynamo/operations');
+
 const view = async () => {
   const athena = new Athena({});
-
   const resources = await getAllResources();
 
-  const wharfie_resources = resources.map((resource) => {
+  const wharfieResources = resources.map((resource) => {
     const name = `${resource.destination_properties.databaseName}.${resource.destination_properties.name}`;
     /**
      * @type {string[]}
      */
     const dependsOn = [];
+
     if (resource.source_properties.tableType === 'VIRTUAL_VIEW') {
       const viewOriginalText =
         resource.source_properties.viewOriginalText || '';
-      const view_sql = JSON.parse(
+      const viewSql = JSON.parse(
         Buffer.from(
           viewOriginalText.substring(16, viewOriginalText.length - 3),
           'base64'
         ).toString()
       ).originalSql;
-      const { sources } = athena.extractSources(view_sql);
+
+      const { sources } = athena.extractSources(viewSql);
       sources.forEach((source) => {
-        if (!source.DatabaseName || !source.TableName) return;
-        dependsOn.push(`${source.DatabaseName}.${source.TableName}`);
+        if (source.DatabaseName && source.TableName) {
+          dependsOn.push(`${source.DatabaseName}.${source.TableName}`);
+        }
       });
     }
+
     return {
       name,
       dependsOn,
@@ -39,10 +44,11 @@ const view = async () => {
       },
     };
   });
+
   console.log(
     JSON.stringify(
       {
-        resources: wharfie_resources,
+        resources: wharfieResources,
       },
       null,
       2
@@ -50,13 +56,14 @@ const view = async () => {
   );
 };
 
-exports.command = 'dependency_list';
-exports.desc = "output deployment's resource dependencies";
-exports.builder = () => {};
-exports.handler = async function () {
-  try {
-    await view();
-  } catch (err) {
-    displayFailure(err);
-  }
-};
+const dependencyListCommand = new Command('dependency_list')
+  .description("Output deployment's resource dependencies")
+  .action(async () => {
+    try {
+      await view();
+    } catch (err) {
+      displayFailure(err);
+    }
+  });
+
+module.exports = dependencyListCommand;

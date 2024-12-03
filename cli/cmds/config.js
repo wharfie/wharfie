@@ -1,23 +1,22 @@
 'use strict';
 
+const { Command } = require('commander');
 const fs = require('fs');
 const inquirer = require('inquirer');
 const STS = require('../../lambdas/lib/sts');
+const { displaySuccess, displayFailure } = require('../output/basic');
+
 const sts = new STS();
 
-const { displaySuccess, displayFailure } = require('../output/basic');
-exports.command = 'config';
-exports.desc = 'configure the cli';
-exports.builder = {};
-exports.handler = async function () {
-  const config = {};
-  const answers = await new Promise((resolve, reject) => {
-    inquirer
-      .prompt([
+const configCommand = new Command('config')
+  .description('Configure the CLI')
+  .action(async () => {
+    try {
+      const answers = await inquirer.prompt([
         {
           type: 'input',
           name: 'region',
-          message: 'Enter your aws region:',
+          message: 'Enter your AWS region:',
           default: 'us-west-2',
         },
         {
@@ -25,20 +24,25 @@ exports.handler = async function () {
           name: 'deployment_name',
           message: 'Enter your wharfie deployment name:',
         },
-      ])
-      .then(resolve)
-      .catch((err) => {
-        displayFailure(err);
-        reject(err);
-      });
+      ]);
+
+      const { Account } = await sts.getCallerIdentity();
+
+      const config = {
+        region: answers.region,
+        deployment_name: answers.deployment_name,
+        service_bucket: `${answers.deployment_name}-${Account}-${answers.region}`,
+      };
+
+      if (!process.env.CONFIG_PATH) {
+        throw new Error('CONFIG_PATH not set');
+      }
+
+      fs.writeFileSync(process.env.CONFIG_PATH, JSON.stringify(config));
+      displaySuccess('Configuration Saved 🎉');
+    } catch (err) {
+      displayFailure(err);
+    }
   });
-  const { Account } = await sts.getCallerIdentity();
 
-  config.region = answers.region;
-  config.deployment_name = answers.deployment_name;
-  config.service_bucket = `${config.deployment_name}-${Account}-${config.region}`;
-  if (!process.env.CONFIG_PATH) throw new Error('CONFIG_PATH not set');
-
-  fs.writeFileSync(process.env.CONFIG_PATH, JSON.stringify(config));
-  displaySuccess('Configuration Saved 🎉');
-};
+module.exports = configCommand;
