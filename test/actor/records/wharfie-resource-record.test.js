@@ -8,6 +8,8 @@ const { Resource } = require('../../../lambdas/lib/graph/');
 const AWS = require('@aws-sdk/lib-dynamodb');
 let query, _delete, put, update;
 
+// eslint-disable-next-line jest/no-untyped-mock-factory
+jest.mock('../../../package.json', () => ({ version: '0.0.1' }));
 jest.mock('../../../lambdas/lib/dynamo/operations');
 const operations_db = require('../../../lambdas/lib/dynamo/operations');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
@@ -160,7 +162,7 @@ describe('wharfie resource record IaC', () => {
                   "source_region": "us-east-1",
                   "status": "ACTIVE",
                   "version": 0,
-                  "wharfie_version": "0.0.12-0",
+                  "wharfie_version": "0.0.1",
                 },
                 "resource_id": "resource_id",
                 "sort_key": "resource_id",
@@ -248,7 +250,7 @@ describe('wharfie resource record IaC', () => {
           "source_region": "us-east-1",
           "status": "ACTIVE",
           "version": 0,
-          "wharfie_version": "0.0.12-0",
+          "wharfie_version": "0.0.1",
         },
       }
     `);
@@ -317,7 +319,7 @@ describe('wharfie resource record IaC', () => {
               "source_region": "us-east-1",
               "status": "ACTIVE",
               "version": 0,
-              "wharfie_version": "0.0.12-0",
+              "wharfie_version": "0.0.1",
             },
             "resource_id": "resource_id",
             "sort_key": "resource_id",
@@ -412,7 +414,7 @@ describe('wharfie resource record IaC', () => {
             "source_region": "us-east-1",
             "status": "ACTIVE",
             "version": 0,
-            "wharfie_version": "0.0.12-0",
+            "wharfie_version": "0.0.1",
           },
           "resource_id": "resource_id",
           "sort_key": "resource_id",
