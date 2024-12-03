@@ -30,7 +30,7 @@
     "lint:js": "eslint . && prettier --check \"{*,**/*}.{js,json}\"",
     "lint": "npm run lint:js",
     "lint:fix": "eslint --fix . && prettier --write \"{*,**/*}.{js,json}\"",
-    "build": "./build/sea.sh"
+    "build": "./build.sh"
   },
   "prettier": {
     "singleQuote": true,
