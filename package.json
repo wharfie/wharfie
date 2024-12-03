@@ -29,7 +29,8 @@
     "test:ci": "npm run lint && npm run typecheck && npm run test",
     "lint:js": "eslint . && prettier --check \"{*,**/*}.{js,json}\"",
     "lint": "npm run lint:js",
-    "lint:fix": "eslint --fix . && prettier --write \"{*,**/*}.{js,json}\""
+    "lint:fix": "eslint --fix . && prettier --write \"{*,**/*}.{js,json}\"",
+    "build": "./build/sea.sh"
   },
   "prettier": {
     "singleQuote": true,
@@ -50,7 +51,8 @@
       "jsdoc"
     ],
     "ignorePatterns": [
-      "dist/"
+      "dist/",
+      "tmp/"
     ],
     "overrides": [
       {
