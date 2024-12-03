@@ -87,7 +87,6 @@ class Role extends BaseResource {
   }
 
   async _reconcile() {
-    console.log(this.get('roleName'));
     try {
       const { Role } = await this.iam.getRole({
         RoleName: this.get('roleName'),
