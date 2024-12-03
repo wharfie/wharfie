@@ -1,30 +1,29 @@
 'use strict';
-const inquirer = require('inquirer');
 
+const { Command } = require('commander');
+const inquirer = require('inquirer');
 const { loadProject } = require('../../project/load');
 const { load } = require('../../../lambdas/lib/actor/deserialize');
 const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
 const loadEnvironment = require('../../project/load-environment');
 const { getResourceOptions } = require('../../project/template-actor');
 const ansiEscapes = require('../../output/escapes');
-
 const {
   displayFailure,
   displayInfo,
   displaySuccess,
 } = require('../../output/basic');
 const monitorProjectDestroyReconcilables = require('../../output/project/destroy');
-
 const { handleError } = require('../../output/error');
+
 /**
- * @param {string} path -
- * @param {string} environmentName -
- * @param {boolean} yes -
+ * Destroys a Wharfie project, including its resources and data.
+ * @param {string} path - The path to the Wharfie project root.
+ * @param {string} environmentName - The Wharfie project environment to use.
+ * @param {boolean} yes - Skip confirmation prompt and approve destruction.
  */
 const destroy = async (path, environmentName, yes) => {
-  const project = await loadProject({
-    path,
-  });
+  const project = await loadProject({ path });
 
   let projectResources;
   try {
@@ -36,13 +35,15 @@ const destroy = async (path, environmentName, yes) => {
     if (!(error instanceof Error)) throw error;
     if (
       !['No resource found', 'Resource was not stored'].includes(error.message)
-    )
+    ) {
       throw error;
+    }
     const deployment = await load({
       deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME || '',
     });
-    if (deployment instanceof WharfieProject)
-      throw new Error('should not have loaded a project');
+    if (deployment instanceof WharfieProject) {
+      throw new Error('Should not have loaded a project');
+    }
     projectResources = new WharfieProject({
       deployment,
       name: project.name,
@@ -52,29 +53,27 @@ const destroy = async (path, environmentName, yes) => {
 
     projectResources.registerWharfieResources(resourceOptions);
   }
+
   if (!yes) {
-    const answers = await new Promise((resolve, reject) => {
-      inquirer
-        .prompt([
-          {
-            type: 'confirm',
-            name: 'confirmation',
-            message: `This will destroy the project including all data in the ${projectResources
-              .getBucket()
-              .get('bucketName')} S3 bucket. Are you sure?`,
-            default: false,
-          },
-        ])
-        .then(resolve)
-        .catch(reject);
-    });
+    const answers = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'confirmation',
+        message: `This will destroy the project including all data in the ${projectResources
+          .getBucket()
+          .get('bucketName')} S3 bucket. Are you sure?`,
+        default: false,
+      },
+    ]);
+
     if (!answers.confirmation) {
-      displayFailure('destroy cancelled');
+      displayFailure('Destroy cancelled');
       return;
     }
     process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
   }
-  displayInfo(`destroying wharfie project ${project.name}...`);
+
+  displayInfo(`Destroying Wharfie project ${project.name}...`);
 
   const multibar = monitorProjectDestroyReconcilables(projectResources);
 
@@ -82,46 +81,27 @@ const destroy = async (path, environmentName, yes) => {
 
   multibar.stop();
   process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
-  displaySuccess(`Destroyed wharfie project ${project.name} successfully`);
+  displaySuccess(`Destroyed Wharfie project ${project.name} successfully.`);
 };
 
-exports.command = 'destroy [path]';
-exports.desc = 'Destroy previously-created wharfie project';
-/**
- * @param {import('yargs').Argv} yargs -
- */
-exports.builder = (yargs) => {
-  yargs
-    .positional('path', {
-      type: 'string',
-      describe: 'the path of the wharfie project root',
-      optional: true,
-    })
-    .option('environment', {
-      alias: 'e',
-      type: 'string',
-      describe: 'the wharfie project environment to use',
-    })
-    .option('yes', {
-      alias: 'y',
-      type: 'boolean',
-      describe: 'approve destruction',
-    });
-};
-/**
- * @typedef projectDestroyCLIParams
- * @property {string} path -
- * @property {string} environment -
- * @property {boolean} yes -
- * @param {projectDestroyCLIParams} params -
- */
-exports.handler = async function ({ path, environment, yes }) {
-  if (!path) {
-    path = process.cwd();
-  }
-  try {
-    await destroy(path, environment, yes);
-  } catch (err) {
-    handleError(err);
-  }
-};
+const destroyCommand = new Command('destroy')
+  .description('Destroy previously-created Wharfie project')
+  .argument('[path]', 'The path to the Wharfie project root')
+  .option(
+    '-e, --environment <environment>',
+    'The Wharfie project environment to use'
+  )
+  .option('-y, --yes', 'Approve destruction without confirmation prompt')
+  .action(async (path, options) => {
+    const { environment, yes } = options;
+    if (!path) {
+      path = process.cwd();
+    }
+    try {
+      await destroy(path, environment, yes);
+    } catch (err) {
+      handleError(err);
+    }
+  });
+
+module.exports = destroyCommand;

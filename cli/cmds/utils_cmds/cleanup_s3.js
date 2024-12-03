@@ -1,5 +1,6 @@
 'use strict';
 
+const { Command } = require('commander');
 const {
   displaySuccess,
   displayFailure,
@@ -13,59 +14,50 @@ const {
 const Glue = require('../../../lambdas/lib/glue');
 const S3 = require('../../../lambdas/lib/s3');
 const Clean = require('../../../lambdas/operations/actions/lib/clean');
+
 const glue = new Glue({});
 const s3 = new S3();
-const clean = new Clean({
-  s3,
-  glue,
-});
+const clean = new Clean({ s3, glue });
 
 /**
- * @param {string} resource_id -
+ * Cleans up stale S3 data for a specific resource or all resources.
+ * @param {string} [resource_id] - The ID of the resource to clean up.
  */
-const cleanup_s3 = async (resource_id) => {
+const cleanupS3 = async (resource_id) => {
   let resources = [];
+
   if (resource_id) {
     const resource = await getResource(resource_id);
-    if (!resource)
+    if (!resource) {
       throw new Error(
-        `Resource with ID, ${resource_id} , does not exist in wharfie deployment, ${process.env.WHARFIE_DEPLOYMENT_NAME}`
+        `Resource with ID "${resource_id}" does not exist in Wharfie deployment "${process.env.WHARFIE_DEPLOYMENT_NAME}".`
       );
+    }
     resources = [resource];
   } else {
     resources = await getAllResources();
   }
-  displayInfo(`cleaning s3 for ${resources.length} resources`);
+
+  displayInfo(`Cleaning S3 for ${resources.length} resource(s)...`);
 
   await Promise.all(resources.map((r) => clean.cleanAll(r)));
 
-  displaySuccess(`s3 cleanup successful`);
+  displaySuccess('S3 cleanup successful');
 };
 
-exports.command = 'cleanup-s3 [resource_id]';
-exports.desc = 'remove stale s3 data';
-/**
- * @param {import('yargs').Argv} yargs -
- */
-exports.builder = (yargs) => {
-  yargs.positional('resource_id', {
-    type: 'string',
-    describe: 'the wharfie resource id',
+const cleanupS3Command = new Command('cleanup-s3')
+  .description('Remove stale S3 data')
+  .argument('[resource_id]', 'The Wharfie resource ID')
+  .action(async (resource_id) => {
+    if (!resource_id) {
+      displayInstruction("Param 'resource_id' Missing 🙁");
+      return;
+    }
+    try {
+      await cleanupS3(resource_id);
+    } catch (err) {
+      displayFailure(err);
+    }
   });
-};
-/**
- * @typedef utilCleanupS3CLIParams
- * @property {string} resource_id -
- * @param {utilCleanupS3CLIParams} params -
- */
-exports.handler = async function ({ resource_id }) {
-  if (!resource_id) {
-    displayInstruction("Param 'resource_id' Missing 🙁");
-    return;
-  }
-  try {
-    await cleanup_s3(resource_id);
-  } catch (err) {
-    displayFailure(err);
-  }
-};
+
+module.exports = cleanupS3Command;
