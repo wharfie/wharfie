@@ -1,8 +1,7 @@
 'use strict';
 
+const { Command } = require('commander');
 const cliProgress = require('cli-progress');
-const progressBar = new cliProgress.Bar({});
-
 const {
   displaySuccess,
   displayFailure,
@@ -13,47 +12,62 @@ const Glue = require('../../../lambdas/lib/glue');
 const cleanupTemporaryDB = async () => {
   const DatabaseName = `${process.env.WHARFIE_DEPLOYMENT_NAME}_temporary_store`;
   const glue = new Glue({});
-  displayInfo('fetching tables...');
-  const { TableList } = await glue.getTables({
-    DatabaseName,
-  });
-  if (!TableList || TableList.length === 0) throw new Error('no tables found');
 
-  const tables_to_remove = TableList.filter(
+  displayInfo('Fetching tables...');
+  const { TableList } = await glue.getTables({ DatabaseName });
+  if (!TableList || TableList.length === 0) {
+    throw new Error('No tables found');
+  }
+
+  const tablesToRemove = TableList.filter(
     (table) =>
       table.CreateTime &&
       table.CreateTime.getTime() < new Date().getTime() - 1000 * 60 * 60 * 24
   );
-  let delete_count = 0;
-  displayInfo('deleting stale tables...');
-  progressBar.start(tables_to_remove.length, 0);
-  while (tables_to_remove.length > 0) {
-    const tableChunk = tables_to_remove.splice(0, 10);
+
+  if (tablesToRemove.length === 0) {
+    displayInfo('No stale tables to delete.');
+    return;
+  }
+
+  let deleteCount = 0;
+  displayInfo('Deleting stale tables...');
+  const progressBar = new cliProgress.Bar(
+    {},
+    cliProgress.Presets.shades_classic
+  );
+  progressBar.start(tablesToRemove.length, 0);
+
+  while (tablesToRemove.length > 0) {
+    const tableChunk = tablesToRemove.splice(0, 10);
     await Promise.all(
       tableChunk.map(async (table) => {
-        delete_count = delete_count + 1;
         try {
           await glue.deleteTable({
             DatabaseName,
             Name: table.Name,
           });
-        } catch (e) {
-          console.log(`ignoring delete failure ${e}`);
+          deleteCount++;
+        } catch (err) {
+          console.log(`Ignoring delete failure: ${err}`);
         }
       })
     );
-    progressBar.update(delete_count);
+    progressBar.update(deleteCount);
   }
+
   progressBar.stop();
-  displaySuccess(`${delete_count} expired tables deleted`);
+  displaySuccess(`${deleteCount} expired tables deleted`);
 };
 
-exports.command = 'cleanup-glue';
-exports.desc = 'remove stale temporary glue tables';
-exports.handler = async function () {
-  try {
-    await cleanupTemporaryDB();
-  } catch (err) {
-    displayFailure(err);
-  }
-};
+const cleanupGlueCommand = new Command('cleanup-glue')
+  .description('Remove stale temporary Glue tables')
+  .action(async () => {
+    try {
+      await cleanupTemporaryDB();
+    } catch (err) {
+      displayFailure(err);
+    }
+  });
+
+module.exports = cleanupGlueCommand;

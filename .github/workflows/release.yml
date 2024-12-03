@@ -22,59 +22,29 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run typecheck
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+      - run: npm run build
+      - name: Upload binaries to release
+        uses: actions/upload-release-asset@v1
         with:
-          aws-access-key-id: ${{ secrets.AWS_PUBLISH_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_PUBLISH_SECRET_ACCESS_KEY }}
-          aws-region: us-west-2
-      # enables wharfie cli
-      - run: npm link
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/wharfie-darwin-arm64
+          asset_name: wharfie-darwin-arm64
+          asset_content_type: application/octet-stream
+      - uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/wharfie-linux-x64
+          asset_name: wharfie-linux-x64
+          asset_content_type: application/octet-stream
+      - uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/wharfie-linux-arm64
+          asset_name: wharfie-linux-arm64
+          asset_content_type: application/octet-stream
       - run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-      - name: release to us-west-2
-        run: wharfie build ${{ github.event.release.tag_name }}
-        env:
-          WHARFIE_REGION: us-west-2
-          AWS_REGION: us-west-2
-          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-west-2
-          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
-      - name: release to us-east-1
-        run: wharfie build ${{ github.event.release.tag_name }}
-        env:
-          WHARFIE_REGION: us-east-1
-          AWS_REGION: us-east-1
-          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-east-1
-          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
-      - name: release to us-east-2
-        run: wharfie build ${{ github.event.release.tag_name }}
-        env:
-          WHARFIE_REGION: us-east-2
-          AWS_REGION: us-east-2
-          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-east-2
-          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
-      - name: release to us-west-1
-        run: wharfie build ${{ github.event.release.tag_name }}
-        env:
-          WHARFIE_REGION: us-west-1
-          AWS_REGION: us-west-1
-          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-west-1
-          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
-      - name: release to  eu-central-1
-        run: wharfie build ${{ github.event.release.tag_name }}
-        env:
-          WHARFIE_REGION: eu-central-1
-          AWS_REGION: eu-central-1
-          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-eu-central-1
-          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
-      - name: release to eu-west-1
-        run: wharfie build ${{ github.event.release.tag_name }}
-        env:
-          WHARFIE_REGION: eu-west-1
-          AWS_REGION: eu-west-1
-          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-eu-west-1
-          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
   prerelease_publish:
     if: github.event.release.prerelease == true
     runs-on: ubuntu-latest
@@ -89,56 +59,26 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run typecheck
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+      - run: npm run build=
+      - name: Upload binaries to release
+        uses: actions/upload-release-asset@v1
         with:
-          aws-access-key-id: ${{ secrets.AWS_PUBLISH_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_PUBLISH_SECRET_ACCESS_KEY }}
-          aws-region: us-west-2
-      # enables wharfie cli
-      - run: npm link
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/wharfie-darwin-arm64
+          asset_name: wharfie-darwin-arm64
+          asset_content_type: application/octet-stream
+      - uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/wharfie-linux-x64
+          asset_name: wharfie-linux-x64
+          asset_content_type: application/octet-stream
+      - uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/wharfie-linux-arm64
+          asset_name: wharfie-linux-arm64
+          asset_content_type: application/octet-stream
       - run: npm publish --tag next --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-      - name: release to us-west-2
-        run: wharfie build ${{ github.event.release.tag_name }}
-        env:
-          WHARFIE_REGION: us-west-2
-          AWS_REGION: us-west-2
-          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-west-2
-          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
-      - name: release to us-east-1
-        run: wharfie build ${{ github.event.release.tag_name }}
-        env:
-          WHARFIE_REGION: us-east-1
-          AWS_REGION: us-east-1
-          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-east-1
-          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
-      - name: release to us-east-2
-        run: wharfie build ${{ github.event.release.tag_name }}
-        env:
-          WHARFIE_REGION: us-east-2
-          AWS_REGION: us-east-2
-          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-east-2
-          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
-      - name: release to us-west-1
-        run: wharfie build ${{ github.event.release.tag_name }}
-        env:
-          WHARFIE_REGION: us-west-1
-          AWS_REGION: us-west-1
-          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-us-west-1
-          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
-      - name: release to  eu-central-1
-        run: wharfie build ${{ github.event.release.tag_name }}
-        env:
-          WHARFIE_REGION: eu-central-1
-          AWS_REGION: eu-central-1
-          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-eu-central-1
-          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
-      - name: release to eu-west-1
-        run: wharfie build ${{ github.event.release.tag_name }}
-        env:
-          WHARFIE_REGION: eu-west-1
-          AWS_REGION: eu-west-1
-          WHARFIE_ARTIFACT_BUCKET: ${{ env.WHARFIE_ARTIFACTS_BUCKET_PREFIX }}-eu-west-1
-          WHARFIE_DEPLOYMENT_NAME: wharfie-releasing
