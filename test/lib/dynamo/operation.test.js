@@ -11,6 +11,9 @@ const {
 } = require('../../../lambdas/lib/graph');
 const Logger = require('../../../lambdas/lib/logging/logger');
 
+// eslint-disable-next-line jest/no-untyped-mock-factory
+jest.mock('../../../package.json', () => ({ version: '0.0.1' }));
+
 process.env.OPERATIONS_TABLE = 'operations_table';
 process.env.QUERY_TABLE = 'query_table';
 
@@ -290,7 +293,7 @@ describe('dynamo resource db', () => {
               "source_region": undefined,
               "status": "ACTIVE",
               "version": 0,
-              "wharfie_version": "0.0.12-0",
+              "wharfie_version": "0.0.1",
             },
             "resource_id": "StackName",
             "sort_key": "StackName",
@@ -556,7 +559,7 @@ describe('dynamo resource db', () => {
                       "started_at": 1466424490000,
                       "status": "PENDING",
                       "type": "START",
-                      "wharfie_version": "0.0.12-0",
+                      "wharfie_version": "0.0.1",
                     },
                     "resource_id": "resource_id",
                     "sort_key": "resource_id#test_operation#start_action",
@@ -576,7 +579,7 @@ describe('dynamo resource db', () => {
                       "started_at": 1466424490000,
                       "status": "PENDING",
                       "type": "FINISH",
-                      "wharfie_version": "0.0.12-0",
+                      "wharfie_version": "0.0.1",
                     },
                     "resource_id": "resource_id",
                     "sort_key": "resource_id#test_operation#finish_action",
@@ -598,7 +601,7 @@ describe('dynamo resource db', () => {
                       "started_at": 1466424490000,
                       "status": "PENDING",
                       "type": "BACKFILL",
-                      "wharfie_version": "0.0.12-0",
+                      "wharfie_version": "0.0.1",
                     },
                     "resource_id": "resource_id",
                     "sort_key": "resource_id#test_operation",
@@ -831,7 +834,7 @@ describe('dynamo resource db', () => {
                       "started_at": 20123001200,
                       "status": "PENDING",
                       "type": "START",
-                      "wharfie_version": "0.0.12-0",
+                      "wharfie_version": "0.0.1",
                     },
                     "resource_id": "resource_id",
                     "sort_key": "resource_id#operation_id#action_id",
@@ -875,7 +878,7 @@ describe('dynamo resource db', () => {
               "resource_id": "resource_id",
               "started_at": 20123001200,
               "status": "PENDING",
-              "wharfie_version": "0.0.12-0",
+              "wharfie_version": "0.0.1",
             },
             "resource_id": "resource_id",
             "sort_key": "resource_id#operation_id#action_id#query_id_1",
@@ -930,7 +933,7 @@ describe('dynamo resource db', () => {
                       "resource_id": "resource_id",
                       "started_at": 20123001200,
                       "status": "PENDING",
-                      "wharfie_version": "0.0.12-0",
+                      "wharfie_version": "0.0.1",
                     },
                     "resource_id": "resource_id",
                     "sort_key": "resource_id#operation_id#action_id#query_id_1",
@@ -952,7 +955,7 @@ describe('dynamo resource db', () => {
                       "resource_id": "resource_id",
                       "started_at": 20123001200,
                       "status": "PENDING",
-                      "wharfie_version": "0.0.12-0",
+                      "wharfie_version": "0.0.1",
                     },
                     "resource_id": "resource_id",
                     "sort_key": "resource_id#operation_id#action_id#query_id_2",
