@@ -59,7 +59,7 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run typecheck
-      - run: npm run build=
+      - run: npm run build
       - name: Upload binaries to release
         uses: actions/upload-release-asset@v1
         with:
