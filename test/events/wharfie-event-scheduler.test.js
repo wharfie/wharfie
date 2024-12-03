@@ -5,6 +5,8 @@ const AWSSQS = require('@aws-sdk/client-sqs');
 jest.mock('../../lambdas/lib/dynamo/scheduler');
 jest.mock('../../lambdas/lib/dynamo/dependency');
 jest.mock('../../lambdas/lib/dynamo/operations');
+// eslint-disable-next-line jest/no-untyped-mock-factory
+jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 const {
   WharfieOperationCompleted,
 } = require('../../lambdas/scheduler/events/');
@@ -96,7 +98,7 @@ describe('tests for s3 event scheduling', () => {
       sort_key: 'unpartitioned:1466424600000',
       status: 'SCHEDULED',
       type: 'SchedulerEntry',
-      version: '0.0.11',
+      version: '0.0.1',
       retries: 0,
     });
   });

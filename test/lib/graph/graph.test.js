@@ -51,7 +51,7 @@ describe('tests for graph', () => {
             "started_at": 1466424490000,
             "status": "PENDING",
             "type": "START",
-            "wharfie_version": "0.0.11",
+            "wharfie_version": "0.0.12-0",
           },
           "resource_id": "resource_id",
           "sort_key": "resource_id#test_operation#start_action",
@@ -71,7 +71,7 @@ describe('tests for graph', () => {
             "started_at": 1466424490000,
             "status": "PENDING",
             "type": "START",
-            "wharfie_version": "0.0.11",
+            "wharfie_version": "0.0.12-0",
           },
           "resource_id": "resource_id",
           "sort_key": "resource_id#test_operation#start_action",
@@ -89,7 +89,7 @@ describe('tests for graph', () => {
             "started_at": 1466424490000,
             "status": "PENDING",
             "type": "BACKFILL",
-            "wharfie_version": "0.0.11",
+            "wharfie_version": "0.0.12-0",
           },
           "resource_id": "resource_id",
           "sort_key": "resource_id#test_operation",
@@ -136,7 +136,7 @@ describe('tests for graph', () => {
             "started_at": 1466424490000,
             "status": "PENDING",
             "type": "START",
-            "wharfie_version": "0.0.11",
+            "wharfie_version": "0.0.12-0",
           },
           "resource_id": "resource_id",
           "sort_key": "resource_id#test_operation#start_action",
@@ -152,7 +152,7 @@ describe('tests for graph', () => {
             "started_at": 1466424490000,
             "status": "PENDING",
             "type": "RUN_COMPACTION",
-            "wharfie_version": "0.0.11",
+            "wharfie_version": "0.0.12-0",
           },
           "resource_id": "resource_id",
           "sort_key": "resource_id#test_operation#compaction_action",
@@ -168,7 +168,7 @@ describe('tests for graph', () => {
             "started_at": 1466424490000,
             "status": "PENDING",
             "type": "FINISH",
-            "wharfie_version": "0.0.11",
+            "wharfie_version": "0.0.12-0",
           },
           "resource_id": "resource_id",
           "sort_key": "resource_id#test_operation#finish_action",
@@ -186,7 +186,7 @@ describe('tests for graph', () => {
             "started_at": 1466424490000,
             "status": "PENDING",
             "type": "BACKFILL",
-            "wharfie_version": "0.0.11",
+            "wharfie_version": "0.0.12-0",
           },
           "resource_id": "resource_id",
           "sort_key": "resource_id#test_operation",
@@ -227,7 +227,7 @@ describe('tests for graph', () => {
         "started_at": 1466424490000,
         "status": "PENDING",
         "type": "BACKFILL",
-        "wharfie_version": "0.0.11",
+        "wharfie_version": "0.0.12-0",
       }
     `);
     expect(
@@ -318,7 +318,7 @@ describe('tests for graph', () => {
           "started_at": 1466424490000,
           "status": "PENDING",
           "type": "RUN_COMPACTION",
-          "wharfie_version": "0.0.11",
+          "wharfie_version": "0.0.12-0",
         },
         Action {
           "id": "register_partitions_action",
@@ -330,7 +330,7 @@ describe('tests for graph', () => {
           "started_at": 1466424490000,
           "status": "PENDING",
           "type": "REGISTER_PARTITION",
-          "wharfie_version": "0.0.11",
+          "wharfie_version": "0.0.12-0",
         },
       ]
     `);
@@ -347,7 +347,7 @@ describe('tests for graph', () => {
           "started_at": 1466424490000,
           "status": "PENDING",
           "type": "START",
-          "wharfie_version": "0.0.11",
+          "wharfie_version": "0.0.12-0",
         },
       ]
     `);
@@ -391,7 +391,7 @@ describe('tests for graph', () => {
           "started_at": 1466424490000,
           "status": "PENDING",
           "type": "RUN_COMPACTION",
-          "wharfie_version": "0.0.11",
+          "wharfie_version": "0.0.12-0",
         },
         Action {
           "id": "register_partitions_action",
@@ -403,7 +403,7 @@ describe('tests for graph', () => {
           "started_at": 1466424490000,
           "status": "PENDING",
           "type": "REGISTER_PARTITION",
-          "wharfie_version": "0.0.11",
+          "wharfie_version": "0.0.12-0",
         },
       ]
     `);
@@ -420,7 +420,7 @@ describe('tests for graph', () => {
           "started_at": 1466424490000,
           "status": "PENDING",
           "type": "FINISH",
-          "wharfie_version": "0.0.11",
+          "wharfie_version": "0.0.12-0",
         },
       ]
     `);
@@ -466,7 +466,7 @@ describe('tests for graph', () => {
           "started_at": 1466424490000,
           "status": "PENDING",
           "type": "START",
-          "wharfie_version": "0.0.11",
+          "wharfie_version": "0.0.12-0",
         },
         Action {
           "id": "compaction_action",
@@ -478,7 +478,7 @@ describe('tests for graph', () => {
           "started_at": 1466424490000,
           "status": "PENDING",
           "type": "RUN_COMPACTION",
-          "wharfie_version": "0.0.11",
+          "wharfie_version": "0.0.12-0",
         },
         Action {
           "id": "register_partitions_action",
@@ -490,7 +490,7 @@ describe('tests for graph', () => {
           "started_at": 1466424490000,
           "status": "PENDING",
           "type": "REGISTER_PARTITION",
-          "wharfie_version": "0.0.11",
+          "wharfie_version": "0.0.12-0",
         },
         Action {
           "id": "finish_action",
@@ -502,7 +502,7 @@ describe('tests for graph', () => {
           "started_at": 1466424490000,
           "status": "PENDING",
           "type": "FINISH",
-          "wharfie_version": "0.0.11",
+          "wharfie_version": "0.0.12-0",
         },
       ]
     `);
