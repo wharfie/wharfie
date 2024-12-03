@@ -22,12 +22,29 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run typecheck
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
+      - name: build script permissions
+        run: chmod +x ./build/sea.sh
+      - name: Single Executable Applications build
+        run: ./build/sea.sh
+      - name: Upload binaries to release
+        uses: actions/upload-release-asset@v1
         with:
-          aws-access-key-id: ${{ secrets.AWS_PUBLISH_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_PUBLISH_SECRET_ACCESS_KEY }}
-          aws-region: us-west-2
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/wharfie-darwin-arm64
+          asset_name: wharfie-darwin-arm64
+          asset_content_type: application/octet-stream
+      - uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/wharfie-linux-x64
+          asset_name: wharfie-linux-x64
+          asset_content_type: application/octet-stream
+      - uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/wharfie-linux-arm64
+          asset_name: wharfie-linux-arm64
+          asset_content_type: application/octet-stream
       - run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
@@ -45,12 +62,29 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run typecheck
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_PUBLISH_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_PUBLISH_SECRET_ACCESS_KEY }}
-          aws-region: us-west-2
       - run: npm publish --tag next --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+      - name: build script permissions
+        run: chmod +x ./build/sea.sh
+      - name: Single Executable Applications build
+        run: ./build/sea.sh
+      - name: Upload binaries to release
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/wharfie-darwin-arm64
+          asset_name: wharfie-darwin-arm64
+          asset_content_type: application/octet-stream
+      - uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/wharfie-linux-x64
+          asset_name: wharfie-linux-x64
+          asset_content_type: application/octet-stream
+      - uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/wharfie-linux-arm64
+          asset_name: wharfie-linux-arm64
+          asset_content_type: application/octet-stream
