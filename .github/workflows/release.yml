@@ -22,10 +22,7 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run typecheck
-      - name: build script permissions
-        run: chmod +x ./build/sea.sh
-      - name: Single Executable Applications build
-        run: ./build/sea.sh
+      - run: npm run build
       - name: Upload binaries to release
         uses: actions/upload-release-asset@v1
         with:
@@ -62,13 +59,7 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run typecheck
-      - run: npm publish --tag next --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-      - name: build script permissions
-        run: chmod +x ./build/sea.sh
-      - name: Single Executable Applications build
-        run: ./build/sea.sh
+      - run: npm run build=
       - name: Upload binaries to release
         uses: actions/upload-release-asset@v1
         with:
@@ -88,3 +79,6 @@ jobs:
           asset_path: ./dist/wharfie-linux-arm64
           asset_name: wharfie-linux-arm64
           asset_content_type: application/octet-stream
+      - run: npm publish --tag next --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
