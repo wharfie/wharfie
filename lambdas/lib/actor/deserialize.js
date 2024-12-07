@@ -1,7 +1,6 @@
 const AWSResources = require('./resources/aws');
 const RecordResources = require('./resources/records');
 const WharfieActors = require('./wharfie-actors');
-const WharfieActorResources = require('./resources/wharfie-actor-resources');
 const WharfieDeploymentResources = require('./resources/wharfie-deployment-resources');
 const WharfieProject = require('./resources/wharfie-project');
 const WharfieResource = require('./resources/wharfie-resource');
@@ -23,7 +22,6 @@ const classes = Object.assign(
   WharfieActors,
   {
     WharfieDeploymentResources,
-    WharfieActorResources,
     WharfieProject,
     WharfieResource,
     WharfieDeployment,
@@ -55,6 +53,9 @@ function _deserialize(serialized, serializedResourceMap, resourceMap) {
     throw new Error('Invalid serialized resource');
   }
   const ClassDefinition = classes[serialized.resourceType];
+  if (!ClassDefinition || typeof ClassDefinition !== 'function') {
+    throw new Error(`Unknown resource type: ${serialized.resourceType}`);
+  }
   /** @type {Object<string, import('./resources/base-resource')>} */
   const deserializedResources = {};
 

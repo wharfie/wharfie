@@ -41,7 +41,7 @@ describe('lambda function IaC', () => {
       name: 'test-function',
       properties: {
         deployment: getMockDeploymentProperties(),
-        handler: './test/fixtures/lambda-build-test-handler.handler',
+        handler: '<WHARFIE_BUILT_IN>/cleanup.handler',
         artifactBucket: bucket.get('bucketName'),
       },
     });

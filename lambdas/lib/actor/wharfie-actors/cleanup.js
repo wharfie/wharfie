@@ -12,7 +12,7 @@ class Cleanup extends WharfieActor {
       resources,
       properties: {
         ...properties,
-        handler: './lambdas/cleanup.handler',
+        handler: '<WHARFIE_BUILT_IN>/cleanup.handler',
       },
     });
   }

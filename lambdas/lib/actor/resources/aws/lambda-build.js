@@ -4,6 +4,22 @@ const path = require('path');
 const crypto = require('crypto');
 const JSZip = require('jszip');
 const { NotFound } = require('@aws-sdk/client-s3');
+const { createRequire } = require('module');
+const requireFromExecutable = createRequire(__filename);
+
+// Statically import all known handlers
+/**
+ * @type {Object<string,(event: import('aws-lambda').SQSEvent, context: import('aws-lambda').Context) => Promise<void>>}
+ */
+const HANDLERS = {
+  // '<WHARFIE_BUILT_IN>/daemon.handler': require('../../../../../lambdas/daemon').handler,
+  '<WHARFIE_BUILT_IN>/cleanup.handler':
+    require('../../../../../lambdas/cleanup').handler,
+  '<WHARFIE_BUILT_IN>/events.handler': require('../../../../../lambdas/events')
+    .handler,
+  '<WHARFIE_BUILT_IN>/monitor.handler':
+    require('../../../../../lambdas/monitor').handler,
+};
 
 const S3 = require('../../../s3');
 const BaseResource = require('../base-resource');
@@ -67,29 +83,26 @@ class LambdaBuild extends BaseResource {
     if (!this.get('handler').split('.').pop())
       throw new Error('No handler method defined');
 
-    const resolvedHandler = path.join(
-      __dirname,
-      '../../../../../',
-      this.get('handler')
-    );
+    // Lookup and set the handler based on metadata
+    const resolvedHandlerKey = this.get('handler');
+    const handler = HANDLERS[resolvedHandlerKey];
+
+    if (!handler) {
+      throw new Error(`Handler not found: ${resolvedHandlerKey}`);
+      // TODO enable generically loading handlers from the filesystem
+    }
 
     // TODO hydrate shared actor state generally
-    const requirePathParts = resolvedHandler.split('.');
-    const functionName = requirePathParts.pop();
-    const requirePath = requirePathParts.join('.');
-    const entryContent = `
-    const { ${functionName}: handler } = require('${requirePath}');
-
-    // Lambda handler setup to use actor's handler method
-    exports.handler = handler
+    const handlerContent = `
+      // Lambda handler setup to use the provided handler method
+      exports.handler = (${handler.toString()});
     `;
-    // require here to avoid runtime errors when bundled (without esbuild)
-    const esbuild = require('esbuild');
-    await esbuild.build({
+    const esbuild = requireFromExecutable('esbuild');
+    const result = await esbuild.build({
       stdin: {
-        contents: entryContent,
+        contents: handlerContent,
         resolveDir: __dirname,
-        sourcefile: 'WharfieActorGeneratedEntrypoint.js',
+        sourcefile: 'InlineHandler.js',
         loader: 'js',
       },
       bundle: true,
@@ -98,17 +111,15 @@ class LambdaBuild extends BaseResource {
       sourcemap: 'inline',
       platform: 'node',
       target: 'node22',
-      outfile: `./dist/${this.name}/index.js`,
-      external: ['esbuild'],
+      write: false, // Prevent writing to disk
     });
+
+    // The bundled code is available in `result.outputFiles`
+    const bundledCode = result.outputFiles[0].text;
 
     const functionCodeHash = crypto
       .createHash('sha256')
-      .update(
-        fs.readFileSync(
-          path.join(process.cwd(), `./dist/${this.name}/index.js`)
-        )
-      )
+      .update(bundledCode)
       .digest('hex');
 
     this.set(

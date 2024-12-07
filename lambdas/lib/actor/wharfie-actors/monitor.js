@@ -1,6 +1,5 @@
 const WharfieActor = require('../wharfie-actor');
 const EventsRule = require('../resources/aws/events-rule');
-const WharfieActorResources = require('../resources/wharfie-actor-resources');
 
 class Monitor extends WharfieActor {
   /**
@@ -14,7 +13,7 @@ class Monitor extends WharfieActor {
       resources,
       properties: {
         ...properties,
-        handler: './lambdas/monitor.handler',
+        handler: '<WHARFIE_BUILT_IN>/monitor.handler',
       },
     });
   }
@@ -25,19 +24,22 @@ class Monitor extends WharfieActor {
    */
   _defineGroupResources(parent) {
     const resources = super._defineGroupResources(parent);
-    const actorResourceGroup = resources.find(
-      (resource) => resource instanceof WharfieActorResources
+    const queue = resources.find(
+      (resource) =>
+        resource.name === `${this.get('deployment').name}-${this.name}-queue`
     );
-    if (!actorResourceGroup) {
-      throw new Error(`could not find actor resources`);
+    if (!queue) {
+      throw new Error(`could not find actor queue`);
+    }
+    const dlq = resources.find(
+      (resource) =>
+        resource.name === `${this.get('deployment').name}-${this.name}-dlq`
+    );
+    if (!dlq) {
+      throw new Error(`could not find actor dlq`);
     }
     const athena_events_rule = new EventsRule({
-      dependsOn: [
-        // @ts-ignore
-        actorResourceGroup.getResource(
-          `${this.get('deployment').name}-${this.name}-queue`
-        ),
-      ],
+      dependsOn: [queue],
       name: `${this.name}-athena-events-rule`,
       parent,
       properties: {
@@ -51,13 +53,9 @@ class Monitor extends WharfieActor {
         targets: () => [
           {
             Id: `${this.name}-athena-events-rule-target`,
-            Arn: this.getActorResources()
-              .getResource(`${this.get('deployment').name}-${this.name}-queue`)
-              .get('arn'),
+            Arn: queue.get('arn'),
             DeadLetterConfig: {
-              Arn: this.getActorResources()
-                .getResource(`${this.get('deployment').name}-${this.name}-dlq`)
-                .get('arn'),
+              Arn: dlq.get('arn'),
             },
           },
         ],

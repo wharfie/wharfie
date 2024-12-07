@@ -12,7 +12,7 @@ class Events extends WharfieActor {
       resources,
       properties: {
         ...properties,
-        handler: './lambdas/events.handler',
+        handler: '<WHARFIE_BUILT_IN>/events.handler',
       },
     });
   }

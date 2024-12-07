@@ -12,7 +12,7 @@ class Daemon extends WharfieActor {
       resources,
       properties: {
         ...properties,
-        handler: './lambdas/daemon.handler',
+        handler: '<WHARFIE_BUILT_IN>/daemon.handler',
       },
     });
   }

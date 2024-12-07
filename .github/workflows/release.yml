@@ -68,8 +68,6 @@ jobs:
       - run: npm run test
       - run: npm run typecheck
       - run: npm run build
-      - run: echo "Upload URL ${{ github.event.release.upload_url }}"
-      - run: ls -al ./dist
       - name: Upload darwin-arm64 binaries to release
         uses: actions/upload-release-asset@v1
         env:
