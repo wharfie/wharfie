@@ -6,7 +6,7 @@ const { displayInfo, displaySuccess } = require('../../output/basic');
 const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
 const { handleError } = require('../../output/error');
 const ansiEscapes = require('../../output/escapes');
-const { load } = require('../../../lambdas/lib/actor/deserialize');
+const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 const monitorDeploymentCreateReconcilables = require('../../output/deployment/create');
 
 /**

@@ -12,7 +12,8 @@ const requireFromExecutable = createRequire(__filename);
  * @type {Object<string,(event: import('aws-lambda').SQSEvent, context: import('aws-lambda').Context) => Promise<void>>}
  */
 const HANDLERS = {
-  // '<WHARFIE_BUILT_IN>/daemon.handler': require('../../../../../lambdas/daemon').handler,
+  '<WHARFIE_BUILT_IN>/daemon.handler': require('../../../../../lambdas/daemon')
+    .handler,
   '<WHARFIE_BUILT_IN>/cleanup.handler':
     require('../../../../../lambdas/cleanup').handler,
   '<WHARFIE_BUILT_IN>/events.handler': require('../../../../../lambdas/events')

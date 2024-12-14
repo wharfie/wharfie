@@ -13,7 +13,7 @@ jest.mock('../../lambdas/lib/dynamo/dependency');
 jest.mock('../../lambdas/lib/dynamo/location');
 const WharfieResource = require('../../lambdas/lib/actor/resources/wharfie-resource');
 const Reconcilable = require('../../lambdas/lib/actor/resources/reconcilable');
-const { load } = require('../../lambdas/lib/actor/deserialize');
+const { load } = require('../../lambdas/lib/actor/deserialize/full');
 const { resetAWSMocks } = require('../util');
 const state_db = require('../../lambdas/lib/dynamo/state');
 

@@ -10,7 +10,7 @@ const {
 } = require('../../../lambdas/lib/actor/resources/aws/');
 const Reconcilable = require('../../../lambdas/lib/actor/resources/reconcilable');
 
-const { load } = require('../../../lambdas/lib/actor/deserialize');
+const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 const { getMockDeploymentProperties } = require('../util');
 
 describe('autoscaling table IaC', () => {

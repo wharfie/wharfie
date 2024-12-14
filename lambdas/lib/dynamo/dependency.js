@@ -22,10 +22,14 @@ const DEPENDENCY_TABLE = process.env.DEPENDENCY_TABLE || '';
 
 /**
  * @param {import('../../typedefs').DependencyRecord} dependency -
+ * @param {string} [tableName] -
  */
-async function putDependency(dependency) {
+async function putDependency(
+  dependency,
+  tableName = process.env.DEPENDENCY_TABLE
+) {
   await docClient.put({
-    TableName: DEPENDENCY_TABLE,
+    TableName: tableName,
     Item: {
       resource_id: dependency.resource_id,
       dependency: dependency.dependency,
@@ -62,10 +66,14 @@ async function findDependencies(dependency) {
 
 /**
  * @param {import('../../typedefs').DependencyRecord} dependency -
+ * @param {string} [tableName] -
  */
-async function deleteDependency(dependency) {
+async function deleteDependency(
+  dependency,
+  tableName = process.env.DEPENDENCY_TABLE
+) {
   await docClient.delete({
-    TableName: DEPENDENCY_TABLE,
+    TableName: tableName,
     Key: {
       resource_id: dependency.resource_id,
       dependency: dependency.dependency,

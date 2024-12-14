@@ -72,7 +72,7 @@ describe('lambda function IaC', () => {
             "version": "0.0.1test",
           },
           "functionCodeHash": "mockedHash",
-          "handler": "./test/fixtures/lambda-build-test-handler.handler",
+          "handler": "<WHARFIE_BUILT_IN>/cleanup.handler",
         },
         "resourceType": "LambdaBuild",
         "status": "STABLE",

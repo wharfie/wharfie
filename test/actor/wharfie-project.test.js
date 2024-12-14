@@ -17,7 +17,7 @@ jest.mock('../../lambdas/lib/dynamo/location');
 const WharfieProject = require('../../lambdas/lib/actor/resources/wharfie-project');
 const WharfieDeployment = require('../../lambdas/lib/actor/wharfie-deployment');
 const Reconcilable = require('../../lambdas/lib/actor/resources/reconcilable');
-const { load } = require('../../lambdas/lib/actor/deserialize');
+const { load } = require('../../lambdas/lib/actor/deserialize/full');
 const { getResourceOptions } = require('../../cli/project/template-actor');
 const { loadProject } = require('../../cli/project/load');
 const { resetAWSMocks } = require('../util');

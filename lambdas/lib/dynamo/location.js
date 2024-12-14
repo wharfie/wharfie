@@ -22,10 +22,11 @@ const LOCATION_TABLE = process.env.LOCATION_TABLE || '';
 
 /**
  * @param {import('../../typedefs').LocationRecord} location -
+ * @param {string} [tableName] -
  */
-async function putLocation(location) {
+async function putLocation(location, tableName = process.env.LOCATION_TABLE) {
   await docClient.put({
-    TableName: LOCATION_TABLE,
+    TableName: tableName,
     Item: {
       resource_id: location.resource_id,
       location: location.location,
@@ -70,10 +71,14 @@ async function findLocations(location) {
 
 /**
  * @param {import('../../typedefs').LocationRecord} location -
+ * @param {string} [tableName] -
  */
-async function deleteLocation(location) {
+async function deleteLocation(
+  location,
+  tableName = process.env.LOCATION_TABLE
+) {
   await docClient.delete({
-    TableName: LOCATION_TABLE,
+    TableName: tableName,
     Key: {
       resource_id: location.resource_id,
       location: location.location,

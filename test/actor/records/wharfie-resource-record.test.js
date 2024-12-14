@@ -12,7 +12,7 @@ let query, _delete, put, update;
 jest.mock('../../../package.json', () => ({ version: '0.0.1' }));
 jest.mock('../../../lambdas/lib/dynamo/operations');
 const operations_db = require('../../../lambdas/lib/dynamo/operations');
-const { load } = require('../../../lambdas/lib/actor/deserialize');
+const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 const { getMockDeploymentProperties } = require('../util');
 const WharfieResourceRecord = require('../../../lambdas/lib/actor/resources/records/wharfie-resource-record');
 const Reconcilable = require('../../../lambdas/lib/actor/resources/reconcilable');

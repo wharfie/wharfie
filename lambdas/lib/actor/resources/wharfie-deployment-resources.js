@@ -704,6 +704,10 @@ class WharfieDeploymentResources extends BaseResourceGroup {
     return this.getResource(`${this.get('deployment').name}-bucket`);
   }
 
+  getActorPolicy() {
+    return this.getResource(`${this.get('deployment').name}-actor-policy`);
+  }
+
   getActorPolicyArn() {
     return this.getResource(`${this.get('deployment').name}-actor-policy`).get(
       'arn'

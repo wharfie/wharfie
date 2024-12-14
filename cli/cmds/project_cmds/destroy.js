@@ -3,7 +3,7 @@
 const { Command } = require('commander');
 const inquirer = require('inquirer');
 const { loadProject } = require('../../project/load');
-const { load } = require('../../../lambdas/lib/actor/deserialize');
+const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
 const loadEnvironment = require('../../project/load-environment');
 const { getResourceOptions } = require('../../project/template-actor');

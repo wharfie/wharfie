@@ -142,12 +142,13 @@ class Reconcilable {
           await new Promise((resolve) => setTimeout(resolve, 500));
           continue;
         }
+        // console.log(`reconciling ${ this.constructor.name} ${this.name}`)
         await this._reconcile();
         this.reconcile_end = Date.now();
         this.setStatus(Status.STABLE);
         break;
       } catch (error) {
-        // console.trace(error)
+        console.trace(error);
         Reconcilable.Emitter.emit(Events.WHARFIE_ERROR, {
           name: this.name,
           constructor: this.constructor.name,
@@ -197,7 +198,6 @@ class Reconcilable {
         this.setStatus(Status.DESTROYED);
         break;
       } catch (error) {
-        // console.trace(error)
         Reconcilable.Emitter.emit(Events.WHARFIE_ERROR, {
           name: this.name,
           constructor: this.constructor.name,

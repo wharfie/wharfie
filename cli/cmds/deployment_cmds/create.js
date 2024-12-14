@@ -3,7 +3,7 @@
 const { Command } = require('commander');
 const ansiEscapes = require('../../output/escapes');
 const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
-const { load } = require('../../../lambdas/lib/actor/deserialize');
+const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 const {
   displayFailure,
   displayInfo,

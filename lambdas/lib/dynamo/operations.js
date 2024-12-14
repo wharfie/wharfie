@@ -29,10 +29,11 @@ const OPERATIONS_TABLE = process.env.OPERATIONS_TABLE || '';
 
 /**
  * @param {Resource} resource -
+ * @param {string} [tableName] -
  */
-async function putResource(resource) {
+async function putResource(resource, tableName = process.env.OPERATIONS_TABLE) {
   await docClient.put({
-    TableName: OPERATIONS_TABLE,
+    TableName: tableName,
     Item: resource.toRecord(),
     ReturnValues: 'NONE',
   });
@@ -40,11 +41,15 @@ async function putResource(resource) {
 
 /**
  * @param {string} resource_id -
+ * @param {string} [tableName] -
  * @returns {Promise<Resource?>} -
  */
-async function getResource(resource_id) {
+async function getResource(
+  resource_id,
+  tableName = process.env.OPERATIONS_TABLE
+) {
   const { Items } = await query({
-    TableName: OPERATIONS_TABLE,
+    TableName: tableName,
     ConsistentRead: true,
     KeyConditionExpression:
       'resource_id = :resource_id AND sort_key = :resource_id',
@@ -59,10 +64,14 @@ async function getResource(resource_id) {
 
 /**
  * @param {Resource} resource -
+ * @param {string} [tableName] -
  */
-async function deleteResource(resource) {
+async function deleteResource(
+  resource,
+  tableName = process.env.OPERATIONS_TABLE
+) {
   const { Items } = await query({
-    TableName: OPERATIONS_TABLE,
+    TableName: tableName,
     ProjectionExpression: 'resource_id, sort_key',
     ConsistentRead: true,
     KeyConditionExpression:

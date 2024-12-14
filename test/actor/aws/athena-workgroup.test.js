@@ -11,7 +11,7 @@ let query, _delete, put, update;
 const {
   AthenaWorkGroup,
 } = require('../../../lambdas/lib/actor/resources/aws/');
-const { load } = require('../../../lambdas/lib/actor/deserialize');
+const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 const { getMockDeploymentProperties } = require('../util');
 const Reconcilable = require('../../../lambdas/lib/actor/resources/reconcilable');
 
