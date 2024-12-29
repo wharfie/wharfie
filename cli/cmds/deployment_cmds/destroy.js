@@ -35,14 +35,21 @@ const destroy = async (yes) => {
     });
   }
 
-  const bucket = deployment.getBucket();
+  let bucketName;
+  try {
+    const bucket = deployment.getBucket();
+    bucketName = bucket.name;
+  } catch (err) {
+    // partial deletes can remove this without completing
+    bucketName = 'deployment';
+  }
 
   if (!yes) {
     const answers = await inquirer.prompt([
       {
         type: 'confirm',
         name: 'confirmation',
-        message: `This will destroy the deployment and all data stored in the ${bucket.name} S3 bucket. Are you sure?`,
+        message: `This will destroy the deployment and all data stored in the ${bucketName} S3 bucket. Are you sure?`,
         default: false,
       },
     ]);
