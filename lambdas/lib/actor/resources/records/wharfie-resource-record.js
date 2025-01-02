@@ -2,6 +2,8 @@
 const BaseResource = require('../base-resource');
 const Resource = require('../../../../lib/graph/resource');
 const S3 = require('../../../s3');
+const resource_db = require('../../../../lib/dynamo/operations');
+const { ResourceNotFoundException } = require('@aws-sdk/client-dynamodb');
 
 /**
  * @typedef WharfieResourceRecordProperties
@@ -34,8 +36,6 @@ class WharfieResourceRecord extends BaseResource {
   }
 
   async _reconcile() {
-    process.env.OPERATIONS_TABLE = this.get('table_name');
-    const resource_db = require('../../../../lib/dynamo/operations');
     const resource = Resource.fromRecord(this.get('data'));
     if (!resource.source_region && resource.source_properties.location) {
       const { bucket } = this.s3.parseS3Uri(
@@ -45,13 +45,20 @@ class WharfieResourceRecord extends BaseResource {
         Bucket: bucket,
       });
     }
-    await resource_db.putResource(resource);
+    await resource_db.putResource(resource, this.get('table_name'));
   }
 
   async _destroy() {
-    process.env.OPERATIONS_TABLE = this.get('table_name');
-    const resource_db = require('../../../../lib/dynamo/operations');
-    await resource_db.deleteResource(Resource.fromRecord(this.get('data')));
+    try {
+      await resource_db.deleteResource(
+        Resource.fromRecord(this.get('data')),
+        this.get('table_name')
+      );
+    } catch (e) {
+      if (!(e instanceof ResourceNotFoundException)) {
+        throw e;
+      }
+    }
   }
 }
 

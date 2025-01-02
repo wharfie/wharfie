@@ -1,9 +1,30 @@
 'use strict';
-const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const JSZip = require('jszip');
 const { NotFound } = require('@aws-sdk/client-s3');
+const { createRequire } = require('module');
+const requireFromExecutable = createRequire(__filename);
+const { getAsset, isSea } = require('node:sea');
+
+// Statically import all known handlers
+/**
+ * @type {Object<string,string>}
+ */
+const HANDLERS = {
+  '<WHARFIE_BUILT_IN>/daemon.handler': isSea()
+    ? getAsset('<WHARFIE_BUILT_IN>/daemon.handler', 'utf8')
+    : path.resolve(__dirname, '../../../../daemon.handler'),
+  '<WHARFIE_BUILT_IN>/cleanup.handler': isSea()
+    ? getAsset('<WHARFIE_BUILT_IN>/cleanup.handler', 'utf8')
+    : path.resolve(__dirname, '../../../../cleanup.handler'),
+  '<WHARFIE_BUILT_IN>/events.handler': isSea()
+    ? getAsset('<WHARFIE_BUILT_IN>/events.handler', 'utf8')
+    : path.resolve(__dirname, '../../../../events.handler'),
+  '<WHARFIE_BUILT_IN>/monitor.handler': isSea()
+    ? getAsset('<WHARFIE_BUILT_IN>/monitor.handler', 'utf8')
+    : path.resolve(__dirname, '../../../../monitor.handler'),
+};
 
 const S3 = require('../../../s3');
 const BaseResource = require('../base-resource');
@@ -33,82 +54,22 @@ class LambdaBuild extends BaseResource {
   }
 
   async _reconcile() {
-    await this._build();
-  }
-
-  /**
-   * @param {string} dir -
-   * @returns {Promise<Buffer>} -
-   */
-  async _zip(dir) {
-    const zipInstance = new JSZip();
-    // Read directory
-    const files = await fs.promises.readdir(dir);
-
-    // Loop over files
-    for (const file of files) {
-      const filePath = path.join(dir, file);
-
-      // Only add file if it's not a directory
-      const stats = await fs.promises.stat(filePath);
-      if (stats.isFile()) {
-        const fileData = await fs.promises.readFile(filePath);
-        zipInstance.file(file, fileData);
-      }
-    }
-    return await zipInstance.generateAsync({
-      type: 'nodebuffer',
-      streamFiles: true,
-    });
-  }
-
-  async _build() {
     if (!this.get('handler')) throw new Error('No handler defined');
     if (!this.get('handler').split('.').pop())
       throw new Error('No handler method defined');
 
-    const resolvedHandler = path.join(
-      __dirname,
-      '../../../../../',
-      this.get('handler')
-    );
+    // Lookup and set the handler based on metadata
+    const resolvedHandlerKey = this.get('handler');
+    const builtInHandler = HANDLERS[resolvedHandlerKey];
 
-    // TODO hydrate shared actor state generally
-    const requirePathParts = resolvedHandler.split('.');
-    const functionName = requirePathParts.pop();
-    const requirePath = requirePathParts.join('.');
-    const entryContent = `
-    const { ${functionName}: handler } = require('${requirePath}');
+    const build = isSea()
+      ? builtInHandler
+      : await this._build(builtInHandler || resolvedHandlerKey);
 
-    // Lambda handler setup to use actor's handler method
-    exports.handler = handler
-    `;
-    // require here to avoid runtime errors when bundled (without esbuild)
-    const esbuild = require('esbuild');
-    await esbuild.build({
-      stdin: {
-        contents: entryContent,
-        resolveDir: __dirname,
-        sourcefile: 'WharfieActorGeneratedEntrypoint.js',
-        loader: 'js',
-      },
-      bundle: true,
-      minify: true,
-      keepNames: true,
-      sourcemap: 'inline',
-      platform: 'node',
-      target: 'node22',
-      outfile: `./dist/${this.name}/index.js`,
-      external: ['esbuild'],
-    });
-
+    // The bundled code is available in `result.outputFiles`
     const functionCodeHash = crypto
       .createHash('sha256')
-      .update(
-        fs.readFileSync(
-          path.join(process.cwd(), `./dist/${this.name}/index.js`)
-        )
-      )
+      .update(build)
       .digest('hex');
 
     this.set(
@@ -130,15 +91,69 @@ class LambdaBuild extends BaseResource {
       }
     }
 
-    const stream = await this._zip(
-      path.join(process.cwd(), `./dist/${this.name}`)
-    );
+    const stream = await this._zip([{ text: build, path: 'index.js' }]);
 
     await this.s3.putObject({
       Bucket: this.get('artifactBucket'),
       Key: this.get('artifactKey'),
       Body: stream,
     });
+  }
+
+  /**
+   * Compresses files into a ZIP archive from provided file data.
+   * @param {Object[]} files - An array of objects representing files,
+   *                           each with a `path` and `contents`.
+   *                           Example: [{ path: 'folder1/file1.txt', contents: 'Hello World' }]
+   * @returns {Promise<Buffer>} - A Promise resolving to a Buffer containing the ZIP archive.
+   */
+  async _zip(files) {
+    const zipInstance = new JSZip();
+
+    // Loop over provided files
+    // @ts-ignore
+    for (const { path, text } of files) {
+      // Add file content to the ZIP instance using its path
+      zipInstance.file(path, text);
+    }
+
+    // Generate the ZIP archive as a Buffer
+    return await zipInstance.generateAsync({
+      type: 'nodebuffer',
+      streamFiles: true,
+    });
+  }
+
+  /**
+   * @param {string} handler -
+   * @returns {Promise<string>} -
+   */
+  async _build(handler) {
+    const requirePathParts = handler.split('.');
+    const functionName = requirePathParts.pop();
+    const requirePath = requirePathParts.join('.');
+    const handlerContent = `
+    const { ${functionName}: handler } = require('${requirePath}');
+    // Lambda handler setup to use actor's handler method
+    exports.handler = handler
+    `;
+    const esbuild = requireFromExecutable('esbuild');
+    const result = await esbuild.build({
+      stdin: {
+        contents: handlerContent,
+        resolveDir: path.dirname(requirePath),
+        sourcefile: 'index.js',
+        loader: 'js',
+      },
+      bundle: true,
+      minify: true,
+      keepNames: true,
+      sourcemap: 'inline',
+      platform: 'node',
+      target: 'node22',
+      write: false, // Prevent writing to disk
+    });
+    return result.outputFiles[0].text;
   }
 
   async _destroy() {}

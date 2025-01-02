@@ -9,7 +9,7 @@ const {
   displayInfo,
   displaySuccess,
 } = require('../../output/basic');
-const { load } = require('../../../lambdas/lib/actor/deserialize');
+const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 const monitorDeploymentDestroyReconcilables = require('../../output/deployment/destroy');
 
 /**

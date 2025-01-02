@@ -3,7 +3,7 @@
 const { Command } = require('commander');
 const { displayInfo, displaySuccess } = require('../../output/basic');
 const { handleError } = require('../../output/error');
-const { load } = require('../../../lambdas/lib/actor/deserialize');
+const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
 const ansiEscapes = require('../../output/escapes');
 const monitorDeploymentCreateReconcilables = require('../../output/deployment/create');

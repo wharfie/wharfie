@@ -2,7 +2,6 @@
 const IAM = require('../../../iam');
 const BaseResource = require('../base-resource');
 const { NoSuchEntityException } = require('@aws-sdk/client-iam');
-const { createShortId } = require('../../../id');
 /**
  * @typedef RoleProperties
  * @property {string} [roleName] -
@@ -30,7 +29,7 @@ class Role extends BaseResource {
     if (!properties.roleName) {
       const propertiesWithDefaults = Object.assign(
         {
-          roleName: `${name.substring(0, 57)}_${createShortId()}`,
+          roleName: `${name.substring(0, 64)}`,
         },
         properties
       );
