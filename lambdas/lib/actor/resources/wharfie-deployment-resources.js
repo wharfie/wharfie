@@ -352,6 +352,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
               Action: ['athena:GetQueryExecution'],
               Resource: '*',
             },
+
             {
               Effect: 'Allow',
               Action: ['cloudwatch:PutMetricData'],
@@ -361,13 +362,12 @@ class WharfieDeploymentResources extends BaseResourceGroup {
               ? [
                   {
                     Effect: 'Allow',
-                    Action: 'cloudwatch:*',
-                    Resource: ['*'],
-                  },
-                  {
-                    Effect: 'Allow',
-                    Action: 'logs:*',
-                    Resource: ['*'],
+                    Action: [
+                      'logs:CreateLogGroup',
+                      'logs:CreateLogStream',
+                      'logs:PutLogEvents',
+                    ],
+                    Resource: '*',
                   },
                 ]
               : []),
@@ -702,6 +702,10 @@ class WharfieDeploymentResources extends BaseResourceGroup {
 
   getBucket() {
     return this.getResource(`${this.get('deployment').name}-bucket`);
+  }
+
+  getActorPolicy() {
+    return this.getResource(`${this.get('deployment').name}-actor-policy`);
   }
 
   getActorPolicyArn() {

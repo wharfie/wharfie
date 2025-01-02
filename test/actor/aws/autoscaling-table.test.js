@@ -10,7 +10,7 @@ const {
 } = require('../../../lambdas/lib/actor/resources/aws/');
 const Reconcilable = require('../../../lambdas/lib/actor/resources/reconcilable');
 
-const { load } = require('../../../lambdas/lib/actor/deserialize');
+const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 const { getMockDeploymentProperties } = require('../util');
 
 describe('autoscaling table IaC', () => {
@@ -174,7 +174,7 @@ describe('autoscaling table IaC', () => {
             "parent": "test-table",
             "properties": {
               "_INTERNAL_STATE_RESOURCE": undefined,
-              "arn": "arn:aws:iam::123456789012:role/table-name-autoscaling-role_111111",
+              "arn": "arn:aws:iam::123456789012:role/table-name-autoscaling-role",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -204,7 +204,7 @@ describe('autoscaling table IaC', () => {
                 "version": "0.0.1test",
               },
               "description": "Role for table-name table autoscaling",
-              "roleName": "table-name-autoscaling-role_111111",
+              "roleName": "table-name-autoscaling-role",
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -297,7 +297,7 @@ describe('autoscaling table IaC', () => {
               "maxCapacity": 100,
               "minCapacity": 5,
               "resourceId": "table/table-name",
-              "roleArn": "arn:aws:iam::123456789012:role/table-name-autoscaling-role_111111",
+              "roleArn": "arn:aws:iam::123456789012:role/table-name-autoscaling-role",
               "scalableDimension": "dynamodb:table:ReadCapacityUnits",
               "serviceNamespace": "dynamodb",
               "tags": {},
@@ -369,7 +369,7 @@ describe('autoscaling table IaC', () => {
               "maxCapacity": 50,
               "minCapacity": 1,
               "resourceId": "table/table-name",
-              "roleArn": "arn:aws:iam::123456789012:role/table-name-autoscaling-role_111111",
+              "roleArn": "arn:aws:iam::123456789012:role/table-name-autoscaling-role",
               "scalableDimension": "dynamodb:table:WriteCapacityUnits",
               "serviceNamespace": "dynamodb",
               "tags": {},

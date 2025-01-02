@@ -1,6 +1,7 @@
 'use strict';
 const BaseResource = require('../base-resource');
 const { ResourceNotFoundException } = require('@aws-sdk/client-dynamodb');
+const location_db = require('../../../../lib/dynamo/location');
 
 /**
  * @typedef LocationRecordProperties
@@ -32,16 +33,15 @@ class LocationRecord extends BaseResource {
   }
 
   async _reconcile() {
-    process.env.LOCATION_TABLE = this.get('table_name');
-    const location_db = require('../../../../lib/dynamo/location');
-    await location_db.putLocation(this.get('data', {}));
+    await location_db.putLocation(this.get('data', {}), this.get('table_name'));
   }
 
   async _destroy() {
-    process.env.LOCATION_TABLE = this.get('table_name');
-    const location_db = require('../../../../lib/dynamo/location');
     try {
-      await location_db.deleteLocation(this.get('data', {}));
+      await location_db.deleteLocation(
+        this.get('data', {}),
+        this.get('table_name')
+      );
     } catch (error) {
       if (!(error instanceof ResourceNotFoundException)) {
         throw error;
