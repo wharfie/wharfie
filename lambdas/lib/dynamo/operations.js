@@ -49,18 +49,25 @@ async function getResource(
   resource_id,
   tableName = process.env.OPERATIONS_TABLE
 ) {
-  const { Items } = await query({
-    TableName: tableName,
-    ConsistentRead: true,
-    KeyConditionExpression:
-      'resource_id = :resource_id AND sort_key = :resource_id',
-    ExpressionAttributeValues: {
-      ':resource_id': resource_id,
-    },
-  });
-  if (!Items || Items.length === 0) return null;
-  // @ts-ignore
-  return Resource.fromRecord(Items[0]);
+  try {
+    const { Items } = await query({
+      TableName: tableName,
+      ConsistentRead: true,
+      KeyConditionExpression:
+        'resource_id = :resource_id AND sort_key = :resource_id',
+      ExpressionAttributeValues: {
+        ':resource_id': resource_id,
+      },
+    });
+    if (!Items || Items.length === 0) return null;
+    // @ts-ignore
+    return Resource.fromRecord(Items[0]);
+  } catch (e) {
+    if (!(e instanceof ResourceNotFoundException)) {
+      throw e;
+    }
+    return null;
+  }
 }
 
 /**
@@ -71,16 +78,25 @@ async function deleteResource(
   resource,
   tableName = process.env.OPERATIONS_TABLE
 ) {
-  const { Items } = await query({
-    TableName: tableName,
-    ProjectionExpression: 'resource_id, sort_key',
-    ConsistentRead: true,
-    KeyConditionExpression:
-      'resource_id = :resource_id AND begins_with(sort_key, :resource_id)',
-    ExpressionAttributeValues: {
-      ':resource_id': resource.id,
-    },
-  });
+  let Items;
+  try {
+    const queryResult = await query({
+      TableName: tableName,
+      ProjectionExpression: 'resource_id, sort_key',
+      ConsistentRead: true,
+      KeyConditionExpression:
+        'resource_id = :resource_id AND begins_with(sort_key, :resource_id)',
+      ExpressionAttributeValues: {
+        ':resource_id': resource.id,
+      },
+    });
+    Items = queryResult.Items;
+  } catch (e) {
+    if (!(e instanceof ResourceNotFoundException)) {
+      throw e;
+    }
+    return;
+  }
   if (!Items || Items.length === 0) return;
   while (Items.length > 0)
     await batchWrite({

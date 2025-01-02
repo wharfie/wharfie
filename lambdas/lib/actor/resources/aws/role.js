@@ -2,7 +2,6 @@
 const IAM = require('../../../iam');
 const BaseResource = require('../base-resource');
 const { NoSuchEntityException } = require('@aws-sdk/client-iam');
-// const { createShortId } = require('../../../id');
 /**
  * @typedef RoleProperties
  * @property {string} [roleName] -

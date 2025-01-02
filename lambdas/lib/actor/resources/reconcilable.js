@@ -142,7 +142,6 @@ class Reconcilable {
           await new Promise((resolve) => setTimeout(resolve, 500));
           continue;
         }
-        // console.log(`reconciling ${ this.constructor.name} ${this.name}`)
         await this._reconcile();
         this.reconcile_end = Date.now();
         this.setStatus(Status.STABLE);
