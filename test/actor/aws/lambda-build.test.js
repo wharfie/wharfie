@@ -163,7 +163,6 @@ describe('lambda function IaC', () => {
             "version": "0.0.1test",
           },
           "functionCodeHash": "mockedHash",
-          "handler": "/Volumes/Joe Workspace/workspace/wharfie/wharfie/test/fixtures/lambda-build-test-handler.handler",
         },
         "resourceType": "LambdaBuild",
         "status": "STABLE",
