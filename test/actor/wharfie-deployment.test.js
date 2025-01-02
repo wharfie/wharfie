@@ -18,7 +18,7 @@ const crypto = require('crypto');
 
 const WharfieDeployment = require('../../lambdas/lib/actor/wharfie-deployment');
 const Reconcilable = require('../../lambdas/lib/actor/resources/reconcilable');
-const { load } = require('../../lambdas/lib/actor/deserialize');
+const { load } = require('../../lambdas/lib/actor/deserialize/full');
 
 describe('deployment IaC', () => {
   beforeAll(() => {
@@ -139,61 +139,9 @@ describe('deployment IaC', () => {
                 "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
                 "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
               },
-              "handler": "./lambdas/cleanup.handler",
+              "handler": "<WHARFIE_BUILT_IN>/cleanup.handler",
             },
             "resourceType": "Cleanup",
-            "resources": [
-              "cleanup-actor-resources",
-            ],
-            "status": "STABLE",
-          },
-          "test-deployment#cleanup#cleanup-actor-resources": {
-            "dependsOn": [],
-            "name": "cleanup-actor-resources",
-            "parent": "test-deployment#cleanup",
-            "properties": {
-              "actorName": "cleanup",
-              "actorPolicyArns": [
-                "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
-                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
-              ],
-              "artifactBucket": "test-deployment-bucket-111111",
-              "deployment": {
-                "accountId": "123456789012",
-                "envPaths": {
-                  "cache": "mock",
-                  "config": "mock",
-                  "data": "mock",
-                  "log": "mock",
-                  "temp": "mock",
-                },
-                "name": "test-deployment",
-                "region": "us-west-2",
-                "stateTable": "test-deployment-state",
-                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
-                "version": "0.0.1",
-              },
-              "environmentVariables": {
-                "CLEANUP_QUEUE_URL": "test-deployment-cleanup-queue",
-                "DAEMON_QUEUE_URL": "test-deployment-daemon-queue",
-                "DEPENDENCY_TABLE": "test-deployment-dependencies",
-                "EVENTS_QUEUE_URL": "test-deployment-events-queue",
-                "GLOBAL_QUERY_CONCURRENCY": "10",
-                "LOCATION_TABLE": "test-deployment-locations",
-                "LOGGING_LEVEL": "info",
-                "MAX_QUERIES_PER_ACTION": "10000",
-                "MONITOR_QUEUE_URL": "test-deployment-monitor-queue",
-                "OPERATIONS_TABLE": "test-deployment-operations",
-                "RESOURCE_QUERY_CONCURRENCY": "10",
-                "SCHEDULER_TABLE": "test-deployment-scheduler",
-                "SEMAPHORE_TABLE": "test-deployment-semaphore",
-                "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
-                "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
-              },
-              "handler": "./lambdas/cleanup.handler",
-            },
-            "resourceType": "WharfieActorResources",
             "resources": [
               "test-deployment-cleanup-build",
               "test-deployment-cleanup-function",
@@ -204,13 +152,13 @@ describe('deployment IaC', () => {
             ],
             "status": "STABLE",
           },
-          "test-deployment#cleanup#cleanup-actor-resources#cleanup-mapping": {
+          "test-deployment#cleanup#cleanup-mapping": {
             "dependsOn": [
               "test-deployment-cleanup-function",
               "test-deployment-cleanup-queue",
             ],
             "name": "cleanup-mapping",
-            "parent": "test-deployment#cleanup#cleanup-actor-resources",
+            "parent": "test-deployment#cleanup",
             "properties": {
               "arn": "arn:aws:lambda:us-west-2:123456789012:event-source-mapping:ckywjpmr70002zjvd0wyq5x48",
               "batchSize": 1,
@@ -237,10 +185,10 @@ describe('deployment IaC', () => {
             "resourceType": "EventSourceMapping",
             "status": "STABLE",
           },
-          "test-deployment#cleanup#cleanup-actor-resources#test-deployment-cleanup-build": {
+          "test-deployment#cleanup#test-deployment-cleanup-build": {
             "dependsOn": [],
             "name": "test-deployment-cleanup-build",
-            "parent": "test-deployment#cleanup#cleanup-actor-resources",
+            "parent": "test-deployment#cleanup",
             "properties": {
               "artifactBucket": "test-deployment-bucket-111111",
               "artifactKey": "actor-artifacts/test-deployment-cleanup-build/mockedHash.zip",
@@ -260,15 +208,15 @@ describe('deployment IaC', () => {
                 "version": "0.0.1",
               },
               "functionCodeHash": "mockedHash",
-              "handler": "./lambdas/cleanup.handler",
+              "handler": "<WHARFIE_BUILT_IN>/cleanup.handler",
             },
             "resourceType": "LambdaBuild",
             "status": "STABLE",
           },
-          "test-deployment#cleanup#cleanup-actor-resources#test-deployment-cleanup-dlq": {
+          "test-deployment#cleanup#test-deployment-cleanup-dlq": {
             "dependsOn": [],
             "name": "test-deployment-cleanup-dlq",
-            "parent": "test-deployment#cleanup#cleanup-actor-resources",
+            "parent": "test-deployment#cleanup",
             "properties": {
               "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-cleanup-dlq",
               "delaySeconds": "0",
@@ -295,7 +243,7 @@ describe('deployment IaC', () => {
             "resourceType": "Queue",
             "status": "STABLE",
           },
-          "test-deployment#cleanup#cleanup-actor-resources#test-deployment-cleanup-function": {
+          "test-deployment#cleanup#test-deployment-cleanup-function": {
             "dependsOn": [
               "test-deployment-cleanup-role",
               "test-deployment-cleanup-dlq",
@@ -303,7 +251,7 @@ describe('deployment IaC', () => {
               "test-deployment-cleanup-build",
             ],
             "name": "test-deployment-cleanup-function",
-            "parent": "test-deployment#cleanup#cleanup-actor-resources",
+            "parent": "test-deployment#cleanup",
             "properties": {
               "architectures": [
                 "arm64",
@@ -364,17 +312,17 @@ describe('deployment IaC', () => {
               "memorySize": 1024,
               "packageType": "Zip",
               "publish": true,
-              "role": "arn:aws:iam::123456789012:role/test-deployment-cleanup-role_111111",
+              "role": "arn:aws:iam::123456789012:role/test-deployment-cleanup-role",
               "runtime": "nodejs22.x",
               "timeout": 300,
             },
             "resourceType": "LambdaFunction",
             "status": "STABLE",
           },
-          "test-deployment#cleanup#cleanup-actor-resources#test-deployment-cleanup-queue": {
+          "test-deployment#cleanup#test-deployment-cleanup-queue": {
             "dependsOn": [],
             "name": "test-deployment-cleanup-queue",
-            "parent": "test-deployment#cleanup#cleanup-actor-resources",
+            "parent": "test-deployment#cleanup",
             "properties": {
               "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-cleanup-queue",
               "delaySeconds": "0",
@@ -438,15 +386,15 @@ describe('deployment IaC', () => {
             "resourceType": "Queue",
             "status": "STABLE",
           },
-          "test-deployment#cleanup#cleanup-actor-resources#test-deployment-cleanup-role": {
+          "test-deployment#cleanup#test-deployment-cleanup-role": {
             "dependsOn": [
               "test-deployment-cleanup-queue",
               "test-deployment-cleanup-dlq",
             ],
             "name": "test-deployment-cleanup-role",
-            "parent": "test-deployment#cleanup#cleanup-actor-resources",
+            "parent": "test-deployment#cleanup",
             "properties": {
-              "arn": "arn:aws:iam::123456789012:role/test-deployment-cleanup-role_111111",
+              "arn": "arn:aws:iam::123456789012:role/test-deployment-cleanup-role",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -479,7 +427,7 @@ describe('deployment IaC', () => {
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
-              "roleName": "test-deployment-cleanup-role_111111",
+              "roleName": "test-deployment-cleanup-role",
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -545,61 +493,9 @@ describe('deployment IaC', () => {
                 "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
                 "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
               },
-              "handler": "./lambdas/daemon.handler",
+              "handler": "<WHARFIE_BUILT_IN>/daemon.handler",
             },
             "resourceType": "Daemon",
-            "resources": [
-              "daemon-actor-resources",
-            ],
-            "status": "STABLE",
-          },
-          "test-deployment#daemon#daemon-actor-resources": {
-            "dependsOn": [],
-            "name": "daemon-actor-resources",
-            "parent": "test-deployment#daemon",
-            "properties": {
-              "actorName": "daemon",
-              "actorPolicyArns": [
-                "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
-                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
-              ],
-              "artifactBucket": "test-deployment-bucket-111111",
-              "deployment": {
-                "accountId": "123456789012",
-                "envPaths": {
-                  "cache": "mock",
-                  "config": "mock",
-                  "data": "mock",
-                  "log": "mock",
-                  "temp": "mock",
-                },
-                "name": "test-deployment",
-                "region": "us-west-2",
-                "stateTable": "test-deployment-state",
-                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
-                "version": "0.0.1",
-              },
-              "environmentVariables": {
-                "CLEANUP_QUEUE_URL": "test-deployment-cleanup-queue",
-                "DAEMON_QUEUE_URL": "test-deployment-daemon-queue",
-                "DEPENDENCY_TABLE": "test-deployment-dependencies",
-                "EVENTS_QUEUE_URL": "test-deployment-events-queue",
-                "GLOBAL_QUERY_CONCURRENCY": "10",
-                "LOCATION_TABLE": "test-deployment-locations",
-                "LOGGING_LEVEL": "info",
-                "MAX_QUERIES_PER_ACTION": "10000",
-                "MONITOR_QUEUE_URL": "test-deployment-monitor-queue",
-                "OPERATIONS_TABLE": "test-deployment-operations",
-                "RESOURCE_QUERY_CONCURRENCY": "10",
-                "SCHEDULER_TABLE": "test-deployment-scheduler",
-                "SEMAPHORE_TABLE": "test-deployment-semaphore",
-                "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
-                "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
-              },
-              "handler": "./lambdas/daemon.handler",
-            },
-            "resourceType": "WharfieActorResources",
             "resources": [
               "test-deployment-daemon-build",
               "test-deployment-daemon-function",
@@ -610,13 +506,13 @@ describe('deployment IaC', () => {
             ],
             "status": "STABLE",
           },
-          "test-deployment#daemon#daemon-actor-resources#daemon-mapping": {
+          "test-deployment#daemon#daemon-mapping": {
             "dependsOn": [
               "test-deployment-daemon-function",
               "test-deployment-daemon-queue",
             ],
             "name": "daemon-mapping",
-            "parent": "test-deployment#daemon#daemon-actor-resources",
+            "parent": "test-deployment#daemon",
             "properties": {
               "arn": "arn:aws:lambda:us-west-2:123456789012:event-source-mapping:ckywjpmr70002zjvd0wyq5x48",
               "batchSize": 1,
@@ -643,10 +539,10 @@ describe('deployment IaC', () => {
             "resourceType": "EventSourceMapping",
             "status": "STABLE",
           },
-          "test-deployment#daemon#daemon-actor-resources#test-deployment-daemon-build": {
+          "test-deployment#daemon#test-deployment-daemon-build": {
             "dependsOn": [],
             "name": "test-deployment-daemon-build",
-            "parent": "test-deployment#daemon#daemon-actor-resources",
+            "parent": "test-deployment#daemon",
             "properties": {
               "artifactBucket": "test-deployment-bucket-111111",
               "artifactKey": "actor-artifacts/test-deployment-daemon-build/mockedHash.zip",
@@ -666,15 +562,15 @@ describe('deployment IaC', () => {
                 "version": "0.0.1",
               },
               "functionCodeHash": "mockedHash",
-              "handler": "./lambdas/daemon.handler",
+              "handler": "<WHARFIE_BUILT_IN>/daemon.handler",
             },
             "resourceType": "LambdaBuild",
             "status": "STABLE",
           },
-          "test-deployment#daemon#daemon-actor-resources#test-deployment-daemon-dlq": {
+          "test-deployment#daemon#test-deployment-daemon-dlq": {
             "dependsOn": [],
             "name": "test-deployment-daemon-dlq",
-            "parent": "test-deployment#daemon#daemon-actor-resources",
+            "parent": "test-deployment#daemon",
             "properties": {
               "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-dlq",
               "delaySeconds": "0",
@@ -701,7 +597,7 @@ describe('deployment IaC', () => {
             "resourceType": "Queue",
             "status": "STABLE",
           },
-          "test-deployment#daemon#daemon-actor-resources#test-deployment-daemon-function": {
+          "test-deployment#daemon#test-deployment-daemon-function": {
             "dependsOn": [
               "test-deployment-daemon-role",
               "test-deployment-daemon-dlq",
@@ -709,7 +605,7 @@ describe('deployment IaC', () => {
               "test-deployment-daemon-build",
             ],
             "name": "test-deployment-daemon-function",
-            "parent": "test-deployment#daemon#daemon-actor-resources",
+            "parent": "test-deployment#daemon",
             "properties": {
               "architectures": [
                 "arm64",
@@ -770,17 +666,17 @@ describe('deployment IaC', () => {
               "memorySize": 1024,
               "packageType": "Zip",
               "publish": true,
-              "role": "arn:aws:iam::123456789012:role/test-deployment-daemon-role_111111",
+              "role": "arn:aws:iam::123456789012:role/test-deployment-daemon-role",
               "runtime": "nodejs22.x",
               "timeout": 300,
             },
             "resourceType": "LambdaFunction",
             "status": "STABLE",
           },
-          "test-deployment#daemon#daemon-actor-resources#test-deployment-daemon-queue": {
+          "test-deployment#daemon#test-deployment-daemon-queue": {
             "dependsOn": [],
             "name": "test-deployment-daemon-queue",
-            "parent": "test-deployment#daemon#daemon-actor-resources",
+            "parent": "test-deployment#daemon",
             "properties": {
               "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-daemon-queue",
               "delaySeconds": "0",
@@ -844,15 +740,15 @@ describe('deployment IaC', () => {
             "resourceType": "Queue",
             "status": "STABLE",
           },
-          "test-deployment#daemon#daemon-actor-resources#test-deployment-daemon-role": {
+          "test-deployment#daemon#test-deployment-daemon-role": {
             "dependsOn": [
               "test-deployment-daemon-queue",
               "test-deployment-daemon-dlq",
             ],
             "name": "test-deployment-daemon-role",
-            "parent": "test-deployment#daemon#daemon-actor-resources",
+            "parent": "test-deployment#daemon",
             "properties": {
-              "arn": "arn:aws:iam::123456789012:role/test-deployment-daemon-role_111111",
+              "arn": "arn:aws:iam::123456789012:role/test-deployment-daemon-role",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -885,7 +781,7 @@ describe('deployment IaC', () => {
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
-              "roleName": "test-deployment-daemon-role_111111",
+              "roleName": "test-deployment-daemon-role",
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -951,61 +847,9 @@ describe('deployment IaC', () => {
                 "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
                 "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
               },
-              "handler": "./lambdas/events.handler",
+              "handler": "<WHARFIE_BUILT_IN>/events.handler",
             },
             "resourceType": "Events",
-            "resources": [
-              "events-actor-resources",
-            ],
-            "status": "STABLE",
-          },
-          "test-deployment#events#events-actor-resources": {
-            "dependsOn": [],
-            "name": "events-actor-resources",
-            "parent": "test-deployment#events",
-            "properties": {
-              "actorName": "events",
-              "actorPolicyArns": [
-                "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
-                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
-              ],
-              "artifactBucket": "test-deployment-bucket-111111",
-              "deployment": {
-                "accountId": "123456789012",
-                "envPaths": {
-                  "cache": "mock",
-                  "config": "mock",
-                  "data": "mock",
-                  "log": "mock",
-                  "temp": "mock",
-                },
-                "name": "test-deployment",
-                "region": "us-west-2",
-                "stateTable": "test-deployment-state",
-                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
-                "version": "0.0.1",
-              },
-              "environmentVariables": {
-                "CLEANUP_QUEUE_URL": "test-deployment-cleanup-queue",
-                "DAEMON_QUEUE_URL": "test-deployment-daemon-queue",
-                "DEPENDENCY_TABLE": "test-deployment-dependencies",
-                "EVENTS_QUEUE_URL": "test-deployment-events-queue",
-                "GLOBAL_QUERY_CONCURRENCY": "10",
-                "LOCATION_TABLE": "test-deployment-locations",
-                "LOGGING_LEVEL": "info",
-                "MAX_QUERIES_PER_ACTION": "10000",
-                "MONITOR_QUEUE_URL": "test-deployment-monitor-queue",
-                "OPERATIONS_TABLE": "test-deployment-operations",
-                "RESOURCE_QUERY_CONCURRENCY": "10",
-                "SCHEDULER_TABLE": "test-deployment-scheduler",
-                "SEMAPHORE_TABLE": "test-deployment-semaphore",
-                "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
-                "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
-              },
-              "handler": "./lambdas/events.handler",
-            },
-            "resourceType": "WharfieActorResources",
             "resources": [
               "test-deployment-events-build",
               "test-deployment-events-function",
@@ -1016,13 +860,13 @@ describe('deployment IaC', () => {
             ],
             "status": "STABLE",
           },
-          "test-deployment#events#events-actor-resources#events-mapping": {
+          "test-deployment#events#events-mapping": {
             "dependsOn": [
               "test-deployment-events-function",
               "test-deployment-events-queue",
             ],
             "name": "events-mapping",
-            "parent": "test-deployment#events#events-actor-resources",
+            "parent": "test-deployment#events",
             "properties": {
               "arn": "arn:aws:lambda:us-west-2:123456789012:event-source-mapping:ckywjpmr70002zjvd0wyq5x48",
               "batchSize": 1,
@@ -1049,10 +893,10 @@ describe('deployment IaC', () => {
             "resourceType": "EventSourceMapping",
             "status": "STABLE",
           },
-          "test-deployment#events#events-actor-resources#test-deployment-events-build": {
+          "test-deployment#events#test-deployment-events-build": {
             "dependsOn": [],
             "name": "test-deployment-events-build",
-            "parent": "test-deployment#events#events-actor-resources",
+            "parent": "test-deployment#events",
             "properties": {
               "artifactBucket": "test-deployment-bucket-111111",
               "artifactKey": "actor-artifacts/test-deployment-events-build/mockedHash.zip",
@@ -1072,15 +916,15 @@ describe('deployment IaC', () => {
                 "version": "0.0.1",
               },
               "functionCodeHash": "mockedHash",
-              "handler": "./lambdas/events.handler",
+              "handler": "<WHARFIE_BUILT_IN>/events.handler",
             },
             "resourceType": "LambdaBuild",
             "status": "STABLE",
           },
-          "test-deployment#events#events-actor-resources#test-deployment-events-dlq": {
+          "test-deployment#events#test-deployment-events-dlq": {
             "dependsOn": [],
             "name": "test-deployment-events-dlq",
-            "parent": "test-deployment#events#events-actor-resources",
+            "parent": "test-deployment#events",
             "properties": {
               "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-dlq",
               "delaySeconds": "0",
@@ -1107,7 +951,7 @@ describe('deployment IaC', () => {
             "resourceType": "Queue",
             "status": "STABLE",
           },
-          "test-deployment#events#events-actor-resources#test-deployment-events-function": {
+          "test-deployment#events#test-deployment-events-function": {
             "dependsOn": [
               "test-deployment-events-role",
               "test-deployment-events-dlq",
@@ -1115,7 +959,7 @@ describe('deployment IaC', () => {
               "test-deployment-events-build",
             ],
             "name": "test-deployment-events-function",
-            "parent": "test-deployment#events#events-actor-resources",
+            "parent": "test-deployment#events",
             "properties": {
               "architectures": [
                 "arm64",
@@ -1176,17 +1020,17 @@ describe('deployment IaC', () => {
               "memorySize": 1024,
               "packageType": "Zip",
               "publish": true,
-              "role": "arn:aws:iam::123456789012:role/test-deployment-events-role_111111",
+              "role": "arn:aws:iam::123456789012:role/test-deployment-events-role",
               "runtime": "nodejs22.x",
               "timeout": 300,
             },
             "resourceType": "LambdaFunction",
             "status": "STABLE",
           },
-          "test-deployment#events#events-actor-resources#test-deployment-events-queue": {
+          "test-deployment#events#test-deployment-events-queue": {
             "dependsOn": [],
             "name": "test-deployment-events-queue",
-            "parent": "test-deployment#events#events-actor-resources",
+            "parent": "test-deployment#events",
             "properties": {
               "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
               "delaySeconds": "0",
@@ -1250,15 +1094,15 @@ describe('deployment IaC', () => {
             "resourceType": "Queue",
             "status": "STABLE",
           },
-          "test-deployment#events#events-actor-resources#test-deployment-events-role": {
+          "test-deployment#events#test-deployment-events-role": {
             "dependsOn": [
               "test-deployment-events-queue",
               "test-deployment-events-dlq",
             ],
             "name": "test-deployment-events-role",
-            "parent": "test-deployment#events#events-actor-resources",
+            "parent": "test-deployment#events",
             "properties": {
-              "arn": "arn:aws:iam::123456789012:role/test-deployment-events-role_111111",
+              "arn": "arn:aws:iam::123456789012:role/test-deployment-events-role",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -1291,7 +1135,7 @@ describe('deployment IaC', () => {
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
-              "roleName": "test-deployment-events-role_111111",
+              "roleName": "test-deployment-events-role",
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -1357,26 +1201,28 @@ describe('deployment IaC', () => {
                 "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
                 "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
               },
-              "handler": "./lambdas/monitor.handler",
+              "handler": "<WHARFIE_BUILT_IN>/monitor.handler",
             },
             "resourceType": "Monitor",
             "resources": [
-              "monitor-actor-resources",
+              "test-deployment-monitor-build",
+              "test-deployment-monitor-function",
+              "test-deployment-monitor-queue",
+              "test-deployment-monitor-dlq",
+              "test-deployment-monitor-role",
+              "monitor-mapping",
               "monitor-athena-events-rule",
             ],
             "status": "STABLE",
           },
-          "test-deployment#monitor#monitor-actor-resources": {
-            "dependsOn": [],
-            "name": "monitor-actor-resources",
+          "test-deployment#monitor#monitor-athena-events-rule": {
+            "dependsOn": [
+              "test-deployment-monitor-queue",
+            ],
+            "name": "monitor-athena-events-rule",
             "parent": "test-deployment#monitor",
             "properties": {
-              "actorName": "monitor",
-              "actorPolicyArns": [
-                "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
-                "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
-              ],
-              "artifactBucket": "test-deployment-bucket-111111",
+              "arn": "arn:aws:events:us-east-1:123456789012:rule/monitor-athena-events-rule",
               "deployment": {
                 "accountId": "123456789012",
                 "envPaths": {
@@ -1392,44 +1238,29 @@ describe('deployment IaC', () => {
                 "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
                 "version": "0.0.1",
               },
-              "environmentVariables": {
-                "CLEANUP_QUEUE_URL": "test-deployment-cleanup-queue",
-                "DAEMON_QUEUE_URL": "test-deployment-daemon-queue",
-                "DEPENDENCY_TABLE": "test-deployment-dependencies",
-                "EVENTS_QUEUE_URL": "test-deployment-events-queue",
-                "GLOBAL_QUERY_CONCURRENCY": "10",
-                "LOCATION_TABLE": "test-deployment-locations",
-                "LOGGING_LEVEL": "info",
-                "MAX_QUERIES_PER_ACTION": "10000",
-                "MONITOR_QUEUE_URL": "test-deployment-monitor-queue",
-                "OPERATIONS_TABLE": "test-deployment-operations",
-                "RESOURCE_QUERY_CONCURRENCY": "10",
-                "SCHEDULER_TABLE": "test-deployment-scheduler",
-                "SEMAPHORE_TABLE": "test-deployment-semaphore",
-                "TEMPORARY_GLUE_DATABASE": "test-deployment-temporary-database",
-                "WHARFIE_LOGGING_FIREHOSE": "test-deployment-firehose",
-                "WHARFIE_SERVICE_BUCKET": "test-deployment-bucket-111111",
-              },
-              "handler": "./lambdas/monitor.handler",
+              "description": "monitor athena events rule",
+              "eventPattern": "{"source":["aws.athena"],"detail-type":["Athena Query State Change"]}",
+              "state": "ENABLED",
+              "targets": [
+                {
+                  "Arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-queue",
+                  "DeadLetterConfig": {
+                    "Arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-dlq",
+                  },
+                  "Id": "monitor-athena-events-rule-target",
+                },
+              ],
             },
-            "resourceType": "WharfieActorResources",
-            "resources": [
-              "test-deployment-monitor-build",
-              "test-deployment-monitor-function",
-              "test-deployment-monitor-queue",
-              "test-deployment-monitor-dlq",
-              "test-deployment-monitor-role",
-              "monitor-mapping",
-            ],
+            "resourceType": "EventsRule",
             "status": "STABLE",
           },
-          "test-deployment#monitor#monitor-actor-resources#monitor-mapping": {
+          "test-deployment#monitor#monitor-mapping": {
             "dependsOn": [
               "test-deployment-monitor-function",
               "test-deployment-monitor-queue",
             ],
             "name": "monitor-mapping",
-            "parent": "test-deployment#monitor#monitor-actor-resources",
+            "parent": "test-deployment#monitor",
             "properties": {
               "arn": "arn:aws:lambda:us-west-2:123456789012:event-source-mapping:ckywjpmr70002zjvd0wyq5x48",
               "batchSize": 1,
@@ -1456,10 +1287,10 @@ describe('deployment IaC', () => {
             "resourceType": "EventSourceMapping",
             "status": "STABLE",
           },
-          "test-deployment#monitor#monitor-actor-resources#test-deployment-monitor-build": {
+          "test-deployment#monitor#test-deployment-monitor-build": {
             "dependsOn": [],
             "name": "test-deployment-monitor-build",
-            "parent": "test-deployment#monitor#monitor-actor-resources",
+            "parent": "test-deployment#monitor",
             "properties": {
               "artifactBucket": "test-deployment-bucket-111111",
               "artifactKey": "actor-artifacts/test-deployment-monitor-build/mockedHash.zip",
@@ -1479,15 +1310,15 @@ describe('deployment IaC', () => {
                 "version": "0.0.1",
               },
               "functionCodeHash": "mockedHash",
-              "handler": "./lambdas/monitor.handler",
+              "handler": "<WHARFIE_BUILT_IN>/monitor.handler",
             },
             "resourceType": "LambdaBuild",
             "status": "STABLE",
           },
-          "test-deployment#monitor#monitor-actor-resources#test-deployment-monitor-dlq": {
+          "test-deployment#monitor#test-deployment-monitor-dlq": {
             "dependsOn": [],
             "name": "test-deployment-monitor-dlq",
-            "parent": "test-deployment#monitor#monitor-actor-resources",
+            "parent": "test-deployment#monitor",
             "properties": {
               "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-dlq",
               "delaySeconds": "0",
@@ -1514,7 +1345,7 @@ describe('deployment IaC', () => {
             "resourceType": "Queue",
             "status": "STABLE",
           },
-          "test-deployment#monitor#monitor-actor-resources#test-deployment-monitor-function": {
+          "test-deployment#monitor#test-deployment-monitor-function": {
             "dependsOn": [
               "test-deployment-monitor-role",
               "test-deployment-monitor-dlq",
@@ -1522,7 +1353,7 @@ describe('deployment IaC', () => {
               "test-deployment-monitor-build",
             ],
             "name": "test-deployment-monitor-function",
-            "parent": "test-deployment#monitor#monitor-actor-resources",
+            "parent": "test-deployment#monitor",
             "properties": {
               "architectures": [
                 "arm64",
@@ -1583,17 +1414,17 @@ describe('deployment IaC', () => {
               "memorySize": 1024,
               "packageType": "Zip",
               "publish": true,
-              "role": "arn:aws:iam::123456789012:role/test-deployment-monitor-role_111111",
+              "role": "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
               "runtime": "nodejs22.x",
               "timeout": 300,
             },
             "resourceType": "LambdaFunction",
             "status": "STABLE",
           },
-          "test-deployment#monitor#monitor-actor-resources#test-deployment-monitor-queue": {
+          "test-deployment#monitor#test-deployment-monitor-queue": {
             "dependsOn": [],
             "name": "test-deployment-monitor-queue",
-            "parent": "test-deployment#monitor#monitor-actor-resources",
+            "parent": "test-deployment#monitor",
             "properties": {
               "arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-queue",
               "delaySeconds": "0",
@@ -1657,15 +1488,15 @@ describe('deployment IaC', () => {
             "resourceType": "Queue",
             "status": "STABLE",
           },
-          "test-deployment#monitor#monitor-actor-resources#test-deployment-monitor-role": {
+          "test-deployment#monitor#test-deployment-monitor-role": {
             "dependsOn": [
               "test-deployment-monitor-queue",
               "test-deployment-monitor-dlq",
             ],
             "name": "test-deployment-monitor-role",
-            "parent": "test-deployment#monitor#monitor-actor-resources",
+            "parent": "test-deployment#monitor",
             "properties": {
-              "arn": "arn:aws:iam::123456789012:role/test-deployment-monitor-role_111111",
+              "arn": "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -1698,7 +1529,7 @@ describe('deployment IaC', () => {
                 "arn:aws:iam::123456789012:policy/test-deployment-actor-policy",
                 "arn:aws:iam::123456789012:policy/test-deployment-infra-policy",
               ],
-              "roleName": "test-deployment-monitor-role_111111",
+              "roleName": "test-deployment-monitor-role",
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -1719,45 +1550,6 @@ describe('deployment IaC', () => {
               },
             },
             "resourceType": "Role",
-            "status": "STABLE",
-          },
-          "test-deployment#monitor#monitor-athena-events-rule": {
-            "dependsOn": [
-              "test-deployment-monitor-queue",
-            ],
-            "name": "monitor-athena-events-rule",
-            "parent": "test-deployment#monitor",
-            "properties": {
-              "arn": "arn:aws:events:us-east-1:123456789012:rule/monitor-athena-events-rule",
-              "deployment": {
-                "accountId": "123456789012",
-                "envPaths": {
-                  "cache": "mock",
-                  "config": "mock",
-                  "data": "mock",
-                  "log": "mock",
-                  "temp": "mock",
-                },
-                "name": "test-deployment",
-                "region": "us-west-2",
-                "stateTable": "test-deployment-state",
-                "stateTableArn": "arn:aws:dynamodb:us-east-1:123456789012:table/test-deployment-state",
-                "version": "0.0.1",
-              },
-              "description": "monitor athena events rule",
-              "eventPattern": "{"source":["aws.athena"],"detail-type":["Athena Query State Change"]}",
-              "state": "ENABLED",
-              "targets": [
-                {
-                  "Arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-queue",
-                  "DeadLetterConfig": {
-                    "Arn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-monitor-dlq",
-                  },
-                  "Id": "monitor-athena-events-rule-target",
-                },
-              ],
-            },
-            "resourceType": "EventsRule",
             "status": "STABLE",
           },
           "test-deployment#test-deployment-deployment-resources": {
@@ -2151,7 +1943,7 @@ describe('deployment IaC', () => {
               "resourceId": "test-deployment.logs",
               "resourceKey": "test-deployment#test-deployment-deployment-resources#test-deployment-deployment-resources-log-resource",
               "resourceName": "logs",
-              "roleArn": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-rol_111111",
+              "roleArn": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-role",
               "scheduleQueueArn": "arn:aws:sqs:us-west-2:123456789012:test-deployment-events-queue",
               "scheduleQueueUrl": "https://sqs.us-west-2.amazonaws.com/123456789012/test-deployment-events-queue",
               "serdeInfo": {
@@ -2464,7 +2256,7 @@ describe('deployment IaC', () => {
                   "athena_workgroup": "wharfie-test-deployment-logs-workgroup",
                   "created_at": 123456789,
                   "daemon_config": {
-                    "Role": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-rol_111111",
+                    "Role": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-role",
                   },
                   "destination_properties": {
                     "arn": "arn:aws:glue:us-west-2:123456789012:table/test-deployment/logs",
@@ -2704,7 +2496,7 @@ describe('deployment IaC', () => {
                     "resourceId": "test-deployment.logs",
                     "resourceKey": "test-deployment#test-deployment-deployment-resources#test-deployment-deployment-resources-log-resource",
                     "resourceName": "logs",
-                    "roleArn": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-rol_111111",
+                    "roleArn": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-role",
                     "scheduleQueueArn": "arn:aws:sqs:us-west-2:123456789012:test-deployment-events-queue",
                     "scheduleQueueUrl": "https://sqs.us-west-2.amazonaws.com/123456789012/test-deployment-events-queue",
                     "serdeInfo": {
@@ -2896,7 +2688,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-deployment-resources-logging-resource-role",
             "parent": "test-deployment#test-deployment-deployment-resources",
             "properties": {
-              "arn": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-rol_111111",
+              "arn": "arn:aws:iam::123456789012:role/test-deployment-deployment-resources-logging-resource-role",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -2928,7 +2720,7 @@ describe('deployment IaC', () => {
               "managedPolicyArns": [
                 "arn:aws:iam::123456789012:policy/test-deployment-shared-policy",
               ],
-              "roleName": "test-deployment-deployment-resources-logging-resource-rol_111111",
+              "roleName": "test-deployment-deployment-resources-logging-resource-role",
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -2973,7 +2765,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-event-role",
             "parent": "test-deployment#test-deployment-deployment-resources",
             "properties": {
-              "arn": "arn:aws:iam::123456789012:role/test-deployment-event-role_111111",
+              "arn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -3005,7 +2797,7 @@ describe('deployment IaC', () => {
                 "version": "0.0.1",
               },
               "description": "test-deployment event role",
-              "roleName": "test-deployment-event-role_111111",
+              "roleName": "test-deployment-event-role",
             },
             "resourceType": "Role",
             "status": "STABLE",
@@ -3042,7 +2834,7 @@ describe('deployment IaC', () => {
                 },
                 "CompressionFormat": "GZIP",
                 "Prefix": "logs/raw/",
-                "RoleARN": "arn:aws:iam::123456789012:role/test-deployment-firehose-role_111111",
+                "RoleARN": "arn:aws:iam::123456789012:role/test-deployment-firehose-role",
               },
             },
             "resourceType": "Firehose",
@@ -3055,7 +2847,7 @@ describe('deployment IaC', () => {
             "name": "test-deployment-firehose-role",
             "parent": "test-deployment#test-deployment-deployment-resources",
             "properties": {
-              "arn": "arn:aws:iam::123456789012:role/test-deployment-firehose-role_111111",
+              "arn": "arn:aws:iam::123456789012:role/test-deployment-firehose-role",
               "assumeRolePolicyDocument": {
                 "Statement": [
                   {
@@ -3084,7 +2876,7 @@ describe('deployment IaC', () => {
                 "version": "0.0.1",
               },
               "description": "test-deployment firehose role",
-              "roleName": "test-deployment-firehose-role_111111",
+              "roleName": "test-deployment-firehose-role",
               "rolePolicyDocument": {
                 "Statement": [
                   {
@@ -3530,7 +3322,7 @@ describe('deployment IaC', () => {
                     ],
                     "Effect": "Allow",
                     "Resource": [
-                      "arn:aws:iam::123456789012:role/test-deployment-event-role_111111",
+                      "arn:aws:iam::123456789012:role/test-deployment-event-role",
                     ],
                   },
                 ],
@@ -3748,7 +3540,7 @@ describe('deployment IaC', () => {
     events.push('DESTROYING');
     await deserialized.destroy();
     expect(deserialized.status).toBe('DESTROYED');
-    expect(events).toHaveLength(398);
+    expect(events).toHaveLength(374);
     expect(state_db.__getMockState()).toMatchInlineSnapshot(`
       {
         "test-deployment": {

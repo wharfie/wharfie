@@ -10,7 +10,7 @@ const ApplicationAutoScaling = jest.requireMock(
   '@aws-sdk/client-application-auto-scaling'
 );
 
-const { load } = require('../../../lambdas/lib/actor/deserialize');
+const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 const { getMockDeploymentProperties } = require('../util');
 const Reconcilable = require('../../../lambdas/lib/actor/resources/reconcilable');
 const AWS = require('@aws-sdk/lib-dynamodb');

@@ -17,7 +17,7 @@ jest.mock('../../lambdas/lib/dynamo/location');
 const WharfieProject = require('../../lambdas/lib/actor/resources/wharfie-project');
 const WharfieDeployment = require('../../lambdas/lib/actor/wharfie-deployment');
 const Reconcilable = require('../../lambdas/lib/actor/resources/reconcilable');
-const { load } = require('../../lambdas/lib/actor/deserialize');
+const { load } = require('../../lambdas/lib/actor/deserialize/full');
 const { getResourceOptions } = require('../../cli/project/template-actor');
 const { loadProject } = require('../../cli/project/load');
 const { resetAWSMocks } = require('../util');
@@ -61,10 +61,10 @@ describe('wharfie project IaC', () => {
         "parent": "",
         "properties": {
           "actorRoleArns": [
-            "arn:aws:iam::123456789012:role/test-deployment-daemon-role_111111",
-            "arn:aws:iam::123456789012:role/test-deployment-cleanup-role_111111",
-            "arn:aws:iam::123456789012:role/test-deployment-events-role_111111",
-            "arn:aws:iam::123456789012:role/test-deployment-monitor-role_111111",
+            "arn:aws:iam::123456789012:role/test-deployment-daemon-role",
+            "arn:aws:iam::123456789012:role/test-deployment-cleanup-role",
+            "arn:aws:iam::123456789012:role/test-deployment-events-role",
+            "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
           ],
           "createdAt": 123456789,
           "daemonQueueUrl": "test-deployment-daemon-queue",
@@ -93,7 +93,7 @@ describe('wharfie project IaC', () => {
           },
           "scheduleQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
           "scheduleQueueUrl": "test-deployment-events-queue",
-          "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role_111111",
+          "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
         },
         "resourceType": "WharfieProject",
         "resources": [
@@ -168,10 +168,10 @@ describe('wharfie project IaC', () => {
         "parent": "",
         "properties": {
           "actorRoleArns": [
-            "arn:aws:iam::123456789012:role/test-deployment-daemon-role_111111",
-            "arn:aws:iam::123456789012:role/test-deployment-cleanup-role_111111",
-            "arn:aws:iam::123456789012:role/test-deployment-events-role_111111",
-            "arn:aws:iam::123456789012:role/test-deployment-monitor-role_111111",
+            "arn:aws:iam::123456789012:role/test-deployment-daemon-role",
+            "arn:aws:iam::123456789012:role/test-deployment-cleanup-role",
+            "arn:aws:iam::123456789012:role/test-deployment-events-role",
+            "arn:aws:iam::123456789012:role/test-deployment-monitor-role",
           ],
           "createdAt": 123456789,
           "daemonQueueUrl": "test-deployment-daemon-queue",
@@ -200,7 +200,7 @@ describe('wharfie project IaC', () => {
           },
           "scheduleQueueArn": "arn:aws:sqs:us-east-1:123456789012:test-deployment-events-queue",
           "scheduleQueueUrl": "test-deployment-events-queue",
-          "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role_111111",
+          "scheduleRoleArn": "arn:aws:iam::123456789012:role/test-deployment-event-role",
         },
         "resourceType": "WharfieProject",
         "resources": [

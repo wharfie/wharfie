@@ -1,5 +1,5 @@
 const { Operation, Resource } = require('../../lib/graph/');
-const { load } = require('../../lib/actor/deserialize');
+const { load } = require('../../lib/actor/deserialize/non-circular');
 const logging = require('../../lib/logging');
 
 /**

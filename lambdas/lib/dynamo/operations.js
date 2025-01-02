@@ -30,10 +30,11 @@ const OPERATIONS_TABLE = process.env.OPERATIONS_TABLE || '';
 
 /**
  * @param {Resource} resource -
+ * @param {string} [tableName] -
  */
-async function putResource(resource) {
+async function putResource(resource, tableName = process.env.OPERATIONS_TABLE) {
   await docClient.put({
-    TableName: OPERATIONS_TABLE,
+    TableName: tableName,
     Item: resource.toRecord(),
     ReturnValues: 'NONE',
   });
@@ -41,53 +42,45 @@ async function putResource(resource) {
 
 /**
  * @param {string} resource_id -
+ * @param {string} [tableName] -
  * @returns {Promise<Resource?>} -
  */
-async function getResource(resource_id) {
-  try {
-    const { Items } = await query({
-      TableName: OPERATIONS_TABLE,
-      ConsistentRead: true,
-      KeyConditionExpression:
-        'resource_id = :resource_id AND sort_key = :resource_id',
-      ExpressionAttributeValues: {
-        ':resource_id': resource_id,
-      },
-    });
-    if (!Items || Items.length === 0) return null;
-    // @ts-ignore
-    return Resource.fromRecord(Items[0]);
-  } catch (e) {
-    if (!(e instanceof ResourceNotFoundException)) {
-      throw e;
-    }
-    return null;
-  }
+async function getResource(
+  resource_id,
+  tableName = process.env.OPERATIONS_TABLE
+) {
+  const { Items } = await query({
+    TableName: tableName,
+    ConsistentRead: true,
+    KeyConditionExpression:
+      'resource_id = :resource_id AND sort_key = :resource_id',
+    ExpressionAttributeValues: {
+      ':resource_id': resource_id,
+    },
+  });
+  if (!Items || Items.length === 0) return null;
+  // @ts-ignore
+  return Resource.fromRecord(Items[0]);
 }
 
 /**
  * @param {Resource} resource -
+ * @param {string} [tableName] -
  */
-async function deleteResource(resource) {
-  let Items;
-  try {
-    const queryResult = await query({
-      TableName: OPERATIONS_TABLE,
-      ProjectionExpression: 'resource_id, sort_key',
-      ConsistentRead: true,
-      KeyConditionExpression:
-        'resource_id = :resource_id AND begins_with(sort_key, :resource_id)',
-      ExpressionAttributeValues: {
-        ':resource_id': resource.id,
-      },
-    });
-    Items = queryResult.Items;
-  } catch (e) {
-    if (!(e instanceof ResourceNotFoundException)) {
-      throw e;
-    }
-    return;
-  }
+async function deleteResource(
+  resource,
+  tableName = process.env.OPERATIONS_TABLE
+) {
+  const { Items } = await query({
+    TableName: tableName,
+    ProjectionExpression: 'resource_id, sort_key',
+    ConsistentRead: true,
+    KeyConditionExpression:
+      'resource_id = :resource_id AND begins_with(sort_key, :resource_id)',
+    ExpressionAttributeValues: {
+      ':resource_id': resource.id,
+    },
+  });
   if (!Items || Items.length === 0) return;
   while (Items.length > 0)
     await batchWrite({

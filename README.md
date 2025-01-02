@@ -33,10 +33,15 @@ When defining tables with Wharfie, you only need to statically define your table
 
 ### ⚡️ Quickstart
 
-#### CLI
+#### Install
 
 ```bash
-npm i -g @wharfie/wharfie
+curl -fsSL https://raw.githubusercontent.com/wharfie/wharfie/install.sh | bash
+```
+
+#### Example
+
+```bash
 wharfie config
 wharfie deployment create
 wharfie project init

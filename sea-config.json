@@ -4,5 +4,10 @@
   "disableExperimentalSEAWarning": true,
   "useSnapshot": false,
   "useCodeCache": true,
-  "assets": {}
+  "assets": {
+    "<WHARFIE_BUILT_IN>/daemon.handler": "./tmp/daemon.js",
+    "<WHARFIE_BUILT_IN>/cleanup.handler": "./tmp/cleanup.js",
+    "<WHARFIE_BUILT_IN>/events.handler": "./tmp/events.js",
+    "<WHARFIE_BUILT_IN>/monitor.handler": "./tmp/monitor.js"
+  }
 }

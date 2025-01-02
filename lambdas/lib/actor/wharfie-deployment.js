@@ -78,12 +78,9 @@ class WharfieDeployment extends BaseResourceGroup {
      */
     const actorQueues = {};
     Object.values(this.getActors()).forEach((actor) => {
-      actorQueues[`${actor.name.toUpperCase()}_QUEUE_URL`] =
-        // @ts-ignore
-        actor
-          .getActorResources()
-          .getResource(`${this.name}-${actor.name}-queue`)
-          .get('url');
+      actorQueues[`${actor.name.toUpperCase()}_QUEUE_URL`] = actor
+        .getQueue()
+        .get('url');
     });
 
     return {
@@ -158,7 +155,6 @@ class WharfieDeployment extends BaseResourceGroup {
       },
     });
 
-    // @ts-ignore
     const daemonActor = new Daemon({
       dependsOn: [resourceGroup],
       parent,

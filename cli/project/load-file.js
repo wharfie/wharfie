@@ -12,18 +12,24 @@ async function loadFile(dirent) {
   switch (fileExtension) {
     case 'json':
       return JSON.parse(
-        await fs.readFile(path.join(dirent.path, dirent.name), 'utf8')
+        await fs.readFile(path.join(dirent.parentPath, dirent.name), 'utf8')
       );
     case 'yaml':
     case 'yml':
       return yaml.load(
-        await fs.readFile(path.join(dirent.path, dirent.name), 'utf8')
+        await fs.readFile(path.join(dirent.parentPath, dirent.name), 'utf8')
       );
     case 'sql':
-      return await fs.readFile(path.join(dirent.path, dirent.name), 'utf8');
+      return await fs.readFile(
+        path.join(dirent.parentPath, dirent.name),
+        'utf8'
+      );
     default:
       throw new Error(
-        `project file not supported ${path.join(dirent.path, dirent.name)}`
+        `project file not supported ${path.join(
+          dirent.parentPath,
+          dirent.name
+        )}`
       );
   }
 }
