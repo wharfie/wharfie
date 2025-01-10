@@ -6,7 +6,7 @@ on:
 env:
   WHARFIE_ARTIFACTS_BUCKET_PREFIX: wharfie-artifacts
 jobs:
-  latest_publish:
+  release_npm:
     if: github.event.release.prerelease == false
     runs-on: ubuntu-latest
     steps:
@@ -51,8 +51,7 @@ jobs:
       - run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-  prerelease_publish_macos:
-    if: github.event.release.prerelease == true
+  release_macos:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v3
@@ -70,7 +69,7 @@ jobs:
         env:
           MACOS_CERT_BASE64: ${{ secrets.MACOS_CERT_BASE64 }}
           MACOS_CERT_PASS: ${{ secrets.MACOS_CERT_PASS }}
-          MACOS_KEYCHAIN_PASS: ${{ secrets.MACOS_MACOS_KEYCHAIN_PASSCERT_PASS }}
+          MACOS_KEYCHAIN_PASS: ${{ secrets.MACOS_KEYCHAIN_PASS }}
       - name: Upload darwin-arm64 binary to release
         uses: actions/upload-release-asset@v1
         env:
@@ -85,7 +84,7 @@ jobs:
         env:
           MACOS_CERT_BASE64: ${{ secrets.MACOS_CERT_BASE64 }}
           MACOS_CERT_PASS: ${{ secrets.MACOS_CERT_PASS }}
-          MACOS_KEYCHAIN_PASS: ${{ secrets.MACOS_MACOS_KEYCHAIN_PASSCERT_PASS }}
+          MACOS_KEYCHAIN_PASS: ${{ secrets.MACOS_KEYCHAIN_PASS }}
       - name: Upload darwin-x64 binary to release
         uses: actions/upload-release-asset@v1
         env:
@@ -95,7 +94,7 @@ jobs:
           asset_path: ./dist/wharfie-darwin-x64
           asset_name: wharfie-darwin-x64
           asset_content_type: application/octet-stream
-  prerelease_publish_linux:
+  release_linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -130,7 +129,8 @@ jobs:
           asset_path: ./dist/wharfie-linux-x64
           asset_name: wharfie-linux-x64
           asset_content_type: application/octet-stream
-  prerelease_npm_publish:
+  prerelease_npm:
+    if: github.event.release.prerelease == true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
