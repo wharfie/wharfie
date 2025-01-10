@@ -71,14 +71,9 @@ jobs:
           MACOS_CERT_PASS: ${{ secrets.MACOS_CERT_PASS }}
           MACOS_KEYCHAIN_PASS: ${{ secrets.MACOS_KEYCHAIN_PASS }}
       - name: Upload darwin-arm64 binary to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./dist/wharfie-darwin-arm64
-          asset_name: wharfie-darwin-arm64
-          asset_content_type: application/octet-stream
+          files: ./dist/wharfie-darwin-arm64
       - name: build darwin-x64 binary
         run: ./build.js --platform darwin --arch x64
         env:

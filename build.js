@@ -431,6 +431,16 @@ function setupMacKeychain() {
     return;
   }
 
+  try {
+    runCmd('security', ['delete-keychain', '/tmp/build.keychain']);
+    console.log('Deleted existing /tmp/build.keychain.');
+  } catch (err) {
+    // If the keychain doesn't exist, "security delete-keychain" will fail; ignore that error
+    console.log(
+      'No existing /tmp/build.keychain found (ignore if error above).'
+    );
+  }
+
   // 1) Create a temporary keychain (in /tmp or in memory)
   runCmd('security', [
     'create-keychain',
