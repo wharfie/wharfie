@@ -242,7 +242,7 @@ async function fetchOrGetNodeBinary(platform, arch) {
     arch
   );
   console.log(`Downloading from nodejs.org ${nodeDownloadUrl}...`);
-  const archiveExt = platform === 'win32' ? '.zip' : '.tar.xz';
+  const archiveExt = platform === 'win32' ? '.zip' : '.tar.gz';
   const archiveName = `node-${platform}-${arch}${archiveExt}`;
   const archivePath = path.join(nodeBinariesDir, archiveName);
 
