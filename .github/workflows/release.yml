@@ -3,10 +3,8 @@ name: Wharfie Release
 on:
   release:
     types: [published]
-
 env:
   WHARFIE_ARTIFACTS_BUCKET_PREFIX: wharfie-artifacts
-
 jobs:
   latest_publish:
     if: github.event.release.prerelease == false
@@ -50,11 +48,51 @@ jobs:
           asset_path: ./dist/wharfie-linux-arm64
           asset_name: wharfie-linux-arm64
           asset_content_type: application/octet-stream
-      - run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-  prerelease_publish:
+  prerelease_publish_macos:
     if: github.event.release.prerelease == true
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v3
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22.x
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run typecheck
+      - name: build darwin-arm64 binary
+        run: ./build.js --platform darwin --arch arm64
+        env:
+          MACOS_CERT_BASE64: ${{ secrets.MACOS_CERT_BASE64 }}
+          MACOS_CERT_PASS: ${{ secrets.MACOS_CERT_PASS }}
+          MACOS_KEYCHAIN_PASS: ${{ secrets.MACOS_MACOS_KEYCHAIN_PASSCERT_PASS }}
+      - name: Upload darwin-arm64 binary to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/wharfie-darwin-arm64
+          asset_name: wharfie-darwin-arm64
+          asset_content_type: application/octet-stream
+      - name: build darwin-x64 binary
+        run: ./build.js --platform darwin --arch x64
+        env:
+          MACOS_CERT_BASE64: ${{ secrets.MACOS_CERT_BASE64 }}
+          MACOS_CERT_PASS: ${{ secrets.MACOS_CERT_PASS }}
+          MACOS_KEYCHAIN_PASS: ${{ secrets.MACOS_MACOS_KEYCHAIN_PASSCERT_PASS }}
+      - name: Upload darwin-x64 binary to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/wharfie-darwin-x64
+          asset_name: wharfie-darwin-x64
+          asset_content_type: application/octet-stream
+  prerelease_publish_linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -67,26 +105,9 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run typecheck
-      - run: npm run build
-      - name: Upload darwin-arm64 binaries to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./dist/wharfie-darwin-arm64
-          asset_name: wharfie-darwin-arm64
-          asset_content_type: application/octet-stream
-      - name: Upload linux-x64 binaries to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./dist/wharfie-linux-x64
-          asset_name: wharfie-linux-x64
-          asset_content_type: application/octet-stream
-      - name: Upload linux-arm64 binaries to release
+      - name: build linux-arm64 binary
+        run: ./build.js --platform linux --arch arm64
+      - name: Upload linux-arm64 binary to release
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -95,6 +116,14 @@ jobs:
           asset_path: ./dist/wharfie-linux-arm64
           asset_name: wharfie-linux-arm64
           asset_content_type: application/octet-stream
-      - run: npm publish --tag next --access public
+      - name: build linux-x64 binary
+        run: ./build.js --platform linux --arch x64
+      - name: Upload linux-x64 binary to release
+        uses: actions/upload-release-asset@v1
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./dist/wharfie-linux-x64
+          asset_name: wharfie-linux-x64
+          asset_content_type: application/octet-stream

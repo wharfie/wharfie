@@ -12,3 +12,4 @@ build
 *.egg
 dist/
 .vscode
+node_binaries/

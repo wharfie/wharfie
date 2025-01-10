@@ -18,6 +18,7 @@
     "resolveJsonModule": true
   },
   "include": [
+    "build.js",
     "lambdas/**/*.js",
     "cli/**/*.js",
     "bin/wharfie",
