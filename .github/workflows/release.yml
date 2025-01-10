@@ -48,6 +48,9 @@ jobs:
           asset_path: ./dist/wharfie-linux-arm64
           asset_name: wharfie-linux-arm64
           asset_content_type: application/octet-stream
+      - run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
   prerelease_publish_macos:
     if: github.event.release.prerelease == true
     runs-on: macos-14
@@ -127,3 +130,19 @@ jobs:
           asset_path: ./dist/wharfie-linux-x64
           asset_name: wharfie-linux-x64
           asset_content_type: application/octet-stream
+  prerelease_npm_publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22.x
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run typecheck
+      - run: npm publish --tag next --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
