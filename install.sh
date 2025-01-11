@@ -4,7 +4,7 @@ set -e
 
 APP_NAME="wharfie"
 REPO="wharfie/wharfie" # Replace with your GitHub username/repo
-VERSION="v0.0.12-6" # Use a specific version if necessary
+VERSION="v0.0.12-9" # Use a specific version if necessary
 
 echo "Installing $APP_NAME..."
 
