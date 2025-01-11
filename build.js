@@ -431,14 +431,24 @@ function setupMacKeychain() {
     return;
   }
 
-  try {
-    runCmd('security', ['delete-keychain', '/tmp/build.keychain']);
-    console.log('Deleted existing /tmp/build.keychain.');
-  } catch (err) {
-    // If the keychain doesn't exist, "security delete-keychain" will fail; ignore that error
+  // Path to keychain
+  const keychainPath = '/tmp/build.keychain';
+
+  // Check if this keychain is already listed
+  // We'll parse the output of `security list-keychains`
+  const listResult = spawnSync('security', ['list-keychains'], {
+    stdio: ['pipe', 'pipe', 'inherit'],
+  });
+  if (listResult.status !== 0) {
+    throw new Error('Failed to run "security list-keychains"');
+  }
+
+  const stdout = listResult.stdout.toString();
+  if (stdout.includes(keychainPath)) {
     console.log(
-      'No existing /tmp/build.keychain found (ignore if error above).'
+      `Keychain ${keychainPath} already exists. Skipping keychain setup.`
     );
+    return; // Early return, so we don’t recreate or re-import.
   }
 
   // 1) Create a temporary keychain (in /tmp or in memory)
