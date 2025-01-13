@@ -22,22 +22,6 @@ jobs:
       - run: npm run test
       - run: npm run typecheck
 
-  release_npm:
-    if: github.event.release.prerelease == false
-    needs: verify
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Use Node.js 22.x
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.x
-          cache: 'npm'
-      - run: npm ci
-      - run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-
   release_macos:
     needs: verify
     runs-on: macos-14
@@ -47,7 +31,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22.x
-          cache: 'npm'
+          cache: npm
       - run: npm ci
       - name: build darwin-arm64 binary
         run: ./build.js --platform darwin --arch arm64
@@ -79,7 +63,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22.x
-          cache: 'npm'
+          cache: npm
       - run: npm ci
       - name: build linux-arm64 binary
         run: ./build.js --platform linux --arch arm64
@@ -103,7 +87,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22.x
-          cache: 'npm'
+          cache: npm
       - run: npm ci
       - name: build windows-arm64 binary
         run: ./build.js --platform windows --arch arm64
@@ -118,9 +102,13 @@ jobs:
         with:
           files: ./dist/wharfie-windows-x64.exe
 
-  prerelease_npm:
-    if: github.event.release.prerelease == true
-    needs: verify
+  # Run this after all platform releases complete.
+  release_npm:
+    if: github.event.release.prerelease == false
+    needs:
+      - release_macos
+      - release_linux
+      - release_windows
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -128,7 +116,27 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22.x
-          cache: 'npm'
+          cache: npm
+      - run: npm ci
+      - run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+
+  # Run this after all platform releases complete.
+  prerelease_npm:
+    if: github.event.release.prerelease == true
+    needs:
+      - release_macos
+      - release_linux
+      - release_windows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
       - run: npm ci
       - run: npm publish --tag next --access public
         env:
