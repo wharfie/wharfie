@@ -134,13 +134,13 @@ jobs:
       - name: Upload windows-arm64 binary to release
         uses: softprops/action-gh-release@v2
         with:
-          files: ./dist/wharfie-windows-arm64
+          files: ./dist/wharfie-windows-arm64.exe
       - name: build windows-x64 binary
         run: ./build.js --platform windows --arch x64
       - name: Upload windows-x64 binary to release
         uses: softprops/action-gh-release@v2
         with:
-          files: ./dist/wharfie-windows-x64
+          files: ./dist/wharfie-windows-x64.exe
 
   prerelease_npm:
     if: github.event.release.prerelease == true
