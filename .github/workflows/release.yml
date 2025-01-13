@@ -81,14 +81,9 @@ jobs:
           MACOS_CERT_PASS: ${{ secrets.MACOS_CERT_PASS }}
           MACOS_KEYCHAIN_PASS: ${{ secrets.MACOS_KEYCHAIN_PASS }}
       - name: Upload darwin-x64 binary to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./dist/wharfie-darwin-x64
-          asset_name: wharfie-darwin-x64
-          asset_content_type: application/octet-stream
+          files: ./dist/wharfie-darwin-x64
   release_linux:
     runs-on: ubuntu-latest
     steps:
@@ -105,25 +100,40 @@ jobs:
       - name: build linux-arm64 binary
         run: ./build.js --platform linux --arch arm64
       - name: Upload linux-arm64 binary to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./dist/wharfie-linux-arm64
-          asset_name: wharfie-linux-arm64
-          asset_content_type: application/octet-stream
+          files: ./dist/wharfie-linux-arm64
       - name: build linux-x64 binary
         run: ./build.js --platform linux --arch x64
       - name: Upload linux-x64 binary to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./dist/wharfie-linux-x64
-          asset_name: wharfie-linux-x64
-          asset_content_type: application/octet-stream
+          files: ./dist/wharfie-linux-x64
+  release_windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22.x
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run typecheck
+      - name: build windows-arm64 binary
+        run: ./build.js --platform windows --arch arm64
+      - name: Upload windows-arm64 binary to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./dist/wharfie-windows-arm64
+      - name: build windows-x64 binary
+        run: ./build.js --platform windows --arch x64
+      - name: Upload windows-x64 binary to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./dist/wharfie-windows-x64
   prerelease_npm:
     if: github.event.release.prerelease == true
     runs-on: ubuntu-latest

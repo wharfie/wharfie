@@ -4,12 +4,12 @@
 
 /**
  * Cross-Compile Single Executable App for:
- *   - darwin, win32, linux
+ *   - darwin, windows, linux
  *   - x64, arm64
  *
  * Usage:
  *   1) All combos: ./build.js
- *   2) Single combo: ./build.js --platform win32 --arch x64
+ *   2) Single combo: ./build.js --platform windows --arch x64
  */
 
 const fs = require('fs');
@@ -25,8 +25,8 @@ const tar = require('tar');
 const DEFAULT_BUILDS = [
   ['darwin', 'x64'],
   ['darwin', 'arm64'],
-  ['win32', 'x64'],
-  ['win32', 'arm64'],
+  ['windows', 'x64'],
+  ['windows', 'arm64'],
   ['linux', 'x64'],
   ['linux', 'arm64'],
 ];
@@ -98,13 +98,13 @@ async function runBuild(platform, arch) {
 
   // Decide final binary name (.exe on Windows)
   let outputName = WHARFIE_BASENAME;
-  if (platform === 'win32') {
+  if (platform === 'windows') {
     outputName += '.exe';
   }
 
   // Dist file name (include platform & arch)
   let distFile = `${WHARFIE_BASENAME}-${platform}-${arch}`;
-  if (platform === 'win32') {
+  if (platform === 'windows') {
     distFile += '.exe';
   }
 
@@ -180,8 +180,7 @@ async function runBuild(platform, arch) {
       entitlementsPath,
       nodeBinaryPath,
     ]);
-  } else if (platform === 'win32') {
-    console.log('Signing Windows binary... (placeholder)');
+  } else if (platform === 'windows') {
     // e.g. osslsigncode usage
   }
 
@@ -224,7 +223,7 @@ async function fetchOrGetNodeBinary(platform, arch) {
   }
 
   let binaryName = `node-${platform}-${arch}`;
-  if (platform === 'win32') {
+  if (platform === 'windows') {
     binaryName += '.exe';
   }
   const localPath = path.join(nodeBinariesDir, binaryName);
@@ -242,7 +241,7 @@ async function fetchOrGetNodeBinary(platform, arch) {
     arch
   );
   console.log(`Downloading from nodejs.org ${nodeDownloadUrl}...`);
-  const archiveExt = platform === 'win32' ? '.zip' : '.tar.gz';
+  const archiveExt = platform === 'windows' ? '.zip' : '.tar.gz';
   const archiveName = `node-${platform}-${arch}${archiveExt}`;
   const archivePath = path.join(nodeBinariesDir, archiveName);
 
@@ -252,7 +251,7 @@ async function fetchOrGetNodeBinary(platform, arch) {
 
   // Extract node binary
   let extractedBinary;
-  if (platform === 'win32') {
+  if (platform === 'windows') {
     extractedBinary = await extractWindowsZip(archivePath);
   } else {
     extractedBinary = await extractUnixTar(archivePath);
@@ -278,12 +277,12 @@ async function fetchOrGetNodeBinary(platform, arch) {
  */
 function getNodeDownloadUrl(version, platform, arch) {
   let platformPart = platform;
-  if (platform === 'win32') {
+  if (platform === 'windows') {
     platformPart = 'win';
   }
   const fileArch = arch;
   const filename = `node-v${version}-${platformPart}-${fileArch}`;
-  const suffix = platform === 'win32' ? '.zip' : '.tar.gz';
+  const suffix = platform === 'windows' ? '.zip' : '.tar.gz';
 
   return `https://nodejs.org/dist/v${version}/${filename}${suffix}`;
 }
