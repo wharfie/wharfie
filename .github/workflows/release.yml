@@ -3,11 +3,28 @@ name: Wharfie Release
 on:
   release:
     types: [published]
+
 env:
   WHARFIE_ARTIFACTS_BUCKET_PREFIX: wharfie-artifacts
+
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run typecheck
+
   release_npm:
     if: github.event.release.prerelease == false
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -16,11 +33,7 @@ jobs:
         with:
           node-version: 22.x
           cache: 'npm'
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run test
-      - run: npm run typecheck
-      - run: npm run build
+      - run: npm build
       - name: Upload darwin-arm64 binaries to release
         uses: actions/upload-release-asset@v1
         env:
@@ -51,7 +64,9 @@ jobs:
       - run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
+
   release_macos:
+    needs: verify
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v3
@@ -60,10 +75,6 @@ jobs:
         with:
           node-version: 22.x
           cache: 'npm'
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run test
-      - run: npm run typecheck
       - name: build darwin-arm64 binary
         run: ./build.js --platform darwin --arch arm64
         env:
@@ -84,7 +95,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ./dist/wharfie-darwin-x64
+
   release_linux:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -93,10 +106,6 @@ jobs:
         with:
           node-version: 22.x
           cache: 'npm'
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run test
-      - run: npm run typecheck
       - name: build linux-arm64 binary
         run: ./build.js --platform linux --arch arm64
       - name: Upload linux-arm64 binary to release
@@ -109,7 +118,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ./dist/wharfie-linux-x64
+
   release_windows:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -118,10 +129,6 @@ jobs:
         with:
           node-version: 22.x
           cache: 'npm'
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run test
-      - run: npm run typecheck
       - name: build windows-arm64 binary
         run: ./build.js --platform windows --arch arm64
       - name: Upload windows-arm64 binary to release
@@ -134,8 +141,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ./dist/wharfie-windows-x64
+
   prerelease_npm:
     if: github.event.release.prerelease == true
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -144,10 +153,6 @@ jobs:
         with:
           node-version: 22.x
           cache: 'npm'
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run test
-      - run: npm run typecheck
       - run: npm publish --tag next --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
