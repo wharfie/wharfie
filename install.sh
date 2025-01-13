@@ -25,18 +25,13 @@ UNAME_S=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$UNAME_S" in
   linux)
     OS="linux"
-    INSTALL_DIR="/usr/local/bin"
+    INSTALL_DIR="/usr/local/bin"  # Common on Linux
     BIN_NAME="$APP_NAME"
     ;;
   darwin)
     OS="darwin"
-    INSTALL_DIR="/usr/local/bin"
+    INSTALL_DIR="/usr/local/bin"  # Common on macOS
     BIN_NAME="$APP_NAME"
-    ;;
-  mingw*|msys*|cygwin*|windows_nt)
-    OS="windows"
-    INSTALL_DIR="$HOME/.local/bin"
-    BIN_NAME="$APP_NAME.exe"
     ;;
   *)
     echo "Unsupported operating system: $UNAME_S"
@@ -61,38 +56,18 @@ esac
 
 # Construct download URL
 DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/$APP_NAME-$OS-$ARCH"
-if [ "$OS" = "windows" ]; then
-  DOWNLOAD_URL="$DOWNLOAD_URL.exe"
-fi
 
 # Download the binary
 TEMP_FILE=$(mktemp)
 echo "Downloading $APP_NAME from $DOWNLOAD_URL..."
 curl -L -o "$TEMP_FILE" "$DOWNLOAD_URL"
 
-# Make the binary executable on Linux/macOS
-if [ "$OS" != "windows" ]; then
-  chmod +x "$TEMP_FILE"
-fi
+# Make the binary executable
+chmod +x "$TEMP_FILE"
 
 # Move binary to final location
 echo "Placing $APP_NAME in $INSTALL_DIR..."
 sudo mkdir -p "$INSTALL_DIR" 2>/dev/null || mkdir -p "$INSTALL_DIR"
 sudo mv "$TEMP_FILE" "$INSTALL_DIR/$BIN_NAME"
-
-# Add bin directory to PATH if not already present (Linux/macOS)
-if [ "$OS" != "windows" ]; then
-  if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-    echo "Appending $INSTALL_DIR to your PATH in ~/.bashrc..."
-    {
-      echo ""
-      echo "# Added by $APP_NAME installer"
-      echo "export PATH=\"$INSTALL_DIR:\$PATH\""
-    } >> ~/.bashrc
-    echo "Please reload your shell or run 'source ~/.bashrc' to update your PATH."
-  fi
-else
-  echo "On Windows, consider adding $INSTALL_DIR to your PATH manually."
-fi
 
 echo "$APP_NAME installed successfully!"
