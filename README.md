@@ -36,7 +36,7 @@ When defining tables with Wharfie, you only need to statically define your table
 #### Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wharfie/wharfie/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/wharfie/wharfie/master/install.sh | bash
 ```
 
 #### Example

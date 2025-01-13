@@ -8,7 +8,11 @@ REPO="wharfie/wharfie"
 # If a version wasn't passed in, find the latest version from GitHub
 if [ -z "$1" ]; then
   echo "Determining the latest version from GitHub..."
-  LATEST_VERSION=$(curl -sSL "https://api.github.com/repos/$REPO/releases/latest" | grep -oP '(?<="tag_name": ")[^"]+')
+  LATEST_VERSION=$(curl -sSL "https://api.github.com/repos/$REPO/releases/latest" \
+    | grep '"tag_name":' \
+    | head -n 1 \
+    | cut -d '"' -f 4
+  )
   VERSION="$LATEST_VERSION"
 else
   VERSION="$1"
@@ -21,17 +25,17 @@ UNAME_S=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$UNAME_S" in
   linux)
     OS="linux"
-    INSTALL_DIR="/usr/local/bin"        # Common on Linux
+    INSTALL_DIR="/usr/local/bin"
     BIN_NAME="$APP_NAME"
     ;;
   darwin)
     OS="darwin"
-    INSTALL_DIR="/usr/local/bin"        # Common on macOS
+    INSTALL_DIR="/usr/local/bin"
     BIN_NAME="$APP_NAME"
     ;;
   mingw*|msys*|cygwin*|windows_nt)
     OS="windows"
-    INSTALL_DIR="$HOME/.local/bin"      # Arbitrary per-user location
+    INSTALL_DIR="$HOME/.local/bin"
     BIN_NAME="$APP_NAME.exe"
     ;;
   *)
@@ -58,7 +62,6 @@ esac
 # Construct download URL
 DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/$APP_NAME-$OS-$ARCH"
 if [ "$OS" = "windows" ]; then
-  # Binaries are often named with .exe for Windows
   DOWNLOAD_URL="$DOWNLOAD_URL.exe"
 fi
 
