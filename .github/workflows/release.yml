@@ -33,34 +33,7 @@ jobs:
         with:
           node-version: 22.x
           cache: 'npm'
-      - run: npm build
-      - name: Upload darwin-arm64 binaries to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./dist/wharfie-darwin-arm64
-          asset_name: wharfie-darwin-arm64
-          asset_content_type: application/octet-stream
-      - name: Upload linux-x64 binaries to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./dist/wharfie-linux-x64
-          asset_name: wharfie-linux-x64
-          asset_content_type: application/octet-stream
-      - name: Upload linux-arm64 binaries to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./dist/wharfie-linux-arm64
-          asset_name: wharfie-linux-arm64
-          asset_content_type: application/octet-stream
+      - run: npm ci
       - run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
@@ -75,6 +48,7 @@ jobs:
         with:
           node-version: 22.x
           cache: 'npm'
+      - run: npm ci
       - name: build darwin-arm64 binary
         run: ./build.js --platform darwin --arch arm64
         env:
@@ -106,6 +80,7 @@ jobs:
         with:
           node-version: 22.x
           cache: 'npm'
+      - run: npm ci
       - name: build linux-arm64 binary
         run: ./build.js --platform linux --arch arm64
       - name: Upload linux-arm64 binary to release
@@ -129,6 +104,7 @@ jobs:
         with:
           node-version: 22.x
           cache: 'npm'
+      - run: npm ci
       - name: build windows-arm64 binary
         run: ./build.js --platform windows --arch arm64
       - name: Upload windows-arm64 binary to release
@@ -153,6 +129,7 @@ jobs:
         with:
           node-version: 22.x
           cache: 'npm'
+      - run: npm ci
       - run: npm publish --tag next --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
