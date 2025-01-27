@@ -45,6 +45,16 @@ program.addCommand(require('../cli/cmds/utils'));
 program.addCommand(require('../cli/cmds/project'));
 program.addCommand(require('../cli/cmds/deployment'));
 
+program.hook('preAction', async () => {
+  try {
+    await config.validate();
+  } catch (err) {
+    displayFailure(err)
+    // eslint-disable-next-line no-process-exit
+    process.exit(1);
+  }
+});
+
 // Show help if no command is provided
 if (!process.argv.slice(2).length) {
   program.outputHelp();
