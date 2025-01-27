@@ -15,6 +15,7 @@ process.env.LOGGING_LEVEL = 'warn';
 
 const { displayFailure } = require('../cli/output/basic');
 const config = require('../cli/config');
+const { checkForNewRelease } = require('../cli/upgrade');
 
 if (fs.existsSync(process.env.CONFIG_PATH)) {
   try {
@@ -25,9 +26,7 @@ if (fs.existsSync(process.env.CONFIG_PATH)) {
   } catch (err) {
     const lastArgs = process.argv.slice(-2);
     if (!(lastArgs.includes('config') && lastArgs.includes('wharfie'))) {
-      displayFailure(
-        'Failed to load config. Run "wharfie config" to resolve.'
-      );
+      displayFailure('Failed to load config. Run "wharfie config" to resolve.');
       // eslint-disable-next-line no-process-exit
       process.exit(1);
     }
@@ -49,10 +48,11 @@ program.hook('preAction', async () => {
   try {
     await config.validate();
   } catch (err) {
-    displayFailure(err)
+    displayFailure(err);
     // eslint-disable-next-line no-process-exit
     process.exit(1);
   }
+  await checkForNewRelease();
 });
 
 // Show help if no command is provided
