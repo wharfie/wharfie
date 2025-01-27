@@ -55,8 +55,7 @@ async function validateConfig() {
 
   if (!keySet || !sessionSet) {
     throw new Error(
-      // @ts-ignore
-      `AWS credentials are incomplete in terminal please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html \nfailed with this error:\n${err.message}`
+      `AWS credentials are incomplete in terminal please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html`
     );
   }
 
@@ -64,8 +63,7 @@ async function validateConfig() {
   const region = await sts.sts.config.region();
   if (!region) {
     throw new Error(
-      // @ts-ignore
-      `AWS Region is not configured for terminal, please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html \nfailed with this error:\n${err.message}`
+      `AWS Region is not configured for terminal, please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html`
     );
   }
   check(configuration);
