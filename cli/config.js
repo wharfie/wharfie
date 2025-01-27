@@ -1,4 +1,6 @@
 'use strict';
+const STS = require('../lambdas/lib/sts');
+const { defaultProvider } = require('@aws-sdk/credential-provider-node');
 
 const configuration = {
   region: process.env.WHARFIE_REGION,
@@ -17,20 +19,55 @@ const configuration = {
 const check = ({ region, deployment_name, service_bucket }) => {
   if (!region) {
     throw new Error(
-      'wharfie region not found. Please make sure you set up the cli config correctly (run wharfie config)'
+      'wharfie region not found. Please make sure you set up the cli config correctly (run `wharfie config`)'
     );
   }
   if (!deployment_name) {
     throw new Error(
-      'wharfie service name not found. Please make sure you set up the cli config correctly (run wharfie config)'
+      'wharfie service name not found. Please make sure you set up the cli config correctly (run `wharfie config`)'
     );
   }
   if (!service_bucket) {
     throw new Error(
-      'wharfie service name not found. Please make sure you set up the cli config correctly (run wharfie config)'
+      'wharfie service name not found. Please make sure you set up the cli config correctly (run `wharfie config`)'
     );
   }
 };
+
+/**
+ *
+ */
+async function validateConfig() {
+  let credentials;
+  const sts = new STS();
+  // Check credentials
+  const credentialProvider = defaultProvider();
+  try {
+    credentials = await credentialProvider();
+  } catch (err) {
+    throw new Error(
+      // @ts-ignore
+      `AWS credentials are not configured for terminal, please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html \nfailed with this error:\n${err.message}`
+    );
+  }
+  const keySet = credentials.accessKeyId && credentials.secretAccessKey;
+  const sessionSet = credentials.sessionToken;
+
+  if (!keySet || !sessionSet) {
+    throw new Error(
+      `AWS credentials are incomplete in terminal please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html`
+    );
+  }
+
+  // // Check region configuration
+  const region = await sts.sts.config.region();
+  if (!region) {
+    throw new Error(
+      `AWS Region is not configured for terminal, please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html`
+    );
+  }
+  check(configuration);
+}
 
 module.exports = {
   /**
@@ -59,4 +96,5 @@ module.exports = {
     process.env.WHARFIE_SERVICE_BUCKET = configuration.service_bucket;
     process.env.WHARFIE_ARTIFACT_BUCKET = configuration.service_bucket;
   },
+  validate: validateConfig,
 };

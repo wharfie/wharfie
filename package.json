@@ -149,6 +149,7 @@
     "@aws-sdk/client-sns": "^3.363.0",
     "@aws-sdk/client-sqs": "^3.363.0",
     "@aws-sdk/client-sts": "^3.363.0",
+    "@aws-sdk/credential-provider-node": "^3.734.0",
     "@aws-sdk/credential-providers": "^3.363.0",
     "@aws-sdk/lib-dynamodb": "^3.365.0",
     "@aws-sdk/util-dynamodb": "^3.658.1",
