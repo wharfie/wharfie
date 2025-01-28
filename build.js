@@ -33,7 +33,7 @@ const DEFAULT_BUILDS = [
 
 // Update this to the "latest Node 22 version" you want to use.
 // In reality, you'd confirm what's actually available at nodejs.org.
-const DEFAULT_NODE_VERSION = '22.9.0';
+const DEFAULT_NODE_VERSION = '22.13.1';
 // const DEFAULT_NODE_VERSION = '23.6.0';
 
 (async () => {
