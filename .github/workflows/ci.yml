@@ -33,4 +33,4 @@ jobs:
         env:
           WHARFIE_ARTIFACT_BUCKET: service-bucket
       - run: npm run typecheck
-      - run: ./build.js --platform linux --arch x64 && ./dist/wharfie-linux-x64
+      - run: ./build.js --platform linux --arch x64 && ./dist/wharfie-linux-x64 --help
