@@ -21,7 +21,7 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run typecheck
-      - run: ./build.js --platform linux --arch x64 && ./dist/wharfie-linux-x64
+      - run: ./build.js --platform linux --arch x64 && ./dist/wharfie-linux-x64 --help
 
   release_macos:
     needs: verify
