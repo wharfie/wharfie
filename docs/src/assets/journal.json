@@ -1,0 +1,15 @@
+{
+  "entries": [
+    {
+      "id": 1,
+      "title": "Go: Longest Increasing and Decreasing Subsequence",
+      "slug": "go-longest-increasing-and-decreasing-subsequence",
+      "markdown": "assets/journals/1.md",
+      "description": "Two neat little functions. Both run in O(n log n) time.",
+      "created_at": 1454372683652,
+      "updated_at": 1454372683652,
+      "published_at": 1454372683652,
+      "published": true
+    }
+  ]
+}
