@@ -3,26 +3,21 @@ import { parse as parseQueryString } from 'qs';
 
 import journal from 'assets/journal.json';
 
-import Dashboard from './dashboard/';
-import Journal from './journal/';
-import JournalEntry from './journal/entry/';
+import Documentation from './documentation/';
+import DocsEntry from './documentation/entry';
 import NotFound from './404';
 
 const ROUTES = journal.entries
   .filter((entry) => entry.published)
   .map((entry) => ({
-    test: new RegExp(`^/journal/${entry.slug}/$`),
+    test: new RegExp(`^/${entry.slug}/$`),
     props: { entry },
-    Component: JournalEntry,
+    Component: DocsEntry,
   }))
   .concat([
     {
-      test: new RegExp(`^/journal/$`),
-      Component: Journal,
-    },
-    {
       test: new RegExp(`^/$`),
-      Component: Dashboard,
+      Component: Documentation,
     },
   ]);
 
@@ -38,31 +33,11 @@ const Router = ({ history }) => {
     };
   }, [history]);
 
-  useEffect(() => {
-    const staticFiles = ['rss.xml']; // Add more if needed
-    const isStaticFile = staticFiles.some((ext) =>
-      location.pathname.endsWith(ext)
-    );
-
-    if (isStaticFile) {
-      // Perform a full-page redirect to the static asset
-      window.location.href = location.pathname;
-    }
-  }, [location.pathname]);
-
   const query = parseQueryString(location.search.substring(1));
 
   const Route = ROUTES.find(({ test }) => test.test(location.pathname)) || {
     Component: NotFound,
   };
-
-  // Don't render anything if we're redirecting to a static file
-  const isStaticFile = ['rss.xml'].some((ext) =>
-    location.pathname.endsWith(ext)
-  );
-  if (isStaticFile) {
-    return null; // Prevent rendering during the redirect
-  }
 
   return (
     <Route.Component

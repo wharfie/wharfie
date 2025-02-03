@@ -60,7 +60,10 @@ const getMetaTags = (entry) => {
     { name: 'twitter:image:src', content: wharfieLogo.src },
     { name: 'og:title', content: entry.title },
     { name: 'og:type', content: 'website' },
-    { name: 'og:url', content: `https://wharfie.dev/journal/${entry.slug}` },
+    {
+      name: 'og:url',
+      content: `https://docs.wharfie.dev/journal/${entry.slug}`,
+    },
     { name: 'og:image', content: wharfieLogo.src },
     { name: 'og:description', content: entry.description },
     { name: 'og:site_name', content: 'wharfie' },
@@ -128,7 +131,7 @@ function Entry({ entry, html }) {
         <title>{entry.title} 📝 | JVD</title>
         <link
           rel="canonical"
-          href={`https://wharfie.dev/journal/${entry.slug}`}
+          href={`https://docs.wharfie.dev/journal/${entry.slug}`}
         />
         <script type="application/ld+json">
           {JSON.stringify({
@@ -136,7 +139,7 @@ function Entry({ entry, html }) {
             '@type': 'NewsArticle',
             mainEntityOfPage: {
               '@type': 'WebPage',
-              '@id': `https://wharfie.dev/journal/${entry.slug}`,
+              '@id': `https://docs.wharfie.dev/journal/${entry.slug}`,
             },
             headline: 'Article headline',
             image: [],

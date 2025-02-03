@@ -42,7 +42,7 @@ async function buildSW() {
         },
         {
           // Cache your domain's fetch calls more gently (NetworkFirst).
-          urlPattern: new RegExp('^https://www\\.wharfie\\.dev/'),
+          urlPattern: new RegExp('^https://docs\\.wharfie\\.dev/'),
           handler: 'NetworkFirst',
           options: {
             cacheName: 'api',
