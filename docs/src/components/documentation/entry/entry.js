@@ -62,7 +62,7 @@ const getMetaTags = (entry) => {
     { name: 'og:type', content: 'website' },
     {
       name: 'og:url',
-      content: `https://docs.wharfie.dev/journal/${entry.slug}`,
+      content: `https://docs.wharfie.dev/${entry.slug}`,
     },
     { name: 'og:image', content: wharfieLogo.src },
     { name: 'og:description', content: entry.description },
@@ -129,17 +129,14 @@ function Entry({ entry, html }) {
     <article {...articleStyle}>
       <Helmet meta={getMetaTags(entry)}>
         <title>{entry.title} 📝 | JVD</title>
-        <link
-          rel="canonical"
-          href={`https://docs.wharfie.dev/journal/${entry.slug}`}
-        />
+        <link rel="canonical" href={`https://docs.wharfie.dev/${entry.slug}`} />
         <script type="application/ld+json">
           {JSON.stringify({
             '@context': 'http://schema.org',
             '@type': 'NewsArticle',
             mainEntityOfPage: {
               '@type': 'WebPage',
-              '@id': `https://docs.wharfie.dev/journal/${entry.slug}`,
+              '@id': `https://docs.wharfie.dev/${entry.slug}`,
             },
             headline: 'Article headline',
             image: [],

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { parse as parseQueryString } from 'qs';
 
-import journal from 'assets/journal.json';
+import journal from 'assets/documentation.json';
 
 import Documentation from './documentation/';
 import DocsEntry from './documentation/entry';
