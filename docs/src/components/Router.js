@@ -1,25 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { parse as parseQueryString } from 'qs';
 
-import journal from 'assets/documentation.json';
+import documentation from 'assets/documentation.json';
 
-import Documentation from './documentation/';
 import DocsEntry from './documentation/entry';
 import NotFound from './404';
 
-const ROUTES = journal.entries
+const ROUTES = documentation.entries
   .filter((entry) => entry.published)
   .map((entry) => ({
-    test: new RegExp(`^/${entry.slug}/$`),
+    test: new RegExp(`^/${entry.slug}$`),
     props: { entry },
     Component: DocsEntry,
-  }))
-  .concat([
-    {
-      test: new RegExp(`^/$`),
-      Component: Documentation,
-    },
-  ]);
+  }));
 
 const Router = ({ history }) => {
   const [location, setLocation] = useState(history.location);

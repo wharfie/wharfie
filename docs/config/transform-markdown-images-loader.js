@@ -11,7 +11,10 @@ module.exports = function transformMarkdownImages(source) {
   const tasks = imgElements.map((imgEl) => {
     const $img = $(imgEl);
     const originalSrc = $img.attr('src');
+    const originalWidth = $img.attr('width');
+    const originalHeight = $img.attr('height');
     if (!originalSrc) return Promise.resolve();
+    if (originalSrc.startsWith('https://')) return Promise.resolve();
 
     // We'll interpret the relative path + query with Webpack
     return new Promise((resolve, reject) => {
@@ -53,11 +56,13 @@ module.exports = function transformMarkdownImages(source) {
             $img.attr('src', exportsObj.placeholder || exportsObj.src);
             // Store the real image in data-fullsrc
             $img.attr('data-fullsrc', exportsObj.src);
-            $img.attr('width', exportsObj.width);
-            $img.attr('height', exportsObj.height);
+            if (!originalWidth && !originalHeight) {
+              $img.attr('width', exportsObj.width);
+              $img.attr('height', exportsObj.height);
+            }
             // $img.attr("aspect-ratio", exportsObj.width/exportsObj.height);
             // The onload swap
-            const onloadScript = `(function(e){if(navigator.userAgent!=='ReactSnap'){e.onload=null;(async function(){try{var t=e.dataset.fullsrc;if(!t)return;var i=await(function(u){return new Promise(function(r,n){var a=new Image;a.onload=function(){r(a)},a.onerror=n,a.src=u})})(t);i.decode&&await i.decode();e.src=t}catch(s){console.error('Failed to preload image:',s)}})()}})(this)`;
+            const onloadScript = `(function(e){if(navigator.userAgent!=='ReactSnap'){e.onload=null;(async function(){try{var t=e.dataset.fullsrc;if(!t)return;var i=await(function(u){return new Promise(function(r,n){var a=new Image;a.onload=function(){r(a)},a.onerror=n,a.src=u})})(t);i.decode&&await i.decode();e.src=t}catch(s){}})()}})(this)`;
             $img.attr('onload', onloadScript);
 
             const $parentP = $img.parent('p');

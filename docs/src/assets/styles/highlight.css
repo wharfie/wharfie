@@ -1,21 +1,23 @@
+
+/* Code blocks */
 code {
   font-family: Inconsolata, monospace, sans-serif;
-  font-size: 0.9em;
-  line-height: 1.3em;
+  font-size: 1.2em;
+  line-height: 1.6em;
   display: block;
   overflow-x: auto;
   padding: 0.5em;
-  color: #333;
+  color: #f8f8f2;  /* light text */
   border-radius: 10px;
-  color: #333;
-  background: rgb(248, 248, 248);
+  background: #2d2d2d;  /* dark background that won’t clash with black */
   -webkit-text-size-adjust: none;
 }
 
+/* Highlight.js styles adjusted for dark background */
 .hljs-comment,
 .diff .hljs-header,
 .hljs-javadoc {
-  color: #998;
+  color: #75715e;  /* olive-gray tone */
   font-style: italic;
 }
 
@@ -26,14 +28,14 @@ code {
 .hljs-subst,
 .hljs-request,
 .hljs-status {
-  color: #333;
+  color: #f92672;  /* bright pinkish */
   font-weight: bold;
 }
 
 .hljs-number,
 .hljs-hexcolor,
 .ruby .hljs-constant {
-  color: #008080;
+  color: #ae81ff;  /* purple */
 }
 
 .hljs-string,
@@ -41,13 +43,13 @@ code {
 .hljs-phpdoc,
 .hljs-dartdoc,
 .tex .hljs-formula {
-  color: #d14;
+  color: #e6db74;  /* light yellow */
 }
 
 .hljs-title,
 .hljs-id,
 .scss .hljs-preprocessor {
-  color: #900;
+  color: #66d9ef;  /* cyan */
   font-weight: bold;
 }
 
@@ -60,7 +62,7 @@ code {
 .hljs-type,
 .vhdl .hljs-literal,
 .tex .hljs-command {
-  color: #458;
+  color: #a6e22e;  /* green */
   font-weight: bold;
 }
 
@@ -68,7 +70,7 @@ code {
 .hljs-tag .hljs-title,
 .hljs-rule .hljs-property,
 .django .hljs-tag .hljs-keyword {
-  color: #000080;
+  color: #fd971f;  /* orange */
   font-weight: normal;
 }
 
@@ -76,11 +78,11 @@ code {
 .hljs-variable,
 .lisp .hljs-body,
 .hljs-name {
-  color: #008080;
+  color: #f8f8f2;
 }
 
 .hljs-regexp {
-  color: #009926;
+  color: #e6db74;
 }
 
 .hljs-symbol,
@@ -90,11 +92,11 @@ code {
 .scheme .hljs-keyword,
 .tex .hljs-special,
 .hljs-prompt {
-  color: #990073;
+  color: #f92672;
 }
 
 .hljs-built_in {
-  color: #0086b3;
+  color: #66d9ef;
 }
 
 .hljs-preprocessor,
@@ -103,24 +105,24 @@ code {
 .hljs-doctype,
 .hljs-shebang,
 .hljs-cdata {
-  color: #999;
+  color: #75715e;
   font-weight: bold;
 }
 
 .hljs-deletion {
-  background: #fdd;
+  background: #3e3d32;
 }
 
 .hljs-addition {
-  background: #dfd;
+  background: #344f2b;
 }
 
 .diff .hljs-change {
-  background: #0086b3;
+  background: #49483e;
 }
 
 .hljs-chunk {
-  color: #aaa;
+  color: #75715e;
 }
 
 .code-block {
@@ -129,25 +131,28 @@ code {
 
 .copy-button {
   position: absolute;
+  line-height: 1;
   top: 0; 
   right: 0;
   border-radius: 10px;
   cursor: pointer;
   background: none;
   border: none;
-  padding: 0.5rem;
-  color: #454545; 
+  padding: 0.3rem;
+  color: #f8f8f2; 
+  background-color: rgba(93, 93, 93, 0.9);
   opacity: 0.8;
 }
 
 .copy-button:hover,
 .copy-button:focus {
-  color: #1e1e1e; 
+  color: #ffffff; 
   opacity: 0.9;
   outline: none;
 }
+
 .copy-button:active {
-  color: rgb(0, 0, 0); 
+  color: #ffffff; 
   opacity: 1;
   outline: none;
 }

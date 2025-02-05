@@ -2,9 +2,9 @@ import React, { lazy, Suspense } from 'react';
 
 const Footer = lazy(() => import('./footer'));
 
-const FooterWithSuspense = () => (
+const FooterWithSuspense = (props) => (
   <Suspense fallback={null}>
-    <Footer />
+    <Footer {...props} />
   </Suspense>
 );
 

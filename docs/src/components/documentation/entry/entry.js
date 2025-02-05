@@ -2,7 +2,7 @@ import 'assets/styles/highlight.css';
 import 'assets/styles/markdown.css';
 import React, { useEffect, useRef } from 'react';
 import { css } from 'glamor';
-import Time from 'components/shared/time';
+import Navbar from 'components/shared/navbar/';
 import Footer from 'components/shared/footer/';
 import { Helmet } from 'react-helmet';
 import wharfieLogo from 'assets/images/beanie.png?as=webp';
@@ -11,36 +11,14 @@ const articleStyle = css({
   width: '100%',
 });
 
-const headerStyle = css({
-  height: '33vh',
-  display: 'flex',
-  flexDirection: 'column',
-  justifyContent: 'flex-end',
-  backgroundColor: '#dedede',
-  padding: '2rem 0',
-});
-
-const titleStyle = css({
-  width: '80%',
-  maxWidth: 710,
-  marginRight: 'auto',
-  marginLeft: 'auto',
-  margin: '0 auto',
-  padding: '1rem 0',
-  position: 'relative',
-});
-
 const contentStyle = css({
-  minHeight: '66vh', // Changed to vh units to match header
   paddingTop: '3em',
-  width: '80%',
-  maxWidth: 710,
+  maxWidth: 890,
   textAlign: 'left',
   margin: '0 auto', // Simplified margin
   display: 'flex',
   flexDirection: 'column',
   justifyContent: 'flex-start', // Changed from space-evenly to prevent shifting
-  backgroundColor: '#fefefe',
   position: 'relative', // Added for stable positioning
   padding: '3em 0 2em', // Added consistent padding
   '& > *': {
@@ -124,11 +102,14 @@ function Entry({ entry, html }) {
         aria-hidden="true"
       ><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path></svg>`;
   }
+  console.log(entry);
+  console.log(entry.updated_at);
 
   return (
     <article {...articleStyle}>
       <Helmet meta={getMetaTags(entry)}>
-        <title>{entry.title} 📝 | JVD</title>
+        <title>{entry.title}</title>
+        <meta name="description" content={entry.description} />
         <link rel="canonical" href={`https://docs.wharfie.dev/${entry.slug}`} />
         <script type="application/ld+json">
           {JSON.stringify({
@@ -162,19 +143,15 @@ function Entry({ entry, html }) {
           })}
         </script>
       </Helmet>
-      <header {...headerStyle}>
-        <h1 {...titleStyle}>{entry.title}</h1>
-      </header>
-      <section
-        className={'entry-content'}
-        {...contentStyle}
-        ref={contentRef}
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-      <footer>
-        <Time timestamp={entry.updated_at} />
-      </footer>
-      <Footer />
+      <Navbar>
+        <section
+          className={'entry-content'}
+          {...contentStyle}
+          ref={contentRef}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      </Navbar>
+      <Footer timestamp={entry.updated_at} />
     </article>
   );
 }

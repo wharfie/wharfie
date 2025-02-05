@@ -4,6 +4,7 @@ import { css } from 'glamor';
 import githubSvg from 'assets/svgs/github.svg';
 import wharfieLogo from 'assets/images/beanie.png?as=webp';
 import { COLOR_BLUE } from '../color';
+import Time from '../time';
 
 const footerStyle = css({
   paddingTop: 20,
@@ -28,7 +29,8 @@ const githubIconStyle = css({
   width: 50,
 });
 
-function Footer() {
+function Footer({ timestamp }) {
+  console.log(timestamp);
   return (
     <footer {...footerStyle}>
       <section {...linkStyle}>
@@ -57,6 +59,7 @@ function Footer() {
           />
         </a>
       </section>
+      <Time timestamp={timestamp} />
     </footer>
   );
 }

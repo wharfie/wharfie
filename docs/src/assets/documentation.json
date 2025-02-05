@@ -1,15 +1,49 @@
 {
   "entries": [
     {
-      "id": 1,
-      "title": "Go: Longest Increasing and Decreasing Subsequence",
-      "slug": "go-longest-increasing-and-decreasing-subsequence",
-      "markdown": "assets/journals/1.md",
-      "description": "Two neat little functions. Both run in O(n log n) time.",
-      "created_at": 1454372683652,
-      "updated_at": 1454372683652,
-      "published_at": 1454372683652,
+      "path": "home",
+      "title": "Wharfie Documentation",
+      "slug": "",
+      "description": "Wharfie is an experimental table-oriented data application framework built ontop of AWS Athena.",
+      "created_at": 1738635590000,
+      "updated_at": 1738635590000,
+      "published_at": 1738635590000,
       "published": true
+    },
+    {
+      "path": "quickstart",
+      "title": "Quickstart",
+      "slug": "quickstart",
+      "description": "How to get started with Wharfie",
+      "created_at": 1738635590000,
+      "updated_at": 1738635590000,
+      "published_at": 1738635590000,
+      "published": true
+    },
+    {
+      "path": "installation",
+      "title": "Installation & Setup",
+      "slug": "install",
+      "description": "How to install and configure wharfie",
+      "created_at": 1738635590000,
+      "updated_at": 1738635590000,
+      "published_at": 1738635590000,
+      "published": true
+    }
+  ],
+  "hierarchy": [
+    {
+      "label": "Home",
+      "path": "/",
+      "isItalic": true
+    },
+    {
+      "label": "Installation & Setup",
+      "path": "/install"
+    },
+    {
+      "label": "Quickstart",
+      "path": "/quickstart"
     }
   ]
 }

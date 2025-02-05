@@ -19,12 +19,7 @@ function Documentation() {
         />
         <link rel="canonical" href="https://docs.wharfie.dev/" />
       </Helmet>
-      <Navbar>
-        <h1>Welcome to the Documentation</h1>
-        <p>
-          Resize your browser or click the menu on mobile to open the sidebar.
-        </p>
-      </Navbar>
+      <Navbar></Navbar>
       <Footer />
     </div>
   );

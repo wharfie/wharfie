@@ -2,39 +2,7 @@ import React, { useState } from 'react';
 import { css } from 'glamor';
 import { PAGE_BG, COLOR_BLUE, COLOR_ORANGE, COLOR_YELLOW } from '../color';
 import wharfieJson from '../../../../../package.json';
-
-//
-// Example data structure
-//
-const docHierarchy = [
-  { label: 'Home', isItalic: true },
-  {
-    label: 'Setup & Installation',
-    children: [{ label: 'Installation' }, { label: 'Docker Deployment' }],
-  },
-  { label: 'Quick Start' },
-  {
-    label: 'Blog & Changelog',
-    children: [{ label: 'Blog Home' }, { label: 'Changelog' }],
-  },
-  {
-    label: 'Core',
-    children: [
-      { label: 'Simple Crawling' },
-      { label: 'Crawler Result' },
-      { label: 'Browser & Crawler Config' },
-      { label: 'Markdown Generation' },
-      { label: 'Fit Markdown' },
-      { label: 'Page Interaction' },
-      { label: 'Content Selection' },
-      { label: 'Cache Modes' },
-      { label: 'Local Files & Raw HTML' },
-      { label: 'Link & Media' },
-    ],
-  },
-  { label: 'Advanced' },
-  { label: 'S3 Support' },
-];
+import documentation from 'assets/documentation.json';
 
 // Top-level container
 const layoutStyle = css({
@@ -64,7 +32,7 @@ const leftSectionStyle = css({
 const titleStyle = css({
   color: COLOR_ORANGE,
   textDecoration: 'none',
-  fontSize: '1rem',
+  fontSize: '1.2rem',
   ':hover': {
     opacity: 0.8,
   },
@@ -121,6 +89,10 @@ const sidebarBaseStyle = css({
   transitionDuration: '0.2s',
   transitionTimingFunction: 'ease-in-out',
 
+  textAlign: 'left',
+  // fontSize: '1rem',
+  // lineHeight: '1.5rem',
+
   // Mobile default: hidden off-screen
   position: 'absolute',
   left: 0,
@@ -130,7 +102,7 @@ const sidebarBaseStyle = css({
   visibility: 'hidden',
 
   // Desktop: static, always visible
-  '@media(min-width: 1000px)': {
+  '@media(min-width: 1170px)': {
     position: 'relative',
     transform: 'none',
     opacity: 1,
@@ -150,8 +122,9 @@ const sidebarOpenStyle = css({
 // Top-level item styles
 const topLevelItemStyle = css({
   fontWeight: 'bold',
-  marginTop: '1rem',
-  marginBottom: '0.5rem',
+  fontSize: '1.1rem',
+  paddingTop: '0.5rem',
+  paddingBottom: '0.5rem',
 });
 const italicItemStyle = css({
   fontStyle: 'italic',
@@ -174,6 +147,7 @@ const linkStyle = css({
 const mainContentStyle = css({
   flex: 1,
   padding: '1rem',
+  width: '100%',
 });
 
 // OVERLAY behind the sidebar on mobile
@@ -186,7 +160,7 @@ const overlayBaseStyle = css({
   backgroundColor: 'rgba(0,0,0,0.7)',
   zIndex: 10,
   transition: 'opacity 0.2s ease-in-out, visibility 0.2s ease-in-out',
-  '@media(min-width: 1000px)': {
+  '@media(min-width: 1170px)': {
     display: 'none', // no overlay on desktop
   },
 });
@@ -248,7 +222,7 @@ const closeModalButtonStyle = css({
   },
 });
 
-export default function NavBar(props) {
+export default function NavBar({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
 
@@ -319,18 +293,16 @@ export default function NavBar(props) {
         <aside
           {...css(sidebarBaseStyle, sidebarOpen ? sidebarOpenStyle : null)}
         >
-          {docHierarchy.map((section, idx) => {
+          {documentation.hierarchy.map((section, idx) => {
             const topStyle = section.isItalic
               ? css(topLevelItemStyle, italicItemStyle)
               : topLevelItemStyle;
 
             return (
               <div key={idx}>
-                <div {...topStyle}>
-                  <a href="/#" {...linkStyle}>
-                    {section.label}
-                  </a>
-                </div>
+                <a href={section.path} {...linkStyle}>
+                  <div {...topStyle}>{section.label}</div>
+                </a>
                 {section.children &&
                   section.children.map((child, i) => (
                     <div key={i} {...subItemStyle}>
@@ -345,7 +317,7 @@ export default function NavBar(props) {
         </aside>
 
         {/* MAIN CONTENT */}
-        <main {...mainContentStyle}>{props.children}</main>
+        <main {...mainContentStyle}>{children}</main>
       </div>
 
       {/* SEARCH MODAL (with fade) */}

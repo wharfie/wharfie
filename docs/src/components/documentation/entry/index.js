@@ -9,7 +9,7 @@ export default class AsyncEntry extends React.Component {
     };
   }
   componentDidMount() {
-    import(`assets/markdown/${this.props.entry.id}.md`).then((file) => {
+    import(`assets/markdown/${this.props.entry.path}.md`).then((file) => {
       this.setState({ html: file.default });
     });
   }

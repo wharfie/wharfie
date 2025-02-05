@@ -8,7 +8,10 @@ const DATE_OPTIONS = {
 };
 
 const timeStyle = css({
-  fontSize: '0.6rem',
+  display: 'inline-block',
+  width: '100%',
+  fontSize: '0.8rem',
+  color: '#f8f8f2' /* light text */,
 });
 
 const Time = ({ timestamp }) => (
