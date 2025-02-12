@@ -36,6 +36,7 @@
         "imagemin-webp": "^8.0.0",
         "loader-utils": "^2.0.1",
         "lqip-modern": "^2.2.1",
+        "lz-string": "^1.5.0",
         "markdown-loader": "^8.0.0",
         "marked": "^15.0.6",
         "mini-css-extract-plugin": "^2.7.5",
@@ -52,6 +53,7 @@
         "react-dom": "^18.0.0",
         "react-helmet": "^6.1.0",
         "react-snap": "^1.23.0",
+        "stemmer": "^2.0.1",
         "style-loader": "^4.0.0",
         "typography": "^0.16.24",
         "webpack": "^5.88.2",
@@ -61,10 +63,9 @@
     },
     "scripts": {
         "start": "node scripts/start.js",
-        "deploy": "./bin/deploy.sh",
+        "deploy": "node scripts/deploy.js",
         "build": "node scripts/build.js && react-snap && npm run generate-sw",
-        "generate-sw": "node scripts/generate-service-worker.js",
-        "generate-work": "bin/generate-work.js"
+        "generate-sw": "node scripts/generate-service-worker.js"
     },
     "eslintConfig": {
         "extends": "react-app",
@@ -78,5 +79,9 @@
         "skipThirdPartyRequests": true,
         "inlineCss": true,
         "removeScriptTags": false
+    },
+    "devDependencies": {
+        "bluebird": "^3.7.2",
+        "mime-types": "^2.1.35"
     }
 }

@@ -51,7 +51,8 @@
     ],
     "ignorePatterns": [
       "dist/",
-      "tmp/"
+      "tmp/",
+      "docs"
     ],
     "overrides": [
       {

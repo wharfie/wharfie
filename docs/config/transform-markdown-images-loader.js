@@ -60,9 +60,42 @@ module.exports = function transformMarkdownImages(source) {
               $img.attr('width', exportsObj.width);
               $img.attr('height', exportsObj.height);
             }
-            // $img.attr("aspect-ratio", exportsObj.width/exportsObj.height);
             // The onload swap
-            const onloadScript = `(function(e){if(navigator.userAgent!=='ReactSnap'){e.onload=null;(async function(){try{var t=e.dataset.fullsrc;if(!t)return;var i=await(function(u){return new Promise(function(r,n){var a=new Image;a.onload=function(){r(a)},a.onerror=n,a.src=u})})(t);i.decode&&await i.decode();e.src=t}catch(s){}})()}})(this)`;
+            const onloadScript = `(function(e){
+              // For browsers like ReactSnap that we might want to ignore
+              if(navigator.userAgent==='ReactSnap') return;
+
+              var fullsrc = e.dataset.fullsrc;
+              if(!fullsrc) return;
+
+              // Check if the full image is already cached
+              var testImg = new Image();
+              testImg.src = fullsrc;
+              if(testImg.complete){
+                // Image is cached – swap immediately
+                e.onload = null;
+                e.src = fullsrc;
+                return;
+              }
+
+              // Otherwise, load the full image asynchronously
+              e.onload = null;
+              (async function(){
+                try {
+                  // Load the full image via a promise
+                  var loadedImg = await new Promise(function(resolve, reject){
+                    var a = new Image();
+                    a.onload = function(){ resolve(a); };
+                    a.onerror = reject;
+                    a.src = fullsrc;
+                  });
+                  if(loadedImg.decode) await loadedImg.decode();
+                  e.src = fullsrc;
+                } catch(err) {
+                  // Handle any errors here if desired
+                }
+              })();
+            })(this)`;
             $img.attr('onload', onloadScript);
 
             const $parentP = $img.parent('p');

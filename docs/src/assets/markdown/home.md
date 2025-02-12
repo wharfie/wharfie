@@ -43,4 +43,4 @@ wharfie deployment create
 wharfie project init
 ```
 
-For more follow the [QuickStart Guide](./quickstart)
+For more follow the [QuickStart Guide](/quickstart)

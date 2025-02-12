@@ -3,11 +3,12 @@ const glamor = require('glamor/babel');
 const webpack = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const ESLintPlugin = require('eslint-webpack-plugin');
+const BuildSearchIndexPlugin = require('./build-search-index-plugin');
 
 process.env.NODE_ENV = 'development';
 module.exports = {
   mode: process.env.NODE_ENV,
-  devtool: 'cheap-module-source-map',
+  devtool: 'eval-source-map',
 
   // Your main entry file(s):
   entry: [
@@ -21,6 +22,14 @@ module.exports = {
     path: path.resolve(__dirname, '..', 'build'),
     filename: 'static/js/bundle.js',
     publicPath: '/',
+    devtoolModuleFilenameTemplate: (info) =>
+      'webpack:///' +
+      path
+        .relative(
+          path.resolve(__dirname, '..', 'src'),
+          info.absoluteResourcePath
+        )
+        .replace(/\\/g, '/'),
   },
 
   resolve: {
@@ -110,6 +119,7 @@ module.exports = {
   },
 
   plugins: [
+    new BuildSearchIndexPlugin(),
     // Generates an index.html with the <script> injected.
     new HtmlWebpackPlugin({
       template: path.resolve(__dirname, '..', 'public', 'index.html'),
@@ -117,8 +127,6 @@ module.exports = {
         PUBLIC_URL: process.env.PUBLIC_URL || 'http://localhost:3000', // Pass PUBLIC_URL to the template
       },
     }),
-    // Enables Hot Module Replacement
-    new webpack.HotModuleReplacementPlugin(),
     // Define environment variables
     new webpack.DefinePlugin({
       'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV),

@@ -3,6 +3,7 @@ import { css } from 'glamor';
 import { PAGE_BG, COLOR_BLUE, COLOR_ORANGE, COLOR_YELLOW } from '../color';
 import wharfieJson from '../../../../../package.json';
 import documentation from 'assets/documentation.json';
+import Search from '../search';
 
 // Top-level container
 const layoutStyle = css({
@@ -51,7 +52,7 @@ const iconButtonStyle = css({
   color: '#fff',
   fontSize: '1.2rem',
   cursor: 'pointer',
-  padding: 0,
+  padding: '5px',
   ':hover': {
     opacity: 0.8,
   },
@@ -60,7 +61,7 @@ const iconButtonStyle = css({
 // Only show the hamburger/X on mobile
 const hamburgerStyle = css({
   display: 'none',
-  '@media(max-width: 1000px)': {
+  '@media(max-width: 1170px)': {
     display: 'block',
   },
 });
@@ -173,55 +174,6 @@ const overlayClosedStyle = css({
   visibility: 'hidden',
 });
 
-// SEARCH MODAL
-const modalOverlayBaseStyle = css({
-  position: 'fixed',
-  top: 0,
-  left: 0,
-  width: '100%',
-  height: '100vh',
-  backgroundColor: 'rgba(0,0,0,0.7)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  zIndex: 9999,
-  transition: 'opacity 0.2s ease-in-out, visibility 0.2s ease-in-out',
-});
-
-const modalOverlayOpenStyle = css({
-  opacity: 1,
-  visibility: 'visible',
-});
-
-const modalOverlayClosedStyle = css({
-  opacity: 0,
-  visibility: 'hidden',
-});
-
-const modalContentStyle = css({
-  backgroundColor: PAGE_BG,
-  padding: '2rem',
-  border: `1px solid ${COLOR_BLUE}`,
-  width: '90%',
-  maxWidth: '500px',
-  boxSizing: 'border-box',
-  position: 'relative',
-});
-
-const closeModalButtonStyle = css({
-  position: 'absolute',
-  top: '0.5rem',
-  right: '0.5rem',
-  background: 'none',
-  border: 'none',
-  color: '#fff',
-  fontSize: '1.5rem',
-  cursor: 'pointer',
-  ':hover': {
-    opacity: 0.8,
-  },
-});
-
 export default function NavBar({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -236,14 +188,6 @@ export default function NavBar({ children }) {
 
   // Hamburger → "X" icon
   const menuIcon = sidebarOpen ? '✕' : '☰';
-
-  // Close the search modal by clicking outside
-  const onModalOverlayClick = (e) => {
-    // If you clicked directly on overlay (not the modal content), close
-    if (e.target === e.currentTarget) {
-      setSearchOpen(false);
-    }
-  };
 
   return (
     <div {...layoutStyle}>
@@ -321,32 +265,7 @@ export default function NavBar({ children }) {
       </div>
 
       {/* SEARCH MODAL (with fade) */}
-      <div
-        {...css(
-          modalOverlayBaseStyle,
-          searchOpen ? modalOverlayOpenStyle : modalOverlayClosedStyle
-        )}
-        onClick={onModalOverlayClick}
-      >
-        <div {...modalContentStyle} onClick={(e) => e.stopPropagation()}>
-          <button
-            {...closeModalButtonStyle}
-            onClick={() => setSearchOpen(false)}
-          >
-            ✕
-          </button>
-          <h2>Search</h2>
-          <input
-            type="text"
-            placeholder="Type to search..."
-            style={{
-              width: '100%',
-              padding: '0.5rem',
-              border: 'none',
-            }}
-          />
-        </div>
-      </div>
+      {searchOpen && <Search onClose={() => setSearchOpen(false)} />}
     </div>
   );
 }

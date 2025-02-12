@@ -2,15 +2,26 @@
 /* Code blocks */
 code {
   font-family: Inconsolata, monospace, sans-serif;
-  font-size: 1.2em;
-  line-height: 1.6em;
-  display: block;
-  overflow-x: auto;
-  padding: 0.5em;
+  font-size: 1em;
   color: #f8f8f2;  /* light text */
-  border-radius: 10px;
-  background: #2d2d2d;  /* dark background that won’t clash with black */
   -webkit-text-size-adjust: none;
+  overflow-x: auto;
+  display: inline;
+  background: #2d2d2d; /* dark background that won’t clash with black */
+}
+
+.code-block {
+  position: relative;
+  display: block;
+  padding: 0.5em;
+  font-size: 0.8em;
+  line-height: 1.6em;
+  background: #2d2d2d;  /* dark background that won’t clash with black */
+  border-radius: 10px;
+}
+
+.code-block > code {
+  display: block;
 }
 
 /* Highlight.js styles adjusted for dark background */
@@ -125,10 +136,6 @@ code {
   color: #75715e;
 }
 
-.code-block {
-  position: relative;
-}
-
 .copy-button {
   position: absolute;
   line-height: 1;
@@ -138,7 +145,7 @@ code {
   cursor: pointer;
   background: none;
   border: none;
-  padding: 0.3rem;
+  padding: 0.25rem;
   color: #f8f8f2; 
   background-color: rgba(93, 93, 93, 0.9);
   opacity: 0.8;

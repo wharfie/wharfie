@@ -4,18 +4,19 @@ import { css } from 'glamor';
 import { createBrowserHistory } from 'history';
 import { PAGE_BG } from './shared/color';
 
-// import "assets/styles/typography.css";
+import 'assets/styles/typography.css';
 
-import Typography from 'typography';
+// import Typography from 'typography';
 
-const typography = new Typography({
-  baseFontSize: '16px',
-  baseLineHeight: 1.63,
-  scaleRatio: 2.0,
-  headerFontFamily: ['Menlo', 'Monaco', 'Lucida Console', 'monospace'],
-  bodyFontFamily: ['monospace'],
-});
-typography.injectStyles();
+// const typography = new Typography({
+//   baseFontSize: '16px',
+//   baseLineHeight: 1.63,
+//   scaleRatio: 2.0,
+//   headerFontFamily: ['Menlo', 'Monaco', 'Lucida Console', 'monospace'],
+//   bodyFontFamily: ['monospace'],
+// });
+// typography.injectStyles();
+// console.log(typography.createStyles())
 
 const containerStyle = css({
   height: '100%',

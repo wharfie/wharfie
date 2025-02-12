@@ -30,7 +30,6 @@ const githubIconStyle = css({
 });
 
 function Footer({ timestamp }) {
-  console.log(timestamp);
   return (
     <footer {...footerStyle}>
       <section {...linkStyle}>

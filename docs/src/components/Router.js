@@ -8,11 +8,19 @@ import NotFound from './404';
 
 const ROUTES = documentation.entries
   .filter((entry) => entry.published)
-  .map((entry) => ({
-    test: new RegExp(`^/${entry.slug}$`),
-    props: { entry },
-    Component: DocsEntry,
-  }));
+  .map((entry) => [
+    {
+      test: new RegExp(`^${entry.slug}$`),
+      props: { entry },
+      Component: DocsEntry,
+    },
+    {
+      test: new RegExp(`^${entry.slug}/$`),
+      props: { entry },
+      Component: DocsEntry,
+    },
+  ])
+  .reduce((acc, val) => acc.concat(val), []);
 
 const Router = ({ history }) => {
   const [location, setLocation] = useState(history.location);

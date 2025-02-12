@@ -12,6 +12,7 @@ const glamor = require('glamor/babel');
 const autoprefixer = require('autoprefixer');
 const postcssFlexbugsFixes = require('postcss-flexbugs-fixes');
 const ImageMinimizerPlugin = require('image-minimizer-webpack-plugin');
+const BuildSearchIndexPlugin = require('./build-search-index-plugin');
 
 process.env.NODE_ENV = 'production';
 module.exports = {
@@ -150,6 +151,7 @@ module.exports = {
   plugins: [
     // Clean the build folder before each build
     new CleanWebpackPlugin(),
+    new BuildSearchIndexPlugin(),
     new CopyPlugin({
       patterns: [
         path.resolve(__dirname, '..', 'public', 'manifest.json'),
@@ -186,7 +188,7 @@ module.exports = {
     new webpack.DefinePlugin({
       'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV),
       'process.env.PUBLIC_URL': JSON.stringify(
-        process.env.PUBLIC_URL || 'https:/docs.wharfie.dev'
+        process.env.PUBLIC_URL || 'https://docs.wharfie.dev'
       ),
     }),
 

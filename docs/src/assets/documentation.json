@@ -13,7 +13,7 @@
     {
       "path": "quickstart",
       "title": "Quickstart",
-      "slug": "quickstart",
+      "slug": "/quickstart",
       "description": "How to get started with Wharfie",
       "created_at": 1738635590000,
       "updated_at": 1738635590000,
@@ -23,8 +23,18 @@
     {
       "path": "installation",
       "title": "Installation & Setup",
-      "slug": "install",
+      "slug": "/install",
       "description": "How to install and configure wharfie",
+      "created_at": 1738635590000,
+      "updated_at": 1738635590000,
+      "published_at": 1738635590000,
+      "published": true
+    },
+    {
+      "path": "project-structure",
+      "title": "Project Structure",
+      "slug": "/project-structure",
+      "description": "How a wharfie project is structured",
       "created_at": 1738635590000,
       "updated_at": 1738635590000,
       "published_at": 1738635590000,
@@ -44,6 +54,10 @@
     {
       "label": "Quickstart",
       "path": "/quickstart"
+    },
+    {
+      "label": "Project Structure",
+      "path": "/project-structure"
     }
   ]
 }
