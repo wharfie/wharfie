@@ -13,3 +13,8 @@ build
 dist/
 .vscode
 node_binaries/
+docs/build/
+docs/node_modules/
+docs/public/
+docs/.env
+docs/.env.local

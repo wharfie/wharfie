@@ -1,15 +1,8 @@
 <h1 align="center">
-  <img src="./docs/beanie.svg" alt="Wharfie Beanie Logo" width="200">
+  <img src="../images/beanie.png?as=webp" alt="Wharfie Beanie Logo" width="200">
   <br>
   Wharfie
-  <br>
-  <br>
 </h1>
-
-<p align="center">
-  <a href="https://discord.gg/QEbzFUsR"><img src="https://img.shields.io/discord/1131550721142161408" alt="discord"></a>
-  <a href="https://github.com/wharfie/wharfie/actions/workflows/ci.yml"><img src="https://github.com/wharfie/wharfie/actions/workflows/ci.yml/badge.svg" alt="Wharfie CI"></a>
-</p>
 
 Wharfie is an experimental table-oriented data application framework built ontop of [AWS Athena](https://aws.amazon.com/athena/). Designed to be fast to develop, confident to modify and cheap to run.
 
@@ -50,6 +43,4 @@ wharfie deployment create
 wharfie project init
 ```
 
-### Reference
-
-[docs.wharfie.dev](docs.wharfie.dev)
+For more follow the [QuickStart Guide](/quickstart)
