@@ -9,9 +9,6 @@
 <p align="center">
   <a href="https://discord.gg/QEbzFUsR"><img src="https://img.shields.io/discord/1131550721142161408" alt="discord"></a>
   <a href="https://github.com/wharfie/wharfie/actions/workflows/ci.yml"><img src="https://github.com/wharfie/wharfie/actions/workflows/ci.yml/badge.svg" alt="Wharfie CI"></a>
-  <a href="https://www.npmjs.com/package/@wharfie/wharfie"><img src="https://img.shields.io/npm/v/@wharfie/wharfie.svg" alt="npm version"></a>
-  <a href="https://www.npmjs.com/package/@wharfie/wharfie"><img src="https://img.shields.io/npm/dm/@wharfie/wharfie.svg" alt="npm downloads"></a>
-  <a href="https://standardjs.com"><img src="https://img.shields.io/badge/code_style-standard-brightgreen.svg" alt="Standard - JavaScript Style Guide"></a>
 </p>
 
 Wharfie is an experimental table-oriented data application framework built ontop of [AWS Athena](https://aws.amazon.com/athena/). Designed to be fast to develop, confident to modify and cheap to run.
@@ -39,6 +36,12 @@ When defining tables with Wharfie, you only need to statically define your table
 curl -fsSL https://raw.githubusercontent.com/wharfie/wharfie/master/install.sh | bash
 ```
 
+For Windows:
+
+```ps1
+iex (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wharfie/wharfie/master/install.ps1" -UseBasicParsing).Content
+```
+
 #### Example
 
 ```bash
@@ -49,6 +52,4 @@ wharfie project init
 
 ### Reference
 
-- **[Project Structure](./docs/project.md)**
-- **[FAQ](./docs/FAQ.md)**
-- **[Contributing](./docs/contributing.md)**
+[docs.wharfie.dev](docs.wharfie.dev)

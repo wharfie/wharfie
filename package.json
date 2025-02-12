@@ -52,7 +52,7 @@
     "ignorePatterns": [
       "dist/",
       "tmp/",
-      "docs"
+      "docs/"
     ],
     "overrides": [
       {
