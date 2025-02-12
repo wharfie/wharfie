@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="./docs/beanie.svg" alt="Wharfie Beanie Logo" width="200">
+  <img src="./docs/src/assets/svgs/beanie.svg" alt="Wharfie Beanie Logo" width="200">
   <br>
   Wharfie
   <br>
