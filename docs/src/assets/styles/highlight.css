@@ -1,0 +1,165 @@
+
+/* Code blocks */
+code {
+  font-family: Inconsolata, monospace, sans-serif;
+  font-size: 1em;
+  color: #f8f8f2;  /* light text */
+  -webkit-text-size-adjust: none;
+  overflow-x: auto;
+  display: inline;
+  background: #2d2d2d; /* dark background that won’t clash with black */
+}
+
+.code-block {
+  position: relative;
+  display: block;
+  padding: 0.5em;
+  font-size: 0.8em;
+  line-height: 1.6em;
+  background: #2d2d2d;  /* dark background that won’t clash with black */
+  border-radius: 10px;
+}
+
+.code-block > code {
+  display: block;
+}
+
+/* Highlight.js styles adjusted for dark background */
+.hljs-comment,
+.diff .hljs-header,
+.hljs-javadoc {
+  color: #75715e;  /* olive-gray tone */
+  font-style: italic;
+}
+
+.hljs-keyword,
+.css .rule .hljs-keyword,
+.hljs-winutils,
+.nginx .hljs-title,
+.hljs-subst,
+.hljs-request,
+.hljs-status {
+  color: #f92672;  /* bright pinkish */
+  font-weight: bold;
+}
+
+.hljs-number,
+.hljs-hexcolor,
+.ruby .hljs-constant {
+  color: #ae81ff;  /* purple */
+}
+
+.hljs-string,
+.hljs-tag .hljs-value,
+.hljs-phpdoc,
+.hljs-dartdoc,
+.tex .hljs-formula {
+  color: #e6db74;  /* light yellow */
+}
+
+.hljs-title,
+.hljs-id,
+.scss .hljs-preprocessor {
+  color: #66d9ef;  /* cyan */
+  font-weight: bold;
+}
+
+.hljs-list .hljs-keyword,
+.hljs-subst {
+  font-weight: normal;
+}
+
+.hljs-class .hljs-title,
+.hljs-type,
+.vhdl .hljs-literal,
+.tex .hljs-command {
+  color: #a6e22e;  /* green */
+  font-weight: bold;
+}
+
+.hljs-tag,
+.hljs-tag .hljs-title,
+.hljs-rule .hljs-property,
+.django .hljs-tag .hljs-keyword {
+  color: #fd971f;  /* orange */
+  font-weight: normal;
+}
+
+.hljs-attribute,
+.hljs-variable,
+.lisp .hljs-body,
+.hljs-name {
+  color: #f8f8f2;
+}
+
+.hljs-regexp {
+  color: #e6db74;
+}
+
+.hljs-symbol,
+.ruby .hljs-symbol .hljs-string,
+.lisp .hljs-keyword,
+.clojure .hljs-keyword,
+.scheme .hljs-keyword,
+.tex .hljs-special,
+.hljs-prompt {
+  color: #f92672;
+}
+
+.hljs-built_in {
+  color: #66d9ef;
+}
+
+.hljs-preprocessor,
+.hljs-pragma,
+.hljs-pi,
+.hljs-doctype,
+.hljs-shebang,
+.hljs-cdata {
+  color: #75715e;
+  font-weight: bold;
+}
+
+.hljs-deletion {
+  background: #3e3d32;
+}
+
+.hljs-addition {
+  background: #344f2b;
+}
+
+.diff .hljs-change {
+  background: #49483e;
+}
+
+.hljs-chunk {
+  color: #75715e;
+}
+
+.copy-button {
+  position: absolute;
+  line-height: 1;
+  top: 0; 
+  right: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0.25rem;
+  color: #f8f8f2; 
+  background-color: rgba(93, 93, 93, 0.9);
+  opacity: 0.8;
+}
+
+.copy-button:hover,
+.copy-button:focus {
+  color: #ffffff; 
+  opacity: 0.9;
+  outline: none;
+}
+
+.copy-button:active {
+  color: #ffffff; 
+  opacity: 1;
+  outline: none;
+}
