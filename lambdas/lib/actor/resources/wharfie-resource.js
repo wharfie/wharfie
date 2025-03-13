@@ -62,6 +62,7 @@ const sqs = new SQS({});
  * @property {string} dependencyTable -
  * @property {string} locationTable -
  * @property {boolean} [migrationResource] -
+ * @property {import('../../../typedefs').SideEffect[]} [sideEffects] -
  * @property {import('../../../../cli/project/typedefs').Model | import('../../../../cli/project/typedefs').Source} [userInput] -
  */
 
@@ -260,6 +261,7 @@ class WharfieResource extends BaseResourceGroup {
                 name: outputTable.name,
                 ...outputTable.resolveProperties(),
               },
+              side_effects: this.get('sideEffects', []),
             });
             return resource.toRecord();
           },

@@ -133,6 +133,8 @@ async function route(event, context, resource, operation) {
       );
     case 'UPDATE_SYMLINKS':
       return await update_symlinks.run(event, context, resource, operation);
+    case 'SIDE_EFFECT__CUSTOM_DEFINITION':
+      return await side_effects.route(event, context, resource, operation);
     case 'SIDE_EFFECT__CLOUDWATCH':
       return await side_effects.cloudwatch(event, context, resource, operation);
     case 'SIDE_EFFECT__WHARFIE':

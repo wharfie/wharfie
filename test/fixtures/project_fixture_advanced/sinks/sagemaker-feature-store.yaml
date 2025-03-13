@@ -1,0 +1,14 @@
+name: abo_sage_store
+sink_type: sagemaker_feature_store
+input:
+  model_name: amazon_berkely_objects_join
+service_level_agreement:
+  freshness: 1440
+config:
+  feature_group_name: 'some_feature_name'
+  target_stores:
+    - store_name_foo
+    - store_name_bar
+  tlt_duration:
+    unit: 'Seconds'
+    value: 300

@@ -4,6 +4,7 @@ const LambdaFunction = require('./resources/aws/lambda-function');
 const EventSourceMapping = require('./resources/aws/event-source-mapping');
 const LambdaBuild = require('./resources/aws/lambda-build');
 const BaseResourceGroup = require('./resources/base-resource-group');
+// const ActionDefinitionRecord = require('./resources/records/action-type-definition-record');
 
 /**
  * @typedef ExtendedWharfieActorProperties
@@ -26,6 +27,7 @@ const BaseResourceGroup = require('./resources/base-resource-group');
  * @property {string} handler -
  * @property {string[] | function(): string[]} actorPolicyArns -
  * @property {string | function(): string} artifactBucket -
+ * @property {string | function(): string} actionDefinitionTable -
  * @property {Object<string,string> | function(): Object<string,string>} environmentVariables -
  */
 
@@ -198,6 +200,23 @@ class WharfieActor extends BaseResourceGroup {
         maximumBatchingWindowInSeconds: 0,
       },
     });
+
+    // const record = new ActionDefinitionRecord({
+    //   name: `${this.get('projectName')}-${this.get(
+    //     'resourceName'
+    //   )}-location-record`,
+    //   dependsOn: [lambda, queue],
+    //   parent,
+    //   properties: {
+    //     table_name: this.get('actionDefinitionTable'),
+    //     deployment: () => this.get('deployment'),
+    //     data: {
+    //       resource_id: this.get('resourceId'),
+    //       location: this.get('inputLocation'),
+    //       interval: this.get('interval'),
+    //     },
+    //   },
+    // })
     return [build, lambda, queue, dlq, role, eventSourceMapping];
   }
 
