@@ -85,6 +85,7 @@ function getResourceOptions(environment, project) {
         )} */`,
         viewExpandedText: '/* Presto View */',
         userInput: model,
+        sideEffects: model.side_effects,
       },
     });
     modelsForValidation[model.name] = model.sql.replace(
@@ -135,6 +136,7 @@ function getResourceOptions(environment, project) {
         serdeInfo: tableInput.StorageDescriptor.SerdeInfo,
         compressed: tableInput.StorageDescriptor.Compressed,
         userInput: source,
+        sideEffects: source.side_effects,
       },
     });
   }

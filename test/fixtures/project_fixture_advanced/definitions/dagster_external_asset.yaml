@@ -1,0 +1,17 @@
+name: dagster_external_asset
+description: notify dagster of an external asset materialization
+definition_type: side_effect
+runtime:
+  language: node
+  version: 22
+  architecture: arm64
+timeout: 300
+memory: 128
+entrypoint: ./dagster_external_asset/index.handler
+environment_variables:
+  NODE_OPTIONS: '--enable-source-maps'
+  AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+configuration_definition:
+  dagster_organization: string
+  dagster_deployment: string
+  dagster_token: secret

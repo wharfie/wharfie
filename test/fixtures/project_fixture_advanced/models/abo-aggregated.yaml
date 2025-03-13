@@ -1,0 +1,11 @@
+name: amazon_berkely_objects_aggregated
+description: 'Materialized Table'
+columns: 
+- name: country
+  type: string
+- name: brands
+  type: string
+- name: count
+  type: bigint
+service_level_agreement:
+  freshness: 60
