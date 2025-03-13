@@ -3,8 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const JSZip = require('jszip');
 const { NotFound } = require('@aws-sdk/client-s3');
-const { createRequire } = require('module');
-const requireFromExecutable = createRequire(__filename);
+const esbuild = require('../../../esbuild');
 const { getAsset, isSea } = require('node:sea');
 
 // Statically import all known handlers
@@ -137,7 +136,6 @@ class LambdaBuild extends BaseResource {
     // Lambda handler setup to use actor's handler method
     exports.handler = handler
     `;
-    const esbuild = requireFromExecutable('esbuild');
     const result = await esbuild.build({
       stdin: {
         contents: handlerContent,

@@ -19,17 +19,10 @@ async function loadFile(dirent) {
       return yaml.load(
         await fs.readFile(path.join(dirent.parentPath, dirent.name), 'utf8')
       );
-    case 'sql':
+    default:
       return await fs.readFile(
         path.join(dirent.parentPath, dirent.name),
         'utf8'
-      );
-    default:
-      throw new Error(
-        `project file not supported ${path.join(
-          dirent.parentPath,
-          dirent.name
-        )}`
       );
   }
 }

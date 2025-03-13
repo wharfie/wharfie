@@ -1,0 +1,17 @@
+name: hugging_face_dataset
+description: tap to download hugging face datasets
+definition_type: tap
+runtime:
+  language: node
+  version: 22
+  architecture: arm64
+timeout: 900
+memory: 1024
+entrypoint: ./hugging_face_dataset/index.handler
+environment_variables:
+  NODE_OPTIONS: '--enable-source-maps'
+  AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+configuration_definition:
+  dataset_name: string
+  path_to_dataset: string
+  hugging_face_token: secret
