@@ -16,14 +16,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Read Node version from package.json
-        id: node_version
-        run: echo "version=$(jq -r '.engines.node' package.json)" >> $GITHUB_OUTPUT
-      - name: Use Node.js ${{ steps.node_version.outputs.version }}
+      - name: setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ steps.node_version.outputs.version }}
-          cache: 'npm'
+          node-version-file: 'package.json'
+          cache: npm
       - run: npm ci
       - run: npm run lint
       - run: npm run test
