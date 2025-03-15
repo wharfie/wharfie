@@ -46,13 +46,6 @@
  */
 
 /**
- * @typedef ActionHandler
- * @property {string} queue_url -
- * @property {string} dlq_arn -
- * @property {string} dlq_url -
- * @property {string} lambda_arn -
- */
-/**
  * @typedef ActionRecordData
  * @property {string} resource_id - Id of the resource
  * @property {string} operation_id - Id of the operation
@@ -62,7 +55,6 @@
  * @property {number} started_at - started_at
  * @property {number} last_updated_at - update_at_timestamp
  * @property {string} wharfie_version - version of wharfie
- * @property {ActionHandler} handler - handler description
  * @property {'ACTION'} record_type -
  */
 
