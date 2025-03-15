@@ -14,18 +14,15 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        node-version: [22.x]
-        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
-
     steps:
       - uses: actions/checkout@v4
-      - name: Use Node.js ${{ matrix.node-version }}
+      - name: Read Node version from package.json
+        id: node_version
+        run: echo "version=$(jq -r '.engines.node' package.json)" >> $GITHUB_OUTPUT
+      - name: Use Node.js ${{ steps.node_version.outputs.version }}
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: ${{ steps.node_version.outputs.version }}
           cache: 'npm'
       - run: npm ci
       - run: npm run lint

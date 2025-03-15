@@ -12,10 +12,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Use Node.js 22.x
+      - name: Read Node version from package.json
+        id: node_version
+        run: echo "version=$(jq -r '.engines.node' package.json)" >> $GITHUB_OUTPUT
+      - name: Use Node.js ${{ steps.node_version.outputs.version }}
         uses: actions/setup-node@v4
         with:
-          node-version: 22.x
+          node-version: ${{ steps.node_version.outputs.version }}
           cache: npm
       - run: npm ci
       - run: npm run lint
@@ -61,10 +64,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Use Node.js 22.x
+      - name: Read Node version from package.json
+        id: node_version
+        run: echo "version=$(jq -r '.engines.node' package.json)" >> $GITHUB_OUTPUT
+      - name: Use Node.js ${{ steps.node_version.outputs.version }}
         uses: actions/setup-node@v4
         with:
-          node-version: 22.x
+          node-version: ${{ steps.node_version.outputs.version }}
           cache: npm
       - run: npm ci
       - name: build linux-arm64 binary
@@ -84,11 +90,13 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Use Node.js 22.x
+      - name: Read Node version from package.json
+        id: node_version
+        run: echo "version=$(jq -r '.engines.node' package.json)" >> $GITHUB_OUTPUT
+      - name: Use Node.js ${{ steps.node_version.outputs.version }}
         uses: actions/setup-node@v4
         with:
-          node-version: 22.x
+          node-version: ${{ steps.node_version.outputs.version }}
           cache: npm
       - run: npm ci
       - name: build windows-arm64 binary
@@ -113,11 +121,13 @@ jobs:
       - release_windows
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Use Node.js 22.x
+      - name: Read Node version from package.json
+        id: node_version
+        run: echo "version=$(jq -r '.engines.node' package.json)" >> $GITHUB_OUTPUT
+      - name: Use Node.js ${{ steps.node_version.outputs.version }}
         uses: actions/setup-node@v4
         with:
-          node-version: 22.x
+          node-version: ${{ steps.node_version.outputs.version }}
           cache: npm
       - run: npm ci
       - run: npm publish --access public
@@ -134,10 +144,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Use Node.js 22.x
+      - name: Read Node version from package.json
+        id: node_version
+        run: echo "version=$(jq -r '.engines.node' package.json)" >> $GITHUB_OUTPUT
+      - name: Use Node.js ${{ steps.node_version.outputs.version }}
         uses: actions/setup-node@v4
         with:
-          node-version: 22.x
+          node-version: ${{ steps.node_version.outputs.version }}
           cache: npm
       - run: npm ci
       - run: npm publish --tag next --access public
