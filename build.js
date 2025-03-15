@@ -269,7 +269,6 @@ async function fetchEsbuildBinary(platform, arch) {
 
   console.log(`Downloading metadata from npm.org ${metadataUrl}...`);
   const packageMetadata = JSON.parse(await download(metadataUrl));
-  console.log(packageMetadata);
   const tarballUrl = packageMetadata.dist.tarball;
 
   const archiveName = `esbuild-${platform}-${arch}.tar.gz`;
