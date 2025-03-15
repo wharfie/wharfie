@@ -27,7 +27,6 @@ const BaseResourceGroup = require('./resources/base-resource-group');
  * @property {string} handler -
  * @property {string[] | function(): string[]} actorPolicyArns -
  * @property {string | function(): string} artifactBucket -
- * @property {string | function(): string} actionDefinitionTable -
  * @property {Object<string,string> | function(): Object<string,string>} environmentVariables -
  */
 
@@ -201,22 +200,6 @@ class WharfieActor extends BaseResourceGroup {
       },
     });
 
-    // const record = new ActionDefinitionRecord({
-    //   name: `${this.get('projectName')}-${this.get(
-    //     'resourceName'
-    //   )}-location-record`,
-    //   dependsOn: [lambda, queue],
-    //   parent,
-    //   properties: {
-    //     table_name: this.get('actionDefinitionTable'),
-    //     deployment: () => this.get('deployment'),
-    //     data: {
-    //       resource_id: this.get('resourceId'),
-    //       location: this.get('inputLocation'),
-    //       interval: this.get('interval'),
-    //     },
-    //   },
-    // })
     return [build, lambda, queue, dlq, role, eventSourceMapping];
   }
 
