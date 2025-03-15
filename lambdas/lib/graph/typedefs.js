@@ -10,7 +10,6 @@
  * @property {import('../actor/resources/wharfie-resource').WharfieResourceProperties & import('../actor/typedefs').SharedProperties} resource_properties -
  * @property {import('../../typedefs').TableProperties} source_properties -
  * @property {import('../../typedefs').TableProperties} destination_properties -
- * @property {import('../../typedefs').SideEffect[]} side_effects -
  * @property {number} created_at - created timestamp
  * @property {number} last_updated_at - update_at_timestamp
  * @property {string} wharfie_version - version of wharfie

@@ -27,7 +27,6 @@ const Status = {
  * @property {import('../actor/resources/wharfie-resource').WharfieResourceProperties & import('../actor/typedefs').SharedProperties} resource_properties -
  * @property {import('../../typedefs').TableProperties} source_properties -
  * @property {import('../../typedefs').TableProperties} destination_properties -
- * @property {import('../../typedefs').SideEffect[]} side_effects -
  * @property {number} [created_at] - created timestamp
  * @property {number} [last_updated_at] - update_at_timestamp
  * @property {string} [wharfie_version] -
@@ -48,7 +47,6 @@ class Resource {
     resource_properties,
     source_properties,
     destination_properties,
-    side_effects,
     created_at = Date.now(),
     last_updated_at = created_at,
     wharfie_version = WHARFIE_VERSION,
@@ -63,7 +61,6 @@ class Resource {
     this.resource_properties = resource_properties;
     this.source_properties = source_properties;
     this.destination_properties = destination_properties;
-    this.side_effects = side_effects;
     this.created_at = created_at;
     this.last_updated_at = last_updated_at;
     this.wharfie_version = wharfie_version;
@@ -91,7 +88,6 @@ class Resource {
         resource_properties: this.resource_properties,
         source_properties: this.source_properties,
         destination_properties: this.destination_properties,
-        side_effects: this.side_effects,
         created_at: this.created_at,
         last_updated_at: this.last_updated_at,
         wharfie_version: this.wharfie_version,
@@ -116,7 +112,6 @@ class Resource {
       resource_properties: resource_record.data.resource_properties,
       source_properties: resource_record.data.source_properties,
       destination_properties: resource_record.data.destination_properties,
-      side_effects: resource_record.data.side_effects,
       created_at: resource_record.data.created_at,
       last_updated_at: resource_record.data.last_updated_at,
       wharfie_version: resource_record.data.wharfie_version,
