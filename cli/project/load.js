@@ -13,16 +13,32 @@ const { validateProject } = require('./schema');
  */
 
 /**
+ * Asynchronously reads the contents of a directory.
+ * @param {string} path - The path to the directory to read.
+ * @param {boolean} [recursive] - Optional. Whether to read the directory recursively. Defaults to true.
+ * @returns {Promise<import('fs').Dirent[]>} A promise that resolves to an array of filenames or Buffer objects.
+ */
+async function readDirectory(path, recursive = true) {
+  try {
+    // check if directory exists if not do not error
+    await fs.access(path);
+  } catch {
+    return [];
+  }
+  return fs.readdir(path, {
+    withFileTypes: true,
+    recursive,
+  });
+}
+
+/**
  *  @param {LoadProjectOptions} options -
  *  @returns {Promise<import('./typedefs').Model[]>} -
  */
 async function loadModels(options) {
   /** @type {Object<string,import('./typedefs').Model | Object<string, any>>} */
   const models = {};
-  const files = await fs.readdir(path.join(options.path, 'models'), {
-    withFileTypes: true,
-    recursive: true,
-  });
+  const files = await readDirectory(path.join(options.path, 'models'));
   for (const file of files) {
     if (!file.isFile()) {
       continue;
@@ -36,8 +52,10 @@ async function loadModels(options) {
     }
     if (fileExtension === 'sql') {
       models[modelName].sql = fileData;
-    } else {
+    } else if (['json', 'yaml', 'yml'].includes(fileExtension || '')) {
       models[modelName] = { ...models[modelName], ...fileData };
+    } else {
+      continue;
     }
   }
   // @ts-ignore
@@ -50,13 +68,13 @@ async function loadModels(options) {
  */
 async function loadSources(options) {
   const sources = [];
-  const files = await fs.readdir(path.join(options.path, 'sources'), {
-    withFileTypes: true,
-    recursive: true,
-  });
+  const files = await readDirectory(path.join(options.path, 'sources'));
   for (const file of files) {
-    const fileData = await loadFile(file);
-    sources.push(fileData);
+    const fileExtension = file.name.split('.').at(-1);
+    if (['json', 'yaml', 'yml'].includes(fileExtension || '')) {
+      const fileData = await loadFile(file);
+      sources.push(fileData);
+    }
   }
   return sources;
 }
@@ -68,9 +86,7 @@ async function loadSources(options) {
 async function loadEnvironments(options) {
   const environments = [];
 
-  const files = await fs.readdir(options.path, {
-    withFileTypes: true,
-  });
+  const files = await readDirectory(options.path, false);
 
   for (const file of files) {
     if (!file.isFile()) {
@@ -100,6 +116,59 @@ async function loadEnvironments(options) {
 
 /**
  *  @param {LoadProjectOptions} options -
+ *  @returns {Promise<import('./typedefs').Definition[]>} -
+ */
+async function loadDefinitions(options) {
+  const definitions = [];
+  const files = await readDirectory(path.join(options.path, 'definitions'));
+  for (const file of files) {
+    const fileExtension = file.name.split('.').at(-1);
+    if (['json', 'yaml', 'yml'].includes(fileExtension || '')) {
+      const fileData = await loadFile(file);
+      // to avoid adding other code related config files to definitions (package.json, etc)
+      if (!fileData.definition_type) continue;
+      definitions.push(fileData);
+    }
+  }
+  return definitions;
+}
+
+/**
+ *  @param {LoadProjectOptions} options -
+ *  @returns {Promise<import('./typedefs').Sink[]>} -
+ */
+async function loadSinks(options) {
+  const sinks = [];
+  const files = await readDirectory(path.join(options.path, 'sinks'));
+  for (const file of files) {
+    const fileExtension = file.name.split('.').at(-1);
+    if (['json', 'yaml', 'yml'].includes(fileExtension || '')) {
+      const fileData = await loadFile(file);
+      sinks.push(fileData);
+    }
+  }
+  return sinks;
+}
+
+/**
+ *  @param {LoadProjectOptions} options -
+ *  @returns {Promise<import('./typedefs').Tap[]>} -
+ */
+async function loadTaps(options) {
+  const taps = [];
+  const files = await readDirectory(path.join(options.path, 'taps'));
+  for (const file of files) {
+    const fileExtension = file.name.split('.').at(-1);
+    if (['json', 'yaml', 'yml'].includes(fileExtension || '')) {
+      const fileData = await loadFile(file);
+      taps.push(fileData);
+    }
+  }
+  return taps;
+}
+
+/**
+ *  @param {LoadProjectOptions} options -
  *  @returns {Promise<import('./typedefs').Project>} -
  */
 async function loadProject(options) {
@@ -111,6 +180,9 @@ async function loadProject(options) {
     environments: await loadEnvironments(options),
     models: await loadModels(options),
     sources: await loadSources(options),
+    definitions: await loadDefinitions(options),
+    sinks: await loadSinks(options),
+    taps: await loadTaps(options),
   };
 
   const validatedProject = validateProject(project);

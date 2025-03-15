@@ -218,6 +218,39 @@
  */
 
 /**
+ * @typedef Definition
+ * @property {string} sort_key -
+ * @property {string} queue_arn -
+ * @property {string} queue_url -
+ * @property {string} dlq_arn -
+ * @property {string} dlq_url -
+ * @property {string} lambda_arn -
+ * @property {string} code_hash -
+ */
+
+/**
+ * @typedef ActionDefinitionRecord
+ * @property {string} action_type -
+ * @property {string} queue_arn -
+ * @property {string} queue_url -
+ * @property {string} dlq_arn -
+ * @property {string} dlq_url -
+ * @property {string} lambda_arn -
+ * @property {string} code_hash -
+ */
+
+/**
+ * @typedef QueryDefinitionRecord
+ * @property {string} query_type -
+ * @property {string} queue_arn -
+ * @property {string} queue_url -
+ * @property {string} dlq_arn -
+ * @property {string} dlq_url -
+ * @property {string} lambda_arn -
+ * @property {string} code_hash -
+ */
+
+/**
  * @typedef CleanupEvent
  * @property {string} operation_id - Id of the operation being performed
  * @property {string} action_id -
@@ -225,6 +258,13 @@
  * @property {number} [retries] -
  * @property {number} [delays] -
  * @property {string} manifest_uri -
+ */
+
+/**
+ * @typedef SideEffect
+ * @property {string} type -
+ * @property {('onChange')} trigger -
+ * @property {Object<string,any>} config -
  */
 
 exports.unused = {};

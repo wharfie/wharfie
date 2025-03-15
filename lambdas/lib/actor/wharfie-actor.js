@@ -4,6 +4,7 @@ const LambdaFunction = require('./resources/aws/lambda-function');
 const EventSourceMapping = require('./resources/aws/event-source-mapping');
 const LambdaBuild = require('./resources/aws/lambda-build');
 const BaseResourceGroup = require('./resources/base-resource-group');
+// const ActionDefinitionRecord = require('./resources/records/action-type-definition-record');
 
 /**
  * @typedef ExtendedWharfieActorProperties
@@ -198,6 +199,7 @@ class WharfieActor extends BaseResourceGroup {
         maximumBatchingWindowInSeconds: 0,
       },
     });
+
     return [build, lambda, queue, dlq, role, eventSourceMapping];
   }
 
