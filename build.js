@@ -15,6 +15,9 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const {
+  engines: { node: NODE_VERSION },
+} = require('./package.json');
 const esbuild = require('./lambdas/lib/esbuild');
 const https = require('https');
 const http = require('http');
@@ -33,12 +36,6 @@ const DEFAULT_BUILDS = [
   ['linux', 'x64'],
   ['linux', 'arm64'],
 ];
-
-// Update this to the "latest Node 22 version" you want to use.
-// In reality, you'd confirm what's actually available at nodejs.org.
-// const DEFAULT_NODE_VERSION = '22.13.1';
-const DEFAULT_NODE_VERSION = '23.9.0';
-// const DEFAULT_NODE_VERSION = '23.6.0';
 
 (async () => {
   // Parse CLI args
@@ -331,7 +328,7 @@ async function fetchOrGetNodeBinary(platform, arch) {
     fs.mkdirSync(nodeBinariesDir, { recursive: true });
   }
 
-  let binaryName = `node-${platform}-${arch}-${DEFAULT_NODE_VERSION}`;
+  let binaryName = `node-${platform}-${arch}-${NODE_VERSION}`;
   if (platform === 'windows') {
     binaryName += '.exe';
   }
@@ -344,11 +341,7 @@ async function fetchOrGetNodeBinary(platform, arch) {
   console.log(`Node binary not found locally: ${binaryName}`);
 
   // Construct official Node download URL
-  const nodeDownloadUrl = getNodeDownloadUrl(
-    DEFAULT_NODE_VERSION,
-    platform,
-    arch
-  );
+  const nodeDownloadUrl = getNodeDownloadUrl(NODE_VERSION, platform, arch);
   console.log(`Downloading from nodejs.org ${nodeDownloadUrl}...`);
   const archiveExt = platform === 'windows' ? '.zip' : '.tar.gz';
   const archiveName = `node-${platform}-${arch}${archiveExt}`;
