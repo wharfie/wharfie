@@ -6,7 +6,7 @@ const WharfieProject = require('../resources/wharfie-project');
 const WharfieResource = require('../resources/wharfie-resource');
 const WharfieDeployment = require('../wharfie-deployment');
 const WharfieActor = require('../wharfie-actor');
-const { getResources } = require('../../dynamo/state');
+const { getResources } = require('../../db/state/aws');
 const { deserialize } = require('./shared');
 
 /**

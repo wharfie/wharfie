@@ -1,11 +1,11 @@
 'use strict';
 const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
 const { DynamoDB } = require('@aws-sdk/client-dynamodb');
-const { query, putWithThroughputRetry } = require('.');
-const BaseResource = require('../actor/resources/base-resource');
+const { query, putWithThroughputRetry } = require('../../dynamo');
+const BaseResource = require('../../actor/resources/base-resource');
 const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
 
-const BaseAWS = require('../base');
+const BaseAWS = require('../../base');
 
 const credentials = fromNodeProviderChain();
 const docClient = DynamoDBDocument.from(
@@ -60,9 +60,11 @@ async function putResourceStatus(resource) {
       deployment: name,
       resource_key,
     },
-    UpdateExpression: 'SET #status = :new_status',
+    UpdateExpression: 'SET #status = :new_status, #serialized.#s = :new_status',
     ExpressionAttributeNames: {
       '#status': 'status',
+      '#serialized': 'serialized',
+      '#s': 'status',
     },
     ExpressionAttributeValues: {
       ':new_status': resource.status,
@@ -73,7 +75,7 @@ async function putResourceStatus(resource) {
 
 /**
  * @param {BaseResource} resource -
- * @returns {Promise<import("../actor/resources/reconcilable").StatusEnum?>} -
+ * @returns {Promise<import("../../actor/resources/reconcilable").StatusEnum?>} -
  */
 async function getResourceStatus(resource) {
   if (!resource.has('deployment') || !resource.get('deployment'))
@@ -107,7 +109,7 @@ async function getResourceStatus(resource) {
 
 /**
  * @param {BaseResource} resource -
- * @returns {Promise<import("../actor/typedefs").SerializedBaseResource?>} -
+ * @returns {Promise<import("../../actor/typedefs").SerializedBaseResource?>} -
  */
 async function getResource(resource) {
   if (!resource.has('deployment') || !resource.get('deployment'))
@@ -138,7 +140,7 @@ async function getResource(resource) {
 /**
  * @param {string} deploymentName -
  * @param {string} resourceKey -
- * @returns {Promise<import("../actor/typedefs").SerializedBaseResource[]>} -
+ * @returns {Promise<import("../../actor/typedefs").SerializedBaseResource[]>} -
  */
 async function getResources(deploymentName, resourceKey) {
   const { Items } = await query({

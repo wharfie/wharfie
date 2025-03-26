@@ -4,10 +4,12 @@ const Reconcilable = require('./reconcilable');
 const {
   putResource,
   getResource,
+  getResources,
   getResourceStatus,
   deleteResource,
   putResourceStatus,
-} = require('../../dynamo/state');
+} = require('../../db/state/aws');
+const Secret = require('../lib/secret');
 
 const { isEqual } = require('es-toolkit');
 const jdf = require('jsondiffpatch');
@@ -40,6 +42,8 @@ class BaseResource extends Reconcilable {
       return value();
     } else if (Array.isArray(value)) {
       return value.map((item) => this._resolveProperty(item));
+    } else if (Secret.isSecret(value)) {
+      return value.getSecretValue();
     } else if (value !== null && typeof value === 'object') {
       return Object.keys(value).reduce((acc, key) => {
         // @ts-ignore
@@ -87,6 +91,18 @@ class BaseResource extends Reconcilable {
     if (this.status !== Reconcilable.Status.DRIFTED) {
       this.setStatus(Reconcilable.Status.DRIFTED);
     }
+  }
+
+  /**
+   * sets a property without marking the resource as drifted, should only be used internally by the reconcile method
+   * @param {string} key -
+   * @param {any} value -
+   */
+  _setUNSAFE(key, value) {
+    if (this.get(key) === this._resolveProperty(value)) {
+      return;
+    }
+    this.properties[key] = value;
   }
 
   /**
@@ -198,22 +214,25 @@ class BaseResource extends Reconcilable {
   }
 
   async save() {
-    await putResource(this);
+    await BaseResource.stateDB.putResource(this);
   }
 
+  /**
+   * @returns {Promise<Reconcilable.StatusEnum?>} -
+   */
   async getStatus() {
-    return await getResourceStatus(this);
+    return await BaseResource.stateDB.getResourceStatus(this);
   }
 
   async saveStatus() {
-    await putResourceStatus(this);
+    await BaseResource.stateDB.putResourceStatus(this);
   }
 
   /**
    * @returns {Promise<import('../typedefs').SerializedBaseResource?>} -
    */
   async fetchStoredData() {
-    return await getResource(this);
+    return await BaseResource.stateDB.getResource(this);
   }
 
   /**
@@ -226,10 +245,29 @@ class BaseResource extends Reconcilable {
   }
 
   async delete() {
-    await deleteResource(this);
+    await BaseResource.stateDB.deleteResource(this);
   }
-
-  async cache() {}
 }
+/**
+ * @typedef StateStore
+ * @property {function(BaseResource): Promise<void>} putResource -
+ * @property {function(BaseResource): Promise<void>} putResourceStatus -
+ * @property {function(BaseResource): Promise<import("../typedefs").SerializedBaseResource?>} getResource -
+ * @property {function(BaseResource): Promise<Reconcilable.StatusEnum?>} getResourceStatus -
+ * @property {function(string, string): Promise<import("../typedefs").SerializedBaseResource[]>} getResources -
+ * @property {function(BaseResource): Promise<void>} deleteResource -
+ */
+
+/**
+ * @type {StateStore}
+ */
+BaseResource.stateDB = {
+  putResource,
+  putResourceStatus,
+  getResource,
+  getResources,
+  getResourceStatus,
+  deleteResource,
+};
 
 module.exports = BaseResource;

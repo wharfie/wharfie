@@ -218,7 +218,7 @@ async function buildWithEsbuild(entryPoint, outFile) {
     minify: true,
     keepNames: true,
     sourcemap: 'inline',
-    target: 'node23',
+    target: `node${NODE_VERSION}`,
     logLevel: 'silent',
   });
   if (errors.length > 0) {
@@ -343,7 +343,7 @@ async function fetchOrGetNodeBinary(platform, arch) {
   const nodeDownloadUrl = getNodeDownloadUrl(NODE_VERSION, platform, arch);
   console.log(`Downloading from nodejs.org ${nodeDownloadUrl}...`);
   const archiveExt = platform === 'windows' ? '.zip' : '.tar.gz';
-  const archiveName = `node-${platform}-${arch}${archiveExt}`;
+  const archiveName = `node-v${NODE_VERSION}-${platform}-${arch}${archiveExt}`;
   const archivePath = path.join(nodeBinariesDir, archiveName);
 
   // Download the archive
@@ -462,7 +462,6 @@ async function extractNodeUnixTar(archivePath) {
       `Expected exactly 1 top-level dir in tar, got: ${subDirs.length}`
     );
   }
-
   const nodeBinary = path.join(extractDir, subDirs[0], 'bin', 'node');
   if (!fs.existsSync(nodeBinary)) {
     throw new Error(`Node binary not found at: ${nodeBinary}`);

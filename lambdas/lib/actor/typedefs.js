@@ -27,7 +27,7 @@
 
 /**
  * @typedef SharedProperties
- * @property {DeploymentEnvironmentProperties| function(): DeploymentEnvironmentProperties} deployment -
+ * @property {DeploymentEnvironmentProperties| function(): DeploymentEnvironmentProperties} [deployment] -
  * @property {ProjectEnvironmentProperties| function(): ProjectEnvironmentProperties} [project] -
  * @property {boolean} [_INTERNAL_STATE_RESOURCE] -
  */

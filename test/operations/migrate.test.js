@@ -18,7 +18,7 @@ jest.mock('../../lambdas/lib/dynamo/scheduler');
 jest.mock('../../lambdas/lib/dynamo/location');
 jest.mock('../../lambdas/lib/dynamo/semaphore');
 jest.mock('../../lambdas/lib/dynamo/dependency');
-jest.mock('../../lambdas/lib/dynamo/state');
+jest.mock('../../lambdas/lib/db/state/aws');
 jest.mock('../../lambdas/lib/env-paths');
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
@@ -29,7 +29,7 @@ const { S3 } = require('@aws-sdk/client-s3');
 
 const resource_db = require('../../lambdas/lib/dynamo/operations');
 const semaphore = require('../../lambdas/lib/dynamo/semaphore');
-const state_db = require('../../lambdas/lib/dynamo/state');
+const state_db = require('../../lambdas/lib/db/state/aws');
 
 const WharfieResource = require('../../lambdas/lib/actor/resources/wharfie-resource');
 const Reconcilable = require('../../lambdas/lib/actor/resources/reconcilable');
