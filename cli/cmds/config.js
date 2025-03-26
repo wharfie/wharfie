@@ -34,11 +34,11 @@ const configCommand = new Command('config')
         service_bucket: `${answers.deployment_name}-${Account}-${answers.region}`,
       };
 
-      if (!process.env.CONFIG_PATH) {
-        throw new Error('CONFIG_PATH not set');
+      if (!process.env.CONFIG_FILE_PATH) {
+        throw new Error('CONFIG_FILE_PATH not set');
       }
 
-      fs.writeFileSync(process.env.CONFIG_PATH, JSON.stringify(config));
+      fs.writeFileSync(process.env.CONFIG_FILE_PATH, JSON.stringify(config));
       displaySuccess('Configuration Saved 🎉');
     } catch (err) {
       displayFailure(err);

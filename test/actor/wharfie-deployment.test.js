@@ -9,7 +9,7 @@ jest.mock('crypto');
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 jest.mock('../../lambdas/lib/env-paths');
 jest.mock('../../lambdas/lib/id');
-jest.mock('../../lambdas/lib/dynamo/state');
+jest.mock('../../lambdas/lib/db/state/aws');
 jest.mock('../../lambdas/lib/dynamo/operations');
 jest.mock('../../lambdas/lib/dynamo/dependency');
 jest.mock('../../lambdas/lib/dynamo/location');
@@ -35,7 +35,7 @@ describe('deployment IaC', () => {
   });
   it('basic', async () => {
     expect.assertions(9);
-    const state_db = require('../../lambdas/lib/dynamo/state');
+    const state_db = require('../../lambdas/lib/db/state/aws');
 
     const events = [];
     Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {

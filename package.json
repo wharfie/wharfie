@@ -162,6 +162,7 @@
     "commander": "^12.1.0",
     "death": "^1.1.0",
     "diff": "^5.2.0",
+    "env-paths": "^2.2.1",
     "es-toolkit": "^1.13.1",
     "esbuild": "0.25.1",
     "flatted": "^3.3.1",
@@ -172,6 +173,7 @@
     "js-yaml": "^4.1.0",
     "jsondiffpatch": "^0.5.0",
     "jszip": "^3.10.1",
+    "lmdb": "^3.2.6",
     "node-sql-parser": "^5.3.0",
     "postject": "^1.0.0-alpha.6",
     "semver": "^7.6.3"

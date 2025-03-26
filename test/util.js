@@ -16,7 +16,7 @@ const location_db = require('../lambdas/lib/dynamo/location');
 const operation_db = require('../lambdas/lib/dynamo/operations');
 const scheduler_db = require('../lambdas/lib/dynamo/scheduler');
 const semaphore = require('../lambdas/lib/dynamo/semaphore');
-const state_db = require('../lambdas/lib/dynamo/state');
+const state_db = require('../lambdas/lib/db/state/aws');
 
 const s3 = new S3();
 const sts = new STS();

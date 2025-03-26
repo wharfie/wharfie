@@ -11,7 +11,7 @@ process.env.LOGGING_LEVEL = 'debug';
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 jest.mock('../../lambdas/lib/env-paths');
 jest.mock('../../lambdas/lib/id');
-jest.mock('../../lambdas/lib/dynamo/state');
+jest.mock('../../lambdas/lib/db/state/aws');
 jest.mock('../../lambdas/lib/dynamo/operations');
 jest.mock('../../lambdas/lib/dynamo/dependency');
 jest.mock('../../lambdas/lib/dynamo/location');
@@ -23,7 +23,7 @@ const { getResourceOptions } = require('../../cli/project/template-actor');
 const { loadProject } = require('../../cli/project/load');
 const { resetAWSMocks } = require('../util');
 
-const state_db = require('../../lambdas/lib/dynamo/state');
+const state_db = require('../../lambdas/lib/db/state/aws');
 
 const { S3 } = require('@aws-sdk/client-s3');
 const { SQS } = require('@aws-sdk/client-sqs');

@@ -3,7 +3,7 @@
 'use strict';
 
 process.env.AWS_MOCKS = '1';
-jest.mock('../../../lambdas/lib/dynamo/state');
+jest.mock('../../../lambdas/lib/db/state/aws');
 jest.mock('../../../lambdas/lib/id');
 const {
   AutoscalingTable,
@@ -16,7 +16,7 @@ const { getMockDeploymentProperties } = require('../util');
 describe('autoscaling table IaC', () => {
   it('basic', async () => {
     expect.assertions(8);
-    const state_db = require('../../../lambdas/lib/dynamo/state');
+    const state_db = require('../../../lambdas/lib/db/state/aws');
     const events = [];
     Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
       events.push(`${event.status} - ${event.constructor}:${event.name}`);
