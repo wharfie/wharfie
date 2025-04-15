@@ -1,11 +1,11 @@
 const NodeBinary = require('./node-binary');
 const BuildResource = require('./build-resource');
-const SeaBuild = require('./sea-build');
-// const NPMTarball = require('./npm-tarball');
+const JSBundle = require('./js-bundle');
+const NodeSingleExecutableApplication = require('./node-single-executable-application');
 const PackageBinary = require('./package-binary');
 const MacOSBinarySignature = require('./macos-binary-signature');
 const BaseResourceGroup = require('../base-resource-group');
-const { execFile } = require('../../../../lib/cmd');
+const { execFile } = require('../../../cmd');
 const {
   packages: {
     'node_modules/esbuild': { version: ESBUILD_VERSION },
@@ -145,61 +145,37 @@ class Actor extends BaseResourceGroup {
           this.get('platform') === 'win' ? 'esbuild.exe' : 'bin/esbuild',
       },
     });
-    // const lmdb = new NPMTarball({
-    //   name: `${this.name}-lmdb`,
-    //   properties: {
-    //     version: LMDB_VERSION,
-    //     packageName: () => {
-    //       /** @type {Object<string, string>} */
-    //       const packageMap = {
-    //         'darwin-x64': '@lmdb/lmdb-darwin-x64',
-    //         'darwin-arm64': '@lmdb/lmdb-darwin-arm64',
-    //         'win-x64': '@lmdb/lmdb-win32-x64',
-    //         'linux-x64': '@lmdb/lmdb-linux-x64',
-    //         'linux-arm64': '@lmdb/lmdb-linux-arm64',
-    //       };
-    //       if (
-    //         !packageMap[`${this.get('platform')}-${this.get('architecture')}`]
-    //       ) {
-    //         throw new Error(
-    //           `No lmdb package for ${this.get('platform')}-${this.get(
-    //             'architecture'
-    //           )}`
-    //         );
-    //       }
-    //       return packageMap[
-    //         `${this.get('platform')}-${this.get('architecture')}`
-    //       ];
-    //     },
-    //   },
-    // });
-    const build = new SeaBuild({
-      name: `${this.name}-build`,
+    const main_bundle = new JSBundle({
+      name: `${this.name}-bundle`,
       parent,
-      dependsOn: [node_binary, esbuild_binary],
+      dependsOn: [],
       properties: {
         entryCode: () => {
           return `
-            (async () => {
-              require('source-map-support').install();
-              // Auto-generated entry file
-              require(${JSON.stringify(this.callerFile)});
-              await global.__wharfieActorInitializeEnvironmentFunctions['${this.getName()}']();
-              // Execute the actor function captured from the original context.
-              await global.__wharfieActorFunctions['${this.getName()}']();
-            })();
-        `;
+              (async () => {
+                require('source-map-support').install();
+                // Auto-generated entry file
+                require(${JSON.stringify(this.callerFile)});
+                await global.__wharfieActorInitializeEnvironmentFunctions['${this.getName()}']();
+                // Execute the actor function captured from the original context.
+                await global.__wharfieActorFunctions['${this.getName()}']();
+              })();
+          `;
         },
         resolveDir: () => path.dirname(this.callerDirectory),
+        nodeVersion: this.get('nodeVersion'),
+      },
+    });
+    const application = new NodeSingleExecutableApplication({
+      name: `${this.name}-application`,
+      parent,
+      dependsOn: [main_bundle],
+      properties: {
+        bundlePath: () => main_bundle.get('bundlePath'),
         nodeBinaryPath: () => node_binary.get('binaryPath'),
         nodeVersion: this.get('nodeVersion'),
         platform: this.get('platform'),
         architecture: this.get('architecture'),
-        environmentVariables: () => {
-          return {
-            // 'LMBD_PREBUILD':
-          };
-        },
         assets: () => {
           return {
             [esbuild_binary.name]: esbuild_binary.get('binaryPath'),
@@ -208,14 +184,14 @@ class Actor extends BaseResourceGroup {
       },
     });
     /** @type {(import('../base-resource') | import('../base-resource-group'))[]} */
-    const resources = [node_binary, esbuild_binary, build];
+    const resources = [node_binary, esbuild_binary, application];
     if (this.get('platform') === 'darwin') {
       const macosBinarySignature = new MacOSBinarySignature({
         name: `${this.name}-macos-binary-signature`,
         parent,
-        dependsOn: [build],
+        dependsOn: [application],
         properties: {
-          binaryPath: () => build.get('binaryPath'),
+          binaryPath: () => application.get('binaryPath'),
           macosCertBase64: this.get('macosCertBase64'),
           macosCertPassword: this.get('macosCertPassword'),
           macosKeychainPassword: this.get('macosKeychainPassword'),

@@ -3,15 +3,17 @@ const path = require('node:path');
 const paths = require('../paths');
 
 const dbPath = path.join(paths.data, 'database');
-const ROOT_DB = lmdb.open({
-  path: dbPath,
-});
 
 class LocalDB {
   /**
-   * @param {lmdb.Database} [db] -
+   * @param {import('lmdb').Database} [db] -
    */
   constructor(db) {
+    if (!LocalDB.ROOT_DB) {
+      LocalDB.ROOT_DB = lmdb.open({
+        path: dbPath,
+      });
+    }
     if (db) {
       this.db = db;
     } else {
@@ -21,10 +23,15 @@ class LocalDB {
 
   /**
    * @param {string} dbName -
-   * @param {lmdb.DatabaseOptions} options -
+   * @param {import('lmdb').DatabaseOptions} options -
    * @returns {LocalDB} -
    */
   static open(dbName, options = {}) {
+    if (!LocalDB.ROOT_DB) {
+      LocalDB.ROOT_DB = lmdb.open({
+        path: dbPath,
+      });
+    }
     return new LocalDB(LocalDB.ROOT_DB.openDB(dbName, options));
   }
 
@@ -75,7 +82,7 @@ class LocalDB {
 
   /**
    * @typedef KeyValuePair
-   * @property {lmdb.Key} key -
+   * @property {import('lmdb').Key} key -
    * @property {any} value -
    * @property {number} [version] -
    */
@@ -100,6 +107,7 @@ class LocalDB {
   }
 }
 
-LocalDB.ROOT_DB = ROOT_DB;
+/** @type {import('lmdb').RootDatabase | undefined} */
+LocalDB.ROOT_DB = undefined;
 
 module.exports = LocalDB;

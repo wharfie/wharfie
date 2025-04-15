@@ -259,6 +259,7 @@ class NodeBinary extends BaseResource {
   }
 
   async _reconcile() {
+    console.log(await this.getBinaryPath());
     if (await fs.existsSync(await this.getBinaryPath())) return;
     await this.download();
     await this.extract();

@@ -23,14 +23,14 @@ class BaseResourceGroup extends BaseResource {
 
     if (!this.resources) {
       this.resources = {};
-      this.addResources(this._defineGroupResources(this._getParentName()));
+      this.addResources(this._defineGroupResources(this.getName()));
     }
   }
 
   /**
    * @returns {string} -
    */
-  _getParentName() {
+  getName() {
     return this.parent ? `${this.parent}#${this.name}` : this.name;
   }
 

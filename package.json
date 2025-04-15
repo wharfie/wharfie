@@ -112,7 +112,7 @@
     "@types/inquirer": "^8.0.7",
     "@types/jest": "^26.0.24",
     "@types/js-yaml": "^4.0.9",
-    "@types/node": "^20.11.25",
+    "@types/node": "^20.17.30",
     "@types/uuid": "^8.3.0",
     "@types/yargs": "^17.0.33",
     "aws-sdk-client-mock": "^3.0.0",
@@ -154,8 +154,13 @@
     "@aws-sdk/util-dynamodb": "^3.658.1",
     "@paralleldrive/cuid2": "^2.2.2",
     "@smithy/util-retry": "^3.0.3",
+    "actual-crash": "^1.0.3",
     "apache-arrow": "^12.0.1",
+    "aws-sdk": "^2.1692.0",
+    "bcrypt": "^5.1.1",
     "bluebird": "^3.7.2",
+    "boxednode": "^2.4.4",
+    "bpkg": "^0.9.2",
     "chalk": "^4.1.0",
     "cli-progress": "^3.12.0",
     "cli-table3": "^0.6.5",
@@ -174,8 +179,13 @@
     "jsondiffpatch": "^0.5.0",
     "jszip": "^3.10.1",
     "lmdb": "^3.2.6",
+    "mock-aws-s3": "^4.0.2",
     "node-sql-parser": "^5.3.0",
+    "package-up": "^5.0.0",
+    "parcel": "^2.14.4",
+    "pkg-up": "^3.1.0",
     "postject": "^1.0.0-alpha.6",
-    "semver": "^7.6.3"
+    "semver": "^7.6.3",
+    "source-map-support": "^0.5.21"
   }
 }
