@@ -640,7 +640,7 @@ class WharfieResource extends BaseResourceGroup {
    */
   async setProperties(properties) {
     super.setProperties(properties);
-    this.updateResources(this._defineGroupResources(this._getParentName()));
+    this.updateResources(this._defineGroupResources(this.getName()));
   }
 
   /**
@@ -649,7 +649,7 @@ class WharfieResource extends BaseResourceGroup {
    */
   set(key, value) {
     super.set(key, value);
-    this.updateResources(this._defineGroupResources(this._getParentName()));
+    this.updateResources(this._defineGroupResources(this.getName()));
   }
 }
 

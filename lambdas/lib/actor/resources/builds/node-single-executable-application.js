@@ -4,7 +4,6 @@
 const uuid = require('uuid');
 const path = require('node:path');
 const fs = require('node:fs');
-const esbuild = require('esbuild');
 const paths = require('../../../paths');
 const { runCmd, execFile } = require('../../../cmd');
 // @ts-ignore
@@ -18,29 +17,27 @@ const BaseResource = require('../base-resource');
  * @typedef {('x64'|'arm64')} SeaBinaryArch
  */
 /**
- * @typedef SeaBuildProperties
- * @property {string | function(): string} entryCode -
- * @property {string | function(): string} resolveDir -
+ * @typedef NodeSingleExecutableApplicationProperties
+ * @property {string | function(): string} bundlePath -
  * @property {string | function(): string} nodeBinaryPath -
  * @property {string | function(): string} nodeVersion -
  * @property {SeaBinaryPlatform | function(): SeaBinaryPlatform} platform -
  * @property {SeaBinaryArch | function(): SeaBinaryArch} architecture -
- * @property {Object<string,string> | function(): Object<string,string>} [environmentVariables] -
  * @property {Object<string,string> | function(): Object<string,string>} [assets] -
  */
 
 /**
- * @typedef SeaBuildOptions
+ * @typedef NodeSingleExecutableApplicationOptions
  * @property {string} name -
  * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {import('../reconcilable')[]} [dependsOn] -
- * @property {SeaBuildProperties & import('../../typedefs').SharedProperties} properties -
+ * @property {NodeSingleExecutableApplicationProperties & import('../../typedefs').SharedProperties} properties -
  */
 
-class SeaBuild extends BaseResource {
+class NodeSingleExecutableApplication extends BaseResource {
   /**
-   * @param {SeaBuildOptions} options - SeaBuild Class Options
+   * @param {NodeSingleExecutableApplicationOptions} options - NodeSingleExecutableApplication Class Options
    */
   constructor({ name, parent, status, dependsOn, properties }) {
     const propertiesWithDefaults = Object.assign(
@@ -62,94 +59,30 @@ class SeaBuild extends BaseResource {
     const distFile = `${this.name}-${this.get('nodeVersion')}-${this.get(
       'platform'
     )}-${this.get('architecture')}`;
-    const binaryPath = path.join(SeaBuild.BINARIES_DIR, distFile);
-    const tmpBuildDir = path.join(SeaBuild.BUILD_DIR, `build-${uuid.v4()}`);
+    const binaryPath = path.join(
+      NodeSingleExecutableApplication.BINARIES_DIR,
+      distFile
+    );
+    const tmpBuildDir = path.join(
+      NodeSingleExecutableApplication.TMP_DIR,
+      `build-${uuid.v4()}`
+    );
     await fs.promises.mkdir(tmpBuildDir, { recursive: true });
-    await this.esbuild(tmpBuildDir);
-    console.log('esbuild completed', tmpBuildDir);
-    await this.prepareExternalBinaries();
     const tempNodeBinaryPath = path.join(tmpBuildDir, 'node-binary');
     await fs.promises.copyFile(
       await this.get('nodeBinaryPath'),
       tempNodeBinaryPath
     );
     await this.seaBuild(tmpBuildDir, tempNodeBinaryPath);
-    if (!fs.existsSync(SeaBuild.BINARIES_DIR)) {
-      await fs.promises.mkdir(SeaBuild.BINARIES_DIR, { recursive: true });
+    if (!fs.existsSync(NodeSingleExecutableApplication.BINARIES_DIR)) {
+      await fs.promises.mkdir(NodeSingleExecutableApplication.BINARIES_DIR, {
+        recursive: true,
+      });
     }
     await fs.promises.copyFile(tempNodeBinaryPath, binaryPath);
     console.log('BINARYPATH', binaryPath);
 
     this._setUNSAFE('binaryPath', binaryPath);
-  }
-
-  async prepareExternalBinaries() {}
-
-  async fetchUserDefinedBinaries() {}
-
-  formatEnvVars() {
-    return Object.entries(this.get('environmentVariables', {}))
-      .map(
-        ([key, value]) =>
-          `process.env['${key.toString()}'] = '${value.toString()}';`
-      )
-      .join('\n');
-  }
-
-  _entrypointParameters() {
-    const args = process.argv.slice(2);
-    let wharfie_event = {};
-    let wharfie_context = {};
-    for (let i = 0; i < args.length; i++) {
-      if (args[i] === '--event') {
-        wharfie_event = JSON.parse(args[i + 1]);
-        i++;
-      } else if (args[i] === '--context') {
-        wharfie_context = JSON.parse(args[i + 1]);
-        i++;
-      }
-    }
-    // if (!wharfie_event) throw new Error('Missing event');
-    if (!wharfie_event) wharfie_event = { foo: 'bar' };
-    // if (!wharfie_context) throw new Error('Missing context');
-    if (!wharfie_context) wharfie_context = { some: 'thing' };
-    return [wharfie_event, wharfie_context];
-  }
-
-  /**
-   * @param {string} buildDir -
-   */
-  async esbuild(buildDir) {
-    console.log(this.get('entryCode'));
-    console.log(this.get('resolveDir'));
-    const { errors, warnings } = await esbuild.build({
-      stdin: {
-        contents: this.get('entryCode'),
-        resolveDir: this.get('resolveDir'),
-        sourcefile: 'index.js',
-      },
-      outfile: path.join(buildDir, 'esbundle.js'),
-      bundle: true,
-      platform: 'node',
-      minify: true,
-      keepNames: false,
-      sourcemap: 'inline',
-      target: `node${this.get('nodeVersion')}`,
-      logLevel: 'silent',
-      define: {
-        __WILLEM_BUILD_RECONCILE_TERMINATOR: '1', // injects this variable definition into the global scope
-      },
-    });
-
-    if (errors.length > 0) {
-      console.error(errors);
-      // eslint-disable-next-line no-process-exit
-      process.exit(1);
-    }
-
-    if (warnings.length > 0) {
-      console.warn(warnings);
-    }
   }
 
   /**
@@ -160,7 +93,7 @@ class SeaBuild extends BaseResource {
     const seaConfigPath = path.join(buildDir, 'sea-config.json');
     const blobPath = path.join(buildDir, 'sea.blob');
     const seaConfig = {
-      main: path.join(buildDir, 'esbundle.js'),
+      main: this.get('bundlePath'),
       output: blobPath,
       disableExperimentalSEAWarning: true,
       useSnapshot: false,
@@ -192,10 +125,8 @@ class SeaBuild extends BaseResource {
   }
 
   async _reconcile() {
-    if (!fs.existsSync(path.join(paths.data, 'builds'))) {
-      await fs.promises.mkdir(path.join(paths.data, 'builds'), {
-        recursive: true,
-      });
+    if (this.has('binaryPath') && fs.existsSync(this.get('binaryPath'))) {
+      return;
     }
     await this.build();
   }
@@ -208,8 +139,14 @@ class SeaBuild extends BaseResource {
   }
 }
 
-SeaBuild.BINARIES_DIR = path.join(paths.data, 'actor_binaries');
+NodeSingleExecutableApplication.BINARIES_DIR = path.join(
+  paths.data,
+  'node-single-executable-application'
+);
 
-SeaBuild.BUILD_DIR = path.join(paths.temp, 'builds');
+NodeSingleExecutableApplication.TMP_DIR = path.join(
+  paths.temp,
+  'node-single-executable-application'
+);
 
-module.exports = SeaBuild;
+module.exports = NodeSingleExecutableApplication;

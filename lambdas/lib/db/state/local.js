@@ -1,5 +1,5 @@
 const BaseResource = require('../../actor/resources/base-resource');
-const LocalDB = require('../local');
+const LocalDB = require('../vanilla');
 
 const stateDB = LocalDB.open('state');
 

@@ -323,7 +323,7 @@ class WharfieProject extends BaseResourceGroup {
         new WharfieResource({
           ...options,
           name,
-          parent: this._getParentName(),
+          parent: this.getName(),
           dependsOn: [this.getRole(), this.getBucket()],
           properties: newProperties,
         })
