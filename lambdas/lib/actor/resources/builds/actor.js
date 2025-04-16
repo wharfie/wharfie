@@ -61,8 +61,12 @@ class Actor extends BaseResourceGroup {
       dependsOn,
     });
     this.fn = fn;
-    this.callerFile = this.getCallerFile();
-    this.callerDirectory = path.dirname(this.callerFile);
+    // console.log(module.parent.filename)
+    this.callerFile = module?.parent?.filename;
+    this.callerDirectory = this.callerFile
+      ? path.dirname(this.callerFile)
+      : undefined;
+
     // @ts-ignore
     global.__wharfieActorFunctions[`${this.getName()}`] = this.fn;
 

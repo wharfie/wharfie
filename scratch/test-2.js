@@ -52,8 +52,8 @@ async function main() {
 
   const system = new ActorSystem({
     name: 'system',
-    resources: [start],
   });
+  await system.registerActors([start]);
   await system.reconcile();
 }
 main();
