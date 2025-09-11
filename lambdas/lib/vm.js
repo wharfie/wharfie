@@ -12,54 +12,6 @@ const paths = require('./paths');
 const VM_PATH = path.join(paths.data, 'vms');
 
 /**
- * @param {string} pkgName -
- * @param {string} srcRoot -
- */
-function resolvePackageDir(pkgName, srcRoot) {
-  const hostReq = srcRoot
-    ? createRequire(path.join(srcRoot, 'package.json'))
-    : require;
-
-  // Resolve the package's entry file (this *is* allowed by exports)
-  const entry = hostReq.resolve(pkgName);
-
-  // Walk up to the nearest package.json
-  let dir = path.dirname(entry);
-  const { root } = path.parse(dir);
-  while (true) {
-    const pj = path.join(dir, 'package.json');
-    if (fs.existsSync(pj)) {
-      // (Optional) sanity check: ensure we actually found the right package
-      try {
-        const pkg = JSON.parse(fs.readFileSync(pj, 'utf8'));
-        if (pkg.name === pkgName || dir.endsWith(path.sep + pkgName))
-          return dir;
-      } catch {}
-      return dir; // good enough in practice
-    }
-    const up = path.dirname(dir);
-    if (up === dir || up === root) {
-      throw new Error(
-        `Could not locate package.json for ${pkgName} (entry: ${entry})`
-      );
-    }
-    dir = up;
-  }
-}
-
-/**
- * @param {string} nodeModulesDir -
- * @param {string} pkgName -
- * @param {string} srcRoot -
- */
-function stageFromHost(nodeModulesDir, pkgName, srcRoot) {
-  const srcDir = resolvePackageDir(pkgName, srcRoot);
-  const dstDir = path.join(nodeModulesDir, pkgName);
-  fs.mkdirSync(path.dirname(dstDir), { recursive: true });
-  fs.cpSync(srcDir, dstDir, { recursive: true, dereference: true });
-}
-
-/**
  * @typedef VMSandboxOptions
  * @property {Buffer} [externalsTar] -
  * @property {Object<string,string>} [env] -

@@ -1,9 +1,9 @@
 'use strict';
-const crypto = require('crypto');
+// const crypto = require('crypto');
 
 class Secret {
   /**
-   * @param {string} value
+   * @param {string} value -
    */
   constructor(value) {
     // Capture the secret value in a closure.

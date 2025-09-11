@@ -103,7 +103,7 @@ class Function extends BuildResource {
     const { outputFiles, errors, warnings } = await esbuild.build({
       stdin: {
         contents: entryCode,
-        resolveDir: resolveDir,
+        resolveDir,
         sourcefile: 'index.js',
       },
       write: false,

@@ -1,5 +1,6 @@
 const path = require('node:path');
 const paths = require('../paths');
+// @ts-ignore
 const { DatabaseSync } = require('node:sqlite');
 
 const dbPath = path.join(paths.data, 'database.sqlite');
@@ -114,7 +115,7 @@ class LocalDB {
       'SELECT key, value FROM store WHERE key LIKE ?'
     );
     const rows = stmt.all(this.namespace + prefix + '%');
-    return rows.map((row) => ({
+    return rows.map((/** @type {{ key: any; value: string; }} */ row) => ({
       key: row.key,
       value: JSON.parse(row.value),
     }));

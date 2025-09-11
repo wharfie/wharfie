@@ -23,6 +23,10 @@ BaseResource.stateDB = {
 
 const lock = require('../package-lock.json');
 
+/**
+ *
+ * @param pkgName
+ */
 function getInstalledVersion(pkgName) {
   const entry = lock.packages?.[`node_modules/${pkgName}`];
   return entry?.version || null;
