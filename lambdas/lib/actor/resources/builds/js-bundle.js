@@ -1,33 +1,46 @@
 // const bluebirdPromise = require('bluebird');
 
 // eslint-disable-next-line node/no-extraneous-require
+const uuid = require('uuid');
 const path = require('node:path');
 const fs = require('node:fs');
 const esbuild = require('esbuild');
 const paths = require('../../../paths');
+const { runCmd, execFile } = require('../../../cmd');
+// @ts-ignore
+const postject = require('postject');
 const BaseResource = require('../base-resource');
 
 /**
- * @typedef JSBundleProperties
+ * @typedef {('darwin'|'win'|'linux')} SeaBinaryPlatform
+ */
+/**
+ * @typedef {('x64'|'arm64')} SeaBinaryArch
+ */
+/**
+ * @typedef SeaBuildProperties
  * @property {string | function(): string} entryCode -
  * @property {string | function(): string} resolveDir -
+ * @property {string | function(): string} nodeBinaryPath -
  * @property {string | function(): string} nodeVersion -
+ * @property {SeaBinaryPlatform | function(): SeaBinaryPlatform} platform -
+ * @property {SeaBinaryArch | function(): SeaBinaryArch} architecture -
  * @property {Object<string,string> | function(): Object<string,string>} [environmentVariables] -
  * @property {Object<string,string> | function(): Object<string,string>} [assets] -
  */
 
 /**
- * @typedef JSBundleOptions
+ * @typedef SeaBuildOptions
  * @property {string} name -
  * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {import('../reconcilable')[]} [dependsOn] -
- * @property {JSBundleProperties & import('../../typedefs').SharedProperties} properties -
+ * @property {SeaBuildProperties & import('../../typedefs').SharedProperties} properties -
  */
 
-class JSBundle extends BaseResource {
+class SeaBuild extends BaseResource {
   /**
-   * @param {JSBundleOptions} options - JSBundle Class Options
+   * @param {SeaBuildOptions} options - SeaBuild Class Options
    */
   constructor({ name, parent, status, dependsOn, properties }) {
     const propertiesWithDefaults = Object.assign(
@@ -46,10 +59,47 @@ class JSBundle extends BaseResource {
   }
 
   async build() {
-    const distFile = `${this.name}-${this.get('nodeVersion')}.js`;
-    const bundlePath = path.join(JSBundle.BUILD_DIR, distFile);
-    await this.esbuild(bundlePath);
-    this._setUNSAFE('bundlePath', bundlePath);
+    const distFile = `${this.name}-${this.get('nodeVersion')}-${this.get(
+      'platform'
+    )}-${this.get('architecture')}`;
+    const binaryPath = path.join(SeaBuild.BINARIES_DIR, distFile);
+    const tmpBuildDir = path.join(SeaBuild.BUILD_DIR, `build-${uuid.v4()}`);
+    await fs.promises.mkdir(tmpBuildDir, { recursive: true });
+    await this.esbuild(tmpBuildDir);
+    console.log('esbuild completed', tmpBuildDir);
+  }
+
+  async prepareExternalBinaries() {}
+
+  async fetchUserDefinedBinaries() {}
+
+  formatEnvVars() {
+    return Object.entries(this.get('environmentVariables', {}))
+      .map(
+        ([key, value]) =>
+          `process.env['${key.toString()}'] = '${value.toString()}';`
+      )
+      .join('\n');
+  }
+
+  _entrypointParameters() {
+    const args = process.argv.slice(2);
+    let wharfie_event = {};
+    let wharfie_context = {};
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--event') {
+        wharfie_event = JSON.parse(args[i + 1]);
+        i++;
+      } else if (args[i] === '--context') {
+        wharfie_context = JSON.parse(args[i + 1]);
+        i++;
+      }
+    }
+    // if (!wharfie_event) throw new Error('Missing event');
+    if (!wharfie_event) wharfie_event = { foo: 'bar' };
+    // if (!wharfie_context) throw new Error('Missing context');
+    if (!wharfie_context) wharfie_context = { some: 'thing' };
+    return [wharfie_event, wharfie_context];
   }
 
   /**
@@ -58,13 +108,14 @@ class JSBundle extends BaseResource {
   async esbuild(buildDir) {
     console.log(this.get('entryCode'));
     console.log(this.get('resolveDir'));
+    const outputPath = path.join(buildDir, 'esbundle.js');
     const { errors, warnings } = await esbuild.build({
       stdin: {
         contents: this.get('entryCode'),
         resolveDir: this.get('resolveDir'),
         sourcefile: 'index.js',
       },
-      outfile: path.join(buildDir, 'esbundle.js'),
+      outfile: outputPath,
       bundle: true,
       platform: 'node',
       minify: true,
@@ -72,6 +123,7 @@ class JSBundle extends BaseResource {
       sourcemap: 'inline',
       target: `node${this.get('nodeVersion')}`,
       logLevel: 'silent',
+      external: ['lmdb'],
       define: {
         __WILLEM_BUILD_RECONCILE_TERMINATOR: '1', // injects this variable definition into the global scope
       },
@@ -86,11 +138,52 @@ class JSBundle extends BaseResource {
     if (warnings.length > 0) {
       console.warn(warnings);
     }
+    this.set('codeBundlePath', outputPath);
+  }
+
+  /**
+   * @param {string} buildDir -
+   * @param {string} nodeBinaryPath -
+   */
+  async seaBuild(buildDir, nodeBinaryPath) {
+    const seaConfigPath = path.join(buildDir, 'sea-config.json');
+    const blobPath = path.join(buildDir, 'sea.blob');
+    console.log('assets', this.get('assets', {}));
+    const seaConfig = {
+      main: path.join(buildDir, 'esbundle.js'),
+      output: blobPath,
+      disableExperimentalSEAWarning: true,
+      useSnapshot: false,
+      assets: this.get('assets', {}),
+    };
+
+    fs.writeFileSync(seaConfigPath, JSON.stringify(seaConfig, null, 2), 'utf8');
+    await execFile(nodeBinaryPath, [
+      '--no-warnings',
+      '--experimental-sea-config',
+      seaConfigPath,
+    ]);
+    if (this.get('platform') === 'darwin') {
+      await runCmd('codesign', ['--remove-signature', nodeBinaryPath]);
+    }
+    const blobData = fs.readFileSync(blobPath);
+    console.log('NODE BINARY PATH', nodeBinaryPath);
+    // base64 encoded fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+    // see https://github.com/nodejs/postject/issues/92#issuecomment-2283508514
+    await postject.inject(nodeBinaryPath, 'NODE_SEA_BLOB', blobData, {
+      sentinelFuse: Buffer.from(
+        'Tk9ERV9TRUFfRlVTRV9mY2U2ODBhYjJjYzQ2N2I2ZTA3MmI4YjVkZjE5OTZiMg==',
+        'base64'
+      ).toString(),
+      ...(this.get('platform') === 'darwin'
+        ? { machoSegmentName: 'NODE_SEA' }
+        : {}),
+    });
   }
 
   async _reconcile() {
-    if (!fs.existsSync(JSBundle.BUILD_DIR)) {
-      await fs.promises.mkdir(JSBundle.BUILD_DIR, {
+    if (!fs.existsSync(path.join(paths.data, 'builds'))) {
+      await fs.promises.mkdir(path.join(paths.data, 'builds'), {
         recursive: true,
       });
     }
@@ -98,13 +191,15 @@ class JSBundle extends BaseResource {
   }
 
   async _destroy() {
-    if (!fs.existsSync(this.get('bundlePath'))) {
+    if (!fs.existsSync(this.get('binaryPath'))) {
       return;
     }
-    await fs.promises.unlink(this.get('bundlePath'));
+    await fs.promises.unlink(this.get('binaryPath'));
   }
 }
 
-JSBundle.BUILD_DIR = path.join(paths.data, 'js-bundle');
+SeaBuild.BINARIES_DIR = path.join(paths.data, 'actor_binaries');
 
-module.exports = JSBundle;
+SeaBuild.BUILD_DIR = path.join(paths.temp, 'builds');
+
+module.exports = SeaBuild;

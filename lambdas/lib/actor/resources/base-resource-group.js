@@ -28,13 +28,6 @@ class BaseResourceGroup extends BaseResource {
   }
 
   /**
-   * @returns {string} -
-   */
-  getName() {
-    return this.parent ? `${this.parent}#${this.name}` : this.name;
-  }
-
-  /**
    * @param {string} parent -
    * @returns {(BaseResource | BaseResourceGroup)[]} -
    */

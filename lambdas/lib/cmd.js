@@ -34,9 +34,10 @@ async function runCmd(cmd, args) {
  * @param {string} filepath - The command to execute.
  * @param {string[]} [args] - Arguments for the command.
  * @param {child_process.ExecFileOptions} [options] - Arguments for the command.
+ * @param {boolean} silent - If true, don't print output.
  * @returns {Promise<void>}
  */
-async function execFile(filepath, args = [], options = {}) {
+async function execFile(filepath, args = [], options = {}, silent = false) {
   return new Promise((resolve, reject) => {
     const proc = child_process.execFile(
       filepath,
@@ -48,7 +49,7 @@ async function execFile(filepath, args = [], options = {}) {
           console.error('stderr:', stderr);
           return;
         }
-
+        if (silent) return;
         console.log('stdout:', stdout);
       }
     );

@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const JSZip = require('jszip');
 const { NotFound } = require('@aws-sdk/client-s3');
-const esbuild = require('../../../esbuild');
+const esbuild = require('esbuild');
 const { getAsset, isSea } = require('node:sea');
 
 // Statically import all known handlers

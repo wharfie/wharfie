@@ -1,27 +1,36 @@
+const uuid = require('uuid');
+
+const BuildResourceGroup = require('./build-resource-group');
 const NodeBinary = require('./node-binary');
 const BuildResource = require('./build-resource');
-const JSBundle = require('./js-bundle');
-const NodeSingleExecutableApplication = require('./node-single-executable-application');
-const PackageBinary = require('./package-binary');
+const SeaBuild = require('./sea-build');
 const MacOSBinarySignature = require('./macos-binary-signature');
-const BaseResourceGroup = require('../base-resource-group');
-const { execFile } = require('../../../cmd');
-const {
-  packages: {
-    'node_modules/esbuild': { version: ESBUILD_VERSION },
-  },
-} = require('../../../../../package-lock.json');
+// const { execFile } = require('../../../cmd');
+const paths = require('../../../paths');
+const vm = require('../../../vm');
+
 const path = require('node:path');
+const zlib = require('node:zlib');
+const fs = require('node:fs');
+const { getAsset } = require('node:sea');
 
 /**
- * @typedef ExtendedWharfieActorProperties
- * @property {string[] | function(): string[]} actorPolicyArns -
- * @property {string | function(): string} artifactBucket -
- * @property {Object<string,string> | function(): Object<string,string>} environmentVariables -
+ * @typedef {('local'|'aws')} InfrastructurePlatform
  */
 
 /**
- * @typedef WharfieActorProperties
+ * @typedef {('darwin'|'win'|'linux')} SeaBinaryPlatform
+ */
+/**
+ * @typedef {('x64'|'arm64')} SeaBinaryArch
+ */
+
+/**
+ * @typedef WharfieActorSystemProperties
+ * @property {InfrastructurePlatform | function(): InfrastructurePlatform} infrastructure -
+ * @property {string | function(): string} nodeVersion -
+ * @property {SeaBinaryPlatform | function(): SeaBinaryPlatform} platform -
+ * @property {SeaBinaryArch | function(): SeaBinaryArch} architecture -
  */
 
 /**
@@ -29,43 +38,47 @@ const path = require('node:path');
  * @property {string} name -
  * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
- * @property {WharfieActorProperties & import('../../typedefs').SharedProperties} properties -
+ * @property {WharfieActorSystemProperties & import('../../typedefs').SharedProperties} properties -
+ * @property {import('./function')[]} functions -
  * @property {import('../reconcilable')[]} [dependsOn] -
  * @property {Object<string, import('../base-resource') | import('../base-resource-group')>} [resources] -
  */
 
-// @ts-ignore
-global.__wharfieActorFunctions = {};
-
-// @ts-ignore
-global.__wharfieActorInitializeEnvironmentFunctions = {};
-
-class Actor extends BaseResourceGroup {
+class ActorSystem extends BuildResourceGroup {
   /**
-   * @param {function} fn -
    * @param {WharfieActorSystemOptions} options -
    */
-  constructor(fn, { name, parent, status, properties, resources, dependsOn }) {
-    if (typeof fn !== 'function') {
-      throw new Error('Actor expects a function as an argument');
-    }
+  constructor({
+    name,
+    parent,
+    status,
+    properties,
+    resources,
+    dependsOn,
+    functions,
+  }) {
+    const propertiesWithDefaults = Object.assign(
+      {},
+      ActorSystem.DefaultProperties,
+      properties
+    );
     super({
       name,
       parent,
       status,
-      properties,
+      properties: propertiesWithDefaults,
       resources,
-      dependsOn,
+      dependsOn: [...(dependsOn ?? []), ...(functions ?? [])],
     });
-    this.fn = fn;
-    this.callerFile = this.getCallerFile();
-    this.callerDirectory = path.dirname(this.callerFile);
+    this.functions = functions;
     // @ts-ignore
-    global.__wharfieActorFunctions[`${this.getName()}`] = this.fn;
+    this.callerFile = module?.parent?.filename;
+    this.callerDirectory = this.callerFile
+      ? path.dirname(this.callerFile)
+      : undefined;
 
     // @ts-ignore
-    global.__wharfieActorInitializeEnvironmentFunctions[`${this.getName()}`] =
-      this.initializeEnvironment.bind(this);
+    global[Symbol.for(`${this.getName()}`)] = this.run.bind(this);
   }
 
   async initializeEnvironment() {
@@ -77,22 +90,6 @@ class Actor extends BaseResourceGroup {
         return Promise.resolve();
       })
     );
-  }
-
-  getCallerFile() {
-    let callerFile;
-    const err = new Error();
-    Error.prepareStackTrace = (_err, stack) => stack;
-    // Check if the stack property exists and is an array
-    if (!err.stack || !Array.isArray(err.stack)) {
-      throw new Error('Stack trace is not available');
-    }
-    const currentFile = err.stack.shift().getFileName();
-    while (err.stack.length) {
-      callerFile = err.stack.shift().getFileName();
-      if (callerFile !== currentFile) break;
-    }
-    return callerFile;
   }
 
   /**
@@ -109,86 +106,71 @@ class Actor extends BaseResourceGroup {
         architecture: this.get('architecture'),
       },
     });
-    const esbuild_binary = new PackageBinary({
-      name: `${this.name}-esbuild-binary`,
-      properties: {
-        version: ESBUILD_VERSION,
-        platform: this.get('platform'),
-        architecture: this.get('architecture'),
-        packageName: () => {
-          /** @type {Object<string, string>} */
-          const packageMap = {
-            'darwin-x64': '@esbuild/darwin-x64',
-            'darwin-arm64': '@esbuild/darwin-arm64',
-            'win-x64': '@esbuild/win32-x64',
-            'win-arm64': '@esbuild/win32-arm64',
-            'linux-x64': '@esbuild/linux-x64',
-            'linux-arm64': '@esbuild/linux-arm64',
-          };
-          if (
-            !packageMap[`${this.get('platform')}-${this.get('architecture')}`]
-          ) {
-            throw new Error(
-              `No esbuild package for ${this.get('platform')}-${this.get(
-                'architecture'
-              )}`
-            );
-          }
-          return packageMap[
-            `${this.get('platform')}-${this.get('architecture')}`
-          ];
-        },
-        binaryRelativePath: () =>
-          this.get('platform') === 'win' ? 'esbuild.exe' : 'bin/esbuild',
-      },
-    });
-    const main_bundle = new JSBundle({
-      name: `${this.name}-bundle`,
+    const build = new SeaBuild({
+      name: `${this.name}-build`,
       parent,
-      dependsOn: [],
+      dependsOn: [node_binary],
       properties: {
         entryCode: () => {
           return `
               (async () => {
+                console.time('overall');
                 require('source-map-support').install();
                 // Auto-generated entry file
                 require(${JSON.stringify(this.callerFile)});
-                await global.__wharfieActorInitializeEnvironmentFunctions['${this.getName()}']();
-                // Execute the actor function captured from the original context.
-                await global.__wharfieActorFunctions['${this.getName()}']();
+                await global[Symbol.for('${this.getName()}')]();
+                console.timeEnd('overall');
               })();
           `;
         },
-        resolveDir: () => path.dirname(this.callerDirectory),
-        nodeVersion: this.get('nodeVersion'),
-      },
-    });
-    const application = new NodeSingleExecutableApplication({
-      name: `${this.name}-application`,
-      parent,
-      dependsOn: [main_bundle],
-      properties: {
-        bundlePath: () => main_bundle.get('bundlePath'),
+        resolveDir: () => path.dirname(this.callerDirectory || ''),
         nodeBinaryPath: () => node_binary.get('binaryPath'),
         nodeVersion: this.get('nodeVersion'),
         platform: this.get('platform'),
         architecture: this.get('architecture'),
+        environmentVariables: () => {
+          return {};
+        },
         assets: () => {
-          return {
-            [esbuild_binary.name]: esbuild_binary.get('binaryPath'),
-          };
+          const functions = this.functions;
+          return functions.reduce(
+            (
+              /** @type {{ [x: string]: any; }} */ acc,
+              /** @type {import('./function')} */ func
+            ) => {
+              // i don't know why this doesn't work
+              // const filePath = func.get('codeBundlePath');
+              // const filePath = func.properties.codeBundlePath;
+              // if (!fs.existsSync(filePath)) { return acc }
+              const bundledAssetPath = path.join(
+                ActorSystem.TEMP_ASSET_PATH,
+                uuid.v4()
+              );
+              const codeBundle = zlib
+                .brotliCompressSync(func.properties.codeBlob)
+                .toString('base64');
+              const assetDescription = JSON.stringify({
+                codeBundle,
+                externalsTar: func.properties.externalsTar,
+              });
+              fs.writeFileSync(bundledAssetPath, assetDescription);
+              acc[func.name] = bundledAssetPath;
+              return acc;
+            },
+            {}
+          );
         },
       },
     });
     /** @type {(import('../base-resource') | import('../base-resource-group'))[]} */
-    const resources = [node_binary, esbuild_binary, application];
+    const resources = [node_binary, build];
     if (this.get('platform') === 'darwin') {
       const macosBinarySignature = new MacOSBinarySignature({
         name: `${this.name}-macos-binary-signature`,
         parent,
-        dependsOn: [application],
+        dependsOn: [build],
         properties: {
-          binaryPath: () => application.get('binaryPath'),
+          binaryPath: () => build.get('binaryPath'),
           macosCertBase64: this.get('macosCertBase64'),
           macosCertPassword: this.get('macosCertPassword'),
           macosKeychainPassword: this.get('macosKeychainPassword'),
@@ -203,25 +185,56 @@ class Actor extends BaseResourceGroup {
     return this.getResource(`${this.name}-build`).get('binaryPath');
   }
 
-  async reconcile() {
-    if (
-      // @ts-ignore
-      typeof __WILLEM_BUILD_RECONCILE_TERMINATOR !== 'undefined' &&
-      /* eslint-disable no-undef */
-      // @ts-ignore
-      __WILLEM_BUILD_RECONCILE_TERMINATOR
-      /* eslint-enable no-undef */
-    ) {
-      return;
+  async _reconcile() {
+    if (!fs.existsSync(ActorSystem.TEMP_ASSET_PATH)) {
+      await fs.promises.mkdir(ActorSystem.TEMP_ASSET_PATH, {
+        recursive: true,
+      });
     }
-    await super.reconcile();
+    await super._reconcile();
   }
+
+  /**
+   * @param {string} functionName -
+   */
+  async runLocalFunction(functionName) {
+    const functionAssetBuffer = await getAsset(functionName);
+    const functionDescriptionBuffer = Buffer.from(functionAssetBuffer);
+    const assetDescription = JSON.parse(functionDescriptionBuffer.toString());
+    const functionBuffer = zlib.brotliDecompressSync(
+      Buffer.from(assetDescription.codeBundle, 'base64')
+    );
+    const functionCodeString = functionBuffer.toString();
+    console.time('sandbox');
+    await vm.runInSandbox(functionName, functionCodeString, {
+      externalsTar: Buffer.from(assetDescription.externalsTar, 'base64'),
+    });
+    console.timeEnd('sandbox');
+  }
+
+  // /**
+  //  * @param {string} functionName -
+  //  */
+  // async runRemoteFunction(functionName) {
+  //   const functionAssetBuffer = await getAsset(functionName);
+  //   const compressedFunctionBuffer = Buffer.from(functionAssetBuffer);
+  //   const functionBuffer = zlib.brotliDecompressSync(compressedFunctionBuffer);
+  //   const functionCodeString = functionBuffer.toString();
+  //   console.time('sandbox')
+  //   await vm.runInSandbox(functionName, functionCodeString, {});
+  //   console.timeEnd('sandbox')
+  // }
 
   async run() {
-    if (!this.isStable()) throw new Error('Actor is not stable');
-    console.log(this.getBinaryPath());
-    await execFile(this.getBinaryPath(), [], {});
+    console.time('run');
+    await this.runLocalFunction('start');
+    console.timeEnd('run');
   }
 }
+ActorSystem.DefaultProperties = {
+  infrastructure: 'local',
+  functions: [],
+};
+ActorSystem.TEMP_ASSET_PATH = path.join(paths.temp, 'actor-system-assets');
 
-module.exports = Actor;
+module.exports = ActorSystem;

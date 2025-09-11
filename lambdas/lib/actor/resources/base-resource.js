@@ -34,6 +34,13 @@ class BaseResource extends Reconcilable {
   }
 
   /**
+   * @returns {string} -
+   */
+  getName() {
+    return this.parent ? `${this.parent}#${this.name}` : this.name;
+  }
+
+  /**
    * @param {any} value -
    * @returns {any} -
    */

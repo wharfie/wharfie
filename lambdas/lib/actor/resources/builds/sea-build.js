@@ -4,7 +4,7 @@
 const uuid = require('uuid');
 const path = require('node:path');
 const fs = require('node:fs');
-const esbuild = require('esbuild');
+const esbuild = require('../../../esbuild');
 const paths = require('../../../paths');
 const { runCmd, execFile } = require('../../../cmd');
 // @ts-ignore
@@ -66,7 +66,6 @@ class SeaBuild extends BaseResource {
     const tmpBuildDir = path.join(SeaBuild.BUILD_DIR, `build-${uuid.v4()}`);
     await fs.promises.mkdir(tmpBuildDir, { recursive: true });
     await this.esbuild(tmpBuildDir);
-    console.log('esbuild completed', tmpBuildDir);
     await this.prepareExternalBinaries();
     const tempNodeBinaryPath = path.join(tmpBuildDir, 'node-binary');
     await fs.promises.copyFile(
@@ -78,8 +77,6 @@ class SeaBuild extends BaseResource {
       await fs.promises.mkdir(SeaBuild.BINARIES_DIR, { recursive: true });
     }
     await fs.promises.copyFile(tempNodeBinaryPath, binaryPath);
-    console.log('BINARYPATH', binaryPath);
-
     this._setUNSAFE('binaryPath', binaryPath);
   }
 
@@ -120,15 +117,14 @@ class SeaBuild extends BaseResource {
    * @param {string} buildDir -
    */
   async esbuild(buildDir) {
-    console.log(this.get('entryCode'));
-    console.log(this.get('resolveDir'));
+    const outputPath = path.join(buildDir, 'esbundle.js');
     const { errors, warnings } = await esbuild.build({
       stdin: {
         contents: this.get('entryCode'),
         resolveDir: this.get('resolveDir'),
         sourcefile: 'index.js',
       },
-      outfile: path.join(buildDir, 'esbundle.js'),
+      outfile: outputPath,
       bundle: true,
       platform: 'node',
       minify: true,
@@ -136,6 +132,7 @@ class SeaBuild extends BaseResource {
       sourcemap: 'inline',
       target: `node${this.get('nodeVersion')}`,
       logLevel: 'silent',
+      external: ['lmdb', 'esbuild', 'node-gyp/bin/node-gyp.js'],
       define: {
         __WILLEM_BUILD_RECONCILE_TERMINATOR: '1', // injects this variable definition into the global scope
       },
@@ -150,6 +147,7 @@ class SeaBuild extends BaseResource {
     if (warnings.length > 0) {
       console.warn(warnings);
     }
+    this.set('codeBundlePath', outputPath);
   }
 
   /**
@@ -164,20 +162,21 @@ class SeaBuild extends BaseResource {
       output: blobPath,
       disableExperimentalSEAWarning: true,
       useSnapshot: false,
+      useCodeCache: false,
       assets: this.get('assets', {}),
     };
 
     fs.writeFileSync(seaConfigPath, JSON.stringify(seaConfig, null, 2), 'utf8');
-    await execFile(nodeBinaryPath, [
-      '--no-warnings',
-      '--experimental-sea-config',
-      seaConfigPath,
-    ]);
+    await execFile(
+      nodeBinaryPath,
+      ['--no-warnings', '--experimental-sea-config', seaConfigPath],
+      {},
+      true
+    );
     if (this.get('platform') === 'darwin') {
       await runCmd('codesign', ['--remove-signature', nodeBinaryPath]);
     }
     const blobData = fs.readFileSync(blobPath);
-    console.log('NODE BINARY PATH', nodeBinaryPath);
     // base64 encoded fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
     // see https://github.com/nodejs/postject/issues/92#issuecomment-2283508514
     await postject.inject(nodeBinaryPath, 'NODE_SEA_BLOB', blobData, {
