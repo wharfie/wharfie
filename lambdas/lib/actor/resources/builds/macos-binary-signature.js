@@ -59,10 +59,6 @@ class MacOSBinarySignature extends BaseResource {
     const macosCertPassword = this.get('macosCertPassword');
     const macosKeychainPassword = this.get('macosKeychainPassword');
 
-    if (!macosCertBase64 || !macosCertPassword || !macosKeychainPassword) {
-      return;
-    }
-
     // Check if this keychain is already listed
     // We'll parse the output of `security list-keychains`
     const listResult = spawnSync('security', ['list-keychains'], {
@@ -152,6 +148,7 @@ class MacOSBinarySignature extends BaseResource {
     const macosKeychainPassword = this.get('macosKeychainPassword');
     const data = `${macosCertBase64}|${macosCertPassword}|${macosKeychainPassword}`;
     // Create a stable MD5 hash in base64 format (shorter than hex)
+
     const keychainHash = crypto.createHash('md5').update(data).digest('base64');
 
     const keychainPath = path.join(
@@ -168,25 +165,40 @@ class MacOSBinarySignature extends BaseResource {
       `entitlements-${entitlementsHash}.plist`
     );
     this._setUNSAFE('entitlementsPath', entitlementsPath);
-    await this.setupMacKeychain(keychainPath);
     await this.writeEntitlements(entitlementsPath);
 
-    await runCmd('codesign', [
-      '--force',
-      '--deep',
-      '--verify',
-      '--options',
-      'runtime',
-      '--sign',
-      // Make sure quotes are correct. Sometimes passing the certificate name with quotes
-      // inside the array can be tricky; you might need to remove the extra quotes:
-      'Developer ID Application: Joseph Van Drunen (F84MQ242HH)',
-      '--entitlements',
-      entitlementsPath,
-      '--keychain',
-      keychainPath,
-      this.get('binaryPath'),
-    ]);
+    if (!macosCertBase64 || !macosCertPassword || !macosKeychainPassword) {
+      await runCmd('codesign', [
+        '--force',
+        '--deep',
+        '--verify',
+        '--options',
+        'runtime',
+        '--sign',
+        '-',
+        '--entitlements',
+        entitlementsPath,
+        this.get('binaryPath'),
+      ]);
+    } else {
+      await this.setupMacKeychain(keychainPath);
+      await runCmd('codesign', [
+        '--force',
+        '--deep',
+        '--verify',
+        '--options',
+        'runtime',
+        '--sign',
+        // Make sure quotes are correct. Sometimes passing the certificate name with quotes
+        // inside the array can be tricky; you might need to remove the extra quotes:
+        'Developer ID Application: Joseph Van Drunen (F84MQ242HH)',
+        '--entitlements',
+        entitlementsPath,
+        '--keychain',
+        keychainPath,
+        this.get('binaryPath'),
+      ]);
+    }
   }
 
   async _reconcile() {
@@ -200,7 +212,6 @@ class MacOSBinarySignature extends BaseResource {
         recursive: true,
       });
     }
-
     await this.signBinary();
     console.log('Binary signed successfully', this.get('binaryPath'));
   }

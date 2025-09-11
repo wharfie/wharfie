@@ -1,18 +1,9 @@
 const BaseResource = require('../lambdas/lib/actor/resources/base-resource');
-const Actor = require('../lambdas/lib/actor/resources/builds/actor');
-const paths = require('../lambdas/lib/paths');
+const Function = require('../lambdas/lib/actor/resources/builds/function');
+const ActorSystem = require('../lambdas/lib/actor/resources/builds/actor-system');
 const Reconcilable = require('../lambdas/lib/actor/resources/reconcilable');
-const path = require('node:path');
 const dep = require('./lib/dep');
 
-// const start = new Actor((context) => {
-// console.log('started')
-// dep();
-// console.log('done')
-// })
-
-// start.build();
-// if (!(typeof __BUNDLED_WITH_ESBUILD !== 'undefined' && __BUNDLED_WITH_ESBUILD)) {
 const {
   putResource,
   putResourceStatus,
@@ -29,7 +20,13 @@ BaseResource.stateDB = {
   getResources,
   deleteResource,
 };
-// }
+
+const lock = require('../package-lock.json');
+
+function getInstalledVersion(pkgName) {
+  const entry = lock.packages?.[`node_modules/${pkgName}`];
+  return entry?.version || null;
+}
 
 /**
  *
@@ -38,44 +35,46 @@ async function main() {
   Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
     // console.log(event)
   });
-  const start = new Actor(
+  const start = new Function(
     async () => {
       console.log('started');
       dep();
       console.log('done');
 
-      // const lmdb = require('lmdb');
-      // const ROOT_DB = lmdb.open({
-      //     path: 'test-db',
-      // });
-      // await ROOT_DB.put('greeting', { someText: 'Hello, World!' });
-      // console.log(ROOT_DB.get('greeting').someText)
+      const lmdb = require('lmdb');
+      const ROOT_DB = lmdb.open({
+        path: 'test-db',
+      });
+      await ROOT_DB.put('greeting', { someText: 'Hello, World!' });
+      console.log(ROOT_DB.get('greeting').someText);
     },
     {
       name: 'start',
       properties: {
-        //   handler: path.join(__dirname, './handlers/start.handler'),
-        nodeVersion: '23',
-        platform: 'darwin',
-        architecture: 'arm64',
+        nodeVersion: '24',
+        external: [
+          {
+            name: 'lmdb',
+            version: getInstalledVersion('lmdb'),
+          },
+        ],
       },
     }
   );
-  //   const timeA = Date.now();
+
+  const main = new ActorSystem({
+    name: 'main',
+    properties: {
+      infrastructure: 'aws',
+      nodeVersion: '24',
+      platform: 'darwin',
+      architecture: 'arm64',
+    },
+    functions: [start],
+  });
+
   await start.reconcile();
-  //   console.log('reconcile: ', Date.now() - timeA);
-  //   const timeB = Date.now();
-  // await start.run();
-  //   console.log('run1: ', Date.now() - timeB);
-  //   const timeC = Date.now();
-  //   await start.run();
-  //   console.log('run2: ', Date.now() - timeC);
-  //   const timeD = Date.now();
-  //   await start.run();
-  //   console.log('run3: ', Date.now() - timeD);
-  //   const timeDestroy = Date.now();
-  //   // await start.destroy();
-  //   console.log('destroy: ', Date.now() - timeDestroy);
+  await main.reconcile();
 }
 main();
 

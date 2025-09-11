@@ -1,4 +1,4 @@
-const BaseResource = require('../base-resource');
+const BaseResourceGroup = require('../base-resource-group');
 
 /**
  * @typedef BuildResourceOptions
@@ -7,14 +7,15 @@ const BaseResource = require('../base-resource');
  * @property {import('../reconcilable').Status} [status] -
  * @property {import('../reconcilable')[]} [dependsOn] -
  * @property {import('../../typedefs').SharedProperties} properties -
+ * @property {Object<string, import('../base-resource') | BaseResourceGroup>} [resources] -
  */
 
-class BuildResource extends BaseResource {
+class BuildResource extends BaseResourceGroup {
   /**
    * @param {BuildResourceOptions} options -
    */
-  constructor({ name, parent, status, dependsOn, properties }) {
-    super({ name, parent, status, dependsOn, properties });
+  constructor({ name, parent, status, dependsOn, properties, resources }) {
+    super({ name, parent, status, dependsOn, properties, resources });
   }
 
   async initializeEnvironment() {}

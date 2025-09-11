@@ -176,6 +176,6 @@ class LocalDB {
  * The root database object.
  * @type {DBRoot}
  */
-LocalDB.ROOT_DB = {};
+LocalDB.ROOT_DB = null;
 
 module.exports = LocalDB;
