@@ -28,15 +28,15 @@ const paths = require('../../../paths');
 /**
  * @typedef PackageBinaryOptions
  * @property {string} name - Resource name.
- * @property {string} [parent]
- * @property {import('../reconcilable').Status} [status]
- * @property {import('../reconcilable')[]} [dependsOn]
- * @property {PackageBinaryProperties & import('../../typedefs').SharedProperties} properties
+ * @property {string} [parent] -
+ * @property {import('../reconcilable').Status} [status] -
+ * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {PackageBinaryProperties & import('../../typedefs').SharedProperties} properties -
  */
 
 class PackageBinary extends BaseResource {
   /**
-   * @param {PackageBinaryOptions} options
+   * @param {PackageBinaryOptions} options -
    */
   constructor({ name, parent, status, dependsOn, properties }) {
     super({ name, parent, status, dependsOn, properties });
@@ -45,7 +45,7 @@ class PackageBinary extends BaseResource {
   /**
    * Build the binary file name from the package name, version, platform and architecture.
    * Optionally appends an executable extension for Windows.
-   * @returns {string}
+   * @returns {string} -
    */
   getBinaryName() {
     const ext = this.get('platform') === 'win' ? '.exe' : '';
@@ -56,7 +56,7 @@ class PackageBinary extends BaseResource {
 
   /**
    * Determines the destination path where the binary will be installed.
-   * @returns {Promise<string>}
+   * @returns {Promise<string>} -
    */
   async getBinaryPath() {
     if (this.has('binaryPath')) return this.get('binaryPath');
@@ -72,7 +72,7 @@ class PackageBinary extends BaseResource {
 
   /**
    * Determines the file path for the downloaded archive.
-   * @returns {Promise<string>}
+   * @returns {Promise<string>} -
    */
   async getArchivePath() {
     if (this._archivePath) return this._archivePath;
@@ -106,8 +106,8 @@ class PackageBinary extends BaseResource {
 
   /**
    * Utility: Downloads content from the given URL and returns it as a string.
-   * @param {string} url
-   * @returns {Promise<string>}
+   * @param {string} url -
+   * @returns {Promise<string>} -
    */
   async download(url) {
     const protocol = url.startsWith('https:') ? https : http;
@@ -124,8 +124,8 @@ class PackageBinary extends BaseResource {
 
   /**
    * Utility: Downloads a file from a URL to a specified destination path.
-   * @param {string} url
-   * @param {string} destPath
+   * @param {string} url -
+   * @param {string} destPath -
    */
   async downloadFile(url, destPath) {
     // Ensure the destination directory exists.
@@ -164,8 +164,8 @@ class PackageBinary extends BaseResource {
 
   /**
    * Extracts a .tar.gz archive (Unix) and returns the path to the desired binary.
-   * @param {string} archivePath
-   * @returns {Promise<string>}
+   * @param {string} archivePath -
+   * @returns {Promise<string>} -
    */
   async extractUnixTar(archivePath) {
     const extractDir = `${archivePath}-extract`;

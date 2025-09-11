@@ -12,11 +12,13 @@ const logging = require('../../lib/logging');
 async function run(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
   event_log.info({
-    deploymentName: resource.resource_properties.deployment.name,
+    deploymentName: resource.resource_properties?.deployment?.name,
     resourceKey: resource.resource_properties.resourceName,
   });
   let migrationResource;
   try {
+    if (!resource.resource_properties?.deployment?.name)
+      throw new Error('no deployment found for operation');
     migrationResource = await load({
       deploymentName: resource.resource_properties.deployment.name,
       resourceKey: resource.resource_properties.resourceName,
