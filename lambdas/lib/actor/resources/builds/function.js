@@ -1,12 +1,16 @@
 const uuid = require('uuid');
-
-const paths = require('../../../paths');
-const esbuild = require('../../../esbuild');
-const BuildResource = require('./build-resource');
-const path = require('node:path');
-const fs = require('node:fs');
 const Arborist = require('@npmcli/arborist');
 const tar = require('tar');
+
+const BuildResource = require('./build-resource');
+const paths = require('../../../paths');
+const esbuild = require('../../../esbuild');
+const vm = require('../../../vm');
+
+const path = require('node:path');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+const { getAsset } = require('node:sea');
 const { buffer: streamToBuffer } = require('node:stream/consumers');
 
 /**
@@ -88,15 +92,23 @@ class Function extends BuildResource {
   }
 
   /**
-   *
+   * @returns {Promise<string>}
    */
   async esbuild() {
     const entryCode = `
+      const { once } = require('node:events');
       (async () => {
+        // makes sure stack traces point to original files
         require('source-map-support').install();
         // Auto-generated entry file
         require(${JSON.stringify(this.callerFile)});
-        await global[Symbol.for('${this.getName()}')]();
+        const fn = await global[Symbol.for('${this.getName()}')];
+        if (typeof fn !== 'function') {
+          throw new TypeError('Global entrypoint is not a function');
+        }
+        const res = await fn(...global.__ENTRY_ARGS__);  
+        // blocks return even if user-code was not awaiting async calls
+        await once(process, 'beforeExit');
       })();
     `;
     const resolveDir = path.dirname(this.callerDirectory || '');
@@ -133,15 +145,18 @@ class Function extends BuildResource {
     }
 
     if (!outputFiles || outputFiles.length !== 1) {
-      throw new Error('Esbuild output not as expected');
+      throw new Error('esbuild output not as expected');
     }
 
     if (warnings.length > 0) {
       console.warn(warnings);
     }
-    this.set('codeBlob', outputFiles[0].text);
+    return outputFiles[0].text;
   }
 
+  /**
+   * @returns {Promise<string>}
+   */
   async bundleExternals() {
     const externals = this.get('external', []);
     const tmpBuildDir = path.join(Function.BUILD_DIR, `externals-${uuid.v4()}`);
@@ -152,7 +167,7 @@ class Function extends BuildResource {
       add: externals.map(
         (/** @type {ExternalDependencyDescription} */ external) =>
           `${external.name}@${external.version}`
-      ), // e.g. ['lodash@^4.17.21']
+      ),
       saveType: 'prod',
     });
     await arb.reify({ save: true });
@@ -166,26 +181,60 @@ class Function extends BuildResource {
       ['.']
     );
     const externalsTar = await streamToBuffer(stream);
-    this.set('externalsTar', externalsTar.toString('base64'));
+    return externalsTar.toString('base64');
   }
 
   async _reconcile() {
-    await Promise.all([this.esbuild(), this.bundleExternals()]);
+    if (!fs.existsSync(Function.TEMP_ASSET_PATH)) {
+      await fs.promises.mkdir(Function.TEMP_ASSET_PATH, {
+        recursive: true,
+      });
+    }
+    const [codeBlob, externalsTar] = await Promise.all([
+      this.esbuild(),
+      this.bundleExternals(),
+    ]);
+    const codeBundle = zlib.brotliCompressSync(codeBlob).toString('base64');
+    const assetDescription = JSON.stringify({
+      codeBundle,
+      externalsTar: externalsTar,
+    });
+    const singleExecutableAssetPath = path.join(
+      Function.TEMP_ASSET_PATH,
+      uuid.v4()
+    );
+    fs.writeFileSync(singleExecutableAssetPath, assetDescription);
+    this.set('singleExecutableAssetPath', singleExecutableAssetPath);
   }
 
   async _destroy() {
-    // if (!fs.existsSync(this.get('codeBundlePath'))) {
-    //   return;
-    // }
-    // await fs.promises.unlink(this.get('codeBundlePath'));
+    if (!fs.existsSync(this.get('assetPath'))) {
+      return;
+    }
+    await fs.promises.unlink(this.get('assetPath'));
   }
 
-  async run() {
-    if (!this.isStable()) throw new Error('Actor is not stable');
+  /**
+   * @param {any} event
+   * @param {any} context
+   */
+  async run(event, context) {
+    const functionAssetBuffer = await getAsset(this.name);
+    const functionDescriptionBuffer = Buffer.from(functionAssetBuffer);
+    const assetDescription = JSON.parse(functionDescriptionBuffer.toString());
+    const functionBuffer = zlib.brotliDecompressSync(
+      Buffer.from(assetDescription.codeBundle, 'base64')
+    );
+    const functionCodeString = functionBuffer.toString();
+    console.time('sandbox');
+    await vm.runInSandbox(this.name, functionCodeString, [event, context], {
+      externalsTar: Buffer.from(assetDescription.externalsTar, 'base64'),
+    });
+    console.timeEnd('sandbox');
   }
 
   async recieve() {
-    await this.run();
+    await this.run({}, {});
   }
 }
 
@@ -195,5 +244,6 @@ Function.DefaultProperties = {
 };
 Function.BUILD_DIR = path.join(paths.temp, 'builds');
 Function.REQUIRED_UNUSED_EXTERNALS = ['esbuild', 'node-gyp/bin/node-gyp.js'];
+Function.TEMP_ASSET_PATH = path.join(paths.temp, 'function-assets');
 
 module.exports = Function;

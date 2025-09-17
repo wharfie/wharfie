@@ -32,6 +32,10 @@ function getInstalledVersion(pkgName) {
   return entry?.version || null;
 }
 
+async function unawaitedAsync() {
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  console.log('test draining');
+}
 /**
  *
  */
@@ -40,7 +44,8 @@ async function main() {
     // console.log(event)
   });
   const start = new Function(
-    async () => {
+    async (event, context) => {
+      console.log('params', [event, context]);
       console.log('started');
       dep();
       console.log('done');
@@ -51,6 +56,7 @@ async function main() {
       });
       await ROOT_DB.put('greeting', { someText: 'Hello, World!' });
       console.log(ROOT_DB.get('greeting').someText);
+      unawaitedAsync();
     },
     {
       name: 'start',
@@ -80,11 +86,5 @@ async function main() {
   await start.reconcile();
   await main.reconcile();
 }
+
 main();
-
-// const start = new Actor(path.join(__dirname, './handlers/start.handler'))
-// const end = new Actor(path.join(__dirname, './handlers/start.handler'))
-
-// start.run();
-
-// const finish = new Actor()

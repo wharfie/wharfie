@@ -126,8 +126,8 @@ class NPMTarball extends BuildResource {
     }
 
     // Define paths.
-    const targetDir = path.join(paths.cache, 'lmbd');
-    const tempTarPath = path.join(paths.temp, 'lmdb.tar');
+    const targetDir = path.join(paths.cache, this.name);
+    const tempTarPath = path.join(paths.temp, `${this.name}.tar`);
 
     // Check if the target directory exists and is non-empty.
     if (fs.existsSync(targetDir) && fs.readdirSync(targetDir).length > 0) {
