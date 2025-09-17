@@ -5,14 +5,12 @@ const NodeBinary = require('./node-binary');
 const BuildResource = require('./build-resource');
 const SeaBuild = require('./sea-build');
 const MacOSBinarySignature = require('./macos-binary-signature');
-// const { execFile } = require('../../../cmd');
+const Actor = require('./actor/');
 const paths = require('../../../paths');
-const vm = require('../../../vm');
 
 const path = require('node:path');
-const zlib = require('node:zlib');
-const fs = require('node:fs');
-const { getAsset } = require('node:sea');
+const { fork } = require('node:child_process');
+const { once } = require('node:events');
 
 /**
  * @typedef {('local'|'aws')} InfrastructurePlatform
@@ -71,6 +69,10 @@ class ActorSystem extends BuildResourceGroup {
       dependsOn: [...(dependsOn ?? []), ...(functions ?? [])],
     });
     this.functions = functions;
+    this.functionMap = functions.reduce((acc, func) => {
+      acc.set(func.name, func);
+      return acc;
+    }, new Map());
     // @ts-ignore
     this.callerFile = module?.parent?.filename;
     this.callerDirectory = this.callerFile
@@ -132,29 +134,12 @@ class ActorSystem extends BuildResourceGroup {
           return {};
         },
         assets: () => {
-          const functions = this.functions;
-          return functions.reduce(
+          return this.functions.reduce(
             (
-              /** @type {{ [x: string]: any; }} */ acc,
+              /** @type {{ [x: string]: string; }} */ acc,
               /** @type {import('./function')} */ func
             ) => {
-              // i don't know why this doesn't work
-              // const filePath = func.get('codeBundlePath');
-              // const filePath = func.properties.codeBundlePath;
-              // if (!fs.existsSync(filePath)) { return acc }
-              const bundledAssetPath = path.join(
-                ActorSystem.TEMP_ASSET_PATH,
-                uuid.v4()
-              );
-              const codeBundle = zlib
-                .brotliCompressSync(func.properties.codeBlob)
-                .toString('base64');
-              const assetDescription = JSON.stringify({
-                codeBundle,
-                externalsTar: func.properties.externalsTar,
-              });
-              fs.writeFileSync(bundledAssetPath, assetDescription);
-              acc[func.name] = bundledAssetPath;
+              acc[func.name] = func.get('singleExecutableAssetPath');
               return acc;
             },
             {}
@@ -162,6 +147,15 @@ class ActorSystem extends BuildResourceGroup {
         },
       },
     });
+    // const actors = this.functions.map(func =>
+    //   new Actor({
+    //     name: `${func.name}-actor`,
+    //     func,
+    //     properties: {
+    //       infrastructure: 'local'
+    //     }
+    //   })
+    // )
     /** @type {(import('../base-resource') | import('../base-resource-group'))[]} */
     const resources = [node_binary, build];
     if (this.get('platform') === 'darwin') {
@@ -185,56 +179,37 @@ class ActorSystem extends BuildResourceGroup {
     return this.getResource(`${this.name}-build`).get('binaryPath');
   }
 
-  async _reconcile() {
-    if (!fs.existsSync(ActorSystem.TEMP_ASSET_PATH)) {
-      await fs.promises.mkdir(ActorSystem.TEMP_ASSET_PATH, {
-        recursive: true,
-      });
-    }
-    await super._reconcile();
-  }
-
-  /**
-   * @param {string} functionName -
-   */
-  async runLocalFunction(functionName) {
-    const functionAssetBuffer = await getAsset(functionName);
-    const functionDescriptionBuffer = Buffer.from(functionAssetBuffer);
-    const assetDescription = JSON.parse(functionDescriptionBuffer.toString());
-    const functionBuffer = zlib.brotliDecompressSync(
-      Buffer.from(assetDescription.codeBundle, 'base64')
-    );
-    const functionCodeString = functionBuffer.toString();
-    console.time('sandbox');
-    await vm.runInSandbox(functionName, functionCodeString, {
-      externalsTar: Buffer.from(assetDescription.externalsTar, 'base64'),
-    });
-    console.timeEnd('sandbox');
-  }
-
-  // /**
-  //  * @param {string} functionName -
-  //  */
-  // async runRemoteFunction(functionName) {
-  //   const functionAssetBuffer = await getAsset(functionName);
-  //   const compressedFunctionBuffer = Buffer.from(functionAssetBuffer);
-  //   const functionBuffer = zlib.brotliDecompressSync(compressedFunctionBuffer);
-  //   const functionCodeString = functionBuffer.toString();
-  //   console.time('sandbox')
-  //   await vm.runInSandbox(functionName, functionCodeString, {});
-  //   console.timeEnd('sandbox')
-  // }
-
   async run() {
-    console.time('run');
-    await this.runLocalFunction('start');
-    console.timeEnd('run');
+    console.log(process.argv);
+    if (process.argv.length <= 2) {
+      // this should spin up polling actor/workqueues
+      console.log('starting system');
+
+      const controller = new AbortController();
+      const { signal } = controller;
+      const child = fork('start', ['hello'], { signal });
+      child.on('error', (err) => {
+        // This will be called with err being an AbortError if the controller aborts
+      });
+      const [exitCode] = await once(child, 'exit');
+      console.log('exited with ', exitCode);
+      // c
+      // controller.abort();
+    } else {
+      // assume that we are passing some work to a specific function
+      const binary = process.argv[0];
+      const filteredArgs = process.argv.filter((arg) => arg != binary);
+      console.log(filteredArgs);
+      const functionName = filteredArgs[0];
+      console.log(`running function ${functionName}`);
+      const func = this.functionMap.get(functionName);
+      await func.run(filteredArgs[1], { context: 'foo' });
+    }
   }
 }
 ActorSystem.DefaultProperties = {
   infrastructure: 'local',
   functions: [],
 };
-ActorSystem.TEMP_ASSET_PATH = path.join(paths.temp, 'actor-system-assets');
 
 module.exports = ActorSystem;

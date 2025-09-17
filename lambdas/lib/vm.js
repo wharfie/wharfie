@@ -1,7 +1,6 @@
 const { createRequire } = require('module');
 const vm = require('node:vm');
 const path = require('node:path');
-const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const tar = require('tar');
 const { Readable } = require('node:stream');
@@ -20,14 +19,19 @@ const VM_PATH = path.join(paths.data, 'vms');
 /**
  * @param {string} name -
  * @param {string} codeString -
+ * @param {any[] | any} params -
  * @param {VMSandboxOptions} options -
  * @returns {Promise<any>} -
  */
-async function runInSandbox(name, codeString, { externalsTar, env = {} }) {
-  await fsp.mkdir(VM_PATH, { recursive: true });
-  const tmpRoot = fs.mkdtempSync(path.join(VM_PATH, `${name}-sandbox`));
+async function runInSandbox(
+  name,
+  codeString,
+  params,
+  { externalsTar, env = {} }
+) {
+  const tmpRoot = await fsp.mkdtemp(path.join(VM_PATH, `${name}-sandbox`));
   const nodeModules = path.join(tmpRoot, 'node_modules');
-  fs.mkdirSync(nodeModules, { recursive: true });
+  await fsp.mkdir(nodeModules, { recursive: true });
 
   const entryFile = path.join(tmpRoot, `${name}.js`);
   const pkgFile = path.join(tmpRoot, 'package.json');
@@ -38,14 +42,19 @@ async function runInSandbox(name, codeString, { externalsTar, env = {} }) {
       C: tmpRoot, // extraction root
       preserveOwner: false,
       unlink: true, // replace existing files
-      // strip: 1,        // optionally strip the top-level folder
-      // onentry: e => { /* observe each entry */ },
     });
     await pipeline(src, extractor);
   }
 
   const sandboxRequire = createRequire(pkgFile);
-
+  // Build a process surrogate that preserves methods but overrides env
+  const sandboxProcess = Object.create(process);
+  Object.defineProperty(sandboxProcess, 'env', {
+    value: { ...process.env, ...env },
+    writable: false,
+    enumerable: true,
+    configurable: true,
+  });
   // 3) Build a fresh context (a “sandbox”) that injects exactly the globals we want:
   const sandboxTemplate = {
     // ─── CommonJS environment ───────────────────────────────────────────────
@@ -109,10 +118,7 @@ async function runInSandbox(name, codeString, { externalsTar, env = {} }) {
 
     // ─── Node‐specific globals ────────────────────────────────────────────────
     console,
-    process: {
-      ...process,
-      env: { ...env },
-    },
+    process: sandboxProcess,
     Buffer,
 
     // Make “global” refer to this sandbox itself
@@ -135,6 +141,8 @@ async function runInSandbox(name, codeString, { externalsTar, env = {} }) {
   // 4) Assign sandboxTemplate.global → sandboxTemplate (so “global === sandbox”)
   // @ts-ignore
   sandboxTemplate.global = sandboxTemplate;
+  // @ts-ignore
+  sandboxTemplate.__ENTRY_ARGS__ = Array.isArray(params) ? params : [params];
 
   const contextified = vm.createContext(sandboxTemplate);
 
