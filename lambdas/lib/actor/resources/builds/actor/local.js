@@ -41,7 +41,7 @@ class LocalActorInfra extends BaseResourceGroup {
 
   /**
    * @param {string} parent -
-   * @returns {(import('../base-resource') | import('../base-resource-group'))[]} -
+   * @returns {(import('../../base-resource') | import('../../base-resource-group'))[]} -
    */
   _defineGroupResources(parent) {
     let ActorInfraConstructor;

@@ -20,6 +20,7 @@
   "include": [
     "build.js",
     "lambdas/**/*.js",
+    // "scratch/**/*.js",
     "cli/**/*.js",
     "bin/wharfie",
     "test/lib/dynamo/operation.test.js",
