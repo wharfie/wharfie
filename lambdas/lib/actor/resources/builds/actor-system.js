@@ -69,8 +69,8 @@ class ActorSystem extends BuildResourceGroup {
       resources,
       dependsOn: [...(dependsOn ?? []), ...(functions ?? [])],
     });
-    this.functions = functions;
-    this.functionMap = functions.reduce((acc, func) => {
+    this.functions = functions || ActorSystem.DefaultProperties.functions;
+    this.functionMap = this.functions.reduce((acc, func) => {
       acc.set(func.name, func);
       return acc;
     }, new Map());
@@ -102,13 +102,14 @@ class ActorSystem extends BuildResourceGroup {
    * @returns {(import('../base-resource') | import('../base-resource-group'))[]} -
    */
   _defineGroupResources(parent) {
+    const { nodeVersion, platform, architecture } = this.get('targets')[0];
     const node_binary = new NodeBinary({
       name: `${this.name}-node-binary`,
       parent,
       properties: {
-        version: this.get('nodeVersion'),
-        platform: this.get('platform'),
-        architecture: this.get('architecture'),
+        version: nodeVersion,
+        platform: platform,
+        architecture: architecture,
       },
     });
     const build = new SeaBuild({
@@ -119,6 +120,7 @@ class ActorSystem extends BuildResourceGroup {
         entryCode: () => {
           return `
               (async () => {
+                console.log("hello");
                 console.time('overall');
                 require('source-map-support').install();
                 // Auto-generated entry file
@@ -130,9 +132,9 @@ class ActorSystem extends BuildResourceGroup {
         },
         resolveDir: () => path.dirname(this.callerDirectory || ''),
         nodeBinaryPath: () => node_binary.get('binaryPath'),
-        nodeVersion: this.get('nodeVersion'),
-        platform: this.get('platform'),
-        architecture: this.get('architecture'),
+        nodeVersion: nodeVersion,
+        platform: platform,
+        architecture: architecture,
         environmentVariables: () => {
           return {};
         },
@@ -152,7 +154,7 @@ class ActorSystem extends BuildResourceGroup {
     });
     /** @type {(import('../base-resource') | import('../base-resource-group'))[]} */
     const resources = [node_binary, build];
-    if (this.get('platform') === 'darwin') {
+    if (platform === 'darwin') {
       const macosBinarySignature = new MacOSBinarySignature({
         name: `${this.name}-macos-binary-signature`,
         parent,
