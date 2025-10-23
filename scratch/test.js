@@ -75,10 +75,13 @@ async function main() {
   const main = new ActorSystem({
     name: 'main',
     properties: {
-      infrastructure: 'aws',
-      nodeVersion: '24',
-      platform: 'darwin',
-      architecture: 'arm64',
+      targest: [
+        {
+          nodeVersion: '24',
+          platform: 'darwin',
+          architecture: 'arm64',
+        },
+      ],
     },
     functions: [start],
   });

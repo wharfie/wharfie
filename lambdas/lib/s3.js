@@ -5,6 +5,51 @@ const BaseAWS = require('./base');
 const bluebirdPromise = require('bluebird');
 const { Readable } = require('stream');
 
+/**
+ * @typedef {'aws'|'fixed'} RegionResolver
+ */
+
+/**
+ * @typedef ProviderMeta
+ * @property {Provider} provider -
+ * @property {RegionResolver} regionResolver -
+ * @property {string} [fixedRegion] -
+ */
+
+/**
+ * @typedef {'aws'|'b2'|'r2'|'hetzner'} Provider
+ */
+
+/**
+ * @typedef ProviderCredentials
+ * @property {string} accessKeyId -
+ * @property {string} secretAccessKey -
+ */
+
+/**
+ * @typedef ProviderOptions
+ * @property {string} [endpoint] -
+ * @property {string} [region] -
+ * @property {string} [accountId]   // R2
+ * @property {string} [location]    // Hetzner
+ * @property {ProviderCredentials} [credentials] -
+ * @property {boolean} [forcePathStyle] -
+ */
+
+/**
+ * Keep this simple so eslintjsdoc is happy. We *don’t* try to “extend”
+ * S3ClientConfig via `&`; we just list the extra fields and the common ones we use.
+ * If you want perfect typing, use the .d.ts option below.
+ * @typedef S3Options
+ * @property {Provider} [provider] -
+ * @property {ProviderOptions} [providerOptions] -
+ * @property {any} [credentials] -
+ * @property {string} [region] -
+ * @property {string} [endpoint] -
+ * @property {boolean} [forcePathStyle] -
+ * @property {boolean} [useArnRegion] -
+ */
+
 const AWS_REGIONS = [
   'us-east-1',
   'us-east-2',
@@ -22,6 +67,7 @@ const AWS_REGIONS = [
   'eu-west-3',
   'sa-east-1',
 ];
+
 /**
  * @param {import("@aws-sdk/client-sts").STSClientConfig} options - client configuration
  * @returns {import("@aws-sdk/client-s3").S3ClientConfig} -
@@ -33,18 +79,111 @@ function formatClientOptions(options) {
   return restOptions;
 }
 
+/**
+ * Normalize provider & endpoint into S3Client config.
+ * @param {import("@aws-sdk/client-s3").S3ClientConfig} base
+ * @param {Provider} provider
+ * @param {ProviderOptions} providerOptions
+ * @returns {{clientConfig: import("@aws-sdk/client-s3").S3ClientConfig, providerMeta: ProviderMeta}}
+ */
+function buildProviderClientConfig(base, provider, providerOptions = {}) {
+  const cfg = { ...base };
+
+  /** @type {ProviderMeta} */
+  const meta = { provider, regionResolver: 'aws' };
+
+  if (providerOptions.credentials) {
+    cfg.credentials = providerOptions.credentials;
+  }
+  if (typeof providerOptions.forcePathStyle === 'boolean') {
+    cfg.forcePathStyle = providerOptions.forcePathStyle;
+  }
+
+  if (!provider || provider === 'aws') {
+    // Nothing extra
+  } else if (provider === 'b2') {
+    const region = providerOptions.region || 'us-west-004';
+    const endpoint =
+      providerOptions.endpoint || `https://s3.${region}.backblazeb2.com`;
+    cfg.region = region;
+    cfg.endpoint = endpoint;
+    meta.regionResolver = 'fixed';
+    meta.fixedRegion = region;
+  } else if (provider === 'r2') {
+    const endpoint =
+      providerOptions.endpoint ||
+      (providerOptions.accountId
+        ? `https://${providerOptions.accountId}.r2.cloudflarestorage.com`
+        : null);
+    if (!endpoint)
+      throw new Error('R2 requires providerOptions.accountId or endpoint');
+    const region = providerOptions.region || 'auto';
+    cfg.region = region;
+    cfg.endpoint = endpoint;
+    meta.regionResolver = 'fixed';
+    meta.fixedRegion = region;
+  } else if (provider === 'hetzner') {
+    const endpoint =
+      providerOptions.endpoint ||
+      (providerOptions.location
+        ? `https://${providerOptions.location}.your-objectstorage.com`
+        : null);
+    if (!endpoint)
+      throw new Error(
+        'Hetzner requires providerOptions.location or endpoint (e.g., fsn1)'
+      );
+    const region = providerOptions.region || providerOptions.location || 'fsn1';
+    cfg.region = region;
+    cfg.endpoint = endpoint;
+    meta.regionResolver = 'fixed';
+    meta.fixedRegion = region;
+  } else {
+    throw new Error(`Unknown provider: ${provider}`);
+  }
+
+  // ---- IMPORTANT: normalize URL → string for S3ClientConfig.endpoint typing ----
+  // (JSDoc typing + @ts-check may still let a URL leak in from callers)
+  // eslint-disable-next-line no-undef
+  if (cfg.endpoint && typeof cfg.endpoint !== 'string') {
+    try {
+      // in Node, URL is global
+      if (cfg.endpoint instanceof URL) {
+        cfg.endpoint = cfg.endpoint.toString();
+      }
+    } catch (_) {
+      // noop: if URL isn’t defined here, caller shouldn’t be passing one
+    }
+  }
+
+  return { clientConfig: cfg, providerMeta: meta };
+}
+
 class S3 {
   /**
-   * @param {import("@aws-sdk/client-s3").S3ClientConfig} [options] - S3 client configuration
+   * @param {S3Options} [options]
    */
   constructor(options = {}) {
-    const credentials = fromNodeProviderChain();
-    this.client_config = {
+    const { provider = 'aws', providerOptions = {}, ...s3Options } = options;
+
+    const defaultCreds = fromNodeProviderChain();
+
+    const baseConfig = {
       ...formatClientOptions(BaseAWS.config()),
-      credentials,
-      ...options,
-      useArnRegion: true,
+      credentials:
+        s3Options.credentials || providerOptions.credentials || defaultCreds,
+      ...s3Options,
+      useArnRegion: true, // harmless for non-AWS providers
     };
+
+    const { clientConfig, providerMeta } = buildProviderClientConfig(
+      baseConfig,
+      provider,
+      providerOptions
+    );
+
+    this.client_config = clientConfig;
+    this._providerMeta = providerMeta;
+
     this.s3 = new AWS.S3(this.client_config);
     this.COPY_PART_SIZE_BYTES = 500000000; // ~500 MB
     this.COPY_PART_SIZE_MINIMUM_BYTES = 5242880; // 5 MB
@@ -52,8 +191,12 @@ class S3 {
     this._LEFT_PAD_SIZE = 5 * 1024 * 1024;
     this._left_pad_object_checked = false;
 
+    // For non-AWS providers, region fan-out is meaningless. We gate it.
+    const regionKey = (this.s3?.config?.region || 'default').toString();
+    this._allowRegionFanout = this._providerMeta.regionResolver === 'aws';
+
     this.region_clients = {
-      [this.s3?.config?.region.toString()]: this.s3,
+      [regionKey]: this.s3,
     };
   }
 
@@ -62,6 +205,10 @@ class S3 {
    * @returns {import("@aws-sdk/client-s3").S3} -
    */
   _getRegionClient(region) {
+    if (!this._allowRegionFanout) {
+      // Non-AWS providers do not support/need per-region clients
+      return this.s3;
+    }
     if (!this.region_clients[region]) {
       this.region_clients[region] = new AWS.S3({
         ...this.client_config,

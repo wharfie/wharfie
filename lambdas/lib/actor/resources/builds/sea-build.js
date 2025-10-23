@@ -12,7 +12,7 @@ const postject = require('postject');
 const BaseResource = require('../base-resource');
 
 /**
- * @typedef {('darwin'|'win'|'linux')} SeaBinaryPlatform
+ * @typedef {('darwin'|'win32'|'linux')} SeaBinaryPlatform
  */
 /**
  * @typedef {('x64'|'arm64')} SeaBinaryArch

@@ -10,7 +10,7 @@ const paths = require('../../../paths');
 const BaseResource = require('../base-resource');
 
 /**
- * @typedef {('darwin'|'win'|'linux')} NodeBinaryPlatform
+ * @typedef {('darwin'|'win32'|'linux')} NodeBinaryPlatform
  */
 /**
  * @typedef {('x64'|'arm64')} NodeBinaryArch
@@ -99,7 +99,7 @@ class NodeBinary extends BaseResource {
    * @returns {Promise<string>} - name of the Node.js binary
    */
   async getBinaryName() {
-    const ext = this.get('platform') === 'windows' ? '.exe' : '';
+    const ext = this.get('platform') === 'win32' ? '.exe' : '';
     return `node-${await this.getExactVersion()}-${this.get(
       'platform'
     )}-${this.get('architecture')}${ext}`;
@@ -127,7 +127,7 @@ class NodeBinary extends BaseResource {
    */
   async getArchivePath() {
     if (this._archivePath) return this._archivePath;
-    const ext = this.get('platform') === 'windows' ? '.zip' : '.tar.gz';
+    const ext = this.get('platform') === 'win32' ? '.zip' : '.tar.gz';
     const archiveName = `node-${await this.getExactVersion()}-${this.get(
       'platform'
     )}-${this.get('architecture')}${ext}`;
@@ -140,10 +140,12 @@ class NodeBinary extends BaseResource {
    * @returns {Promise<string>} - URL of the Node.js binary to download.
    */
   async getUrl() {
-    const ext = this.get('platform') === 'windows' ? '.zip' : '.tar.gz';
-    return `https://nodejs.org/dist/${await this.getExactVersion()}/node-${await this.getExactVersion()}-${this.get(
-      'platform'
-    )}-${this.get('architecture')}${ext}`;
+    const ext = this.get('platform') === 'win32' ? '.zip' : '.tar.gz';
+    const platform =
+      this.get('platform') === 'win32' ? 'win' : this.get('platform');
+    return `https://nodejs.org/dist/${await this.getExactVersion()}/node-${await this.getExactVersion()}-${platform}-${this.get(
+      'architecture'
+    )}${ext}`;
   }
 
   async download() {
@@ -173,7 +175,7 @@ class NodeBinary extends BaseResource {
   async extract() {
     // Extract node binary
     let extractedBinary;
-    if (this.get('platform') === 'windows') {
+    if (this.get('platform') === 'win32') {
       extractedBinary = await this.extractWindowsZip(
         await this.getArchivePath()
       );

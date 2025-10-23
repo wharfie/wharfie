@@ -7,28 +7,29 @@ const SeaBuild = require('./sea-build');
 const MacOSBinarySignature = require('./macos-binary-signature');
 const Actor = require('./actor/');
 const paths = require('../../../paths');
+const cli = require('./actor-system-cli');
 
 const path = require('node:path');
 const { fork } = require('node:child_process');
 const { once } = require('node:events');
 
 /**
- * @typedef {('local'|'aws')} InfrastructurePlatform
- */
-
-/**
- * @typedef {('darwin'|'win'|'linux')} SeaBinaryPlatform
+ * @typedef {('darwin'|'win32'|'linux')} SeaBinaryPlatform
  */
 /**
  * @typedef {('x64'|'arm64')} SeaBinaryArch
  */
 
 /**
- * @typedef WharfieActorSystemProperties
- * @property {InfrastructurePlatform | function(): InfrastructurePlatform} infrastructure -
+ * @typedef WharfieActorSystemTarget
  * @property {string | function(): string} nodeVersion -
  * @property {SeaBinaryPlatform | function(): SeaBinaryPlatform} platform -
  * @property {SeaBinaryArch | function(): SeaBinaryArch} architecture -
+ */
+
+/**
+ * @typedef WharfieActorSystemProperties
+ * @property {WharfieActorSystemTarget[] | function(): WharfieActorSystemTarget[]} targets -
  */
 
 /**
@@ -79,6 +80,8 @@ class ActorSystem extends BuildResourceGroup {
       ? path.dirname(this.callerFile)
       : undefined;
 
+    // @ts-ignore
+    global[Symbol.for('functionMap')] = this.functionMap;
     // @ts-ignore
     global[Symbol.for(`${this.getName()}`)] = this.run.bind(this);
   }
@@ -147,15 +150,6 @@ class ActorSystem extends BuildResourceGroup {
         },
       },
     });
-    // const actors = this.functions.map(func =>
-    //   new Actor({
-    //     name: `${func.name}-actor`,
-    //     func,
-    //     properties: {
-    //       infrastructure: 'local'
-    //     }
-    //   })
-    // )
     /** @type {(import('../base-resource') | import('../base-resource-group'))[]} */
     const resources = [node_binary, build];
     if (this.get('platform') === 'darwin') {
@@ -180,35 +174,47 @@ class ActorSystem extends BuildResourceGroup {
   }
 
   async run() {
-    console.log(process.argv);
-    if (process.argv.length <= 2) {
-      // this should spin up polling actor/workqueues
-      console.log('starting system');
-
-      const controller = new AbortController();
-      const { signal } = controller;
-      const child = fork('start', ['hello'], { signal });
-      child.on('error', (err) => {
-        // This will be called with err being an AbortError if the controller aborts
+    let argv = process.argv;
+    let stdinData = '';
+    if (!process.stdin.isTTY) {
+      process.stdin.setEncoding('utf8');
+      process.stdin.on('data', (chunk) => {
+        stdinData += chunk;
       });
-      const [exitCode] = await once(child, 'exit');
-      console.log('exited with ', exitCode);
-      // c
-      // controller.abort();
-    } else {
-      // assume that we are passing some work to a specific function
-      const binary = process.argv[0];
-      const filteredArgs = process.argv.filter((arg) => arg != binary);
-      console.log(filteredArgs);
-      const functionName = filteredArgs[0];
-      console.log(`running function ${functionName}`);
-      const func = this.functionMap.get(functionName);
-      await func.run(filteredArgs[1], { context: 'foo' });
+      process.stdin.on('end', () => {
+        process.env.STDIN_DATA = stdinData;
+      });
     }
+    console.log(argv);
+    console.log('RUNNING');
+    await cli(argv);
+    //   if (process.argv.length <= 2) {
+    //     // this should spin up polling actor/workqueues
+    //     console.log('starting system');
+
+    //     const controller = new AbortController();
+    //     const { signal } = controller;
+    //     const child = fork('start', ['hello'], { signal });
+    //     child.on('error', (err) => {
+    //       // This will be called with err being an AbortError if the controller aborts
+    //     });
+    //     const [exitCode] = await once(child, 'exit');
+    //     console.log('exited with ', exitCode);
+    //     // c
+    //     // controller.abort();
+    //   } else {
+    //     // assume that we are passing some work to a specific function
+    //     const binary = process.argv[0];
+    //     const filteredArgs = process.argv.filter((arg) => arg !== binary);
+    //     console.log(filteredArgs);
+    //     const functionName = filteredArgs[0];
+    //     console.log(`running function ${functionName}`);
+    //     const func = this.functionMap.get(functionName);
+    //     await func.run(filteredArgs[1], { context: 'foo' });
+    //   }
   }
 }
 ActorSystem.DefaultProperties = {
-  infrastructure: 'local',
   functions: [],
 };
 
