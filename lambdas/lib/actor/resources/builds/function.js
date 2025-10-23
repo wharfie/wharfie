@@ -1,11 +1,12 @@
 const uuid = require('uuid');
-const Arborist = require('@npmcli/arborist');
+// const Arborist = require('@npmcli/arborist');
 const tar = require('tar');
 
 const BuildResource = require('./build-resource');
 const paths = require('../../../paths');
 const esbuild = require('../../../esbuild');
 const vm = require('../../../vm');
+const { installForTarget } = require('./lib/install-deps');
 
 const path = require('node:path');
 const fs = require('node:fs');
@@ -176,22 +177,11 @@ class Function extends BuildResource {
     const externals = this.get('external', []);
     const tmpBuildDir = path.join(Function.BUILD_DIR, `externals-${uuid.v4()}`);
     await fs.promises.mkdir(tmpBuildDir, { recursive: true });
-
-    const current_platform = process.env.npm_config_platform;
-    const current_arch = process.env.npm_config_arch;
-    process.env.npm_config_platform = this.get('buildTarget').platform;
-    process.env.npm_config_arch = this.get('buildTarget').architecture;
-    const arb = new Arborist({ path: tmpBuildDir });
-    await arb.buildIdealTree({
-      add: externals.map(
-        (/** @type {ExternalDependencyDescription} */ external) =>
-          `${external.name}@${external.version}`
-      ),
-      saveType: 'prod',
+    await installForTarget({
+      buildTarget: this.get('buildTarget'),
+      externals: externals,
+      tmpBuildDir,
     });
-    await arb.reify({ save: true });
-    process.env.npm_config_platform = current_platform;
-    process.env.npm_config_arch = current_arch;
     const stream = tar.c(
       {
         cwd: tmpBuildDir,

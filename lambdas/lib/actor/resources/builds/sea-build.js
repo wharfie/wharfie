@@ -197,6 +197,7 @@ class SeaBuild extends BaseResource {
       });
     }
     await this.build();
+    console.log();
   }
 
   async _destroy() {

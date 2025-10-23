@@ -43,6 +43,9 @@ async function main() {
   Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
     // console.log(event)
   });
+  Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_ERROR, (event) => {
+    // console.error(event)
+  });
   const start = new Function(
     async (event, context) => {
       console.log('params', [event, context]);
@@ -61,7 +64,11 @@ async function main() {
     {
       name: 'start',
       properties: {
-        nodeVersion: '24',
+        buildTarget: {
+          nodeVersion: '24',
+          platform: 'darwin',
+          architecture: 'arm64',
+        },
         external: [
           {
             name: 'lmdb',
@@ -75,7 +82,7 @@ async function main() {
   const main = new ActorSystem({
     name: 'main',
     properties: {
-      targest: [
+      targets: [
         {
           nodeVersion: '24',
           platform: 'darwin',
