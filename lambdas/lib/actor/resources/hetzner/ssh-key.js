@@ -59,7 +59,7 @@ class HetznerSSHKey extends BaseResource {
   /**
    * Find an existing Hetzner SSH key by name (single page fetch).
    * @param {string} name - Exact key name.
-   * @returns {Promise<{id:number,name:string,public_key?:string}|null>}
+   * @returns {Promise<{id:number,name:string,public_key?:string}|null>} -
    * @private
    */
   async _findRemoteByName(name) {

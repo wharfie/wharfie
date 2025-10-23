@@ -1,7 +1,27 @@
 'use strict';
 
-const { HetznerCloud, HetznerError } = require('../../../hetzner');
+const { HetznerCloud, HetznerError } = require('../../../hetzner/');
 const BaseResource = require('../base-resource');
+
+/**
+ * Minimal systemd service spec for first-boot install via cloud-init.
+ * Mirrors the exec fields your Hetzner client already understands.
+ * @typedef {Object} VPSServiceSpec
+ * @property {string} [url] - HTTPS URL to download the executable (preferred for large artifacts).
+ * @property {string} [inline_b64] - Base64-encoded executable/script (keep << 32 KiB).
+ * @property {string} [remote_path='/usr/local/bin/app'] - Absolute path for the binary on the VM.
+ * @property {string[]} [args=[]] - CLI args.
+ * @property {Record<string,string>} [env={}] - Environment variables.
+ * @property {string} [user='root'] - System user to own/execute.
+ * @property {string} [group] - Optional group; defaults to user.
+ * @property {string} [service_name='app'] - systemd unit name (=> app.service).
+ * @property {'simple'|'exec'|'notify'} [type='simple'] - systemd Service Type.
+ * @property {'always'|'on-failure'|'no'} [restart='always'] - systemd Restart policy.
+ * @property {number} [restart_sec=3] - Seconds before restart.
+ * @property {boolean} [wantsNetworkOnline=true] - Depend on network-online.target.
+ * @property {string} [stdout_log='/var/log/app.stdout.log'] - stdout log file.
+ * @property {string} [stderr_log='/var/log/app.stderr.log'] - stderr log file.
+ */
 
 /**
  * @typedef VPSProperties
@@ -9,7 +29,9 @@ const BaseResource = require('../base-resource');
  * @property {string} serverType - Server type slug (e.g., "cpx11").
  * @property {string} image - Image slug (e.g., "ubuntu-22.04").
  * @property {string} location - Location slug (e.g., "nbg1").
- * @property {string} [sshKeyName] - Optional Hetzner SSH key name to inject at creation.
+ * @property {string} [sshKeyName] - Optional Hetzner SSH key **name** to inject at creation.
+ * @property {string} [cloudInit] - Optional raw cloud-init YAML string to pass as user_data.
+ * @property {VPSServiceSpec} [service] - Optional structured spec for a systemd-managed executable.
  */
 
 /**
@@ -59,10 +81,42 @@ class HetznerVPS extends BaseResource {
   }
 
   /**
+   * Build user_data from either properties.cloudInit (raw YAML)
+   * or properties.service (structured systemd spec). If both are provided,
+   * they are merged (raw first, then service section appended).
+   * @returns {string|undefined} -
+   * @private
+   */
+  _composeUserData() {
+    /** @type {string|undefined} */
+    const raw = this.get('cloudInit');
+    /** @type {VPSServiceSpec|undefined} */
+    const svc = this.get('service');
+
+    if (!raw && !svc) return undefined;
+
+    // If only raw YAML → pass-through
+    if (raw && !svc) return String(raw);
+
+    // If only service spec → generate cloud-config for systemd
+    if (!raw && svc) {
+      // leverage the client’s generator; returns "#cloud-config" YAML
+      // (yes, it's a "private" helper; we control both sides)
+      // @ts-ignore
+      return this.hz._buildCloudInitForSystemd(svc);
+    }
+
+    // Both provided → merge (raw first, then systemd section)
+    // @ts-ignore
+    const svcYaml = this.hz._buildCloudInitForSystemd(svc);
+    // @ts-ignore
+    return this.hz._mergeUserData(String(raw), svcYaml);
+  }
+
+  /**
    * Ensure the server exists and is running; inject SSH key on first creation if provided.
-   * Idempotent:
-   *  - If server already exists (by stored id or by name), do not recreate; just wait for running and refresh IP.
-   *  - If missing, create (optionally with sshKeyName) and wait until running.
+   * If cloud-init/systemd is supplied, it is applied **only on first creation** (cannot be updated later).
+   * Idempotent lifecycle.
    * @returns {Promise<void>}
    */
   async _reconcile() {
@@ -76,7 +130,6 @@ class HetznerVPS extends BaseResource {
         server = res?.server ?? null;
       } catch (err) {
         if (!(err instanceof HetznerError && err.status === 404)) throw err;
-        // stale id -> clear and fall through to name-based lookup
         serverId = null;
         this.set('hetzner_id', undefined);
       }
@@ -91,16 +144,22 @@ class HetznerVPS extends BaseResource {
       }
     }
 
-    // 2) If not found, create it (optionally with SSH key)
+    // 2) If not found, create it (optionally with SSH key + cloud-init)
     if (!server) {
       /** @type {string|undefined} */
       const sshKeyName = this.get('sshKeyName');
+      const user_data = this._composeUserData();
+
+      /** @type {import('../../../hetzner/typedefs').CreateServerPayload} */
       const payload = {
         name: this.name,
         server_type: this.get('serverType'),
         image: this.get('image'),
         location: this.get('location'),
         ...(sshKeyName ? { ssh_keys: [sshKeyName] } : {}),
+        ...(user_data ? { user_data } : {}),
+        // make public-net intent explicit (safer for future templates)
+        public_net: { enable_ipv4: true, enable_ipv6: true },
       };
 
       const createRes = await this.hz.createServer(payload);
@@ -117,11 +176,15 @@ class HetznerVPS extends BaseResource {
 
       this.set('hetzner_id', createdServerId);
       serverId = createdServerId;
+    } else {
+      // If server already exists but caller provided new cloud-init/service,
+      // we **do not** re-provision (user_data is immutable post-create).
+      // You could log/emit a warning here if you have a logger.
     }
 
     // 3) Wait for running & refresh IP (idempotent)
     const running = await this.hz.waitForServerRunning(serverId, {
-      // keep defaults from client: intervalMs=2000, timeoutMs=15m, requireIPv4=true
+      // defaults: intervalMs=2000, timeoutMs=15m, requireIPv4=true
     });
     const ip = running?.public_net?.ipv4?.ip;
     if (ip) this.set('ip', ip);
@@ -129,16 +192,19 @@ class HetznerVPS extends BaseResource {
 
   /**
    * Terminate the server if it exists.
-   * Idempotent: ignores "already gone".
+   * Idempotent: ignores "already gone". Clears cached state.
    * @returns {Promise<void>}
    */
   async _destroy() {
     let serverId = this.get('hetzner_id');
 
-    // If we don't have an id, attempt to find by name (idempotent safety)
     if (serverId == null) {
       const byName = await this._findServerByName();
-      if (!byName) return;
+      if (!byName) {
+        this.set('ip', undefined);
+        this.set('hetzner_id', undefined);
+        return;
+      }
       serverId = byName.id;
       this.set('hetzner_id', serverId);
     }
@@ -146,13 +212,10 @@ class HetznerVPS extends BaseResource {
     try {
       await this.hz.terminateServerFast(serverId, { wait: true });
     } catch (err) {
-      if (err instanceof HetznerError && err.status === 404) {
-        this.set('ip', undefined);
-        this.set('hetzner_id', undefined);
-        // already deleted
-      } else {
-        throw err;
-      }
+      if (!(err instanceof HetznerError && err.status === 404)) throw err;
+    } finally {
+      this.set('ip', undefined);
+      this.set('hetzner_id', undefined);
     }
   }
 }

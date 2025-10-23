@@ -20,8 +20,23 @@ const { buffer: streamToBuffer } = require('node:stream/consumers');
  */
 
 /**
+ * @typedef {('darwin'|'win32'|'linux')} Platform
+ */
+
+/**
+ * @typedef {('x64'|'arm64')} Arch
+ */
+
+/**
+ * @typedef FunctionBuildTarget
+ * @property {string | function(): string} nodeVersion -
+ * @property {Platform | function(): Platform} platform -
+ * @property {Arch | function(): Arch} architecture -
+ */
+
+/**
  * @typedef FunctionProperties
- * @property {string} nodeVersion -
+ * @property {FunctionBuildTarget | function(): FunctionBuildTarget} buildTarget -
  * @property {ExternalDependencyDescription[]} external -
  * @property {Object<string,string>} environmentVariables -
  * @property {Object<string,string> | function(): Object<string,string>} assets -
@@ -124,7 +139,7 @@ class Function extends BuildResource {
       minify: true,
       keepNames: false,
       sourcemap: 'inline',
-      target: `node${this.get('nodeVersion')}`,
+      target: `node${this.get('buildTarget').nodeVersion}`,
       logLevel: 'silent',
       external: this.get('external', []).length
         ? [
@@ -162,6 +177,10 @@ class Function extends BuildResource {
     const tmpBuildDir = path.join(Function.BUILD_DIR, `externals-${uuid.v4()}`);
     await fs.promises.mkdir(tmpBuildDir, { recursive: true });
 
+    const current_platform = process.env.npm_config_platform;
+    const current_arch = process.env.npm_config_arch;
+    process.env.npm_config_platform = this.get('buildTarget').platform;
+    process.env.npm_config_arch = this.get('buildTarget').architecture;
     const arb = new Arborist({ path: tmpBuildDir });
     await arb.buildIdealTree({
       add: externals.map(
@@ -171,6 +190,8 @@ class Function extends BuildResource {
       saveType: 'prod',
     });
     await arb.reify({ save: true });
+    process.env.npm_config_platform = current_platform;
+    process.env.npm_config_arch = current_arch;
     const stream = tar.c(
       {
         cwd: tmpBuildDir,

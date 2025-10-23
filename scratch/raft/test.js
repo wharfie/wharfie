@@ -8,8 +8,6 @@ const DHT = require('hyperdht');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const HETZNER_TOKEN =
-  'P9LtyppMddGiGAUYkxB3klBIRncm3xyIXbLmuxxO41h1lKnu7UfYiBk3OnpRgOtS';
 const CLUSTER = process.env.CLUSTER_ID || `dev:${Math.random()}`;
 const BASE = process.env.DATA_BASE || './cluster-data';
 const NODES = Number(process.env.NODES || '3');
@@ -119,5 +117,5 @@ async function startLocalBootstrap() {
       }
     })
   );
-  await bootstrapNode.destroy();
+  // await bootstrapNode.destroy();
 })();
