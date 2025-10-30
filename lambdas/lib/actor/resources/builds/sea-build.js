@@ -12,19 +12,20 @@ const postject = require('postject');
 const BaseResource = require('../base-resource');
 
 /**
- * @typedef {('darwin'|'win32'|'linux')} SeaBinaryPlatform
+ * @typedef {NodeJS.Process["platform"]} TargetPlatform
+ * @typedef {NodeJS.Architecture} TargetArch
+ * @typedef {import('detect-libc').GLIBC|import('detect-libc').MUSL} TargetLibc
  */
-/**
- * @typedef {('x64'|'arm64')} SeaBinaryArch
- */
+
 /**
  * @typedef SeaBuildProperties
  * @property {string | function(): string} entryCode -
  * @property {string | function(): string} resolveDir -
  * @property {string | function(): string} nodeBinaryPath -
  * @property {string | function(): string} nodeVersion -
- * @property {SeaBinaryPlatform | function(): SeaBinaryPlatform} platform -
- * @property {SeaBinaryArch | function(): SeaBinaryArch} architecture -
+ * @property {TargetPlatform | function(): TargetPlatform} platform -
+ * @property {TargetArch | function(): TargetArch} architecture -
+ * @property {TargetLibc | function(): TargetLibc} [libc] -
  * @property {Object<string,string> | function(): Object<string,string>} [environmentVariables] -
  * @property {Object<string,string> | function(): Object<string,string>} [assets] -
  */
@@ -43,25 +44,17 @@ class SeaBuild extends BaseResource {
    * @param {SeaBuildOptions} options - SeaBuild Class Options
    */
   constructor({ name, parent, status, dependsOn, properties }) {
-    const propertiesWithDefaults = Object.assign(
-      {
-        nodeVersion: '23',
-      },
-      properties
-    );
     super({
       name,
       parent,
       status,
       dependsOn,
-      properties: propertiesWithDefaults,
+      properties,
     });
   }
 
   async build() {
-    const distFile = `${this.name}-${this.get('nodeVersion')}-${this.get(
-      'platform'
-    )}-${this.get('architecture')}`;
+    const distFile = `${this.name}`;
     const binaryPath = path.join(SeaBuild.BINARIES_DIR, distFile);
     const tmpBuildDir = path.join(SeaBuild.BUILD_DIR, `build-${uuid.v4()}`);
     await fs.promises.mkdir(tmpBuildDir, { recursive: true });
@@ -168,7 +161,7 @@ class SeaBuild extends BaseResource {
 
     fs.writeFileSync(seaConfigPath, JSON.stringify(seaConfig, null, 2), 'utf8');
     await execFile(
-      nodeBinaryPath,
+      process.execPath,
       ['--no-warnings', '--experimental-sea-config', seaConfigPath],
       {},
       true
@@ -197,7 +190,6 @@ class SeaBuild extends BaseResource {
       });
     }
     await this.build();
-    console.log();
   }
 
   async _destroy() {

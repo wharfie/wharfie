@@ -10,16 +10,14 @@ const paths = require('../../../paths');
 const BaseResource = require('../base-resource');
 
 /**
- * @typedef {('darwin'|'win32'|'linux')} NodeBinaryPlatform
- */
-/**
- * @typedef {('x64'|'arm64')} NodeBinaryArch
+ * @typedef {NodeJS.Process["platform"]} TargetPlatform
+ * @typedef {NodeJS.Architecture} TargetArch
  */
 /**
  * @typedef NodeBinaryProperties
  * @property {string | function(): string} version -
- * @property {NodeBinaryPlatform | function(): NodeBinaryPlatform} platform -
- * @property {NodeBinaryArch | function(): NodeBinaryArch} architecture -
+ * @property {TargetPlatform | function(): TargetPlatform} platform -
+ * @property {TargetArch | function(): TargetArch} architecture -
  */
 
 /**
@@ -56,7 +54,7 @@ class NodeBinary extends BaseResource {
    * @returns {Promise<string>} - Exact version of Node.js to download.
    */
   async getExactVersion() {
-    if (this._exactVersion) return this._exactVersion;
+    if (this.has('exactVersion')) return this.get('exactVersion');
     const versions = await NodeBinary.getVersions();
     const matchingVersions = versions.filter((v) =>
       v.version.startsWith(`v${this.get('version')}`)
@@ -64,8 +62,9 @@ class NodeBinary extends BaseResource {
     if (matchingVersions.length === 0) {
       throw new Error(`No Node.js version found for ${this.get('version')}`);
     }
+
     const latestVersion = matchingVersions[0].version;
-    this._exactVersion = latestVersion;
+    this.set('exactVersion', latestVersion);
     return latestVersion;
   }
 
@@ -134,40 +133,123 @@ class NodeBinary extends BaseResource {
     this._archivePath = path.join(NodeBinary.TEMP_DIR, archiveName);
     return this._archivePath;
   }
+  /**
+   * Map Node/OS tokens and choose packaging for our extractor.
+   * - We extract .zip on Windows.
+   * - We extract .tar.gz on macOS (Node publishes osx-*-tar).
+   * - For everything else we keep your existing .tar.gz assumption.
+   */
+  static resolveTargetSpec(platform, arch) {
+    // Normalize platform
+    const isWin = platform === 'win32';
+    const isMac = platform === 'darwin';
+    const token = isWin ? 'win' : isMac ? 'osx' : platform;
+    // Normalize arch (Node uses x64/arm64; windows 32-bit is x86)
+    const normArch = arch === 'ia32' ? 'x86' : arch;
+    const normPlatform = isWin ? 'win' : platform;
+
+    // What packaging do we intend to download?
+    // (Keep your extractor expectations: zip on win; tar.gz elsewhere)
+    const ext = isWin ? '.zip' : '.tar.gz';
+    const packagingKey = isWin ? 'zip' : 'tar';
+
+    return { token, normPlatform, normArch, ext, packagingKey, isWin, isMac };
+  }
+
+  /**
+   * Build candidate "files" keys to validate against index.json.
+   * Node's `files` array sometimes lists either a base key (linux-x64)
+   * and sometimes keyed by packaging (osx-arm64-tar, win-x64-zip).
+   */
+  static candidateFilesKeys(token, normArch, packagingKey) {
+    const base = `${token}-${normArch}`;
+    // Try most-specific first, then fallback to base:
+    return [
+      `${base}-${packagingKey}`, // e.g. osx-arm64-tar, win-x64-zip
+      base, // e.g. linux-x64
+    ];
+  }
 
   /**
    * Get the URL of the Node.js binary to download.
-   * @returns {Promise<string>} - URL of the Node.js binary to download.
+   * Validates against index.json "files" to ensure artifact exists,
+   * and maps darwin->osx properly.
+   * @returns {Promise<string>} URL of the Node.js binary to download.
    */
   async getUrl() {
-    const ext = this.get('platform') === 'win32' ? '.zip' : '.tar.gz';
-    const platform =
-      this.get('platform') === 'win32' ? 'win' : this.get('platform');
-    return `https://nodejs.org/dist/${await this.getExactVersion()}/node-${await this.getExactVersion()}-${platform}-${this.get(
-      'architecture'
-    )}${ext}`;
+    const version = await this.getExactVersion();
+    const versions = await NodeBinary.getVersions();
+    const meta = versions.find((v) => v.version === version);
+    if (!meta) {
+      throw new Error(`No metadata found for Node.js ${version}`);
+    }
+
+    const { token, normPlatform, normArch, ext, packagingKey } =
+      NodeBinary.resolveTargetSpec(
+        this.get('platform'),
+        this.get('architecture')
+      );
+
+    // Validate that at least one acceptable "files" key exists
+    const keys = NodeBinary.candidateFilesKeys(token, normArch, packagingKey);
+    const available = new Set(meta.files);
+    const ok = keys.some((k) => available.has(k));
+    if (!ok) {
+      throw new Error(
+        `Node.js ${version} does not publish binaries for ${token}-${normArch}. Available: ${meta.files.join(
+          ', '
+        )}`
+      );
+    }
+    // node-v23.11.1-darwin-x64.tar.gz
+
+    // Construct URL with our normalized token + arch + chosen ext
+    // Examples:
+    //  - mac:  https://nodejs.org/dist/v23.11.1/node-v23.11.1-osx-arm64.tar.gz
+    //  - win:  https://nodejs.org/dist/v24.11.0/node-v24.11.0-win-x64.zip
+    //  - linux (kept as .tar.gz per your extractor): node-vX-linux-x64.tar.gz
+    return `https://nodejs.org/dist/${version}/node-${version}-${normPlatform}-${normArch}${ext}`;
   }
 
+  /**
+   * Download the Node.js archive and verify status + content-type.
+   */
   async download() {
     if (!fs.existsSync(NodeBinary.TEMP_DIR)) {
       await fspromise.mkdir(NodeBinary.TEMP_DIR, { recursive: true });
     }
-    const file = fs.createWriteStream(await this.getArchivePath());
+
     const url = await this.getUrl();
-    const request = url.startsWith('https') ? https : http;
     const archivePath = await this.getArchivePath();
+    console.log(`Downloading: ${url}`);
+    console.log(`Saving to: ${archivePath}`);
+
     return new Promise((resolve, reject) => {
+      const file = fs.createWriteStream(archivePath);
+      const request = url.startsWith('https') ? https : http;
+
       request
         .get(url, (response) => {
+          if (response.statusCode !== 200) {
+            response.resume();
+            return reject(
+              new Error(`Download failed: ${response.statusCode} ${url}`)
+            );
+          }
+          const ct = (response.headers['content-type'] || '').toLowerCase();
+          // Accept the usual suspects; Node sometimes serves octet-stream
+          if (!/zip|tar|gzip|octet-stream/.test(ct)) {
+            response.resume();
+            return reject(
+              new Error(`Unexpected content-type '${ct}' from ${url}`)
+            );
+          }
+
           response.pipe(file);
-          file.on('finish', () => {
-            file.close(resolve);
-          });
+          file.on('finish', () => file.close(resolve));
         })
-        .on('error', (error) => {
-          fs.unlink(archivePath, () => {
-            reject(error);
-          });
+        .on('error', (err) => {
+          fs.unlink(archivePath, () => reject(err));
         });
     });
   }
