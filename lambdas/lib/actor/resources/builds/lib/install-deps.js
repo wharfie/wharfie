@@ -6,14 +6,23 @@ const path = require('node:path');
 const importFresh = require('import-fresh');
 // const Arborist = importFresh('@npmcli/arborist')
 const { runWithVirtualEnv } = require('./env-virtualizer');
-const { family, GLIBC, MUSL } = require('detect-libc');
+const { family } = require('detect-libc');
 
 /**
  * @typedef {NodeJS.Process["platform"]} TargetPlatform
  * @typedef {NodeJS.Architecture} TargetArch
- * @typedef {GLIBC|MUSL} TargetLibc
- * @typedef {{ platform: TargetPlatform, architecture: TargetArch, libc?: TargetLibc }} BuildTarget
- * @typedef {{ name: string, version: string }} ExternalDep
+ * @typedef {import('detect-libc').GLIBC|import('detect-libc').MUSL} TargetLibc
+ */
+/**
+ * @typedef BuildTarget
+ * @property {TargetPlatform} platform -
+ * @property {TargetArch} architecture -
+ * @property {TargetLibc} [libc] -
+ */
+/**
+ * @typedef ExternalDep
+ * @property {string} name -
+ * @property {string} version -
  */
 
 /**
@@ -58,21 +67,17 @@ async function installForTarget(opts) {
 
     npm_config_platform: buildTarget.platform,
     npm_config_arch: buildTarget.architecture,
-    npm_config_os: buildTarget.platform, // win32 | linux | darwin
-    npm_config_cpu: buildTarget.architecture, // x64 | arm64 | ia32
+    npm_config_os: buildTarget.platform,
+    npm_config_cpu: buildTarget.architecture,
     ...(buildTarget.platform === 'linux' && buildTarget.libc
       ? { npm_config_libc: buildTarget.libc }
       : {}),
-    // Guardrails to prevent building from source:
 
     npm_config_node_gyp: path.resolve('/nonexistent-node-gyp'), // make raw node-gyp fail immediately
-    // npm_config_ignore_scripts: 'false',
 
     // optional hardening
     npm_config_audit: 'false',
     npm_config_fund: 'false',
-    // npm_config_foreground_scripts: 'true', // stream lifecycle output
-    // npm_config_loglevel: 'silly',
   };
 
   try {
@@ -86,7 +91,6 @@ async function installForTarget(opts) {
       await arb.reify({ save: true });
     });
   } catch (err) {
-    // Wrap with a precise, developer-facing message.
     const targetTag = [
       buildTarget.platform,
       buildTarget.architecture,
@@ -117,7 +121,6 @@ async function installForTarget(opts) {
       `Original error: ${stringifyError(err)}`;
 
     const e = new Error(msg);
-    // Preserve original stack for debugging if present.
     if (err && typeof err === 'object' && 'stack' in err && err.stack) {
       e.stack = `${e.stack}\nCaused by:\n${err.stack}`;
     }

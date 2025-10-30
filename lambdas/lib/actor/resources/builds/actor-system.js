@@ -3,42 +3,40 @@ const uuid = require('uuid');
 const BuildResourceGroup = require('./build-resource-group');
 const NodeBinary = require('./node-binary');
 const BuildResource = require('./build-resource');
+const FunctionResource = require('./function-resource');
 const SeaBuild = require('./sea-build');
 const MacOSBinarySignature = require('./macos-binary-signature');
-const Actor = require('./actor/');
-const paths = require('../../../paths');
 const cli = require('./actor-system-cli');
 
 const path = require('node:path');
-const { fork } = require('node:child_process');
-const { once } = require('node:events');
 
 /**
- * @typedef {('darwin'|'win32'|'linux')} SeaBinaryPlatform
- */
-/**
- * @typedef {('x64'|'arm64')} SeaBinaryArch
+ * @typedef {NodeJS.Process["platform"]} TargetPlatform
+ * @typedef {NodeJS.Architecture} TargetArch
+ * @typedef {import('detect-libc').GLIBC|import('detect-libc').MUSL} TargetLibc
  */
 
 /**
- * @typedef WharfieActorSystemTarget
+ * @typedef BuildTarget
  * @property {string | function(): string} nodeVersion -
- * @property {SeaBinaryPlatform | function(): SeaBinaryPlatform} platform -
- * @property {SeaBinaryArch | function(): SeaBinaryArch} architecture -
+ * @property {TargetPlatform | function(): TargetPlatform} platform -
+ * @property {TargetArch | function(): TargetArch} architecture -
+ * @property {TargetLibc | function(): TargetLibc} [libc] -
  */
 
 /**
  * @typedef WharfieActorSystemProperties
- * @property {WharfieActorSystemTarget[] | function(): WharfieActorSystemTarget[]} targets -
+ * @property {BuildTarget[] | function(): BuildTarget[]} targets -
+ * @property {import('./function')[]} [functions] -
  */
 
 /**
  * @typedef WharfieActorSystemOptions
  * @property {string} name -
+ * @property {import('./function')[]} [functions] -
  * @property {string} [parent] -
  * @property {import('../reconcilable').Status} [status] -
  * @property {WharfieActorSystemProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('./function')[]} functions -
  * @property {import('../reconcilable')[]} [dependsOn] -
  * @property {Object<string, import('../base-resource') | import('../base-resource-group')>} [resources] -
  */
@@ -54,7 +52,7 @@ class ActorSystem extends BuildResourceGroup {
     properties,
     resources,
     dependsOn,
-    functions,
+    functions = [],
   }) {
     const propertiesWithDefaults = Object.assign(
       {},
@@ -67,21 +65,23 @@ class ActorSystem extends BuildResourceGroup {
       status,
       properties: propertiesWithDefaults,
       resources,
-      dependsOn: [...(dependsOn ?? []), ...(functions ?? [])],
+      dependsOn: [...(dependsOn ?? [])],
     });
-    this.functions = functions || ActorSystem.DefaultProperties.functions;
-    this.functionMap = this.functions.reduce((acc, func) => {
-      acc.set(func.name, func);
-      return acc;
-    }, new Map());
+    this.functions = functions;
+    // this.functionMap = this.functions.reduce((acc, func) => {
+    //   acc.set(func.name, func);
+    //   return acc;
+    // }, new Map());
     // @ts-ignore
     this.callerFile = module?.parent?.filename;
     this.callerDirectory = this.callerFile
       ? path.dirname(this.callerFile)
       : undefined;
+    // normally _defineGroupResources is used but this is a workaround to make sure this.functions and this.callerFile is set before defining things
+    this.addResources(this.defineActorSystemResources(parent));
 
     // @ts-ignore
-    global[Symbol.for('functionMap')] = this.functionMap;
+    // global[Symbol.for('functionMap')] = this.functionMap;
     // @ts-ignore
     global[Symbol.for(`${this.getName()}`)] = this.run.bind(this);
   }
@@ -98,13 +98,18 @@ class ActorSystem extends BuildResourceGroup {
   }
 
   /**
-   * @param {string} parent -
+   * @param {string|undefined} parent -
+   * @param {BuildTarget} target -
    * @returns {(import('../base-resource') | import('../base-resource-group'))[]} -
    */
-  _defineGroupResources(parent) {
-    const { nodeVersion, platform, architecture } = this.get('targets')[0];
+  _defineTargetResources(
+    parent,
+    { nodeVersion, platform, architecture, libc }
+  ) {
+    /** @type {(import('../base-resource') | import('../base-resource-group'))[]} */
+    const resources = [];
     const node_binary = new NodeBinary({
-      name: `${this.name}-node-binary`,
+      name: `${this.name}-node-binary-${nodeVersion}-${platform}-${architecture}`,
       parent,
       properties: {
         version: nodeVersion,
@@ -112,15 +117,35 @@ class ActorSystem extends BuildResourceGroup {
         architecture: architecture,
       },
     });
+    const targetFunctions = this.functions.map(
+      (/** @type {import('./function')} */ func) => {
+        return new FunctionResource(func.fn, {
+          name: `${func.name}-${nodeVersion}-${platform}-${architecture}`,
+          parent,
+          dependsOn: [node_binary],
+          properties: {
+            functionName: func.name,
+            ...func.properties,
+            resolveDir: () => path.dirname(this.callerDirectory || ''),
+            callerFile: () => this.callerFile,
+            buildTarget: () => ({
+              nodeVersion: node_binary.get('exactVersion').slice(1),
+              platform: platform,
+              architecture: architecture,
+              libc: libc,
+            }),
+          },
+        });
+      }
+    );
     const build = new SeaBuild({
-      name: `${this.name}-build`,
+      name: `${this.name}-build-${nodeVersion}-${platform}-${architecture}`,
       parent,
-      dependsOn: [node_binary],
+      dependsOn: [node_binary, ...targetFunctions],
       properties: {
         entryCode: () => {
           return `
               (async () => {
-                console.log("hello");
                 console.time('overall');
                 require('source-map-support').install();
                 // Auto-generated entry file
@@ -132,19 +157,24 @@ class ActorSystem extends BuildResourceGroup {
         },
         resolveDir: () => path.dirname(this.callerDirectory || ''),
         nodeBinaryPath: () => node_binary.get('binaryPath'),
-        nodeVersion: nodeVersion,
+        nodeVersion: () => node_binary.get('exactVersion').slice(1),
         platform: platform,
         architecture: architecture,
         environmentVariables: () => {
           return {};
         },
         assets: () => {
-          return this.functions.reduce(
+          return targetFunctions.reduce(
             (
               /** @type {{ [x: string]: string; }} */ acc,
-              /** @type {import('./function')} */ func
+              /** @type {import('./function-resource')} */ func
             ) => {
-              acc[func.name] = func.get('singleExecutableAssetPath');
+              acc[
+                func.name.replace(
+                  `-${nodeVersion}-${platform}-${architecture}`,
+                  ''
+                )
+              ] = func.get('singleExecutableAssetPath');
               return acc;
             },
             {}
@@ -153,10 +183,10 @@ class ActorSystem extends BuildResourceGroup {
       },
     });
     /** @type {(import('../base-resource') | import('../base-resource-group'))[]} */
-    const resources = [node_binary, build];
+    resources.push(node_binary, build, ...targetFunctions);
     if (platform === 'darwin') {
       const macosBinarySignature = new MacOSBinarySignature({
-        name: `${this.name}-macos-binary-signature`,
+        name: `${this.name}-macos-binary-signature-${nodeVersion}-${platform}-${architecture}`,
         parent,
         dependsOn: [build],
         properties: {
@@ -171,25 +201,25 @@ class ActorSystem extends BuildResourceGroup {
     return resources;
   }
 
+  /**
+   * @param {string|undefined} parent -
+   * @returns {(import('../base-resource') | import('../base-resource-group'))[]} -
+   */
+  defineActorSystemResources(parent) {
+    /** @type {(import('../base-resource') | import('../base-resource-group'))[]} */
+    const resources = [];
+    this.get('targets', []).map((/** @type {BuildTarget} */ target) => {
+      resources.push(...this._defineTargetResources(parent, target));
+    });
+    return resources;
+  }
+
   getBinaryPath() {
     return this.getResource(`${this.name}-build`).get('binaryPath');
   }
 
   async run() {
-    let argv = process.argv;
-    let stdinData = '';
-    if (!process.stdin.isTTY) {
-      process.stdin.setEncoding('utf8');
-      process.stdin.on('data', (chunk) => {
-        stdinData += chunk;
-      });
-      process.stdin.on('end', () => {
-        process.env.STDIN_DATA = stdinData;
-      });
-    }
-    console.log(argv);
-    console.log('RUNNING');
-    await cli(argv);
+    await cli();
     //   if (process.argv.length <= 2) {
     //     // this should spin up polling actor/workqueues
     //     console.log('starting system');

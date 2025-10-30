@@ -24,7 +24,6 @@ BaseResource.stateDB = {
 const lock = require('../package-lock.json');
 
 /**
- *
  * @param pkgName
  */
 function getInstalledVersion(pkgName) {
@@ -64,11 +63,6 @@ async function main() {
     {
       name: 'start',
       properties: {
-        buildTarget: {
-          nodeVersion: '24',
-          platform: 'darwin',
-          architecture: 'arm64',
-        },
         external: [
           {
             name: 'lmdb',
@@ -81,6 +75,7 @@ async function main() {
 
   const main = new ActorSystem({
     name: 'main',
+    functions: [start],
     properties: {
       targets: [
         {
@@ -88,12 +83,35 @@ async function main() {
           platform: 'darwin',
           architecture: 'arm64',
         },
+        // {
+        //   nodeVersion: '23',
+        //   platform: 'darwin',
+        //   architecture: 'arm64',
+        // },
+        // {
+        //   nodeVersion: '24',
+        //   platform: 'darwin',
+        //   architecture: 'x64',
+        // },
+        // {
+        //   nodeVersion: '22',
+        //   platform: 'darwin',
+        //   architecture: 'x64',
+        // },
+        // {
+        //   nodeVersion: '24',
+        //   platform: 'win32',
+        //   architecture: 'x64',
+        // },
+        // {
+        //   nodeVersion: '22',
+        //   platform: 'win32',
+        //   architecture: 'x86',
+        // },
       ],
     },
-    functions: [start],
   });
 
-  await start.reconcile();
   await main.reconcile();
 }
 

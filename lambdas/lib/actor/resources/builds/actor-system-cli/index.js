@@ -6,10 +6,23 @@ const config = require('../../../../../../cli/config');
 const { checkForNewRelease } = require('../../../../../../cli/upgrade');
 
 /**
- * @param {readonly string[]} argv
+ *
  */
-async function entrypoint(argv) {
+async function entrypoint() {
   console.log('entrypoint');
+
+  let argv = process.argv;
+  let stdinData = '';
+  if (!process.stdin.isTTY) {
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => {
+      stdinData += chunk;
+    });
+    process.stdin.on('end', () => {
+      process.env.STDIN_DATA = stdinData;
+    });
+  }
+  console.log(argv);
   process.env.CONFIG_DIR = paths.config;
   process.env.CONFIG_FILE_PATH = `${process.env.CONFIG_DIR}/wharfie.config`;
   process.env.LOGGING_FORMAT = 'cli';

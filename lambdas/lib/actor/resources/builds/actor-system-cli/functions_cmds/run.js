@@ -1,6 +1,7 @@
 'use strict';
 
 const { Command } = require('commander');
+const Function = require('../../function');
 
 /**
  * @param {string} functionName
@@ -8,9 +9,7 @@ const { Command } = require('commander');
  */
 async function run(functionName, message) {
   console.log(`running function ${functionName}`);
-  // @ts-ignore
-  const func = global[Symbol.for('functionMap')].get(functionName);
-  await func.run(message, { context: 'foo' });
+  Function.run(functionName, message, { context: 'foo' });
   console.log(`function ${functionName} completed`);
 }
 
