@@ -234,7 +234,6 @@ FunctionResource.BUILD_DIR = path.join(paths.temp, 'builds');
 FunctionResource.REQUIRED_UNUSED_EXTERNALS = [
   'esbuild',
   'node-gyp/bin/node-gyp.js',
-  // '@mapbox/node-pre-gyp'
 ];
 FunctionResource.TEMP_ASSET_PATH = path.join(paths.temp, 'function-assets');
 

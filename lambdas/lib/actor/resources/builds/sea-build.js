@@ -125,7 +125,7 @@ class SeaBuild extends BaseResource {
       sourcemap: 'inline',
       target: `node${this.get('nodeVersion')}`,
       logLevel: 'silent',
-      external: ['esbuild', 'node-gyp/bin/node-gyp.js'],
+      external: ['esbuild', 'node-gyp/bin/node-gyp.js', 'sharp'],
       define: {
         __WILLEM_BUILD_RECONCILE_TERMINATOR: '1', // injects this variable definition into the global scope
       },
