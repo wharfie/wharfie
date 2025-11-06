@@ -37,6 +37,7 @@ async function entrypoint() {
 
   program.hook('preAction', async () => {
     console.log('preAction');
+    await paths.createWharfiePaths();
     // await paths.createWharfiePaths();
     // if (fs.existsSync(process.env.CONFIG_FILE_PATH)) {
     //   try {

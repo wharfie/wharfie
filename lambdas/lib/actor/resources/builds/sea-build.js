@@ -125,7 +125,7 @@ class SeaBuild extends BaseResource {
       sourcemap: 'inline',
       target: `node${this.get('nodeVersion')}`,
       logLevel: 'silent',
-      external: ['lmdb', 'esbuild', 'node-gyp/bin/node-gyp.js'],
+      external: ['esbuild', 'node-gyp/bin/node-gyp.js'],
       define: {
         __WILLEM_BUILD_RECONCILE_TERMINATOR: '1', // injects this variable definition into the global scope
       },
@@ -189,7 +189,10 @@ class SeaBuild extends BaseResource {
         recursive: true,
       });
     }
+    console.log('running sea build');
     await this.build();
+    console.log('completed sea build');
+    console.log(this.get('binaryPath'));
   }
 
   async _destroy() {
