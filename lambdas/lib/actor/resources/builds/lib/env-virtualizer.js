@@ -84,6 +84,24 @@ const envProxy = new Proxy(baseEnv, {
 const processProxy = new Proxy(process, {
   get(target, prop, receiver) {
     if (prop === 'env') return envProxy;
+    // Per-task platform/arch virtualization
+    if (prop === 'platform' || prop === 'arch') {
+      const store = /** @type {Store|undefined} */ (als.getStore());
+      // explicit overrides take precedence
+      const explicit =
+        store?.overrides &&
+        (prop === 'platform'
+          ? store.overrides.__platform
+          : store.overrides.__arch);
+      if (explicit) return explicit;
+      // fallback to npm_config_* if provided
+      const fromEnv =
+        prop === 'platform'
+          ? envProxy.npm_config_platform || envProxy.npm_config_os
+          : envProxy.npm_config_arch || envProxy.npm_config_cpu;
+      if (fromEnv) return fromEnv;
+      return Reflect.get(target, prop, receiver);
+    }
     return Reflect.get(target, prop, receiver);
   },
   set(target, prop, value, receiver) {

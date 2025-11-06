@@ -3,6 +3,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 const fsp = require('node:fs/promises');
 const tar = require('tar');
+// const nodeAbi = require('node-abi');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 
@@ -10,10 +11,34 @@ const paths = require('./paths');
 
 const VM_PATH = path.join(paths.data, 'vms');
 
+const Module = require('node:module');
+
+async function linkIntoSandbox(modName, destRoot) {
+  const pkgJson = require.resolve(`${modName}/package.json`);
+  const srcDir = path.dirname(pkgJson);
+  const destDir = path.join(destRoot, 'node_modules', modName);
+
+  await fsp.mkdir(path.dirname(destDir), { recursive: true });
+  try {
+    await fsp.symlink(
+      srcDir,
+      destDir,
+      process.platform === 'win32' ? 'junction' : 'dir'
+    );
+  } catch (e) {
+    // Fallback: deep copy if symlinks are restricted
+    await fsp.cp(srcDir, destDir, { recursive: true });
+  }
+}
+
 /**
  * @typedef VMSandboxOptions
  * @property {Buffer} [externalsTar] -
  * @property {Object<string,string>} [env] -
+ * @property {string} [arch] -
+ * @property {string} [platform] -
+ * @property {string} [version] -
+ * @property {string[]} [links] -
  */
 
 /**
@@ -27,14 +52,33 @@ async function runInSandbox(
   name,
   codeString,
   params,
-  { externalsTar, env = {} }
+  {
+    externalsTar,
+    env = {},
+    arch = process.arch,
+    platform = process.platform,
+    version = process.version.slice(1),
+    links = [],
+  }
 ) {
+  await fsp.mkdir(VM_PATH, { recursive: true });
   const tmpRoot = await fsp.mkdtemp(path.join(VM_PATH, `${name}-sandbox`));
+  console.log('running in vm root: ', tmpRoot);
   const nodeModules = path.join(tmpRoot, 'node_modules');
+  const pkgFile = path.join(tmpRoot, 'package.json');
+
   await fsp.mkdir(nodeModules, { recursive: true });
 
+  // Ensure a minimal package.json exists so createRequire() has a base package
+  await fsp.writeFile(
+    pkgFile,
+    JSON.stringify({ name: `${name}-sandbox`, private: true }, null, 2)
+  );
+  await Promise.all(
+    links.map((/** @type {string} */ link) => linkIntoSandbox(link, tmpRoot))
+  );
+
   const entryFile = path.join(tmpRoot, `${name}.js`);
-  const pkgFile = path.join(tmpRoot, 'package.json');
   // Write package.json and entry
   if (externalsTar) {
     const src = Readable.from(externalsTar);
@@ -55,6 +99,59 @@ async function runInSandbox(
     enumerable: true,
     configurable: true,
   });
+  Object.defineProperty(sandboxProcess, 'arch', {
+    value: arch,
+    writable: false,
+    enumerable: true,
+    configurable: true,
+  });
+  Object.defineProperty(sandboxProcess, 'platform', {
+    value: platform,
+    writable: false,
+    enumerable: true,
+    configurable: true,
+  });
+  Object.defineProperty(sandboxProcess, 'version', {
+    value: `v${version}`,
+    writable: false,
+    enumerable: true,
+    configurable: true,
+  });
+  // const modulesAbi = nodeAbi.getAbi(version, 'node');
+  // Object.defineProperty(sandboxProcess, 'versions', {
+  //   value: {...process.versions, node: version, nabi: modulesAbi},
+  //   writable: false,
+  //   enumerable: true,
+  //   configurable: true,
+  // });
+  // Object.defineProperty(sandboxProcess, 'versions', {
+  //   value: {
+  //     ...process.versions,
+  //     node: version,
+  //     modules: String(modulesAbi),
+  //   },
+  //   writable: false,
+  //   enumerable: true,
+  //   configurable: true,
+  // });
+  // const nodeAbiPath = sandboxRequire.resolve('node-abi');
+  // require.cache[nodeAbiPath] = {
+  //   id: nodeAbiPath,
+  //   filename: nodeAbiPath,
+  //   loaded: true,
+  //   exports: {
+  //     ...nodeAbi,
+  //     getAbi: () => String(modulesAbi),
+  //     getTarget: (abi) => abi === String(modulesAbi) ? version : nodeAbi.getTarget?.(abi, 'node'),
+  //     ...(typeof nodeAbi.getNapiVersion === 'function'
+  //         ? { getNapiVersion: () => (napiVer ? String(napiVer) : undefined) }
+  //         : {}),
+  //   },
+  // };
+  // console.log(sandboxProcess)
+  // console.log("SANDBOX VM")
+  // console.log(sandboxProcess.arch)
+  // console.log(sandboxProcess.platform)
   // 3) Build a fresh context (a “sandbox”) that injects exactly the globals we want:
   const sandboxTemplate = {
     // ─── CommonJS environment ───────────────────────────────────────────────

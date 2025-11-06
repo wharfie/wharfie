@@ -1,9 +1,11 @@
 const fs = require('fs');
+const fsp = fs.promises;
 const path = require('path');
 const { createId } = require('../id');
 const paths = require('../paths');
 
 const dbFilePath = path.join(paths.data, 'database.json');
+const dbDir = path.dirname(dbFilePath);
 
 /**
  * @typedef {Object.<string, any>} DBRoot
@@ -32,23 +34,40 @@ function addToQueue(operation) {
  * @returns {Promise<void>}
  */
 function flush(root) {
-  return addToQueue(() => {
-    return new Promise((resolve, reject) => {
-      const data = JSON.stringify(root);
-      const tempFilePath = dbFilePath + `.${createId()}` + '.tmp';
-      fs.writeFile(tempFilePath, data, 'utf8', (writeErr) => {
-        if (writeErr) {
-          return reject(writeErr);
-        }
-        // The rename should be atomic on most filesystems.
-        fs.rename(tempFilePath, dbFilePath, (renameErr) => {
-          if (renameErr) {
-            return reject(renameErr);
-          }
-          resolve();
-        });
-      });
-    });
+  return addToQueue(async () => {
+    const data = JSON.stringify(root);
+    await fsp.mkdir(dbDir, { recursive: true });
+
+    const tmp = path.join(
+      dbDir,
+      `.tmp-${path.basename(dbFilePath)}-${
+        process.pid
+      }-${Date.now()}-${createId()}`
+    );
+
+    // open, write, fsync, close
+    const handle = await fsp.open(tmp, 'w', 0o600);
+    try {
+      await handle.writeFile(data, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+
+    // atomic replace
+    await fsp.rename(tmp, dbFilePath);
+
+    // best-effort: ensure directory entry hits disk
+    try {
+      const dh = await fsp.open(dbDir, 'r');
+      try {
+        await dh.sync();
+      } finally {
+        await dh.close();
+      }
+    } catch {
+      /* ignore */
+    }
   });
 }
 

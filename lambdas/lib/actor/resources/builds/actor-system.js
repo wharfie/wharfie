@@ -68,10 +68,6 @@ class ActorSystem extends BuildResourceGroup {
       dependsOn: [...(dependsOn ?? [])],
     });
     this.functions = functions;
-    // this.functionMap = this.functions.reduce((acc, func) => {
-    //   acc.set(func.name, func);
-    //   return acc;
-    // }, new Map());
     // @ts-ignore
     this.callerFile = module?.parent?.filename;
     this.callerDirectory = this.callerFile
@@ -79,9 +75,6 @@ class ActorSystem extends BuildResourceGroup {
       : undefined;
     // normally _defineGroupResources is used but this is a workaround to make sure this.functions and this.callerFile is set before defining things
     this.addResources(this.defineActorSystemResources(parent));
-
-    // @ts-ignore
-    // global[Symbol.for('functionMap')] = this.functionMap;
     // @ts-ignore
     global[Symbol.for(`${this.getName()}`)] = this.run.bind(this);
   }

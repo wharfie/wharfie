@@ -6,13 +6,6 @@ const net = require('node:net');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const crypto = require('node:crypto');
-const {
-  S3Client,
-  PutObjectCommand,
-  HeadObjectCommand,
-  GetObjectCommand,
-} = require('@aws-sdk/client-s3');
-const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 const SSHKey = require('../../lambdas/lib/actor/resources/local/ssh-key');
 const HetznerSSHKey = require('../../lambdas/lib/actor/resources/hetzner/ssh-key');
@@ -46,15 +39,9 @@ const IMAGE = process.env.IMAGE || 'ubuntu-22.04';
 const LOCATION = process.env.LOCATION || 'nbg1';
 const KEY_PREFIX = process.env.KEY_PREFIX || '';
 
-const BINARY_FILE = process.env.BINARY_FILE || '';
-const S3_BUCKET = process.env.S3_BUCKET || 'wharfie-artifacts-us-east-2';
-const S3_KEY =
-  process.env.S3_KEY ||
-  (BINARY_FILE ? `releases/${path.basename(BINARY_FILE)}` : '');
-const AWS_REGION =
-  process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'us-east-1';
-const S3_PUBLIC = process.env.S3_PUBLIC === '1';
-const PRESIGN_SECONDS = Number(process.env.PRESIGN_SECONDS || 0);
+const BINARY_FILE =
+  process.env.BINARY_FILE ||
+  '/Users/josephvandrunen/Library/Application Support/wharfie-nodejs/actor_binaries/main-build-24-linux-x64';
 
 const SERVICE_NAME = process.env.SERVICE_NAME || 'app';
 const REMOTE_PATH = process.env.REMOTE_PATH || '/usr/local/bin/app';
@@ -68,11 +55,206 @@ function requireEnv() {
   const missing = [];
   if (!HZ_TOKEN) missing.push('HETZNER_TOKEN');
   if (!BINARY_FILE) missing.push('BINARY_FILE');
-  if (!S3_BUCKET) missing.push('S3_BUCKET');
   if (missing.length) {
     console.error(`Missing env: ${missing.join(', ')}`);
     process.exit(2);
   }
+}
+
+function sshArgs(privateKeyPath, ip, extra = []) {
+  return [
+    '-i',
+    privateKeyPath,
+    '-o',
+    'StrictHostKeyChecking=no',
+    '-o',
+    'UserKnownHostsFile=/dev/null',
+    `root@${ip}`,
+    ...extra,
+  ];
+}
+
+function spawnP(cmd, args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(cmd, args, { stdio: 'inherit', ...opts });
+    p.on('error', reject);
+    p.on('exit', (code) =>
+      code === 0 ? resolve() : reject(new Error(`${cmd} exited ${code}`))
+    );
+  });
+}
+
+async function sha256File(filePath) {
+  const h = crypto.createHash('sha256');
+  await new Promise((resolve, reject) => {
+    const rs = fs.createReadStream(filePath);
+    rs.on('error', reject);
+    rs.on('data', (chunk) => h.update(chunk));
+    rs.on('end', resolve);
+  });
+  return h.digest('hex');
+}
+
+// Run a remote shell command and capture stdout (string). Stderr is inherited.
+async function sshExecCapture(ip, key, shellCmd) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    const p = spawn('ssh', sshArgs(key, ip, [shellCmd]), {
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
+    p.stdout.on('data', (buf) => chunks.push(buf));
+    p.on('error', reject);
+    p.on('exit', (code) => {
+      if (code === 0) resolve(Buffer.concat(chunks).toString('utf8').trim());
+      else reject(new Error(`ssh exited ${code}`));
+    });
+  });
+}
+
+// Copy a local file to the remote temp path using scp (fast, resilient).
+async function scpCopy(ip, key, localPath, remotePath) {
+  await spawnP('scp', [
+    '-i',
+    key,
+    '-o',
+    'StrictHostKeyChecking=no',
+    '-o',
+    'UserKnownHostsFile=/dev/null',
+    localPath,
+    `root@${ip}:${remotePath}`,
+  ]);
+}
+
+// Idempotent systemd unit writer (only rewrites when changed).
+async function upsertSystemdUnit(
+  ip,
+  key,
+  { serviceName, execPath, user, args }
+) {
+  const unitPath = `/etc/systemd/system/${serviceName}.service`;
+  const unit = `[Unit]
+Description=${serviceName}
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=${user}
+ExecStart=${execPath}${args ? ' ' + args : ''}
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/${serviceName}.out
+StandardError=append:/var/log/${serviceName}.err
+# Hardening (tweak as needed)
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=yes
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
+`;
+
+  // Write to a temp file, compare, then move atomically if different
+  const tmp = `/tmp/.${serviceName}.service.new`;
+  // Use base64 to avoid quoting issues in heredocs
+  const b64 = Buffer.from(unit, 'utf8').toString('base64');
+  await sshExecCapture(
+    ip,
+    key,
+    `set -e; umask 022; echo ${b64} | base64 -d > ${tmp}`
+  );
+
+  const remoteSum = await sshExecCapture(
+    ip,
+    key,
+    `test -f ${unitPath} && sha256sum ${unitPath} | awk '{print $1}' || echo ""`
+  );
+  const newSum = await sshExecCapture(
+    ip,
+    key,
+    `sha256sum ${tmp} | awk '{print $1}'`
+  );
+
+  if (remoteSum !== newSum) {
+    await sshExecCapture(
+      ip,
+      key,
+      `set -e; mv ${tmp} ${unitPath}; chmod 0644 ${unitPath}`
+    );
+    await sshExecCapture(ip, key, `systemctl daemon-reload`);
+    // If first install, enable; otherwise just restart
+    if (!remoteSum) {
+      await sshExecCapture(ip, key, `systemctl enable ${serviceName}`);
+    }
+    await sshExecCapture(ip, key, `systemctl restart ${serviceName}`);
+  } else {
+    await sshExecCapture(ip, key, `rm -f ${tmp}`);
+  }
+}
+
+// Full install: copy → verify → install → chown/chmod atomically
+async function installBinaryOverSSH({
+  ip,
+  privateKeyPath,
+  localBinaryPath,
+  remoteInstallPath,
+  serviceName,
+  serviceUser,
+  serviceArgs,
+}) {
+  const basename = path.basename(remoteInstallPath);
+  const remoteTmp = `/tmp/.${basename}.${Date.now()}.new`;
+  const localSha = await sha256File(localBinaryPath);
+
+  // 1) Copy to temp
+  await scpCopy(ip, privateKeyPath, localBinaryPath, remoteTmp);
+
+  // 2) Verify SHA on remote
+  const remoteSha = await sshExecCapture(
+    ip,
+    privateKeyPath,
+    `sha256sum ${remoteTmp} | awk '{print $1}'`
+  );
+  if (remoteSha !== localSha) {
+    await sshExecCapture(ip, privateKeyPath, `rm -f ${remoteTmp}`);
+    throw new Error(
+      `Checksum mismatch after transfer: local=${localSha} remote=${remoteSha}`
+    );
+  }
+
+  // // 3) Install atomically with proper mode/owner
+  // // Use 'install' for atomic write & perms; then mv to final path.
+  // // If user != root, chown after move.
+  await sshExecCapture(
+    ip,
+    privateKeyPath,
+    `
+    set -e
+    chmod 0755 ${remoteTmp}
+    mkdir -p $(dirname ${remoteInstallPath})
+    # preserve old binary as .bak once (best-effort)
+    if [ -f ${remoteInstallPath} ] && [ ! -f ${remoteInstallPath}.bak ]; then cp -pf ${remoteInstallPath} ${remoteInstallPath}.bak || true; fi
+    mv -f ${remoteTmp} ${remoteInstallPath}
+    chown ${serviceUser}:${serviceUser} ${remoteInstallPath} || chown ${serviceUser}:root ${remoteInstallPath} || true
+  `
+  );
+
+  // // 4) (Re)create/refresh the systemd unit and restart
+  // await upsertSystemdUnit(ip, privateKeyPath, {
+  //   serviceName,
+  //   execPath: remoteInstallPath,
+  //   user: serviceUser,
+  //   args: serviceArgs,
+  // });
+
+  // // 5) Final sanity: print status & version
+  // try {
+  //   const status = await sshExecCapture(ip, privateKeyPath, `systemctl is-active ${serviceName} || true`);
+  //   const sum = await sshExecCapture(ip, privateKeyPath, `sha256sum ${remoteInstallPath} | awk '{print $1}'`);
+  //   console.log(`[remote] ${serviceName}=${status} sha256=${sum}`);
+  // } catch (_) { } // non-fatal
 }
 
 /**
@@ -140,147 +322,18 @@ function openSSH(ip, privateKeyPath) {
   });
 }
 
-/**
- * Compute streaming SHA256 (hex) for a file.
- * @param {string} filePath - Local path to hash.
- * @returns {Promise<string>} Hex digest.
- */
-async function sha256File(filePath) {
-  const h = crypto.createHash('sha256');
-  await new Promise((resolve, reject) => {
-    const rs = fs.createReadStream(filePath);
-    rs.on('error', reject);
-    rs.on('data', (chunk) => h.update(chunk));
-    rs.on('end', resolve);
-  });
-  return h.digest('hex');
-}
-
-/**
- * Guess content-type for common artifact extensions.
- * @param {string} key - S3 object key.
- * @returns {string} MIME type.
- */
-function guessContentType(key) {
-  if (key.endsWith('.gz')) return 'application/gzip';
-  if (key.endsWith('.zip')) return 'application/zip';
-  if (key.endsWith('.tar')) return 'application/x-tar';
-  if (key.endsWith('.tgz')) return 'application/gzip';
-  return 'application/octet-stream';
-}
-
-/**
- * Build a public HTTPS URL for an S3 object.
- * @param {string} bucket - S3 bucket.
- * @param {string} key - Object key.
- * @param {string} region - AWS region.
- * @returns {string} URL.
- */
-function publicUrl(bucket, key, region) {
-  const encKey = encodeURI(key).replace(/#/g, '%23');
-  return region && region !== 'us-east-1'
-    ? `https://${bucket}.s3.${region}.amazonaws.com/${encKey}`
-    : `https://${bucket}.s3.amazonaws.com/${encKey}`;
-}
-
-/**
- * Upload (or no-op if identical) a file to S3 and return a download URL.
- * If S3_PUBLIC=1 → returns a stable public URL.
- * Else if PRESIGN_SECONDS>0 → returns a presigned URL valid for that many seconds.
- * Else throws (since you'd have no way to download in cloud-init).
- * @param {object} p - Params.
- * @param {string} p.file - Local file path.
- * @param {string} p.bucket - S3 bucket.
- * @param {string} p.key - S3 key.
- * @param {string} p.region - AWS region.
- * @param {boolean} p.makePublic - Whether to set ACL public-read.
- * @param {number} p.presignSeconds - Presign expiry in seconds (0 to skip).
- * @returns {Promise<string>} Download URL to use in cloud-init.
- */
-async function uploadAndGetUrl({
-  file,
-  bucket,
-  key,
-  region,
-  makePublic,
-  presignSeconds,
-}) {
-  const stat = await fsp.stat(file);
-  if (!stat.isFile()) throw new Error(`Not a regular file: ${file}`);
-  if (stat.size > 5 * 1024 * 1024 * 1024) {
-    throw new Error(
-      'File > 5GB; add multipart upload if you need larger artifacts.'
-    );
-  }
-
-  const s3 = new S3Client({ region });
-  const checksumHex = await sha256File(file);
-  const body = fs.createReadStream(file);
-
-  // Idempotent HEAD check
-  let upToDate = false;
-  try {
-    const head = await s3.send(
-      new HeadObjectCommand({ Bucket: bucket, Key: key })
-    );
-    const sizeMatches = Number(head.ContentLength || -1) === stat.size;
-    const remoteSha =
-      head.Metadata && head.Metadata.sha256 ? String(head.Metadata.sha256) : '';
-    upToDate = sizeMatches && remoteSha === checksumHex;
-  } catch {
-    // not found → upload
-  }
-
-  if (!upToDate) {
-    await s3.send(
-      new PutObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        Body: body,
-        ContentType: guessContentType(key),
-        ContentLength: stat.size,
-        ChecksumSHA256: Buffer.from(checksumHex, 'hex').toString('base64'),
-        Metadata: { sha256: checksumHex },
-        // Cache forever-ish if public; tweak if you serve mutable keys.
-        ACL: makePublic ? 'public-read' : undefined,
-        CacheControl: makePublic
-          ? 'public, max-age=31536000, immutable'
-          : undefined,
-      })
-    );
-    // eslint-disable-next-line no-console
-    console.log(`Uploaded s3://${bucket}/${key} (${stat.size} bytes)`);
-  } else {
-    // eslint-disable-next-line no-console
-    console.log(`S3 object up-to-date: s3://${bucket}/${key}`);
-  }
-
-  if (makePublic) {
-    return publicUrl(bucket, key, region);
-  }
-
-  if (presignSeconds > 0) {
-    const cmd = new GetObjectCommand({ Bucket: bucket, Key: key });
-    return getSignedUrl(s3, cmd, { expiresIn: presignSeconds });
-  }
-
-  throw new Error(
-    'Object is private and PRESIGN_SECONDS not set — no usable download URL.'
-  );
-}
-
 (async () => {
   requireEnv();
 
   // 0) Upload artifact and get a URL suitable for cloud-init to curl
-  const downloadUrl = await uploadAndGetUrl({
-    file: BINARY_FILE,
-    bucket: S3_BUCKET,
-    key: S3_KEY,
-    region: AWS_REGION,
-    makePublic: S3_PUBLIC,
-    presignSeconds: PRESIGN_SECONDS,
-  });
+  // const downloadUrl = await uploadAndGetUrl({
+  //   file: BINARY_FILE,
+  //   bucket: S3_BUCKET,
+  //   key: S3_KEY,
+  //   region: AWS_REGION,
+  //   makePublic: S3_PUBLIC,
+  //   presignSeconds: PRESIGN_SECONDS,
+  // });
 
   // 1) Ensure local SSH keypair exists (idempotent)
   const sshKey = new SSHKey({
@@ -319,19 +372,6 @@ async function uploadAndGetUrl({
       image: IMAGE,
       location: LOCATION,
       sshKeyName: VPS_NAME,
-      // Use the structured service spec; HetznerVPS will generate cloud-init and systemd unit.
-      service: {
-        url: downloadUrl,
-        remote_path: REMOTE_PATH,
-        args: argsArray,
-        user: SERVICE_USER,
-        service_name: SERVICE_NAME,
-        wantsNetworkOnline: true,
-        stdout_log: `/var/log/${SERVICE_NAME}.out`,
-        stderr_log: `/var/log/${SERVICE_NAME}.err`,
-        restart: 'always',
-        restart_sec: 3,
-      },
     },
   });
 
@@ -343,6 +383,17 @@ async function uploadAndGetUrl({
     if (!ip) throw new Error('VPS is missing an IPv4 address after reconcile.');
 
     await waitForPortOpen(ip, 22);
+
+    // === NEW: direct transfer & install (no intermediate storage) ===
+    await installBinaryOverSSH({
+      ip,
+      privateKeyPath: sshKey.get('path'),
+      localBinaryPath: BINARY_FILE,
+      remoteInstallPath: REMOTE_PATH, // e.g. /usr/local/bin/app
+      // serviceName: SERVICE_NAME,                 // e.g. app
+      // serviceUser: SERVICE_USER,                 // e.g. root or appuser
+      // serviceArgs: SERVICE_ARGS,                 // e.g. "--port=8080"
+    });
 
     // 4) Open an interactive SSH session
     // eslint-disable-next-line no-console
