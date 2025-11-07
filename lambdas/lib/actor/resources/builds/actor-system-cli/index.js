@@ -9,8 +9,6 @@ const { checkForNewRelease } = require('../../../../../../cli/upgrade');
  *
  */
 async function entrypoint() {
-  console.log('entrypoint');
-
   let argv = process.argv;
   let stdinData = '';
   if (!process.stdin.isTTY) {
@@ -22,7 +20,6 @@ async function entrypoint() {
       process.env.STDIN_DATA = stdinData;
     });
   }
-  console.log(argv);
   process.env.CONFIG_DIR = paths.config;
   process.env.CONFIG_FILE_PATH = `${process.env.CONFIG_DIR}/wharfie.config`;
   process.env.LOGGING_FORMAT = 'cli';
@@ -36,7 +33,6 @@ async function entrypoint() {
   program.addCommand(require('./control'));
 
   program.hook('preAction', async () => {
-    console.log('preAction');
     await paths.createWharfiePaths();
     // await paths.createWharfiePaths();
     // if (fs.existsSync(process.env.CONFIG_FILE_PATH)) {

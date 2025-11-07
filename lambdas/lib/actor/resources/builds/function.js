@@ -26,14 +26,14 @@ class Function {
    * @param {FunctionOptions} options -
    */
   constructor(fn, { name, properties = {} }) {
-    if (typeof fn !== 'function') {
+    this.fn = fn;
+    if (typeof this.fn !== 'function') {
       throw new Error('Actor expects a function as an argument');
     }
     if (!name) {
       throw new Error('Actor expects a name as an argument');
     }
     const { external, environmentVariables } = properties;
-    this.fn = fn;
     this.name = name;
     this.properties = {
       external: external,
@@ -47,7 +47,6 @@ class Function {
    * @param {any} context
    */
   static async run(name, event, context) {
-    console.log('running', name);
     const functionAssetBuffer = await getAsset(name);
     const functionDescriptionBuffer = Buffer.from(functionAssetBuffer);
     const assetDescription = JSON.parse(functionDescriptionBuffer.toString());
@@ -55,11 +54,11 @@ class Function {
       Buffer.from(assetDescription.codeBundle, 'base64')
     );
     const functionCodeString = functionBuffer.toString();
-    console.time('sandbox');
+    console.time('VM time');
     await vm.runInSandbox(name, functionCodeString, [event, context], {
       externalsTar: Buffer.from(assetDescription.externalsTar, 'base64'),
     });
-    console.timeEnd('sandbox');
+    console.timeEnd('VM time');
   }
 
   // async recieve() {

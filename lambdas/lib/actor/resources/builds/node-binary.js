@@ -138,6 +138,8 @@ class NodeBinary extends BaseResource {
    * - We extract .zip on Windows.
    * - We extract .tar.gz on macOS (Node publishes osx-*-tar).
    * - For everything else we keep your existing .tar.gz assumption.
+   * @param {string} platform
+   * @param {string} arch
    */
   static resolveTargetSpec(platform, arch) {
     // Normalize platform
@@ -160,6 +162,9 @@ class NodeBinary extends BaseResource {
    * Build candidate "files" keys to validate against index.json.
    * Node's `files` array sometimes lists either a base key (linux-x64)
    * and sometimes keyed by packaging (osx-arm64-tar, win-x64-zip).
+   * @param {string} token
+   * @param {string} normArch
+   * @param {string} packagingKey
    */
   static candidateFilesKeys(token, normArch, packagingKey) {
     const base = `${token}-${normArch}`;
@@ -221,8 +226,6 @@ class NodeBinary extends BaseResource {
 
     const url = await this.getUrl();
     const archivePath = await this.getArchivePath();
-    console.log(`Downloading: ${url}`);
-    console.log(`Saving to: ${archivePath}`);
 
     return new Promise((resolve, reject) => {
       const file = fs.createWriteStream(archivePath);

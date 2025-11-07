@@ -213,7 +213,6 @@ class MacOSBinarySignature extends BaseResource {
       });
     }
     await this.signBinary();
-    console.log('Binary signed successfully', this.get('binaryPath'));
   }
 
   async _destroy() {}

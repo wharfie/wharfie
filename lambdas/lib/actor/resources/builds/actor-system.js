@@ -148,6 +148,7 @@ class ActorSystem extends BuildResourceGroup {
               })();
           `;
         },
+        callerFile: () => this.callerFile,
         resolveDir: () => path.dirname(this.callerDirectory || ''),
         nodeBinaryPath: () => node_binary.get('binaryPath'),
         nodeVersion: () => node_binary.get('exactVersion').slice(1),
