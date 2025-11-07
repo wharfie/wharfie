@@ -282,22 +282,22 @@ async function main() {
         //   platform: 'darwin',
         //   architecture: 'arm64',
         // },
-        // {
-        //   nodeVersion: '24',
-        //   platform: 'linux',
-        //   architecture: 'x64',
-        //   libc: 'glibc'
-        // },
+        {
+          nodeVersion: '24',
+          platform: 'linux',
+          architecture: 'x64',
+          libc: 'glibc',
+        },
         // {
         //   nodeVersion: '22',
         //   platform: 'darwin',
         //   architecture: 'x64',
         // },
-        // {
-        //   nodeVersion: '24',
-        //   platform: 'win32',
-        //   architecture: 'x64',
-        // },
+        {
+          nodeVersion: '24',
+          platform: 'win32',
+          architecture: 'x64',
+        },
         // {
         //   nodeVersion: '22',
         //   platform: 'win32',
