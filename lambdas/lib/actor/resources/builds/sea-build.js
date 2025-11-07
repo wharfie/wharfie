@@ -21,6 +21,7 @@ const BaseResource = require('../base-resource');
  * @typedef SeaBuildProperties
  * @property {string | function(): string} entryCode -
  * @property {string | function(): string} resolveDir -
+ * @property {string | function(): string} callerFile -
  * @property {string | function(): string} nodeBinaryPath -
  * @property {string | function(): string} nodeVersion -
  * @property {TargetPlatform | function(): TargetPlatform} platform -
@@ -55,7 +56,9 @@ class SeaBuild extends BaseResource {
 
   async build() {
     const distFile = `${this.name}`;
-    const binaryPath = path.join(SeaBuild.BINARIES_DIR, distFile);
+    const finalName =
+      this.get('platform') === 'win32' ? `${distFile}.exe` : distFile;
+    const binaryPath = path.join(SeaBuild.BINARIES_DIR, finalName);
     const tmpBuildDir = path.join(SeaBuild.BUILD_DIR, `build-${uuid.v4()}`);
     await fs.promises.mkdir(tmpBuildDir, { recursive: true });
     await this.esbuild(tmpBuildDir);
@@ -111,6 +114,7 @@ class SeaBuild extends BaseResource {
    */
   async esbuild(buildDir) {
     const outputPath = path.join(buildDir, 'esbundle.js');
+    const callerFile = path.resolve(this.get('callerFile'));
     const { errors, warnings } = await esbuild.build({
       stdin: {
         contents: this.get('entryCode'),
@@ -125,10 +129,64 @@ class SeaBuild extends BaseResource {
       sourcemap: 'inline',
       target: `node${this.get('nodeVersion')}`,
       logLevel: 'silent',
-      external: ['esbuild', 'node-gyp/bin/node-gyp.js', 'sharp'],
+      external: ['esbuild', 'node-gyp/bin/node-gyp.js'],
       define: {
         __WILLEM_BUILD_RECONCILE_TERMINATOR: '1', // injects this variable definition into the global scope
       },
+      // SEA-only: turn the first arg of `new Function(<fn>, ...)` into a noop in the caller file
+      plugins: [
+        {
+          name: 'sea-noop-inline-function-arg',
+          setup(build) {
+            const acorn = require('acorn');
+            const walk = require('acorn-walk');
+
+            build.onLoad({ filter: /.*/ }, async (args) => {
+              if (path.resolve(args.path) !== callerFile) return;
+              const src = await fs.promises.readFile(args.path, 'utf8');
+
+              // Parse and collect ranges to mutate
+              const ast = acorn.parse(src, {
+                ecmaVersion: 'latest',
+                sourceType: 'script', // CommonJS entrypoint
+                allowReturnOutsideFunction: true,
+                locations: false,
+              });
+
+              /** @type {Array<{start:number,end:number}>} */
+              const toReplace = [];
+              walk.simple(ast, {
+                NewExpression(node) {
+                  // Match: new Function(<arg0>, ...)
+                  if (
+                    node.callee &&
+                    node.callee.type === 'Identifier' &&
+                    node.callee.name === 'Function'
+                  ) {
+                    if (node.arguments && node.arguments.length > 0) {
+                      const first = node.arguments[0];
+                      // Only replace if the first arg is an expression we can safely overwrite (FunctionExpression or ArrowFunctionExpression typical)
+                      // In practice we can replace anything (object, identifier, etc.) because we only need a noop.
+                      toReplace.push({ start: first.start, end: first.end });
+                    }
+                  }
+                },
+              });
+
+              if (toReplace.length === 0) {
+                return { contents: src, loader: 'js' };
+              }
+
+              // Apply replacements from right to left to keep offsets stable
+              let out = src;
+              for (const r of toReplace.sort((a, b) => b.start - a.start)) {
+                out = out.slice(0, r.start) + '(()=>{})' + out.slice(r.end);
+              }
+              return { contents: out, loader: 'js' };
+            });
+          },
+        },
+      ],
     });
 
     if (errors.length > 0) {
@@ -189,9 +247,17 @@ class SeaBuild extends BaseResource {
         recursive: true,
       });
     }
-    console.log('running sea build');
+    const hostVersion = process.version.slice(1);
+    const targetVersion = this.get('nodeVersion');
+    if (
+      Number(hostVersion.split('.')[0]) < Number(targetVersion.split('.')[0])
+    ) {
+      throw new Error(
+        `Cannot build target (${this.name}) with node version (${targetVersion}) when using ${hostVersion}. Upgrade to at least ${targetVersion}`
+      );
+    }
+
     await this.build();
-    console.log('completed sea build');
     console.log(this.get('binaryPath'));
   }
 

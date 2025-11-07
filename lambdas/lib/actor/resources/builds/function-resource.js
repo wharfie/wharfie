@@ -73,10 +73,8 @@ class FunctionResource extends BuildResource {
       properties: propertiesWithDefaults,
       dependsOn,
     });
-    this.fn = fn;
-
     // @ts-ignore
-    global[Symbol.for(`${this.get('functionName')}`)] = this.fn;
+    global[Symbol.for(`${this.get('functionName')}`)] = fn;
     // @ts-ignore
     global[Symbol.for(`${this.get('functionName')}_initializeEnvironment`)] =
       this.initializeEnvironment.bind(this);
