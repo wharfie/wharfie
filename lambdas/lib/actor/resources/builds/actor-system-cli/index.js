@@ -1,15 +1,15 @@
-const fs = require('fs');
+// const fs = require('fs');
 const { Command } = require('commander');
 const paths = require('../../../../paths');
-const { displayFailure } = require('../../../../../../cli/output/basic');
-const config = require('../../../../../../cli/config');
-const { checkForNewRelease } = require('../../../../../../cli/upgrade');
+// const { displayFailure } = require('../../../../../../cli/output/basic');
+// const config = require('../../../../../../cli/config');
+// const { checkForNewRelease } = require('../../../../../../cli/upgrade');
 
 /**
  *
  */
 async function entrypoint() {
-  let argv = process.argv;
+  const argv = process.argv;
   let stdinData = '';
   if (!process.stdin.isTTY) {
     process.stdin.setEncoding('utf8');
@@ -26,7 +26,7 @@ async function entrypoint() {
   process.env.LOGGING_LEVEL = 'warn';
   const program = new Command();
   program.name('wharfie').description('CLI tool for Wharfie');
-  // .version(version);
+  // .version(version);ctor/resources/builds/actor-system.js
 
   program.addCommand(require('./functions'));
   program.addCommand(require('./infrastructure'));

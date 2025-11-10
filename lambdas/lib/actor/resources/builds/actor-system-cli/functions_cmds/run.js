@@ -4,8 +4,8 @@ const { Command } = require('commander');
 const Function = require('../../function');
 
 /**
- * @param {string} functionName
- * @param {any} message
+ * @param {string} functionName -
+ * @param {any} message -
  */
 async function run(functionName, message) {
   console.log(`running function ${functionName}`);

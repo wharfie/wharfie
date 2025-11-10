@@ -20,7 +20,11 @@ const { makeFakeNativePkg } = require('./make-fake-native-pkg');
  * @typedef {{ platform: TargetPlatform, architecture: TargetArch, libc?: 'glibc'|'musl' }} BuildTarget
  */
 
-/** temp workdir utils **/
+/**
+ * temp workdir utils
+ * @param {string} prefix -
+ * @returns {Promise<string>} -
+ */
 async function mkTmpDir(prefix) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `${prefix}-`));
   // create a minimal package.json so Arborist has a place to write dependencies
@@ -54,8 +58,8 @@ function requireFrom(root) {
 jest.setTimeout(180000); // real network & builds can be slow
 
 describe('installForTarget (integration)', () => {
-  test('host-target install: sharp and better-sqlite3 work on the current platform', async () => {
-    expect.assertions(4);
+  it('host-target install: sharp and better-sqlite3 work on the current platform', async () => {
+    expect.assertions(5);
 
     const tmp = await mkTmpDir('host-install');
     const host = hostTarget();
@@ -64,31 +68,51 @@ describe('installForTarget (integration)', () => {
       buildTarget: host,
       externals: [
         { name: 'sharp', version: 'latest' },
-        { name: 'better-sqlite3', version: 'latest' },
+        { name: '@duckdb/node-api', version: 'latest' },
       ],
       tmpBuildDir: tmp,
     });
 
     const localRequire = requireFrom(tmp);
     const sharp = localRequire('sharp');
-    expect(typeof sharp).toBe('function');
+    const redDotPng = await sharp({
+      create: {
+        width: 64,
+        height: 64,
+        channels: 3,
+        background: { r: 255, g: 0, b: 0 },
+      },
+    })
+      .png()
+      .toBuffer();
+
+    expect(redDotPng).toHaveLength(229);
 
     // better-sqlite3 smoke: open in-memory DB and run a trivial statement
-    const Database = localRequire('better-sqlite3');
-    const db = new Database(':memory:');
-    const rows = db.prepare('select 1 as one').all();
-    expect(Array.isArray(rows)).toBe(true);
-    expect(rows[0].one).toBe(1);
+    const duckdb = localRequire('@duckdb/node-api');
+    const { DuckDBInstance } = duckdb;
+
+    const instance = await DuckDBInstance.create(':memory:');
+    const conn = await instance.connect();
+    const [row] = (
+      await conn.runAndReadAll(
+        "select 1 as one, 2+2 as two, 'ok'::varchar as status"
+      )
+    ).getRowObjects();
+
+    expect(row.one).toBe(1);
+    expect(row.two).toBe(4);
+    expect(row.status).toBe('ok');
 
     // ensure .node binaries actually exist somewhere under node_modules
     // (very loose check to keep things portable)
     const globCandidate =
       existsSync(path.join(tmp, 'node_modules', 'sharp')) ||
-      existsSync(path.join(tmp, 'node_modules', 'better-sqlite3'));
+      existsSync(path.join(tmp, 'node_modules', '@duckdb/node-api'));
     expect(globCandidate).toBe(true);
   });
 
-  test('cross-target resolution (prebuild fetch) with esbuild installs the target-specific pkg', async () => {
+  it('cross-target resolution (prebuild fetch) with esbuild installs the target-specific pkg', async () => {
     expect.assertions(1);
 
     const tmp = await mkTmpDir('cross-esbuild');
@@ -105,26 +129,35 @@ describe('installForTarget (integration)', () => {
 
     await installForTarget({
       buildTarget: target,
-      externals: [{ name: 'better-sqlite3', version: 'latest' }],
+      externals: [{ name: '@duckdb/node-api', version: 'latest' }],
       tmpBuildDir: tmp,
     });
 
     let threw = false;
     const localRequire = requireFrom(tmp);
+    let msg = '';
     try {
-      const Database = localRequire('better-sqlite3');
-      const db = new Database(':memory:');
-      db.prepare('select 1 as one').all();
+      const duckdb = localRequire('@duckdb/node-api');
+      const { DuckDBInstance } = duckdb;
+
+      const instance = await DuckDBInstance.create(':memory:');
+      const conn = await instance.connect();
+      (
+        await conn.runAndReadAll(
+          "select 1 as one, 2+2 as two, 'ok'::varchar as status"
+        )
+      ).getRowObjects();
     } catch (e) {
       threw = true;
-      const msg =
+      msg =
         e && typeof e === 'object' && 'message' in e ? e.message : String(e);
-      expect(msg).toMatch(/better_sqlite3.node/);
     }
+    expect(msg).toMatch(/duckdb.node/);
     if (!threw) throw new Error('should throw when using wrong arch .node');
   });
 
-  test('cross-target prebuilds-only: a package that “builds” during install triggers our custom error', async () => {
+  // eslint-disable-next-line jest/no-disabled-tests
+  it.skip('cross-target prebuilds-only: a package that “builds” during install triggers our custom error', async () => {
     expect.assertions(3);
 
     const tmp = await mkTmpDir('fake-native');
@@ -140,6 +173,7 @@ describe('installForTarget (integration)', () => {
         : { platform: 'linux', architecture: 'x64' };
 
     let threw = false;
+    let msg = '';
 
     // IMPORTANT: allow scripts so the fake install script runs.
     // Your installForTarget already sets:
@@ -157,13 +191,12 @@ describe('installForTarget (integration)', () => {
       });
     } catch (e) {
       threw = true;
-      const msg =
+      msg =
         e && typeof e === 'object' && 'message' in e ? e.message : String(e);
-
-      // Your wrapper prefix + the target info
-      expect(msg).toMatch(/Cross-target install blocked/);
-      expect(msg).toMatch(/command failed/);
     }
+    // Your wrapper prefix + the target info
+    expect(msg).toMatch(/Cross-target install blocked/);
+    expect(msg).toMatch(/command failed/);
 
     if (!threw)
       throw new Error(

@@ -2,7 +2,6 @@
 'use strict';
 
 const crypto = require('crypto');
-const path = require('path');
 
 // IMPORTANT: import the SDK module *before* your wrapper so we can restore mocks if needed
 const AWS = require('@aws-sdk/client-s3');
@@ -32,12 +31,19 @@ if (!B2_KEY_ID || !B2_APPLICATION_KEY) {
   );
 }
 
-jest.setTimeout(120_000);
+jest.setTimeout(120000);
 
+/**
+ * @param {number} n -
+ * @returns {string} -
+ */
 function rand(n = 6) {
   return crypto.randomBytes(n).toString('hex');
 }
 
+/**
+ * @returns {S3} -
+ */
 function makeClient() {
   return new S3({
     provider: 'b2',
@@ -51,14 +57,25 @@ function makeClient() {
   });
 }
 
+/**
+ *
+ * @param {number} ms -
+ * @returns {Promise<void>} -
+ */
 async function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** List all object keys under a prefix (handles pagination). */
+/**
+ * List all object keys under a prefix (handles pagination).
+ * @param {S3} s3 -
+ * @param {string} Bucket -
+ * @param {string} Prefix -
+ * @returns {string[]} -
+ */
 async function listAllKeys(s3, Bucket, Prefix) {
   const { ListObjectsV2Command } = require('@aws-sdk/client-s3');
-  let keys = [];
+  const keys = [];
   let ContinuationToken;
   do {
     const page = await s3.s3.send(
@@ -71,7 +88,11 @@ async function listAllKeys(s3, Bucket, Prefix) {
   return keys;
 }
 
-/** Purge *everything*, including all versions and delete markers (B2 is versioned by default). */
+/**
+ * Purge *everything*, including all versions and delete markers (B2 is versioned by default).
+ * @param {S3} s3 -
+ * @param {string} Bucket -
+ */
 async function purgeBucket(s3, Bucket) {
   const {
     ListObjectsV2Command,
@@ -131,7 +152,11 @@ async function purgeBucket(s3, Bucket) {
   } while (keyMarker || versionIdMarker);
 }
 
-/** Create bucket if absent; ignore 409. */
+/**
+ * Create bucket if absent; ignore 409.
+ * @param {S3} s3 -
+ * @param {string} Bucket -
+ */
 async function ensureBucket(s3, Bucket) {
   try {
     await s3.createBucket({ Bucket });
@@ -141,13 +166,17 @@ async function ensureBucket(s3, Bucket) {
   }
 }
 
-/** Delete bucket (must be empty). */
+/**
+ * Delete bucket (must be empty).
+ * @param {S3} s3 -
+ * @param {string} Bucket -
+ */
 async function dropBucket(s3, Bucket) {
   await purgeBucket(s3, Bucket);
   await s3.deleteBucket({ Bucket });
 }
 
-describe('S3 wrapper – Backblaze B2 live tests (no mocks)', () => {
+describe('s3 wrapper – Backblaze B2 live tests (no mocks)', () => {
   const s3 = makeClient();
   const BUCKET = `it-${Date.now()}-${rand(3)}`;
   const BASE_PREFIX = `it-${rand(3)}/`;
@@ -201,8 +230,8 @@ describe('S3 wrapper – Backblaze B2 live tests (no mocks)', () => {
     });
 
     const keys = await listAllKeys(s3, BUCKET, `${BASE_PREFIX}delete/`);
-    expect(keys).toEqual([]);
-    expect(keys.length).toBe(0);
+    expect(keys).toStrictEqual([]);
+    expect(keys).toHaveLength(0);
   });
 
   it('copyPath copies all objects from source prefix to destination prefix', async () => {
@@ -226,7 +255,7 @@ describe('S3 wrapper – Backblaze B2 live tests (no mocks)', () => {
 
     const dstKeys = await listAllKeys(s3, BUCKET, dstPrefix);
     // Your wrapper prefixes DestinationPrefix + full source key (no stripping)
-    expect(dstKeys.sort()).toEqual(
+    expect(dstKeys.sort()).toStrictEqual(
       [
         `${dstPrefix}${srcPrefix}source_database/source_table/123.json`,
         `${dstPrefix}${srcPrefix}source_database/source_table/456.json`,
@@ -281,8 +310,8 @@ describe('S3 wrapper – Backblaze B2 live tests (no mocks)', () => {
     await s3.deletePath({ Bucket: BUCKET, Prefix: delPrefix });
 
     const remaining = await listAllKeys(s3, BUCKET, delPrefix);
-    expect(remaining).toEqual([]);
-    expect(remaining.length).toBe(0);
+    expect(remaining).toStrictEqual([]);
+    expect(remaining).toHaveLength(0);
   });
 
   it('getCommonPrefixes returns folder-like prefixes under a path', async () => {
@@ -303,7 +332,7 @@ describe('S3 wrapper – Backblaze B2 live tests (no mocks)', () => {
     const result = await s3.getCommonPrefixes({ Bucket: BUCKET, Prefix: base });
 
     // Wrapper returns full prefixes incl. the provided Prefix
-    expect(result.sort()).toEqual(
+    expect(result.sort()).toStrictEqual(
       [`${base}first_prefix/`, `${base}second_prefix/`].sort()
     );
     expect(Array.isArray(result)).toBe(true);
@@ -342,7 +371,9 @@ describe('S3 wrapper – Backblaze B2 live tests (no mocks)', () => {
       []
     );
 
-    expect(res.sort((a, b) => a.location.localeCompare(b.location))).toEqual(
+    expect(
+      res.sort((a, b) => a.location.localeCompare(b.location))
+    ).toStrictEqual(
       [
         {
           location: `s3://${BUCKET}/${base}02/day=01/`,

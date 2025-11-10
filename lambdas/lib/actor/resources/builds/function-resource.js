@@ -19,8 +19,8 @@ const { buffer: streamToBuffer } = require('node:stream/consumers');
  */
 
 /**
- * @typedef {NodeJS.Process["platform"]} TargetPlatform
- * @typedef {NodeJS.Architecture} TargetArch
+ * @typedef {import('node:process')['platform']} TargetPlatform
+ * @typedef {import('node:process')['arch']} TargetArch
  * @typedef {import('detect-libc').GLIBC|import('detect-libc').MUSL} TargetLibc
  */
 
@@ -101,7 +101,7 @@ class FunctionResource extends BuildResource {
   }
 
   /**
-   * @returns {Promise<string>}
+   * @returns {Promise<string>} -
    */
   async esbuild() {
     const entryCode = `
@@ -166,7 +166,7 @@ class FunctionResource extends BuildResource {
   }
 
   /**
-   * @returns {Promise<string>}
+   * @returns {Promise<string>} -
    */
   async bundleExternals() {
     const externals = this.get('external', []);
@@ -177,7 +177,7 @@ class FunctionResource extends BuildResource {
     await fs.promises.mkdir(tmpBuildDir, { recursive: true });
     await installForTarget({
       buildTarget: this.get('buildTarget'),
-      externals: externals,
+      externals,
       tmpBuildDir,
     });
     const stream = tar.c(
@@ -206,7 +206,7 @@ class FunctionResource extends BuildResource {
     const codeBundle = zlib.brotliCompressSync(codeBlob).toString('base64');
     const assetDescription = JSON.stringify({
       codeBundle,
-      externalsTar: externalsTar,
+      externalsTar,
     });
     const singleExecutableAssetPath = path.join(
       FunctionResource.TEMP_ASSET_PATH,

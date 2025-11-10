@@ -12,8 +12,8 @@ const postject = require('postject');
 const BaseResource = require('../base-resource');
 
 /**
- * @typedef {NodeJS.Process["platform"]} TargetPlatform
- * @typedef {NodeJS.Architecture} TargetArch
+ * @typedef {import('node:process')['platform']} TargetPlatform -
+ * @typedef {import('node:process')['arch']} TargetArch -
  * @typedef {import('detect-libc').GLIBC|import('detect-libc').MUSL} TargetLibc
  */
 

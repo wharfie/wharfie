@@ -36,15 +36,15 @@ class Function {
     const { external, environmentVariables } = properties;
     this.name = name;
     this.properties = {
-      external: external,
-      environmentVariables: environmentVariables,
+      external,
+      environmentVariables,
     };
   }
 
   /**
-   * @param {string} name
-   * @param {any} event
-   * @param {any} context
+   * @param {string} name -
+   * @param {any} event -
+   * @param {any} context -
    */
   static async run(name, event, context) {
     const functionAssetBuffer = await getAsset(name);
