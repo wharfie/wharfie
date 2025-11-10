@@ -15,7 +15,9 @@
     "allowJs": true,
     "checkJs": true,
     "noEmit": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "types": ["node"],
+    "moduleResolution": "node"
   },
   "include": [
     "build.js",

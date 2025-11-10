@@ -17,10 +17,10 @@ const BaseResource = require('../base-resource');
 /**
  * @typedef SSHKeyOptions
  * @property {string} name - Logical name for this SSH key resource (used for default path/comment).
- * @property {string} [parent]
- * @property {import('../reconcilable').Status} [status]
- * @property {SSHKeyProperties & import('../../typedefs').SharedProperties} properties
- * @property {import('../reconcilable')[]} [dependsOn]
+ * @property {string} [parent] -
+ * @property {import('../reconcilable').Status} [status] -
+ * @property {SSHKeyProperties & import('../../typedefs').SharedProperties} properties -
+ * @property {import('../reconcilable')[]} [dependsOn] -
  */
 
 class SSHKey extends BaseResource {

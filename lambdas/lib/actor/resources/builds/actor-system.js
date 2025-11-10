@@ -1,5 +1,3 @@
-const uuid = require('uuid');
-
 const BuildResourceGroup = require('./build-resource-group');
 const NodeBinary = require('./node-binary');
 const BuildResource = require('./build-resource');
@@ -11,8 +9,8 @@ const cli = require('./actor-system-cli');
 const path = require('node:path');
 
 /**
- * @typedef {NodeJS.Process["platform"]} TargetPlatform
- * @typedef {NodeJS.Architecture} TargetArch
+ * @typedef {import('node:process')['platform']} TargetPlatform
+ * @typedef {import('node:process')['arch']} TargetArch
  * @typedef {import('detect-libc').GLIBC|import('detect-libc').MUSL} TargetLibc
  */
 
@@ -106,8 +104,8 @@ class ActorSystem extends BuildResourceGroup {
       parent,
       properties: {
         version: nodeVersion,
-        platform: platform,
-        architecture: architecture,
+        platform,
+        architecture,
       },
     });
     const targetFunctions = this.functions.map(
@@ -123,9 +121,9 @@ class ActorSystem extends BuildResourceGroup {
             callerFile: () => this.callerFile,
             buildTarget: () => ({
               nodeVersion: node_binary.get('exactVersion').slice(1),
-              platform: platform,
-              architecture: architecture,
-              libc: libc,
+              platform,
+              architecture,
+              libc,
             }),
           },
         });
@@ -152,8 +150,8 @@ class ActorSystem extends BuildResourceGroup {
         resolveDir: () => path.dirname(this.callerDirectory || ''),
         nodeBinaryPath: () => node_binary.get('binaryPath'),
         nodeVersion: () => node_binary.get('exactVersion').slice(1),
-        platform: platform,
-        architecture: architecture,
+        platform,
+        architecture,
         environmentVariables: () => {
           return {};
         },
@@ -202,7 +200,7 @@ class ActorSystem extends BuildResourceGroup {
   defineActorSystemResources(parent) {
     /** @type {(import('../base-resource') | import('../base-resource-group'))[]} */
     const resources = [];
-    this.get('targets', []).map((/** @type {BuildTarget} */ target) => {
+    this.get('targets', []).forEach((/** @type {BuildTarget} */ target) => {
       resources.push(...this._defineTargetResources(parent, target));
     });
     return resources;

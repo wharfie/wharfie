@@ -10,8 +10,8 @@ const paths = require('../../../paths');
 const BaseResource = require('../base-resource');
 
 /**
- * @typedef {NodeJS.Process["platform"]} TargetPlatform
- * @typedef {NodeJS.Architecture} TargetArch
+ * @typedef {import('node:process')['platform']} TargetPlatform
+ * @typedef {import('node:process')['arch']} TargetArch
  */
 /**
  * @typedef NodeBinaryProperties
@@ -133,13 +133,25 @@ class NodeBinary extends BaseResource {
     this._archivePath = path.join(NodeBinary.TEMP_DIR, archiveName);
     return this._archivePath;
   }
+
+  /**
+   * @typedef targetSpec
+   * @property {string} token -
+   * @property {string} normPlatform -
+   * @property {string} normArch -
+   * @property {string} ext -
+   * @property {string} packagingKey -
+   * @property {boolean} isWin -
+   * @property {boolean} isMac -
+   */
   /**
    * Map Node/OS tokens and choose packaging for our extractor.
    * - We extract .zip on Windows.
    * - We extract .tar.gz on macOS (Node publishes osx-*-tar).
    * - For everything else we keep your existing .tar.gz assumption.
-   * @param {string} platform
-   * @param {string} arch
+   * @param {string} platform -
+   * @param {string} arch -
+   * @returns {targetSpec} -
    */
   static resolveTargetSpec(platform, arch) {
     // Normalize platform
@@ -162,9 +174,10 @@ class NodeBinary extends BaseResource {
    * Build candidate "files" keys to validate against index.json.
    * Node's `files` array sometimes lists either a base key (linux-x64)
    * and sometimes keyed by packaging (osx-arm64-tar, win-x64-zip).
-   * @param {string} token
-   * @param {string} normArch
-   * @param {string} packagingKey
+   * @param {string} token -
+   * @param {string} normArch -
+   * @param {string} packagingKey -
+   * @returns {string[]} -
    */
   static candidateFilesKeys(token, normArch, packagingKey) {
     const base = `${token}-${normArch}`;

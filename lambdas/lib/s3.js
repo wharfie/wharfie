@@ -81,10 +81,10 @@ function formatClientOptions(options) {
 
 /**
  * Normalize provider & endpoint into S3Client config.
- * @param {import("@aws-sdk/client-s3").S3ClientConfig} base
- * @param {Provider} provider
- * @param {ProviderOptions} providerOptions
- * @returns {{clientConfig: import("@aws-sdk/client-s3").S3ClientConfig, providerMeta: ProviderMeta}}
+ * @param {import("@aws-sdk/client-s3").S3ClientConfig} base -
+ * @param {Provider} provider -
+ * @param {ProviderOptions} providerOptions -
+ * @returns {{clientConfig: import("@aws-sdk/client-s3").S3ClientConfig, providerMeta: ProviderMeta}} -
  */
 function buildProviderClientConfig(base, provider, providerOptions = {}) {
   const cfg = { ...base };
@@ -160,7 +160,7 @@ function buildProviderClientConfig(base, provider, providerOptions = {}) {
 
 class S3 {
   /**
-   * @param {S3Options} [options]
+   * @param {S3Options} [options] -
    */
   constructor(options = {}) {
     const { provider = 'aws', providerOptions = {}, ...s3Options } = options;

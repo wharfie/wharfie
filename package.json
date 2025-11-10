@@ -23,8 +23,8 @@
   "main": "./client/",
   "scripts": {
     "typecheck": "tsc",
-    "test:js": "TZ=UTC jest --silent --coverage",
-    "test:update": "TZ=UTC jest --silent --updateSnapshot",
+    "test:js": "TZ=UTC jest --silent --coverage ./test/",
+    "test:update": "TZ=UTC jest --silent --updateSnapshot ./test/",
     "test": "npm run test:js",
     "test:ci": "npm run lint && npm run typecheck && npm run test",
     "lint:js": "eslint . && prettier --check \"{*,**/*}.{js,json}\"",
@@ -52,7 +52,8 @@
     "ignorePatterns": [
       "dist/",
       "tmp/",
-      "docs/"
+      "docs/",
+      "scratch/"
     ],
     "overrides": [
       {
@@ -112,10 +113,11 @@
     "@types/inquirer": "^8.0.7",
     "@types/jest": "^26.0.24",
     "@types/js-yaml": "^4.0.9",
-    "@types/node": "^20.19.13",
+    "@types/node": "^20.19.24",
     "@types/npmcli__arborist": "^6.3.1",
     "@types/uuid": "^8.3.0",
     "@types/yargs": "^17.0.33",
+    "@typescript-eslint/parser": "^8.46.3",
     "aws-sdk-client-mock": "^3.0.0",
     "aws-sdk-client-mock-jest": "^3.0.0",
     "eslint": "^8.45.0",
