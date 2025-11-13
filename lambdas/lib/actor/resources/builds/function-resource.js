@@ -105,22 +105,7 @@ class FunctionResource extends BuildResource {
    */
   async esbuild() {
     const entryCode = `
-      const { once } = require('node:events');
-      (async () => {
-        // makes sure stack traces point to original files
-        require('source-map-support').install();
-        // Auto-generated entry file
-        require(${JSON.stringify(this.get('callerFile'))});
-        const fn = await global[Symbol.for(${JSON.stringify(
-          this.get('functionName')
-        )})];
-        if (typeof fn !== 'function') {
-          throw new TypeError('Global entrypoint is not a function');
-        }
-        const res = await fn(...global.__ENTRY_ARGS__);  
-        // blocks return even if user-code was not awaiting async calls
-        await once(process, 'beforeExit');
-      })();
+      require(${JSON.stringify(this.get('callerFile'))});
     `;
     const resolveDir = path.dirname(this.get('callerDirectory') || '');
     const { outputFiles, errors, warnings } = await esbuild.build({

@@ -1,5 +1,6 @@
 coverage/
 mock/
+test-db/
 tmp/
 node_modules/
 *.pyc
