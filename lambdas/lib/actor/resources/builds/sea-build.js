@@ -121,6 +121,9 @@ class SeaBuild extends BaseResource {
         resolveDir: this.get('resolveDir'),
         sourcefile: 'index.js',
       },
+      loader: {
+        '.worker.js': 'text',
+      },
       outfile: outputPath,
       bundle: true,
       platform: 'node',

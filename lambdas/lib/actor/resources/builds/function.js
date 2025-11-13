@@ -1,5 +1,5 @@
 const { getAsset } = require('node:sea');
-const vm = require('../../../vm');
+const worker = require('../../../code-execution/worker');
 const zlib = require('node:zlib');
 
 /**
@@ -54,11 +54,21 @@ class Function {
       Buffer.from(assetDescription.codeBundle, 'base64')
     );
     const functionCodeString = functionBuffer.toString();
-    console.time('VM time');
-    await vm.runInSandbox(name, functionCodeString, [event, context], {
+    console.time('WORKER time');
+    await worker.runInSandbox(name, functionCodeString, [event, context], {
       externalsTar: Buffer.from(assetDescription.externalsTar, 'base64'),
     });
-    console.timeEnd('VM time');
+    console.timeEnd('WORKER time');
+    // let t = 0
+    // while (t < 10) {
+    //   console.time('WORKER time');
+    //   await worker.runInSandbox(name, functionCodeString, [event, context], {
+    //     externalsTar: Buffer.from(assetDescription.externalsTar, 'base64'),
+    //   });
+    //   console.timeEnd('WORKER time');
+    //   t += 1
+    // }
+    await worker._destroyWorker();
   }
 
   // async recieve() {
