@@ -16,14 +16,22 @@ const VM_PATH = path.join(paths.data, 'vms');
 const workerSource = require('./runner.worker.js');
 
 // --- singleton worker + response router ---
+/**
+ * @type {Worker | null}
+ */
 let worker = null;
 let nextId = 1;
 const pending = new Map();
 
+/**
+ * @param {string} name -
+ * @returns {Worker} -
+ */
 function ensureWorker(name) {
   if (worker) return worker;
   console.log('ENSURE WORKER');
 
+  // @ts-ignore
   const w = new Worker(workerSource, {
     eval: true,
     stdout: true,
@@ -82,8 +90,26 @@ function ensureWorker(name) {
 /**
  * Map<name, { root, nodeModules, pkgFile, entryFile, prepared: boolean, codeString }>
  */
+
+/**
+ * @typedef Sandbox
+ * @property {string} root -
+ * @property {string} nodeModules -
+ * @property {string} pkgFile -
+ * @property {string} entryFile -
+ * @property {boolean} prepared -
+ * @property {string} codeString -
+ */
+
+/**
+ * @type {Map<string,Sandbox>}
+ */
 const sandboxes = new Map();
 
+/**
+ * @param {import("fs").PathLike} p -
+ * @returns {Promise<boolean>} -
+ */
 async function pathExists(p) {
   try {
     await fsp.access(p, FS.F_OK);
@@ -93,6 +119,12 @@ async function pathExists(p) {
   }
 }
 
+/**
+ * @param {string} name -
+ * @param {string} codeString -
+ * @param {Iterable<any> | AsyncIterable<any> | undefined} externalsTar -
+ * @returns {Promise<Sandbox>} -
+ */
 async function ensureSandboxForName(name, codeString, externalsTar) {
   let sb = sandboxes.get(name);
   if (sb) return sb;
@@ -129,15 +161,15 @@ async function ensureSandboxForName(name, codeString, externalsTar) {
 
 /**
  * @typedef VMSandboxOptions
- * @property {Buffer} [externalsTar]
- * @property {Object<string,string>} [env]
+ * @property {Buffer} [externalsTar] -
+ * @property {Object<string,string>} [env] -
  */
 
 /**
- * @param {string} name
- * @param {string} codeString
- * @param {any[] | any} params
- * @param {VMSandboxOptions} options
+ * @param {string} name -
+ * @param {string} codeString -
+ * @param {any[] | any} params -
+ * @param {VMSandboxOptions} options -
  * @returns {Promise<void>}  // you don't care about return value
  */
 async function runInSandbox(
