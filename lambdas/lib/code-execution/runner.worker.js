@@ -3,12 +3,14 @@
 
 const { parentPort, isMainThread } = require('node:worker_threads');
 const { createRequire } = require('module');
-let loaded = false;
 
 if (process.setSourceMapsEnabled) process.setSourceMapsEnabled(true);
 
 // Global guards – shared across any accidental re-evaluations of this script
+
+// @ts-ignore
 if (!global.__wharfieWorkerInit) {
+  // @ts-ignore
   global.__wharfieWorkerInit = {
     handlerInstalled: false,
     bundleLoaded: false,
@@ -26,21 +28,29 @@ if (!global.__wharfieWorkerInit) {
 //   return r;
 // }
 
+/**
+ *
+ */
 async function drainOneTick() {
   await Promise.resolve();
   await new Promise((resolve) => setImmediate(resolve));
 }
 
 // Run the esbuild bundle exactly ONCE per codeString
-function runBundleOnce({
-  functionName,
-  codeString,
-  pkgFile,
-  entryFile,
-  tmpRoot,
-  env,
-}) {
+/**
+ * @typedef RunBundleOptions
+ * @property {string} codeString -
+ * @property {string} pkgFile -
+ * @property {string} entryFile -
+ * @property {string} tmpRoot -
+ * @property {Object<string,string>} env -
+ */
+/**
+ * @param {RunBundleOptions} options -
+ */
+function runBundleOnce({ codeString, pkgFile, entryFile, tmpRoot, env }) {
   // Use codeString as the key – if it’s the same bundle, don’t re-run it
+  // @ts-ignore
   if (global.__wharfieWorkerInit.bundleLoaded) return;
 
   console.log('[worker] REQUIRING WORKER CODE ONCE');
@@ -90,12 +100,18 @@ function runBundleOnce({
     // sandboxProcess
   );
 
+  // @ts-ignore
   global.__wharfieWorkerInit.bundleLoaded = true;
 }
 
-if (!isMainThread && !global.__wharfieWorkerInit.handlerInstalled) {
+// @ts-ignore
+if (
+  !isMainThread &&
+  !global.__wharfieWorkerInit.handlerInstalled &&
+  parentPort
+) {
+  // @ts-ignore
   global.__wharfieWorkerInit.handlerInstalled = true;
-
   parentPort.on('message', async (msg) => {
     const { id, kind } = msg || {};
     if (kind !== 'exec') return;
@@ -112,7 +128,6 @@ if (!isMainThread && !global.__wharfieWorkerInit.handlerInstalled) {
 
     try {
       runBundleOnce({
-        functionName,
         codeString,
         pkgFile,
         entryFile,
@@ -121,6 +136,7 @@ if (!isMainThread && !global.__wharfieWorkerInit.handlerInstalled) {
       });
 
       const sym = Symbol.for(functionName);
+      // @ts-ignore
       const fn = global[sym];
       if (typeof fn !== 'function') {
         throw new TypeError(
@@ -131,7 +147,7 @@ if (!isMainThread && !global.__wharfieWorkerInit.handlerInstalled) {
       const args = Array.isArray(__ENTRY_ARGS__)
         ? __ENTRY_ARGS__
         : [__ENTRY_ARGS__];
-      let result = fn(...args);
+      const result = fn(...args);
 
       if (result && typeof result.then === 'function') {
         await result;
@@ -139,13 +155,15 @@ if (!isMainThread && !global.__wharfieWorkerInit.handlerInstalled) {
 
       await drainOneTick();
 
-      parentPort.postMessage({ id, ok: true });
+      parentPort && parentPort.postMessage({ id, ok: true });
     } catch (err) {
-      parentPort.postMessage({
-        id,
-        ok: false,
-        error: err && err.stack ? err.stack : String(err),
-      });
+      parentPort &&
+        parentPort.postMessage({
+          id,
+          ok: false,
+          // @ts-ignore
+          error: err && err.stack ? err.stack : String(err),
+        });
     }
   });
 }

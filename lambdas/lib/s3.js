@@ -48,6 +48,7 @@ const { Readable } = require('stream');
  * @property {string} [endpoint] -
  * @property {boolean} [forcePathStyle] -
  * @property {boolean} [useArnRegion] -
+ * @property {boolean} [followRegionRedirects] -
  */
 
 const AWS_REGIONS = [
