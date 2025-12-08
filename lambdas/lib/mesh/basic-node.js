@@ -23,6 +23,9 @@ function topicBuffer(topicStr) {
   return crypto.createHash('sha256').update(topicStr).digest();
 }
 
+/**
+ *
+ */
 function now() {
   return Date.now();
 }
@@ -352,6 +355,10 @@ class BasicNode extends EventEmitter {
  * @property {number} lastSeen -
  */
 
+/**
+ *
+ * @param s
+ */
 function safeParse(s) {
   try {
     return JSON.parse(s);
