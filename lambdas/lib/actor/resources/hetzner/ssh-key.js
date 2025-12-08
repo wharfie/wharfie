@@ -8,7 +8,7 @@ const BaseResource = require('../base-resource');
 /**
  * @typedef HetznerSSHKeyProperties
  * @property {string} hetznerToken - Hetzner API token.
- * @property {string} publicKeyPath - Absolute or relative path to the OpenSSH public key file (.pub).
+ * @property {string} sshPublicKeyPath - Absolute or relative path to the OpenSSH public key file (.pub).
  */
 
 /**
@@ -39,7 +39,7 @@ class HetznerSSHKey extends BaseResource {
    * @private
    */
   async _readPublicKeyFromPath() {
-    const p = this.get('publicKeyPath');
+    const p = this.get('sshPublicKeyPath');
     if (typeof p !== 'string' || p.trim().length === 0) {
       throw new Error(
         'properties.publicKeyPath is required and must be a non-empty string.'
