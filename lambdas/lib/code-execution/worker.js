@@ -200,24 +200,24 @@ async function runInSandbox(
       functionName: name,
     });
   });
-  // let runs = 0
-  // while (runs < 10) {
-  //   await new Promise((resolve, reject) => {
-  //     pending.set(id, { resolve, reject });
-  //     w.postMessage({
-  //       id,
-  //       kind: 'exec',
-  //       codeString: sb.codeString,
-  //       entryFile: sb.entryFile,
-  //       tmpRoot: sb.root,
-  //       pkgFile: sb.pkgFile,
-  //       env,
-  //       __ENTRY_ARGS__,
-  //       functionName: name,
-  //     });
-  //   });
-  //   runs += 1
-  // }
+  let runs = 0;
+  while (runs < 9) {
+    await new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      w.postMessage({
+        id,
+        kind: 'exec',
+        codeString: sb.codeString,
+        entryFile: sb.entryFile,
+        tmpRoot: sb.root,
+        pkgFile: sb.pkgFile,
+        env,
+        __ENTRY_ARGS__,
+        functionName: name,
+      });
+    });
+    runs += 1;
+  }
 
   if (!msg || !msg.ok) {
     throw new Error(msg && msg.error ? msg.error : 'Unknown worker error');

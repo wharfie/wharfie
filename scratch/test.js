@@ -49,10 +49,10 @@ async function main() {
     async (event, context) => {
       const depLabel = `INTERNAL DEPENDENCY LOADING TIMER`;
       console.time(depLabel);
-      const lmdb = require('lmdb');
       const sharp = require('sharp');
-      const duckdb = require('@duckdb/node-api');
       const sodium = require('sodium-native');
+      const duckdb = require('@duckdb/node-api');
+      const lmdb = require('lmdb');
       // const usb = require('usb');
       console.timeEnd(depLabel);
 
@@ -204,7 +204,10 @@ async function main() {
           { name: 'lmdb', version: getInstalledVersion('lmdb') },
           { name: 'sharp', version: '0.34.4' },
           { name: 'sodium-native', version: '5.0.9' },
-          { name: '@duckdb/node-api', version: '1.4.1-r.4' },
+          {
+            name: '@duckdb/node-api',
+            version: getInstalledVersion('@duckdb/node-api'),
+          },
           { name: 'usb', version: '2.13.0' },
         ],
       },
@@ -226,12 +229,12 @@ async function main() {
         //   platform: 'darwin',
         //   architecture: 'arm64',
         // },
-        // {
-        //   nodeVersion: '24',
-        //   platform: 'linux',
-        //   architecture: 'x64',
-        //   libc: 'glibc',
-        // },
+        {
+          nodeVersion: '24',
+          platform: 'linux',
+          architecture: 'x64',
+          // libc: 'glibc',
+        },
         // {
         //   nodeVersion: '22',
         //   platform: 'darwin',

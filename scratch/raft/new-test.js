@@ -23,7 +23,7 @@ const HetznerNode = require('../../lambdas/lib/actor/resources/hetzner/node');
 
 const HZ_TOKEN = process.env.HETZNER_TOKEN;
 const BINARY_FILE =
-  '/Users/josephvandrunen/Library/Application Support/wharfie-nodejs/actor_binaries/main-build-24-linux-x64';
+  '/Users/joe/Library/Application Support/wharfie-nodejs/actor_binaries/main-build-24-linux-x64';
 
 /**
  * Ensure required env present.
