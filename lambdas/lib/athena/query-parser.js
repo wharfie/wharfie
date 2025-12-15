@@ -1,6 +1,6 @@
 /* eslint-disable new-cap */
 'use strict';
-const { Parser } = require('node-sql-parser/build/athena');
+import { Parser } from 'node-sql-parser/build/athena.js';
 
 class QueryParser {
   constructor() {
@@ -8,7 +8,7 @@ class QueryParser {
   }
 
   /**
-   * @param {import('node-sql-parser/build/athena').ExpressionValue} node -
+   * @param {import('node-sql-parser/build/athena.js').ExpressionValue} node -
    * @param {string[]} results -
    * @returns {string[]} -
    */
@@ -31,7 +31,7 @@ class QueryParser {
   }
 
   /**
-   * @param {import('node-sql-parser/build/athena').Column} ast -
+   * @param {import('node-sql-parser/build/athena.js').Column} ast -
    * @returns {ColumnSelection} -
    */
   traverseColumnAst(ast) {
@@ -47,7 +47,7 @@ class QueryParser {
   }
 
   /**
-   * @param {import('node-sql-parser/build/athena').Column[]} ast -
+   * @param {import('node-sql-parser/build/athena.js').Column[]} ast -
    * @returns {ColumnSelection[]} -
    */
   traverseAst(ast) {
@@ -97,4 +97,4 @@ class QueryParser {
   }
 }
 
-module.exports = QueryParser;
+export default QueryParser;

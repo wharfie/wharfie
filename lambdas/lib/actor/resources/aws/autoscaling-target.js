@@ -1,7 +1,5 @@
-'use strict';
-
-const BaseResource = require('../base-resource');
-const ApplicationAutoScaling = require('../../../application-auto-scaling');
+import BaseResource from '../base-resource.js';
+import ApplicationAutoScaling from '../../../application-auto-scaling.js';
 
 /**
  * @typedef AutoscalingTargetProperties
@@ -18,9 +16,9 @@ const ApplicationAutoScaling = require('../../../application-auto-scaling');
  * @typedef AutoscalingTargetOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {AutoscalingTargetProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {AutoscalingTargetProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class AutoscalingTarget extends BaseResource {
@@ -117,4 +115,4 @@ class AutoscalingTarget extends BaseResource {
   }
 }
 
-module.exports = AutoscalingTarget;
+export default AutoscalingTarget;

@@ -1,10 +1,12 @@
+import * as resource_db from '../../lib/dynamo/operations.js';
+import { Type } from '../../lib/graph/operation.js';
+import { schedule } from '../schedule.js';
+import * as logging from '../../lib/logging/index.js';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
 const { version: WHARFIE_VERSION } = require('../../../package.json');
 
-const resource_db = require('../../lib/dynamo/operations');
-const Operation = require('../../lib/graph/operation');
-const { schedule } = require('../schedule');
-
-const logging = require('../../lib/logging');
 const daemon_log = logging.getDaemonLogger();
 /**
  * @type {'WHARFIE:OPERATION:SCHEDULE'}
@@ -14,7 +16,7 @@ const TYPE = 'WHARFIE:OPERATION:SCHEDULE';
 /**
  * @typedef WharfieEventProperties
  * @property {string} resource_id -
- * @property {Operation.WharfieOperationTypeEnum} operation_type -
+ * @property {Type} operation_type -
  * @property {any} [operation_input] -
  * @property {string} [status] -
  * @property {string} [version] -
@@ -90,20 +92,20 @@ class WharfieScheduleOperation {
     const nowInterval = Math.round(now / ms) * ms;
     const before = nowInterval - 1000 * interval;
 
-    if (this.operation_type === Operation.Type.BACKFILL) {
+    if (this.operation_type === Type.BACKFILL) {
       await schedule({
         resource_id: this.resource_id,
         interval,
         window: [before, nowInterval],
       });
-    } else if (this.operation_type === Operation.Type.LOAD) {
+    } else if (this.operation_type === Type.LOAD) {
       await schedule({
         resource_id: this.resource_id,
         interval,
         window: [before, nowInterval],
         partition: this.operation_input.partition,
       });
-    } else if (this.operation_type === Operation.Type.MIGRATE) {
+    } else if (this.operation_type === Type.MIGRATE) {
       daemon_log.warn('migrations can not be scheduled');
     } else {
       throw new Error(`operation type unrecognized ${this.operation_type}`);
@@ -112,4 +114,4 @@ class WharfieScheduleOperation {
 }
 WharfieScheduleOperation.Type = TYPE;
 
-module.exports = WharfieScheduleOperation;
+export default WharfieScheduleOperation;

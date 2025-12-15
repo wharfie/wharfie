@@ -1,6 +1,7 @@
-'use strict';
-const Action = require('./action');
-const { createId } = require('../id');
+import Action from './action.js';
+import { createId } from '../id.js';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { version: WHARFIE_VERSION } = require('../../../package.json');
 
 /**
@@ -81,7 +82,7 @@ class Operation {
      */
     this.actions = new Map();
     /**
-     * @type {Map<string,import('./action').WharfieActionTypeEnum>}
+     * @type {Map<string,import('./action.js').WharfieActionTypeEnum>}
      */
     this.actionIdsToTypes = new Map();
     /**
@@ -96,7 +97,7 @@ class Operation {
 
   /**
    * @typedef addActionOptions
-   * @property {import('./action').WharfieActionTypeEnum} type -
+   * @property {import('./action.js').WharfieActionTypeEnum} type -
    * @property {Action[]} [dependsOn] -
    * @property {string} [id] -
    */
@@ -180,7 +181,7 @@ class Operation {
   }
 
   /**
-   * @param {import('./action').WharfieActionTypeEnum} type -
+   * @param {import('./action.js').WharfieActionTypeEnum} type -
    * @returns {string} -
    */
   getActionIdByType(type) {
@@ -197,7 +198,7 @@ class Operation {
 
   /**
    * @param {string} id -
-   * @returns {import('./action').WharfieActionTypeEnum} -
+   * @returns {import('./action.js').WharfieActionTypeEnum} -
    */
   getActionTypeById(id) {
     const type = this.actionIdsToTypes.get(id);
@@ -431,4 +432,5 @@ Operation.Status = Status;
  */
 Operation.RecordType = 'OPERATION';
 
-module.exports = Operation;
+export { Status, Type };
+export default Operation;

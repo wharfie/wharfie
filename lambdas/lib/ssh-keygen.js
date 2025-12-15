@@ -1,8 +1,6 @@
-'use strict';
-
-const { execFile } = require('node:child_process');
-const { access, readFile, unlink } = require('node:fs/promises');
-const { constants } = require('node:fs');
+import { execFile } from 'node:child_process';
+import { access, readFile, unlink } from 'node:fs/promises';
+import { constants } from 'node:fs';
 
 /**
  * Promise wrapper around execFile.
@@ -154,4 +152,4 @@ class SSHKeygen {
   }
 }
 
-module.exports = SSHKeygen;
+export default SSHKeygen;

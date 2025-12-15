@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { afterEach, beforeAll, describe, expect, it } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const AWS = require('@aws-sdk/client-athena');
 const AWSGlue = require('@aws-sdk/client-glue');
 const Athena = require('../../../lambdas/lib/athena');
@@ -8,6 +10,7 @@ describe('tests for Athena', () => {
   beforeAll(() => {
     require('aws-sdk-client-mock-jest');
   });
+
   afterEach(() => {
     AWS.AthenaMock.reset();
     AWSGlue.GlueMock.reset();
@@ -15,10 +18,12 @@ describe('tests for Athena', () => {
 
   it('extractSources', async () => {
     expect.assertions(1);
+
     const athena = new Athena({ region: 'us-east-1' });
     const result = await athena.extractSources(
       'select * from test_database.test_table'
     );
+
     expect(result).toMatchInlineSnapshot(`
       {
         "columns": [
@@ -44,10 +49,12 @@ describe('tests for Athena', () => {
 
   it('extractSources columns', async () => {
     expect.assertions(1);
+
     const athena = new Athena({ region: 'us-east-1' });
     const result = await athena.extractSources(
       'select column1, column_2 from test_database.test_table'
     );
+
     expect(result).toMatchInlineSnapshot(`
       {
         "columns": [
@@ -80,10 +87,12 @@ describe('tests for Athena', () => {
 
   it('extractSources select as', async () => {
     expect.assertions(1);
+
     const athena = new Athena({ region: 'us-east-1' });
     const result = await athena.extractSources(
       'select CONCAT(first_name, " ", last_name) AS full_name, renamed_column as column2, column3, CONCAT(first_name, " ", last_name)  from test_table'
     );
+
     expect(result).toMatchInlineSnapshot(`
       {
         "columns": [
@@ -132,11 +141,13 @@ describe('tests for Athena', () => {
 
   it('startQueryExecution', async () => {
     expect.assertions(2);
+
     AWS.AthenaMock.on(AWS.StartQueryExecutionCommand).resolves();
 
     const athena = new Athena({ region: 'us-east-1' });
     const params = {};
     await athena.startQueryExecution(params);
+
     expect(AWS.AthenaMock).toHaveReceivedCommandWith(
       AWS.StartQueryExecutionCommand,
       params
@@ -145,10 +156,12 @@ describe('tests for Athena', () => {
 
   it('batchGetQueryExecution', async () => {
     expect.assertions(2);
+
     AWS.AthenaMock.on(AWS.BatchGetQueryExecutionCommand).resolves();
     const athena = new Athena({ region: 'us-east-1' });
     const params = {};
     await athena.batchGetQueryExecution(params);
+
     expect(AWS.AthenaMock).toHaveReceivedCommandWith(
       AWS.BatchGetQueryExecutionCommand,
       params
@@ -157,10 +170,12 @@ describe('tests for Athena', () => {
 
   it('getQueryExecution', async () => {
     expect.assertions(2);
+
     AWS.AthenaMock.on(AWS.GetQueryExecutionCommand).resolves();
     const athena = new Athena({ region: 'us-east-1' });
     const params = {};
     await athena.getQueryExecution(params);
+
     expect(AWS.AthenaMock).toHaveReceivedCommandWith(
       AWS.GetQueryExecutionCommand,
       params
@@ -169,6 +184,7 @@ describe('tests for Athena', () => {
 
   it('getQueryResults', async () => {
     expect.assertions(4);
+
     AWS.AthenaMock.on(AWS.GetQueryResultsCommand)
       .resolvesOnce({
         NextToken: 'next-token',
@@ -294,6 +310,7 @@ describe('tests for Athena', () => {
     for await (const result of resultStream) {
       results.push(result);
     }
+
     expect(AWS.AthenaMock).toHaveReceivedCommandWith(
       AWS.GetQueryResultsCommand,
       params
@@ -343,6 +360,7 @@ describe('tests for Athena', () => {
     const athena = new Athena({ region: 'us-east-1' });
 
     const result = await athena.getQueryMetrics('1');
+
     expect(result).toMatchInlineSnapshot(`
       {
         "References": [
@@ -368,6 +386,7 @@ describe('tests for Athena', () => {
 
   it('getQueryMetrics derive db', async () => {
     expect.assertions(3);
+
     AWS.AthenaMock.on(AWS.GetQueryExecutionCommand).resolves({
       QueryExecution: {
         Query: 'select * from "test_table"',
@@ -390,6 +409,7 @@ describe('tests for Athena', () => {
     const athena = new Athena({ region: 'us-east-1' });
 
     const result = await athena.getQueryMetrics('1');
+
     expect(result).toMatchInlineSnapshot(`
       {
         "References": [

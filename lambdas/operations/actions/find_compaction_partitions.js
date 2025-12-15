@@ -1,19 +1,18 @@
-'use strict';
-const { Operation, Resource } = require('../../lib/graph/');
+import { Operation, Resource } from '../../lib/graph/index.js';
 
-const Glue = require('../../lib/glue');
-const Athena = require('../../lib/athena');
-const STS = require('../../lib/sts');
-const logging = require('../../lib/logging');
-const Compaction = require('./lib/compaction');
-const query = require('../query');
+import Glue from '../../lib/glue.js';
+import Athena from '../../lib/athena/index.js';
+import STS from '../../lib/sts.js';
+import * as logging from '../../lib/logging/index.js';
+import Compaction from './lib/compaction.js';
+import * as query from '../query/index.js';
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function run(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
@@ -63,4 +62,4 @@ async function run(event, context, resource, operation) {
   };
 }
 
-module.exports = { run };
+export default { run };

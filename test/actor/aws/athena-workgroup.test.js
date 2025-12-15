@@ -1,6 +1,15 @@
 /* eslint-disable jest/no-large-snapshots */
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
 const { Athena } = jest.requireMock('@aws-sdk/client-athena');
@@ -26,8 +35,10 @@ describe('athena workgroup IaC', () => {
   afterEach(() => {
     AWS.clearAllMocks();
   });
+
   it('basic', async () => {
     expect.assertions(14);
+
     const athena = new Athena({});
     const workgroup = new AthenaWorkGroup({
       name: 'test-workgroup',
@@ -52,7 +63,9 @@ describe('athena workgroup IaC', () => {
       .map(([{ Item }]) => Item);
 
     expect(reconcilingStatusUpdate).toHaveLength(1);
+
     update.mock.calls = [];
+
     expect(stableStatusUpdate).toHaveLength(1);
     expect(stableStatusUpdate).toMatchInlineSnapshot(`
       [
@@ -98,6 +111,7 @@ describe('athena workgroup IaC', () => {
     `);
 
     const serialized = workgroup.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -143,6 +157,7 @@ describe('athena workgroup IaC', () => {
       resourceKey: 'test-workgroup',
     });
     await deserialized.reconcile();
+
     expect(deserialized).toMatchInlineSnapshot(`
       AthenaWorkGroup {
         "_MAX_RETRIES": 10,
@@ -237,6 +252,7 @@ describe('athena workgroup IaC', () => {
     `);
 
     await deserialized.destroy();
+
     expect(deserialized.status).toBe('DESTROYED');
     await expect(
       athena.getWorkGroup({ WorkGroup: 'test-workgroup' })

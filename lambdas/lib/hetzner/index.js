@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Error thrown for non-2xx Hetzner API responses.
  * @class
@@ -13,7 +11,7 @@ class HetznerError extends Error {
    * @param {string} params.code Hetzner machine-readable error code (e.g., "invalid_input").
    * @param {string} params.message Human-readable error message.
    * @param {unknown} [params.details] Provider-specific details object, if present.
-   * @param {import('./typedefs').HetznerRate|null} [params.rate] Parsed rate-limit information, if available.
+   * @param {import('./typedefs.js').HetznerRate|null} [params.rate] Parsed rate-limit information, if available.
    */
   constructor({ status, code, message, details, rate }) {
     super(message || `Hetzner API error (${status})`);
@@ -54,10 +52,10 @@ class HetznerCloud {
 
   /**
    * Create the API client.
-   * @param {import('./typedefs').HetznerClientOptions} [params] Initialization options for the client.
+   * @param {import('./typedefs.js').HetznerClientOptions} [params] Initialization options for the client.
    */
   constructor(
-    params = /** @type {import('./typedefs').HetznerClientOptions} */ ({})
+    params = /** @type {import('./typedefs.js').HetznerClientOptions} */ ({})
   ) {
     const token = params.token;
     const baseUrl = (params.baseUrl || 'https://api.hetzner.cloud/v1').replace(
@@ -70,13 +68,13 @@ class HetznerCloud {
     this.token = token;
     this.baseUrl = baseUrl;
 
-    /** @type {import('./typedefs').HetznerRate|null} */
+    /** @type {import('./typedefs.js').HetznerRate|null} */
     this._lastRate = null;
   }
 
   /**
    * Last-seen rate-limit snapshot from the previous request.
-   * @returns {import('./typedefs').HetznerRate|null} Rate-limit info or null if not available.
+   * @returns {import('./typedefs.js').HetznerRate|null} Rate-limit info or null if not available.
    */
   get lastRate() {
     return this._lastRate;
@@ -88,7 +86,7 @@ class HetznerCloud {
 
   /**
    * List Floating IPs (single page).
-   * @param {import('./typedefs').ListFloatingIPsOptions} [opts] Filtering, sorting, and pagination options.
+   * @param {import('./typedefs.js').ListFloatingIPsOptions} [opts] Filtering, sorting, and pagination options.
    * @returns {Promise<any>} Raw response with "floating_ips" and "meta.pagination".
    */
   listFloatingIPs({
@@ -105,7 +103,7 @@ class HetznerCloud {
 
   /**
    * Iterate all Floating IPs across pages.
-   * @param {Omit<import('./typedefs').ListFloatingIPsOptions, 'page'|'per_page'> & { per_page?: number }} [opts] Filters/sort; per_page controls pagination.
+   * @param {Omit<import('./typedefs.js').ListFloatingIPsOptions, 'page'|'per_page'> & { per_page?: number }} [opts] Filters/sort; per_page controls pagination.
    * @yields {any} Each Floating IP object from the paginated collection.
    */
   async *iterateFloatingIPs({
@@ -124,7 +122,7 @@ class HetznerCloud {
 
   /**
    * Create a Floating IP (POST /floating_ips).
-   * @param {import('./typedefs').CreateFloatingIPPayload} payload Parameters for floating IP creation.
+   * @param {import('./typedefs.js').CreateFloatingIPPayload} payload Parameters for floating IP creation.
    * @returns {Promise<any>} Response with "floating_ip" and optional "action".
    */
   createFloatingIP(payload) {
@@ -143,7 +141,7 @@ class HetznerCloud {
   /**
    * Update a Floating IP (PUT /floating_ips/{id}).
    * @param {number|string} id Floating IP ID.
-   * @param {import('./typedefs').UpdateFloatingIPBody} body Fields to update on the floating IP.
+   * @param {import('./typedefs.js').UpdateFloatingIPBody} body Fields to update on the floating IP.
    * @returns {Promise<any>} Response containing "floating_ip".
    */
   updateFloatingIP(id, body) {
@@ -161,7 +159,7 @@ class HetznerCloud {
 
   /**
    * List Floating IP actions (GET /floating_ips/actions).
-   * @param {import('./typedefs').ListFloatingIPActionsOptions} [opts] Filters, sorters, and pagination options.
+   * @param {import('./typedefs.js').ListFloatingIPActionsOptions} [opts] Filters, sorters, and pagination options.
    * @returns {Promise<any>} Response containing "actions" and "meta.pagination".
    */
   listFloatingIPActions({ id, status, sort, page = 1, per_page = 25 } = {}) {
@@ -182,7 +180,7 @@ class HetznerCloud {
   /**
    * List actions for a specific Floating IP (GET /floating_ips/{id}/actions).
    * @param {number|string} id Floating IP ID whose actions to list.
-   * @param {import('./typedefs').ListFIPActionsForResourceOptions} [opts] Filters, sorters, and pagination options.
+   * @param {import('./typedefs.js').ListFIPActionsForResourceOptions} [opts] Filters, sorters, and pagination options.
    * @returns {Promise<any>} Response containing "actions" and "meta.pagination".
    */
   listActionsForFloatingIP(id, { sort, status, page = 1, per_page = 25 } = {}) {
@@ -204,7 +202,7 @@ class HetznerCloud {
   /**
    * Assign a Floating IP (POST /floating_ips/{id}/actions/assign).
    * @param {number|string} id Floating IP ID to assign.
-   * @param {import('./typedefs').AssignFloatingIPBody} body Body with the target server id.
+   * @param {import('./typedefs.js').AssignFloatingIPBody} body Body with the target server id.
    * @returns {Promise<any>} Response containing "action".
    */
   assignFloatingIP(id, body) {
@@ -229,7 +227,7 @@ class HetznerCloud {
   /**
    * Change reverse DNS (PTR) (POST /floating_ips/{id}/actions/change_dns_ptr).
    * @param {number|string} id Floating IP ID whose PTR to modify.
-   * @param {import('./typedefs').ChangeDNSPtrBody} body Object containing the exact IP and dns_ptr to set.
+   * @param {import('./typedefs.js').ChangeDNSPtrBody} body Object containing the exact IP and dns_ptr to set.
    * @returns {Promise<any>} Response containing "action".
    */
   changeFloatingIPDNSPtr(id, body) {
@@ -242,7 +240,7 @@ class HetznerCloud {
   /**
    * Change protection (POST /floating_ips/{id}/actions/change_protection).
    * @param {number|string} id Floating IP ID whose protection to change.
-   * @param {import('./typedefs').ChangeFloatingIPProtectionBody} body Object with the delete protection flag.
+   * @param {import('./typedefs.js').ChangeFloatingIPProtectionBody} body Object with the delete protection flag.
    * @returns {Promise<any>} Response containing "action".
    */
   changeFloatingIPProtection(id, body) {
@@ -258,7 +256,7 @@ class HetznerCloud {
 
   /**
    * List SSH keys (single page).
-   * @param {import('./typedefs').ListSSHKeysOptions} [opts] Filtering, sorting, and pagination options.
+   * @param {import('./typedefs.js').ListSSHKeysOptions} [opts] Filtering, sorting, and pagination options.
    * @returns {Promise<any>} Response containing "ssh_keys" and "meta.pagination".
    */
   listSSHKeys({
@@ -276,7 +274,7 @@ class HetznerCloud {
 
   /**
    * Iterate all SSH keys.
-   * @param {Omit<import('./typedefs').ListSSHKeysOptions,'page'|'per_page'> & { per_page?: number }} [opts] Filters and per_page to control pagination.
+   * @param {Omit<import('./typedefs.js').ListSSHKeysOptions,'page'|'per_page'> & { per_page?: number }} [opts] Filters and per_page to control pagination.
    * @yields {any} Each SSH key object.
    */
   async *iterateSSHKeys({
@@ -297,7 +295,7 @@ class HetznerCloud {
 
   /**
    * Create an SSH key (POST /ssh_keys).
-   * @param {import('./typedefs').CreateSSHKeyPayload} payload Object containing name, public_key, and optional labels.
+   * @param {import('./typedefs.js').CreateSSHKeyPayload} payload Object containing name, public_key, and optional labels.
    * @returns {Promise<any>} Response containing "ssh_key".
    */
   createSSHKey(payload) {
@@ -316,7 +314,7 @@ class HetznerCloud {
   /**
    * Update an SSH key (PUT /ssh_keys/{id}).
    * @param {number|string} id SSH key ID to update.
-   * @param {import('./typedefs').UpdateSSHKeyBody} body Fields to update (name and/or labels).
+   * @param {import('./typedefs.js').UpdateSSHKeyBody} body Fields to update (name and/or labels).
    * @returns {Promise<any>} Response containing "ssh_key".
    */
   updateSSHKey(id, body) {
@@ -334,7 +332,7 @@ class HetznerCloud {
 
   /**
    * Ensure an SSH key with the given name exists; create it if missing.
-   * @param {import('./typedefs').CreateSSHKeyPayload} payload Name + OpenSSH public_key and optional labels.
+   * @param {import('./typedefs.js').CreateSSHKeyPayload} payload Name + OpenSSH public_key and optional labels.
    * @returns {Promise<any>} The SSH key object (same shape as "ssh_key").
    */
   async ensureSSHKey(payload) {
@@ -363,7 +361,7 @@ class HetznerCloud {
 
   /**
    * List servers (single page).
-   * @param {import('./typedefs').ListServersOptions} [opts] Filtering, sorting, and pagination options.
+   * @param {import('./typedefs.js').ListServersOptions} [opts] Filtering, sorting, and pagination options.
    * @returns {Promise<any>} Raw response including "servers" and "meta.pagination".
    */
   listServers({ page = 1, per_page = 25, label_selector, sort } = {}) {
@@ -374,7 +372,7 @@ class HetznerCloud {
 
   /**
    * Iterate servers across all pages.
-   * @param {import('./typedefs').IterateServersOptions} [opts] Options controlling pagination and filtering.
+   * @param {import('./typedefs.js').IterateServersOptions} [opts] Options controlling pagination and filtering.
    * @yields {any} Each server object.
    */
   async *iterateServers({ per_page = 50, label_selector, sort } = {}) {
@@ -392,7 +390,7 @@ class HetznerCloud {
 
   /**
    * Create a server via POST /servers.
-   * @param {import('./typedefs').CreateServerPayload} payload Complete server creation payload.
+   * @param {import('./typedefs.js').CreateServerPayload} payload Complete server creation payload.
    * @returns {Promise<any>} Response with "server", "action", "next_actions" and optionally "root_password".
    */
   createServer(payload) {
@@ -421,7 +419,7 @@ class HetznerCloud {
   /**
    * Get server metrics for cpu, disk, or network.
    * @param {number|string} id Numeric ID or string-compatible identifier of the server.
-   * @param {import('./typedefs').ServerMetricsParams} params Metric type and time range parameters.
+   * @param {import('./typedefs.js').ServerMetricsParams} params Metric type and time range parameters.
    * @returns {Promise<any>} Response containing a "metrics" object with time series.
    */
   getServerMetrics(id, { type, start, end, step }) {
@@ -436,7 +434,7 @@ class HetznerCloud {
 
   /**
    * List actions across all servers (GET /servers/actions).
-   * @param {import('./typedefs').ListServerActionsOptions} [opts] Filters, sorters, and pagination options.
+   * @param {import('./typedefs.js').ListServerActionsOptions} [opts] Filters, sorters, and pagination options.
    * @returns {Promise<any>} Response containing "actions" and "meta.pagination".
    */
   listServerActions({ id, status, sort, page = 1, per_page = 25 } = {}) {
@@ -457,7 +455,7 @@ class HetznerCloud {
   /**
    * List actions for a specific server (GET /servers/{id}/actions).
    * @param {number|string} id Server ID whose actions to list.
-   * @param {import('./typedefs').ListServerActionsForResourceOptions} [opts] Filters, sorters, and pagination options.
+   * @param {import('./typedefs.js').ListServerActionsForResourceOptions} [opts] Filters, sorters, and pagination options.
    * @returns {Promise<any>} Response containing "actions" and "meta.pagination".
    */
   listActionsForServer(id, { status, sort, page = 1, per_page = 25 } = {}) {
@@ -563,7 +561,7 @@ class HetznerCloud {
   /**
    * Options for waiting until a server is ready.
    * @param {number|string} id Server ID to wait for.
-   * @param {import('./typedefs').WaitServerOptions} [opts] Control polling and readiness conditions.
+   * @param {import('./typedefs.js').WaitServerOptions} [opts] Control polling and readiness conditions.
    * @returns {Promise<any>} The final server object once running.
    */
   async waitForServerRunning(
@@ -597,7 +595,7 @@ class HetznerCloud {
 
   /**
    * Create a server and install your executable as a persistent systemd service.
-   * @param {import('./typedefs').CreateAndRunServiceOptions} options Server creation and service installation configuration.
+   * @param {import('./typedefs.js').CreateAndRunServiceOptions} options Server creation and service installation configuration.
    * @returns {Promise<{ create: any, server: any }>} Raw create response and the created server object.
    */
   async createServerAndInstallService(options) {
@@ -616,7 +614,7 @@ class HetznerCloud {
     }
 
     const userData = this._buildCloudInitForSystemd(exec);
-    /** @type {import('./typedefs').CreateServerPayload} */
+    /** @type {import('./typedefs.js').CreateServerPayload} */
     const payload = {
       ...server,
       user_data: this._mergeUserData(server.user_data, userData),
@@ -643,7 +641,7 @@ class HetznerCloud {
   /**
    * Build cloud-init that places the executable, writes a systemd unit, enables and starts it.
    * @private
-   * @param {Required<Pick<import('./typedefs').CreateAndRunServiceOptions,'exec'>>['exec']} exec Executable and service parameters.
+   * @param {Required<Pick<import('./typedefs.js').CreateAndRunServiceOptions,'exec'>>['exec']} exec Executable and service parameters.
    * @returns {string} Cloud-init user-data in cloud-config form.
    */
   _buildCloudInitForSystemd(exec) {
@@ -770,7 +768,7 @@ class HetznerCloud {
 
   /**
    * Create a server and run an executable on first boot via cloud-init.
-   * @param {import('./typedefs').CreateAndRunOptions} options Server creation and execution configuration.
+   * @param {import('./typedefs.js').CreateAndRunOptions} options Server creation and execution configuration.
    * @returns {Promise<{ create: any, server: any }>} Object with raw create response and the created server.
    */
   async createServerAndRun(options) {
@@ -781,7 +779,7 @@ class HetznerCloud {
     }
 
     const userData = this._buildCloudInitForExec(exec);
-    /** @type {import('./typedefs').CreateServerPayload} */
+    /** @type {import('./typedefs.js').CreateServerPayload} */
     const payload = {
       ...server,
       user_data: this._mergeUserData(server.user_data, userData),
@@ -805,7 +803,7 @@ class HetznerCloud {
   /**
    * Build cloud-init YAML that installs and runs the executable.
    * @private
-   * @param {Required<Pick<import('./typedefs').CreateAndRunOptions,'exec'>>['exec']} exec Executable shipping and runtime configuration.
+   * @param {Required<Pick<import('./typedefs.js').CreateAndRunOptions,'exec'>>['exec']} exec Executable shipping and runtime configuration.
    * @returns {string} Cloud-init user-data in cloud-config YAML form.
    */
   _buildCloudInitForExec(exec) {
@@ -900,7 +898,7 @@ class HetznerCloud {
   /**
    * Terminate and delete a server ASAP.
    * @param {number|string} serverId Numeric ID (or stringy) of the server to nuke.
-   * @param {import('./typedefs').TerminateServerFastOptions} [opts] Behavior tuning for waiting/polling.
+   * @param {import('./typedefs.js').TerminateServerFastOptions} [opts] Behavior tuning for waiting/polling.
    * @returns {Promise<{ deleteAction?: any }>} Deleted FIP IDs and optional final delete action.
    */
   async terminateServerFast(
@@ -971,7 +969,7 @@ class HetznerCloud {
   /**
    * Low-level request wrapper with JSON parsing and error mapping.
    * @param {string} path Absolute or relative API path (e.g., "/servers").
-   * @param {import('./typedefs').HetznerRequestOptions} [opts] HTTP method, query, headers, and body options.
+   * @param {import('./typedefs.js').HetznerRequestOptions} [opts] HTTP method, query, headers, and body options.
    * @returns {Promise<any>} Parsed JSON payload or text response for non-JSON.
    * @throws {HetznerError} When the API returns a non-2xx status code.
    */
@@ -1078,7 +1076,7 @@ class HetznerCloud {
   /**
    * Parse rate-limit headers from a Response.
    * @param {Response} res Fetch Response returned by the HTTP call.
-   * @returns {import('./typedefs').HetznerRate|null} Parsed rate information or null when absent.
+   * @returns {import('./typedefs.js').HetznerRate|null} Parsed rate information or null when absent.
    */
   _readRateHeaders(res) {
     const limit = res.headers.get('RateLimit-Limit');
@@ -1166,7 +1164,4 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-module.exports = {
-  HetznerCloud,
-  HetznerError,
-};
+export { HetznerCloud, HetznerError };

@@ -1,13 +1,13 @@
-const { Operation, Resource } = require('../../lib/graph/');
-const WharfieResource = require('../../lib/actor/resources/wharfie-resource');
-const resource_db = require('../../lib/dynamo/operations');
+import { Operation, Resource } from '../../lib/graph/index.js';
+import WharfieResource from '../../lib/actor/resources/wharfie-resource.js';
+import * as resource_db from '../../lib/dynamo/operations.js';
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function run(event, context, resource, operation) {
   const migration_db = process.env.TEMPORARY_GLUE_DATABASE || '';
@@ -35,6 +35,6 @@ async function run(event, context, resource, operation) {
   };
 }
 
-module.exports = {
+export default {
   run,
 };

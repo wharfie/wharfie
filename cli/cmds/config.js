@@ -1,9 +1,10 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const fs = require('fs');
 const inquirer = require('inquirer');
-const STS = require('../../lambdas/lib/sts');
+const STS = require('../../lambdas/lib/sts').default;
 const { displaySuccess, displayFailure } = require('../output/basic');
 
 const sts = new STS();

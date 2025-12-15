@@ -1,6 +1,4 @@
-'use strict';
-
-const { Command } = require('commander');
+import { Command } from 'commander';
 
 const infraCommand = new Command('infra')
   .description('Wharfie infra commands')
@@ -18,4 +16,4 @@ infraCommand.hook('preAction', async () => {
 // utilsCommand.addCommand(require('./utils_cmds/cleanup_dynamo'));
 // utilsCommand.addCommand(require('./utils_cmds/cancel'));
 
-module.exports = infraCommand;
+export default infraCommand;

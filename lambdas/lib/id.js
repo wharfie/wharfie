@@ -1,12 +1,9 @@
-const cuid = require('@paralleldrive/cuid2');
+import { init } from '@paralleldrive/cuid2';
 
 // configuration. All configuration properties are optional.
-const createId = cuid.init();
-const createShortId = cuid.init({
+const createId = init();
+const createShortId = init({
   length: 6,
 });
 
-module.exports = {
-  createId,
-  createShortId,
-};
+export { createId, createShortId };

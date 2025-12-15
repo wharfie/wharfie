@@ -1,6 +1,18 @@
 /* eslint-disable jest/no-large-snapshots */
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import Logger from '../../../lambdas/lib/logging/logger.js';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const AWS = require('@aws-sdk/lib-dynamodb');
 const AWSAthena = require('@aws-sdk/client-athena');
 const {
@@ -9,7 +21,6 @@ const {
   Action,
   Query,
 } = require('../../../lambdas/lib/graph');
-const Logger = require('../../../lambdas/lib/logging/logger');
 
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../../package.json', () => ({ version: '0.0.1' }));
@@ -109,10 +120,11 @@ let put;
 describe('dynamo resource db', () => {
   beforeAll(() => {
     const mockedDate = new Date(1466424490000);
-    jest.useFakeTimers('modern');
+    jest.useFakeTimers();
     jest.setSystemTime(mockedDate);
     require('aws-sdk-client-mock-jest');
   });
+
   beforeEach(() => {
     // @ts-ignore
     put = AWS.spyOn('DynamoDBDocument', 'put');
@@ -135,6 +147,7 @@ describe('dynamo resource db', () => {
 
   it('putResource', async () => {
     expect.assertions(2);
+
     put.mockResolvedValue(undefined);
     await operation.putResource(
       new Resource({
@@ -176,6 +189,7 @@ describe('dynamo resource db', () => {
         },
       })
     );
+
     expect(put).toHaveBeenCalledTimes(1);
     expect(put.mock.calls[0]).toMatchInlineSnapshot(`
       [
@@ -307,6 +321,7 @@ describe('dynamo resource db', () => {
 
   it('getResource', async () => {
     expect.assertions(2);
+
     query.mockResolvedValue({
       Items: [
         {
@@ -358,6 +373,7 @@ describe('dynamo resource db', () => {
       ],
     });
     const result = await operation.getResource('resource_id');
+
     expect(query).toHaveBeenCalledTimes(1);
     expect(result).toMatchInlineSnapshot(`
       Resource {
@@ -408,6 +424,7 @@ describe('dynamo resource db', () => {
 
   it('deleteResource', async () => {
     expect.assertions(4);
+
     query.mockResolvedValue({
       Items: [
         {
@@ -465,6 +482,7 @@ describe('dynamo resource db', () => {
         },
       })
     );
+
     expect(query).toHaveBeenCalledTimes(1);
     expect(query.mock.calls[1]).toMatchInlineSnapshot(`undefined`);
     expect(batchWrite).toHaveBeenCalledTimes(1);
@@ -506,6 +524,7 @@ describe('dynamo resource db', () => {
 
   it('putOperation', async () => {
     expect.assertions(2);
+
     query.mockResolvedValue({
       Items: [
         {
@@ -540,6 +559,7 @@ describe('dynamo resource db', () => {
       dependsOn: [start_action],
     });
     await operation.putOperation(test_operation);
+
     expect(batchWrite).toHaveBeenCalledTimes(1);
     expect(batchWrite.mock.calls[0]).toMatchInlineSnapshot(`
       [
@@ -617,6 +637,7 @@ describe('dynamo resource db', () => {
 
   it('getOperation', async () => {
     expect.assertions(3);
+
     query.mockResolvedValue({
       Items: [
         {
@@ -638,6 +659,7 @@ describe('dynamo resource db', () => {
       ],
     });
     const result = await operation.getOperation('resource_id', 'operation_id');
+
     expect(query).toHaveBeenCalledTimes(1);
     expect(query.mock.calls[0]).toMatchInlineSnapshot(`
       [
@@ -685,6 +707,7 @@ describe('dynamo resource db', () => {
 
   it('getQuery', async () => {
     expect.assertions(3);
+
     const dateMock = jest.spyOn(Date, 'now').mockReturnValue(20123001200);
     query.mockResolvedValue({
       Items: [
@@ -714,6 +737,7 @@ describe('dynamo resource db', () => {
       'action_id',
       'query_id'
     );
+
     expect(query).toHaveBeenCalledTimes(1);
     expect(query.mock.calls[0]).toMatchInlineSnapshot(`
       [
@@ -743,11 +767,13 @@ describe('dynamo resource db', () => {
         "wharfie_version": "0.0.11",
       }
     `);
+
     dateMock.mockClear();
   });
 
   it('getAction', async () => {
     expect.assertions(3);
+
     query.mockResolvedValue({
       Items: [
         {
@@ -770,6 +796,7 @@ describe('dynamo resource db', () => {
       'operation_id',
       'action_id'
     );
+
     expect(query).toHaveBeenCalledTimes(1);
     expect(query.mock.calls[0]).toMatchInlineSnapshot(`
       [
@@ -802,6 +829,7 @@ describe('dynamo resource db', () => {
 
   it('putAction', async () => {
     expect.assertions(2);
+
     batchWrite.mockResolvedValue({ Item: { value: 10 } });
 
     const test_operation = new Operation({
@@ -815,6 +843,7 @@ describe('dynamo resource db', () => {
       id: 'action_id',
     });
     await operation.putAction(test_action);
+
     expect(batchWrite).toHaveBeenCalledTimes(1);
     expect(batchWrite.mock.calls[0]).toMatchInlineSnapshot(`
       [
@@ -850,6 +879,7 @@ describe('dynamo resource db', () => {
 
   it('putQuery', async () => {
     expect.assertions(2);
+
     put.mockResolvedValue(undefined);
     const query = new Query({
       id: 'query_id_1',
@@ -861,6 +891,7 @@ describe('dynamo resource db', () => {
       query_data: 'query_data 1',
     });
     await operation.putQuery(query);
+
     expect(put).toHaveBeenCalledTimes(1);
     expect(put.mock.calls[0]).toMatchInlineSnapshot(`
       [
@@ -891,6 +922,7 @@ describe('dynamo resource db', () => {
 
   it('putQueries', async () => {
     expect.assertions(2);
+
     batchWrite.mockResolvedValue({});
 
     const query1 = new Query({
@@ -912,6 +944,7 @@ describe('dynamo resource db', () => {
       query_data: 'query_data 2',
     });
     await operation.putQueries([query1, query2]);
+
     expect(batchWrite).toHaveBeenCalledTimes(1);
     expect(batchWrite.mock.calls[0]).toMatchInlineSnapshot(`
       [
@@ -971,6 +1004,7 @@ describe('dynamo resource db', () => {
 
   it('deleteOperation', async () => {
     expect.assertions(4);
+
     query.mockResolvedValue({
       Items: [
         {
@@ -1010,6 +1044,7 @@ describe('dynamo resource db', () => {
       id: 'operation_id',
     });
     await operation.deleteOperation(test_operation);
+
     expect(batchWrite).toHaveBeenCalledTimes(1);
     expect(batchWrite.mock.calls[0]).toMatchInlineSnapshot(`
       [
@@ -1064,6 +1099,7 @@ describe('dynamo resource db', () => {
 
   it('checkActionPrerequisites', async () => {
     expect.assertions(6);
+
     const dateMock = jest.spyOn(Date, 'now').mockReturnValueOnce(20123001200);
     // @ts-ignore
     AWSAthena.AthenaMock.on(AWSAthena.GetQueryExecutionCommand).resolves({
@@ -1121,6 +1157,7 @@ describe('dynamo resource db', () => {
       Action.Type.FINISH,
       logger
     );
+
     expect(query).toHaveBeenCalledTimes(1);
     expect(query.mock.calls[0]).toMatchInlineSnapshot(`
       [
@@ -1148,6 +1185,7 @@ describe('dynamo resource db', () => {
       }
     );
     expect(prerequisites_met).toBe(false);
+
     dateMock.mockClear();
   });
 });

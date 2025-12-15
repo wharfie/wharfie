@@ -1,5 +1,6 @@
 // test.js
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { fork } = require('child_process');
 const path = require('path');
 const fs = require('fs');

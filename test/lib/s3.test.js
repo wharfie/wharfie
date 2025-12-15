@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { afterEach, beforeAll, describe, expect, it } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const AWS = require('@aws-sdk/client-s3');
 const S3 = require('../../lambdas/lib/s3');
 
@@ -7,12 +9,14 @@ describe('tests for S3', () => {
   beforeAll(() => {
     require('aws-sdk-client-mock-jest');
   });
+
   afterEach(() => {
     AWS.S3Mock.reset();
   });
 
   it('putObject', async () => {
     expect.assertions(3);
+
     AWS.S3Mock.on(AWS.PutObjectCommand).resolves({});
     const s3 = new S3({ region: 'us-east-1' });
     const params = {
@@ -21,12 +25,14 @@ describe('tests for S3', () => {
       Body: JSON.stringify({}),
     };
     await s3.putObject(params);
+
     expect(AWS.S3Mock).toHaveReceivedCommandTimes(AWS.PutObjectCommand, 1);
     expect(AWS.S3Mock).toHaveReceivedCommandWith(AWS.PutObjectCommand, params);
   });
 
   it('deleteObjects', async () => {
     expect.assertions(3);
+
     AWS.S3Mock.on(AWS.DeleteObjectsCommand)
       .resolvesOnce({
         Errors: [{ Key: 'key/path.json' }],
@@ -48,6 +54,7 @@ describe('tests for S3', () => {
       },
     };
     await s3.deleteObjects(params);
+
     expect(AWS.S3Mock).toHaveReceivedCommandTimes(AWS.DeleteObjectsCommand, 2);
     expect(AWS.S3Mock.commandCalls(AWS.DeleteObjectsCommand)[0].args[0].input)
       .toMatchInlineSnapshot(`
@@ -84,6 +91,7 @@ describe('tests for S3', () => {
 
   it('copyPath', async () => {
     expect.assertions(8);
+
     AWS.S3Mock.on(AWS.ListObjectsV2Command)
       .resolvesOnce({
         Contents: [
@@ -111,6 +119,7 @@ describe('tests for S3', () => {
     const destinationBucket = 'destination_bucket';
     const destinationPrefix = 'prefix/';
     await s3.copyPath(params, destinationBucket, destinationPrefix);
+
     expect(AWS.S3Mock).toHaveReceivedCommandTimes(AWS.ListObjectsV2Command, 2);
     expect(AWS.S3Mock).toHaveReceivedNthCommandWith(
       1,
@@ -139,7 +148,9 @@ describe('tests for S3', () => {
 
   it('parseS3Uri throws on non-string uri', () => {
     expect.assertions(1);
+
     const s3 = new S3({ region: 'us-east-1' });
+
     expect(() => s3.parseS3Uri(123)).toThrowErrorMatchingInlineSnapshot(
       `"uri (123) is not a string"`
     );
@@ -147,7 +158,9 @@ describe('tests for S3', () => {
 
   it('parseS3Uri throws on unterminated bucket uri', () => {
     expect.assertions(1);
+
     const s3 = new S3({ region: 'us-east-1' });
+
     expect(() =>
       s3.parseS3Uri('s3://example-bucket')
     ).toThrowErrorMatchingInlineSnapshot(
@@ -157,8 +170,10 @@ describe('tests for S3', () => {
 
   it('parseS3Uri works with bucket only', () => {
     expect.assertions(1);
+
     const s3 = new S3({});
     const result = s3.parseS3Uri('s3://example-bucket/');
+
     expect(result).toStrictEqual({
       bucket: 'example-bucket',
       prefix: '',
@@ -168,6 +183,7 @@ describe('tests for S3', () => {
 
   it('deletePath', async () => {
     expect.assertions(10);
+
     AWS.S3Mock.on(AWS.ListObjectsV2Command)
       .resolvesOnce({
         Contents: [
@@ -193,6 +209,7 @@ describe('tests for S3', () => {
       Prefix: 'test/prefix/',
     };
     await s3.deletePath(params);
+
     expect(AWS.S3Mock).toHaveReceivedCommandTimes(AWS.ListObjectsV2Command, 2);
     expect(AWS.S3Mock).toHaveReceivedNthCommandWith(
       1,
@@ -243,8 +260,10 @@ describe('tests for S3', () => {
 
   it('parseS3Uri', () => {
     expect.assertions(1);
+
     const s3 = new S3({});
     const result = s3.parseS3Uri('s3://example-bucket/path/to/object/');
+
     expect(result).toStrictEqual({
       bucket: 'example-bucket',
       prefix: 'path/to/object/',
@@ -254,6 +273,7 @@ describe('tests for S3', () => {
 
   it('getCommonPrefixes', async () => {
     expect.assertions(4);
+
     AWS.S3Mock.on(AWS.ListObjectsV2Command)
       .resolvesOnce({
         CommonPrefixes: [
@@ -275,6 +295,7 @@ describe('tests for S3', () => {
       Bucket: 'example-bucket',
       Prefix: 'test/prefix/',
     });
+
     expect(result).toStrictEqual(['first_prefix', 'second_prefix']);
     expect(AWS.S3Mock).toHaveReceivedCommandTimes(AWS.ListObjectsV2Command, 2);
     expect(AWS.S3Mock).toHaveReceivedNthCommandWith(
@@ -291,6 +312,7 @@ describe('tests for S3', () => {
 
   it('findPartitions', async () => {
     expect.assertions(1);
+
     AWS.S3Mock.on(AWS.ListObjectsV2Command)
       .resolvesOnce({
         CommonPrefixes: [
@@ -330,6 +352,7 @@ describe('tests for S3', () => {
         name: 'day',
       },
     ]);
+
     expect(result).toStrictEqual([
       {
         location: 's3://example-bucket/test/prefix/02/day=01/',

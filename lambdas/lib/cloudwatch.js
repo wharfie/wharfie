@@ -1,8 +1,7 @@
-'use strict';
-const AWS = require('@aws-sdk/client-cloudwatch');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import { CloudWatch as _CloudWatch } from '@aws-sdk/client-cloudwatch';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('./base');
+import BaseAWS from './base.js';
 
 class CloudWatch {
   /**
@@ -10,7 +9,7 @@ class CloudWatch {
    */
   constructor(options) {
     const credentials = fromNodeProviderChain();
-    this.cloudwatch = new AWS.CloudWatch({
+    this.cloudwatch = new _CloudWatch({
       ...BaseAWS.config(),
       credentials,
       ...options,
@@ -26,4 +25,4 @@ class CloudWatch {
   }
 }
 
-module.exports = CloudWatch;
+export default CloudWatch;

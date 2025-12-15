@@ -1,4 +1,5 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const BaseResource = require('../../lambdas/lib/actor/resources/base-resource');
 const {
@@ -18,8 +19,10 @@ BaseResource.stateDB = {
   deleteResource,
 };
 
-const SSHKey = require('../../lambdas/lib/actor/resources/local/ssh-key');
-const HetznerNode = require('../../lambdas/lib/actor/resources/hetzner/node');
+const SSHKey =
+  require('../../lambdas/lib/actor/resources/local/ssh-key').default;
+const HetznerNode =
+  require('../../lambdas/lib/actor/resources/hetzner/node').default;
 
 const HZ_TOKEN = process.env.HETZNER_TOKEN;
 const BINARY_FILE =

@@ -1,5 +1,6 @@
 // test.js (fixed)
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { fork } = require('child_process');
 const { once } = require('events');
 const path = require('path');
@@ -23,6 +24,9 @@ const nodePath = path.join(__dirname, 'node.js');
 // const workerPath = path.join(__dirname, 'worker.js');
 
 // Start a local bootstrap via DHT.bootstrapper (no .listen() on DHT instances!)
+/**
+ *
+ */
 async function startLocalBootstrap() {
   // Try a few common/high ports; pick the first that binds
   // const candidates = [49737, 49738, 49739, 30001, 30002];

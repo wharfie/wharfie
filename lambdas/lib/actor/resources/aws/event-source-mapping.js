@@ -1,10 +1,9 @@
-'use strict';
-const Lambda = require('../../../lambda');
-const BaseResource = require('../base-resource');
-const {
+import Lambda from '../../../lambda.js';
+import BaseResource from '../base-resource.js';
+import {
   ResourceNotFoundException,
   ResourceConflictException,
-} = require('@aws-sdk/client-lambda');
+} from '@aws-sdk/client-lambda';
 
 /**
  * @typedef EventSourceMappingProperties
@@ -19,9 +18,9 @@ const {
  * @typedef EventSourceMappingOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {EventSourceMappingProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {EventSourceMappingProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class EventSourceMapping extends BaseResource {
@@ -186,4 +185,4 @@ class EventSourceMapping extends BaseResource {
   }
 }
 
-module.exports = EventSourceMapping;
+export default EventSourceMapping;

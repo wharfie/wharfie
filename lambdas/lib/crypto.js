@@ -1,4 +1,4 @@
-const crypto = require('crypto');
+import { createHash } from 'crypto';
 /**
  * Create an 8-character stable hash of a string.
  * @param {string} input - The input string to hash.
@@ -6,7 +6,7 @@ const crypto = require('crypto');
  */
 function createStableHash(input) {
   // Create a SHA-256 hash of the input
-  const hash = crypto.createHash('sha256').update(input).digest('base64');
+  const hash = createHash('sha256').update(input).digest('base64');
 
   // Convert to URL-safe base64 by replacing characters and removing padding
   const base64urlHash = hash
@@ -18,6 +18,4 @@ function createStableHash(input) {
   return base64urlHash.substring(0, 8).toLowerCase();
 }
 
-module.exports = {
-  createStableHash,
-};
+export { createStableHash };

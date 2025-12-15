@@ -1,11 +1,9 @@
-'use strict';
-const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const Dynamo = require('@aws-sdk/client-dynamodb');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
-const { ResourceNotFoundException } = require('@aws-sdk/client-dynamodb');
+import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
+import { DynamoDB, ResourceNotFoundException } from '@aws-sdk/client-dynamodb';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('../../../base');
-const BaseResource = require('../base-resource');
+import baseAWS from '../../../base.js';
+import BaseResource from '../base-resource.js';
 
 /**
  * @typedef GenericRecordProperties
@@ -21,10 +19,10 @@ const BaseResource = require('../base-resource');
  * @typedef GenericRecordOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {GenericRecordProperties & import('../../typedefs').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {GenericRecordProperties & import('../../typedefs.js').SharedProperties} properties -
  * @property {() => Promise<Object<string,any>>} [dataResolver] -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class GenericRecord extends BaseResource {
@@ -55,8 +53,8 @@ class GenericRecord extends BaseResource {
     });
     this.dataResolver = dataResolver;
     const credentials = fromNodeProviderChain();
-    this.dynamo = new Dynamo.DynamoDB({
-      ...BaseAWS.config({
+    this.dynamo = new DynamoDB({
+      ...baseAWS.config({
         maxAttempts: Number(process.env?.DYNAMO_MAX_RETRIES || 300),
       }),
       credentials,
@@ -102,4 +100,4 @@ class GenericRecord extends BaseResource {
   }
 }
 
-module.exports = GenericRecord;
+export default GenericRecord;

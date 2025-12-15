@@ -1,10 +1,12 @@
+import * as dependency_db from '../../lib/dynamo/dependency.js';
+import * as resource_db from '../../lib/dynamo/operations.js';
+import { schedule } from '../schedule.js';
+
+import * as logging from '../../lib/logging/index.js';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
 const { version: WHARFIE_VERSION } = require('../../../package.json');
-
-const dependency_db = require('../../lib/dynamo/dependency');
-const resource_db = require('../../lib/dynamo/operations');
-const { schedule } = require('../schedule');
-
-const logging = require('../../lib/logging');
 const daemon_log = logging.getDaemonLogger();
 
 /**
@@ -126,4 +128,4 @@ class WharfieOperationCompleted {
 }
 WharfieOperationCompleted.Type = TYPE;
 
-module.exports = WharfieOperationCompleted;
+export default WharfieOperationCompleted;

@@ -1,13 +1,13 @@
-const { Operation, Resource } = require('../../lib/graph/');
-const { load } = require('../../lib/actor/deserialize/non-circular');
-const logging = require('../../lib/logging');
+import { Operation, Resource } from '../../lib/graph/index.js';
+import { load } from '../../lib/actor/deserialize/non-circular.js';
+import * as logging from '../../lib/logging/index.js';
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function run(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
@@ -41,6 +41,6 @@ async function run(event, context, resource, operation) {
   };
 }
 
-module.exports = {
+export default {
   run,
 };

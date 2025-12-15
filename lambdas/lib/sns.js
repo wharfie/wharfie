@@ -1,8 +1,7 @@
-'use strict';
-const AWS = require('@aws-sdk/client-sns');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import { SNS as _SNS, PublishCommand } from '@aws-sdk/client-sns';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('./base');
+import BaseAWS from './base.js';
 
 class SNS {
   /**
@@ -10,7 +9,7 @@ class SNS {
    */
   constructor(options) {
     const credentials = fromNodeProviderChain();
-    this.sns = new AWS.SNS({
+    this.sns = new _SNS({
       ...BaseAWS.config(),
       credentials,
       ...options,
@@ -22,9 +21,9 @@ class SNS {
    * @returns {Promise<import("@aws-sdk/client-sns").PublishResponse>} - SNS Publish result
    */
   async publish(params) {
-    const command = new AWS.PublishCommand(params);
+    const command = new PublishCommand(params);
     return await this.sns.send(command);
   }
 }
 
-module.exports = SNS;
+export default SNS;

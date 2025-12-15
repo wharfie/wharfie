@@ -1,19 +1,18 @@
-// run-in-sandbox.js
-'use strict';
-
-const path = require('node:path');
-const fsp = require('node:fs/promises');
-const { constants: FS } = require('node:fs');
-const { Worker } = require('node:worker_threads');
-const tar = require('tar');
-const { Readable } = require('node:stream');
-const { pipeline } = require('node:stream/promises');
-
-const paths = require('../paths');
-const VM_PATH = path.join(paths.data, 'vms');
+import { join } from 'node:path';
+import { access, mkdir, writeFile } from 'node:fs/promises';
+import { constants as FS } from 'node:fs';
+import { Worker } from 'node:worker_threads';
+import { x } from 'tar';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 // esbuild inlines this file as text (configure: loader { '.worker.js': 'text' })
-const workerSource = require('./runner.worker.js');
+// @ts-ignore
+// eslint-disable-next-line import/default
+import workerSource from './runner.worker.js';
+
+import paths from '../paths.js';
+const VM_PATH = join(paths.data, 'vms');
 
 // --- singleton worker + response router ---
 /**
@@ -112,7 +111,7 @@ const sandboxes = new Map();
  */
 async function pathExists(p) {
   try {
-    await fsp.access(p, FS.F_OK);
+    await access(p, FS.F_OK);
     return true;
   } catch {
     return false;
@@ -130,18 +129,18 @@ async function ensureSandboxForName(name, codeString, externalsTar) {
   if (sb) return sb;
   console.log('ENSURE SANDBOX');
 
-  await fsp.mkdir(VM_PATH, { recursive: true });
+  await mkdir(VM_PATH, { recursive: true });
 
-  const root = path.join(VM_PATH, name);
-  const nodeModules = path.join(root, 'node_modules');
-  const pkgFile = path.join(root, 'package.json');
-  const entryFile = path.join(root, `${name}.js`);
+  const root = join(VM_PATH, name);
+  const nodeModules = join(root, 'node_modules');
+  const pkgFile = join(root, 'package.json');
+  const entryFile = join(root, `${name}.js`);
 
-  await fsp.mkdir(root, { recursive: true });
-  await fsp.mkdir(nodeModules, { recursive: true });
+  await mkdir(root, { recursive: true });
+  await mkdir(nodeModules, { recursive: true });
 
   if (!(await pathExists(pkgFile))) {
-    await fsp.writeFile(
+    await writeFile(
       pkgFile,
       JSON.stringify({ name: `${name}-sandbox`, private: true }, null, 2)
     );
@@ -150,7 +149,7 @@ async function ensureSandboxForName(name, codeString, externalsTar) {
   // Extract externals only once per name
   if (externalsTar) {
     const src = Readable.from(externalsTar);
-    const extractor = tar.x({ C: root, preserveOwner: false, unlink: true });
+    const extractor = x({ C: root, preserveOwner: false, unlink: true });
     await pipeline(src, extractor);
   }
 
@@ -224,7 +223,7 @@ async function runInSandbox(
   }
 }
 
-module.exports = {
+export default {
   runInSandbox,
   _destroyWorker: async () => {
     if (worker) {

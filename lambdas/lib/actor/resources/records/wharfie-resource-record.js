@@ -1,13 +1,15 @@
-'use strict';
-const BaseResource = require('../base-resource');
-const Resource = require('../../../../lib/graph/resource');
-const S3 = require('../../../s3');
-const resource_db = require('../../../../lib/dynamo/operations');
-const { ResourceNotFoundException } = require('@aws-sdk/client-dynamodb');
+import BaseResource from '../base-resource.js';
+import Resource from '../../../../lib/graph/resource.js';
+import S3 from '../../../s3.js';
+import {
+  putResource,
+  deleteResource,
+} from '../../../../lib/dynamo/operations.js';
+import { ResourceNotFoundException } from '@aws-sdk/client-dynamodb';
 
 /**
  * @typedef WharfieResourceRecordProperties
- * @property {import('../../../../lib/graph/typedefs').ResourceRecord | function(): import('../../../../lib/graph/typedefs').ResourceRecord} data -
+ * @property {import('../../../../lib/graph/typedefs.js').ResourceRecord | function(): import('../../../../lib/graph/typedefs.js').ResourceRecord} data -
  * @property {string} table_name -
  */
 
@@ -15,9 +17,9 @@ const { ResourceNotFoundException } = require('@aws-sdk/client-dynamodb');
  * @typedef WharfieResourceRecordOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {WharfieResourceRecordProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {WharfieResourceRecordProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class WharfieResourceRecord extends BaseResource {
@@ -45,12 +47,12 @@ class WharfieResourceRecord extends BaseResource {
         Bucket: bucket,
       });
     }
-    await resource_db.putResource(resource, this.get('table_name'));
+    await putResource(resource, this.get('table_name'));
   }
 
   async _destroy() {
     try {
-      await resource_db.deleteResource(
+      await deleteResource(
         Resource.fromRecord(this.get('data')),
         this.get('table_name')
       );
@@ -62,4 +64,4 @@ class WharfieResourceRecord extends BaseResource {
   }
 }
 
-module.exports = WharfieResourceRecord;
+export default WharfieResourceRecord;

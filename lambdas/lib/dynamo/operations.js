@@ -1,19 +1,17 @@
-'use strict';
-const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const {
+import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
+import {
   DynamoDB,
   ResourceNotFoundException,
   ConditionalCheckFailedException,
-} = require('@aws-sdk/client-dynamodb');
-const { createId } = require('../id');
-const { query, batchWrite } = require('.');
-const STS = require('../sts');
-const SQS = require('../sqs');
-const Athena = require('../athena');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
-
-const BaseAWS = require('../base');
-const { Operation, Action, Query, Resource } = require('../graph');
+} from '@aws-sdk/client-dynamodb';
+import { createId } from '../id.js';
+import { query, batchWrite } from './index.js';
+import STS from '../sts.js';
+import SQS from '../sqs.js';
+import Athena from '../athena/index.js';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
+import BaseAWS from '../base.js';
+import { Operation, Action, Query, Resource } from '../graph/index.js';
 
 const credentials = fromNodeProviderChain();
 const docClient = DynamoDBDocument.from(
@@ -276,7 +274,7 @@ async function putAction(action) {
 
 /**
  * @param {Action} action -
- * @param {import('../graph/action').WharfieActionStatusEnum} new_status -
+ * @param {import('../graph/action.js').WharfieActionStatusEnum} new_status -
  * @returns {Promise<boolean>} -
  */
 async function updateActionStatus(action, new_status) {
@@ -366,7 +364,7 @@ async function deleteOperation(operation) {
 
 /**
  * @param {string} query_execution_id -
- * @param {import('../logging/logger')?} logger -
+ * @param {import('../logging/logger.js').default?} logger -
  */
 async function checkForStaleQuery(query_execution_id, logger) {
   const sts = new STS({ region: process.env.AWS_REGION });
@@ -394,7 +392,7 @@ async function checkForStaleQuery(query_execution_id, logger) {
         queryEvent.query_id
       ) {
         const { Account } = await sts.getCallerIdentity();
-        /** @type {import('../../typedefs').AthenaEvent} */
+        /** @type {import('../../typedefs.js').AthenaEvent} */
         const synthetic_athena_event = {
           version: '0',
           id: createId(),
@@ -432,8 +430,8 @@ async function checkForStaleQuery(query_execution_id, logger) {
 
 /**
  * @param {Operation} operation -
- * @param {import('../graph/action').WharfieActionTypeEnum} action_type -
- * @param {import('../logging/logger')?} logger -
+ * @param {import('../graph/action.js').WharfieActionTypeEnum} action_type -
+ * @param {import('../logging/logger.js').default?} logger -
  * @param {boolean} includeQueries -
  * @returns {Promise<boolean>} -
  */
@@ -558,12 +556,12 @@ async function getRecords(resource_id, operation_id = '') {
 
   /**
    * @typedef ActionRecordGroup
-   * @property {import('../graph/typedefs').ActionRecord} action_record -
-   * @property {import('../graph/typedefs').QueryRecord[]} query_records -
+   * @property {import('../graph/typedefs.js').ActionRecord} action_record -
+   * @property {import('../graph/typedefs.js').QueryRecord[]} query_records -
    */
   /** @type {ActionRecordGroup[]} */
   let operationBatch = [];
-  /** @type {import('../graph/typedefs').QueryRecord[]} */
+  /** @type {import('../graph/typedefs.js').QueryRecord[]} */
   let actionBatch = [];
   while (processedItems.length > 0) {
     const item = processedItems.pop();
@@ -661,7 +659,7 @@ async function getAllResources() {
 }
 
 /**
- * @param {Object.<string, import('../graph/typedefs').ResourceRecordData | import('../graph/typedefs').OperationRecordData | import('../graph/typedefs').ActionRecordData | import('../graph/typedefs').QueryRecordData >} state -
+ * @param {Object.<string, import('../graph/typedefs.js').ResourceRecordData | import('../graph/typedefs.js').OperationRecordData | import('../graph/typedefs.js').ActionRecordData | import('../graph/typedefs.js').QueryRecordData >} state -
  */
 // @ts-ignore
 function __setMockState(state = {}) {
@@ -669,7 +667,7 @@ function __setMockState(state = {}) {
 }
 
 /**
- * @returns {Object.<string, import('../graph/typedefs').ResourceRecordData | import('../graph/typedefs').OperationRecordData | import('../graph/typedefs').ActionRecordData | import('../graph/typedefs').QueryRecordData >} -
+ * @returns {Object.<string, import('../graph/typedefs.js').ResourceRecordData | import('../graph/typedefs.js').OperationRecordData | import('../graph/typedefs.js').ActionRecordData | import('../graph/typedefs.js').QueryRecordData >} -
  */
 function __getMockState() {
   throw new Error('stub for mock typechecking');
@@ -677,7 +675,8 @@ function __getMockState() {
   // eslint-disable-next-line no-unreachable
   return {};
 }
-module.exports = {
+
+export {
   getRecords,
   getAllOperations,
   getAllResources,

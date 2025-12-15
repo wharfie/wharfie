@@ -1,8 +1,23 @@
-'use strict';
-const AWS = require('@aws-sdk/client-lambda');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import {
+  Lambda as _Lambda,
+  CreateEventSourceMappingCommand,
+  UpdateEventSourceMappingCommand,
+  DeleteEventSourceMappingCommand,
+  GetEventSourceMappingCommand,
+  ListEventSourceMappingsCommand,
+  CreateFunctionCommand,
+  UpdateFunctionConfigurationCommand,
+  UpdateFunctionCodeCommand,
+  DeleteFunctionCommand,
+  GetFunctionCommand,
+  TagResourceCommand,
+  UntagResourceCommand,
+  ListTagsCommand,
+  ListFunctionsCommand,
+} from '@aws-sdk/client-lambda';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('./base');
+import BaseAWS from './base.js';
 
 class Lambda {
   /**
@@ -10,7 +25,7 @@ class Lambda {
    */
   constructor(options) {
     const credentials = fromNodeProviderChain();
-    this.lambda = new AWS.Lambda({
+    this.lambda = new _Lambda({
       ...BaseAWS.config(),
       credentials,
       ...options,
@@ -22,7 +37,7 @@ class Lambda {
    * @returns {Promise<import("@aws-sdk/client-lambda").CreateEventSourceMappingCommandOutput>} - lambda createEventSourceMapping result
    */
   async createEventSourceMapping(params) {
-    const command = new AWS.CreateEventSourceMappingCommand(params);
+    const command = new CreateEventSourceMappingCommand(params);
     return this.lambda.send(command);
   }
 
@@ -31,7 +46,7 @@ class Lambda {
    * @returns {Promise<import("@aws-sdk/client-lambda").UpdateEventSourceMappingCommandOutput>} - lambda updateEventSourceMapping result
    */
   async updateEventSourceMapping(params) {
-    const command = new AWS.UpdateEventSourceMappingCommand(params);
+    const command = new UpdateEventSourceMappingCommand(params);
     return this.lambda.send(command);
   }
 
@@ -40,7 +55,7 @@ class Lambda {
    * @returns {Promise<import("@aws-sdk/client-lambda").DeleteEventSourceMappingCommandOutput>} - lambda deleteEventSourceMapping result
    */
   async deleteEventSourceMapping(params) {
-    const command = new AWS.DeleteEventSourceMappingCommand(params);
+    const command = new DeleteEventSourceMappingCommand(params);
     return this.lambda.send(command);
   }
 
@@ -49,7 +64,7 @@ class Lambda {
    * @returns {Promise<import("@aws-sdk/client-lambda").GetEventSourceMappingCommandOutput>} - lambda getEventSourceMapping result
    */
   async getEventSourceMapping(params) {
-    const command = new AWS.GetEventSourceMappingCommand(params);
+    const command = new GetEventSourceMappingCommand(params);
     return this.lambda.send(command);
   }
 
@@ -58,7 +73,7 @@ class Lambda {
    * @returns {Promise<import("@aws-sdk/client-lambda").ListEventSourceMappingsCommandOutput>} - lambda listEventSourceMappings result
    */
   async listEventSourceMappings(params) {
-    const command = new AWS.ListEventSourceMappingsCommand(params);
+    const command = new ListEventSourceMappingsCommand(params);
     return this.lambda.send(command);
   }
 
@@ -67,7 +82,7 @@ class Lambda {
    * @returns {Promise<import("@aws-sdk/client-lambda").CreateFunctionCommandOutput>} - lambda createFunction result
    */
   async createFunction(params) {
-    const command = new AWS.CreateFunctionCommand(params);
+    const command = new CreateFunctionCommand(params);
     return this.lambda.send(command);
   }
 
@@ -76,7 +91,7 @@ class Lambda {
    * @returns {Promise<import("@aws-sdk/client-lambda").UpdateFunctionConfigurationCommandOutput>} - lambda updateFunctionConfiguration result
    */
   async updateFunctionConfiguration(params) {
-    const command = new AWS.UpdateFunctionConfigurationCommand(params);
+    const command = new UpdateFunctionConfigurationCommand(params);
     return this.lambda.send(command);
   }
 
@@ -85,7 +100,7 @@ class Lambda {
    * @returns {Promise<import("@aws-sdk/client-lambda").UpdateFunctionCodeCommandOutput>} - lambda updateFunctionCode result
    */
   async updateFunctionCode(params) {
-    const command = new AWS.UpdateFunctionCodeCommand(params);
+    const command = new UpdateFunctionCodeCommand(params);
     return this.lambda.send(command);
   }
 
@@ -94,7 +109,7 @@ class Lambda {
    * @returns {Promise<import("@aws-sdk/client-lambda").DeleteFunctionCommandOutput>} - lambda createFunction result
    */
   async deleteFunction(params) {
-    const command = new AWS.DeleteFunctionCommand(params);
+    const command = new DeleteFunctionCommand(params);
     return this.lambda.send(command);
   }
 
@@ -103,7 +118,7 @@ class Lambda {
    * @returns {Promise<import("@aws-sdk/client-lambda").GetFunctionCommandOutput>} - lambda getFunction result
    */
   async getFunction(params) {
-    const command = new AWS.GetFunctionCommand(params);
+    const command = new GetFunctionCommand(params);
     return this.lambda.send(command);
   }
 
@@ -112,7 +127,7 @@ class Lambda {
    * @returns {Promise<import("@aws-sdk/client-lambda").TagResourceCommandOutput>} - lambda tagResource result
    */
   async tagResource(params) {
-    const command = new AWS.TagResourceCommand(params);
+    const command = new TagResourceCommand(params);
     return this.lambda.send(command);
   }
 
@@ -121,7 +136,7 @@ class Lambda {
    * @returns {Promise<import("@aws-sdk/client-lambda").UntagResourceCommandOutput>} - lambda untagResource result
    */
   async untagResource(params) {
-    const command = new AWS.UntagResourceCommand(params);
+    const command = new UntagResourceCommand(params);
     return this.lambda.send(command);
   }
 
@@ -130,7 +145,7 @@ class Lambda {
    * @returns {Promise<import("@aws-sdk/client-lambda").ListTagsCommandOutput>} - lambda listTags result
    */
   async listTags(params) {
-    const command = new AWS.ListTagsCommand(params);
+    const command = new ListTagsCommand(params);
     return this.lambda.send(command);
   }
 
@@ -141,13 +156,13 @@ class Lambda {
   async listFunctions(params) {
     const allFunctions = [];
     const { Functions, NextMarker } = await this.lambda.send(
-      new AWS.ListFunctionsCommand(params)
+      new ListFunctionsCommand(params)
     );
     allFunctions.push(...(Functions || []));
     let Marker = NextMarker;
     while (Marker) {
       const { Functions, NextMarker } = await this.lambda.send(
-        new AWS.ListFunctionsCommand({
+        new ListFunctionsCommand({
           ...params,
           Marker,
         })
@@ -162,4 +177,4 @@ class Lambda {
   }
 }
 
-module.exports = Lambda;
+export default Lambda;

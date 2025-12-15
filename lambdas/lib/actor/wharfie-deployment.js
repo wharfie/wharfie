@@ -1,16 +1,17 @@
-// Modify the ActorSystem to accept an optional parent argument.
-const SQS = require('../sqs');
-const STS = require('../sts');
-const Lambda = require('../lambda');
-const IAM = require('../iam');
-const WharfieDeploymentResources = require('./resources/wharfie-deployment-resources');
-const Table = require('./resources/aws/table');
-const BucketNotificationConfiguration = require('./resources/aws/bucket-notification-configuration');
-const BaseResourceGroup = require('./resources/base-resource-group');
-const { Daemon, Cleanup, Events, Monitor } = require('./wharfie-actors');
+import BaseResourceGroup from './resources/base-resource-group.js';
+import WharfieDeploymentResources from './resources/wharfie-deployment-resources.js';
+import WharfieActor from './wharfie-actor.js';
+import envPaths from '../env-paths.js';
 
-const WharfieActor = require('./wharfie-actor');
-const envPaths = require('../env-paths');
+import SQS from '../sqs.js';
+import STS from '../sts.js';
+import Lambda from '../lambda.js';
+import IAM from '../iam.js';
+import Table from './resources/aws/table.js';
+import BucketNotificationConfiguration from './resources/aws/bucket-notification-configuration.js';
+import { Daemon, Cleanup, Events, Monitor } from './wharfie-actors/index.js';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 /**
  * @typedef WharfieDeploymentProperties
@@ -24,10 +25,10 @@ const envPaths = require('../env-paths');
 /**
  * @typedef WharfieDeploymentOptions
  * @property {string} name -
- * @property {import('./resources/reconcilable').Status} [status] -
+ * @property {import('./resources/reconcilable.js').default.Status} [status] -
  * @property {WharfieDeploymentProperties} [properties] -
- * @property {import('./resources/reconcilable')[]} [dependsOn] -
- * @property {Object<string, import('./resources/base-resource') | import('./resources/base-resource-group')>} [resources] -
+ * @property {import('./resources/reconcilable.js').default[]} [dependsOn] -
+ * @property {Object<string, import('./resources/base-resource.js').default | import('./resources/base-resource-group.js').default>} [resources] -
  */
 
 class WharfieDeployment extends BaseResourceGroup {
@@ -117,7 +118,7 @@ class WharfieDeployment extends BaseResourceGroup {
 
   /**
    * @param {string} parent -
-   * @returns {(import('./resources/base-resource') | import('./resources/base-resource-group'))[]} -
+   * @returns {(import('./resources/base-resource.js').default | import('./resources/base-resource-group.js').default)[]} -
    */
   _defineGroupResources(parent) {
     const systemTable = new Table({
@@ -306,7 +307,7 @@ class WharfieDeployment extends BaseResourceGroup {
   }
 
   /**
-   * @returns {import('./resources/aws/bucket')} -
+   * @returns {import('./resources/aws/bucket.js')} -
    */
   getBucket() {
     // @ts-ignore
@@ -340,4 +341,4 @@ class WharfieDeployment extends BaseResourceGroup {
   }
 }
 
-module.exports = WharfieDeployment;
+export default WharfieDeployment;

@@ -1,20 +1,18 @@
-'use strict';
-
-const SQS = require('../../lib/sqs');
-const logging = require('../../lib/logging');
-const { Operation, Resource } = require('../../lib/graph/');
-const WharfieOperationCompleted = require('../../scheduler/events/wharfie-operation-completed');
+import SQS from '../../lib/sqs.js';
+import * as logging from '../../lib/logging/index.js';
+import { Operation, Resource } from '../../lib/graph/index.js';
+import WharfieOperationCompleted from '../../scheduler/events/wharfie-operation-completed.js';
 
 const wharfie_db_log = logging.getWharfieDBLogger();
 const sqs = new SQS({ region: process.env.AWS_REGION });
 
 const QUEUE_URL = process.env.EVENTS_QUEUE_URL || '';
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function wharfie(event, context, resource, operation) {
   const { completed_at } = event.action_inputs;
@@ -37,4 +35,4 @@ async function wharfie(event, context, resource, operation) {
   };
 }
 
-module.exports = wharfie;
+export default wharfie;

@@ -1,8 +1,21 @@
-'use strict';
-const AWS = require('@aws-sdk/client-application-auto-scaling');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import {
+  ApplicationAutoScaling as _ApplicationAutoScaling,
+  UntagResourceCommand,
+  TagResourceCommand,
+  ListTagsForResourceCommand,
+  PutScalingPolicyCommand,
+  DeleteScalingPolicyCommand,
+  DescribeScalingPoliciesCommand,
+  RegisterScalableTargetCommand,
+  DeregisterScalableTargetCommand,
+  DescribeScalableTargetsCommand,
+  ServiceNamespace,
+  ScalableDimension,
+  PolicyType,
+} from '@aws-sdk/client-application-auto-scaling';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('./base');
+import BaseAWS from './base.js';
 
 class ApplicationAutoScaling {
   /**
@@ -10,7 +23,7 @@ class ApplicationAutoScaling {
    */
   constructor(options) {
     const credentials = fromNodeProviderChain();
-    this.autoscaling = new AWS.ApplicationAutoScaling({
+    this.autoscaling = new _ApplicationAutoScaling({
       ...BaseAWS.config(),
       credentials,
       ...options,
@@ -22,7 +35,7 @@ class ApplicationAutoScaling {
    * @returns {Promise<import("@aws-sdk/client-application-auto-scaling").UntagResourceCommandOutput>} -
    */
   async untagResource(params) {
-    const command = new AWS.UntagResourceCommand(params);
+    const command = new UntagResourceCommand(params);
     return this.autoscaling.send(command);
   }
 
@@ -31,7 +44,7 @@ class ApplicationAutoScaling {
    * @returns {Promise<import("@aws-sdk/client-application-auto-scaling").TagResourceCommandOutput>} -
    */
   async tagResource(params) {
-    const command = new AWS.TagResourceCommand(params);
+    const command = new TagResourceCommand(params);
     return this.autoscaling.send(command);
   }
 
@@ -40,7 +53,7 @@ class ApplicationAutoScaling {
    * @returns {Promise<import("@aws-sdk/client-application-auto-scaling").ListTagsForResourceCommandOutput>} -
    */
   async listTagsForResource(params) {
-    const command = new AWS.ListTagsForResourceCommand(params);
+    const command = new ListTagsForResourceCommand(params);
     return this.autoscaling.send(command);
   }
 
@@ -49,7 +62,7 @@ class ApplicationAutoScaling {
    * @returns {Promise<import("@aws-sdk/client-application-auto-scaling").PutScalingPolicyCommandOutput>} -
    */
   async putScalingPolicy(params) {
-    const command = new AWS.PutScalingPolicyCommand(params);
+    const command = new PutScalingPolicyCommand(params);
     return this.autoscaling.send(command);
   }
 
@@ -58,7 +71,7 @@ class ApplicationAutoScaling {
    * @returns {Promise<import("@aws-sdk/client-application-auto-scaling").DeleteScalingPolicyCommandOutput>} -
    */
   async deleteScalingPolicy(params) {
-    const command = new AWS.DeleteScalingPolicyCommand(params);
+    const command = new DeleteScalingPolicyCommand(params);
     return this.autoscaling.send(command);
   }
 
@@ -67,7 +80,7 @@ class ApplicationAutoScaling {
    * @returns {Promise<import("@aws-sdk/client-application-auto-scaling").DescribeScalingPoliciesCommandOutput>} -
    */
   async describeScalingPolicies(params) {
-    const command = new AWS.DescribeScalingPoliciesCommand(params);
+    const command = new DescribeScalingPoliciesCommand(params);
     return this.autoscaling.send(command);
   }
 
@@ -76,7 +89,7 @@ class ApplicationAutoScaling {
    * @returns {Promise<import("@aws-sdk/client-application-auto-scaling").RegisterScalableTargetCommandOutput>} -
    */
   async registerScalableTarget(params) {
-    const command = new AWS.RegisterScalableTargetCommand(params);
+    const command = new RegisterScalableTargetCommand(params);
     return this.autoscaling.send(command);
   }
 
@@ -85,7 +98,7 @@ class ApplicationAutoScaling {
    * @returns {Promise<import("@aws-sdk/client-application-auto-scaling").DeregisterScalableTargetCommandOutput>} -
    */
   async deregisterScalableTarget(params) {
-    const command = new AWS.DeregisterScalableTargetCommand(params);
+    const command = new DeregisterScalableTargetCommand(params);
     return this.autoscaling.send(command);
   }
 
@@ -94,12 +107,12 @@ class ApplicationAutoScaling {
    * @returns {Promise<import("@aws-sdk/client-application-auto-scaling").DescribeScalableTargetsCommandOutput>} -
    */
   async describeScalableTargets(params) {
-    const command = new AWS.DescribeScalableTargetsCommand(params);
+    const command = new DescribeScalableTargetsCommand(params);
     return this.autoscaling.send(command);
   }
 }
-ApplicationAutoScaling.ServiceNamespace = AWS.ServiceNamespace;
-ApplicationAutoScaling.ScalableDimension = AWS.ScalableDimension;
-ApplicationAutoScaling.PolicyType = AWS.PolicyType;
+ApplicationAutoScaling.ServiceNamespace = ServiceNamespace;
+ApplicationAutoScaling.ScalableDimension = ScalableDimension;
+ApplicationAutoScaling.PolicyType = PolicyType;
 
-module.exports = ApplicationAutoScaling;
+export default ApplicationAutoScaling;

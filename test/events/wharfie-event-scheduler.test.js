@@ -1,5 +1,15 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const AWSSQS = require('@aws-sdk/client-sqs');
 jest.mock('../../lambdas/lib/dynamo/scheduler');

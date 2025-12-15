@@ -1,12 +1,12 @@
-const BaseResourceGroup = require('./base-resource-group');
-const WharfieResource = require('./wharfie-resource');
-const Table = require('./aws/table');
-const GlueDatabase = require('./aws/glue-database');
-const Bucket = require('./aws/bucket');
-const Firehose = require('./aws/firehose');
-const Role = require('./aws/role');
-const Policy = require('./aws/policy');
-const Database = require('./aws/glue-database');
+import BaseResourceGroup from './base-resource-group.js';
+import WharfieResource from './wharfie-resource.js';
+
+import Table from './aws/table.js';
+import GlueDatabase from './aws/glue-database.js';
+import Bucket from './aws/bucket.js';
+import Firehose from './aws/firehose.js';
+import Role from './aws/role.js';
+import Policy from './aws/policy.js';
 
 /**
  * @typedef WharfieDeploymentResourcesProperties
@@ -18,10 +18,10 @@ const Database = require('./aws/glue-database');
  * @typedef WharfieDeploymentResourcesOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('./reconcilable').Status} [status] -
- * @property {WharfieDeploymentResourcesProperties &  import('../typedefs').SharedProperties} properties -
- * @property {Object<string, import('./base-resource') | BaseResourceGroup>} [resources] -
- * @property {import('./reconcilable')[]} [dependsOn] -
+ * @property {import('./reconcilable.js').default.Status} [status] -
+ * @property {WharfieDeploymentResourcesProperties &  import('../typedefs.js').SharedProperties} properties -
+ * @property {Object<string, import('./base-resource.js').default | BaseResourceGroup>} [resources] -
+ * @property {import('./reconcilable.js').default[]} [dependsOn] -
  */
 
 class WharfieDeploymentResources extends BaseResourceGroup {
@@ -41,7 +41,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
 
   /**
    * @param {string} parent -
-   * @returns {(import('./base-resource') | BaseResourceGroup)[]} -
+   * @returns {(import('./base-resource.js').default | BaseResourceGroup)[]} -
    */
   _defineGroupResources(parent) {
     const systemBucket = new Bucket({
@@ -321,7 +321,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         }),
       },
     });
-    const temporaryDatabase = new Database({
+    const temporaryDatabase = new GlueDatabase({
       name: `${this.get('deployment').name}-temporary-database`,
       parent,
       properties: {
@@ -727,4 +727,4 @@ class WharfieDeploymentResources extends BaseResourceGroup {
   }
 }
 
-module.exports = WharfieDeploymentResources;
+export default WharfieDeploymentResources;

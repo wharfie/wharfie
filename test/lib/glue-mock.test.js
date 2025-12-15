@@ -1,18 +1,31 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 let Glue;
+
 describe('tests for Glue', () => {
   beforeEach(() => {
     process.env.AWS_MOCKS = true;
     jest.requireMock('@aws-sdk/client-s3');
     Glue = require('../../lambdas/lib/glue');
   });
+
   afterAll(() => {
     process.env.AWS_MOCKS = false;
   });
+
   it('getTable mock', async () => {
     expect.assertions(1);
+
     const glueFoo = new Glue();
     glueFoo.glue.__setMockState({
       database_name: {
@@ -32,6 +45,7 @@ describe('tests for Glue', () => {
       DatabaseName: 'database_name',
       Name: 'table_name',
     });
+
     expect(result).toMatchInlineSnapshot(`
       {
         "Table": {
@@ -52,6 +66,7 @@ describe('tests for Glue', () => {
 
   it('cloneDestinationTable mock', async () => {
     expect.assertions(1);
+
     const glue = new Glue();
     glue.glue.__setMockState({
       database_name: {
@@ -95,6 +110,7 @@ describe('tests for Glue', () => {
       DatabaseName: 'database_name',
       Name: 'table_name_cloned',
     });
+
     expect(result).toMatchInlineSnapshot(`
       {
         "Table": {
@@ -120,6 +136,7 @@ describe('tests for Glue', () => {
 
   it('batch partition operations mock', async () => {
     expect.assertions(4);
+
     const glue = new Glue();
     glue.glue.__setMockState({
       database_name: {

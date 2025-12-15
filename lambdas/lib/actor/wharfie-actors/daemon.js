@@ -1,8 +1,8 @@
-const WharfieActor = require('../wharfie-actor');
+import WharfieActor from '../wharfie-actor.js';
 
 class Daemon extends WharfieActor {
   /**
-   * @param {import('../wharfie-actor').ExtendedWharfieActorOptions} options -
+   * @param {import('../wharfie-actor.js').ExtendedWharfieActorOptions} options -
    */
   constructor({ status, parent, resources, properties }) {
     super({
@@ -18,4 +18,4 @@ class Daemon extends WharfieActor {
   }
 }
 
-module.exports = Daemon;
+export default Daemon;

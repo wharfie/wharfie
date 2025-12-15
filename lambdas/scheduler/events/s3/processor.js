@@ -1,10 +1,8 @@
-'use strict';
+import * as location_db from '../../../lib/dynamo/location.js';
+import { getResource } from '../../../lib/dynamo/operations.js';
+import { schedule } from '../../schedule.js';
 
-const location_db = require('../../../lib/dynamo/location');
-const resource_db = require('../../../lib/dynamo/operations');
-const { schedule } = require('../../schedule');
-
-const logging = require('../../../lib/logging');
+import * as logging from '../../../lib/logging/index.js';
 const daemon_log = logging.getDaemonLogger();
 
 /**
@@ -56,7 +54,7 @@ async function run({ bucket, key }, context) {
     const nowInterval = Math.round(now / ms) * ms;
     const before = nowInterval - 1000 * interval;
 
-    const resource = await resource_db.getResource(location_record.resource_id);
+    const resource = await getResource(location_record.resource_id);
     if (!resource) {
       daemon_log.warn('resource unexpectedly missing, maybe it was deleted?');
       return;
@@ -91,6 +89,4 @@ async function run({ bucket, key }, context) {
   }
 }
 
-module.exports = {
-  run,
-};
+export { run };

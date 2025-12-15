@@ -1,6 +1,17 @@
 /* eslint-disable jest/no-large-snapshots */
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import Logger from '../../../lambdas/lib/logging/logger.js';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const {
   Resource,
@@ -8,7 +19,6 @@ const {
   Action,
   Query,
 } = require('../../../lambdas/lib/graph');
-const Logger = require('../../../lambdas/lib/logging/logger');
 jest.mock('../../../lambdas/lib/dynamo/operations');
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../../package.json', () => ({ version: '0.0.1' }));
@@ -87,23 +97,26 @@ const FIXTURED_RESOURCE_PROPERTIES = {
   tableType: 'EXTERNAL_TABLE',
 };
 
-const operations = require('../../../lambdas/lib/dynamo/operations');
+const operations = require('../../../lambdas/lib/dynamo/operations').default;
 
 describe('dynamo resource db', () => {
   beforeAll(() => {
     const mockedDate = new Date(1466424490000);
-    jest.useFakeTimers('modern');
+    jest.useFakeTimers();
     jest.setSystemTime(mockedDate);
   });
+
   afterEach(() => {
     operations.__setMockState();
   });
+
   afterAll(() => {
     jest.useRealTimers();
   });
 
   it('putResource', async () => {
     expect.assertions(1);
+
     await operations.putResource(
       new Resource({
         id: 'StackName',
@@ -144,6 +157,7 @@ describe('dynamo resource db', () => {
         },
       })
     );
+
     expect(operations.__getMockState()).toMatchInlineSnapshot(`
       {
         "StackName": {
@@ -266,6 +280,7 @@ describe('dynamo resource db', () => {
 
   it('getResource', async () => {
     expect.assertions(1);
+
     await operations.putResource(
       new Resource({
         id: 'StackName',
@@ -307,6 +322,7 @@ describe('dynamo resource db', () => {
       })
     );
     const result = await operations.getResource('StackName');
+
     expect(result).toMatchInlineSnapshot(`
       Resource {
         "athena_workgroup": "StackName",
@@ -426,6 +442,7 @@ describe('dynamo resource db', () => {
 
   it('deleteResource', async () => {
     expect.assertions(1);
+
     const test_resource = new Resource({
       id: 'StackName',
       status: Resource.Status.ACTIVE,
@@ -466,11 +483,13 @@ describe('dynamo resource db', () => {
     });
     await operations.putResource(test_resource);
     await operations.deleteResource(test_resource);
+
     expect(operations.__getMockState()).toMatchInlineSnapshot(`{}`);
   });
 
   it('putOperation', async () => {
     expect.assertions(1);
+
     const test_resource = new Resource({
       id: 'resource_id',
       status: Resource.Status.ACTIVE,
@@ -517,6 +536,7 @@ describe('dynamo resource db', () => {
     });
     await operations.putResource(test_resource);
     await operations.putOperation(test_operation);
+
     expect(operations.__getMockState()).toMatchInlineSnapshot(`
       {
         "resource_id": {
@@ -653,6 +673,7 @@ describe('dynamo resource db', () => {
 
   it('getOperation', async () => {
     expect.assertions(1);
+
     const test_resource = new Resource({
       id: 'resource_id',
       status: Resource.Status.ACTIVE,
@@ -700,6 +721,7 @@ describe('dynamo resource db', () => {
     await operations.putResource(test_resource);
     await operations.putOperation(test_operation);
     const result = await operations.getOperation('resource_id', 'operation_id');
+
     expect(result).toMatchInlineSnapshot(`
       Operation {
         "actionIdsToTypes": Map {},
@@ -722,6 +744,7 @@ describe('dynamo resource db', () => {
 
   it('getAction', async () => {
     expect.assertions(1);
+
     const test_resource = new Resource({
       id: 'resource_id',
       status: Resource.Status.ACTIVE,
@@ -777,6 +800,7 @@ describe('dynamo resource db', () => {
       'operation_id',
       test_operation.getActionIdByType(Action.Type.START)
     );
+
     expect(result).toMatchInlineSnapshot(`
       Action {
         "id": "start_action",
@@ -795,6 +819,7 @@ describe('dynamo resource db', () => {
 
   it('getQueries', async () => {
     expect.assertions(2);
+
     const test_resource = new Resource({
       id: 'resource_id',
       status: Resource.Status.ACTIVE,
@@ -871,6 +896,7 @@ describe('dynamo resource db', () => {
       test_operation.id,
       test_action.id
     );
+
     expect(result).toHaveLength(2);
     expect(result).toMatchInlineSnapshot(`
       [
@@ -906,6 +932,7 @@ describe('dynamo resource db', () => {
 
   it('putAction', async () => {
     expect.assertions(2);
+
     const test_resource = new Resource({
       id: 'resource_id',
       status: Resource.Status.ACTIVE,
@@ -963,6 +990,7 @@ describe('dynamo resource db', () => {
       'operation_id',
       'action_id'
     );
+
     expect(result).toMatchInlineSnapshot(`
       Action {
         "id": "action_id",
@@ -982,6 +1010,7 @@ describe('dynamo resource db', () => {
 
   it('putQuery', async () => {
     expect.assertions(1);
+
     const test_resource = new Resource({
       id: 'resource_id',
       status: Resource.Status.ACTIVE,
@@ -1048,6 +1077,7 @@ describe('dynamo resource db', () => {
       'action_id',
       'query_id'
     );
+
     expect(result).toMatchInlineSnapshot(`
       Query {
         "action_id": "action_id",
@@ -1067,6 +1097,7 @@ describe('dynamo resource db', () => {
 
   it('putQueries', async () => {
     expect.assertions(1);
+
     const test_resource = new Resource({
       id: 'resource_id',
       status: Resource.Status.ACTIVE,
@@ -1141,6 +1172,7 @@ describe('dynamo resource db', () => {
       'operation_id',
       test_operation.getActionIdByType(Action.Type.START)
     );
+
     expect(result).toMatchInlineSnapshot(`
       [
         Query {
@@ -1205,6 +1237,7 @@ describe('dynamo resource db', () => {
       Action.Type.FINISH,
       new Logger()
     );
+
     expect(result).toBe(true);
   });
 
@@ -1238,11 +1271,13 @@ describe('dynamo resource db', () => {
       Action.Type.FINISH,
       new Logger()
     );
+
     expect(result).toBe(false);
   });
 
   it('checkActionPrerequisites - failure', async () => {
     expect.assertions(1);
+
     const test_operation = new Operation({
       resource_id: 'resource_id',
       resource_version: 0,
@@ -1297,6 +1332,7 @@ describe('dynamo resource db', () => {
 
   it('deleteOperation', async () => {
     expect.assertions(1);
+
     const test_operation = new Operation({
       resource_id: 'resource_id',
       resource_version: 0,
@@ -1316,6 +1352,7 @@ describe('dynamo resource db', () => {
 
     await operations.deleteOperation(test_operation);
     const state = operations.__getMockState();
+
     expect(state).toMatchInlineSnapshot(`{}`);
   });
 
@@ -1362,6 +1399,7 @@ describe('dynamo resource db', () => {
     await operations.putAction(start_action);
 
     const records = await operations.getRecords('resource_id', 'operation_id');
+
     expect(records).toMatchInlineSnapshot(`
       {
         "actions": [

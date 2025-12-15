@@ -1,5 +1,6 @@
 // raft-node.js
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const Corestore = require('corestore');
 const Hyperbee = require('hyperbee');
 const Hyperswarm = require('hyperswarm');
@@ -81,6 +82,7 @@ class RaftNode {
   get lastIndex() {
     return this.log.length - 1;
   }
+
   async getLogTerm(i) {
     if (i < 0) return -1;
     const len = this.log.length;
@@ -181,6 +183,7 @@ class RaftNode {
       s.write(JSON.stringify(obj) + '\n');
     } catch {}
   }
+
   _broadcast(obj) {
     const line = JSON.stringify(obj) + '\n';
     for (const s of this.peers.values())
@@ -188,6 +191,7 @@ class RaftNode {
         s.write(line);
       } catch {}
   }
+
   _sendTo(socket, obj) {
     try {
       socket.write(JSON.stringify(obj) + '\n');
@@ -201,8 +205,8 @@ class RaftNode {
       // Only use handshakeHash for dedupe if present (clients won’t have this path)
       const existing = this.peers.get(msg.from);
       if (existing && existing !== socket) {
-        const a = socket.handshakeHash,
-          b = existing.handshakeHash;
+        const a = socket.handshakeHash;
+        const b = existing.handshakeHash;
         const keepNew = a && b ? Buffer.compare(a, b) < 0 : false;
         const keep = keepNew ? socket : existing;
         const drop = keepNew ? existing : socket;
@@ -280,7 +284,6 @@ class RaftNode {
       case 'AENTRIES_RESP':
         return void this._onAppendEntriesResp(msg);
       default:
-        return;
     }
   }
 
@@ -295,6 +298,7 @@ class RaftNode {
       ok,
     });
   }
+
   _onPreVoteResp(msg) {
     if ((this.role === ROLE.Candidate || this.role === ROLE.Follower) && msg.ok)
       this._prevotes.add(msg.from);

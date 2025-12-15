@@ -1,5 +1,6 @@
 // dht-bootstrap.js
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const DHT = require('hyperdht');
 
 const PORT = Number(process.env.DHT_PORT || 49737);

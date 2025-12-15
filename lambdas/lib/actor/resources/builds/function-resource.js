@@ -1,16 +1,15 @@
-const uuid = require('uuid');
-// const Arborist = require('@npmcli/arborist');
-const tar = require('tar');
+import { v4 } from 'uuid';
+import { c } from 'tar';
 
-const BuildResource = require('./build-resource');
-const paths = require('../../../paths');
-const esbuild = require('../../../esbuild');
-const { installForTarget } = require('./lib/install-deps');
+import BuildResource from './build-resource.js';
+import paths from '../../../paths.js';
+import { build } from '../../../esbuild.js';
+import { installForTarget } from './lib/install-deps.js';
 
-const path = require('node:path');
-const fs = require('node:fs');
-const zlib = require('node:zlib');
-const { buffer: streamToBuffer } = require('node:stream/consumers');
+import { dirname, join } from 'node:path';
+import { promises, existsSync, writeFileSync } from 'node:fs';
+import { brotliCompressSync } from 'node:zlib';
+import { buffer as streamToBuffer } from 'node:stream/consumers';
 
 /**
  * @typedef ExternalDependencyDescription
@@ -33,10 +32,15 @@ const { buffer: streamToBuffer } = require('node:stream/consumers');
  */
 
 /**
+ * @typedef FunctionEntrypoint
+ * @property {string} path -
+ * @property {string} [export] -
+ */
+
+/**
  * @typedef FunctionProperties
  * @property {string} functionName -
- * @property {string | function(): string} resolveDir -
- * @property {string | function(): string} callerFile -
+ * @property {FunctionEntrypoint} entrypoint -
  * @property {BuildTarget | function(): BuildTarget} buildTarget -
  * @property {ExternalDependencyDescription[]} [external] -
  * @property {Object<string,string>} [environmentVariables] -
@@ -47,20 +51,16 @@ const { buffer: streamToBuffer } = require('node:stream/consumers');
  * @typedef FunctionOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {FunctionProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {FunctionProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class FunctionResource extends BuildResource {
   /**
-   * @param {function} fn -
    * @param {FunctionOptions} options -
    */
-  constructor(fn, { name, parent, status, properties, dependsOn }) {
-    if (typeof fn !== 'function') {
-      throw new Error('Actor expects a function as an argument');
-    }
+  constructor({ name, parent, status, properties, dependsOn }) {
     const propertiesWithDefaults = Object.assign(
       {},
       FunctionResource.DefaultProperties,
@@ -73,42 +73,25 @@ class FunctionResource extends BuildResource {
       properties: propertiesWithDefaults,
       dependsOn,
     });
-    // @ts-ignore
-    global[Symbol.for(`${this.get('functionName')}`)] = fn;
-    // @ts-ignore
-    global[Symbol.for(`${this.get('functionName')}_initializeEnvironment`)] =
-      this.initializeEnvironment.bind(this);
   }
 
   async initializeEnvironment() {
     await super.initializeEnvironment();
   }
 
-  getCallerFile() {
-    let callerFile;
-    const err = new Error();
-    Error.prepareStackTrace = (_err, stack) => stack;
-    // Check if the stack property exists and is an array
-    if (!err.stack || !Array.isArray(err.stack)) {
-      throw new Error('Stack trace is not available');
-    }
-    const currentFile = err.stack.shift().getFileName();
-    while (err.stack.length) {
-      callerFile = err.stack.shift().getFileName();
-      if (callerFile !== currentFile) break;
-    }
-    return callerFile;
-  }
-
   /**
    * @returns {Promise<string>} -
    */
   async esbuild() {
+    console.log('HELLO');
     const entryCode = `
-      require(${JSON.stringify(this.get('callerFile'))});
+      import { ${
+        this.get('entrypoint').export || 'default'
+      } as entrypoint } from ${JSON.stringify(this.get('entrypoint').path)};
+      global[Symbol.for('${this.get('functionName')}')] = entrypoint
     `;
-    const resolveDir = path.dirname(this.get('callerDirectory') || '');
-    const { outputFiles, errors, warnings } = await esbuild.build({
+    const resolveDir = dirname(this.get('entrypoint').path || '');
+    const { outputFiles, errors, warnings } = await build({
       stdin: {
         contents: entryCode,
         resolveDir,
@@ -155,17 +138,14 @@ class FunctionResource extends BuildResource {
    */
   async bundleExternals() {
     const externals = this.get('external', []);
-    const tmpBuildDir = path.join(
-      FunctionResource.BUILD_DIR,
-      `externals-${uuid.v4()}`
-    );
-    await fs.promises.mkdir(tmpBuildDir, { recursive: true });
+    const tmpBuildDir = join(FunctionResource.BUILD_DIR, `externals-${v4()}`);
+    await promises.mkdir(tmpBuildDir, { recursive: true });
     await installForTarget({
       buildTarget: this.get('buildTarget'),
       externals,
       tmpBuildDir,
     });
-    const stream = tar.c(
+    const stream = c(
       {
         cwd: tmpBuildDir,
         gzip: { level: 9 }, // gzip compress
@@ -179,8 +159,8 @@ class FunctionResource extends BuildResource {
   }
 
   async _reconcile() {
-    if (!fs.existsSync(FunctionResource.TEMP_ASSET_PATH)) {
-      await fs.promises.mkdir(FunctionResource.TEMP_ASSET_PATH, {
+    if (!existsSync(FunctionResource.TEMP_ASSET_PATH)) {
+      await promises.mkdir(FunctionResource.TEMP_ASSET_PATH, {
         recursive: true,
       });
     }
@@ -188,24 +168,24 @@ class FunctionResource extends BuildResource {
       this.esbuild(),
       this.bundleExternals(),
     ]);
-    const codeBundle = zlib.brotliCompressSync(codeBlob).toString('base64');
+    const codeBundle = brotliCompressSync(codeBlob).toString('base64');
     const assetDescription = JSON.stringify({
       codeBundle,
       externalsTar,
     });
-    const singleExecutableAssetPath = path.join(
+    const singleExecutableAssetPath = join(
       FunctionResource.TEMP_ASSET_PATH,
-      uuid.v4()
+      v4()
     );
-    fs.writeFileSync(singleExecutableAssetPath, assetDescription);
+    writeFileSync(singleExecutableAssetPath, assetDescription);
     this.set('singleExecutableAssetPath', singleExecutableAssetPath);
   }
 
   async _destroy() {
-    if (!fs.existsSync(this.get('assetPath'))) {
+    if (!existsSync(this.get('assetPath'))) {
       return;
     }
-    await fs.promises.unlink(this.get('assetPath'));
+    await promises.unlink(this.get('assetPath'));
   }
 }
 
@@ -213,11 +193,11 @@ FunctionResource.DefaultProperties = {
   environmentVariables: {},
   assets: {},
 };
-FunctionResource.BUILD_DIR = path.join(paths.temp, 'builds');
+FunctionResource.BUILD_DIR = join(paths.temp, 'builds');
 FunctionResource.REQUIRED_UNUSED_EXTERNALS = [
   'esbuild',
   'node-gyp/bin/node-gyp.js',
 ];
-FunctionResource.TEMP_ASSET_PATH = path.join(paths.temp, 'function-assets');
+FunctionResource.TEMP_ASSET_PATH = join(paths.temp, 'function-assets');
 
-module.exports = FunctionResource;
+export default FunctionResource;

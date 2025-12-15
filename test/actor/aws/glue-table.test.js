@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-large-snapshots */
-'use strict';
+import { describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = true;
 const { Glue } = jest.requireMock('@aws-sdk/client-glue');
@@ -10,6 +12,7 @@ const { getMockDeploymentProperties } = require('../util');
 describe('glue table IaC', () => {
   it('basic', async () => {
     expect.assertions(4);
+
     const glue = new Glue({});
     await glue.createDatabase({
       DatabaseInput: {
@@ -72,6 +75,7 @@ describe('glue table IaC', () => {
     await table.reconcile();
 
     const serialized = table.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -209,7 +213,9 @@ describe('glue table IaC', () => {
         },
       }
     `);
+
     await table.destroy();
+
     expect(table.status).toBe('DESTROYED');
     await expect(
       glue.getTable({

@@ -1,13 +1,9 @@
-'use strict';
-
-const logging = require('../../lib/logging');
-const resource_db = require('../../lib/dynamo/operations');
-const {
-  resubmit_running_operations,
-} = require('../resubmit_running_operations');
+import * as logging from '../../lib/logging/index.js';
+import * as resource_db from '../../lib/dynamo/operations.js';
+import resubmit_running_operations from '../resubmit_running_operations.js';
 /**
- * @param {import('../../lib/graph/').Resource} _resource -
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../lib/graph/index.js').Resource} _resource -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  */
 async function up(_resource, event, context) {
@@ -31,6 +27,6 @@ async function up(_resource, event, context) {
   throw new Error('Resource Migrated, Retry started');
 }
 
-module.exports = {
+export default {
   up,
 };

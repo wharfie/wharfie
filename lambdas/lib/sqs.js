@@ -1,9 +1,24 @@
-'use strict';
-const AWS = require('@aws-sdk/client-sqs');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import {
+  SQS as _SQS,
+  SendMessageCommand,
+  SendMessageBatchCommand,
+  DeleteMessageBatchCommand,
+  DeleteMessageCommand,
+  ReceiveMessageCommand,
+  ListQueuesCommand,
+  GetQueueUrlCommand,
+  GetQueueAttributesCommand,
+  SetQueueAttributesCommand,
+  CreateQueueCommand,
+  DeleteQueueCommand,
+  ListQueueTagsCommand,
+  TagQueueCommand,
+  UntagQueueCommand,
+} from '@aws-sdk/client-sqs';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('./base');
-const { createId } = require('./id');
+import BaseAWS from './base.js';
+import { createId } from './id.js';
 
 class SQS {
   /**
@@ -11,7 +26,7 @@ class SQS {
    */
   constructor(options) {
     const credentials = fromNodeProviderChain();
-    this.sqs = new AWS.SQS({
+    this.sqs = new _SQS({
       ...BaseAWS.config(),
       credentials,
       ...options,
@@ -23,7 +38,7 @@ class SQS {
    * @returns {Promise<import("@aws-sdk/client-sqs").SendMessageResult>} - SQS sendMessage result
    */
   async sendMessage(params) {
-    const command = new AWS.SendMessageCommand(params);
+    const command = new SendMessageCommand(params);
     return this.sqs.send(command);
   }
 
@@ -31,7 +46,7 @@ class SQS {
    * @param {import("@aws-sdk/client-sqs").SendMessageBatchRequest} params - SQS sendMessage params
    */
   async sendMessageBatch(params) {
-    const command = new AWS.SendMessageBatchCommand(params);
+    const command = new SendMessageBatchCommand(params);
     const { Failed } = await this.sqs.send(command);
     if (Failed && Failed.length > 0) {
       const reruns = [];
@@ -51,7 +66,7 @@ class SQS {
    * @param {import("@aws-sdk/client-sqs").DeleteMessageBatchRequest} params - SQS deleteMessage params
    */
   async deleteMessageBatch(params) {
-    const command = new AWS.DeleteMessageBatchCommand(params);
+    const command = new DeleteMessageBatchCommand(params);
     const { Failed } = await this.sqs.send(command);
     if (Failed && Failed.length > 0) {
       const reruns = [];
@@ -72,7 +87,7 @@ class SQS {
    * @param {import("@aws-sdk/client-sqs").DeleteMessageRequest} params -
    */
   async deleteMessage(params) {
-    const command = new AWS.DeleteMessageCommand(params);
+    const command = new DeleteMessageCommand(params);
     await this.sqs.send(command);
   }
 
@@ -81,17 +96,17 @@ class SQS {
    * @returns {Promise<import("@aws-sdk/client-sqs").ReceiveMessageResult>} - SQS receiveMessage result
    */
   async receiveMessage(params) {
-    const command = new AWS.ReceiveMessageCommand(params);
+    const command = new ReceiveMessageCommand(params);
     return await this.sqs.send(command);
   }
 
   /**
-   * @param {import('../typedefs').WharfieEvent | import('../typedefs').AthenaEvent} event -
+   * @param {import('../typedefs.js').WharfieEvent | import('../typedefs.js').AthenaEvent} event -
    * @param {string} queueUrl -
    * @param {number} [delay] -
    */
   async enqueue(event, queueUrl, delay = 0) {
-    const command = new AWS.SendMessageCommand({
+    const command = new SendMessageCommand({
       MessageBody: JSON.stringify(event),
       QueueUrl: queueUrl,
       DelaySeconds: Math.min(Math.max(delay, 0), 60),
@@ -100,7 +115,7 @@ class SQS {
   }
 
   /**
-   * @param {import('../typedefs').WharfieEvent[]} events -
+   * @param {import('../typedefs.js').WharfieEvent[]} events -
    * @param {string} queueUrl -
    */
   async enqueueBatch(events, queueUrl) {
@@ -120,7 +135,7 @@ class SQS {
   }
 
   /**
-   * @param {import('../typedefs').WharfieEvent} event -
+   * @param {import('../typedefs.js').WharfieEvent} event -
    * @param {string} queueUrl -
    */
   async reenqueue(event, queueUrl) {
@@ -144,13 +159,13 @@ class SQS {
   async listQueues(params) {
     const allQueueUrls = [];
     const { NextToken, QueueUrls } = await this.sqs.send(
-      new AWS.ListQueuesCommand(params)
+      new ListQueuesCommand(params)
     );
     allQueueUrls.push(...(QueueUrls || []));
     let Marker = NextToken;
     while (Marker) {
       const { NextToken, QueueUrls } = await this.sqs.send(
-        new AWS.ListQueuesCommand({
+        new ListQueuesCommand({
           ...params,
           NextToken: Marker,
         })
@@ -181,7 +196,7 @@ class SQS {
    * @returns {Promise<import("@aws-sdk/client-sqs").GetQueueUrlCommandOutput>} - SQS getQueueUrl result
    */
   async getQueueUrl(params) {
-    const command = new AWS.GetQueueUrlCommand(params);
+    const command = new GetQueueUrlCommand(params);
     return await this.sqs.send(command);
   }
 
@@ -190,7 +205,7 @@ class SQS {
    * @returns {Promise<import("@aws-sdk/client-sqs").GetQueueAttributesCommandOutput>} - SQS getQueueAttributes result
    */
   async getQueueAttributes(params) {
-    const command = new AWS.GetQueueAttributesCommand(params);
+    const command = new GetQueueAttributesCommand(params);
     return await this.sqs.send(command);
   }
 
@@ -199,7 +214,7 @@ class SQS {
    * @returns {Promise<import("@aws-sdk/client-sqs").SetQueueAttributesCommandOutput>} - SQS setQueueAttributes result
    */
   async setQueueAttributes(params) {
-    const command = new AWS.SetQueueAttributesCommand(params);
+    const command = new SetQueueAttributesCommand(params);
     return await this.sqs.send(command);
   }
 
@@ -208,7 +223,7 @@ class SQS {
    * @returns {Promise<import("@aws-sdk/client-sqs").CreateQueueCommandOutput>} - SQS createQueue result
    */
   async createQueue(params) {
-    const command = new AWS.CreateQueueCommand(params);
+    const command = new CreateQueueCommand(params);
     return await this.sqs.send(command);
   }
 
@@ -217,7 +232,7 @@ class SQS {
    * @returns {Promise<import("@aws-sdk/client-sqs").DeleteQueueCommandOutput>} - SQS deleteQueue result
    */
   async deleteQueue(params) {
-    const command = new AWS.DeleteQueueCommand(params);
+    const command = new DeleteQueueCommand(params);
     return await this.sqs.send(command);
   }
 
@@ -226,7 +241,7 @@ class SQS {
    * @returns {Promise<import("@aws-sdk/client-sqs").ListQueueTagsCommandOutput>} - SQS listQueueTags result
    */
   async listQueueTags(params) {
-    const command = new AWS.ListQueueTagsCommand(params);
+    const command = new ListQueueTagsCommand(params);
     return await this.sqs.send(command);
   }
 
@@ -235,7 +250,7 @@ class SQS {
    * @returns {Promise<import("@aws-sdk/client-sqs").TagQueueCommandOutput>} - SQS tagQueue result
    */
   async tagQueue(params) {
-    const command = new AWS.TagQueueCommand(params);
+    const command = new TagQueueCommand(params);
     return await this.sqs.send(command);
   }
 
@@ -244,9 +259,9 @@ class SQS {
    * @returns {Promise<import("@aws-sdk/client-sqs").UntagQueueCommandOutput>} - SQS untagQueue result
    */
   async untagQueue(params) {
-    const command = new AWS.UntagQueueCommand(params);
+    const command = new UntagQueueCommand(params);
     return await this.sqs.send(command);
   }
 }
 
-module.exports = SQS;
+export default SQS;

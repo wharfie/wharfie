@@ -1,33 +1,27 @@
 {
   "compilerOptions": {
-    "esModuleInterop": true,
-    "lib": [
-      "es2019",
-      "es2020.promise",
-      "es2020.bigint",
-      "es2020.string",
-      "dom"
-    ],
-    "module": "commonjs",
-    "target": "es2019",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "ES2020",
+    "lib": ["ES2020", "dom"],
+
     "strict": true,
+    "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "allowJs": true,
     "checkJs": true,
     "noEmit": true,
     "resolveJsonModule": true,
     "types": ["jest", "node"]
-    // "moduleResolution": "node"
   },
   "include": [
     "build.js",
+    "scratch/**/*.js",
     "lambdas/**/*.js",
-    // "scratch/**/*.js",
     "cli/**/*.js",
     "bin/wharfie",
     "test/lib/dynamo/operation.test.js",
     "test/lib/dynamo/operation-mock.test.js"
-    // "test/**/*.js"
   ],
   "exclude": ["lambdas/udf_entrypoint.js"]
 }

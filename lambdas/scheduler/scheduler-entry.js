@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { version: WHARFIE_VERSION } = require('../../package.json');
 
 /**
@@ -148,4 +150,6 @@ SchedulerEntry.Status = Status;
 
 SchedulerEntry.EventType = 'SchedulerEntry';
 
-module.exports = SchedulerEntry;
+export default SchedulerEntry;
+
+export { Status };

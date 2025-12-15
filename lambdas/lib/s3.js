@@ -1,9 +1,34 @@
-'use strict';
-const AWS = require('@aws-sdk/client-s3');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
-const BaseAWS = require('./base');
-const bluebirdPromise = require('bluebird');
-const { Readable } = require('stream');
+import {
+  S3 as _S3,
+  PutObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+  CreateBucketCommand,
+  DeleteBucketCommand,
+  ListBucketsCommand,
+  DeleteObjectsCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCopyCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
+  CopyObjectCommand,
+  ListObjectsV2Command,
+  UploadPartCommand,
+  PutBucketNotificationConfigurationCommand,
+  GetBucketNotificationConfigurationCommand,
+  PutBucketLifecycleConfigurationCommand,
+  GetBucketLifecycleConfigurationCommand,
+  HeadBucketCommand,
+  GetBucketLocationCommand,
+  PutBucketTaggingCommand,
+  GetBucketTaggingCommand,
+  DeleteBucketTaggingCommand,
+} from '@aws-sdk/client-s3';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
+import { map, any } from 'bluebird';
+import { Readable } from 'stream';
+
+import BaseAWS from './base.js';
 
 /**
  * @typedef {'aws'|'fixed'} RegionResolver
@@ -185,7 +210,7 @@ class S3 {
     this.client_config = clientConfig;
     this._providerMeta = providerMeta;
 
-    this.s3 = new AWS.S3(this.client_config);
+    this.s3 = new _S3(this.client_config);
     this.COPY_PART_SIZE_BYTES = 500000000; // ~500 MB
     this.COPY_PART_SIZE_MINIMUM_BYTES = 5242880; // 5 MB
     this._LEFT_PAD_OBJECT_NAME = '5MB_file.txt';
@@ -211,7 +236,7 @@ class S3 {
       return this.s3;
     }
     if (!this.region_clients[region]) {
-      this.region_clients[region] = new AWS.S3({
+      this.region_clients[region] = new _S3({
         ...this.client_config,
         region,
       });
@@ -224,7 +249,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").PutObjectCommandOutput>} -
    */
   async putObject(params) {
-    const command = new AWS.PutObjectCommand(params);
+    const command = new PutObjectCommand(params);
     return await this.s3.send(command);
   }
 
@@ -233,7 +258,7 @@ class S3 {
    * @returns {Promise<string>} -
    */
   async getObject(params) {
-    const command = new AWS.GetObjectCommand(params);
+    const command = new GetObjectCommand(params);
     const result = await this.s3.send(command);
 
     // TODO this increases memory usage by emptying streams but makes it easier to work with
@@ -255,7 +280,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").HeadObjectCommandOutput>} -
    */
   async headObject(params) {
-    const command = new AWS.HeadObjectCommand(params);
+    const command = new HeadObjectCommand(params);
     return await this.s3.send(command);
   }
 
@@ -264,7 +289,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").CreateBucketCommandOutput>} -
    */
   async createBucket(params) {
-    const command = new AWS.CreateBucketCommand(params);
+    const command = new CreateBucketCommand(params);
     return await this.s3.send(command);
   }
 
@@ -273,7 +298,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").DeleteBucketCommandOutput>} -
    */
   async deleteBucket(params) {
-    const command = new AWS.DeleteBucketCommand(params);
+    const command = new DeleteBucketCommand(params);
     return await this.s3.send(command);
   }
 
@@ -282,7 +307,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").ListBucketsCommandOutput>} -
    */
   async listBuckets(params) {
-    const command = new AWS.ListBucketsCommand(params);
+    const command = new ListBucketsCommand(params);
     return await this.s3.send(command);
   }
 
@@ -295,7 +320,7 @@ class S3 {
     }
     while (params.Delete.Objects.length > 0) {
       const chunk = params.Delete.Objects.splice(0, 1000);
-      const command = new AWS.DeleteObjectsCommand({
+      const command = new DeleteObjectsCommand({
         ...params,
         Delete: {
           ...params.Delete,
@@ -327,7 +352,7 @@ class S3 {
 
   /**
    * @param {string} uri - S3 URI
-   * @returns {import('../typedefs').S3Location} - S3 bucket, prefix
+   * @returns {import('../typedefs.js').S3Location} - S3 bucket, prefix
    */
   parseS3Uri(uri) {
     if (typeof uri !== 'string')
@@ -350,14 +375,14 @@ class S3 {
     if (!CopySource) throw new Error('CopySource is required');
     const [SourceBucket, SourceKey] = CopySource.split(/\/(.+)/);
     const { ContentLength } = await this.s3.send(
-      new AWS.HeadObjectCommand({
+      new HeadObjectCommand({
         Bucket: SourceBucket,
         Key: SourceKey,
       })
     );
     if (!ContentLength) throw new Error('failed to head object to copy');
     const { UploadId } = await this.s3.send(
-      new AWS.CreateMultipartUploadCommand({
+      new CreateMultipartUploadCommand({
         Bucket,
         Key,
       })
@@ -385,7 +410,7 @@ class S3 {
       }
       partUploads.push(
         this.s3.send(
-          new AWS.UploadPartCopyCommand({
+          new UploadPartCopyCommand({
             Bucket,
             CopySource,
             CopySourceRange: 'bytes=' + range,
@@ -403,7 +428,7 @@ class S3 {
         (index * this.COPY_PART_SIZE_BYTES + remainder - 1);
       partUploads.push(
         this.s3.send(
-          new AWS.UploadPartCopyCommand({
+          new UploadPartCopyCommand({
             Bucket,
             CopySource,
             CopySourceRange: 'bytes=' + range,
@@ -417,7 +442,7 @@ class S3 {
     try {
       const results = await Promise.all(partUploads);
       this.s3.send(
-        new AWS.CompleteMultipartUploadCommand({
+        new CompleteMultipartUploadCommand({
           Bucket,
           Key,
           MultipartUpload: {
@@ -431,7 +456,7 @@ class S3 {
       );
     } catch (err) {
       this.s3.send(
-        new AWS.AbortMultipartUploadCommand({
+        new AbortMultipartUploadCommand({
           Bucket,
           Key,
           UploadId,
@@ -446,7 +471,7 @@ class S3 {
    */
   async copyObjectWithMultiPartFallback(params) {
     try {
-      await this.s3.send(new AWS.CopyObjectCommand(params));
+      await this.s3.send(new CopyObjectCommand(params));
     } catch (err) {
       if (
         // @ts-ignore
@@ -465,13 +490,9 @@ class S3 {
    * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput[]} params -
    */
   async copyObjectsWithMultiPartFallback(params) {
-    await bluebirdPromise.map(
-      params,
-      this.copyObjectWithMultiPartFallback.bind(this),
-      {
-        concurrency: 10,
-      }
-    );
+    await map(params, this.copyObjectWithMultiPartFallback.bind(this), {
+      concurrency: 10,
+    });
   }
 
   /**
@@ -480,9 +501,7 @@ class S3 {
    * @param {string} DestinationPrefix -
    */
   async copyPath(SourceParams, DestinationBucket, DestinationPrefix) {
-    const response = await this.s3.send(
-      new AWS.ListObjectsV2Command(SourceParams)
-    );
+    const response = await this.s3.send(new ListObjectsV2Command(SourceParams));
     if (!response.Contents)
       throw new Error(`No objects to copy with params: ${SourceParams}`);
     const promises = [];
@@ -515,7 +534,7 @@ class S3 {
    * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params -
    */
   async deletePath(params) {
-    const response = await this.s3.send(new AWS.ListObjectsV2Command(params));
+    const response = await this.s3.send(new ListObjectsV2Command(params));
     if (!response.Contents) return;
     if (response.Contents.length === 0) return;
     const objectsToDelete = response.Contents.filter(
@@ -544,7 +563,7 @@ class S3 {
    * @param {Date} expirationDate -
    */
   async expireObjects(params, expirationDate = new Date()) {
-    const response = await this.s3.send(new AWS.ListObjectsV2Command(params));
+    const response = await this.s3.send(new ListObjectsV2Command(params));
     if (!response.Contents)
       throw new Error(`No objects to delete with Params: ${params}`);
     if (response.Contents.length === 0) return;
@@ -582,7 +601,7 @@ class S3 {
    */
   async getCommonPrefixes(params, prefixes = []) {
     const response = await this.s3.send(
-      new AWS.ListObjectsV2Command({
+      new ListObjectsV2Command({
         ...params,
         Delimiter: '/',
       })
@@ -607,9 +626,9 @@ class S3 {
    * @param {string} Bucket - S3 bucket to inspect for partitions
    * @param {string} Prefix - S3 prefix to use for partition inspection
    * @param {Array<{name: string}>} partitionKeys - Partition keys that will exist in s3 paths
-   * @param {import('../typedefs').PartitionValues} PartitionValues - accumulator for Partition values
-   * @param {Array<import('../typedefs').Partition>} partitions - accumulator for Partition objects
-   * @returns {Promise<import('../typedefs').Partition[]>} - list of partitions that exists in the given s3 location
+   * @param {import('../typedefs.js').PartitionValues} PartitionValues - accumulator for Partition values
+   * @param {Array<import('../typedefs.js').Partition>} partitions - accumulator for Partition objects
+   * @returns {Promise<import('../typedefs.js').Partition[]>} - list of partitions that exists in the given s3 location
    */
   async findPartitions(
     Bucket,
@@ -656,7 +675,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").CreateMultipartUploadCommandOutput>} -
    */
   async createMultipartUpload(params) {
-    const command = new AWS.CreateMultipartUploadCommand(params);
+    const command = new CreateMultipartUploadCommand(params);
     return await this.s3.send(command);
   }
 
@@ -665,7 +684,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").CompleteMultipartUploadCommandOutput>} -
    */
   async completeMultipartUpload(params) {
-    const command = new AWS.CompleteMultipartUploadCommand(params);
+    const command = new CompleteMultipartUploadCommand(params);
     return await this.s3.send(command);
   }
 
@@ -674,7 +693,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCopyCommandOutput>} -
    */
   async uploadPartCopy(params) {
-    const command = new AWS.UploadPartCopyCommand(params);
+    const command = new UploadPartCopyCommand(params);
     return await this.s3.send(command);
   }
 
@@ -683,7 +702,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCommandOutput>} -
    */
   async uploadPart(params) {
-    const command = new AWS.UploadPartCommand(params);
+    const command = new UploadPartCommand(params);
     return await this.s3.send(command);
   }
 
@@ -797,7 +816,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").PutBucketNotificationConfigurationCommandOutput>} -
    */
   async putBucketNotificationConfiguration(params) {
-    const command = new AWS.PutBucketNotificationConfigurationCommand(params);
+    const command = new PutBucketNotificationConfigurationCommand(params);
     return await this.s3.send(command);
   }
 
@@ -806,7 +825,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").GetBucketNotificationConfigurationCommandOutput>} -
    */
   async getBucketNotificationConfiguration(params) {
-    const command = new AWS.GetBucketNotificationConfigurationCommand(params);
+    const command = new GetBucketNotificationConfigurationCommand(params);
     return await this.s3.send(command);
   }
 
@@ -815,7 +834,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").PutBucketLifecycleConfigurationCommandOutput>} -
    */
   async putBucketLifecycleConfigutation(params) {
-    const command = new AWS.PutBucketLifecycleConfigurationCommand(params);
+    const command = new PutBucketLifecycleConfigurationCommand(params);
     return await this.s3.send(command);
   }
 
@@ -824,7 +843,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").GetBucketLifecycleConfigurationCommandOutput>} -
    */
   async getBucketLifecycleConfigutation(params) {
-    const command = new AWS.GetBucketLifecycleConfigurationCommand(params);
+    const command = new GetBucketLifecycleConfigurationCommand(params);
     return await this.s3.send(command);
   }
 
@@ -834,7 +853,7 @@ class S3 {
    * @returns {Promise<boolean>} -
    */
   async checkBucketOwnership(bucketName, expectedOwnerId) {
-    const command = new AWS.HeadBucketCommand({
+    const command = new HeadBucketCommand({
       Bucket: bucketName,
       ExpectedBucketOwner: expectedOwnerId,
     });
@@ -852,7 +871,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").GetBucketLocationCommandOutput>} -
    */
   async getBucketLocation(params, region) {
-    const command = new AWS.GetBucketLocationCommand({
+    const command = new GetBucketLocationCommand({
       ...params,
     });
     return await (region
@@ -881,7 +900,7 @@ class S3 {
         );
         return LocationConstraint || 'us-east-1';
       });
-      return await bluebirdPromise.any(regionPromises);
+      return await any(regionPromises);
     }
   }
 
@@ -892,7 +911,7 @@ class S3 {
    * @returns {Promise<Number>} -
    */
   async getPrefixByteSize(params, region, byteSize = 0) {
-    const listCommand = new AWS.ListObjectsV2Command({
+    const listCommand = new ListObjectsV2Command({
       ...params,
     });
     const response = await (region
@@ -919,7 +938,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").PutBucketTaggingCommandOutput>} -
    */
   async putBucketTagging(params) {
-    const command = new AWS.PutBucketTaggingCommand(params);
+    const command = new PutBucketTaggingCommand(params);
     return await this.s3.send(command);
   }
 
@@ -928,7 +947,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").GetBucketTaggingCommandOutput>} -
    */
   async getBucketTagging(params) {
-    const command = new AWS.GetBucketTaggingCommand(params);
+    const command = new GetBucketTaggingCommand(params);
     try {
       return await this.s3.send(command);
     } catch (err) {
@@ -948,7 +967,7 @@ class S3 {
    * @returns {Promise<import("@aws-sdk/client-s3").DeleteBucketTaggingCommandOutput>} -
    */
   async deleteBucketTagging(params) {
-    const command = new AWS.DeleteBucketTaggingCommand(params);
+    const command = new DeleteBucketTaggingCommand(params);
     return await this.s3.send(command);
   }
 }
@@ -956,4 +975,4 @@ class S3 {
 S3.findBucketRegionCache = new Map();
 S3.formatClientOptions = formatClientOptions;
 
-module.exports = S3;
+export default S3;

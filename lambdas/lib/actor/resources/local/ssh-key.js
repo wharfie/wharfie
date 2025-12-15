@@ -1,9 +1,7 @@
-'use strict';
-
-const os = require('node:os');
-const path = require('node:path');
-const SSHKeygen = require('../../../ssh-keygen');
-const BaseResource = require('../base-resource');
+import { homedir } from 'node:os';
+import { resolve, join } from 'node:path';
+import SSHKeygen from '../../../ssh-keygen.js';
+import BaseResource from '../base-resource.js';
 
 /**
  * @typedef SSHKeyProperties
@@ -18,9 +16,9 @@ const BaseResource = require('../base-resource');
  * @typedef SSHKeyOptions
  * @property {string} name - Logical name for this SSH key resource (used for default path/comment).
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {SSHKeyProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {SSHKeyProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class SSHKey extends BaseResource {
@@ -60,10 +58,10 @@ class SSHKey extends BaseResource {
       typeof keyPrefix === 'string' &&
       keyPrefix.trim().length > 0
     ) {
-      return path.resolve(keyPrefix);
+      return resolve(keyPrefix);
     }
-    const home = os.homedir();
-    return path.join(home, '.ssh', this.name);
+    const home = homedir();
+    return join(home, '.ssh', this.name);
   }
 
   /**
@@ -124,4 +122,4 @@ class SSHKey extends BaseResource {
   }
 }
 
-module.exports = SSHKey;
+export default SSHKey;

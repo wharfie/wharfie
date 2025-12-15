@@ -1,9 +1,9 @@
-const ConsoleLogTransport = require('./console-log-transport');
+import ConsoleLogTransport from './console-log-transport.js';
 
 /**
  * @typedef LoggerOptions
  * @property {string} [level] -
- * @property {(import('./console-log-transport')|import('./firehose-log-transport'))[]} [transports] -
+ * @property {(import('./console-log-transport.js').default|import('./firehose-log-transport.js').default)[]} [transports] -
  * @property {boolean} [jsonFormat] -
  * @property {Object} [base] -
  */
@@ -129,4 +129,4 @@ class Logger {
   }
 }
 
-module.exports = Logger;
+export default Logger;

@@ -1,13 +1,13 @@
-const BaseResourceGroup = require('../base-resource-group');
+import BaseResourceGroup from '../base-resource-group.js';
 
 /**
  * @typedef BuildResourceOptions
  * @property {string} name - Resource name.
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {import('../reconcilable')[]} [dependsOn] -
- * @property {import('../../typedefs').SharedProperties} properties -
- * @property {Object<string, import('../base-resource') | BaseResourceGroup>} [resources] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {import('../../typedefs.js').SharedProperties} properties -
+ * @property {Object<string, import('../base-resource.js').default | BaseResourceGroup>} [resources] -
  */
 
 class BuildResource extends BaseResourceGroup {
@@ -34,4 +34,4 @@ class BuildResource extends BaseResourceGroup {
   }
 }
 
-module.exports = BuildResource;
+export default BuildResource;

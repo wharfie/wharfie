@@ -1,11 +1,9 @@
-const path = require('node:path');
-const net = require('node:net');
-const fsp = require('node:fs/promises');
-const { NodeSSH } = require('node-ssh');
-const { spawn } = require('node:child_process');
-
-const BaseResourceGroup = require('./base-resource-group');
-// const Reconcilable = require('./reconcilable');
+import { join, basename as _basename } from 'node:path';
+import { createConnection } from 'node:net';
+import { writeFile, unlink } from 'node:fs/promises';
+import { NodeSSH } from 'node-ssh';
+import { spawn } from 'node:child_process';
+import BaseResourceGroup from './base-resource-group.js';
 
 /**
  * Node-specific properties used when configuring the resource.
@@ -28,10 +26,10 @@ const BaseResourceGroup = require('./base-resource-group');
  * @typedef {Object} NodeOptions
  * @property {string} name - Logical name of the node resource.
  * @property {string} [parent] - Optional parent resource name to attach this node under.
- * @property {import('./reconcilable').Status} [status] - Optional initial reconciliation status.
- * @property {NodeProperties & import('../typedefs').SharedProperties} properties - Node properties and shared properties used for reconciliation.
- * @property {Array<import('./reconcilable')>} [dependsOn] - Optional list of resources that must be reconciled before this node.
- * @property {Record<string, import('./base-resource') | BaseResourceGroup>} [resources] - Optional map of child resources that belong to this node.
+ * @property {import('./reconcilable.js').default.Status} [status] - Optional initial reconciliation status.
+ * @property {NodeProperties & import('../typedefs.js').SharedProperties} properties - Node properties and shared properties used for reconciliation.
+ * @property {Array<import('./reconcilable.js').default>} [dependsOn] - Optional list of resources that must be reconciled before this node.
+ * @property {Record<string, import('./base-resource.js').default | BaseResourceGroup>} [resources] - Optional map of child resources that belong to this node.
  */
 
 /**
@@ -76,7 +74,7 @@ class Node extends BaseResourceGroup {
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const ok = await new Promise((resolve) => {
-        const s = net.createConnection({ host, port });
+        const s = createConnection({ host, port });
         s.setTimeout(4000);
         s.once('connect', () => {
           s.destroy();
@@ -233,12 +231,12 @@ class Node extends BaseResourceGroup {
   async _installSystemdUnit(serviceName, unitContent) {
     const remoteUnitPath = `/etc/systemd/system/${serviceName}.service`;
     const remoteTmp = `/tmp/.${serviceName}.${Date.now()}.service`;
-    const localTmp = path.join(
+    const localTmp = join(
       process.cwd(),
       `.tmp-${serviceName}.${Date.now()}.service`
     );
 
-    await fsp.writeFile(localTmp, unitContent, 'utf8');
+    await writeFile(localTmp, unitContent, 'utf8');
 
     try {
       await this._scpCopy(localTmp, remoteTmp);
@@ -246,7 +244,7 @@ class Node extends BaseResourceGroup {
       await this._exec('chmod', ['0644', remoteUnitPath]);
       await this._exec('systemctl', ['daemon-reload']);
     } finally {
-      await fsp.unlink(localTmp).catch(() => {});
+      await unlink(localTmp).catch(() => {});
     }
   }
 
@@ -273,7 +271,7 @@ class Node extends BaseResourceGroup {
    * @returns {Promise<void>} Resolves when the binary has been uploaded and moved into place.
    */
   async _installBinary(localPath, remotePath) {
-    const basename = path.basename(remotePath);
+    const basename = _basename(remotePath);
     const remoteTmp = `/tmp/.${basename}.${Date.now()}.new`;
     await this._scpCopy(localPath, remoteTmp);
     await this._exec('chmod', ['0755', remoteTmp]);
@@ -371,4 +369,4 @@ Node.DefaultProperties = {
   serviceArgs: [],
 };
 
-module.exports = Node;
+export default Node;

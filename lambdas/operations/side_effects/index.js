@@ -1,14 +1,14 @@
-const cloudwatch = require('./cloudwatch');
-const wharfie = require('./wharfie');
-const dagster = require('./dagster');
-const { Operation, Resource, Action } = require('../../lib/graph/');
+import cloudwatch from './cloudwatch.js';
+import wharfie from './wharfie.js';
+import dagster from './dagster.js';
+import { Operation, Resource, Action } from '../../lib/graph/index.js';
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function finish(event, context, resource, operation) {
   return {
@@ -17,11 +17,11 @@ async function finish(event, context, resource, operation) {
 }
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function defineSideEffects(event, context, resource, operation) {
   const finish_id = operation.getActionIdByType(Action.Type.FINISH);
@@ -60,11 +60,11 @@ async function defineSideEffects(event, context, resource, operation) {
 }
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function routeCustomSideEffect(event, context, resource, operation) {
   return {
@@ -72,7 +72,7 @@ async function routeCustomSideEffect(event, context, resource, operation) {
   };
 }
 
-module.exports = {
+export {
   cloudwatch,
   wharfie,
   dagster,

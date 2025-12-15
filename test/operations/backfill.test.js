@@ -1,5 +1,15 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const bluebird = require('bluebird');
 
 process.env.AWS_MOCKS = true;
@@ -82,6 +92,7 @@ describe('backfill tests', () => {
     });
     createLambdaQueues();
   });
+
   beforeEach(() => {
     setLambdaTriggers(CONTEXT);
   });
@@ -92,6 +103,7 @@ describe('backfill tests', () => {
 
   it('end to end', async () => {
     expect.assertions(4);
+
     await operations.putResource(
       new Resource({
         id: 'resource_id',
@@ -185,6 +197,7 @@ describe('backfill tests', () => {
     });
     await Promise.race([emptyQueues, timeout]);
     timeout.cancel();
+
     // eslint-disable-next-line jest/no-large-snapshots
     expect(Object.keys(dynamo_resource.__getMockState()))
       .toMatchInlineSnapshot(`

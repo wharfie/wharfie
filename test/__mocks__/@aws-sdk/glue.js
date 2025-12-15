@@ -1,4 +1,6 @@
-'use strict';
+import { jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { EntityNotFoundException } = jest.requireActual('@aws-sdk/client-glue');
 const { parse } = require('../../../lambdas/lib/arn');

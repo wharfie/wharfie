@@ -1,7 +1,6 @@
-'use strict';
-const IAM = require('../../../iam');
-const BaseResource = require('../base-resource');
-const { NoSuchEntityException } = require('@aws-sdk/client-iam');
+import IAM from '../../../iam.js';
+import BaseResource from '../base-resource.js';
+import { NoSuchEntityException } from '@aws-sdk/client-iam';
 /**
  * @typedef RoleProperties
  * @property {string} [roleName] -
@@ -16,9 +15,9 @@ const { NoSuchEntityException } = require('@aws-sdk/client-iam');
  * @typedef RoleOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {RoleProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {RoleProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class Role extends BaseResource {
@@ -166,4 +165,4 @@ class Role extends BaseResource {
   }
 }
 
-module.exports = Role;
+export default Role;

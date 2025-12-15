@@ -1,5 +1,5 @@
-const router = require('./router');
+import router from './router.js';
 
-module.exports = {
+export default {
   router,
 };

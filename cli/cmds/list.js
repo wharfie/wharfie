@@ -1,11 +1,10 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const { displayFailure, displaySuccess } = require('../output/basic');
-const {
-  getRecords,
-  getAllResources,
-} = require('../../lambdas/lib/dynamo/operations');
+const { getRecords, getAllResources } =
+  require('../../lambdas/lib/dynamo/operations').default;
 
 /**
  * @param {string} [resource_id] -

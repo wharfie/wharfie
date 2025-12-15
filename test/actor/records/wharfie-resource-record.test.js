@@ -1,6 +1,15 @@
 /* eslint-disable jest/no-large-snapshots */
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
 const { Resource } = require('../../../lambdas/lib/graph/');
@@ -24,11 +33,14 @@ describe('wharfie resource record IaC', () => {
     _delete = AWS.spyOn('DynamoDBDocument', 'delete');
     update = AWS.spyOn('DynamoDBDocument', 'update');
   });
+
   afterEach(() => {
     AWS.clearAllMocks();
   });
+
   it('basic', async () => {
     expect.assertions(14);
+
     const record = new WharfieResourceRecord({
       name: 'test-record',
       dependsOn: [],
@@ -92,7 +104,9 @@ describe('wharfie resource record IaC', () => {
       .map(([{ Item }]) => Item);
 
     expect(reconcilingStatusUpdate).toHaveLength(1);
+
     update.mock.calls = [];
+
     expect(stableStatusUpdate).toHaveLength(1);
     expect(stableStatusUpdate).toMatchInlineSnapshot(`
       [
@@ -254,7 +268,9 @@ describe('wharfie resource record IaC', () => {
         },
       }
     `);
+
     const serialized = record.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -354,6 +370,7 @@ describe('wharfie resource record IaC', () => {
       resourceKey: 'test-record',
     });
     await deserialized.reconcile();
+
     expect(deserialized.resolveProperties()).toMatchInlineSnapshot(`
       {
         "data": {
@@ -438,6 +455,7 @@ describe('wharfie resource record IaC', () => {
     expect(deserialized.status).toBe('STABLE');
 
     await deserialized.destroy();
+
     expect(deserialized.status).toBe('DESTROYED');
 
     const destroyingStatusUpdate = update.mock.calls;

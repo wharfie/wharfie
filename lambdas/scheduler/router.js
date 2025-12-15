@@ -1,23 +1,23 @@
-'use strict';
-const s3Events = require('./events/s3');
-const {
+import s3Events from './events/s3/index.js';
+import {
   WharfieOperationCompleted,
   WharfieScheduleOperation,
-} = require('./events/');
-const SchedulerEntry = require('./scheduler-entry');
-const scheduler = require('./scheduler');
-const logging = require('../lib/logging');
+} from './events/index.js';
+import SchedulerEntry from './scheduler-entry.js';
+import { run } from './scheduler.js';
+import * as logging from '../lib/logging/index.js';
+
 const daemon_log = logging.getDaemonLogger();
 
 /**
- * @param {import('./typedefs').InputEvent} event -
+ * @param {import('./typedefs.js').InputEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @returns {Promise<void>}
  */
 async function router(event, context) {
   daemon_log.info(`Event received ${JSON.stringify({ event, context })}`);
   if (SchedulerEntry.is(event)) {
-    await scheduler.run(SchedulerEntry.fromEvent(event), context);
+    await run(SchedulerEntry.fromEvent(event), context);
   } else if (WharfieOperationCompleted.is(event)) {
     await WharfieOperationCompleted.fromEvent(event).process();
   } else if (WharfieScheduleOperation.is(event)) {
@@ -27,4 +27,4 @@ async function router(event, context) {
   }
 }
 
-module.exports = router;
+export default router;

@@ -1,12 +1,11 @@
-'use strict';
-const DynamoDB = require('../../../dynamodb');
-const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const {
+import DynamoDB from '../../../dynamodb.js';
+import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
+import {
   ResourceNotFoundException,
   BillingMode,
-} = require('@aws-sdk/client-dynamodb');
+} from '@aws-sdk/client-dynamodb';
 
-const BaseResource = require('../base-resource');
+import BaseResource from '../base-resource.js';
 /**
  * @typedef TableProperties
  * @property {import("@aws-sdk/client-dynamodb").AttributeDefinition[]} attributeDefinitions -
@@ -21,9 +20,9 @@ const BaseResource = require('../base-resource');
  * @typedef TableOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {TableProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {TableProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class Table extends BaseResource {
@@ -216,4 +215,4 @@ class Table extends BaseResource {
 
 Table.BillingMode = BillingMode;
 
-module.exports = Table;
+export default Table;

@@ -1,7 +1,6 @@
-'use strict';
-const SQS = require('../../../sqs');
-const BaseResource = require('../base-resource');
-const { QueueDoesNotExist } = require('@aws-sdk/client-sqs');
+import SQS from '../../../sqs.js';
+import BaseResource from '../base-resource.js';
+import { QueueDoesNotExist } from '@aws-sdk/client-sqs';
 
 /**
  * @typedef QueueProperties
@@ -17,9 +16,9 @@ const { QueueDoesNotExist } = require('@aws-sdk/client-sqs');
  * @typedef QueueOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {QueueProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {QueueProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class Queue extends BaseResource {
@@ -155,4 +154,4 @@ class Queue extends BaseResource {
   }
 }
 
-module.exports = Queue;
+export default Queue;

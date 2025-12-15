@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * @param {number} min -
  * @param {number} max -
@@ -55,7 +53,4 @@ function generateSchedule(minutes) {
   return expression;
 }
 
-module.exports = {
-  generateSchedule,
-  getScheduleOffset,
-};
+export { generateSchedule, getScheduleOffset };

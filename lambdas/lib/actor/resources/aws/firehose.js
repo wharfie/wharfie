@@ -1,7 +1,6 @@
-'use strict';
-const FirehoseSDK = require('../../../firehose');
-const BaseResource = require('../base-resource');
-const { ResourceNotFoundException } = require('@aws-sdk/client-firehose');
+import FirehoseSDK from '../../../firehose.js';
+import BaseResource from '../base-resource.js';
+import { ResourceNotFoundException } from '@aws-sdk/client-firehose';
 /**
  * @typedef FirehoseProperties
  * @property {import('@aws-sdk/client-firehose').S3DestinationConfiguration | function(): import('@aws-sdk/client-firehose').S3DestinationConfiguration} s3DestinationConfiguration -
@@ -12,9 +11,9 @@ const { ResourceNotFoundException } = require('@aws-sdk/client-firehose');
  * @typedef FirehoseOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {FirehoseProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {FirehoseProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class Firehose extends BaseResource {
@@ -116,4 +115,4 @@ class Firehose extends BaseResource {
   }
 }
 
-module.exports = Firehose;
+export default Firehose;

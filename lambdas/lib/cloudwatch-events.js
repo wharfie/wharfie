@@ -1,8 +1,20 @@
-'use strict';
-const AWS = require('@aws-sdk/client-cloudwatch-events');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import {
+  CloudWatchEvents as _CloudWatchEvents,
+  DescribeRuleCommand,
+  PutRuleCommand,
+  EnableRuleCommand,
+  DisableRuleCommand,
+  DeleteRuleCommand,
+  PutTargetsCommand,
+  RemoveTargetsCommand,
+  ListTargetsByRuleCommand,
+  ListTagsForResourceCommand,
+  TagResourceCommand,
+  UntagResourceCommand,
+} from '@aws-sdk/client-cloudwatch-events';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('./base');
+import BaseAWS from './base.js';
 
 class CloudWatchEvents {
   /**
@@ -10,7 +22,7 @@ class CloudWatchEvents {
    */
   constructor(options) {
     const credentials = fromNodeProviderChain();
-    this.cloudwatchEvents = new AWS.CloudWatchEvents({
+    this.cloudwatchEvents = new _CloudWatchEvents({
       ...BaseAWS.config(),
       credentials,
       ...options,
@@ -22,9 +34,7 @@ class CloudWatchEvents {
    * @returns {Promise<import("@aws-sdk/client-cloudwatch-events").DescribeRuleCommandOutput>} -
    */
   async describeRule(params) {
-    return await this.cloudwatchEvents.send(
-      new AWS.DescribeRuleCommand(params)
-    );
+    return await this.cloudwatchEvents.send(new DescribeRuleCommand(params));
   }
 
   /**
@@ -32,7 +42,7 @@ class CloudWatchEvents {
    * @returns {Promise<import("@aws-sdk/client-cloudwatch-events").PutRuleCommandOutput>} -
    */
   async putRule(params) {
-    return await this.cloudwatchEvents.send(new AWS.PutRuleCommand(params));
+    return await this.cloudwatchEvents.send(new PutRuleCommand(params));
   }
 
   /**
@@ -40,7 +50,7 @@ class CloudWatchEvents {
    * @returns {Promise<import("@aws-sdk/client-cloudwatch-events").EnableRuleCommandOutput>} -
    */
   async enableRule(params) {
-    return await this.cloudwatchEvents.send(new AWS.EnableRuleCommand(params));
+    return await this.cloudwatchEvents.send(new EnableRuleCommand(params));
   }
 
   /**
@@ -48,7 +58,7 @@ class CloudWatchEvents {
    * @returns {Promise<import("@aws-sdk/client-cloudwatch-events").DisableRuleCommandOutput>} -
    */
   async disableRule(params) {
-    return await this.cloudwatchEvents.send(new AWS.DisableRuleCommand(params));
+    return await this.cloudwatchEvents.send(new DisableRuleCommand(params));
   }
 
   /**
@@ -56,7 +66,7 @@ class CloudWatchEvents {
    * @returns {Promise<import("@aws-sdk/client-cloudwatch-events").DeleteRuleCommandOutput>} -
    */
   async deleteRule(params) {
-    return await this.cloudwatchEvents.send(new AWS.DeleteRuleCommand(params));
+    return await this.cloudwatchEvents.send(new DeleteRuleCommand(params));
   }
 
   /**
@@ -64,7 +74,7 @@ class CloudWatchEvents {
    * @returns {Promise<import("@aws-sdk/client-cloudwatch-events").PutTargetsCommandOutput>} -
    */
   async putTargets(params) {
-    return await this.cloudwatchEvents.send(new AWS.PutTargetsCommand(params));
+    return await this.cloudwatchEvents.send(new PutTargetsCommand(params));
   }
 
   /**
@@ -72,9 +82,7 @@ class CloudWatchEvents {
    * @returns {Promise<import("@aws-sdk/client-cloudwatch-events").RemoveTargetsCommandOutput>} -
    */
   async removeTargets(params) {
-    return await this.cloudwatchEvents.send(
-      new AWS.RemoveTargetsCommand(params)
-    );
+    return await this.cloudwatchEvents.send(new RemoveTargetsCommand(params));
   }
 
   /**
@@ -83,7 +91,7 @@ class CloudWatchEvents {
    */
   async listTargetsByRule(params) {
     return await this.cloudwatchEvents.send(
-      new AWS.ListTargetsByRuleCommand(params)
+      new ListTargetsByRuleCommand(params)
     );
   }
 
@@ -93,7 +101,7 @@ class CloudWatchEvents {
    */
   async listTagsForResource(params) {
     return await this.cloudwatchEvents.send(
-      new AWS.ListTagsForResourceCommand(params)
+      new ListTagsForResourceCommand(params)
     );
   }
 
@@ -102,7 +110,7 @@ class CloudWatchEvents {
    * @returns {Promise<import("@aws-sdk/client-cloudwatch-events").TagResourceCommandOutput>} -
    */
   async tagResource(params) {
-    return await this.cloudwatchEvents.send(new AWS.TagResourceCommand(params));
+    return await this.cloudwatchEvents.send(new TagResourceCommand(params));
   }
 
   /**
@@ -110,10 +118,8 @@ class CloudWatchEvents {
    * @returns {Promise<import("@aws-sdk/client-cloudwatch-events").UntagResourceCommandOutput>} -
    */
   async untagResource(params) {
-    return await this.cloudwatchEvents.send(
-      new AWS.UntagResourceCommand(params)
-    );
+    return await this.cloudwatchEvents.send(new UntagResourceCommand(params));
   }
 }
 
-module.exports = CloudWatchEvents;
+export default CloudWatchEvents;

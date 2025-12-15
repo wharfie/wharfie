@@ -1,19 +1,18 @@
-'use strict';
-const SQS = require('../lib/sqs');
+import SQS from '../lib/sqs.js';
+
+import * as scheduler_db from '../lib/dynamo/scheduler.js';
+import * as resource_db from '../lib/dynamo/operations.js';
+import * as logging from '../lib/logging/index.js';
+import { Status } from './scheduler-entry.js';
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
-
-const scheduler_db = require('../lib/dynamo/scheduler');
-const resource_db = require('../lib/dynamo/operations');
-const logging = require('../lib/logging');
-const SchedulerEntry = require('./scheduler-entry');
 const daemon_log = logging.getDaemonLogger();
 
 const DAEMON_QUEUE_URL = process.env.DAEMON_QUEUE_URL || '';
 const QUEUE_URL = process.env.EVENTS_QUEUE_URL || '';
 
 /**
- * @param {SchedulerEntry} ScheduledEvent -
+ * @param {import('./scheduler-entry.js').default} ScheduledEvent -
  * @param {import('aws-lambda').Context} context -
  */
 async function run(ScheduledEvent, context) {
@@ -56,7 +55,7 @@ async function run(ScheduledEvent, context) {
       },
     };
   } else {
-    /** @type {import('../typedefs').PartitionValues} */
+    /** @type {import('../typedefs.js').PartitionValues} */
     const partitionValues = {};
     if (
       ScheduledEvent?.partition?.partitionValues.filter(
@@ -154,9 +153,7 @@ async function run(ScheduledEvent, context) {
     QueueUrl: DAEMON_QUEUE_URL,
   });
 
-  await scheduler_db.update(ScheduledEvent, SchedulerEntry.Status.STARTED);
+  await scheduler_db.update(ScheduledEvent, Status.STARTED);
 }
 
-module.exports = {
-  run,
-};
+export { run };

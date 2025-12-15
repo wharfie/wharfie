@@ -1,24 +1,24 @@
-'use strict';
-require('./config');
+import './config.js';
 
-const bluebirdPromise = require('bluebird');
+import { map } from 'bluebird';
 
-const SQS = require('./lib/sqs');
-const { getResource } = require('./lib/dynamo/operations');
-const Glue = require('./lib/glue');
-const S3 = require('./lib/s3');
-const STS = require('./lib/sts');
-const Clean = require('./operations/actions/lib/clean');
+import SQS from './lib/sqs.js';
+import { getResource } from './lib/dynamo/operations.js';
+import Glue from './lib/glue.js';
+import S3 from './lib/s3.js';
+import STS from './lib/sts.js';
+import Clean from './operations/actions/lib/clean.js';
+import * as logging from './lib/logging/index.js';
+
 const sqs = new SQS({ region: process.env.AWS_REGION });
 
-const logging = require('./lib/logging/');
 const daemon_log = logging.getDaemonLogger();
 
 const QUEUE_URL = process.env.CLEANUP_QUEUE_URL || '';
 const DLQ_URL = process.env.DLQ_URL || '';
 const MAX_RETRIES = Number(process.env.MAX_RETRIES || 7);
 /**
- * @param {import('./typedefs').CleanupEvent} cleanupEvent -
+ * @param {import('./typedefs.js').CleanupEvent} cleanupEvent -
  * @param {import('aws-lambda').Context} context -
  */
 async function run(cleanupEvent, context) {
@@ -54,7 +54,7 @@ async function run(cleanupEvent, context) {
 }
 
 /**
- * @param {import('./typedefs').CleanupEvent} event -
+ * @param {import('./typedefs.js').CleanupEvent} event -
  */
 async function DLQ(event) {
   daemon_log.error(`Record has expended its retries, sending to DLQ`, {
@@ -67,7 +67,7 @@ async function DLQ(event) {
 }
 
 /**
- * @param {import('./typedefs').CleanupEvent} event -
+ * @param {import('./typedefs.js').CleanupEvent} event -
  */
 async function retry(event) {
   if ((event.retries || 0) >= MAX_RETRIES) {
@@ -98,7 +98,7 @@ async function retry(event) {
  * @param {import('aws-lambda').Context} context -
  */
 async function processRecord(record, context) {
-  /** @type {import('./typedefs').CleanupEvent} */
+  /** @type {import('./typedefs.js').CleanupEvent} */
   const event = JSON.parse(record.body);
   try {
     if (!event.delays || event.delays < 3) {
@@ -130,7 +130,7 @@ async function processRecord(record, context) {
 const handler = async (event, context) => {
   daemon_log.debug(JSON.stringify(event));
   daemon_log.debug(`processing ${event.Records.length} records....`);
-  await bluebirdPromise.map(
+  await map(
     event.Records,
     (/** @type {import('aws-lambda').SQSRecord} */ record) => {
       return processRecord(record, context);
@@ -141,7 +141,7 @@ const handler = async (event, context) => {
   await logging.flush();
 };
 
-module.exports = {
+export default {
   handler,
   run,
 };

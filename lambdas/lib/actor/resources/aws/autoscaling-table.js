@@ -1,11 +1,9 @@
-'use strict';
-
-const Role = require('./role');
-const Table = require('./table');
-const AutoScalingPolicy = require('./autoscaling-policy');
-const AutoScalingTarget = require('./autoscaling-target');
-const ApplicationAutoScaling = require('../../../application-auto-scaling');
-const BaseResourceGroup = require('../base-resource-group');
+import Role from './role.js';
+import Table from './table.js';
+import AutoScalingPolicy from './autoscaling-policy.js';
+import AutoScalingTarget from './autoscaling-target.js';
+import ApplicationAutoScaling from '../../../application-auto-scaling.js';
+import BaseResourceGroup from '../base-resource-group.js';
 
 /**
  * @typedef AutoscalingTableProperties
@@ -24,10 +22,10 @@ const BaseResourceGroup = require('../base-resource-group');
  * @typedef AutoscalingTableOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {AutoscalingTableProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
- * @property {Object<string, import('../base-resource') | BaseResourceGroup>} [resources] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {AutoscalingTableProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {Object<string, import('../base-resource.js').default | BaseResourceGroup>} [resources] -
  */
 
 class AutoscalingTable extends BaseResourceGroup {
@@ -40,7 +38,7 @@ class AutoscalingTable extends BaseResourceGroup {
 
   /**
    * @param {string} parent -
-   * @returns {(import('../base-resource') | BaseResourceGroup)[]} -
+   * @returns {(import('../base-resource.js').default | BaseResourceGroup)[]} -
    */
   _defineGroupResources(parent) {
     const table = new Table({
@@ -201,4 +199,4 @@ class AutoscalingTable extends BaseResourceGroup {
   }
 }
 
-module.exports = AutoscalingTable;
+export default AutoscalingTable;

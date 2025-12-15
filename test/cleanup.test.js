@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const _S3 = require('../lambdas/lib/s3');
 const s3 = new _S3();
 jest.mock('../lambdas/lib/sts');
@@ -39,6 +41,7 @@ describe('tests for cleanup lambda', () => {
 
   it('run', async () => {
     expect.assertions(5);
+
     await lambda.run(
       {
         resource_id: '123',

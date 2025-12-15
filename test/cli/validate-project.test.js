@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-large-snapshots */
-'use strict';
+import { describe, expect, it } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { validateProject } = require('../../cli/project/schema');
 

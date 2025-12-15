@@ -1,9 +1,8 @@
-const path = require('node:path');
-const paths = require('../paths');
-// @ts-ignore
-const { DatabaseSync } = require('node:sqlite');
+import { join } from 'node:path';
+import paths from '../paths.js';
+import { DatabaseSync } from 'node:sqlite';
 
-const dbPath = path.join(paths.data, 'database.sqlite');
+const dbPath = join(paths.data, 'database.sqlite');
 
 class LocalDB {
   /**
@@ -73,7 +72,7 @@ class LocalDB {
   get(key) {
     const stmt = this.db.prepare('SELECT value FROM store WHERE key = ?');
     const row = stmt.get(this.namespace + key);
-    return row ? JSON.parse(row.value) : undefined;
+    return row?.value ? JSON.parse(row.value.toString()) : undefined;
   }
 
   /**
@@ -115,10 +114,14 @@ class LocalDB {
       'SELECT key, value FROM store WHERE key LIKE ?'
     );
     const rows = stmt.all(this.namespace + prefix + '%');
-    return rows.map((/** @type {{ key: any; value: string; }} */ row) => ({
-      key: row.key,
-      value: JSON.parse(row.value),
-    }));
+    return rows.map((row) => {
+      if (!row.key) throw new Error('unexpected key value');
+      if (!row.value) throw new Error('unexpected row value');
+      return {
+        key: row.key?.toString(),
+        value: JSON.parse(row.value?.toString()),
+      };
+    });
   }
 
   /**
@@ -134,4 +137,4 @@ class LocalDB {
 /** @type {DatabaseSync | undefined} */
 LocalDB.ROOT_DB = undefined;
 
-module.exports = LocalDB;
+export default LocalDB;

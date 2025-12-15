@@ -1,8 +1,6 @@
-'use strict';
-
-const Node = require('../node');
-const HetznerSSHKey = require('./ssh-key');
-const HetznerVPS = require('./vps');
+import Node from '../node.js';
+import HetznerSSHKey from './ssh-key.js';
+import HetznerVPS from './vps.js';
 
 /**
  * Properties for {@link HetznerNode}.
@@ -22,10 +20,10 @@ const HetznerVPS = require('./vps');
  * @typedef {Object} HetznerNodeOptions
  * @property {string} name - Logical name of the Hetzner-backed node resource.
  * @property {string} [parent] - Optional parent resource identifier in the resource graph.
- * @property {import('../reconcilable').Status} [status] - Optional initial reconciliation status for the node.
- * @property {HetznerNodeProperties & import('../node').NodeProperties & import('../../typedefs').SharedProperties} properties - Properties controlling Hetzner provisioning and service deployment.
- * @property {Array<import('../reconcilable')>} [dependsOn] - Optional list of resources that must be reconciled before this node.
- * @property {Record<string, import('../base-resource') | import('../base-resource-group')>} [resources] - Optional child resources (not required for {@link HetznerNode}).
+ * @property {import('../reconcilable.js').default.Status} [status] - Optional initial reconciliation status for the node.
+ * @property {HetznerNodeProperties & import('../node.js').NodeProperties & import('../../typedefs.js').SharedProperties} properties - Properties controlling Hetzner provisioning and service deployment.
+ * @property {Array<import('../reconcilable.js').default>} [dependsOn] - Optional list of resources that must be reconciled before this node.
+ * @property {Record<string, import('../base-resource.js').default | import('../base-resource-group.js').default>} [resources] - Optional child resources (not required for {@link HetznerNode}).
  */
 
 /**
@@ -53,7 +51,7 @@ class HetznerNode extends Node {
 
   /**
    * @param {string} parent -
-   * @returns {(import('../base-resource') | import('../base-resource-group'))[]} -
+   * @returns {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} -
    */
   _defineGroupResources(parent) {
     const hetzner_key = new HetznerSSHKey({
@@ -84,4 +82,4 @@ HetznerNode.DefaultProperties = {
   ...Node.DefaultProperties,
 };
 
-module.exports = HetznerNode;
+export default HetznerNode;

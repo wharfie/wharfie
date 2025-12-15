@@ -1,12 +1,12 @@
-const BuildResourceGroup = require('./build-resource-group');
-const NodeBinary = require('./node-binary');
-const BuildResource = require('./build-resource');
-const FunctionResource = require('./function-resource');
-const SeaBuild = require('./sea-build');
-const MacOSBinarySignature = require('./macos-binary-signature');
-const cli = require('./actor-system-cli');
+import BuildResourceGroup from './build-resource-group.js';
+import NodeBinary from './node-binary.js';
+import BuildResource from './build-resource.js';
+import FunctionResource from './function-resource.js';
+import SeaBuild from './sea-build.js';
+import MacOSBinarySignature from './macos-binary-signature.js';
+import cli from './actor-system-cli/index.js';
 
-const path = require('node:path');
+import path from 'node:path';
 
 /**
  * @typedef {import('node:process')['platform']} TargetPlatform
@@ -25,18 +25,18 @@ const path = require('node:path');
 /**
  * @typedef WharfieActorSystemProperties
  * @property {BuildTarget[] | function(): BuildTarget[]} targets -
- * @property {import('./function')[]} [functions] -
+ * @property {import('./function.js').default[]} [functions] -
  */
 
 /**
  * @typedef WharfieActorSystemOptions
  * @property {string} name -
- * @property {import('./function')[]} [functions] -
+ * @property {import('./function.js').default[]} [functions] -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {WharfieActorSystemProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
- * @property {Object<string, import('../base-resource') | import('../base-resource-group')>} [resources] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {WharfieActorSystemProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {Object<string, import('../base-resource.js').default | import('../base-resource-group.js').default>} [resources] -
  */
 
 class ActorSystem extends BuildResourceGroup {
@@ -66,12 +66,7 @@ class ActorSystem extends BuildResourceGroup {
       dependsOn: [...(dependsOn ?? [])],
     });
     this.functions = functions;
-    // @ts-ignore
-    this.callerFile = module?.parent?.filename;
-    this.callerDirectory = this.callerFile
-      ? path.dirname(this.callerFile)
-      : undefined;
-    // normally _defineGroupResources is used but this is a workaround to make sure this.functions and this.callerFile is set before defining things
+    // normally _defineGroupResources is used but this is a workaround to make sure this.functions is set before defining things
     this.addResources(this.defineActorSystemResources(parent));
     // @ts-ignore
     global[Symbol.for(`${this.getName()}`)] = this.run.bind(this);
@@ -91,13 +86,13 @@ class ActorSystem extends BuildResourceGroup {
   /**
    * @param {string|undefined} parent -
    * @param {BuildTarget} target -
-   * @returns {(import('../base-resource') | import('../base-resource-group'))[]} -
+   * @returns {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} -
    */
   _defineTargetResources(
     parent,
     { nodeVersion, platform, architecture, libc }
   ) {
-    /** @type {(import('../base-resource') | import('../base-resource-group'))[]} */
+    /** @type {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} */
     const resources = [];
     const node_binary = new NodeBinary({
       name: `${this.name}-node-binary-${nodeVersion}-${platform}-${architecture}`,
@@ -109,16 +104,15 @@ class ActorSystem extends BuildResourceGroup {
       },
     });
     const targetFunctions = this.functions.map(
-      (/** @type {import('./function')} */ func) => {
-        return new FunctionResource(func.fn, {
+      (/** @type {import('./function.js').default} */ func) => {
+        return new FunctionResource({
           name: `${func.name}-${nodeVersion}-${platform}-${architecture}`,
           parent,
           dependsOn: [node_binary],
           properties: {
             functionName: func.name,
+            entrypoint: func.entrypoint,
             ...func.properties,
-            resolveDir: () => path.dirname(this.callerDirectory || ''),
-            callerFile: () => this.callerFile,
             buildTarget: () => ({
               nodeVersion: node_binary.get('exactVersion').slice(1),
               platform,
@@ -135,19 +129,23 @@ class ActorSystem extends BuildResourceGroup {
       dependsOn: [node_binary, ...targetFunctions],
       properties: {
         entryCode: () => {
+          const __dirname = import.meta.dirname;
           return `
+              import cli from '${path.resolve(
+                __dirname,
+                'actor-system-cli',
+                'index.js'
+              )}';
+              import sourceMapSupport from 'source-map-support';
               (async () => {
                 console.time('overall');
-                require('source-map-support').install();
-                // Auto-generated entry file
-                require(${JSON.stringify(this.callerFile)});
-                await global[Symbol.for('${this.getName()}')]();
+                sourceMapSupport.install();
+                await cli()
                 console.timeEnd('overall');
               })();
           `;
         },
-        callerFile: () => this.callerFile,
-        resolveDir: () => path.dirname(this.callerDirectory || ''),
+        resolveDir: () => path.dirname(import.meta.dirname),
         nodeBinaryPath: () => node_binary.get('binaryPath'),
         nodeVersion: () => node_binary.get('exactVersion').slice(1),
         platform,
@@ -159,7 +157,7 @@ class ActorSystem extends BuildResourceGroup {
           return targetFunctions.reduce(
             (
               /** @type {{ [x: string]: string; }} */ acc,
-              /** @type {import('./function-resource')} */ func
+              /** @type {import('./function-resource.js').default} */ func
             ) => {
               acc[
                 func.name.replace(
@@ -174,7 +172,7 @@ class ActorSystem extends BuildResourceGroup {
         },
       },
     });
-    /** @type {(import('../base-resource') | import('../base-resource-group'))[]} */
+    /** @type {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} */
     resources.push(node_binary, build, ...targetFunctions);
     if (platform === 'darwin') {
       const macosBinarySignature = new MacOSBinarySignature({
@@ -195,10 +193,10 @@ class ActorSystem extends BuildResourceGroup {
 
   /**
    * @param {string|undefined} parent -
-   * @returns {(import('../base-resource') | import('../base-resource-group'))[]} -
+   * @returns {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} -
    */
   defineActorSystemResources(parent) {
-    /** @type {(import('../base-resource') | import('../base-resource-group'))[]} */
+    /** @type {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} */
     const resources = [];
     this.get('targets', []).forEach((/** @type {BuildTarget} */ target) => {
       resources.push(...this._defineTargetResources(parent, target));
@@ -242,4 +240,4 @@ ActorSystem.DefaultProperties = {
   functions: [],
 };
 
-module.exports = ActorSystem;
+export default ActorSystem;

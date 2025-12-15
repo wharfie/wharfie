@@ -1,17 +1,16 @@
-'use strict';
-const { Operation, Resource } = require('../../lib/graph/');
+import { Operation, Resource } from '../../lib/graph/index.js';
 
-const logging = require('../../lib/logging');
-const Glue = require('../../lib/glue');
-const S3 = require('../../lib/s3');
-const Partition = require('./lib/partition');
-const STS = require('../../lib/sts');
+import * as logging from '../../lib/logging/index.js';
+import Glue from '../../lib/glue.js';
+import S3 from '../../lib/s3.js';
+import Partition from './lib/partition.js';
+import STS from '../../lib/sts.js';
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function run(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
@@ -52,4 +51,4 @@ async function run(event, context, resource, operation) {
   };
 }
 
-module.exports = { run };
+export default { run };

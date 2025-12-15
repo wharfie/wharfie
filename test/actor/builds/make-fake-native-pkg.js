@@ -1,5 +1,6 @@
 // test/helpers/make-fake-native.js
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 /* eslint-disable jsdoc/require-jsdoc */
 
@@ -20,7 +21,8 @@ async function makeFakeNativePkg(rootDir, name) {
   };
 
   const installJs = `
-    'use strict';
+    import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
     console.log("INSTALLING")
     const { spawnSync } = require('node:child_process');
 

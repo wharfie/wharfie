@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 jest.mock('../../../lambdas/lib/dynamo/location');
 
@@ -12,10 +14,12 @@ describe('dynamo location db', () => {
 
   it('putLocation', async () => {
     expect.assertions(1);
+
     await location.putLocation({
       resource_id: 'resource_id',
       location: 's3://somebucket/prefix/',
     });
+
     expect(location.__getMockState()).toMatchInlineSnapshot(`
       {
         "s3://somebucket/prefix/": {
@@ -30,6 +34,7 @@ describe('dynamo location db', () => {
 
   it('findLocations', async () => {
     expect.assertions(1);
+
     await location.putLocation({
       resource_id: 'resource_id',
       location: 's3://somebucket/prefix/',
@@ -45,11 +50,13 @@ describe('dynamo location db', () => {
     const result = await location.findLocations(
       's3://some_bucket/prefix/partion=a/a_key.json'
     );
+
     expect(result).toMatchInlineSnapshot(`[]`);
   });
 
   it('deleteLocation', async () => {
     expect.assertions(1);
+
     await location.putLocation({
       resource_id: 'resource_id',
       location: 's3://somebucket/prefix/',
@@ -58,6 +65,7 @@ describe('dynamo location db', () => {
       resource_id: 'resource_id',
       location: 's3://somebucket/prefix/',
     });
+
     expect(location.__getMockState()).toMatchInlineSnapshot(`
       {
         "s3://somebucket/prefix/": {},

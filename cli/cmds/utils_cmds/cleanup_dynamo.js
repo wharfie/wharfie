@@ -1,4 +1,5 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const cliProgress = require('cli-progress');
@@ -7,10 +8,8 @@ const {
   displayFailure,
   displayInfo,
 } = require('../../output/basic');
-const {
-  getAllOperations,
-  deleteOperation,
-} = require('../../../lambdas/lib/dynamo/operations');
+const { getAllOperations, deleteOperation } =
+  require('../../../lambdas/lib/dynamo/operations').default;
 
 const cleanupDynamo = async () => {
   displayInfo('Fetching operations...');

@@ -1,13 +1,12 @@
-'use strict';
-const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const {
+import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
+import {
   DynamoDB,
   ProvisionedThroughputExceededException,
   ResourceNotFoundException,
-} = require('@aws-sdk/client-dynamodb');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+} from '@aws-sdk/client-dynamodb';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('../base');
+import BaseAWS from '../base.js';
 
 const credentials = fromNodeProviderChain();
 const docClient = DynamoDBDocument.from(
@@ -99,4 +98,4 @@ async function putWithThroughputRetry(params) {
   throw new Error('Max attempts exceeded');
 }
 
-module.exports = { query, batchWrite, putWithThroughputRetry, docClient };
+export { query, batchWrite, putWithThroughputRetry, docClient };

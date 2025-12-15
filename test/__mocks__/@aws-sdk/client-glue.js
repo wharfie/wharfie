@@ -1,4 +1,6 @@
-'use strict';
+import { jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const AWS = jest.requireActual('@aws-sdk/client-glue');
 const { mockClient } = require('aws-sdk-client-mock');
 

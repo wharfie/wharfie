@@ -1,9 +1,9 @@
-const WharfieActor = require('../wharfie-actor');
-const EventsRule = require('../resources/aws/events-rule');
+import WharfieActor from '../wharfie-actor.js';
+import EventsRule from '../resources/aws/events-rule.js';
 
 class Monitor extends WharfieActor {
   /**
-   * @param {import('../wharfie-actor').ExtendedWharfieActorOptions} options -
+   * @param {import('../wharfie-actor.js').ExtendedWharfieActorOptions} options -
    */
   constructor({ status, parent, resources, properties }) {
     super({
@@ -20,7 +20,7 @@ class Monitor extends WharfieActor {
 
   /**
    * @param {string} parent -
-   * @returns {(import('../resources/base-resource') | import('../resources/base-resource-group'))[]} -
+   * @returns {(import('../resources/base-resource.js').default | import('../resources/base-resource-group.js').default)[]} -
    */
   _defineGroupResources(parent) {
     const resources = super._defineGroupResources(parent);
@@ -65,4 +65,4 @@ class Monitor extends WharfieActor {
   }
 }
 
-module.exports = Monitor;
+export default Monitor;

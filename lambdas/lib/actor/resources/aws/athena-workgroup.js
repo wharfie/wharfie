@@ -1,8 +1,7 @@
-'use strict';
-const Athena = require('../../../athena');
-const BaseResource = require('../base-resource');
+import Athena from '../../../athena/index.js';
+import BaseResource from '../base-resource.js';
 
-const { InvalidRequestException } = require('@aws-sdk/client-athena');
+import { InvalidRequestException } from '@aws-sdk/client-athena';
 
 /**
  * @typedef AthenaWorkgroupProperties
@@ -15,9 +14,9 @@ const { InvalidRequestException } = require('@aws-sdk/client-athena');
  * @typedef AthenaWorkgroupOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {AthenaWorkgroupProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {AthenaWorkgroupProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class AthenaWorkGroup extends BaseResource {
@@ -126,4 +125,4 @@ class AthenaWorkGroup extends BaseResource {
   }
 }
 
-module.exports = AthenaWorkGroup;
+export default AthenaWorkGroup;

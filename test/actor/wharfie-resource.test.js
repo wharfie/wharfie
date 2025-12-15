@@ -1,6 +1,8 @@
 /* eslint-disable jest/no-large-snapshots */
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
 
@@ -31,8 +33,10 @@ describe('wharfie resource IaC', () => {
   afterEach(() => {
     resetAWSMocks();
   });
+
   it('basic', async () => {
     expect.assertions(7);
+
     // @ts-ignore
     s3.__setMockState({
       's3://amazon-berkeley-objects/empty.json': '',
@@ -128,6 +132,7 @@ describe('wharfie resource IaC', () => {
     });
     await wharfieResource.reconcile();
     const reconcile_state = state_db.__getMockState();
+
     expect(reconcile_state).toMatchInlineSnapshot(`
       {
         "test-deployment": {
@@ -626,6 +631,7 @@ describe('wharfie resource IaC', () => {
     `);
 
     expect(state_db.__getMockState()).toStrictEqual(reconcile_state);
+
     const deserialized = await load({
       deploymentName: 'test-deployment',
       resourceKey: 'test-resource',
@@ -641,6 +647,7 @@ describe('wharfie resource IaC', () => {
     expect(sqs.__getMockState().queues[DAEMON_QUEUE_URL]).toBeUndefined();
 
     await deserialized.destroy();
+
     expect(deserialized.status).toBe('DESTROYED');
   }, 10000);
 });

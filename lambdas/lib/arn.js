@@ -1,5 +1,3 @@
-'use strict';
-
 const arnScheme = 'arn';
 const delimiter = ':';
 const arnSections = 6;
@@ -48,7 +46,7 @@ const splitN = (
   return output;
 };
 
-exports.parse = (/** @type {string} */ arn) => {
+const parse = (/** @type {string} */ arn) => {
   if (typeof arn !== 'string') {
     throw new TypeError(invalidType);
   }
@@ -72,7 +70,7 @@ exports.parse = (/** @type {string} */ arn) => {
   };
 };
 
-exports.toString = (
+const toString = (
   /** @type {{ partition: string; service: string; region: string; accountID: string; resource: string; }} */ arn
 ) => {
   return [
@@ -84,3 +82,5 @@ exports.toString = (
     arn.resource,
   ].join(delimiter);
 };
+
+export { toString, parse };

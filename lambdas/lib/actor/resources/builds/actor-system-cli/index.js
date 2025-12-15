@@ -1,9 +1,9 @@
-// const fs = require('fs');
-const { Command } = require('commander');
-const paths = require('../../../../paths');
-// const { displayFailure } = require('../../../../../../cli/output/basic');
-// const config = require('../../../../../../cli/config');
-// const { checkForNewRelease } = require('../../../../../../cli/upgrade');
+import { Command } from 'commander';
+import paths from '../../../../paths.js';
+
+import functionsCLI from './functions.js';
+import infrastructureCLI from './infrastructure.js';
+import controlCLI from './control.js';
 
 /**
  *
@@ -28,9 +28,9 @@ async function entrypoint() {
   program.name('wharfie').description('CLI tool for Wharfie');
   // .version(version);ctor/resources/builds/actor-system.js
 
-  program.addCommand(require('./functions'));
-  program.addCommand(require('./infrastructure'));
-  program.addCommand(require('./control'));
+  program.addCommand(functionsCLI);
+  program.addCommand(infrastructureCLI);
+  program.addCommand(controlCLI);
 
   program.hook('preAction', async () => {
     await paths.createWharfiePaths();
@@ -67,4 +67,5 @@ async function entrypoint() {
   }
   await program.parseAsync(argv);
 }
-module.exports = entrypoint;
+
+export default entrypoint;

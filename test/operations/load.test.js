@@ -1,5 +1,15 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 // process.env.LOGGING_LEVEL = 'debug';
 const bluebird = require('bluebird');
@@ -86,6 +96,7 @@ describe('s3 event tests', () => {
     });
     createLambdaQueues();
   });
+
   beforeEach(() => {
     setLambdaTriggers(CONTEXT);
   });
@@ -194,6 +205,7 @@ describe('s3 event tests', () => {
     });
     await Promise.race([emptyQueues, timeout]);
     timeout.cancel();
+
     // eslint-disable-next-line jest/no-large-snapshots
     expect(Object.keys(operations.__getMockState())).toMatchInlineSnapshot(`
       [

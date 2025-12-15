@@ -12,21 +12,32 @@
  *   2) Single combo: ./build.js --platform windows --arch x64
  */
 
-const fs = require('fs');
-const path = require('path');
-const { spawnSync } = require('child_process');
+import {
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  copyFileSync,
+  readdirSync,
+  renameSync,
+  unlinkSync,
+  createWriteStream,
+  readFileSync,
+} from 'fs';
+import { resolve as _resolve, join } from 'path';
+import { spawnSync } from 'child_process';
+import { build } from './lambdas/lib/esbuild.js';
+import https from 'https';
+import http from 'http';
+import JSZip from 'jszip';
+// eslint-disable-next-line node/no-unpublished-require
+import { extract } from 'tar';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const {
   engines: { node: NODE_VERSION },
-} = require('./package.json');
-const esbuild = require('./lambdas/lib/esbuild');
-const https = require('https');
-const http = require('http');
-const JSZip = require('jszip');
-// eslint-disable-next-line node/no-unpublished-require
-const tar = require('tar');
-const {
   dependencies: { esbuild: esbuildVersion },
-} = require('./package.json');
+} = require('../../../package.json');
+const __dirname = import.meta.dirname;
 
 const DEFAULT_BUILDS = [
   ['darwin', 'x64'],
@@ -86,15 +97,15 @@ async function runBuild(platform, arch) {
   console.log('=================================================');
 
   // 1) Prepare directories + names
-  const TMP_DIR = path.resolve(path.join('tmp', `${platform}-${arch}`));
-  const DIST_DIR = path.join('dist');
+  const TMP_DIR = _resolve(join('tmp', `${platform}-${arch}`));
+  const DIST_DIR = join('dist');
   const WHARFIE_BASENAME = 'wharfie';
 
-  if (!fs.existsSync(TMP_DIR)) {
-    fs.mkdirSync(TMP_DIR, { recursive: true });
+  if (!existsSync(TMP_DIR)) {
+    mkdirSync(TMP_DIR, { recursive: true });
   }
-  if (!fs.existsSync(DIST_DIR)) {
-    fs.mkdirSync(DIST_DIR, { recursive: true });
+  if (!existsSync(DIST_DIR)) {
+    mkdirSync(DIST_DIR, { recursive: true });
   }
 
   // Decide final binary name (.exe on Windows)
@@ -110,17 +121,11 @@ async function runBuild(platform, arch) {
   }
 
   // 2) esbuild Lambdas + CLI using Node API
-  await buildWithEsbuild('lambdas/daemon.js', path.join(TMP_DIR, 'daemon.js'));
-  await buildWithEsbuild('lambdas/events.js', path.join(TMP_DIR, 'events.js'));
-  await buildWithEsbuild(
-    'lambdas/monitor.js',
-    path.join(TMP_DIR, 'monitor.js')
-  );
-  await buildWithEsbuild(
-    'lambdas/cleanup.js',
-    path.join(TMP_DIR, 'cleanup.js')
-  );
-  await buildWithEsbuild('bin/wharfie', path.join(TMP_DIR, 'wharfie.js'));
+  await buildWithEsbuild('lambdas/daemon.js', join(TMP_DIR, 'daemon.js'));
+  await buildWithEsbuild('lambdas/events.js', join(TMP_DIR, 'events.js'));
+  await buildWithEsbuild('lambdas/monitor.js', join(TMP_DIR, 'monitor.js'));
+  await buildWithEsbuild('lambdas/cleanup.js', join(TMP_DIR, 'cleanup.js'));
+  await buildWithEsbuild('bin/wharfie', join(TMP_DIR, 'wharfie.js'));
 
   console.log(`\x1b[32m✔ esbuild done for ${platform}-${arch}\x1b[0m`);
 
@@ -128,27 +133,27 @@ async function runBuild(platform, arch) {
   const esbuildBinaryLocation = await fetchEsbuildBinary(platform, arch);
 
   // 3) SEA blob generation — dynamically create sea-config.json
-  const seaConfigPath = path.join(TMP_DIR, 'sea-config.json');
+  const seaConfigPath = join(TMP_DIR, 'sea-config.json');
   const seaConfig = {
-    main: path.join(TMP_DIR, 'wharfie.js'),
-    output: path.join(TMP_DIR, 'wharfie.blob'),
+    main: join(TMP_DIR, 'wharfie.js'),
+    output: join(TMP_DIR, 'wharfie.blob'),
     disableExperimentalSEAWarning: true,
     useSnapshot: true,
     assets: {
-      '<WHARFIE_BUILT_IN>/daemon.handler': path.join(TMP_DIR, 'daemon.js'),
-      '<WHARFIE_BUILT_IN>/cleanup.handler': path.join(TMP_DIR, 'cleanup.js'),
-      '<WHARFIE_BUILT_IN>/events.handler': path.join(TMP_DIR, 'events.js'),
-      '<WHARFIE_BUILT_IN>/monitor.handler': path.join(TMP_DIR, 'monitor.js'),
+      '<WHARFIE_BUILT_IN>/daemon.handler': join(TMP_DIR, 'daemon.js'),
+      '<WHARFIE_BUILT_IN>/cleanup.handler': join(TMP_DIR, 'cleanup.js'),
+      '<WHARFIE_BUILT_IN>/events.handler': join(TMP_DIR, 'events.js'),
+      '<WHARFIE_BUILT_IN>/monitor.handler': join(TMP_DIR, 'monitor.js'),
       esbuildBin: esbuildBinaryLocation,
     },
   };
-  fs.writeFileSync(seaConfigPath, JSON.stringify(seaConfig, null, 2), 'utf8');
+  writeFileSync(seaConfigPath, JSON.stringify(seaConfig, null, 2), 'utf8');
   runCmd('node', ['--no-warnings', '--experimental-sea-config', seaConfigPath]);
 
   // 4) Fetch or get the Node binary
   const nodeBinary = await fetchOrGetNodeBinary(platform, arch);
-  const nodeBinaryPath = path.join(TMP_DIR, outputName);
-  fs.copyFileSync(nodeBinary, nodeBinaryPath);
+  const nodeBinaryPath = join(TMP_DIR, outputName);
+  copyFileSync(nodeBinary, nodeBinaryPath);
 
   // 5) Remove signature if macOS (placeholder)
   if (platform === 'darwin') {
@@ -160,13 +165,13 @@ async function runBuild(platform, arch) {
   }
 
   // 6) Inject the SEA blob (postject)
-  runPostject(nodeBinaryPath, path.join(TMP_DIR, 'wharfie.blob'), platform);
+  runPostject(nodeBinaryPath, join(TMP_DIR, 'wharfie.blob'), platform);
 
   // 7) Sign the binary (placeholder)
   if (platform === 'darwin') {
     setupMacKeychain();
     // ---- NEW: Write entitlements.plist to a tmp file ----
-    const entitlementsPath = path.join(TMP_DIR, 'entitlements.plist');
+    const entitlementsPath = join(TMP_DIR, 'entitlements.plist');
     writeEntitlements(entitlementsPath);
 
     console.log('Signing macOS binary...');
@@ -189,10 +194,8 @@ async function runBuild(platform, arch) {
   }
 
   // 8) Copy final artifact to dist/
-  fs.copyFileSync(nodeBinaryPath, path.join(DIST_DIR, distFile));
-  console.log(
-    `\x1b[32m✔ Build complete: ${path.join(DIST_DIR, distFile)}\x1b[0m`
-  );
+  copyFileSync(nodeBinaryPath, join(DIST_DIR, distFile));
+  console.log(`\x1b[32m✔ Build complete: ${join(DIST_DIR, distFile)}\x1b[0m`);
 }
 
 /**
@@ -206,7 +209,7 @@ async function buildWithEsbuild(entryPoint, outFile) {
   require('v8').startupSnapshot.setDeserializeMainFunction(() => {
     require('./${entryPoint}')
   });`;
-  const { errors, warnings } = await esbuild.build({
+  const { errors, warnings } = await build({
     stdin: {
       contents: entryCode,
       resolveDir: process.cwd(),
@@ -247,18 +250,18 @@ async function fetchEsbuildBinary(platform, arch) {
     'linux-x64': '@esbuild/linux-x64',
     'linux-arm64': '@esbuild/linux-arm64',
   };
-  const esbuildBinariesDir = path.join(__dirname, 'esbuild_binaries');
-  if (!fs.existsSync(esbuildBinariesDir)) {
-    fs.mkdirSync(esbuildBinariesDir, { recursive: true });
+  const esbuildBinariesDir = join(__dirname, 'esbuild_binaries');
+  if (!existsSync(esbuildBinariesDir)) {
+    mkdirSync(esbuildBinariesDir, { recursive: true });
   }
 
   let binaryName = `esbuild-${platform}-${arch}`;
   if (platform === 'windows') {
     binaryName += '.exe';
   }
-  const localPath = path.join(esbuildBinariesDir, binaryName);
+  const localPath = join(esbuildBinariesDir, binaryName);
 
-  if (fs.existsSync(localPath)) {
+  if (existsSync(localPath)) {
     return localPath;
   }
 
@@ -272,7 +275,7 @@ async function fetchEsbuildBinary(platform, arch) {
   const tarballUrl = packageMetadata.dist.tarball;
 
   const archiveName = `esbuild-${platform}-${arch}.tar.gz`;
-  const archivePath = path.join(esbuildBinariesDir, archiveName);
+  const archivePath = join(esbuildBinariesDir, archiveName);
 
   console.log(`Downloading tar from npm.org ${tarballUrl}...`);
   await downloadFile(tarballUrl, archivePath);
@@ -280,15 +283,15 @@ async function fetchEsbuildBinary(platform, arch) {
 
   // Extract esbuild binary
   const extractDir = `${archivePath}-extract`;
-  fs.mkdirSync(extractDir, { recursive: true });
+  mkdirSync(extractDir, { recursive: true });
 
-  await tar.extract({
+  await extract({
     file: archivePath,
     cwd: extractDir,
     strict: true,
   });
 
-  const subDirs = fs.readdirSync(extractDir);
+  const subDirs = readdirSync(extractDir);
   if (subDirs.length !== 1) {
     throw new Error(
       `Expected exactly 1 top-level dir in tar, got: ${subDirs.length}`
@@ -296,19 +299,19 @@ async function fetchEsbuildBinary(platform, arch) {
   }
   let esbuildBinary;
   if (platform === 'windows') {
-    esbuildBinary = path.join(extractDir, subDirs[0], 'esbuild.exe');
+    esbuildBinary = join(extractDir, subDirs[0], 'esbuild.exe');
   } else {
-    esbuildBinary = path.join(extractDir, subDirs[0], 'bin', 'esbuild');
+    esbuildBinary = join(extractDir, subDirs[0], 'bin', 'esbuild');
   }
-  if (!fs.existsSync(esbuildBinary)) {
+  if (!existsSync(esbuildBinary)) {
     throw new Error(`esbuild binary not found at: ${esbuildBinary}`);
   }
 
   // Move out of the temp extraction to localPath
-  fs.renameSync(esbuildBinary, localPath);
+  renameSync(esbuildBinary, localPath);
 
   // Cleanup archive
-  fs.unlinkSync(archivePath);
+  unlinkSync(archivePath);
 
   console.log(`✔ Downloaded & extracted esbuild binary to ${localPath}`);
   return localPath;
@@ -322,18 +325,18 @@ async function fetchEsbuildBinary(platform, arch) {
  * @returns {Promise<string>} - Path to the Node binary.
  */
 async function fetchOrGetNodeBinary(platform, arch) {
-  const nodeBinariesDir = path.join(__dirname, 'node_binaries');
-  if (!fs.existsSync(nodeBinariesDir)) {
-    fs.mkdirSync(nodeBinariesDir, { recursive: true });
+  const nodeBinariesDir = join(__dirname, 'node_binaries');
+  if (!existsSync(nodeBinariesDir)) {
+    mkdirSync(nodeBinariesDir, { recursive: true });
   }
 
   let binaryName = `node-${platform}-${arch}-${NODE_VERSION}`;
   if (platform === 'windows') {
     binaryName += '.exe';
   }
-  const localPath = path.join(nodeBinariesDir, binaryName);
+  const localPath = join(nodeBinariesDir, binaryName);
 
-  if (fs.existsSync(localPath)) {
+  if (existsSync(localPath)) {
     return localPath;
   }
 
@@ -344,7 +347,7 @@ async function fetchOrGetNodeBinary(platform, arch) {
   console.log(`Downloading from nodejs.org ${nodeDownloadUrl}...`);
   const archiveExt = platform === 'windows' ? '.zip' : '.tar.gz';
   const archiveName = `node-v${NODE_VERSION}-${platform}-${arch}${archiveExt}`;
-  const archivePath = path.join(nodeBinariesDir, archiveName);
+  const archivePath = join(nodeBinariesDir, archiveName);
 
   // Download the archive
   await downloadFile(nodeDownloadUrl, archivePath);
@@ -359,10 +362,10 @@ async function fetchOrGetNodeBinary(platform, arch) {
   }
 
   // Move out of the temp extraction to localPath
-  fs.renameSync(extractedBinary, localPath);
+  renameSync(extractedBinary, localPath);
 
   // Cleanup archive
-  fs.unlinkSync(archivePath);
+  unlinkSync(archivePath);
 
   console.log(`✔ Downloaded & extracted Node binary to ${localPath}`);
   return localPath;
@@ -394,7 +397,7 @@ function getNodeDownloadUrl(version, platform, arch) {
  * @param {string} destPath -
  */
 async function downloadFile(url, destPath) {
-  const fileStream = fs.createWriteStream(destPath);
+  const fileStream = createWriteStream(destPath);
   const protocol = url.startsWith('https:') ? https : http;
 
   await new Promise((resolve, reject) => {
@@ -447,23 +450,23 @@ async function download(url) {
 async function extractNodeUnixTar(archivePath) {
   // Extract to a new folder
   const extractDir = `${archivePath}-extract`;
-  fs.mkdirSync(extractDir, { recursive: true });
+  mkdirSync(extractDir, { recursive: true });
 
-  await tar.extract({
+  await extract({
     file: archivePath,
     cwd: extractDir,
     strict: true,
   });
 
   // e.g. node-v22.0.0-linux-x64/bin/node
-  const subDirs = fs.readdirSync(extractDir);
+  const subDirs = readdirSync(extractDir);
   if (subDirs.length !== 1) {
     throw new Error(
       `Expected exactly 1 top-level dir in tar, got: ${subDirs.length}`
     );
   }
-  const nodeBinary = path.join(extractDir, subDirs[0], 'bin', 'node');
-  if (!fs.existsSync(nodeBinary)) {
+  const nodeBinary = join(extractDir, subDirs[0], 'bin', 'node');
+  if (!existsSync(nodeBinary)) {
     throw new Error(`Node binary not found at: ${nodeBinary}`);
   }
 
@@ -477,14 +480,14 @@ async function extractNodeUnixTar(archivePath) {
  * @returns {Promise<string>} - Path to the extracted 'node.exe' binary.
  */
 async function extractNodeWindowsZip(archivePath) {
-  const zipData = fs.readFileSync(archivePath);
+  const zipData = readFileSync(archivePath);
   const jszip = new JSZip();
   const zip = await jszip.loadAsync(zipData);
 
   // Typically: node-v22.0.0-win-x64/node.exe
   let nodeExePath = '';
   const extractDir = `${archivePath}-extract`;
-  fs.mkdirSync(extractDir, { recursive: true });
+  mkdirSync(extractDir, { recursive: true });
 
   // Iterate through zip files
   const fileNames = Object.keys(zip.files);
@@ -503,8 +506,8 @@ async function extractNodeWindowsZip(archivePath) {
   const fileData = await zip.files[nodeExePath].async('nodebuffer');
 
   // We'll place it in extractDir/node.exe
-  const finalPath = path.join(extractDir, 'node.exe');
-  fs.writeFileSync(finalPath, fileData);
+  const finalPath = join(extractDir, 'node.exe');
+  writeFileSync(finalPath, fileData);
 
   return finalPath;
 }
@@ -604,10 +607,7 @@ function setupMacKeychain() {
   ]);
 
   // 5) Decode & import the p12
-  fs.writeFileSync(
-    '/tmp/devcert.p12',
-    Buffer.from(MACOS_CERT_BASE64, 'base64')
-  );
+  writeFileSync('/tmp/devcert.p12', Buffer.from(MACOS_CERT_BASE64, 'base64'));
   runCmd('security', [
     'import',
     '/tmp/devcert.p12',
@@ -647,6 +647,6 @@ function writeEntitlements(entitlementsPath) {
 </dict>
 </plist>
 `;
-  fs.writeFileSync(entitlementsPath, contents, 'utf8');
+  writeFileSync(entitlementsPath, contents, 'utf8');
   console.log(`✔ Wrote entitlements to ${entitlementsPath}`);
 }

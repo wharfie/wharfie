@@ -1,5 +1,7 @@
 /* eslint-disable new-cap */
-'use strict';
+import { jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const S3 = require('./s3');
 const Glue = require('./glue');
 const SQS = require('./sqs');

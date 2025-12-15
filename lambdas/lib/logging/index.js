@@ -1,10 +1,10 @@
-'use strict';
+import Logger from './logger.js';
+import ConsoleLogTransport from './console-log-transport.js';
+import FirehoseLogTransport from './firehose-log-transport.js';
+import { hostname as _hostname } from 'os';
 
-const Logger = require('./logger');
-const ConsoleLogTransport = require('./console-log-transport');
-const FirehoseLogTransport = require('./firehose-log-transport');
-const os = require('os');
-
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { version } = require('../../../package.json');
 
 const ROOT_LOGGER = new Logger({
@@ -12,7 +12,7 @@ const ROOT_LOGGER = new Logger({
   jsonFormat: true,
   base: {
     pid: process.pid,
-    hostname: os.hostname,
+    hostname: _hostname,
     wharfie_version: version,
   },
   transports: [
@@ -43,7 +43,7 @@ const WHARFIE_DB_LOGGER = ROOT_LOGGER.child({
 });
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @returns {Logger} -
  */
@@ -90,7 +90,7 @@ async function flush() {
   await ROOT_LOGGER.flush();
 }
 
-module.exports = {
+export {
   getEventLogger,
   getDaemonLogger,
   getAWSSDKLogger,

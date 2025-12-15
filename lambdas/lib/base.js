@@ -1,10 +1,9 @@
-'use strict';
-const { ConfiguredRetryStrategy } = require('@smithy/util-retry');
-const { stringify } = require('flatted');
+import { ConfiguredRetryStrategy } from '@smithy/util-retry';
+import { stringify } from 'flatted';
 
-const logging = require('./logging');
-const aws_sdk_log = logging.getAWSSDKLogger();
-const daemon_log = logging.getDaemonLogger();
+import { getAWSSDKLogger, getDaemonLogger } from './logging/index.js';
+const aws_sdk_log = getAWSSDKLogger();
+const daemon_log = getDaemonLogger();
 
 /**
  * @typedef BaseAWSConfig
@@ -168,4 +167,4 @@ class BaseAWS {
   }
 }
 
-module.exports = BaseAWS;
+export default BaseAWS;

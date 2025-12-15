@@ -1,9 +1,11 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const { displayFailure } = require('../../output/basic');
-const Athena = require('../../../lambdas/lib/athena');
-const { getAllResources } = require('../../../lambdas/lib/dynamo/operations');
+const Athena = require('../../../lambdas/lib/athena').default;
+const { getAllResources } =
+  require('../../../lambdas/lib/dynamo/operations').default;
 
 const view = async () => {
   const athena = new Athena({});

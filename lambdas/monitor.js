@@ -1,22 +1,22 @@
-'use strict';
-require('./config');
-const bluebirdPromise = require('bluebird');
+import './config';
+import { map } from 'bluebird';
 
-const semaphore_db = require('./lib/dynamo/semaphore');
-const resource_db = require('./lib/dynamo/operations');
-const { getResource } = require('./migrations/');
-const Athena = require('./lib/athena');
-const SQS = require('./lib/sqs');
-const SNS = require('./lib/sns');
-const STS = require('./lib/sts');
-const S3 = require('./lib/s3');
-const Glue = require('./lib/glue');
-const CloudWatch = require('./lib/cloudwatch');
-const Clean = require('./operations/actions/lib/clean');
-const logging = require('./lib/logging/');
+import * as semaphore_db from './lib/dynamo/semaphore.js';
+import * as resource_db from './lib/dynamo/operations.js';
+import { getResource } from './migrations/index.js';
+import Athena from './lib/athena/index.js';
+import SQS from './lib/sqs.js';
+import SNS from './lib/sns.js';
+import STS from './lib/sts.js';
+import S3 from './lib/s3.js';
+import Glue from './lib/glue.js';
+import CloudWatch from './lib/cloudwatch.js';
+import Clean from './operations/actions/lib/clean.js';
+import * as logging from './lib/logging/index.js';
+import { StandardUnit } from '@aws-sdk/client-cloudwatch';
+import { Resource, Action, Query } from './lib/graph/index.js';
+
 const daemon_log = logging.getDaemonLogger();
-const CloudwatchClient = require('@aws-sdk/client-cloudwatch');
-const { Resource, Action, Query } = require('./lib/graph/');
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
 const athena = new Athena({ region: process.env.AWS_REGION });
@@ -34,7 +34,7 @@ const MAX_RETRIES = Number(process.env.MAX_RETRIES || 7);
 
 /**
  * @param {string} queryExecutionId -
- * @returns {Promise<import('./typedefs').WharfieEvent?>} -
+ * @returns {Promise<import('./typedefs.js').WharfieEvent?>} -
  */
 async function getEventFromQueryExecution(queryExecutionId) {
   const queryEvent = await getWharfieQueryMetadata(queryExecutionId);
@@ -44,14 +44,14 @@ async function getEventFromQueryExecution(queryExecutionId) {
 
 /**
  * @param {string} queryExecutionId -
- * @returns {Promise<import('./typedefs').WharfieEvent?>} -
+ * @returns {Promise<import('./typedefs.js').WharfieEvent?>} -
  */
 async function getWharfieQueryMetadata(queryExecutionId) {
   const { QueryExecution } = await athena.getQueryExecution({
     QueryExecutionId: queryExecutionId,
   });
   if (!QueryExecution || !QueryExecution.Query) return null;
-  /** @type {import('./typedefs').WharfieEvent} */
+  /** @type {import('./typedefs.js').WharfieEvent} */
   let queryEvent;
 
   try {
@@ -104,8 +104,8 @@ async function _cleanupFailedOrCancelledQuery(resource, query) {
 }
 
 /**
- * @param {import('./typedefs').AthenaEvent} cloudwatchEvent -
- * @param {import('./typedefs').WharfieEvent} queryEvent -
+ * @param {import('./typedefs.js').AthenaEvent} cloudwatchEvent -
+ * @param {import('./typedefs.js').WharfieEvent} queryEvent -
  * @param {import('aws-lambda').Context} context -
  */
 async function _monitorWharfie(cloudwatchEvent, queryEvent, context) {
@@ -247,7 +247,7 @@ async function _monitorWharfie(cloudwatchEvent, queryEvent, context) {
 }
 
 /**
- * @param {import('./typedefs').AthenaEvent} cloudwatchEvent -
+ * @param {import('./typedefs.js').AthenaEvent} cloudwatchEvent -
  * @param {import('aws-lambda').Context} context -
  */
 async function monitorWharfie(cloudwatchEvent, context) {
@@ -283,7 +283,7 @@ async function monitorWharfie(cloudwatchEvent, context) {
 }
 
 /**
- * @param {import('./typedefs').AthenaEvent} cloudwatchEvent -
+ * @param {import('./typedefs.js').AthenaEvent} cloudwatchEvent -
  */
 // TODO: switch to using something other than cloudwatch
 // eslint-disable-next-line no-unused-vars
@@ -313,7 +313,7 @@ async function createMetrics(cloudwatchEvent) {
           Value: query.statementType,
         },
       ],
-      Unit: CloudwatchClient.StandardUnit.Bytes,
+      Unit: StandardUnit.Bytes,
       Value: (athenaMetrics.Statistics || {}).DataScannedInBytes || 0,
     });
 
@@ -351,7 +351,7 @@ async function createMetrics(cloudwatchEvent) {
             Value: database,
           },
         ],
-        Unit: CloudwatchClient.StandardUnit.Bytes,
+        Unit: StandardUnit.Bytes,
         Value: (athenaMetrics.Statistics || {}).DataScannedInBytes || 0,
       });
     });
@@ -377,7 +377,7 @@ async function createMetrics(cloudwatchEvent) {
             Value: table,
           },
         ],
-        Unit: CloudwatchClient.StandardUnit.Bytes,
+        Unit: StandardUnit.Bytes,
         Value: (athenaMetrics.Statistics || {}).DataScannedInBytes || 0,
       });
     });
@@ -396,7 +396,7 @@ async function createMetrics(cloudwatchEvent) {
 }
 
 /**
- * @param {import('./typedefs').AthenaEvent} athenaEvent -
+ * @param {import('./typedefs.js').AthenaEvent} athenaEvent -
  * @param {import('aws-lambda').Context} context -
  */
 async function run(athenaEvent, context) {
@@ -405,7 +405,7 @@ async function run(athenaEvent, context) {
 }
 
 /**
- * @param {import('./typedefs').AthenaEvent} event -
+ * @param {import('./typedefs.js').AthenaEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {any} err -
  */
@@ -478,7 +478,7 @@ async function DLQ(event, context, err) {
 }
 
 /**
- * @param {import('./typedefs').AthenaEvent} event -
+ * @param {import('./typedefs.js').AthenaEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {any} err -
  */
@@ -511,7 +511,7 @@ async function retry(event, context, err) {
  * @param {import('aws-lambda').Context} context -
  */
 async function processRecord(record, context) {
-  /** @type {import('./typedefs').AthenaEvent} */
+  /** @type {import('./typedefs.js').AthenaEvent} */
   const event = JSON.parse(record.body);
 
   try {
@@ -531,9 +531,9 @@ async function processRecord(record, context) {
  * @param {import('aws-lambda').SQSEvent} event -
  * @param {import('aws-lambda').Context} context -
  */
-module.exports.handler = async (event, context) => {
+async function handler(event, context) {
   daemon_log.debug(`monitor processing ${event.Records.length} records....`);
-  await bluebirdPromise.map(
+  await map(
     event.Records,
     (/** @type {import('aws-lambda').SQSRecord} */ record) => {
       return processRecord(record, context);
@@ -542,4 +542,6 @@ module.exports.handler = async (event, context) => {
   );
   daemon_log.info(process.memoryUsage());
   await logging.flush();
-};
+}
+
+export { handler };

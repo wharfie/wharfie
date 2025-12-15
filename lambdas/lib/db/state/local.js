@@ -1,5 +1,5 @@
-const BaseResource = require('../../actor/resources/base-resource');
-const LocalDB = require('../vanilla');
+import BaseResource from '../../actor/resources/base-resource.js';
+import LocalDB from '../vanilla.js';
 
 const stateDB = LocalDB.open('state');
 
@@ -25,7 +25,7 @@ async function putResourceStatus(resource) {
 
 /**
  * @param {BaseResource} resource -
- * @returns {Promise<import("../../actor/resources/reconcilable").StatusEnum?>} -
+ * @returns {Promise<import("../../actor/resources/reconcilable.js").StatusEnum?>} -
  */
 async function getResourceStatus(resource) {
   const resource_key = resource.parent
@@ -39,7 +39,7 @@ async function getResourceStatus(resource) {
 
 /**
  * @param {BaseResource} resource -
- * @returns {Promise<import("../../actor/typedefs").SerializedBaseResource?>} -
+ * @returns {Promise<import("../../actor/typedefs.js").SerializedBaseResource?>} -
  */
 async function getResource(resource) {
   const resource_key = resource.parent
@@ -51,7 +51,7 @@ async function getResource(resource) {
 }
 /**
  * @param {string} resourceKey -
- * @returns {Promise<import("../../actor/typedefs").SerializedBaseResource[]>} -
+ * @returns {Promise<import("../../actor/typedefs.js").SerializedBaseResource[]>} -
  */
 async function getResources(resourceKey) {
   const resources = await stateDB.getBeginsWith(resourceKey);
@@ -70,7 +70,7 @@ async function deleteResource(resource) {
   await stateDB.delete(resource_key);
 }
 
-module.exports = {
+export {
   putResource,
   putResourceStatus,
   getResource,

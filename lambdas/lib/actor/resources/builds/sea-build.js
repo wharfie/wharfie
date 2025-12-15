@@ -1,15 +1,12 @@
-// const bluebirdPromise = require('bluebird');
-
-// eslint-disable-next-line node/no-extraneous-require
-const uuid = require('uuid');
-const path = require('node:path');
-const fs = require('node:fs');
-const esbuild = require('../../../esbuild');
-const paths = require('../../../paths');
-const { runCmd, execFile } = require('../../../cmd');
+import { v4 } from 'uuid';
+import { join } from 'node:path';
+import { promises, existsSync, writeFileSync, readFileSync } from 'node:fs';
+import { build as _build } from '../../../esbuild.js';
+import paths from '../../../paths.js';
+import { runCmd, execFile } from '../../../cmd.js';
 // @ts-ignore
-const postject = require('postject');
-const BaseResource = require('../base-resource');
+import { inject } from 'postject';
+import BaseResource from '../base-resource.js';
 
 /**
  * @typedef {import('node:process')['platform']} TargetPlatform -
@@ -21,7 +18,6 @@ const BaseResource = require('../base-resource');
  * @typedef SeaBuildProperties
  * @property {string | function(): string} entryCode -
  * @property {string | function(): string} resolveDir -
- * @property {string | function(): string} callerFile -
  * @property {string | function(): string} nodeBinaryPath -
  * @property {string | function(): string} nodeVersion -
  * @property {TargetPlatform | function(): TargetPlatform} platform -
@@ -35,9 +31,9 @@ const BaseResource = require('../base-resource');
  * @typedef SeaBuildOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {import('../reconcilable')[]} [dependsOn] -
- * @property {SeaBuildProperties & import('../../typedefs').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {SeaBuildProperties & import('../../typedefs.js').SharedProperties} properties -
  */
 
 class SeaBuild extends BaseResource {
@@ -58,21 +54,21 @@ class SeaBuild extends BaseResource {
     const distFile = `${this.name}`;
     const finalName =
       this.get('platform') === 'win32' ? `${distFile}.exe` : distFile;
-    const binaryPath = path.join(SeaBuild.BINARIES_DIR, finalName);
-    const tmpBuildDir = path.join(SeaBuild.BUILD_DIR, `build-${uuid.v4()}`);
-    await fs.promises.mkdir(tmpBuildDir, { recursive: true });
+    const binaryPath = join(SeaBuild.BINARIES_DIR, finalName);
+    const tmpBuildDir = join(SeaBuild.BUILD_DIR, `build-${v4()}`);
+    await promises.mkdir(tmpBuildDir, { recursive: true });
     await this.esbuild(tmpBuildDir);
     await this.prepareExternalBinaries();
-    const tempNodeBinaryPath = path.join(tmpBuildDir, 'node-binary');
-    await fs.promises.copyFile(
+    const tempNodeBinaryPath = join(tmpBuildDir, 'node-binary');
+    await promises.copyFile(
       await this.get('nodeBinaryPath'),
       tempNodeBinaryPath
     );
     await this.seaBuild(tmpBuildDir, tempNodeBinaryPath);
-    if (!fs.existsSync(SeaBuild.BINARIES_DIR)) {
-      await fs.promises.mkdir(SeaBuild.BINARIES_DIR, { recursive: true });
+    if (!existsSync(SeaBuild.BINARIES_DIR)) {
+      await promises.mkdir(SeaBuild.BINARIES_DIR, { recursive: true });
     }
-    await fs.promises.copyFile(tempNodeBinaryPath, binaryPath);
+    await promises.copyFile(tempNodeBinaryPath, binaryPath);
     this._setUNSAFE('binaryPath', binaryPath);
   }
 
@@ -113,9 +109,8 @@ class SeaBuild extends BaseResource {
    * @param {string} buildDir -
    */
   async esbuild(buildDir) {
-    const outputPath = path.join(buildDir, 'esbundle.js');
-    const callerFile = path.resolve(this.get('callerFile'));
-    const { errors, warnings } = await esbuild.build({
+    const outputPath = join(buildDir, 'esbundle.js');
+    const { errors, warnings } = await _build({
       stdin: {
         contents: this.get('entryCode'),
         resolveDir: this.get('resolveDir'),
@@ -141,60 +136,6 @@ class SeaBuild extends BaseResource {
       define: {
         __WILLEM_BUILD_RECONCILE_TERMINATOR: '1', // injects this variable definition into the global scope
       },
-      // SEA-only: turn the first arg of `new Function(<fn>, ...)` into a noop in the caller file
-      plugins: [
-        {
-          name: 'sea-noop-inline-function-arg',
-          setup(build) {
-            const acorn = require('acorn');
-            const walk = require('acorn-walk');
-
-            build.onLoad({ filter: /.*/ }, async (args) => {
-              if (path.resolve(args.path) !== callerFile) return;
-              const src = await fs.promises.readFile(args.path, 'utf8');
-
-              // Parse and collect ranges to mutate
-              const ast = acorn.parse(src, {
-                ecmaVersion: 'latest',
-                sourceType: 'script', // CommonJS entrypoint
-                allowReturnOutsideFunction: true,
-                locations: false,
-              });
-
-              /** @type {Array<{start:number,end:number}>} */
-              const toReplace = [];
-              walk.simple(ast, {
-                NewExpression(node) {
-                  // Match: new Function(<arg0>, ...)
-                  if (
-                    node.callee &&
-                    node.callee.type === 'Identifier' &&
-                    node.callee.name === 'Function'
-                  ) {
-                    if (node.arguments && node.arguments.length > 0) {
-                      const first = node.arguments[0];
-                      // Only replace if the first arg is an expression we can safely overwrite (FunctionExpression or ArrowFunctionExpression typical)
-                      // In practice we can replace anything (object, identifier, etc.) because we only need a noop.
-                      toReplace.push({ start: first.start, end: first.end });
-                    }
-                  }
-                },
-              });
-
-              if (toReplace.length === 0) {
-                return { contents: src, loader: 'js' };
-              }
-
-              // Apply replacements from right to left to keep offsets stable
-              let out = src;
-              for (const r of toReplace.sort((a, b) => b.start - a.start)) {
-                out = out.slice(0, r.start) + '(()=>{})' + out.slice(r.end);
-              }
-              return { contents: out, loader: 'js' };
-            });
-          },
-        },
-      ],
     });
 
     if (errors.length > 0) {
@@ -214,10 +155,10 @@ class SeaBuild extends BaseResource {
    * @param {string} nodeBinaryPath -
    */
   async seaBuild(buildDir, nodeBinaryPath) {
-    const seaConfigPath = path.join(buildDir, 'sea-config.json');
-    const blobPath = path.join(buildDir, 'sea.blob');
+    const seaConfigPath = join(buildDir, 'sea-config.json');
+    const blobPath = join(buildDir, 'sea.blob');
     const seaConfig = {
-      main: path.join(buildDir, 'esbundle.js'),
+      main: join(buildDir, 'esbundle.js'),
       output: blobPath,
       disableExperimentalSEAWarning: true,
       useSnapshot: false,
@@ -225,7 +166,7 @@ class SeaBuild extends BaseResource {
       assets: this.get('assets', {}),
     };
 
-    fs.writeFileSync(seaConfigPath, JSON.stringify(seaConfig, null, 2), 'utf8');
+    writeFileSync(seaConfigPath, JSON.stringify(seaConfig, null, 2), 'utf8');
     await execFile(
       process.execPath,
       ['--no-warnings', '--experimental-sea-config', seaConfigPath],
@@ -235,10 +176,10 @@ class SeaBuild extends BaseResource {
     if (this.get('platform') === 'darwin') {
       await runCmd('codesign', ['--remove-signature', nodeBinaryPath]);
     }
-    const blobData = fs.readFileSync(blobPath);
+    const blobData = readFileSync(blobPath);
     // base64 encoded fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
     // see https://github.com/nodejs/postject/issues/92#issuecomment-2283508514
-    await postject.inject(nodeBinaryPath, 'NODE_SEA_BLOB', blobData, {
+    await inject(nodeBinaryPath, 'NODE_SEA_BLOB', blobData, {
       sentinelFuse: Buffer.from(
         'Tk9ERV9TRUFfRlVTRV9mY2U2ODBhYjJjYzQ2N2I2ZTA3MmI4YjVkZjE5OTZiMg==',
         'base64'
@@ -250,8 +191,8 @@ class SeaBuild extends BaseResource {
   }
 
   async _reconcile() {
-    if (!fs.existsSync(path.join(paths.data, 'builds'))) {
-      await fs.promises.mkdir(path.join(paths.data, 'builds'), {
+    if (!existsSync(join(paths.data, 'builds'))) {
+      await promises.mkdir(join(paths.data, 'builds'), {
         recursive: true,
       });
     }
@@ -270,15 +211,15 @@ class SeaBuild extends BaseResource {
   }
 
   async _destroy() {
-    if (!fs.existsSync(this.get('binaryPath'))) {
+    if (!existsSync(this.get('binaryPath'))) {
       return;
     }
-    await fs.promises.unlink(this.get('binaryPath'));
+    await promises.unlink(this.get('binaryPath'));
   }
 }
 
-SeaBuild.BINARIES_DIR = path.join(paths.data, 'actor_binaries');
+SeaBuild.BINARIES_DIR = join(paths.data, 'actor_binaries');
 
-SeaBuild.BUILD_DIR = path.join(paths.temp, 'builds');
+SeaBuild.BUILD_DIR = join(paths.temp, 'builds');
 
-module.exports = SeaBuild;
+export default SeaBuild;

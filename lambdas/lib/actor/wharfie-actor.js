@@ -1,10 +1,9 @@
-const Queue = require('./resources/aws/queue');
-const Role = require('./resources/aws/role');
-const LambdaFunction = require('./resources/aws/lambda-function');
-const EventSourceMapping = require('./resources/aws/event-source-mapping');
-const LambdaBuild = require('./resources/aws/lambda-build');
-const BaseResourceGroup = require('./resources/base-resource-group');
-// const ActionDefinitionRecord = require('./resources/records/action-type-definition-record');
+import BaseResourceGroup from './resources/base-resource-group.js';
+import Queue from './resources/aws/queue.js';
+import Role from './resources/aws/role.js';
+import LambdaFunction from './resources/aws/lambda-function.js';
+import EventSourceMapping from './resources/aws/event-source-mapping.js';
+import LambdaBuild from './resources/aws/lambda-build.js';
 
 /**
  * @typedef ExtendedWharfieActorProperties
@@ -16,10 +15,10 @@ const BaseResourceGroup = require('./resources/base-resource-group');
 /**
  * @typedef ExtendedWharfieActorOptions
  * @property {string} parent -
- * @property {import('./resources/reconcilable').Status} [status] -
- * @property {ExtendedWharfieActorProperties & import('./typedefs').SharedProperties} properties -
- * @property {import('./resources/reconcilable')[]} [dependsOn] -
- * @property {Object<string, import('./resources/base-resource') | import('./resources/base-resource-group')>} [resources] -
+ * @property {import('./resources/reconcilable.js').default.Status} [status] -
+ * @property {ExtendedWharfieActorProperties & import('./typedefs.js').SharedProperties} properties -
+ * @property {import('./resources/reconcilable.js').default[]} [dependsOn] -
+ * @property {Object<string, import('./resources/base-resource.js').default | import('./resources/base-resource-group.js').default>} [resources] -
  */
 
 /**
@@ -34,10 +33,10 @@ const BaseResourceGroup = require('./resources/base-resource-group');
  * @typedef WharfieActorOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('./resources/reconcilable').Status} [status] -
- * @property {WharfieActorProperties & import('./typedefs').SharedProperties} properties -
- * @property {import('./resources/reconcilable')[]} [dependsOn] -
- * @property {Object<string, import('./resources/base-resource') | import('./resources/base-resource-group')>} [resources] -
+ * @property {import('./resources/reconcilable.js').default.Status} [status] -
+ * @property {WharfieActorProperties & import('./typedefs.js').SharedProperties} properties -
+ * @property {import('./resources/reconcilable.js').default[]} [dependsOn] -
+ * @property {Object<string, import('./resources/base-resource.js').default | import('./resources/base-resource-group.js').default>} [resources] -
  */
 
 class WharfieActor extends BaseResourceGroup {
@@ -58,7 +57,7 @@ class WharfieActor extends BaseResourceGroup {
 
   /**
    * @param {string} parent -
-   * @returns {(import('./resources/base-resource') | import('./resources/base-resource-group'))[]} -
+   * @returns {(import('./resources/base-resource.js').default | import('./resources/base-resource-group.js').default)[]} -
    */
   _defineGroupResources(parent) {
     const build = new LambdaBuild({
@@ -218,4 +217,4 @@ class WharfieActor extends BaseResourceGroup {
   }
 }
 
-module.exports = WharfieActor;
+export default WharfieActor;

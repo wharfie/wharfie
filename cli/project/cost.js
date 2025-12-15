@@ -1,9 +1,10 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { getDatabaseName } = require('./names');
 
-const Athena = require('../../lambdas/lib/athena');
-const S3 = require('../../lambdas/lib/s3');
-const Glue = require('../../lambdas/lib/glue');
+const Athena = require('../../lambdas/lib/athena').default;
+const S3 = require('../../lambdas/lib/s3').default;
+const Glue = require('../../lambdas/lib/glue').default;
 const s3 = new S3();
 const athena = new Athena({});
 const glue = new Glue({});

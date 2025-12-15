@@ -1,5 +1,6 @@
 // // smoke.js
-// 'use strict';
+// import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 // const duckdb = require('@duckdb/node-api');
 // const { DuckDBInstance } = duckdb;

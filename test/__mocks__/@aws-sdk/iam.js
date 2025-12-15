@@ -1,4 +1,6 @@
-'use strict';
+import { jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { NoSuchEntityException } = jest.requireActual('@aws-sdk/client-iam');
 const { parse } = require('../../../lambdas/lib/arn');

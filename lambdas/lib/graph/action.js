@@ -1,6 +1,7 @@
-'use strict';
-const { createId } = require('../id');
-const Query = require('./query');
+import { createId } from '../id.js';
+import Query from './query.js';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { version: WHARFIE_VERSION } = require('../../../package.json');
 
 /**
@@ -71,7 +72,7 @@ const Status = {
  * @property {string} operation_id -
  * @property {WharfieActionTypeEnum} type -
  * @property {WharfieActionStatusEnum} [status] -
- * @property {import('./query')[]} [queries] -
+ * @property {import('./query.js').default[]} [queries] -
  * @property {number} [started_at] - start timestamp
  * @property {number} [last_updated_at] - update_at_timestamp
  * @property {string} [wharfie_version] -
@@ -114,7 +115,7 @@ class Action {
   }
 
   /**
-   * @returns {(import('./typedefs').ActionRecord | import('./typedefs').QueryRecord)[]} -
+   * @returns {(import('./typedefs.js').ActionRecord | import('./typedefs.js').QueryRecord)[]} -
    */
   toRecords() {
     const records = [];
@@ -188,4 +189,5 @@ Action.Status = Status;
  */
 Action.RecordType = 'ACTION';
 
-module.exports = Action;
+export { Status };
+export default Action;

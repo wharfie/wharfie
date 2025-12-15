@@ -1,13 +1,11 @@
-'use strict';
+import * as scheduler_db from '../lib/dynamo/scheduler.js';
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
+import SQS from '../lib/sqs.js';
+import SchedulerEntry, { Status } from './scheduler-entry.js';
 
-const scheduler_db = require('../lib/dynamo/scheduler');
-const { ConditionalCheckFailedException } = require('@aws-sdk/client-dynamodb');
-const SQS = require('../lib/sqs');
-const SchedulerEntry = require('./scheduler-entry');
+import * as logging from '../lib/logging/index.js';
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
-
-const logging = require('../lib/logging');
 const daemon_log = logging.getDaemonLogger();
 
 const QUEUE_URL = process.env.EVENTS_QUEUE_URL || '';
@@ -39,17 +37,11 @@ async function schedule({ resource_id, interval, window, partition }) {
     after,
     before,
   ]);
-  if (
-    events.filter((event) => event.status === SchedulerEntry.Status.SCHEDULED)
-      .length > 0
-  ) {
+  if (events.filter((event) => event.status === Status.SCHEDULED).length > 0) {
     // interval event queued no need to do work
     return;
   }
-  if (
-    events.filter((event) => event.status === SchedulerEntry.Status.STARTED)
-      .length > 0
-  ) {
+  if (events.filter((event) => event.status === Status.STARTED).length > 0) {
     // interval event already started move onto next interval
     await schedule({
       resource_id,
@@ -86,6 +78,4 @@ async function schedule({ resource_id, interval, window, partition }) {
   });
 }
 
-module.exports = {
-  schedule,
-};
+export { schedule };

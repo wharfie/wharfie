@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-large-snapshots */
-'use strict';
+import { describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = true;
 const { Table } = require('../../../lambdas/lib/actor/resources/aws/');
@@ -9,6 +11,7 @@ const { getMockDeploymentProperties } = require('../util');
 describe('table IaC', () => {
   it('basic', async () => {
     expect.assertions(4);
+
     const dynamoDB = new DynamoDB({});
     const table = new Table({
       name: 'test-table',
@@ -41,6 +44,7 @@ describe('table IaC', () => {
     await table.reconcile();
 
     const serialized = table.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -127,7 +131,9 @@ describe('table IaC', () => {
         },
       }
     `);
+
     await table.destroy();
+
     expect(table.status).toBe('DESTROYED');
     await expect(
       dynamoDB.describeTable({ TableName: table.name })

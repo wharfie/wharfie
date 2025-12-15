@@ -1,7 +1,4 @@
-const WharfieOperationCompleted = require('./wharfie-operation-completed');
-const WharfieScheduleOperation = require('./wharfie-schedule-operation');
+import WharfieOperationCompleted from './wharfie-operation-completed.js';
+import WharfieScheduleOperation from './wharfie-schedule-operation.js';
 
-module.exports = {
-  WharfieOperationCompleted,
-  WharfieScheduleOperation,
-};
+export { WharfieOperationCompleted, WharfieScheduleOperation };

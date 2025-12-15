@@ -1,11 +1,22 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { createId } = require('../../lambdas/lib/id');
 const AWS = require('@aws-sdk/client-sqs');
 jest.mock('../../lambdas/lib/id');
 
 const random = Math.random;
 let SQS;
+
 describe('tests for SQS', () => {
   beforeAll(() => {
     require('aws-sdk-client-mock-jest');
@@ -17,9 +28,11 @@ describe('tests for SQS', () => {
     global.Math = mockMath;
     SQS = require('../../lambdas/lib/sqs');
   });
+
   afterEach(() => {
     AWS.SQSMock.reset();
   });
+
   afterAll(() => {
     process.env.DAEMON_QUEUE_URL = undefined;
     process.env.DLQ_URL = undefined;
@@ -28,6 +41,7 @@ describe('tests for SQS', () => {
 
   it('sendMessage', async () => {
     expect.assertions(3);
+
     AWS.SQSMock.on(AWS.SendMessageCommand).resolves({});
     const sqs = new SQS({ region: 'us-east-1' });
     const params = {
@@ -35,6 +49,7 @@ describe('tests for SQS', () => {
       QueueUrl: 'test_queue',
     };
     await sqs.sendMessage(params);
+
     expect(AWS.SQSMock).toHaveReceivedCommandTimes(AWS.SendMessageCommand, 1);
     expect(AWS.SQSMock).toHaveReceivedCommandWith(
       AWS.SendMessageCommand,
@@ -44,6 +59,7 @@ describe('tests for SQS', () => {
 
   it('enqueue', async () => {
     expect.assertions(5);
+
     AWS.SQSMock.on(AWS.SendMessageCommand).resolves({});
     const sqs = new SQS({ region: 'us-east-1' });
     const event = {
@@ -51,6 +67,7 @@ describe('tests for SQS', () => {
     };
     await sqs.enqueue(event, process.env.DAEMON_QUEUE_URL, 100);
     await sqs.enqueue(event, process.env.DAEMON_QUEUE_URL, -100);
+
     expect(AWS.SQSMock).toHaveReceivedCommandTimes(AWS.SendMessageCommand, 2);
     expect(AWS.SQSMock).toHaveReceivedNthCommandWith(
       1,
@@ -74,6 +91,7 @@ describe('tests for SQS', () => {
 
   it('enqueueBatch', async () => {
     expect.assertions(4);
+
     let idCount = 0;
     createId.mockImplementation(() => {
       idCount = idCount + 1;
@@ -97,6 +115,7 @@ describe('tests for SQS', () => {
       foo: 'bar',
     });
     await sqs.enqueueBatch(events, process.env.DAEMON_QUEUE_URL);
+
     expect(AWS.SQSMock).toHaveReceivedCommandTimes(
       AWS.SendMessageBatchCommand,
       3
@@ -186,12 +205,14 @@ describe('tests for SQS', () => {
 
   it('reenqueue', async () => {
     expect.assertions(3);
+
     AWS.SQSMock.on(AWS.SendMessageCommand).resolves(undefined);
     const sqs = new SQS({ region: 'us-east-1' });
     const event = {
       foo: 'bar',
     };
     await sqs.reenqueue(event, process.env.DAEMON_QUEUE_URL);
+
     expect(AWS.SQSMock).toHaveReceivedCommandTimes(AWS.SendMessageCommand, 1);
     expect(AWS.SQSMock).toHaveReceivedNthCommandWith(
       1,

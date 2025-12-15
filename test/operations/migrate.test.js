@@ -1,6 +1,16 @@
 /* eslint-disable jest/no-large-snapshots */
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 // process.env.LOGGING_LEVEL = 'debug';
 const bluebird = require('bluebird');
 
@@ -45,6 +55,7 @@ describe('migrate tests', () => {
   beforeAll(async () => {
     bluebird.Promise.config({ cancellation: true });
   });
+
   beforeEach(async () => {
     createLambdaQueues();
     s3.__setMockState({
@@ -76,6 +87,7 @@ describe('migrate tests', () => {
 
   it('no-partitions', async () => {
     expect.assertions(7);
+
     const events = [];
     Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
       events.push(`${event.status} - ${event.constructor}:${event.name}`);
@@ -448,6 +460,7 @@ describe('migrate tests', () => {
 
   it('partitions', async () => {
     expect.assertions(7);
+
     const events = [];
     Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
       events.push(`${event.status} - ${event.constructor}:${event.name}`);

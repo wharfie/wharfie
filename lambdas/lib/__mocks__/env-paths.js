@@ -7,4 +7,4 @@ const envPaths = jest.fn(() => ({
   temp: 'mock',
 }));
 
-module.exports = envPaths;
+export default envPaths;

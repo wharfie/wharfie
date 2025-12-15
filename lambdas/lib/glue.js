@@ -1,9 +1,28 @@
-'use strict';
-const AWS = require('@aws-sdk/client-glue');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import {
+  Glue as _Glue,
+  GetPartitionCommand,
+  CreatePartitionCommand,
+  BatchCreatePartitionCommand,
+  UpdatePartitionCommand,
+  DeleteTableCommand,
+  BatchDeletePartitionCommand,
+  CreateTableCommand,
+  UpdateTableCommand,
+  GetTableCommand,
+  GetDatabaseCommand,
+  CreateDatabaseCommand,
+  DeleteDatabaseCommand,
+  GetTagsCommand,
+  TagResourceCommand,
+  UntagResourceCommand,
+  GetTablesCommand,
+  GetPartitionsCommand,
+  EntityNotFoundException,
+} from '@aws-sdk/client-glue';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('./base');
-const { Resource } = require('./graph/');
+import BaseAWS from './base.js';
+import { Resource } from './graph/index.js';
 
 class Glue {
   /**
@@ -11,7 +30,7 @@ class Glue {
    */
   constructor(options) {
     const credentials = fromNodeProviderChain();
-    this.glue = new AWS.Glue({
+    this.glue = new _Glue({
       ...BaseAWS.config(),
       credentials,
       ...options,
@@ -24,7 +43,7 @@ class Glue {
    */
   async getPartition(params) {
     try {
-      return await this.glue.send(new AWS.GetPartitionCommand(params));
+      return await this.glue.send(new GetPartitionCommand(params));
     } catch (e) {
       // @ts-ignore
       if (e.name === 'EntityNotFoundException') {
@@ -39,7 +58,7 @@ class Glue {
    * @returns {Promise<import("@aws-sdk/client-glue").CreatePartitionResponse>} - createPartition response
    */
   async createPartition(params) {
-    return await this.glue.send(new AWS.CreatePartitionCommand(params));
+    return await this.glue.send(new CreatePartitionCommand(params));
   }
 
   /**
@@ -52,7 +71,7 @@ class Glue {
     while (params.PartitionInputList.length > 0) {
       const chunk = params.PartitionInputList.splice(0, 100);
       const { Errors } = await this.glue.send(
-        new AWS.BatchCreatePartitionCommand({
+        new BatchCreatePartitionCommand({
           ...params,
           PartitionInputList: chunk,
         })
@@ -97,7 +116,7 @@ class Glue {
    * @returns {Promise<import("@aws-sdk/client-glue").UpdatePartitionResponse>} - updatePartition response
    */
   async updatePartition(params) {
-    return await this.glue.send(new AWS.UpdatePartitionCommand(params));
+    return await this.glue.send(new UpdatePartitionCommand(params));
   }
 
   /**
@@ -152,7 +171,7 @@ class Glue {
    * @returns {Promise<import("@aws-sdk/client-glue").DeleteTableCommandOutput>} - deleteTable response
    */
   async deleteTable(params) {
-    return await this.glue.send(new AWS.DeleteTableCommand(params));
+    return await this.glue.send(new DeleteTableCommand(params));
   }
 
   /**
@@ -165,7 +184,7 @@ class Glue {
     while (params.PartitionsToDelete.length > 0) {
       const chunk = params.PartitionsToDelete.splice(0, 25);
       const { Errors } = await this.glue.send(
-        new AWS.BatchDeletePartitionCommand({
+        new BatchDeletePartitionCommand({
           ...params,
           PartitionsToDelete: chunk,
         })
@@ -207,7 +226,7 @@ class Glue {
    * @returns {Promise<import("@aws-sdk/client-glue").CreateTableCommandOutput>} - createTable response
    */
   async createTable(params) {
-    return await this.glue.send(new AWS.CreateTableCommand(params));
+    return await this.glue.send(new CreateTableCommand(params));
   }
 
   /**
@@ -215,7 +234,7 @@ class Glue {
    * @returns {Promise<import("@aws-sdk/client-glue").UpdateTableCommandOutput>} - updateTable response
    */
   async updateTable(params) {
-    return await this.glue.send(new AWS.UpdateTableCommand(params));
+    return await this.glue.send(new UpdateTableCommand(params));
   }
 
   /**
@@ -223,7 +242,7 @@ class Glue {
    * @returns {Promise<import("@aws-sdk/client-glue").GetTableCommandOutput>} - getTable response
    */
   async getTable(params) {
-    return await this.glue.send(new AWS.GetTableCommand(params));
+    return await this.glue.send(new GetTableCommand(params));
   }
 
   /**
@@ -231,7 +250,7 @@ class Glue {
    * @returns {Promise<import("@aws-sdk/client-glue").GetDatabaseCommandOutput>} - getDatabase response
    */
   async getDatabase(params) {
-    return await this.glue.send(new AWS.GetDatabaseCommand(params));
+    return await this.glue.send(new GetDatabaseCommand(params));
   }
 
   /**
@@ -239,7 +258,7 @@ class Glue {
    * @returns {Promise<import("@aws-sdk/client-glue").CreateDatabaseCommandOutput>} - createDatabase response
    */
   async createDatabase(params) {
-    return await this.glue.send(new AWS.CreateDatabaseCommand(params));
+    return await this.glue.send(new CreateDatabaseCommand(params));
   }
 
   /**
@@ -247,7 +266,7 @@ class Glue {
    * @returns {Promise<import("@aws-sdk/client-glue").DeleteDatabaseCommandOutput>} - deleteDatabase response
    */
   async deleteDatabase(params) {
-    return await this.glue.send(new AWS.DeleteDatabaseCommand(params));
+    return await this.glue.send(new DeleteDatabaseCommand(params));
   }
 
   /**
@@ -255,7 +274,7 @@ class Glue {
    * @returns {Promise<import("@aws-sdk/client-glue").GetTagsCommandOutput>} - getTags response
    */
   async getTags(params) {
-    return await this.glue.send(new AWS.GetTagsCommand(params));
+    return await this.glue.send(new GetTagsCommand(params));
   }
 
   /**
@@ -263,7 +282,7 @@ class Glue {
    * @returns {Promise<import("@aws-sdk/client-glue").TagResourceCommandOutput>} - tagResource response
    */
   async tagResource(params) {
-    return await this.glue.send(new AWS.TagResourceCommand(params));
+    return await this.glue.send(new TagResourceCommand(params));
   }
 
   /**
@@ -271,7 +290,7 @@ class Glue {
    * @returns {Promise<import("@aws-sdk/client-glue").UntagResourceCommandOutput>} - untagResource response
    */
   async untagResource(params) {
-    return await this.glue.send(new AWS.UntagResourceCommand(params));
+    return await this.glue.send(new UntagResourceCommand(params));
   }
 
   /**
@@ -279,11 +298,11 @@ class Glue {
    * @returns {Promise<import("@aws-sdk/client-glue").GetTablesResponse>} - getTables response
    */
   async getTables(params) {
-    let response = await this.glue.send(new AWS.GetTablesCommand(params));
+    let response = await this.glue.send(new GetTablesCommand(params));
     const TableList = response.TableList || [];
     while (response.NextToken) {
       params.NextToken = response.NextToken;
-      response = await this.glue.send(new AWS.GetTablesCommand(params));
+      response = await this.glue.send(new GetTablesCommand(params));
       TableList.push(...(response.TableList || []));
     }
     return {
@@ -293,11 +312,11 @@ class Glue {
 
   /**
    * @param {import("@aws-sdk/client-glue").GetPartitionsRequest} params - params for getPartitions request
-   * @param {Array<import('../typedefs').Partition>} partitions - accumulator for Partition objects
+   * @param {Array<import('../typedefs.js').Partition>} partitions - accumulator for Partition objects
    * @param {Array<import("@aws-sdk/client-glue").Column>} PartitionKeys - Partition keys that will exist in s3 paths
    */
   async getPartitionsSegment(params, partitions, PartitionKeys) {
-    let response = await this.glue.send(new AWS.GetPartitionsCommand(params));
+    let response = await this.glue.send(new GetPartitionsCommand(params));
     (response.Partitions || []).forEach((partition) => {
       if (
         !partition.Values ||
@@ -319,7 +338,7 @@ class Glue {
 
     while (response.NextToken) {
       params.NextToken = response.NextToken;
-      response = await this.glue.send(new AWS.GetPartitionsCommand(params));
+      response = await this.glue.send(new GetPartitionsCommand(params));
       (response.Partitions || []).forEach((partition) => {
         if (
           !partition.Values ||
@@ -343,11 +362,11 @@ class Glue {
 
   /**
    * @param {import("@aws-sdk/client-glue").GetPartitionsRequest} params - params for getPartitions request
-   * @returns {Promise<Array<import('../typedefs').Partition>>} - partitions in glue table
+   * @returns {Promise<Array<import('../typedefs.js').Partition>>} - partitions in glue table
    */
   async getPartitions(params) {
     const TotalSegments = 10;
-    /** @type {Array<import('../typedefs').Partition>} */
+    /** @type {Array<import('../typedefs.js').Partition>} */
     const partitions = [];
     const { Table } = await this.getTable({
       DatabaseName: params.DatabaseName,
@@ -435,6 +454,6 @@ class Glue {
   }
 }
 
-Glue.EntityNotFoundException = AWS.EntityNotFoundException;
+Glue.EntityNotFoundException = EntityNotFoundException;
 
-module.exports = Glue;
+export default Glue;

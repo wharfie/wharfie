@@ -1,17 +1,15 @@
-'use strict';
+import { Operation, Resource, Query } from '../../lib/graph/index.js';
+import { createId } from '../../lib/id.js';
+import * as logging from '../../lib/logging/index.js';
+import Glue from '../../lib/glue.js';
+import STS from '../../lib/sts.js';
+import S3 from '../../lib/s3.js';
+import SQS from '../../lib/sqs.js';
+import { Readable } from 'stream';
 
-const { Operation, Resource, Query } = require('../../lib/graph/');
-const { createId } = require('../../lib/id');
-const logging = require('../../lib/logging');
-const Glue = require('../../lib/glue');
-const STS = require('../../lib/sts');
-const S3 = require('../../lib/s3');
-const SQS = require('../../lib/sqs');
-const { Readable } = require('stream');
+import { NoSuchKey, NotFound } from '@aws-sdk/client-s3';
 
-const { NoSuchKey, NotFound } = require('@aws-sdk/client-s3');
-
-const resource_db = require('../../lib/dynamo/operations');
+import * as resource_db from '../../lib/dynamo/operations.js';
 
 const CLEANUP_QUEUE_URL = process.env.CLEANUP_QUEUE_URL || '';
 
@@ -22,13 +20,13 @@ const CLEANUP_QUEUE_URL = process.env.CLEANUP_QUEUE_URL || '';
  */
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {import("@aws-sdk/client-glue").Table} destinationTable -
  * @param {string} temporaryDatabaseName -
  * @param {string} temporaryTableName -
- * @param {import('../../typedefs').Partition} partition -
+ * @param {import('../../typedefs.js').Partition} partition -
  * @param {string[]} references -
  * @returns {Promise<UpdatePartitionReturn>} -
  */
@@ -170,12 +168,12 @@ async function update_partition(
 }
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {string} temporaryDatabaseName -
  * @param {string} temporaryTableName -
- * @param {import('../../typedefs').Partition[]} partitions -
+ * @param {import('../../typedefs.js').Partition[]} partitions -
  * @param {string} query_execution_id -
  */
 async function update_partitions(
@@ -307,7 +305,7 @@ async function update_partitions(
 }
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {string} query_execution_id -
@@ -434,7 +432,7 @@ async function update_table(event, context, resource, query_execution_id) {
 }
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
@@ -496,11 +494,11 @@ async function update_symlinks(event, context, resource, operation) {
 }
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function run(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
@@ -525,4 +523,4 @@ async function run(event, context, resource, operation) {
   };
 }
 
-module.exports = { run };
+export default { run };

@@ -1,24 +1,27 @@
-const AthenaWorkGroup = require('./aws/athena-workgroup');
-const GlueTable = require('./aws/glue-table');
-const EventsRule = require('./aws/events-rule');
-const LocationRecord = require('./records/location-record');
-const DependencyRecord = require('./records/dependency-record');
-const WharfieResourceRecord = require('./records/wharfie-resource-record');
-const BaseResourceGroup = require('./base-resource-group');
-const BaseResource = require('./base-resource');
-const { generateSchedule } = require('../../cron');
-const Athena = require('../../athena');
-const S3 = require('../../s3');
-const SQS = require('../../sqs');
-const { Resource } = require('../../graph/');
-const { version } = require('../../../../package.json');
-const WharfieScheduleOperation = require('../../../scheduler/events/wharfie-schedule-operation');
-const Operation = require('../../../lib/graph/operation');
-const Action = require('../../../lib/graph/action');
-const { createId } = require('../../../lib/id');
-const operation_db = require('../../../lib/dynamo/operations');
-const Reconcilable = require('./reconcilable');
+import { createRequire } from 'node:module';
 
+import BaseResourceGroup from './base-resource-group.js';
+import Reconcilable from './reconcilable.js';
+import AthenaWorkGroup from './aws/athena-workgroup.js';
+import GlueTable from './aws/glue-table.js';
+import EventsRule from './aws/events-rule.js';
+import LocationRecord from './records/location-record.js';
+import DependencyRecord from './records/dependency-record.js';
+import WharfieResourceRecord from './records/wharfie-resource-record.js';
+import BaseResource from './base-resource.js';
+import { generateSchedule } from '../../cron.js';
+import Athena from '../../athena/index.js';
+import S3 from '../../s3.js';
+import SQS from '../../sqs.js';
+import { Resource } from '../../graph/index.js';
+import WharfieScheduleOperation from '../../../scheduler/events/wharfie-schedule-operation.js';
+import Operation, { Type, Status } from '../../../lib/graph/operation.js';
+import Action from '../../../lib/graph/action.js';
+import { createId } from '../../../lib/id.js';
+import * as operation_db from '../../../lib/dynamo/operations.js';
+
+const require = createRequire(import.meta.url);
+const { version } = require('../../../../package.json');
 const _athena = new Athena({});
 const s3 = new S3({});
 const sqs = new SQS({});
@@ -36,8 +39,8 @@ const sqs = new SQS({});
  * @property {string} description -
  * @property {string} tableType -
  * @property {any} parameters -
- * @property {import('../typedefs').WharfieTableColumn[]} partitionKeys -
- * @property {import('../typedefs').WharfieTableColumn[]} columns -
+ * @property {import('../typedefs.js').WharfieTableColumn[]} partitionKeys -
+ * @property {import('../typedefs.js').WharfieTableColumn[]} columns -
  * @property {string} [inputFormat] -
  * @property {string} [outputFormat] -
  * @property {string} [inputLocation] -
@@ -62,18 +65,18 @@ const sqs = new SQS({});
  * @property {string} dependencyTable -
  * @property {string} locationTable -
  * @property {boolean} [migrationResource] -
- * @property {import('../../../typedefs').SideEffect[]} [sideEffects] -
- * @property {import('../../../../cli/project/typedefs').Model | import('../../../../cli/project/typedefs').Source} [userInput] -
+ * @property {import('../../../typedefs.js').SideEffect[]} [sideEffects] -
+ * @property {import('../../../../cli/project/typedefs.js').Model | import('../../../../cli/project/typedefs.js').Source} [userInput] -
  */
 
 /**
  * @typedef WharfieResourceOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('./reconcilable').Status} [status] -
- * @property {WharfieResourceProperties & import('../typedefs').SharedProperties} properties -
- * @property {import('./reconcilable')[]} [dependsOn] -
- * @property {Object<string, import('./base-resource') | BaseResourceGroup>} [resources] -
+ * @property {import('./reconcilable.js').default.Status} [status] -
+ * @property {WharfieResourceProperties & import('../typedefs.js').SharedProperties} properties -
+ * @property {import('./reconcilable.js').default[]} [dependsOn] -
+ * @property {Object<string, import('./base-resource.js').default | BaseResourceGroup>} [resources] -
  */
 
 class WharfieResource extends BaseResourceGroup {
@@ -101,7 +104,7 @@ class WharfieResource extends BaseResourceGroup {
 
   /**
    * @param {string} parent -
-   * @returns {(import('./base-resource') | BaseResourceGroup)[]} -
+   * @returns {(import('./base-resource.js').default | BaseResourceGroup)[]} -
    */
   _defineGroupResources(parent) {
     const resources = [];
@@ -218,7 +221,7 @@ class WharfieResource extends BaseResourceGroup {
               InputTransformer: {
                 InputTemplate: new WharfieScheduleOperation({
                   resource_id: this.get('resourceId'),
-                  operation_type: Operation.Type.BACKFILL,
+                  operation_type: Type.BACKFILL,
                 }).serialize(),
               },
             },
@@ -532,7 +535,7 @@ class WharfieResource extends BaseResourceGroup {
       this.get('resourceId'),
       operation_id
     );
-    while (operation && operation.status !== Operation.Status.COMPLETED) {
+    while (operation && operation.status !== Status.COMPLETED) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
       operation = await operation_db.getOperation(
         this.get('resourceId'),
@@ -573,7 +576,7 @@ class WharfieResource extends BaseResourceGroup {
       await sqs.sendMessage({
         MessageBody: new WharfieScheduleOperation({
           resource_id: this.get('resourceId'),
-          operation_type: Operation.Type.BACKFILL,
+          operation_type: Type.BACKFILL,
         }).serialize(),
         QueueUrl: this.get('scheduleQueueUrl'),
       });
@@ -588,8 +591,8 @@ class WharfieResource extends BaseResourceGroup {
         resource_id: this.get('resourceId'),
         resource_version: this.get('version'),
         id: createId(),
-        type: Operation.Type.MIGRATE,
-        status: Operation.Status.PENDING,
+        type: Type.MIGRATE,
+        status: Status.PENDING,
         operation_inputs: {
           migration_resource_properties: this.resolveProperties(),
         },
@@ -662,4 +665,4 @@ WharfieResource.DefaultProperties = {
   migrationResource: false,
 };
 
-module.exports = WharfieResource;
+export default WharfieResource;

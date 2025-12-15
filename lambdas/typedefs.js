@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * @typedef AthenaUDFPingInputEvent
  * @property {AthenaUDFInputEventIdentity} identity -
@@ -69,7 +67,7 @@
  * @property {string} [operation_id] - Id of the operation being performed
  * @property {WharfieOperationTypeEnum} operation_type - Type of the operation being performed
  * @property {string} [action_id] - Id of the action being performed
- * @property {import('./lib/graph/action').WharfieActionTypeEnum} action_type - Type of the action being performed
+ * @property {import('./lib/graph/action.js').WharfieActionTypeEnum} action_type - Type of the action being performed
  * @property {string} resource_id - Id of the Wharfie resource
  * @property {number} [resource_version] - version of the Wharfie resource
  * @property {string} [query_id] - Id of the query being run
@@ -82,7 +80,7 @@
 
 /**
  * @typedef ActionProcessingOutput
- * @property {import('./lib/graph/action').WharfieActionStatusEnum} status -
+ * @property {import('./lib/graph/action.js').WharfieActionStatusEnum} status -
  * @property {any} [outputs] -
  * @property {boolean} [inflightQuery] -
  */
@@ -267,4 +265,4 @@
  * @property {Object<string,any>} config -
  */
 
-exports.unused = {};
+export default () => {};

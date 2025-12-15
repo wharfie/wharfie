@@ -1,6 +1,3 @@
-'use strict';
-// const crypto = require('crypto');
-
 class Secret {
   /**
    * @param {string} value -
@@ -67,4 +64,4 @@ class Secret {
   }
 }
 
-module.exports = Secret;
+export default Secret;

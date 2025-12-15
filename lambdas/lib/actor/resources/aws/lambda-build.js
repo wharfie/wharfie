@@ -1,11 +1,13 @@
-'use strict';
-const path = require('path');
-const crypto = require('crypto');
-const JSZip = require('jszip');
-const { NotFound } = require('@aws-sdk/client-s3');
-const esbuild = require('esbuild');
-const { getAsset, isSea } = require('node:sea');
+import { resolve, dirname } from 'path';
+import { createHash } from 'crypto';
+import JSZip from 'jszip';
+import { NotFound } from '@aws-sdk/client-s3';
+import { build as __build } from 'esbuild';
+import { getAsset, isSea } from 'node:sea';
+import S3 from '../../../s3.js';
+import BaseResource from '../base-resource.js';
 
+const __dirname = import.meta.dirname;
 // Statically import all known handlers
 /**
  * @type {Object<string,string>}
@@ -13,20 +15,17 @@ const { getAsset, isSea } = require('node:sea');
 const HANDLERS = {
   '<WHARFIE_BUILT_IN>/daemon.handler': isSea()
     ? getAsset('<WHARFIE_BUILT_IN>/daemon.handler', 'utf8')
-    : path.resolve(__dirname, '../../../../daemon.handler'),
+    : resolve(__dirname, '../../../../daemon.handler'),
   '<WHARFIE_BUILT_IN>/cleanup.handler': isSea()
     ? getAsset('<WHARFIE_BUILT_IN>/cleanup.handler', 'utf8')
-    : path.resolve(__dirname, '../../../../cleanup.handler'),
+    : resolve(__dirname, '../../../../cleanup.handler'),
   '<WHARFIE_BUILT_IN>/events.handler': isSea()
     ? getAsset('<WHARFIE_BUILT_IN>/events.handler', 'utf8')
-    : path.resolve(__dirname, '../../../../events.handler'),
+    : resolve(__dirname, '../../../../events.handler'),
   '<WHARFIE_BUILT_IN>/monitor.handler': isSea()
     ? getAsset('<WHARFIE_BUILT_IN>/monitor.handler', 'utf8')
-    : path.resolve(__dirname, '../../../../monitor.handler'),
+    : resolve(__dirname, '../../../../monitor.handler'),
 };
-
-const S3 = require('../../../s3');
-const BaseResource = require('../base-resource');
 
 /**
  * @typedef LambdaBuildProperties
@@ -38,9 +37,9 @@ const BaseResource = require('../base-resource');
  * @typedef LambdaBuildOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {LambdaBuildProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {LambdaBuildProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class LambdaBuild extends BaseResource {
@@ -66,10 +65,7 @@ class LambdaBuild extends BaseResource {
       : await this._build(builtInHandler || resolvedHandlerKey);
 
     // The bundled code is available in `result.outputFiles`
-    const functionCodeHash = crypto
-      .createHash('sha256')
-      .update(build)
-      .digest('hex');
+    const functionCodeHash = createHash('sha256').update(build).digest('hex');
 
     this.set(
       'artifactKey',
@@ -136,10 +132,10 @@ class LambdaBuild extends BaseResource {
     // Lambda handler setup to use actor's handler method
     exports.handler = handler
     `;
-    const result = await esbuild.build({
+    const result = await __build({
       stdin: {
         contents: handlerContent,
-        resolveDir: path.dirname(requirePath),
+        resolveDir: dirname(requirePath),
         sourcefile: 'index.js',
         loader: 'js',
       },
@@ -157,4 +153,4 @@ class LambdaBuild extends BaseResource {
   async _destroy() {}
 }
 
-module.exports = LambdaBuild;
+export default LambdaBuild;

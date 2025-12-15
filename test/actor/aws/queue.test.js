@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-large-snapshots */
-'use strict';
+import { describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = true;
 const { SQS } = jest.requireMock('@aws-sdk/client-sqs');
@@ -10,6 +12,7 @@ const { getMockDeploymentProperties } = require('../util');
 describe('sqs queue IaC', () => {
   it('basic', async () => {
     expect.assertions(4);
+
     const sqs = new SQS({});
     const queue = new Queue({
       name: 'test-queue',
@@ -23,6 +26,7 @@ describe('sqs queue IaC', () => {
     await queue.reconcile();
 
     const serialized = queue.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -77,7 +81,9 @@ describe('sqs queue IaC', () => {
         "queue": [],
       }
     `);
+
     await queue.destroy();
+
     expect(queue.status).toBe('DESTROYED');
     await expect(
       sqs.getQueueAttributes({ QueueUrl: 'test-queue' })

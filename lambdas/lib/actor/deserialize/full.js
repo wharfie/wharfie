@@ -1,16 +1,16 @@
-const AWSResources = require('../resources/aws');
-const RecordResources = require('../resources/records');
-const WharfieActors = require('../wharfie-actors');
-const WharfieDeploymentResources = require('../resources/wharfie-deployment-resources');
-const WharfieProject = require('../resources/wharfie-project');
-const WharfieResource = require('../resources/wharfie-resource');
-const WharfieDeployment = require('../wharfie-deployment');
-const WharfieActor = require('../wharfie-actor');
-const { getResources } = require('../../db/state/aws');
-const { deserialize } = require('./shared');
+import AWSResources from '../resources/aws/index.js';
+import RecordResources from '../resources/records/index.js';
+import * as WharfieActors from '../wharfie-actors/index.js';
+import WharfieDeploymentResources from '../resources/wharfie-deployment-resources.js';
+import WharfieProject from '../resources/wharfie-project.js';
+import WharfieResource from '../resources/wharfie-resource.js';
+import WharfieDeployment from '../wharfie-deployment.js';
+import WharfieActor from '../wharfie-actor.js';
+import { getResources } from '../../db/state/aws.js';
+import { deserialize } from './shared.js';
 
 /**
- * @typedef {new (options: any) => import('../resources/base-resource')} ResourceConstructor
+ * @typedef {new (options: any) => import('../resources/base-resource.js').default} ResourceConstructor
  */
 /**
  * @type {Object<string, ResourceConstructor>}
@@ -60,6 +60,4 @@ async function load({ deploymentName, resourceKey }) {
   return deserialize(serializedResources[0], resourceMap, FULL_CLASS_MAP);
 }
 
-module.exports = {
-  load,
-};
+export { load };

@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * @typedef {object} SemaphoreRecord
  * @property {number} value -
@@ -81,10 +79,4 @@ async function deleteSemaphore(semaphore) {
   delete __state[semaphore];
 }
 
-module.exports = {
-  increase,
-  release,
-  deleteSemaphore,
-  __setMockState,
-  __getMockState,
-};
+export { increase, release, deleteSemaphore, __setMockState, __getMockState };

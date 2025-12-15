@@ -1,6 +1,15 @@
 /* eslint-disable jest/no-large-snapshots */
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
 const {
@@ -27,8 +36,10 @@ describe('autoscaling policy IaC', () => {
   afterEach(() => {
     AWS.clearAllMocks();
   });
+
   it('basic', async () => {
     expect.assertions(14);
+
     const applicationAutoScaling =
       new ApplicationAutoScaling.ApplicationAutoScaling({});
     const autoscalingPolicy = new AutoscalingPolicy({
@@ -58,7 +69,9 @@ describe('autoscaling policy IaC', () => {
       .map(([{ Item }]) => Item);
 
     expect(reconcilingStatusUpdate).toHaveLength(1);
+
     update.mock.calls = [];
+
     expect(stableStatusUpdate).toHaveLength(1);
     expect(stableStatusUpdate).toMatchInlineSnapshot(`
       [
@@ -107,6 +120,7 @@ describe('autoscaling policy IaC', () => {
     `);
 
     const serialized = autoscalingPolicy.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -155,6 +169,7 @@ describe('autoscaling policy IaC', () => {
       resourceKey: 'test-rule',
     });
     await deserialized.reconcile();
+
     expect(deserialized).toMatchInlineSnapshot(`
       AutoscalingPolicy {
         "_MAX_RETRIES": 10,
@@ -229,14 +244,18 @@ describe('autoscaling policy IaC', () => {
         ],
       }
     `);
+
     await deserialized.destroy();
+
     expect(deserialized.status).toBe('DESTROYED');
+
     const des_res = await applicationAutoScaling.describeScalingPolicies({
       PolicyNames: [autoscalingPolicy.name],
       ServiceNamespace: autoscalingPolicy.get('serviceNamespace'),
       ScalableDimension: autoscalingPolicy.get('scalableDimension'),
       ResourceId: autoscalingPolicy.get('resourceId'),
     });
+
     expect(des_res.ScalingPolicies).toStrictEqual([]);
 
     const destroyingStatusUpdate = update.mock.calls;

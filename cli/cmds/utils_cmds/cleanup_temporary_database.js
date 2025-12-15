@@ -1,4 +1,5 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const cliProgress = require('cli-progress');
@@ -7,7 +8,7 @@ const {
   displayFailure,
   displayInfo,
 } = require('../../output/basic');
-const Glue = require('../../../lambdas/lib/glue');
+const Glue = require('../../../lambdas/lib/glue').default;
 
 const cleanupTemporaryDB = async () => {
   const DatabaseName = `${process.env.WHARFIE_DEPLOYMENT_NAME}_temporary_store`;

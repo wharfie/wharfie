@@ -1,8 +1,19 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 let FirehoseLogTransport;
 let firehoseLogTransport;
+
 describe('mock tests for firehose log transport', () => {
   beforeAll(() => {
     process.env.AWS_MOCKS = true;
@@ -13,16 +24,19 @@ describe('mock tests for firehose log transport', () => {
       logDeliveryStreamName: 'test-stream',
     });
   });
+
   afterEach(async () => {
     await firehoseLogTransport.flush();
     firehoseLogTransport.firehose.__setMockState();
   });
+
   afterAll(() => {
     process.env.AWS_MOCKS = false;
   });
 
   it('log mock test basic', async () => {
     expect.assertions(3);
+
     await firehoseLogTransport.log('test1 ');
     await firehoseLogTransport.log('test2 ');
     await firehoseLogTransport.log('test3 ');
@@ -31,6 +45,7 @@ describe('mock tests for firehose log transport', () => {
     await firehoseLogTransport.log('test5 ');
     await firehoseLogTransport.log('test6 ');
     await firehoseLogTransport.close();
+
     expect(
       firehoseLogTransport.firehose.__getMockState()['test-stream'].records
     ).toHaveLength(2);
@@ -48,6 +63,7 @@ describe('mock tests for firehose log transport', () => {
 
   it('log mock test binpacking', async () => {
     expect.assertions(2);
+
     await firehoseLogTransport.log(
       new Array(FirehoseLogTransport._MAX_BIN_SIZE + 2).join('a')
     );
@@ -55,6 +71,7 @@ describe('mock tests for firehose log transport', () => {
     await firehoseLogTransport.log('test3 ');
     await firehoseLogTransport.log('test4 ');
     await firehoseLogTransport.close();
+
     expect(
       firehoseLogTransport.firehose.__getMockState()['test-stream'].records
     ).toHaveLength(2);
@@ -67,6 +84,7 @@ describe('mock tests for firehose log transport', () => {
 
   it('log mock test autoFlush bytesize', async () => {
     expect.assertions(1);
+
     await firehoseLogTransport.log(
       new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('a')
     );
@@ -82,6 +100,7 @@ describe('mock tests for firehose log transport', () => {
     await firehoseLogTransport.log(
       new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('e')
     );
+
     expect(
       firehoseLogTransport.firehose.__getMockState()['test-stream'].records
     ).toHaveLength(4);
@@ -93,6 +112,7 @@ describe('mock tests for firehose log transport', () => {
     for (let i = 0; i < FirehoseLogTransport._MAX_BINS; i++) {
       await firehoseLogTransport.log('hi');
     }
+
     expect(
       firehoseLogTransport.firehose.__getMockState()['test-stream'].records
     ).toHaveLength(1);
@@ -100,6 +120,7 @@ describe('mock tests for firehose log transport', () => {
 
   it('shared output', async () => {
     expect.assertions(1);
+
     const firehoseLogTransportFoo = new FirehoseLogTransport({
       flushInterval: -1,
       logDeliveryStreamName: 'test-stream',
@@ -121,10 +142,12 @@ describe('mock tests for firehose log transport', () => {
 
   it('log truncation', async () => {
     expect.assertions(2);
+
     await firehoseLogTransport.log(
       new Array(FirehoseLogTransport._MAX_BIN_SIZE + 1).join('a')
     );
     await firehoseLogTransport.close();
+
     expect(
       firehoseLogTransport.firehose.__getMockState()['test-stream'].records
     ).toHaveLength(1);
@@ -138,12 +161,14 @@ describe('mock tests for firehose log transport', () => {
 
   it('close after flush', async () => {
     expect.assertions(2);
+
     await firehoseLogTransport.log('test1 ');
     await firehoseLogTransport.log('test2 ');
     await firehoseLogTransport.log('test3 ');
     await firehoseLogTransport.log('test4 ');
     await firehoseLogTransport.flush();
     await firehoseLogTransport.close();
+
     expect(
       firehoseLogTransport.firehose.__getMockState()['test-stream'].records
     ).toHaveLength(1);
@@ -156,12 +181,14 @@ describe('mock tests for firehose log transport', () => {
 
   it('flush after close', async () => {
     expect.assertions(2);
+
     await firehoseLogTransport.log('test1 ');
     await firehoseLogTransport.log('test2 ');
     await firehoseLogTransport.log('test3 ');
     await firehoseLogTransport.log('test4 ');
     await firehoseLogTransport.close();
     await firehoseLogTransport.flush();
+
     expect(
       firehoseLogTransport.firehose.__getMockState()['test-stream'].records
     ).toHaveLength(1);

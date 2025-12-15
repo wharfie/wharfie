@@ -1,10 +1,8 @@
-'use strict';
-
 class Clean {
   /**
    * @typedef CleanOptions
-   * @property {import('../../../lib/s3')} s3 - wharfie s3 resource
-   * @property {import('../../../lib/glue')} glue - wharfie glue resource
+   * @property {import('../../../lib/s3.js').default} s3 - wharfie s3 resource
+   * @property {import('../../../lib/glue.js').default} glue - wharfie glue resource
    * @param {CleanOptions} options - options for Clean instance
    */
   constructor({ s3, glue }) {
@@ -13,7 +11,7 @@ class Clean {
   }
 
   /**
-   * @param {import('../../../lib/graph/').Resource} resource -
+   * @param {import('../../../lib/graph/index.js').Resource} resource -
    */
   async cleanup_query_metadata(resource) {
     const dateOffset = 24 * 60 * 60 * 1000; // 24 hours
@@ -33,7 +31,7 @@ class Clean {
   }
 
   /**
-   * @param {import('../../../lib/graph/').Resource} resource -
+   * @param {import('../../../lib/graph/index.js').Resource} resource -
    */
   async cleanup_data(resource) {
     const dateOffset = 24 * 60 * 60 * 1000; // 24 hours
@@ -149,7 +147,7 @@ class Clean {
   }
 
   /**
-   * @param {import('../../../lib/graph/').Resource} resource -
+   * @param {import('../../../lib/graph/index.js').Resource} resource -
    */
   async cleanAll(resource) {
     await Promise.all([
@@ -159,8 +157,8 @@ class Clean {
   }
 
   /**
-   * @param {import('../../../lib/graph/').Resource} resource -
-   * @param {import('../../../lib/graph/').Query} query -
+   * @param {import('../../../lib/graph/index.js').Resource} resource -
+   * @param {import('../../../lib/graph/index.js').Query} query -
    */
   async cleanupQueryOutput(resource, query) {
     const destinationDatabaseName =
@@ -221,7 +219,7 @@ class Clean {
   }
 
   /**
-   * @param {import('../../../lib/graph/').Resource} resource -
+   * @param {import('../../../lib/graph/index.js').Resource} resource -
    * @param {string} manifest_uri -
    */
   // @ts-ignore
@@ -264,4 +262,4 @@ class Clean {
   }
 }
 
-module.exports = Clean;
+export default Clean;

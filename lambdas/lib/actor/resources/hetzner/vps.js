@@ -1,7 +1,5 @@
-'use strict';
-
-const { HetznerCloud, HetznerError } = require('../../../hetzner/');
-const BaseResource = require('../base-resource');
+import { HetznerCloud, HetznerError } from '../../../hetzner/index.js';
+import BaseResource from '../base-resource.js';
 
 /**
  * Minimal systemd service spec for first-boot install via cloud-init.
@@ -38,9 +36,9 @@ const BaseResource = require('../base-resource');
  * @typedef VPSOptions
  * @property {string} name - Unique server name within the project.
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {VPSProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {VPSProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class HetznerVPS extends BaseResource {
@@ -150,7 +148,7 @@ class HetznerVPS extends BaseResource {
       const sshKeyName = this.get('sshKeyName');
       const user_data = this._composeUserData();
 
-      /** @type {import('../../../hetzner/typedefs').CreateServerPayload} */
+      /** @type {import('../../../hetzner/typedefs.js').CreateServerPayload} */
       const payload = {
         name: this.name,
         server_type: this.get('serverType'),
@@ -220,4 +218,4 @@ class HetznerVPS extends BaseResource {
   }
 }
 
-module.exports = HetznerVPS;
+export default HetznerVPS;

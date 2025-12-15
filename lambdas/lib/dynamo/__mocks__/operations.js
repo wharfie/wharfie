@@ -1,18 +1,17 @@
-'use strict';
-const { Resource, Operation, Action, Query } = require('../../graph/');
+import { Resource, Operation, Action, Query } from '../../graph/index.js';
 
-/** @type {Object.<string, import('../../graph/typedefs').ResourceRecordData | import('../../graph/typedefs').OperationRecordData | import('../../graph/typedefs').ActionRecordData | import('../../graph/typedefs').QueryRecordData >} */
+/** @type {Object.<string, import('../../graph/typedefs.js').ResourceRecordData | import('../../graph/typedefs.js').OperationRecordData | import('../../graph/typedefs.js').ActionRecordData | import('../../graph/typedefs.js').QueryRecordData >} */
 let __state = {};
 
 /**
- * @param {Object.<string, import('../../graph/typedefs').ResourceRecordData | import('../../graph/typedefs').OperationRecordData | import('../../graph/typedefs').ActionRecordData | import('../../graph/typedefs').QueryRecordData >} state -
+ * @param {Object.<string, import('../../graph/typedefs.js').ResourceRecordData | import('../../graph/typedefs.js').OperationRecordData | import('../../graph/typedefs.js').ActionRecordData | import('../../graph/typedefs.js').QueryRecordData >} state -
  */
 function __setMockState(state = {}) {
   __state = state;
 }
 
 /**
- * @returns {Object.<string, import('../../graph/typedefs').ResourceRecordData | import('../../graph/typedefs').OperationRecordData | import('../../graph/typedefs').ActionRecordData | import('../../graph/typedefs').QueryRecordData >} -
+ * @returns {Object.<string, import('../../graph/typedefs.js').ResourceRecordData | import('../../graph/typedefs.js').OperationRecordData | import('../../graph/typedefs.js').ActionRecordData | import('../../graph/typedefs.js').QueryRecordData >} -
  */
 function __getMockState() {
   return __state;
@@ -142,7 +141,7 @@ async function putAction(action) {
 
 /**
  * @param {Action} action -
- * @param {import('../../graph/action').WharfieActionStatusEnum} new_status -
+ * @param {import('../../graph/action.js').WharfieActionStatusEnum} new_status -
  * @returns {Promise<boolean>} -
  */
 async function updateActionStatus(action, new_status) {
@@ -196,8 +195,8 @@ async function getQueries(resource_id, operation_id, action_id) {
 
 /**
  * @param {Operation} operation -
- * @param {import('../../graph/action').WharfieActionTypeEnum} action_type -
- * @param {import('../../logging/logger')?} logger -
+ * @param {import('../../graph/action.js').WharfieActionTypeEnum} action_type -
+ * @param {import('../../logging/logger.js').default?} logger -
  * @param {boolean} includeQueries -
  * @returns {Promise<boolean>} -
  */
@@ -309,12 +308,12 @@ async function getRecords(resource_id, operation_id = '') {
 
   /**
    * @typedef ActionRecordGroup
-   * @property {import('../../graph/typedefs').ActionRecord} action_record -
-   * @property {import('../../graph/typedefs').QueryRecord[]} query_records -
+   * @property {import('../../graph/typedefs.js').ActionRecord} action_record -
+   * @property {import('../../graph/typedefs.js').QueryRecord[]} query_records -
    */
   /** @type {ActionRecordGroup[]} */
   let operationBatch = [];
-  /** @type {import('../../graph/typedefs').QueryRecord[]} */
+  /** @type {import('../../graph/typedefs.js').QueryRecord[]} */
   let actionBatch = [];
   while (Items.length > 0) {
     const item = Items.pop();
@@ -388,12 +387,12 @@ async function getAllOperations() {
   if (!Items) return operations;
   /**
    * @typedef ActionRecordGroup
-   * @property {import('../../graph/typedefs').ActionRecord} action_record -
-   * @property {import('../../graph/typedefs').QueryRecord[]} query_records -
+   * @property {import('../../graph/typedefs.js').ActionRecord} action_record -
+   * @property {import('../../graph/typedefs.js').QueryRecord[]} query_records -
    */
   /** @type {ActionRecordGroup[]} */
   let operationBatch = [];
-  /** @type {import('../../graph/typedefs').QueryRecord[]} */
+  /** @type {import('../../graph/typedefs.js').QueryRecord[]} */
   let actionBatch = [];
   while (Items.length > 0) {
     const item = Items.pop();
@@ -453,7 +452,7 @@ async function getAllResources() {
   return operations;
 }
 
-module.exports = {
+export {
   getRecords,
   getAllOperations,
   getAllResources,

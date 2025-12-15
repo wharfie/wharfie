@@ -1,11 +1,13 @@
-'use strict';
-const BaseResource = require('../base-resource');
-const { ResourceNotFoundException } = require('@aws-sdk/client-dynamodb');
-const dependency_db = require('../../../../lib/dynamo/dependency');
+import BaseResource from '../base-resource.js';
+import { ResourceNotFoundException } from '@aws-sdk/client-dynamodb';
+import {
+  putDependency,
+  deleteDependency,
+} from '../../../../lib/dynamo/dependency.js';
 
 /**
  * @typedef DependencyRecordProperties
- * @property {import('../../../../typedefs').DependencyRecord | function(): import('../../../../typedefs').DependencyRecord} data -
+ * @property {import('../../../../typedefs.js').DependencyRecord | function(): import('../../../../typedefs.js').DependencyRecord} data -
  * @property {string} table_name -
  */
 
@@ -13,9 +15,9 @@ const dependency_db = require('../../../../lib/dynamo/dependency');
  * @typedef DependencyRecordOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {DependencyRecordProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {DependencyRecordProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class DependencyRecord extends BaseResource {
@@ -33,18 +35,12 @@ class DependencyRecord extends BaseResource {
   }
 
   async _reconcile() {
-    await dependency_db.putDependency(
-      this.get('data', {}),
-      this.get('table_name')
-    );
+    await putDependency(this.get('data', {}), this.get('table_name'));
   }
 
   async _destroy() {
     try {
-      await dependency_db.deleteDependency(
-        this.get('data', {}),
-        this.get('table_name')
-      );
+      await deleteDependency(this.get('data', {}), this.get('table_name'));
     } catch (error) {
       if (!(error instanceof ResourceNotFoundException)) {
         throw error;
@@ -53,4 +49,4 @@ class DependencyRecord extends BaseResource {
   }
 }
 
-module.exports = DependencyRecord;
+export default DependencyRecord;

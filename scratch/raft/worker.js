@@ -1,5 +1,6 @@
 // worker.js
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { Client } = require('./client');
 
 const SEM_NAME = process.env.SEM_NAME || 'demo';

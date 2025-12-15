@@ -1,10 +1,8 @@
-'use strict';
-
 class Partition {
   /**
    * @typedef PartitionOptions
-   * @property {import('../../../lib/s3')} s3 - wharfie s3 resource
-   * @property {import('../../../lib/glue')} glue - wharfie glue resource
+   * @property {import('../../../lib/s3.js').default} s3 - wharfie s3 resource
+   * @property {import('../../../lib/glue.js').default} glue - wharfie glue resource
    * @param {PartitionOptions} options - options for Partition instance
    */
   constructor({ s3, glue }) {
@@ -15,7 +13,7 @@ class Partition {
   /**
    *
    * @typedef registerPartitionsParams
-   * @property {Array<import('../../../typedefs').Partition>} partitions -
+   * @property {Array<import('../../../typedefs.js').Partition>} partitions -
    * @property {string} databaseName -
    * @property {string} tableName -
    * @param {registerPartitionsParams} params -
@@ -45,8 +43,8 @@ class Partition {
 
   /**
    *
-   * @param {import('../../../typedefs').Partition} partition -
-   * @returns {Promise<import('../../../typedefs').Partition>} -
+   * @param {import('../../../typedefs.js').Partition} partition -
+   * @returns {Promise<import('../../../typedefs.js').Partition>} -
    */
   async followSymlinks(partition) {
     const { bucket, prefix } = this.s3.parseS3Uri(partition.location);
@@ -239,7 +237,7 @@ class Partition {
   /**
    *
    * @typedef registerPartitionParams
-   * @property {import('../../../typedefs').Partition} partition -
+   * @property {import('../../../typedefs.js').Partition} partition -
    * @property {string} databaseName -
    * @property {string} tableName -
    * @param {registerPartitionParams} params -
@@ -295,4 +293,4 @@ class Partition {
   }
 }
 
-module.exports = Partition;
+export default Partition;

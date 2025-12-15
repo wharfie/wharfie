@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { afterEach, beforeAll, describe, expect, it } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const AWSGlue = require('@aws-sdk/client-glue');
 const AWSAthena = require('@aws-sdk/client-athena');
 const AWSS3 = require('@aws-sdk/client-s3');
@@ -17,6 +19,7 @@ describe('partition', () => {
     AWSAthena.AthenaMock.reset();
     AWSS3.S3Mock.reset();
   });
+
   it('registerPartition', async () => {
     expect.assertions(6);
 
@@ -58,6 +61,7 @@ describe('partition', () => {
       databaseName: 'test_db',
       tableName: 'test_table',
     });
+
     expect(AWSGlue.GlueMock).toHaveReceivedCommandTimes(
       AWSGlue.GetTableCommand,
       1
@@ -126,6 +130,7 @@ describe('partition', () => {
 
   it('registerAll', async () => {
     expect.assertions(2);
+
     AWSS3.S3Mock.on(AWSS3.ListObjectsV2Command)
       .resolvesOnce({
         CommonPrefixes: [{ Prefix: 'prefix/references/a=1/' }],

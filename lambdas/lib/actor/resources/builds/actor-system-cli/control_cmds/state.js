@@ -1,6 +1,4 @@
-'use strict';
-
-const { Command } = require('commander');
+import { Command } from 'commander';
 
 const stateCommand = new Command('state')
   .description('<<>>')
@@ -8,4 +6,4 @@ const stateCommand = new Command('state')
     console.log('hello from state command');
   });
 
-module.exports = stateCommand;
+export default stateCommand;

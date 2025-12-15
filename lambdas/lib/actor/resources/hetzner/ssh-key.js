@@ -1,9 +1,7 @@
-'use strict';
-
-const { readFile } = require('node:fs/promises');
-const path = require('node:path');
-const { HetznerCloud, HetznerError } = require('../../../hetzner');
-const BaseResource = require('../base-resource');
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { HetznerCloud, HetznerError } from '../../../hetzner/index.js';
+import BaseResource from '../base-resource.js';
 
 /**
  * @typedef HetznerSSHKeyProperties
@@ -15,9 +13,9 @@ const BaseResource = require('../base-resource');
  * @typedef HetznerSSHKeyOptions
  * @property {string} name - Name of the SSH key in Hetzner (resource identity).
  * @property {string} [parent] - Optional parent id/name in your graph.
- * @property {import('../reconcilable').Status} [status] - Initial status.
- * @property {HetznerSSHKeyProperties & import('../../typedefs').SharedProperties} properties - Resource properties.
- * @property {import('../reconcilable')[]} [dependsOn] - Dependency list.
+ * @property {import('../reconcilable.js').default.Status} [status] - Initial status.
+ * @property {HetznerSSHKeyProperties & import('../../typedefs.js').SharedProperties} properties - Resource properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - Dependency list.
  */
 
 class HetznerSSHKey extends BaseResource {
@@ -45,7 +43,7 @@ class HetznerSSHKey extends BaseResource {
         'properties.publicKeyPath is required and must be a non-empty string.'
       );
     }
-    const full = path.resolve(p);
+    const full = resolve(p);
     const text = (await readFile(full, 'utf8')).trim();
     if (!text) throw new Error(`Public key file is empty: ${full}`);
     // Minimal validation: "type base64 [comment]"
@@ -96,7 +94,7 @@ class HetznerSSHKey extends BaseResource {
       try {
         await this.hz.deleteSSHKey(existing.id);
       } catch (err) {
-        if (!(err instanceof HetznerError && err.status === 404)) {
+        if (!(err instanceof HetznerError && err?.status === 404)) {
           throw err;
         }
       }
@@ -139,4 +137,4 @@ class HetznerSSHKey extends BaseResource {
   }
 }
 
-module.exports = HetznerSSHKey;
+export default HetznerSSHKey;

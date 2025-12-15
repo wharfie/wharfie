@@ -1,11 +1,9 @@
-'use strict';
-const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const { DynamoDB } = require('@aws-sdk/client-dynamodb');
-const { query, putWithThroughputRetry } = require('../../dynamo');
-const BaseResource = require('../../actor/resources/base-resource');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
+import { DynamoDB } from '@aws-sdk/client-dynamodb';
+import { query, putWithThroughputRetry } from '../../dynamo/index.js';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('../../base');
+import BaseAWS from '../../base.js';
 
 const credentials = fromNodeProviderChain();
 const docClient = DynamoDBDocument.from(
@@ -20,7 +18,7 @@ const docClient = DynamoDBDocument.from(
 );
 
 /**
- * @param {BaseResource} resource -
+ * @param {import('../../actor/resources/base-resource.js').default} resource -
  */
 async function putResource(resource) {
   if (!resource.has('deployment') || !resource.get('deployment'))
@@ -43,7 +41,7 @@ async function putResource(resource) {
 }
 
 /**
- * @param {BaseResource} resource -
+ * @param {import('../../actor/resources/base-resource.js').default} resource -
  */
 async function putResourceStatus(resource) {
   if (!resource.has('deployment') || !resource.get('deployment'))
@@ -74,8 +72,8 @@ async function putResourceStatus(resource) {
 }
 
 /**
- * @param {BaseResource} resource -
- * @returns {Promise<import("../../actor/resources/reconcilable").StatusEnum?>} -
+ * @param {import('../../actor/resources/base-resource.js').default} resource -
+ * @returns {Promise<import("../../actor/resources/reconcilable.js").StatusEnum?>} -
  */
 async function getResourceStatus(resource) {
   if (!resource.has('deployment') || !resource.get('deployment'))
@@ -108,8 +106,8 @@ async function getResourceStatus(resource) {
 }
 
 /**
- * @param {BaseResource} resource -
- * @returns {Promise<import("../../actor/typedefs").SerializedBaseResource?>} -
+ * @param {import('../../actor/resources/base-resource.js').default} resource -
+ * @returns {Promise<import("../../actor/typedefs.js").SerializedBaseResource?>} -
  */
 async function getResource(resource) {
   if (!resource.has('deployment') || !resource.get('deployment'))
@@ -140,7 +138,7 @@ async function getResource(resource) {
 /**
  * @param {string} deploymentName -
  * @param {string} resourceKey -
- * @returns {Promise<import("../../actor/typedefs").SerializedBaseResource[]>} -
+ * @returns {Promise<import("../../actor/typedefs.js").SerializedBaseResource[]>} -
  */
 async function getResources(deploymentName, resourceKey) {
   const { Items } = await query({
@@ -167,7 +165,7 @@ async function getResources(deploymentName, resourceKey) {
 }
 
 /**
- * @param {BaseResource} resource -
+ * @param {import('../../actor/resources/base-resource.js').default} resource -
  */
 async function deleteResource(resource) {
   if (!resource.has('deployment') || !resource.get('deployment'))
@@ -187,7 +185,7 @@ async function deleteResource(resource) {
   });
 }
 
-module.exports = {
+export {
   putResource,
   putResourceStatus,
   getResource,

@@ -1,24 +1,22 @@
-'use strict';
-
-const { Operation, Resource } = require('../../lib/graph/');
-const { createId } = require('../../lib/id');
-const logging = require('../../lib/logging');
-const Athena = require('../../lib/athena');
-const Glue = require('../../lib/glue');
-const Compaction = require('./lib/compaction');
-const STS = require('../../lib/sts');
-const resource_db = require('../../lib/dynamo/operations');
-const query = require('../query');
+import { Operation, Resource } from '../../lib/graph/index.js';
+import { createId } from '../../lib/id.js';
+import * as logging from '../../lib/logging/index.js';
+import Athena from '../../lib/athena/index.js';
+import Glue from '../../lib/glue.js';
+import Compaction from './lib/compaction.js';
+import STS from '../../lib/sts.js';
+import * as resource_db from '../../lib/dynamo/operations.js';
+import * as query from '../query/index.js';
 
 const TEMPORARY_GLUE_DATABASE = process.env.TEMPORARY_GLUE_DATABASE || '';
 const MAX_QUERIES_PER_ACTION = process.env.MAX_QUERIES_PER_ACTION || 0;
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function run(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
@@ -79,7 +77,7 @@ async function run(event, context, resource, operation) {
     });
 
     for await (const result of results) {
-      /** @type {import('../../typedefs').Partition} */
+      /** @type {import('../../typedefs.js').Partition} */
       const partition = {
         // view partions have no s3 location
         location: '',
@@ -136,4 +134,4 @@ async function run(event, context, resource, operation) {
   };
 }
 
-module.exports = { run };
+export default { run };

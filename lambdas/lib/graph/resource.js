@@ -1,4 +1,6 @@
-const { createId } = require('../id');
+import { createId } from '../id.js';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { version: WHARFIE_VERSION } = require('../../../package.json');
 
 /**
@@ -23,10 +25,10 @@ const Status = {
  * @property {string} region - aws region of the resource
  * @property {string} [source_region] - aws region of the source data, not set for models
  * @property {string} athena_workgroup - name of the stack's athena workgroup
- * @property {import('../../typedefs').DaemonConfig} daemon_config -
- * @property {import('../actor/resources/wharfie-resource').WharfieResourceProperties & import('../actor/typedefs').SharedProperties} resource_properties -
- * @property {import('../../typedefs').TableProperties} source_properties -
- * @property {import('../../typedefs').TableProperties} destination_properties -
+ * @property {import('../../typedefs.js').DaemonConfig} daemon_config -
+ * @property {import('../actor/resources/wharfie-resource.js').WharfieResourceProperties & import('../actor/typedefs.js').SharedProperties} resource_properties -
+ * @property {import('../../typedefs.js').TableProperties} source_properties -
+ * @property {import('../../typedefs.js').TableProperties} destination_properties -
  * @property {number} [created_at] - created timestamp
  * @property {number} [last_updated_at] - update_at_timestamp
  * @property {string} [wharfie_version] -
@@ -71,7 +73,7 @@ class Resource {
   }
 
   /**
-   * @returns {import('./typedefs').ResourceRecord} -
+   * @returns {import('./typedefs.js').ResourceRecord} -
    */
   toRecord() {
     return {
@@ -97,7 +99,7 @@ class Resource {
   }
 
   /**
-   * @param {import('./typedefs').ResourceRecord} resource_record -
+   * @param {import('./typedefs.js').ResourceRecord} resource_record -
    * @returns {Resource} -
    */
   static fromRecord(resource_record) {
@@ -124,4 +126,5 @@ Resource.Status = Status;
  */
 Resource.RecordType = 'RESOURCE';
 
-module.exports = Resource;
+export { Status };
+export default Resource;

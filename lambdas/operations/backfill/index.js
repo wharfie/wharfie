@@ -1,19 +1,17 @@
-'use strict';
-
-const { Action, Operation, Resource } = require('../../lib/graph/');
-const logging = require('../../lib/logging');
-const resource_db = require('../../lib/dynamo/operations');
-const register_missing_partitions = require('../actions/register_missing_partitions');
-const find_compaction_partitions = require('../actions/find_compaction_partitions');
-const run_compaction = require('../actions/run_compaction');
-const update_symlinks = require('../actions/update_symlinks');
-const side_effects = require('../side_effects');
+import { Action, Operation, Resource } from '../../lib/graph/index.js';
+import * as logging from '../../lib/logging/index.js';
+import * as resource_db from '../../lib/dynamo/operations.js';
+import register_missing_partitions from '../actions/register_missing_partitions.js';
+import find_compaction_partitions from '../actions/find_compaction_partitions.js';
+import run_compaction from '../actions/run_compaction.js';
+import update_symlinks from '../actions/update_symlinks.js';
+import * as side_effects from '../side_effects/index.js';
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function start(event, context, resource) {
   const event_log = logging.getEventLogger(event, context);
@@ -90,11 +88,11 @@ async function start(event, context, resource) {
 }
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function finish(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
@@ -115,11 +113,11 @@ async function finish(event, context, resource, operation) {
 }
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function route(event, context, resource, operation) {
   if (operation.resource_version !== resource.version) {
@@ -158,7 +156,7 @@ async function route(event, context, resource, operation) {
   }
 }
 
-module.exports = {
+export default {
   start,
   finish,
   route,

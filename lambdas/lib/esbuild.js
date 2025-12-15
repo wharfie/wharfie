@@ -1,3 +1,6 @@
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+
 /**
  * @param {import('esbuild').BuildOptions} args -
  * @returns {Promise<import('esbuild').BuildResult>} -
@@ -8,6 +11,4 @@ function build(args) {
   return esbuild.build(args);
 }
 
-module.exports = {
-  build,
-};
+export { build };

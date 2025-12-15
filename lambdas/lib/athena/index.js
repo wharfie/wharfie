@@ -1,10 +1,22 @@
-'use strict';
-const AWS = require('@aws-sdk/client-athena');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import {
+  Athena as _Athena,
+  GetWorkGroupCommand,
+  CreateWorkGroupCommand,
+  UpdateWorkGroupCommand,
+  DeleteWorkGroupCommand,
+  StartQueryExecutionCommand,
+  BatchGetQueryExecutionCommand,
+  GetQueryExecutionCommand,
+  paginateGetQueryResults,
+  ListTagsForResourceCommand,
+  TagResourceCommand,
+  UntagResourceCommand,
+} from '@aws-sdk/client-athena';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const Glue = require('../glue');
-const BaseAWS = require('../base');
-const QueryParser = require('./query-parser');
+import Glue from '../glue.js';
+import BaseAWS from '../base.js';
+import QueryParser from './query-parser.js';
 
 class Athena {
   /**
@@ -12,7 +24,7 @@ class Athena {
    */
   constructor(options) {
     const credentials = fromNodeProviderChain();
-    this.athena = new AWS.Athena({
+    this.athena = new _Athena({
       ...BaseAWS.config(),
       credentials,
       ...options,
@@ -47,7 +59,7 @@ class Athena {
    * @returns {Promise<import("@aws-sdk/client-athena").GetWorkGroupOutput>} -
    */
   async getWorkGroup(params) {
-    return await this.athena.send(new AWS.GetWorkGroupCommand(params));
+    return await this.athena.send(new GetWorkGroupCommand(params));
   }
 
   /**
@@ -55,7 +67,7 @@ class Athena {
    * @returns {Promise<import("@aws-sdk/client-athena").CreateWorkGroupCommandOutput>} -
    */
   async createWorkGroup(params) {
-    return await this.athena.send(new AWS.CreateWorkGroupCommand(params));
+    return await this.athena.send(new CreateWorkGroupCommand(params));
   }
 
   /**
@@ -63,7 +75,7 @@ class Athena {
    * @returns {Promise<import("@aws-sdk/client-athena").UpdateWorkGroupCommandOutput>} -
    */
   async updateWorkGroup(params) {
-    return await this.athena.send(new AWS.UpdateWorkGroupCommand(params));
+    return await this.athena.send(new UpdateWorkGroupCommand(params));
   }
 
   /**
@@ -71,7 +83,7 @@ class Athena {
    * @returns {Promise<import("@aws-sdk/client-athena").DeleteWorkGroupCommandOutput>} -
    */
   async deleteWorkGroup(params) {
-    return await this.athena.send(new AWS.DeleteWorkGroupCommand(params));
+    return await this.athena.send(new DeleteWorkGroupCommand(params));
   }
 
   /**
@@ -79,7 +91,7 @@ class Athena {
    * @returns {Promise<import("@aws-sdk/client-athena").StartQueryExecutionOutput>} - Athena StartQueryExecution result
    */
   async startQueryExecution(params) {
-    return await this.athena.send(new AWS.StartQueryExecutionCommand(params));
+    return await this.athena.send(new StartQueryExecutionCommand(params));
   }
 
   /**
@@ -87,9 +99,7 @@ class Athena {
    * @returns {Promise<import("@aws-sdk/client-athena").BatchGetQueryExecutionOutput>} - Athena BatchGetQueryExecution result
    */
   async batchGetQueryExecution(params) {
-    return await this.athena.send(
-      new AWS.BatchGetQueryExecutionCommand(params)
-    );
+    return await this.athena.send(new BatchGetQueryExecutionCommand(params));
   }
 
   /**
@@ -97,7 +107,7 @@ class Athena {
    * @returns {Promise<import("@aws-sdk/client-athena").GetQueryExecutionOutput>} - Athena GetQueryExecution result
    */
   async getQueryExecution(params) {
-    return await this.athena.send(new AWS.GetQueryExecutionCommand(params));
+    return await this.athena.send(new GetQueryExecutionCommand(params));
   }
 
   /**
@@ -105,7 +115,7 @@ class Athena {
    * @returns {Promise<Object<string, any>[]>} -
    */
   async getQueryResults(params) {
-    const paginator = AWS.paginateGetQueryResults(
+    const paginator = paginateGetQueryResults(
       {
         client: this.athena,
       },
@@ -272,14 +282,14 @@ class Athena {
   async listTagsForResource(params) {
     const returnTags = [];
     let { Tags, NextToken, $metadata } = await this.athena.send(
-      new AWS.ListTagsForResourceCommand(params)
+      new ListTagsForResourceCommand(params)
     );
     if (Tags) returnTags.push(...Tags);
 
     while (NextToken) {
       const { Tags: nextTags, NextToken: nextNextToken } =
         await this.athena.send(
-          new AWS.ListTagsForResourceCommand({ ...params, NextToken })
+          new ListTagsForResourceCommand({ ...params, NextToken })
         );
       if (nextTags) returnTags.push(...nextTags);
       NextToken = nextNextToken;
@@ -292,7 +302,7 @@ class Athena {
    * @returns {Promise<import("@aws-sdk/client-athena").TagResourceCommandOutput>} - Athena tagResource result
    */
   async tagResource(params) {
-    return await this.athena.send(new AWS.TagResourceCommand(params));
+    return await this.athena.send(new TagResourceCommand(params));
   }
 
   /**
@@ -300,8 +310,8 @@ class Athena {
    * @returns {Promise<import("@aws-sdk/client-athena").UntagResourceCommandOutput>} - Athena tagResource result
    */
   async untagResource(params) {
-    return await this.athena.send(new AWS.UntagResourceCommand(params));
+    return await this.athena.send(new UntagResourceCommand(params));
   }
 }
 
-module.exports = Athena;
+export default Athena;

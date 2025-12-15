@@ -1,4 +1,5 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const {
@@ -7,12 +8,10 @@ const {
   displayInfo,
   displayInstruction,
 } = require('../../output/basic');
-const {
-  getAllResources,
-  getResource,
-} = require('../../../lambdas/lib/dynamo/operations');
-const Glue = require('../../../lambdas/lib/glue');
-const S3 = require('../../../lambdas/lib/s3');
+const { getAllResources, getResource } =
+  require('../../../lambdas/lib/dynamo/operations').default;
+const Glue = require('../../../lambdas/lib/glue').default;
+const S3 = require('../../../lambdas/lib/s3').default;
 const Clean = require('../../../lambdas/operations/actions/lib/clean');
 
 const glue = new Glue({});

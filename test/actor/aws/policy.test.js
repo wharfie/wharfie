@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-large-snapshots */
-'use strict';
+import { describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = true;
 const { IAM } = jest.requireMock('@aws-sdk/client-iam');
@@ -9,6 +11,7 @@ const { Policy } = require('../../../lambdas/lib/actor/resources/aws/');
 describe('iam policy IaC', () => {
   it('basic', async () => {
     expect.assertions(4);
+
     const iam = new IAM({});
     const policy = new Policy({
       name: 'test-policy',
@@ -43,6 +46,7 @@ describe('iam policy IaC', () => {
     await policy.reconcile();
 
     const serialized = policy.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -107,7 +111,9 @@ describe('iam policy IaC', () => {
         },
       }
     `);
+
     await policy.destroy();
+
     expect(policy.status).toBe('DESTROYED');
     await expect(
       iam.getPolicy({ PolicyArn: policy.get('arn') })

@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-large-snapshots */
-'use strict';
+import { describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
 const { EventsRule } = require('../../../lambdas/lib/actor/resources/aws/');
@@ -12,6 +14,7 @@ const { getMockDeploymentProperties } = require('../util');
 describe('events rule IaC', () => {
   it('basic', async () => {
     expect.assertions(4);
+
     const cloudWatchEvents = new CloudWatchEvents({});
     const eventsRule = new EventsRule({
       name: 'test-rule',
@@ -44,6 +47,7 @@ describe('events rule IaC', () => {
     await eventsRule.reconcile();
 
     const serialized = eventsRule.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -119,7 +123,9 @@ describe('events rule IaC', () => {
         ],
       }
     `);
+
     await eventsRule.destroy();
+
     expect(eventsRule.status).toBe('DESTROYED');
     await expect(
       cloudWatchEvents.describeRule({

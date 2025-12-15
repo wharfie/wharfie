@@ -1,11 +1,6 @@
-const Daemon = require('./daemon');
-const Cleanup = require('./cleanup');
-const Events = require('./events');
-const Monitor = require('./monitor');
+import Daemon from './daemon.js';
+import Cleanup from './cleanup.js';
+import Events from './events.js';
+import Monitor from './monitor.js';
 
-module.exports = {
-  Daemon,
-  Cleanup,
-  Events,
-  Monitor,
-};
+export { Daemon, Cleanup, Events, Monitor };

@@ -1,27 +1,28 @@
-const AthenaWorkGroup = require('../resources/aws/athena-workgroup');
-const AutoscalingPolicy = require('../resources/aws/autoscaling-policy');
-const AutoscalingTable = require('../resources/aws/autoscaling-table');
-const AutoscalingTarget = require('../resources/aws/autoscaling-target');
-const Bucket = require('../resources/aws/bucket');
-const EventSourceMapping = require('../resources/aws/event-source-mapping');
-const EventsRule = require('../resources/aws/events-rule');
-const Firehose = require('../resources/aws/firehose');
-const GlueDatabase = require('../resources/aws/glue-database');
-const GlueTable = require('../resources/aws/glue-table');
-const Policy = require('../resources/aws/policy');
-const Queue = require('../resources/aws/queue');
-const Role = require('../resources/aws/role');
-const Table = require('../resources/aws/table');
-const BucketNotificationConfiguration = require('../resources/aws/bucket-notification-configuration');
+import { deserialize } from './shared.js';
 
-const RecordResources = require('../resources/records');
-const WharfieProject = require('../resources/wharfie-project');
-const WharfieResource = require('../resources/wharfie-resource');
-const { getResources } = require('../../db/state/aws');
-const { deserialize } = require('./shared');
+import AthenaWorkGroup from '../resources/aws/athena-workgroup.js';
+import AutoscalingPolicy from '../resources/aws/autoscaling-policy.js';
+import AutoscalingTable from '../resources/aws/autoscaling-table.js';
+import AutoscalingTarget from '../resources/aws/autoscaling-target.js';
+import Bucket from '../resources/aws/bucket.js';
+import EventSourceMapping from '../resources/aws/event-source-mapping.js';
+import EventsRule from '../resources/aws/events-rule.js';
+import Firehose from '../resources/aws/firehose.js';
+import GlueDatabase from '../resources/aws/glue-database.js';
+import GlueTable from '../resources/aws/glue-table.js';
+import Policy from '../resources/aws/policy.js';
+import Queue from '../resources/aws/queue.js';
+import Role from '../resources/aws/role.js';
+import Table from '../resources/aws/table.js';
+import BucketNotificationConfiguration from '../resources/aws/bucket-notification-configuration.js';
+
+import RecordResources from '../resources/records/index.js';
+import WharfieProject from '../resources/wharfie-project.js';
+import WharfieResource from '../resources/wharfie-resource.js';
+import { getResources } from '../../db/state/aws.js';
 
 /**
- * @typedef {new (options: any) => import('../resources/base-resource')} ResourceConstructor
+ * @typedef {new (options: any) => import('../resources/base-resource.js').default} ResourceConstructor
  */
 /**
  * @type {Object<string, ResourceConstructor>}
@@ -83,6 +84,4 @@ async function load({ deploymentName, resourceKey }) {
   );
 }
 
-module.exports = {
-  load,
-};
+export { load };

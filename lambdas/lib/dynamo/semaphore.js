@@ -1,12 +1,11 @@
-'use strict';
-const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const {
+import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
+import {
   DynamoDB,
   ConditionalCheckFailedException,
-} = require('@aws-sdk/client-dynamodb');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+} from '@aws-sdk/client-dynamodb';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('../base');
+import BaseAWS from '../base.js';
 
 const credentials = fromNodeProviderChain();
 const docClient = DynamoDBDocument.from(
@@ -121,8 +120,4 @@ async function deleteSemaphore(semaphore) {
   });
 }
 
-module.exports = {
-  increase,
-  release,
-  deleteSemaphore,
-};
+export { increase, release, deleteSemaphore };

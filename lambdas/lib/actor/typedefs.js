@@ -12,7 +12,7 @@
 
 /**
  * @typedef DeploymentEnvironmentProperties
- * @property {import('../env-paths').EnvPaths} envPaths -
+ * @property {import('../env-paths.js').EnvPaths} envPaths -
  * @property {string} version -
  * @property {string} stateTable -
  * @property {string} stateTableArn -
@@ -36,7 +36,7 @@
  * @typedef SerializedBaseResource
  * @property {string} name -
  * @property {string} parent -
- * @property {import('./resources/reconcilable').StatusEnum} [status] -
+ * @property {import('./resources/reconcilable.js').StatusEnum} [status] -
  * @property {string[]} dependsOn -
  * @property {Object<string,any>} properties -
  * @property {string} resourceType -
@@ -46,7 +46,7 @@
  * @typedef SerializedBaseResourceGroup
  * @property {string} name -
  * @property {string} parent -
- * @property {import('./resources/reconcilable').StatusEnum} [status] -
+ * @property {import('./resources/reconcilable.js').StatusEnum} [status] -
  * @property {string[]} dependsOn -
  * @property {Object<string,any>} properties -
  * @property {string} resourceType -
@@ -54,7 +54,7 @@
  */
 
 /**
- * @typedef {import('./typedefs').SerializedBaseResource & import('./typedefs').SerializedBaseResourceGroup} SerializedResource
+ * @typedef {import('./typedefs.js').SerializedBaseResource & import('./typedefs.js').SerializedBaseResourceGroup} SerializedResource
  */
 
-module.exports = {};
+export default {};

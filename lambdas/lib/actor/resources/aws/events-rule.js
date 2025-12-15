@@ -1,11 +1,10 @@
-'use strict';
-const CloudWatchEvents = require('../../../cloudwatch-events');
-const BaseResource = require('../base-resource');
-const {
+import CloudWatchEvents from '../../../cloudwatch-events.js';
+import BaseResource from '../base-resource.js';
+import {
   ResourceNotFoundException,
   RuleState,
-} = require('@aws-sdk/client-cloudwatch-events');
-const { NoSuchBucket } = require('@aws-sdk/client-s3');
+} from '@aws-sdk/client-cloudwatch-events';
+import { NoSuchBucket } from '@aws-sdk/client-s3';
 
 /**
  * @typedef EventsRuleProperties
@@ -22,9 +21,9 @@ const { NoSuchBucket } = require('@aws-sdk/client-s3');
  * @typedef EventsRuleOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {EventsRuleProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {EventsRuleProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class EventsRule extends BaseResource {
@@ -220,4 +219,4 @@ class EventsRule extends BaseResource {
 EventsRule.ENABLED = RuleState.ENABLED;
 EventsRule.DISABLED = RuleState.DISABLED;
 
-module.exports = EventsRule;
+export default EventsRule;

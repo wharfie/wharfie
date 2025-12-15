@@ -1,9 +1,8 @@
-'use strict';
-const S3 = require('../../../s3');
-const BaseResource = require('../base-resource');
-const { createShortId } = require('../../../id');
+import S3 from '../../../s3.js';
+import BaseResource from '../base-resource.js';
+import { createShortId } from '../../../id.js';
 
-const { NoSuchBucket } = require('@aws-sdk/client-s3');
+import { NoSuchBucket } from '@aws-sdk/client-s3';
 
 /**
  * @typedef BucketProperties
@@ -17,9 +16,9 @@ const { NoSuchBucket } = require('@aws-sdk/client-s3');
  * @typedef BucketOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {BucketProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {BucketProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class Bucket extends BaseResource {
@@ -170,4 +169,4 @@ class Bucket extends BaseResource {
   }
 }
 
-module.exports = Bucket;
+export default Bucket;

@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const AWS = require('@aws-sdk/lib-dynamodb');
 
 process.env.LOCATION_TABLE = 'location_table';
@@ -20,6 +22,7 @@ describe('dynamo location db', () => {
 
   it('putLocation', async () => {
     expect.assertions(2);
+
     put.mockResolvedValue({
       $response: {},
     });
@@ -27,6 +30,7 @@ describe('dynamo location db', () => {
       resource_id: 'resource_id',
       location: 's3://somebucket/prefix/',
     });
+
     expect(put).toHaveBeenCalledTimes(1);
     expect(put.mock.calls[0]).toMatchInlineSnapshot(`
       [
@@ -45,6 +49,7 @@ describe('dynamo location db', () => {
 
   it('findLocations', async () => {
     expect.assertions(5);
+
     query
       .mockResolvedValueOnce({
         Items: [],
@@ -63,6 +68,7 @@ describe('dynamo location db', () => {
     const result = await location.findLocations(
       's3://some_bucket/prefix/partion=a/a_key.json'
     );
+
     expect(query).toHaveBeenCalledTimes(3);
     expect(query.mock.calls[0]).toMatchInlineSnapshot(`
       [
@@ -122,6 +128,7 @@ describe('dynamo location db', () => {
 
   it('deleteLocation', async () => {
     expect.assertions(2);
+
     _delete.mockResolvedValue({
       $response: {},
     });
@@ -129,6 +136,7 @@ describe('dynamo location db', () => {
       resource_id: 'resource_id',
       location: 's3://somebucket/prefix/',
     });
+
     expect(_delete).toHaveBeenCalledTimes(1);
     expect(_delete.mock.calls[0]).toMatchInlineSnapshot(`
       [

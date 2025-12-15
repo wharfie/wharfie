@@ -1,11 +1,12 @@
-const fs = require('fs');
-const fsp = fs.promises;
-const path = require('path');
-const { createId } = require('../id');
-const paths = require('../paths');
+import { promises, existsSync, readFileSync } from 'node:fs';
+import { join, dirname, basename } from 'node:path';
+import { createId } from '../id.js';
+import paths from '../paths.js';
 
-const dbFilePath = path.join(paths.data, 'database.json');
-const dbDir = path.dirname(dbFilePath);
+const fsp = promises;
+
+const dbFilePath = join(paths.data, 'database.json');
+const dbDir = dirname(dbFilePath);
 
 /**
  * @typedef {Object.<string, any>} DBRoot
@@ -38,11 +39,9 @@ function flush(root) {
     const data = JSON.stringify(root);
     await fsp.mkdir(dbDir, { recursive: true });
 
-    const tmp = path.join(
+    const tmp = join(
       dbDir,
-      `.tmp-${path.basename(dbFilePath)}-${
-        process.pid
-      }-${Date.now()}-${createId()}`
+      `.tmp-${basename(dbFilePath)}-${process.pid}-${Date.now()}-${createId()}`
     );
 
     // open, write, fsync, close
@@ -90,9 +89,9 @@ class LocalDB {
    */
   static loadRoot() {
     if (LocalDB.ROOT_DB === null) {
-      if (fs.existsSync(dbFilePath)) {
+      if (existsSync(dbFilePath)) {
         try {
-          const data = fs.readFileSync(dbFilePath, 'utf8');
+          const data = readFileSync(dbFilePath, 'utf8');
           LocalDB.ROOT_DB = JSON.parse(data);
         } catch (err) {
           LocalDB.ROOT_DB = {};
@@ -197,4 +196,4 @@ class LocalDB {
  */
 LocalDB.ROOT_DB = {};
 
-module.exports = LocalDB;
+export default LocalDB;

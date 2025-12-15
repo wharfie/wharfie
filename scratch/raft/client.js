@@ -1,5 +1,6 @@
 // client.js
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const Hyperswarm = require('hyperswarm');
 const HyperDHT = require('hyperdht');
 const crypto = require('crypto');
@@ -124,9 +125,11 @@ class Client {
       requestId: crypto.randomUUID(),
     });
   }
+
   release(name) {
     return this._req({ cmd: 'RELEASE', name, requestId: crypto.randomUUID() });
   }
+
   async get(name) {
     const r = await this._req({ cmd: 'GET', name });
     if (!r || r.notLeader || r.error || r.ok === false)

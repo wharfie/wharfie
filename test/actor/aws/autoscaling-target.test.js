@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-large-snapshots */
-'use strict';
+import { describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
 const {
@@ -14,6 +16,7 @@ const { getMockDeploymentProperties } = require('../util');
 describe('autoscaling target IaC', () => {
   it('basic', async () => {
     expect.assertions(4);
+
     const applicationAutoScaling =
       new ApplicationAutoScaling.ApplicationAutoScaling({});
     const autoscalingTarget = new AutoscalingTarget({
@@ -35,6 +38,7 @@ describe('autoscaling target IaC', () => {
     await autoscalingTarget.reconcile();
 
     const serialized = autoscalingTarget.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -92,13 +96,17 @@ describe('autoscaling target IaC', () => {
         ],
       }
     `);
+
     await autoscalingTarget.destroy();
+
     expect(autoscalingTarget.status).toBe('DESTROYED');
+
     const des_res = await applicationAutoScaling.describeScalableTargets({
       ResourceIds: [autoscalingTarget.get('resourceId')],
       ServiceNamespace: autoscalingTarget.get('serviceNamespace'),
       ScalableDimension: autoscalingTarget.get('scalableDimension'),
     });
+
     expect(des_res.ScalableTargets).toStrictEqual([]);
   });
 });

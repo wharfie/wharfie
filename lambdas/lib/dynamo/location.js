@@ -1,10 +1,9 @@
-'use strict';
-const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const { DynamoDB } = require('@aws-sdk/client-dynamodb');
-const { query } = require('.');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
+import { DynamoDB } from '@aws-sdk/client-dynamodb';
+import { query } from './index.js';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('../base');
+import BaseAWS from '../base.js';
 
 const credentials = fromNodeProviderChain();
 const docClient = DynamoDBDocument.from(
@@ -21,7 +20,7 @@ const docClient = DynamoDBDocument.from(
 const LOCATION_TABLE = process.env.LOCATION_TABLE || '';
 
 /**
- * @param {import('../../typedefs').LocationRecord} location -
+ * @param {import('../../typedefs.js').LocationRecord} location -
  * @param {string} [tableName] -
  */
 async function putLocation(location, tableName = process.env.LOCATION_TABLE) {
@@ -38,7 +37,7 @@ async function putLocation(location, tableName = process.env.LOCATION_TABLE) {
 
 /**
  * @param {string} location -
- * @returns {Promise<Array<import('../../typedefs').LocationRecord>?>} - event
+ * @returns {Promise<Array<import('../../typedefs.js').LocationRecord>?>} - event
  */
 async function findLocations(location) {
   if (!location || location === 's3://') return [];
@@ -70,7 +69,7 @@ async function findLocations(location) {
 }
 
 /**
- * @param {import('../../typedefs').LocationRecord} location -
+ * @param {import('../../typedefs.js').LocationRecord} location -
  * @param {string} [tableName] -
  */
 async function deleteLocation(
@@ -86,8 +85,4 @@ async function deleteLocation(
   });
 }
 
-module.exports = {
-  putLocation,
-  findLocations,
-  deleteLocation,
-};
+export { putLocation, findLocations, deleteLocation };

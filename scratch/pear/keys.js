@@ -1,9 +1,14 @@
 // keys.js
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const fs = require('fs');
 const path = require('path');
 const crypto = require('hypercore-crypto'); // comes with hypercore
 
+/**
+ *
+ * @param filePath
+ */
 function loadOrCreateKeypair(filePath) {
   const p = path.resolve(filePath);
   if (fs.existsSync(p)) {

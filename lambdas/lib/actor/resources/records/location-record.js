@@ -1,11 +1,13 @@
-'use strict';
-const BaseResource = require('../base-resource');
-const { ResourceNotFoundException } = require('@aws-sdk/client-dynamodb');
-const location_db = require('../../../../lib/dynamo/location');
+import BaseResource from '../base-resource.js';
+import { ResourceNotFoundException } from '@aws-sdk/client-dynamodb';
+import {
+  putLocation,
+  deleteLocation,
+} from '../../../../lib/dynamo/location.js';
 
 /**
  * @typedef LocationRecordProperties
- * @property {import('../../../../typedefs').LocationRecord | function(): import('../../../../typedefs').LocationRecord} data -
+ * @property {import('../../../../typedefs.js').LocationRecord | function(): import('../../../../typedefs.js').LocationRecord} data -
  * @property {string} table_name -
  */
 
@@ -13,9 +15,9 @@ const location_db = require('../../../../lib/dynamo/location');
  * @typedef LocationRecordOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {LocationRecordProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {LocationRecordProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class LocationRecord extends BaseResource {
@@ -33,15 +35,12 @@ class LocationRecord extends BaseResource {
   }
 
   async _reconcile() {
-    await location_db.putLocation(this.get('data', {}), this.get('table_name'));
+    await putLocation(this.get('data', {}), this.get('table_name'));
   }
 
   async _destroy() {
     try {
-      await location_db.deleteLocation(
-        this.get('data', {}),
-        this.get('table_name')
-      );
+      await deleteLocation(this.get('data', {}), this.get('table_name'));
     } catch (error) {
       if (!(error instanceof ResourceNotFoundException)) {
         throw error;
@@ -50,4 +49,4 @@ class LocationRecord extends BaseResource {
   }
 }
 
-module.exports = LocationRecord;
+export default LocationRecord;

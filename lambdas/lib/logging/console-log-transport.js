@@ -1,13 +1,11 @@
-'use strict';
-
-const stream = require('stream');
+import { Writable } from 'stream';
 
 /**
  * @typedef ConsoleLogTransportOptions
  * @property {number} [flushInterval] -
  */
 
-class ConsoleLogTransport extends stream.Writable {
+class ConsoleLogTransport extends Writable {
   /**
    * @param {ConsoleLogTransportOptions} [options] -a
    */
@@ -51,4 +49,4 @@ class ConsoleLogTransport extends stream.Writable {
   async flush() {}
 }
 
-module.exports = ConsoleLogTransport;
+export default ConsoleLogTransport;

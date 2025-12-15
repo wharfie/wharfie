@@ -1,5 +1,6 @@
-'use strict';
-const STS = require('../lambdas/lib/sts');
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const STS = require('../lambdas/lib/sts').default;
 const { defaultProvider } = require('@aws-sdk/credential-provider-node');
 
 const configuration = {

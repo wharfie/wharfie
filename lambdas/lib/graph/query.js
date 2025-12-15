@@ -1,4 +1,6 @@
-const { createId } = require('../id');
+import { createId } from '../id.js';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { version: WHARFIE_VERSION } = require('../../../package.json');
 
 /**
@@ -73,7 +75,7 @@ class Query {
   }
 
   /**
-   * @returns {import('./typedefs').QueryRecord} -
+   * @returns {import('./typedefs.js').QueryRecord} -
    */
   toRecord() {
     return {
@@ -125,4 +127,5 @@ Query.Status = Status;
  */
 Query.RecordType = 'QUERY';
 
-module.exports = Query;
+export { Status };
+export default Query;

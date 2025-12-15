@@ -1,18 +1,17 @@
-'use strict';
-const BaseResource = require('../../../actor/resources/base-resource');
+import BaseResource from '../../../actor/resources/base-resource.js';
 
-/** @type {Object.<string, Object<string, import("../../../actor/typedefs").SerializedBaseResource>>} */
+/** @type {Object.<string, Object<string, import("../../../actor/typedefs.js").SerializedBaseResource>>} */
 let __state = {};
 
 /**
- * @param {Object.<string, Object<string,  import("../../../actor/typedefs").SerializedBaseResource>>} state -
+ * @param {Object.<string, Object<string,  import("../../../actor/typedefs.js").SerializedBaseResource>>} state -
  */
 function __setMockState(state = {}) {
   __state = state;
 }
 
 /**
- * @returns {Object.<string, Object<string,  import("../../../actor/typedefs").SerializedBaseResource>>} -
+ * @returns {Object.<string, Object<string,  import("../../../actor/typedefs.js").SerializedBaseResource>>} -
  */
 function __getMockState() {
   return __state;
@@ -20,7 +19,7 @@ function __getMockState() {
 
 /**
  * @param {BaseResource} resource -
- * @returns {Promise<import("../../../actor/typedefs").SerializedBaseResource?>} -
+ * @returns {Promise<import("../../../actor/typedefs.js").SerializedBaseResource?>} -
  */
 async function putResource(resource) {
   if (!resource.has('deployment') || !resource.get('deployment'))
@@ -55,7 +54,7 @@ async function putResourceStatus(resource) {
 
 /**
  * @param {BaseResource} resource -
- * @returns {Promise<import("../../../actor/resources/reconcilable").StatusEnum?>} -
+ * @returns {Promise<import("../../../actor/resources/reconcilable.js").StatusEnum?>} -
  */
 async function getResourceStatus(resource) {
   if (!resource.has('deployment') || !resource.get('deployment'))
@@ -69,7 +68,7 @@ async function getResourceStatus(resource) {
 
 /**
  * @param {BaseResource} resource -
- * @returns {Promise<import("../../../actor/typedefs").SerializedBaseResource>} -
+ * @returns {Promise<import("../../../actor/typedefs.js").SerializedBaseResource>} -
  */
 async function getResource(resource) {
   if (!resource.has('deployment') || !resource.get('deployment'))
@@ -85,7 +84,7 @@ async function getResource(resource) {
 /**
  * @param {string} deploymentName -
  * @param {string} resourceKey -
- * @returns {Promise<import("../../../actor/typedefs").SerializedBaseResource[]>} -
+ * @returns {Promise<import("../../../actor/typedefs.js").SerializedBaseResource[]>} -
  */
 async function getResources(deploymentName, resourceKey) {
   return Object.keys(__state[deploymentName] || {})
@@ -109,7 +108,7 @@ async function deleteResource(resource) {
   delete __state[name][resource_key];
 }
 
-module.exports = {
+export default {
   putResource,
   putResourceStatus,
   getResourceStatus,

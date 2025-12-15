@@ -1,7 +1,5 @@
-'use strict';
-
-const { Command } = require('commander');
-const Function = require('../../function');
+import { Command } from 'commander';
+import Function from '../../function.js';
 
 /**
  * @param {string} functionName -
@@ -21,4 +19,4 @@ const runCommand = new Command('run')
     await run(function_name, message);
   });
 
-module.exports = runCommand;
+export default runCommand;

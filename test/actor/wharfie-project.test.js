@@ -1,6 +1,8 @@
 /* eslint-disable jest/no-large-snapshots */
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const path = require('path');
 
@@ -35,8 +37,10 @@ describe('wharfie project IaC', () => {
     resetAWSMocks();
     state_db.__setMockState();
   });
+
   it('empty project', async () => {
     expect.assertions(3);
+
     const deployment = new WharfieDeployment({
       name: 'test-deployment',
       properties: {
@@ -107,12 +111,15 @@ describe('wharfie project IaC', () => {
     `);
 
     expect(wharfieProject.status).toBe('STABLE');
+
     await wharfieProject.destroy();
+
     expect(wharfieProject.status).toBe('DESTROYED');
   }, 10000);
 
   it('simple project', async () => {
     expect.assertions(6);
+
     // setting up buckets for mock
     // @ts-ignore
     s3.__setMockState({
@@ -227,8 +234,10 @@ describe('wharfie project IaC', () => {
 
     expect(deserialized.status).toBe('STABLE');
     expect(state_db.__getMockState()).toStrictEqual(reconcile_state);
+
     events.push('DESTROYING');
     await deserialized.destroy();
+
     expect(deserialized.status).toBe('DESTROYED');
     expect(events).toHaveLength(290);
     expect(sqs.__getMockState().queues[SCHEDULE_QUEUE_URL].queue).toHaveLength(
@@ -238,6 +247,7 @@ describe('wharfie project IaC', () => {
 
   it('advanced project', async () => {
     expect.assertions(6);
+
     // setting up buckets for mock
     // @ts-ignore
     s3.__setMockState({
@@ -351,8 +361,10 @@ describe('wharfie project IaC', () => {
 
     expect(deserialized.status).toBe('STABLE');
     expect(state_db.__getMockState()).toStrictEqual(reconcile_state);
+
     events.push('DESTROYING');
     await deserialized.destroy();
+
     expect(deserialized.status).toBe('DESTROYED');
     expect(events).toHaveLength(290);
     expect(sqs.__getMockState().queues[SCHEDULE_QUEUE_URL].queue).toHaveLength(

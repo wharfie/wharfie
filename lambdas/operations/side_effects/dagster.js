@@ -1,19 +1,17 @@
-'use strict';
-
-const https = require('https');
-const logging = require('../../lib/logging');
-const { Operation, Resource } = require('../../lib/graph/');
+import { request } from 'https';
+import * as logging from '../../lib/logging/index.js';
+import { Operation, Resource } from '../../lib/graph/index.js';
 
 const organization = process.env.SIDE_EFFECT_DAGSTER_ORGANIZATION || '';
 const deployment = process.env.SIDE_EFFECT_DAGSTER_DEPLOYMENT || '';
 const token = process.env.SIDE_EFFECT_DAGSTER_TOKEN || '';
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function dagster(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
@@ -54,7 +52,7 @@ async function dagster(event, context, resource, operation) {
   };
 
   await new Promise((resolve, reject) => {
-    const req = https.request(url, options, (res) => {
+    const req = request(url, options, (res) => {
       let data = '';
 
       res.on('data', (chunk) => {
@@ -85,4 +83,4 @@ async function dagster(event, context, resource, operation) {
   };
 }
 
-module.exports = dagster;
+export default dagster;

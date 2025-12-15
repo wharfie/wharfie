@@ -1,16 +1,13 @@
-'use strict';
-
-const logging = require('../../lib/logging');
-const { Resource, Query } = require('../../lib/graph/');
+import * as logging from '../../lib/logging/index.js';
+import { Resource, Query } from '../../lib/graph/index.js';
+import * as resource_db from '../../lib/dynamo/operations.js';
+import * as semaphore_db from '../../lib/dynamo/semaphore.js';
+import { getResource } from '../../migrations/index.js';
+import Athena from '../../lib/athena/index.js';
+import STS from '../../lib/sts.js';
+import SQS from '../../lib/sqs.js';
 
 const daemon_log = logging.getDaemonLogger();
-
-const resource_db = require('../../lib/dynamo/operations');
-const semaphore_db = require('../../lib/dynamo/semaphore');
-const { getResource } = require('../../migrations/');
-const Athena = require('../../lib/athena');
-const STS = require('../../lib/sts');
-const SQS = require('../../lib/sqs');
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
 
@@ -23,9 +20,9 @@ const RESOURCE_QUERY_CONCURRENCY = Number(
 const QUEUE_URL = process.env.DAEMON_QUEUE_URL || '';
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('../../typedefs').QueryEnqueueInput[]} query_inputs -
+ * @param {import('../../typedefs.js').QueryEnqueueInput[]} query_inputs -
  */
 async function enqueue(event, context, query_inputs) {
   if (!event.action_id || !event.operation_id)
@@ -65,7 +62,7 @@ async function enqueue(event, context, query_inputs) {
 }
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  */
@@ -115,7 +112,7 @@ async function _run(event, context, resource) {
 }
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  */
 async function run(event, context) {
@@ -190,7 +187,4 @@ async function run(event, context) {
   }
 }
 
-module.exports = {
-  run,
-  enqueue,
-};
+export { run, enqueue };

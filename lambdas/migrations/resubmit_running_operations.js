@@ -1,7 +1,5 @@
-'use strict';
-
-const { getRecords, deleteOperation } = require('../lib/dynamo/operations');
-const SQS = require('../../lambdas/lib/sqs');
+import { getRecords, deleteOperation } from '../lib/dynamo/operations.js';
+import SQS from '../../lambdas/lib/sqs.js';
 const sqs = new SQS({ region: process.env.AWS_REGION });
 const DAEMON_QUEUE_URL = process.env.DAEMON_QUEUE_URL || '';
 
@@ -15,7 +13,7 @@ async function resubmit_running_operations(resource_id) {
     const operationChunk = operations_to_remove.splice(0, 10);
     await Promise.all(
       operationChunk.map(
-        (/** @type {import('../lib/graph/').Operation} */ operation) =>
+        (/** @type {import('../lib/graph/index.js').Operation} */ operation) =>
           Promise.all([
             deleteOperation(operation),
             sqs.sendMessage({
@@ -35,6 +33,4 @@ async function resubmit_running_operations(resource_id) {
     );
   }
 }
-module.exports = {
-  resubmit_running_operations,
-};
+export default resubmit_running_operations;

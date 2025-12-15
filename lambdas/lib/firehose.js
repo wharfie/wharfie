@@ -1,8 +1,15 @@
-'use strict';
-const AWS = require('@aws-sdk/client-firehose');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import {
+  Firehose as _Firehose,
+  ListTagsForDeliveryStreamCommand,
+  TagDeliveryStreamCommand,
+  UntagDeliveryStreamCommand,
+  CreateDeliveryStreamCommand,
+  DeleteDeliveryStreamCommand,
+  DescribeDeliveryStreamCommand,
+} from '@aws-sdk/client-firehose';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('./base');
+import BaseAWS from './base.js';
 
 class Firehose {
   /**
@@ -10,7 +17,7 @@ class Firehose {
    */
   constructor(options) {
     const credentials = fromNodeProviderChain();
-    this.firehose = new AWS.Firehose({
+    this.firehose = new _Firehose({
       ...BaseAWS.config(),
       credentials,
       ...options,
@@ -22,7 +29,7 @@ class Firehose {
    * @returns {Promise<import("@aws-sdk/client-firehose").ListTagsForDeliveryStreamCommandOutput>} -
    */
   async listTagsForDeliveryStream(params) {
-    const command = new AWS.ListTagsForDeliveryStreamCommand(params);
+    const command = new ListTagsForDeliveryStreamCommand(params);
     return await this.firehose.send(command);
   }
 
@@ -31,7 +38,7 @@ class Firehose {
    * @returns {Promise<import("@aws-sdk/client-firehose").TagDeliveryStreamCommandOutput>} -
    */
   async tagDeliveryStream(params) {
-    const command = new AWS.TagDeliveryStreamCommand(params);
+    const command = new TagDeliveryStreamCommand(params);
     return await this.firehose.send(command);
   }
 
@@ -40,7 +47,7 @@ class Firehose {
    * @returns {Promise<import("@aws-sdk/client-firehose").UntagDeliveryStreamCommandOutput>} -
    */
   async untagDeliveryStream(params) {
-    const command = new AWS.UntagDeliveryStreamCommand(params);
+    const command = new UntagDeliveryStreamCommand(params);
     return await this.firehose.send(command);
   }
 
@@ -49,7 +56,7 @@ class Firehose {
    * @returns {Promise<import("@aws-sdk/client-firehose").CreateDeliveryStreamCommandOutput>} -
    */
   async createDeliveryStream(params) {
-    const command = new AWS.CreateDeliveryStreamCommand(params);
+    const command = new CreateDeliveryStreamCommand(params);
     return await this.firehose.send(command);
   }
 
@@ -58,7 +65,7 @@ class Firehose {
    * @returns {Promise<import("@aws-sdk/client-firehose").DeleteDeliveryStreamCommandOutput>} -
    */
   async deleteDeliveryStream(params) {
-    const command = new AWS.DeleteDeliveryStreamCommand(params);
+    const command = new DeleteDeliveryStreamCommand(params);
     return await this.firehose.send(command);
   }
 
@@ -67,9 +74,9 @@ class Firehose {
    * @returns {Promise<import("@aws-sdk/client-firehose").DescribeDeliveryStreamCommandOutput>} -
    */
   async describeDeliveryStream(params) {
-    const command = new AWS.DescribeDeliveryStreamCommand(params);
+    const command = new DescribeDeliveryStreamCommand(params);
     return await this.firehose.send(command);
   }
 }
 
-module.exports = Firehose;
+export default Firehose;

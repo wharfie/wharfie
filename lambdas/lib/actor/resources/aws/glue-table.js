@@ -1,7 +1,6 @@
-'use strict';
-const Glue = require('../../../glue');
-const BaseResource = require('../base-resource');
-const { EntityNotFoundException } = require('@aws-sdk/client-glue');
+import Glue from '../../../glue.js';
+import BaseResource from '../base-resource.js';
+import { EntityNotFoundException } from '@aws-sdk/client-glue';
 
 /**
  * @typedef GlueTableProperties
@@ -10,8 +9,8 @@ const { EntityNotFoundException } = require('@aws-sdk/client-glue');
  * @property {string} description -
  * @property {string} tableType -
  * @property {any} parameters -
- * @property {import('../../typedefs').WharfieTableColumn[]} partitionKeys -
- * @property {import('../../typedefs').WharfieTableColumn[]} columns -
+ * @property {import('../../typedefs.js').WharfieTableColumn[]} partitionKeys -
+ * @property {import('../../typedefs.js').WharfieTableColumn[]} columns -
  * @property {string | function(): string} location -
  * @property {number} [numberOfBuckets] -
  * @property {boolean} [storedAsSubDirectories] -
@@ -29,9 +28,9 @@ const { EntityNotFoundException } = require('@aws-sdk/client-glue');
  * @typedef GlueTableOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {GlueTableProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {GlueTableProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class GlueTable extends BaseResource {
@@ -187,4 +186,4 @@ class GlueTable extends BaseResource {
   }
 }
 
-module.exports = GlueTable;
+export default GlueTable;

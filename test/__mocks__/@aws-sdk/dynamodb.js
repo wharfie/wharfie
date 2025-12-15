@@ -1,4 +1,6 @@
-'use strict';
+import { jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { ResourceNotFoundException } = jest.requireActual(
   '@aws-sdk/client-dynamodb'

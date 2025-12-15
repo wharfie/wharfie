@@ -1,7 +1,6 @@
-'use strict';
-const Glue = require('../../../glue');
-const BaseResource = require('../base-resource');
-const { EntityNotFoundException } = require('@aws-sdk/client-glue');
+import Glue from '../../../glue.js';
+import BaseResource from '../base-resource.js';
+import { EntityNotFoundException } from '@aws-sdk/client-glue';
 
 /**
  * @typedef GlueDatabaseProperties
@@ -13,9 +12,9 @@ const { EntityNotFoundException } = require('@aws-sdk/client-glue');
  * @typedef GlueDatabaseOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {GlueDatabaseProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {GlueDatabaseProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class GlueDatabase extends BaseResource {
@@ -99,4 +98,4 @@ class GlueDatabase extends BaseResource {
   }
 }
 
-module.exports = GlueDatabase;
+export default GlueDatabase;

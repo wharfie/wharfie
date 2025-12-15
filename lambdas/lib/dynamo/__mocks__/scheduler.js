@@ -1,6 +1,4 @@
-'use strict';
-
-const SchedulerEntry = require('../../../scheduler/scheduler-entry');
+import SchedulerEntry from '../../../scheduler/scheduler-entry.js';
 
 /** @type {Object.<string, Object<string, SchedulerEntry>>} */
 let __state = {};
@@ -51,7 +49,7 @@ async function schedule(schedulerEvent) {
 
 /**
  * @param {SchedulerEntry} item -
- * @param {SchedulerEntry.SchedulerEntryStatusEnum} status -
+ * @param {SchedulerEntry.Status} status -
  */
 async function update(item, status) {
   if (!__state[item.resource_id]) __state[item.resource_id] = {};
@@ -66,7 +64,7 @@ async function delete_records(resource_id) {
   delete __state[resource_id];
 }
 
-module.exports = {
+export {
   schedule,
   update,
   query,

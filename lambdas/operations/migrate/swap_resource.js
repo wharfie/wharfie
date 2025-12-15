@@ -1,13 +1,11 @@
-'use strict';
-
-const logging = require('../../lib/logging');
-const Glue = require('../../lib/glue');
-const STS = require('../../lib/sts');
-const S3 = require('../../lib/s3');
-const { Operation, Resource } = require('../../lib/graph/');
+import * as logging from '../../lib/logging/index.js';
+import Glue from '../../lib/glue.js';
+import STS from '../../lib/sts.js';
+import S3 from '../../lib/s3.js';
+import { Operation, Resource } from '../../lib/graph/index.js';
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Glue} glue -
@@ -52,7 +50,7 @@ async function swap_partitions(
   const partitionUpdateOps = [];
   /** @type {import("@aws-sdk/client-s3").CopyObjectCommandInput[]} */
   const partitionUpdateReferenceOps = [];
-  /** @type {Object.<string, import('../../typedefs').Partition>} */
+  /** @type {Object.<string, import('../../typedefs.js').Partition>} */
   const existingPartitionsLookup = {};
   existingPartitions.forEach((p) => {
     const partitionLookupKey = Object.keys(p.partitionValues).reduce(
@@ -197,11 +195,11 @@ async function swap_partitions(
 }
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function run(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
@@ -284,4 +282,4 @@ async function run(event, context, resource, operation) {
   };
 }
 
-module.exports = { run };
+export default { run };

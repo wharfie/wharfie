@@ -1,8 +1,6 @@
-'use strict';
+import v0_0_0 from './versions/0.0.0.js';
 
-const v0_0_0 = require('./versions/0.0.0');
-
-const resource_db = require('../lib/dynamo/operations');
+import * as resource_db from '../lib/dynamo/operations.js';
 
 /**
  * @param {string} versionA -
@@ -28,8 +26,8 @@ const isVersionLessThan = (versionA, versionB) => {
 };
 
 /**
- * @param {import('../lib/graph/').Resource} resource -
- * @param {import('../typedefs').WharfieEvent} event -
+ * @param {import('../lib/graph/index.js').Resource} resource -
+ * @param {import('../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  */
 async function run(resource, event, context) {
@@ -39,9 +37,9 @@ async function run(resource, event, context) {
 }
 
 /**
- * @param {import('../typedefs').WharfieEvent} event -
+ * @param {import('../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @returns {Promise<import('../lib/graph/').Resource?>} -
+ * @returns {Promise<import('../lib/graph/index.js').Resource?>} -
  */
 async function getResource(event, context) {
   const resource = await resource_db.getResource(event.resource_id);
@@ -50,7 +48,4 @@ async function getResource(event, context) {
   return resource;
 }
 
-module.exports = {
-  getResource,
-  run,
-};
+export { getResource, run };

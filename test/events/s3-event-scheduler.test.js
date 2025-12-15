@@ -1,5 +1,15 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
@@ -66,6 +76,7 @@ describe('tests for s3 event scheduling', () => {
 
   it('ignore processing_failed/ events', async () => {
     expect.assertions(4);
+
     location_return = [
       {
         resource_id: '1',
@@ -95,6 +106,7 @@ describe('tests for s3 event scheduling', () => {
 
   it('ignore patition count mis-matches', async () => {
     expect.assertions(4);
+
     location_return = [
       {
         resource_id: '1',
@@ -296,6 +308,7 @@ describe('tests for s3 event scheduling', () => {
 
   it('run fixtured', async () => {
     expect.assertions(1);
+
     location_return = [
       {
         resource_id: '1',
@@ -386,6 +399,7 @@ describe('tests for s3 event scheduling', () => {
 
   it('run fixtured eventbridge', async () => {
     expect.assertions(1);
+
     location_return = [
       {
         resource_id: '1',

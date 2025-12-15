@@ -1,8 +1,5 @@
-// worker.js
-'use strict';
-
-const { parentPort, isMainThread } = require('node:worker_threads');
-const { createRequire } = require('module');
+import { parentPort, isMainThread } from 'node:worker_threads';
+import { createRequire } from 'module';
 
 if (process.setSourceMapsEnabled) process.setSourceMapsEnabled(true);
 
@@ -104,9 +101,9 @@ function runBundleOnce({ codeString, pkgFile, entryFile, tmpRoot, env }) {
   global.__wharfieWorkerInit.bundleLoaded = true;
 }
 
-// @ts-ignore
 if (
   !isMainThread &&
+  // @ts-ignore
   !global.__wharfieWorkerInit.handlerInstalled &&
   parentPort
 ) {
@@ -167,3 +164,5 @@ if (
     }
   });
 }
+
+export default () => {};

@@ -1,4 +1,6 @@
-'use strict';
+import { jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { createId } = require('../../../lambdas/lib/id');
 const { NoSuchBucket, NotFound, NoSuchKey } =

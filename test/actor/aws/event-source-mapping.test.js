@@ -1,6 +1,8 @@
 /* eslint-disable jest/no-large-snapshots */
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { createId } = require('../../../lambdas/lib/id');
 jest.mock('../../../lambdas/lib/id');
 
@@ -18,8 +20,10 @@ describe('event source mapping IaC', () => {
     // @ts-ignore
     createId.mockReturnValue('test-id');
   });
+
   it('basic', async () => {
     expect.assertions(4);
+
     const lambda = new Lambda({});
     const lambdaFunction = new LambdaFunction({
       name: 'test-function',
@@ -67,6 +71,7 @@ describe('event source mapping IaC', () => {
     await eventSourceMapping.reconcile();
 
     const serialized = eventSourceMapping.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -124,8 +129,11 @@ describe('event source mapping IaC', () => {
         ],
       }
     `);
+
     await eventSourceMapping.destroy();
+
     expect(eventSourceMapping.status).toBe('DESTROYED');
+
     const del_res = await lambda.listEventSourceMappings({
       FunctionName: lambdaFunction.name,
     });

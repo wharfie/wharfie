@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const AWS = require('@aws-sdk/lib-dynamodb');
 
 process.env.QUERY_TABLE = 'query_table';
@@ -20,10 +22,12 @@ describe('dynamo semaphore db', () => {
 
   it('increase', async () => {
     expect.assertions(2);
+
     update.mockResolvedValue({
       $response: {},
     });
     await semaphore.increase('semaphore_name');
+
     expect(update).toHaveBeenCalledTimes(1);
     expect(update.mock.calls[0]).toMatchInlineSnapshot(`
       [
@@ -51,10 +55,12 @@ describe('dynamo semaphore db', () => {
 
   it('release', async () => {
     expect.assertions(2);
+
     update.mockResolvedValue({
       $response: {},
     });
     await semaphore.release('semaphore_name');
+
     expect(update).toHaveBeenCalledTimes(2);
     expect(update.mock.calls[1]).toMatchInlineSnapshot(`
       [
@@ -81,6 +87,7 @@ describe('dynamo semaphore db', () => {
 
   it('deleteSemaphore', async () => {
     expect.assertions(6);
+
     _delete.mockResolvedValue(undefined);
     get.mockResolvedValue({
       Item: {
@@ -88,6 +95,7 @@ describe('dynamo semaphore db', () => {
       },
     });
     await semaphore.deleteSemaphore('semaphore_name');
+
     expect(get).toHaveBeenCalledTimes(1);
     expect(get.mock.calls[0]).toMatchInlineSnapshot(`
       [

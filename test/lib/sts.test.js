@@ -1,5 +1,14 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const AWS = require('@aws-sdk/client-sts');
 const STS = require('../../lambdas/lib/sts');
 
@@ -7,11 +16,14 @@ describe('tests for STS', () => {
   beforeAll(() => {
     require('aws-sdk-client-mock-jest');
   });
+
   afterEach(() => {
     AWS.STSMock.reset();
   });
+
   it('getCredentials', async () => {
     expect.assertions(5);
+
     const mockedDate = new Date(1466424490000);
     jest.useFakeTimers('modern');
     jest.setSystemTime(mockedDate);
@@ -29,6 +41,7 @@ describe('tests for STS', () => {
     const sts2 = new STS({ region: 'us-east-1' });
     const response = await sts.getCredentials('test-role-arn');
     const response2 = await sts2.getCredentials('test-role-arn');
+
     expect(response).toStrictEqual({
       accessKeyId: 'access-key-id',
       secretAccessKey: 'secret-access-key',
@@ -40,6 +53,7 @@ describe('tests for STS', () => {
       RoleArn: 'test-role-arn',
       RoleSessionName: `wharfie-${mockedDate.getTime()}`,
     });
+
     jest.useRealTimers();
   });
 });

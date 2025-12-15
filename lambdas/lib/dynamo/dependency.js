@@ -1,10 +1,9 @@
-'use strict';
-const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const { DynamoDB } = require('@aws-sdk/client-dynamodb');
-const { query } = require('.');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
+import { DynamoDB } from '@aws-sdk/client-dynamodb';
+import { query } from './index.js';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('../base');
+import BaseAWS from '../base.js';
 
 const credentials = fromNodeProviderChain();
 const docClient = DynamoDBDocument.from(
@@ -21,7 +20,7 @@ const docClient = DynamoDBDocument.from(
 const DEPENDENCY_TABLE = process.env.DEPENDENCY_TABLE || '';
 
 /**
- * @param {import('../../typedefs').DependencyRecord} dependency -
+ * @param {import('../../typedefs.js').DependencyRecord} dependency -
  * @param {string} [tableName] -
  */
 async function putDependency(
@@ -41,7 +40,7 @@ async function putDependency(
 
 /**
  * @param {string} dependency -
- * @returns {Promise<Array<import('../../typedefs').DependencyRecord>?>} - event
+ * @returns {Promise<Array<import('../../typedefs.js').DependencyRecord>?>} - event
  */
 async function findDependencies(dependency) {
   if (!dependency) return [];
@@ -65,7 +64,7 @@ async function findDependencies(dependency) {
 }
 
 /**
- * @param {import('../../typedefs').DependencyRecord} dependency -
+ * @param {import('../../typedefs.js').DependencyRecord} dependency -
  * @param {string} [tableName] -
  */
 async function deleteDependency(
@@ -81,8 +80,4 @@ async function deleteDependency(
   });
 }
 
-module.exports = {
-  putDependency,
-  findDependencies,
-  deleteDependency,
-};
+export { putDependency, findDependencies, deleteDependency };

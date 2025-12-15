@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Rate-limit snapshot parsed from Hetzner response headers.
  * Describes the current hourly window quota and reset time.
@@ -243,4 +241,4 @@
  * @property {number} [timeoutMs=900000] Timeout (ms).
  */
 
-module.exports = {}; // mark as a CommonJS module (no runtime exports necessary)
+export {};

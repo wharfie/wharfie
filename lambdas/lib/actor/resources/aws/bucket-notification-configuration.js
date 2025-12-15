@@ -1,7 +1,6 @@
-'use strict';
-const S3 = require('../../../s3');
-const BaseResource = require('../base-resource');
-const { NoSuchBucket } = require('@aws-sdk/client-s3');
+import S3 from '../../../s3.js';
+import BaseResource from '../base-resource.js';
+import { NoSuchBucket } from '@aws-sdk/client-s3';
 
 /**
  * @typedef BucketNotificationConfigurationProperties
@@ -13,9 +12,9 @@ const { NoSuchBucket } = require('@aws-sdk/client-s3');
  * @typedef BucketNotificationConfigurationOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {BucketNotificationConfigurationProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {BucketNotificationConfigurationProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class BucketNotificationConfiguration extends BaseResource {
@@ -60,4 +59,4 @@ class BucketNotificationConfiguration extends BaseResource {
   }
 }
 
-module.exports = BucketNotificationConfiguration;
+export default BucketNotificationConfiguration;

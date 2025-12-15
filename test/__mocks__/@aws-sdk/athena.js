@@ -1,4 +1,6 @@
-'use strict';
+import { jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const crypto = require('crypto');
 
 const { InvalidRequestException } = jest.requireActual(

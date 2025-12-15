@@ -1,10 +1,14 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { describe, expect, it } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const logging = require('../../lambdas/lib/logging');
+
 describe('mock tests for logging', () => {
   it('getEventLogger', async () => {
     expect.assertions(2);
+
     const event = {
       resource_id: 'resource_id',
       operation_id: 'operation_id',
@@ -18,32 +22,43 @@ describe('mock tests for logging', () => {
     };
     const logger = logging.getEventLogger(event, context);
     const duplicate_logger = logging.getEventLogger(event, context);
+
     expect(logger).toStrictEqual(duplicate_logger);
     expect(logger).toBeDefined();
+
     await logging.flush();
   });
+
   it('getDaemonLogger', async () => {
     expect.assertions(2);
+
     const context = {
       awsRequestId: '123',
     };
     const logger = logging.getDaemonLogger();
     const duplicate_logger = logging.getDaemonLogger();
+
     expect(logger).toStrictEqual(duplicate_logger);
     expect(logger).toBeDefined();
+
     await logging.flush(context);
   });
+
   it('getAWSSDKLogger', async () => {
     expect.assertions(2);
+
     const logger = logging.getAWSSDKLogger();
     const duplicate_logger = logging.getAWSSDKLogger();
+
     expect(logger).toStrictEqual(duplicate_logger);
     expect(logger).toBeDefined();
+
     await logging.flush();
   });
 
   it('test flush', async () => {
     expect.assertions(0);
+
     const event = {
       resource_id: 'resource_id',
       operation_id: 'operation_id',

@@ -1,11 +1,9 @@
-// install-deps.js
-'use strict';
-
-const fs = require('node:fs');
-const fsp = require('node:fs/promises');
-const path = require('node:path');
-const Arborist = require('@npmcli/arborist');
-const pacote = require('pacote');
+import { existsSync } from 'node:fs';
+import { mkdir, writeFile, rm, readdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+// eslint-disable-next-line import/no-named-as-default
+import Arborist from '@npmcli/arborist';
+import pacote from 'pacote';
 
 /**
  * @typedef {import('node:process')['platform']} TargetPlatform
@@ -36,20 +34,20 @@ async function installForTarget({ buildTarget, externals, tmpBuildDir }) {
   if (!externals?.length) return;
 
   // fresh workspace
-  await rmSafe(path.join(tmpBuildDir, 'node_modules'), {
+  await rmSafe(join(tmpBuildDir, 'node_modules'), {
     recursive: true,
     force: true,
   });
-  await rmSafe(path.join(tmpBuildDir, 'package-lock.json'), { force: true });
-  await fsp.mkdir(tmpBuildDir, { recursive: true });
-  await fsp.writeFile(
-    path.join(tmpBuildDir, 'package.json'),
+  await rmSafe(join(tmpBuildDir, 'package-lock.json'), { force: true });
+  await mkdir(tmpBuildDir, { recursive: true });
+  await writeFile(
+    join(tmpBuildDir, 'package.json'),
     JSON.stringify({ name: 'install-sandbox', private: true }, null, 2)
   );
 
   // .npmrc for the target triplet; omit optionals in main pass; don’t run scripts
-  await fsp.writeFile(
-    path.join(tmpBuildDir, '.npmrc'),
+  await writeFile(
+    join(tmpBuildDir, '.npmrc'),
     [
       `platform=${buildTarget.platform}`,
       `arch=${buildTarget.architecture}`,
@@ -141,7 +139,7 @@ async function installForTarget({ buildTarget, externals, tmpBuildDir }) {
 
   // OPTIONAL: now scan and add only target-matching optional deps (general)
   const optionals = await discoverOptionalDeps(
-    path.join(tmpBuildDir, 'node_modules')
+    join(tmpBuildDir, 'node_modules')
   );
 
   await installMatchingOptionals({
@@ -161,12 +159,12 @@ async function installForTarget({ buildTarget, externals, tmpBuildDir }) {
 /**
  * rm but ignore "not exists" and similar errors.
  * @param {string} p -
- * @param {fs.RmOptions} opts -
+ * @param {import('node:fs').RmOptions} opts -
  * @returns {Promise<void>}
  */
 async function rmSafe(p, opts) {
   try {
-    await fsp.rm(p, opts);
+    await rm(p, opts);
   } catch {
     // intentionally ignore errors from rm (e.g., ENOENT)
   }
@@ -188,6 +186,7 @@ async function splitPrebuiltSpecs(specs, npmConfig) {
     /** @type {any} */
     let mani;
     try {
+      // eslint-disable-next-line import/no-named-as-default-member
       mani = await pacote.manifest(spec, { npmConfig });
     } catch {
       normalSpecs.push(spec);
@@ -223,9 +222,10 @@ async function extractPrebuiltSpecs(
 ) {
   for (const { name, spec } of prebuiltSpecs) {
     // sanity: if present already, skip
-    const dest = path.join(tmpBuildDir, 'node_modules', name);
-    if (fs.existsSync(dest)) continue;
-    await fsp.mkdir(dest, { recursive: true });
+    const dest = join(tmpBuildDir, 'node_modules', name);
+    if (existsSync(dest)) continue;
+    await mkdir(dest, { recursive: true });
+    // eslint-disable-next-line import/no-named-as-default-member
     await pacote.extract(spec, dest, { npmConfig });
     // eslint-disable-next-line no-console
     console.log(`[prebuilt+] ${spec}`);
@@ -247,10 +247,10 @@ async function discoverOptionalDeps(nodeModulesRoot) {
     const dir = q.shift();
     if (!dir) break;
 
-    /** @type {fs.Dirent[]} */
+    /** @type {import('node:fs').Dirent[]} */
     let ents;
     try {
-      ents = await fsp.readdir(dir, { withFileTypes: true });
+      ents = await readdir(dir, { withFileTypes: true });
     } catch {
       // intentionally ignore unreadable directories
       continue;
@@ -258,18 +258,18 @@ async function discoverOptionalDeps(nodeModulesRoot) {
 
     for (const ent of ents) {
       if (!ent.isDirectory()) continue;
-      const full = path.join(dir, ent.name);
+      const full = join(dir, ent.name);
 
       if (ent.name.startsWith('@')) {
         q.push(full);
         continue;
       }
 
-      const pkgJson = path.join(full, 'package.json');
-      if (fs.existsSync(pkgJson)) {
+      const pkgJson = join(full, 'package.json');
+      if (existsSync(pkgJson)) {
         try {
           /** @type {any} */
-          const pkg = JSON.parse(await fsp.readFile(pkgJson, 'utf8'));
+          const pkg = JSON.parse(await readFile(pkgJson, 'utf8'));
           if (
             pkg &&
             pkg.optionalDependencies &&
@@ -284,8 +284,8 @@ async function discoverOptionalDeps(nodeModulesRoot) {
         } catch {
           // intentionally ignore invalid package.json
         }
-        const nested = path.join(full, 'node_modules');
-        if (fs.existsSync(nested)) q.push(nested);
+        const nested = join(full, 'node_modules');
+        if (existsSync(nested)) q.push(nested);
       } else {
         q.push(full);
       }
@@ -383,6 +383,7 @@ async function installMatchingOptionals({
     /** @type {any} */
     let mani;
     try {
+      // eslint-disable-next-line import/no-named-as-default-member
       mani = await pacote.manifest(`${name}@${range}`, { npmConfig });
     } catch {
       // skip unresolved optional
@@ -401,10 +402,11 @@ async function installMatchingOptionals({
 
     if (!matches) continue;
 
-    const dest = path.join(tmpBuildDir, 'node_modules', name);
-    if (fs.existsSync(dest)) continue;
+    const dest = join(tmpBuildDir, 'node_modules', name);
+    if (existsSync(dest)) continue;
 
-    await fsp.mkdir(dest, { recursive: true });
+    await mkdir(dest, { recursive: true });
+    // eslint-disable-next-line import/no-named-as-default-member
     await pacote.extract(`${name}@${range}`, dest, { npmConfig });
     extracted.push(name);
     // eslint-disable-next-line no-console
@@ -453,13 +455,13 @@ async function pruneBuildDirsForInstalledOptionals(
   }
 
   for (const base of bases) {
-    const buildDir = path.join(tmpBuildDir, 'node_modules', base, 'build');
+    const buildDir = join(tmpBuildDir, 'node_modules', base, 'build');
     try {
-      await fsp.rm(buildDir, { recursive: true, force: true });
+      await rm(buildDir, { recursive: true, force: true });
     } catch {
       // ignore failures removing build dir
     }
   }
 }
 
-module.exports = { installForTarget };
+export { installForTarget };

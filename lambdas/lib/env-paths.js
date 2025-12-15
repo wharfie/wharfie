@@ -1,9 +1,9 @@
-const path = require('path');
-const os = require('os');
-const process = require('process');
+import { join, basename } from 'path';
+import { homedir as _homedir, tmpdir as _tmpdir } from 'os';
+import process, { platform } from 'process';
 
-const homedir = os.homedir();
-const tmpdir = os.tmpdir();
+const homedir = _homedir();
+const tmpdir = _tmpdir();
 const { env } = process;
 
 /**
@@ -21,14 +21,14 @@ const { env } = process;
  * @returns {EnvPaths} -
  */
 function macos(name) {
-  const library = path.join(homedir, 'Library');
+  const library = join(homedir, 'Library');
 
   return {
-    data: path.join(library, 'Application Support', name),
-    config: path.join(library, 'Preferences', name),
-    cache: path.join(library, 'Caches', name),
-    log: path.join(library, 'Logs', name),
-    temp: path.join(tmpdir, name),
+    data: join(library, 'Application Support', name),
+    config: join(library, 'Preferences', name),
+    cache: join(library, 'Caches', name),
+    log: join(library, 'Logs', name),
+    temp: join(tmpdir, name),
   };
 }
 
@@ -38,17 +38,16 @@ function macos(name) {
  * @returns {EnvPaths} -
  */
 function windows(name) {
-  const appData = env.APPDATA || path.join(homedir, 'AppData', 'Roaming');
-  const localAppData =
-    env.LOCALAPPDATA || path.join(homedir, 'AppData', 'Local');
+  const appData = env.APPDATA || join(homedir, 'AppData', 'Roaming');
+  const localAppData = env.LOCALAPPDATA || join(homedir, 'AppData', 'Local');
 
   return {
     // Data/config/cache/log are invented by me as Windows isn't opinionated about this
-    data: path.join(localAppData, name, 'Data'),
-    config: path.join(appData, name, 'Config'),
-    cache: path.join(localAppData, name, 'Cache'),
-    log: path.join(localAppData, name, 'Log'),
-    temp: path.join(tmpdir, name),
+    data: join(localAppData, name, 'Data'),
+    config: join(appData, name, 'Config'),
+    cache: join(localAppData, name, 'Cache'),
+    log: join(localAppData, name, 'Log'),
+    temp: join(tmpdir, name),
   };
 }
 
@@ -58,24 +57,15 @@ function windows(name) {
  * @returns {EnvPaths} -
  */
 function linux(name) {
-  const username = path.basename(homedir);
+  const username = basename(homedir);
 
   return {
-    data: path.join(
-      env.XDG_DATA_HOME || path.join(homedir, '.local', 'share'),
-      name
-    ),
-    config: path.join(
-      env.XDG_CONFIG_HOME || path.join(homedir, '.config'),
-      name
-    ),
-    cache: path.join(env.XDG_CACHE_HOME || path.join(homedir, '.cache'), name),
+    data: join(env.XDG_DATA_HOME || join(homedir, '.local', 'share'), name),
+    config: join(env.XDG_CONFIG_HOME || join(homedir, '.config'), name),
+    cache: join(env.XDG_CACHE_HOME || join(homedir, '.cache'), name),
     // https://wiki.debian.org/XDGBaseDirectorySpecification#state
-    log: path.join(
-      env.XDG_STATE_HOME || path.join(homedir, '.local', 'state'),
-      name
-    ),
-    temp: path.join(tmpdir, username, name),
+    log: join(env.XDG_STATE_HOME || join(homedir, '.local', 'state'), name),
+    temp: join(tmpdir, username, name),
   };
 }
 
@@ -100,15 +90,15 @@ function envPaths(name, { suffix = 'nodejs' } = {}) {
     name += `-${suffix}`;
   }
 
-  if (process.platform === 'darwin') {
+  if (platform === 'darwin') {
     return macos(name);
   }
 
-  if (process.platform === 'win32') {
+  if (platform === 'win32') {
     return windows(name);
   }
 
   return linux(name);
 }
 
-module.exports = envPaths;
+export default envPaths;

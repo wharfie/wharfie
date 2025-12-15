@@ -1,16 +1,13 @@
-'use strict';
-
-const BaseResource = require('./base-resource');
-const Reconcilable = require('./reconcilable');
-// const Reconcilable = require('./reconcilable');
+import BaseResource from './base-resource.js';
+import Reconcilable from './reconcilable.js';
 
 /**
  * @typedef BaseResourceGroupOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('./reconcilable').Status} [status] -
- * @property {import('./reconcilable')[]} [dependsOn] -
- * @property {Object<string, any> & import('../typedefs').SharedProperties} properties -
+ * @property {Reconcilable.Status} [status] -
+ * @property {Reconcilable[]} [dependsOn] -
+ * @property {Object<string, any> & import('../typedefs.js').SharedProperties} properties -
  * @property {Object<string, BaseResource | BaseResourceGroup>} [resources] -
  */
 class BaseResourceGroup extends BaseResource {
@@ -84,7 +81,7 @@ class BaseResourceGroup extends BaseResource {
    * @typedef BaseResourceGroupEvent
    * @property {string} name -
    * @property {string} constructor -
-   * @property {import('./reconcilable').Status} status -
+   * @property {Reconcilable.Status} status -
    * @property {string[]} resources -
    * @returns {BaseResourceGroupEvent} -
    */
@@ -98,7 +95,7 @@ class BaseResourceGroup extends BaseResource {
   }
 
   /**
-   * @returns {import('../typedefs').SerializedBaseResourceGroup} -
+   * @returns {import('../typedefs.js').SerializedBaseResourceGroup} -
    */
   serialize() {
     return {
@@ -132,4 +129,4 @@ class BaseResourceGroup extends BaseResource {
   }
 }
 
-module.exports = BaseResourceGroup;
+export default BaseResourceGroup;

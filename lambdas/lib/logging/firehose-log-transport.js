@@ -1,9 +1,7 @@
-'use strict';
+import { Writable } from 'stream';
 
-const stream = require('stream');
-
-const AWS = require('@aws-sdk/client-firehose');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import { Firehose, PutRecordBatchCommand } from '@aws-sdk/client-firehose';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
 /**
  * @typedef FirehoseLogTransportOptions
@@ -11,14 +9,14 @@ const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
  * @property {number} [flushInterval] -
  */
 
-class FirehoseLogTransport extends stream.Writable {
+class FirehoseLogTransport extends Writable {
   /**
    * @param {FirehoseLogTransportOptions} [options] -a
    */
   constructor(options = {}) {
     super();
     const credentials = fromNodeProviderChain();
-    this.firehose = new AWS.Firehose({
+    this.firehose = new Firehose({
       credentials,
       region: process.env.AWS_REGION,
       maxAttempts: 20,
@@ -52,7 +50,7 @@ class FirehoseLogTransport extends stream.Writable {
    * @returns {Promise<import("@aws-sdk/client-firehose").PutRecordBatchCommandOutput>} -
    */
   async putRecordsBatch(params) {
-    const command = new AWS.PutRecordBatchCommand(params);
+    const command = new PutRecordBatchCommand(params);
     return await this.firehose.send(command);
   }
 
@@ -211,4 +209,4 @@ FirehoseLogTransport._MAX_BINS = 500;
 FirehoseLogTransport._MAX_BIN_SIZE = 1000 * 1024;
 FirehoseLogTransport._BIN_COST_INCREMENT = 5 * 1024;
 
-module.exports = FirehoseLogTransport;
+export default FirehoseLogTransport;

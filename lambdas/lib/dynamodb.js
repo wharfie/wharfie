@@ -1,8 +1,18 @@
-'use strict';
-const AWS = require('@aws-sdk/client-dynamodb');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import {
+  DynamoDB as _DynamoDB,
+  CreateTableCommand,
+  DeleteTableCommand,
+  DescribeTableCommand,
+  UpdateTableCommand,
+  DescribeTimeToLiveCommand,
+  UpdateTimeToLiveCommand,
+  ListTagsOfResourceCommand,
+  TagResourceCommand,
+  UntagResourceCommand,
+} from '@aws-sdk/client-dynamodb';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('./base');
+import BaseAWS from './base.js';
 
 class DynamoDB {
   /**
@@ -10,7 +20,7 @@ class DynamoDB {
    */
   constructor(options) {
     const credentials = fromNodeProviderChain();
-    this.dynamodb = new AWS.DynamoDB({
+    this.dynamodb = new _DynamoDB({
       ...BaseAWS.config({
         maxAttempts: Number(process.env?.DYNAMO_MAX_RETRIES || 300),
       }),
@@ -24,7 +34,7 @@ class DynamoDB {
    * @returns {Promise<import("@aws-sdk/client-dynamodb").CreateTableCommandOutput>} -
    */
   async createTable(params) {
-    const command = new AWS.CreateTableCommand(params);
+    const command = new CreateTableCommand(params);
     return this.dynamodb.send(command);
   }
 
@@ -33,7 +43,7 @@ class DynamoDB {
    * @returns {Promise<import("@aws-sdk/client-dynamodb").DeleteTableCommandOutput>} -
    */
   async deleteTable(params) {
-    const command = new AWS.DeleteTableCommand(params);
+    const command = new DeleteTableCommand(params);
     return this.dynamodb.send(command);
   }
 
@@ -42,7 +52,7 @@ class DynamoDB {
    * @returns {Promise<import("@aws-sdk/client-dynamodb").DescribeTableCommandOutput>} -
    */
   async describeTable(params) {
-    const command = new AWS.DescribeTableCommand(params);
+    const command = new DescribeTableCommand(params);
     return this.dynamodb.send(command);
   }
 
@@ -51,7 +61,7 @@ class DynamoDB {
    * @returns {Promise<import("@aws-sdk/client-dynamodb").UpdateTableCommandOutput>} -
    */
   async updateTable(params) {
-    const command = new AWS.UpdateTableCommand(params);
+    const command = new UpdateTableCommand(params);
     return this.dynamodb.send(command);
   }
 
@@ -60,7 +70,7 @@ class DynamoDB {
    * @returns {Promise<import("@aws-sdk/client-dynamodb").DescribeTimeToLiveCommandOutput>} -
    */
   async describeTimeToLive(params) {
-    const command = new AWS.DescribeTimeToLiveCommand(params);
+    const command = new DescribeTimeToLiveCommand(params);
     return this.dynamodb.send(command);
   }
 
@@ -69,7 +79,7 @@ class DynamoDB {
    * @returns {Promise<import("@aws-sdk/client-dynamodb").UpdateTimeToLiveCommandOutput>} -
    */
   async updateTimeToLive(params) {
-    const command = new AWS.UpdateTimeToLiveCommand(params);
+    const command = new UpdateTimeToLiveCommand(params);
     return this.dynamodb.send(command);
   }
 
@@ -78,7 +88,7 @@ class DynamoDB {
    * @returns {Promise<import("@aws-sdk/client-dynamodb").ListTagsOfResourceCommandOutput>} -
    */
   async listTagsOfResource(params) {
-    const command = new AWS.ListTagsOfResourceCommand(params);
+    const command = new ListTagsOfResourceCommand(params);
     return this.dynamodb.send(command);
   }
 
@@ -87,7 +97,7 @@ class DynamoDB {
    * @returns {Promise<import("@aws-sdk/client-dynamodb").TagResourceCommandOutput>} -
    */
   async tagResource(params) {
-    const command = new AWS.TagResourceCommand(params);
+    const command = new TagResourceCommand(params);
     return this.dynamodb.send(command);
   }
 
@@ -96,9 +106,9 @@ class DynamoDB {
    * @returns {Promise<import("@aws-sdk/client-dynamodb").UntagResourceCommandOutput>} -
    */
   async untagResource(params) {
-    const command = new AWS.UntagResourceCommand(params);
+    const command = new UntagResourceCommand(params);
     return this.dynamodb.send(command);
   }
 }
 
-module.exports = DynamoDB;
+export default DynamoDB;

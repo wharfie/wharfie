@@ -1,12 +1,9 @@
-// const bluebirdPromise = require('bluebird');
-
-// eslint-disable-next-line node/no-extraneous-require
-const path = require('node:path');
-const crypto = require('node:crypto');
-const fs = require('node:fs');
-const paths = require('../../../paths');
-const { runCmd, spawnSync } = require('../../../cmd');
-const BaseResource = require('../base-resource');
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { writeFileSync, existsSync, promises } from 'node:fs';
+import paths from '../../../paths.js';
+import { runCmd, spawnSync } from '../../../cmd.js';
+import BaseResource from '../base-resource.js';
 
 /**
  * @typedef {('darwin'|'win'|'linux')} SeaBinaryPlatform
@@ -27,9 +24,9 @@ const BaseResource = require('../base-resource');
  * @typedef MacOSBinarySignatureOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {import('../reconcilable')[]} [dependsOn] -
- * @property {MacOSBinarySignatureProperties & import('../../typedefs').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {MacOSBinarySignatureProperties & import('../../typedefs.js').SharedProperties} properties -
  */
 
 class MacOSBinarySignature extends BaseResource {
@@ -102,10 +99,7 @@ class MacOSBinarySignature extends BaseResource {
     ]);
 
     // 5) Decode & import the p12
-    fs.writeFileSync(
-      '/tmp/devcert.p12',
-      Buffer.from(macosCertBase64, 'base64')
-    );
+    writeFileSync('/tmp/devcert.p12', Buffer.from(macosCertBase64, 'base64'));
     runCmd('security', [
       'import',
       '/tmp/devcert.p12',
@@ -134,8 +128,8 @@ class MacOSBinarySignature extends BaseResource {
    * @param {string} entitlementsPath -
    */
   async writeEntitlements(entitlementsPath) {
-    if (fs.existsSync(entitlementsPath)) return;
-    await fs.promises.writeFile(
+    if (existsSync(entitlementsPath)) return;
+    await promises.writeFile(
       entitlementsPath,
       this.get('entitlements'),
       'utf8'
@@ -149,18 +143,17 @@ class MacOSBinarySignature extends BaseResource {
     const data = `${macosCertBase64}|${macosCertPassword}|${macosKeychainPassword}`;
     // Create a stable MD5 hash in base64 format (shorter than hex)
 
-    const keychainHash = crypto.createHash('md5').update(data).digest('base64');
+    const keychainHash = createHash('md5').update(data).digest('base64');
 
-    const keychainPath = path.join(
+    const keychainPath = join(
       MacOSBinarySignature.KEYCHAINS_DIR,
       `${keychainHash}.keychain`
     );
     this._setUNSAFE('keychainPath', keychainPath);
-    const entitlementsHash = crypto
-      .createHash('md5')
+    const entitlementsHash = createHash('md5')
       .update(this.get('entitlements'))
       .digest('base64');
-    const entitlementsPath = path.join(
+    const entitlementsPath = join(
       MacOSBinarySignature.ENTITLEMENTS_DIR,
       `entitlements-${entitlementsHash}.plist`
     );
@@ -202,13 +195,13 @@ class MacOSBinarySignature extends BaseResource {
   }
 
   async _reconcile() {
-    if (!fs.existsSync(MacOSBinarySignature.ENTITLEMENTS_DIR)) {
-      await fs.promises.mkdir(MacOSBinarySignature.ENTITLEMENTS_DIR, {
+    if (!existsSync(MacOSBinarySignature.ENTITLEMENTS_DIR)) {
+      await promises.mkdir(MacOSBinarySignature.ENTITLEMENTS_DIR, {
         recursive: true,
       });
     }
-    if (!fs.existsSync(MacOSBinarySignature.KEYCHAINS_DIR)) {
-      await fs.promises.mkdir(MacOSBinarySignature.KEYCHAINS_DIR, {
+    if (!existsSync(MacOSBinarySignature.KEYCHAINS_DIR)) {
+      await promises.mkdir(MacOSBinarySignature.KEYCHAINS_DIR, {
         recursive: true,
       });
     }
@@ -218,8 +211,8 @@ class MacOSBinarySignature extends BaseResource {
   async _destroy() {}
 }
 
-MacOSBinarySignature.ENTITLEMENTS_DIR = path.join(paths.temp, 'entitlements');
-MacOSBinarySignature.KEYCHAINS_DIR = path.join(paths.config, 'keychains');
+MacOSBinarySignature.ENTITLEMENTS_DIR = join(paths.temp, 'entitlements');
+MacOSBinarySignature.KEYCHAINS_DIR = join(paths.config, 'keychains');
 
 MacOSBinarySignature.DEFAULT_ENTITLEMENTS = `<?xml version="1.0" encoding="UTF-8"?>
   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -239,4 +232,4 @@ MacOSBinarySignature.DEFAULT_ENTITLEMENTS = `<?xml version="1.0" encoding="UTF-8
   </plist>
 `;
 
-module.exports = MacOSBinarySignature;
+export default MacOSBinarySignature;

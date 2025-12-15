@@ -1,6 +1,4 @@
-'use strict';
-
-const EventEmitter = require('events');
+import EventEmitter from 'events';
 
 class ReconcilableEmitter extends EventEmitter {}
 
@@ -108,7 +106,7 @@ class Reconcilable {
    * @typedef ReconcilableEvent
    * @property {string} name -
    * @property {string} constructor -
-   * @property {import('./reconcilable').Status} status -
+   * @property {import('./reconcilable.js').default.Status} status -
    * @returns {ReconcilableEvent} -
    */
   asEvent() {
@@ -231,4 +229,4 @@ Reconcilable.Emitter = new ReconcilableEmitter();
 Reconcilable.Status = Status;
 Reconcilable.Events = Events;
 
-module.exports = Reconcilable;
+export default Reconcilable;

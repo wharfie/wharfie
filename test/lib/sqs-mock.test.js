@@ -1,8 +1,11 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 let SQS;
 const random = Math.random;
+
 describe('mock tests for SQS', () => {
   beforeAll(() => {
     process.env.AWS_MOCKS = true;
@@ -16,14 +19,17 @@ describe('mock tests for SQS', () => {
     jest.requireMock('@aws-sdk/client-sqs');
     SQS = require('../../lambdas/lib/sqs');
   });
+
   afterAll(() => {
     process.env.AWS_MOCKS = false;
     process.env.DAEMON_QUEUE_URL = undefined;
     process.env.DLQ_URL = undefined;
     global.Math.random = random;
   });
+
   it('sendMessage mock', async () => {
     expect.assertions(1);
+
     const sqs = new SQS({ region: 'us-east-1' });
     sqs.sqs.__setMockState();
     const params = {
@@ -57,6 +63,7 @@ describe('mock tests for SQS', () => {
 
   it('sendMessageBatch mock', async () => {
     expect.assertions(1);
+
     const sqs = new SQS({ region: 'us-east-1' });
     sqs.sqs.__setMockState();
     const params = {

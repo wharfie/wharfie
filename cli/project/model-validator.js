@@ -2,7 +2,7 @@ const { Parser } = require('node-sql-parser/build/athena');
 const chalk = require('chalk');
 
 const { WHARFIE_DEFAULT_ENVIRONMENT } = require('./constants');
-const Glue = require('../../lambdas/lib/glue');
+const Glue = require('../../lambdas/lib/glue').default;
 
 const glue = new Glue({});
 const parser = new Parser();

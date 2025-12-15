@@ -1,13 +1,12 @@
-'use strict';
-const { Resource } = require('../../../lib/graph/');
+import { Resource } from '../../../lib/graph/index.js';
 
-const cron = require('../../../lib/cron');
+import { getScheduleOffset } from '../../../lib/cron.js';
 
 class Compaction {
   /**
    * @typedef CompactionOptions
-   * @property {import('../../../lib/glue')} glue -
-   * @property {import('../../../lib/athena')} athena -
+   * @property {import('../../../lib/glue.js').default} glue -
+   * @property {import('../../../lib/athena/index.js').default} athena -
    * @param {CompactionOptions} options - options for Compaction instance
    */
   constructor({ glue, athena }) {
@@ -20,7 +19,7 @@ class Compaction {
    *
    * @typedef getCompactionQueryParams
    * @property {string?} PrimaryKey -
-   * @property {import('../../../typedefs').Partition[]} partitions - partitions to be compacted
+   * @property {import('../../../typedefs.js').Partition[]} partitions - partitions to be compacted
    * @property {string} sourceDatabaseName - raw data to be compacted
    * @property {string} sourceTableName - raw data to be compacted
    * @property {string} destinationDatabaseName - output location for compacted data
@@ -81,13 +80,13 @@ class Compaction {
   /**
    * @typedef getCompactionQueriesParams
    * @property {Resource} resource -
-   * @property {Array<import('../../../typedefs').Partition>} partitions - partitions to be compacted
+   * @property {Array<import('../../../typedefs.js').Partition>} partitions - partitions to be compacted
    * @property {string} sourceDatabaseName - raw data to be compacted
    * @property {string} sourceTableName - raw data to be compacted
    * @property {string} temporaryDatabaseName - output location for compacted data
    * @property {string} temporaryTableName - output location for compacted data
    * @param {getCompactionQueriesParams} params -
-   * @returns {Promise<import('../../../typedefs').QueryEnqueueInput[]>} -
+   * @returns {Promise<import('../../../typedefs.js').QueryEnqueueInput[]>} -
    */
   async getCompactionQueries({
     resource,
@@ -133,7 +132,7 @@ class Compaction {
 
       const partitionGroups = this._groupBy(
         partitions,
-        (/** @type {import('../../../typedefs').Partition} */ partition) => {
+        (/** @type {import('../../../typedefs.js').Partition} */ partition) => {
           return [...referencePartitions]
             .map(
               (key) =>
@@ -145,7 +144,7 @@ class Compaction {
         }
       );
 
-      /** @type {import('../../../typedefs').QueryEnqueueInput[]} */
+      /** @type {import('../../../typedefs.js').QueryEnqueueInput[]} */
       const queries = [];
       Object.values(partitionGroups).forEach((partitionGroup) => {
         while (partitionGroup.length > 0) {
@@ -212,12 +211,12 @@ class Compaction {
    *
    * @typedef getCalculateViewPartitionQueriesParams
    * @property {Resource} resource -
-   * @property {import('../../../typedefs').DaemonConfigSLA} [SLA] -
+   * @property {import('../../../typedefs.js').DaemonConfigSLA} [SLA] -
    * @property {number} operationTime -
    * @property {string} sourceDatabaseName -
    * @property {string} sourceTableName -
    * @property {string} athenaWorkgroup -
-   * @property {import('../../../lib/logging/logger')} event_log -
+   * @property {import('../../../lib/logging/logger.js').default} event_log -
    * @param {getCalculateViewPartitionQueriesParams} params -
    * @returns {Promise<string?>} -
    */
@@ -367,7 +366,7 @@ class Compaction {
     }
 
     if (SLA && SLA.ColumnExpression && SLA.MaxDelay) {
-      const ScheduleOffset = cron.getScheduleOffset(
+      const ScheduleOffset = getScheduleOffset(
         operationTime,
         Number(resource?.daemon_config?.Schedule || 0)
       );
@@ -379,4 +378,4 @@ class Compaction {
   }
 }
 
-module.exports = Compaction;
+export default Compaction;

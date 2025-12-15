@@ -1,7 +1,6 @@
-'use strict';
-const IAM = require('../../../iam');
-const BaseResource = require('../base-resource');
-const { NoSuchEntityException } = require('@aws-sdk/client-iam');
+import IAM from '../../../iam.js';
+import BaseResource from '../base-resource.js';
+import { NoSuchEntityException } from '@aws-sdk/client-iam';
 
 /**
  * @typedef PolicyProperties
@@ -14,9 +13,9 @@ const { NoSuchEntityException } = require('@aws-sdk/client-iam');
  * @typedef PolicyOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {PolicyProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {PolicyProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class Policy extends BaseResource {
@@ -112,4 +111,4 @@ class Policy extends BaseResource {
   }
 }
 
-module.exports = Policy;
+export default Policy;

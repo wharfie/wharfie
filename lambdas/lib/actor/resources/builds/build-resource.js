@@ -1,12 +1,12 @@
-const BaseResource = require('../base-resource');
+import BaseResource from '../base-resource.js';
 
 /**
  * @typedef BuildResourceOptions
  * @property {string} name - Resource name.
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {import('../reconcilable')[]} [dependsOn] -
- * @property {import('../../typedefs').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {import('../../typedefs.js').SharedProperties} properties -
  */
 
 class BuildResource extends BaseResource {
@@ -33,4 +33,4 @@ class BuildResource extends BaseResource {
   }
 }
 
-module.exports = BuildResource;
+export default BuildResource;

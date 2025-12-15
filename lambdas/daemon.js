@@ -1,23 +1,21 @@
-'use strict';
+import './config.js';
+import { map } from 'bluebird';
 
-require('./config');
-const bluebirdPromise = require('bluebird');
+import * as logging from './lib/logging/index.js';
 
-const logging = require('./lib/logging/');
+import backfill from './operations/backfill/index.js';
+import load from './operations/load/index.js';
+import migrate from './operations/migrate/index.js';
+import { run } from './operations/query/index.js';
+import SQS from './lib/sqs.js';
+import SNS from './lib/sns.js';
+import STS from './lib/sts.js';
+import * as resource_db from './lib/dynamo/operations.js';
+import { getResource } from './migrations/index.js';
+import { createId } from './lib/id.js';
+import { Action, Operation } from './lib/graph/index.js';
+
 const daemon_log = logging.getDaemonLogger();
-
-const backfill = require('./operations/backfill/');
-const load = require('./operations/load');
-const migrate = require('./operations/migrate/');
-const query = require('./operations/query/');
-const SQS = require('./lib/sqs');
-const SNS = require('./lib/sns');
-const STS = require('./lib/sts');
-const resource_db = require('./lib/dynamo/operations');
-const { getResource } = require('./migrations/');
-
-const { createId } = require('./lib/id');
-const { Action, Operation } = require('./lib/graph/');
 
 const sqs = new SQS({ region: process.env.AWS_REGION });
 
@@ -26,11 +24,11 @@ const DLQ_URL = process.env.DLQ_URL || '';
 const MAX_RETRIES = Number(process.env.MAX_RETRIES || 7);
 
 /**
- * @param {import('./typedefs').WharfieEvent} event -
+ * @param {import('./typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
- * @param {import('./lib/graph/').Resource} resource -
+ * @param {import('./lib/graph/index.js').Resource} resource -
  * @param {Operation?} operation -
- * @returns {Promise<import('./typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('./typedefs.js').ActionProcessingOutput>} -
  */
 async function daemonRouter(event, context, resource, operation) {
   // START SPECIAL CASE
@@ -76,7 +74,7 @@ async function daemonRouter(event, context, resource, operation) {
 }
 
 /**
- * @param {import('./typedefs').WharfieEvent} event -
+ * @param {import('./typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  */
 async function daemon(event, context) {
@@ -207,7 +205,7 @@ async function daemon(event, context) {
 }
 
 /**
- * @param {import('./typedefs').WharfieEvent} event -
+ * @param {import('./typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {any} err -
  */
@@ -279,7 +277,7 @@ async function DLQ(event, context, err) {
 }
 
 /**
- * @param {import('./typedefs').WharfieEvent} event -
+ * @param {import('./typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {any} err -
  */
@@ -312,12 +310,12 @@ async function retry(event, context, err) {
  * @param {import('aws-lambda').Context} context -
  */
 async function processRecord(record, context) {
-  /** @type {import('./typedefs').WharfieEvent} */
+  /** @type {import('./typedefs.js').WharfieEvent} */
   const event = JSON.parse(record.body);
 
   try {
     if (event.query_id) {
-      await query.run(event, context);
+      await run(event, context);
     } else {
       await daemon(event, context);
     }
@@ -337,9 +335,9 @@ async function processRecord(record, context) {
  * @param {import('aws-lambda').SQSEvent} event -
  * @param {import('aws-lambda').Context} context -
  */
-module.exports.handler = async (event, context) => {
+export async function handler(event, context) {
   daemon_log.debug(`processing ${event.Records.length} records....`);
-  await bluebirdPromise.map(
+  await map(
     event.Records,
     (/** @type {import('aws-lambda').SQSRecord} */ record) => {
       return processRecord(record, context);
@@ -348,4 +346,4 @@ module.exports.handler = async (event, context) => {
   );
   daemon_log.info(process.memoryUsage());
   await logging.flush();
-};
+}

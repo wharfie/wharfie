@@ -1,5 +1,6 @@
 // node.js
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { BasicNode } = require('./basic-node');
 
 const HyperDHT = require('hyperdht');

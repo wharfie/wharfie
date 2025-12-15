@@ -1,7 +1,6 @@
-'use strict';
-const Lambda = require('../../../lambda');
-const BaseResource = require('../base-resource');
-const { ResourceNotFoundException } = require('@aws-sdk/client-lambda');
+import Lambda from '../../../lambda.js';
+import BaseResource from '../base-resource.js';
+import { ResourceNotFoundException } from '@aws-sdk/client-lambda';
 /**
  * @typedef LambdaProperties
  * @property {import('@aws-sdk/client-lambda').Runtime} runtime -
@@ -25,9 +24,9 @@ const { ResourceNotFoundException } = require('@aws-sdk/client-lambda');
  * @typedef LambdaOptions
  * @property {string} name -
  * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {LambdaProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {import('../reconcilable.js').default.Status} [status] -
+ * @property {LambdaProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
 class LambdaFunction extends BaseResource {
@@ -209,4 +208,4 @@ class LambdaFunction extends BaseResource {
   }
 }
 
-module.exports = LambdaFunction;
+export default LambdaFunction;

@@ -1,24 +1,22 @@
-'use strict';
-
-/** @type {Object.<string, Object<string, import('../../../typedefs').LocationRecord>>} */
+/** @type {Object.<string, Object<string, import('../../../typedefs.js').LocationRecord>>} */
 let __state = {};
 
 /**
- * @param {Object.<string, Object<string, import('../../../typedefs').LocationRecord>>} state -
+ * @param {Object.<string, Object<string, import('../../../typedefs.js').LocationRecord>>} state -
  */
 function __setMockState(state = {}) {
   __state = state;
 }
 
 /**
- * @returns {Object.<string, Object<string, import('../../../typedefs').LocationRecord>>} -
+ * @returns {Object.<string, Object<string, import('../../../typedefs.js').LocationRecord>>} -
  */
 function __getMockState() {
   return __state;
 }
 
 /**
- * @param {import('../../../typedefs').LocationRecord} location -
+ * @param {import('../../../typedefs.js').LocationRecord} location -
  */
 async function putLocation(location) {
   if (!__state[location.location]) __state[location.location] = {};
@@ -27,7 +25,7 @@ async function putLocation(location) {
 
 /**
  * @param {string} location -
- * @returns {Promise<Array<import('../../../typedefs').LocationRecord>?>} - event
+ * @returns {Promise<Array<import('../../../typedefs.js').LocationRecord>?>} - event
  */
 async function findLocations(location) {
   if (!location || location === 's3://') return [];
@@ -45,7 +43,7 @@ async function findLocations(location) {
 }
 
 /**
- * @param {import('../../../typedefs').LocationRecord} location -
+ * @param {import('../../../typedefs.js').LocationRecord} location -
  */
 async function deleteLocation(location) {
   if (
@@ -56,7 +54,7 @@ async function deleteLocation(location) {
   delete __state[location.location][location.resource_id];
 }
 
-module.exports = {
+export {
   putLocation,
   findLocations,
   deleteLocation,

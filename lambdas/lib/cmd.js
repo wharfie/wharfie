@@ -1,4 +1,4 @@
-const child_process = require('node:child_process');
+import { spawn, execFile as _execFile, spawnSync } from 'node:child_process';
 
 /**
  * Run a shell command and throw on error.
@@ -8,7 +8,7 @@ const child_process = require('node:child_process');
  */
 async function runCmd(cmd, args) {
   return new Promise((resolve, reject) => {
-    const proc = child_process.spawn(cmd, args, { stdio: 'inherit' });
+    const proc = spawn(cmd, args, { stdio: 'inherit' });
     proc.on('exit', (code, signal) => {
       if (code !== null) {
         if (code === 0) resolve();
@@ -33,26 +33,21 @@ async function runCmd(cmd, args) {
  * Run a shell command and throw on error.
  * @param {string} filepath - The command to execute.
  * @param {string[]} [args] - Arguments for the command.
- * @param {child_process.ExecFileOptions} [options] - Arguments for the command.
+ * @param {import('node:child_process').ExecFileOptions} [options] - Arguments for the command.
  * @param {boolean} silent - If true, don't print output.
  * @returns {Promise<void>}
  */
 async function execFile(filepath, args = [], options = {}, silent = false) {
   return new Promise((resolve, reject) => {
-    const proc = child_process.execFile(
-      filepath,
-      args,
-      options,
-      (error, stdout, stderr) => {
-        if (error) {
-          console.error('Error:', error);
-          console.error('stderr:', stderr);
-          return;
-        }
-        if (silent) return;
-        console.log('stdout:', stdout);
+    const proc = _execFile(filepath, args, options, (error, stdout, stderr) => {
+      if (error) {
+        console.error('Error:', error);
+        console.error('stderr:', stderr);
+        return;
       }
-    );
+      if (silent) return;
+      console.log('stdout:', stdout);
+    });
     proc.on('exit', (code, signal) => {
       if (code !== null) {
         if (code === 0) resolve();
@@ -73,8 +68,4 @@ async function execFile(filepath, args = [], options = {}, silent = false) {
   });
 }
 
-module.exports = {
-  runCmd,
-  execFile,
-  spawnSync: child_process.spawnSync,
-};
+export { runCmd, execFile, spawnSync };

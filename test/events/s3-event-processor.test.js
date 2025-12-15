@@ -1,5 +1,15 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const AWSSQS = require('@aws-sdk/client-sqs');
 
@@ -51,6 +61,7 @@ describe('tests for s3 events processing', () => {
 
   it('run', async () => {
     expect.assertions(3);
+
     await router(
       {
         sort_key: 'a=1/b=abc:1',
@@ -94,6 +105,7 @@ describe('tests for s3 events processing', () => {
 
   it('run for unexpected path', async () => {
     expect.assertions(3);
+
     resource_mock = {
       source_properties: {
         tableType: 'EXTERNAL_TABLE',
@@ -157,6 +169,7 @@ describe('tests for s3 events processing', () => {
 
   it('run for no = signs', async () => {
     expect.assertions(3);
+
     resource_mock = {
       source_properties: {
         tableType: 'EXTERNAL_TABLE',
@@ -222,6 +235,7 @@ describe('tests for s3 events processing', () => {
 
   it('run for view', async () => {
     expect.assertions(3);
+
     resource_mock = {
       source_properties: {
         tableType: 'VIRTUAL_VIEW',

@@ -1,8 +1,7 @@
-'use strict';
-const AWS = require('@aws-sdk/client-sts');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import { STS as _STS, AssumeRoleCommand } from '@aws-sdk/client-sts';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-const BaseAWS = require('./base');
+import BaseAWS from './base.js';
 
 // TODO implement auto-refresh using https://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/Credentials.html
 class STS {
@@ -11,7 +10,7 @@ class STS {
    */
   constructor(options) {
     const credentials = fromNodeProviderChain();
-    this.sts = new AWS.STS({
+    this.sts = new _STS({
       ...BaseAWS.config(),
       credentials,
       ...options,
@@ -39,7 +38,7 @@ class STS {
       RoleArn,
       RoleSessionName: `wharfie-${timestamp}`,
     };
-    const command = new AWS.AssumeRoleCommand(params);
+    const command = new AssumeRoleCommand(params);
     const data = await this.sts.send(command);
     if (
       !data ||
@@ -75,7 +74,7 @@ class STS {
    * @returns {Promise<import("@aws-sdk/client-sts").AssumeRoleCommandOutput>} - STS assumeRole output
    */
   async assumeRole(params) {
-    const command = new AWS.AssumeRoleCommand(params);
+    const command = new AssumeRoleCommand(params);
     return await this.sts.send(command);
   }
 }
@@ -87,4 +86,4 @@ class STS {
 /** @type {Object<string, CachedCredentials>} */
 STS._sessions = {};
 
-module.exports = STS;
+export default STS;

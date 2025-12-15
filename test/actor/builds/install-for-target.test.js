@@ -1,7 +1,8 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const os = require('node:os');
 const path = require('node:path');

@@ -1,5 +1,15 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const crypto = require('crypto');
 
@@ -208,9 +218,11 @@ describe('s3 wrapper – Backblaze B2 live tests (no mocks)', () => {
     await sleep(100);
 
     const data = await s3.getObject({ Bucket: BUCKET, Key });
+
     expect(data).toBe(Body);
 
     const head = await s3.headObject({ Bucket: BUCKET, Key });
+
     expect(typeof head.ContentLength).toBe('number');
     expect(head.ContentLength).toBe(Buffer.byteLength(Body));
   });
@@ -230,6 +242,7 @@ describe('s3 wrapper – Backblaze B2 live tests (no mocks)', () => {
     });
 
     const keys = await listAllKeys(s3, BUCKET, `${BASE_PREFIX}delete/`);
+
     expect(keys).toStrictEqual([]);
     expect(keys).toHaveLength(0);
   });
@@ -254,6 +267,7 @@ describe('s3 wrapper – Backblaze B2 live tests (no mocks)', () => {
     await s3.copyPath({ Bucket: BUCKET, Prefix: srcPrefix }, BUCKET, dstPrefix);
 
     const dstKeys = await listAllKeys(s3, BUCKET, dstPrefix);
+
     // Your wrapper prefixes DestinationPrefix + full source key (no stripping)
     expect(dstKeys.sort()).toStrictEqual(
       [
@@ -266,18 +280,23 @@ describe('s3 wrapper – Backblaze B2 live tests (no mocks)', () => {
       Bucket: BUCKET,
       Key: `${dstPrefix}${srcPrefix}source_database/source_table/123.json`,
     });
+
     expect(content).toBe('123');
   });
 
   it('parseS3Uri throws on non-string uri', () => {
     expect.assertions(1);
+
     const local = makeClient();
+
     expect(() => local.parseS3Uri(123)).toThrow('uri (123) is not a string');
   });
 
   it('parseS3Uri throws on unterminated bucket uri', () => {
     expect.assertions(1);
+
     const local = makeClient();
+
     expect(() => local.parseS3Uri('s3://example-bucket')).toThrow(
       's3://example-bucket is not of form s3://bucket/key or s3://bucket/'
     );
@@ -285,8 +304,10 @@ describe('s3 wrapper – Backblaze B2 live tests (no mocks)', () => {
 
   it('parseS3Uri works with bucket only', () => {
     expect.assertions(1);
+
     const local = makeClient();
     const result = local.parseS3Uri('s3://example-bucket/');
+
     expect(result).toStrictEqual({
       bucket: 'example-bucket',
       prefix: '',
@@ -310,6 +331,7 @@ describe('s3 wrapper – Backblaze B2 live tests (no mocks)', () => {
     await s3.deletePath({ Bucket: BUCKET, Prefix: delPrefix });
 
     const remaining = await listAllKeys(s3, BUCKET, delPrefix);
+
     expect(remaining).toStrictEqual([]);
     expect(remaining).toHaveLength(0);
   });

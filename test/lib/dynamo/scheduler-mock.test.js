@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 jest.mock('../../../lambdas/lib/dynamo/scheduler');
 
 const scheduler = require('../../../lambdas/lib/dynamo/scheduler');
@@ -29,6 +31,7 @@ describe('dynamo event db', () => {
       sort_key: 'dt=10:112313',
     });
     const value = await scheduler.query('test', 'dt=10', ['112312', '212312']);
+
     expect(value).toMatchInlineSnapshot(`
       [
         {
@@ -49,6 +52,7 @@ describe('dynamo event db', () => {
 
   it('schedule', async () => {
     expect.assertions(1);
+
     await scheduler.schedule({
       resource_id: 'test',
       sort_key: 'dt=10:112312',
@@ -61,6 +65,7 @@ describe('dynamo event db', () => {
       resource_id: 'test',
       sort_key: 'dt=10:212312',
     });
+
     expect(scheduler.__getMockState()).toMatchInlineSnapshot(`
       {
         "test": {
@@ -79,6 +84,7 @@ describe('dynamo event db', () => {
 
   it('update', async () => {
     expect.assertions(1);
+
     await scheduler.schedule({
       resource_id: 'test',
       sort_key: 'dt=10:112312',
@@ -90,6 +96,7 @@ describe('dynamo event db', () => {
       },
       'running'
     );
+
     expect(scheduler.__getMockState()).toMatchInlineSnapshot(`
       {
         "test": {
@@ -105,6 +112,7 @@ describe('dynamo event db', () => {
 
   it('delete_records', async () => {
     expect.assertions(1);
+
     await scheduler.schedule({
       resource_id: 'test',
       sort_key: 'dt=10:112312',
@@ -118,6 +126,7 @@ describe('dynamo event db', () => {
       sort_key: 'dt=10:112312',
     });
     await scheduler.delete_records('test');
+
     expect(scheduler.__getMockState()).toMatchInlineSnapshot(`
       {
         "test-1": {

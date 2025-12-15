@@ -1,11 +1,10 @@
-'use strict';
-const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const { DynamoDB } = require('@aws-sdk/client-dynamodb');
-const { query: queryDb, batchWrite } = require('.');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
-const SchedulerEntry = require('../../scheduler/scheduler-entry');
+import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
+import { DynamoDB } from '@aws-sdk/client-dynamodb';
+import { query as queryDb, batchWrite } from './index.js';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
+import SchedulerEntry from '../../scheduler/scheduler-entry.js';
 
-const BaseAWS = require('../base');
+import BaseAWS from '../base.js';
 
 const credentials = fromNodeProviderChain();
 const docClient = DynamoDBDocument.from(
@@ -25,7 +24,7 @@ const SCHEDULER_TABLE = process.env.SCHEDULER_TABLE || '';
  * @param {string} resource_id -
  * @param {string} partition -
  * @param {Array<number>} window -
- * @returns {Promise<SchedulerEntry[]>} -
+ * @returns {Promise<import('../../scheduler/scheduler-entry.js').default[]>} -
  */
 async function query(resource_id, partition, window) {
   const [start_by, end_by] = window;
@@ -49,7 +48,7 @@ async function query(resource_id, partition, window) {
 }
 
 /**
- * @param {SchedulerEntry} schedulerEvent -
+ * @param {import('../../scheduler/scheduler-entry.js').default} schedulerEvent -
  */
 async function schedule(schedulerEvent) {
   schedulerEvent.ttl = Math.round(Date.now() / 1000) + 60 * 60 * 24 * 3; // 3 day ttl
@@ -62,8 +61,8 @@ async function schedule(schedulerEvent) {
 }
 
 /**
- * @param {SchedulerEntry} schedulerEvent -
- * @param {SchedulerEntry.SchedulerEntryStatusEnum} status -
+ * @param {import('../../scheduler/scheduler-entry.js').default} schedulerEvent -
+ * @param {import('../../scheduler/scheduler-entry.js').SchedulerEntryStatusEnum} status -
  */
 async function update(schedulerEvent, status) {
   schedulerEvent.status = status;
@@ -104,9 +103,4 @@ async function delete_records(resource_id) {
     });
 }
 
-module.exports = {
-  schedule,
-  update,
-  query,
-  delete_records,
-};
+export { schedule, update, query, delete_records };

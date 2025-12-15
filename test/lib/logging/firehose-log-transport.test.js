@@ -1,19 +1,24 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { afterEach, beforeAll, describe, expect, it } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const AWS = require('@aws-sdk/client-firehose');
 
 let FirehoseLogTransport;
+
 describe('tests for firehose log transport', () => {
   beforeAll(() => {
     require('aws-sdk-client-mock-jest');
     FirehoseLogTransport = require('../../../lambdas/lib/logging/firehose-log-transport');
   });
+
   afterEach(() => {
     AWS.FirehoseMock.reset();
   });
 
   it('log test', async () => {
     expect.assertions(3);
+
     AWS.FirehoseMock.on(AWS.PutRecordBatchCommand).resolves({});
     const firehoseLogTransport = new FirehoseLogTransport({
       flushInterval: -1,
@@ -46,6 +51,7 @@ describe('tests for firehose log transport', () => {
 
   it('log close after flush', async () => {
     expect.assertions(2);
+
     AWS.FirehoseMock.on(AWS.PutRecordBatchCommand).resolves({});
     const firehoseLogTransport = new FirehoseLogTransport({
       flushInterval: -1,
@@ -71,6 +77,7 @@ describe('tests for firehose log transport', () => {
 
   it('flush interval test', async () => {
     expect.assertions(6);
+
     AWS.FirehoseMock.on(AWS.PutRecordBatchCommand).resolves({});
     const firehoseLogTransport = new FirehoseLogTransport({
       flushInterval: 2,

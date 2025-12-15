@@ -1,10 +1,9 @@
-'use strict';
-const process = require('./processor');
-const logging = require('../../../lib/logging');
+import { run } from './processor.js';
+import * as logging from '../../../lib/logging/index.js';
 const daemon_log = logging.getDaemonLogger();
 
 /**
- * @param {import('../../typedefs').InputEvent} event -
+ * @param {import('../../typedefs.js').InputEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @returns {Promise<void>}
  */
@@ -15,7 +14,7 @@ async function router(event, context) {
       event.Records.map((record) => {
         if (record.eventSource === 'aws:s3') {
           // handle s3 events from s3 service
-          return process.run(
+          return run(
             {
               bucket: record.s3.bucket.name,
               key: record.s3.object.key,
@@ -28,7 +27,7 @@ async function router(event, context) {
       })
     );
   } else if (event.source === 'aws.s3') {
-    await process.run(
+    await run(
       {
         bucket: event.detail.bucket.name,
         key: event.detail.object.key,
@@ -40,4 +39,4 @@ async function router(event, context) {
   }
 }
 
-module.exports = router;
+export default router;

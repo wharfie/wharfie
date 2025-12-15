@@ -1,4 +1,5 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const {
@@ -7,11 +8,8 @@ const {
   displayInstruction,
   displayInfo,
 } = require('../../output/basic');
-const {
-  getRecords,
-  deleteOperation,
-  getAllResources,
-} = require('../../../lambdas/lib/dynamo/operations');
+const { getRecords, deleteOperation, getAllResources } =
+  require('../../../lambdas/lib/dynamo/operations').default;
 
 /**
  * Cancels operations for a given resource ID, operation ID, or operation type.

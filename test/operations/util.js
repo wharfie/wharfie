@@ -1,4 +1,6 @@
-'use strict';
+import { jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 process.env.STACK_NAME = 'test-stack';
 process.env.TEMPORARY_GLUE_DATABASE = 'temp-glue-database';
 process.env.OPERATIONS_TABLE = 'test-deployment-operations';

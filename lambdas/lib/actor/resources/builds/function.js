@@ -1,6 +1,9 @@
-const { getAsset } = require('node:sea');
-const worker = require('../../../code-execution/worker');
-const zlib = require('node:zlib');
+import { getAsset } from 'node:sea';
+import worker from '../../../code-execution/worker.js';
+import { brotliDecompressSync } from 'node:zlib';
+
+// import { createRequire } from 'node:module';
+import path from 'node:path';
 
 /**
  * @typedef ExternalDependencyDescription
@@ -15,26 +18,29 @@ const zlib = require('node:zlib');
  */
 
 /**
+ * @typedef FunctionEntrypoint
+ * @property {string} path -
+ * @property {string} [export] -
+ */
+
+/**
  * @typedef FunctionOptions
  * @property {string} name -
+ * @property {FunctionEntrypoint} entrypoint -
  * @property {FunctionProperties} [properties] -
  */
 
 class Function {
   /**
-   * @param {function} fn -
    * @param {FunctionOptions} options -
    */
-  constructor(fn, { name, properties = {} }) {
-    this.fn = fn;
-    if (typeof this.fn !== 'function') {
-      throw new Error('Actor expects a function as an argument');
-    }
+  constructor({ name, entrypoint, properties = {} }) {
     if (!name) {
-      throw new Error('Actor expects a name as an argument');
+      throw new Error('Function expects a name as an argument');
     }
     const { external, environmentVariables } = properties;
     this.name = name;
+    this.entrypoint = entrypoint;
     this.properties = {
       external,
       environmentVariables,
@@ -50,7 +56,7 @@ class Function {
     const functionAssetBuffer = await getAsset(name);
     const functionDescriptionBuffer = Buffer.from(functionAssetBuffer);
     const assetDescription = JSON.parse(functionDescriptionBuffer.toString());
-    const functionBuffer = zlib.brotliDecompressSync(
+    const functionBuffer = brotliDecompressSync(
       Buffer.from(assetDescription.codeBundle, 'base64')
     );
     const functionCodeString = functionBuffer.toString();
@@ -71,9 +77,30 @@ class Function {
     await worker._destroyWorker();
   }
 
+  async fn() {
+    const entryPath = path.isAbsolute(this.entrypoint.path)
+      ? this.entrypoint.path
+      : path.resolve(this.entrypoint.path);
+
+    // CJS: require() exists. ESM: use dynamic import().
+    const handler =
+      typeof require === 'function'
+        ? // eslint-disable-next-line import/no-dynamic-require, no-undef
+          require(entryPath)
+        : // eslint-disable-next-line node/no-unsupported-features/es-syntax
+          await import(entryPath);
+
+    const candidate = this.entrypoint.export
+      ? handler?.[this.entrypoint.export]
+      : // for ESM default exports
+        handler?.default ?? handler;
+
+    await candidate();
+  }
+
   // async recieve() {
   //   await Function.run({}, {});
   // }
 }
 
-module.exports = Function;
+export default Function;

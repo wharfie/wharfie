@@ -1,24 +1,22 @@
-'use strict';
-
-const { Action, Operation, Resource } = require('../../lib/graph/');
-const logging = require('../../lib/logging');
-const resource_db = require('../../lib/dynamo/operations');
-const semaphore_db = require('../../lib/dynamo/semaphore');
-const register_missing_partitions = require('../actions/register_missing_partitions');
-const find_compaction_partitions = require('../actions/find_compaction_partitions');
-const run_compaction = require('../actions/run_compaction');
-const update_symlinks = require('../actions/update_symlinks');
-const swap_resource = require('./swap_resource');
-const create_migration_resource = require('./create_migration_resource');
-const destroy_migration_resource = require('./destroy_migration_resource');
-const reconcile_resource = require('./reconcile_resource');
-const side_effects = require('../side_effects');
+import { Action, Operation, Resource } from '../../lib/graph/index.js';
+import * as logging from '../../lib/logging/index.js';
+import * as resource_db from '../../lib/dynamo/operations.js';
+import * as semaphore_db from '../../lib/dynamo/semaphore.js';
+import register_missing_partitions from '../actions/register_missing_partitions.js';
+import find_compaction_partitions from '../actions/find_compaction_partitions.js';
+import run_compaction from '../actions/run_compaction.js';
+import update_symlinks from '../actions/update_symlinks.js';
+import swap_resource from './swap_resource.js';
+import create_migration_resource from './create_migration_resource.js';
+import destroy_migration_resource from './destroy_migration_resource.js';
+import reconcile_resource from './reconcile_resource.js';
+import * as side_effects from '../side_effects/index.js';
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function start(event, context, resource) {
   const event_log = logging.getEventLogger(event, context);
@@ -108,7 +106,7 @@ async function start(event, context, resource) {
 }
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} migration_to_cleanup -
@@ -135,11 +133,11 @@ async function cleanup(event, context, resource, migration_to_cleanup) {
 }
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function finish(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
@@ -162,11 +160,11 @@ async function finish(event, context, resource, operation) {
 }
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function route(event, context, resource, operation) {
   switch (event.action_type) {
@@ -229,7 +227,7 @@ async function route(event, context, resource, operation) {
   }
 }
 
-module.exports = {
+export default {
   start,
   finish,
   route,

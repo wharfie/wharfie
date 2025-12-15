@@ -1,17 +1,17 @@
-const { Operation, Resource } = require('../../lib/graph/');
+import { Operation, Resource } from '../../lib/graph/index.js';
 
-const CloudWatch = require('../../lib/cloudwatch');
+import CloudWatch from '../../lib/cloudwatch.js';
 const cloudwatchClient = new CloudWatch({
   region: process.env.AWS_REGION,
 });
 const STACK_NAME = process.env.STACK_NAME || '';
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
+ * @param {import('../../typedefs.js').WharfieEvent} event -
  * @param {import('aws-lambda').Context} context -
  * @param {Resource} resource -
  * @param {Operation} operation -
- * @returns {Promise<import('../../typedefs').ActionProcessingOutput>} -
+ * @returns {Promise<import('../../typedefs.js').ActionProcessingOutput>} -
  */
 async function cloudwatch(event, context, resource, operation) {
   const { completed_at } = event.action_inputs;
@@ -77,4 +77,4 @@ async function cloudwatch(event, context, resource, operation) {
   };
 }
 
-module.exports = cloudwatch;
+export default cloudwatch;

@@ -1,6 +1,5 @@
-'use strict';
-
-const { Command } = require('commander');
+import { Command } from 'commander';
+import stateCmd from './control_cmds/state.js';
 
 const ctlCommand = new Command('ctl')
   .description('Wharfie control commands')
@@ -13,6 +12,6 @@ ctlCommand.hook('preAction', async () => {
   console.log('commands pre action');
 });
 
-ctlCommand.addCommand(require('./control_cmds/state'));
+ctlCommand.addCommand(stateCmd);
 
-module.exports = ctlCommand;
+export default ctlCommand;

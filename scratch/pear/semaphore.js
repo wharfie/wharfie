@@ -1,5 +1,6 @@
 // pear-semaphore.js
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const Corestore = require('corestore');
 const Hypercore = require('hypercore');
@@ -83,6 +84,7 @@ class Lock {
     this.leaseMs = leaseMs;
     this.id = id || crypto.randomBytes(16).toString('hex');
   }
+
   _key() {
     return `/locks/${this.name}`;
   }
@@ -148,9 +150,11 @@ class PearSemaphore {
   _key(name) {
     return `/sem/${name}`;
   }
+
   _limitKey(name) {
     return `/sem/limits/${name}`;
   }
+
   _lock(name) {
     return new Lock(this.store, `sem:${name}`, this.lockLeaseMs);
   }
@@ -231,6 +235,10 @@ class PearSemaphore {
   }
 }
 
+/**
+ *
+ * @param opts
+ */
 function createPearSemaphore(opts = {}) {
   const impl = new PearSemaphore(opts);
   return {

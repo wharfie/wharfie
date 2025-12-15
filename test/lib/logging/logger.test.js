@@ -1,5 +1,16 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const Logger = require('../../../lambdas/lib/logging/logger');
 const ConsoleLogTransport = require('../../../lambdas/lib/logging/console-log-transport');
@@ -9,27 +20,32 @@ const AWS = require('@aws-sdk/client-firehose');
 let FirehoseLogTransport;
 let consoleLog;
 let dateSpy;
+
 describe('tests for console log transport', () => {
   beforeAll(() => {
     const mockDate = new Date(1466424490000);
     dateSpy = jest.spyOn(global, 'Date').mockImplementation(() => mockDate);
   });
+
   beforeEach(() => {
     require('aws-sdk-client-mock-jest');
     FirehoseLogTransport = require('../../../lambdas/lib/logging/firehose-log-transport');
     consoleLog = jest.spyOn(console, 'log').mockImplementation(() => {});
     AWS.FirehoseMock.on(AWS.PutRecordBatchCommand).resolves({});
   });
+
   afterEach(() => {
     AWS.FirehoseMock.reset();
     consoleLog.mockReset();
   });
+
   afterAll(() => {
     dateSpy.mockReset();
   });
 
   it('log default', async () => {
     expect.assertions(5);
+
     const logger = new Logger();
 
     logger.info('test1');
@@ -50,13 +66,16 @@ describe('tests for console log transport', () => {
       "[2016-06-20T12:08:10.000Z] [ERROR] test2
       "
     `);
+
     await logger.flush();
     await logger.close();
+
     expect(consoleLog).toHaveBeenCalledTimes(3);
   });
 
   it('log firehose', async () => {
     expect.assertions(4);
+
     const logger = new Logger({
       transports: [
         new FirehoseLogTransport({
@@ -75,12 +94,16 @@ describe('tests for console log transport', () => {
       AWS.PutRecordBatchCommand,
       0
     );
+
     await logger.flush();
+
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
       1
     );
+
     await logger.close();
+
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
       1
@@ -99,6 +122,7 @@ describe('tests for console log transport', () => {
 
   it('log multiple', async () => {
     expect.assertions(2);
+
     const logger = new Logger({
       transports: [
         new FirehoseLogTransport({
@@ -110,6 +134,7 @@ describe('tests for console log transport', () => {
     });
     logger.info('test');
     await logger.close();
+
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
       1
@@ -119,6 +144,7 @@ describe('tests for console log transport', () => {
 
   it('log json', async () => {
     expect.assertions(4);
+
     const logger = new Logger({
       jsonFormat: true,
       base: {
@@ -134,6 +160,7 @@ describe('tests for console log transport', () => {
     });
     logger.info('test');
     await logger.close();
+
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
       1
@@ -165,6 +192,7 @@ describe('tests for console log transport', () => {
 
   it('child loggers', async () => {
     expect.assertions(4);
+
     const logger = new Logger({
       base: {
         foo: 'bar',
@@ -188,6 +216,7 @@ describe('tests for console log transport', () => {
     childLoggerBar.error('bin');
     logger.info('hello');
     await logger.flush();
+
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
       1
