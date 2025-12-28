@@ -37,7 +37,7 @@ describe('tests for logging', () => {
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      0
+      0,
     );
     expect(consoleLog).toHaveBeenCalledTimes(1);
 
@@ -45,7 +45,7 @@ describe('tests for logging', () => {
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      1
+      1,
     );
   });
 
@@ -68,7 +68,7 @@ describe('tests for logging', () => {
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      0
+      0,
     );
     expect(consoleLog).toHaveBeenCalledTimes(1);
 
@@ -76,7 +76,7 @@ describe('tests for logging', () => {
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      1
+      1,
     );
   });
 
@@ -88,7 +88,7 @@ describe('tests for logging', () => {
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      0
+      0,
     );
     expect(consoleLog).toHaveBeenCalledTimes(1);
 
@@ -96,7 +96,7 @@ describe('tests for logging', () => {
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      1
+      1,
     );
   });
 });

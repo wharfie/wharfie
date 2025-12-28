@@ -123,7 +123,7 @@ async function route(event, context, resource, operation) {
   if (operation.resource_version !== resource.version) {
     const event_log = logging.getEventLogger(event, context);
     event_log.warn(
-      `resource version (${resource.version}) does not match operation's version (${operation.resource_version})`
+      `resource version (${resource.version}) does not match operation's version (${operation.resource_version})`,
     );
     return {
       status: 'COMPLETED',
@@ -137,7 +137,7 @@ async function route(event, context, resource, operation) {
         event,
         context,
         resource,
-        operation
+        operation,
       );
     case 'RUN_COMPACTION':
       return await run_compaction.run(event, context, resource, operation);

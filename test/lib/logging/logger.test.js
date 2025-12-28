@@ -92,26 +92,26 @@ describe('tests for console log transport', () => {
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      0
+      0,
     );
 
     await logger.flush();
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      1
+      1,
     );
 
     await logger.close();
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      1
+      1,
     );
     expect(
       AWS.FirehoseMock.commandCalls(
-        AWS.PutRecordBatchCommand
-      )[0].args[0].input.Records[0].Data.toString()
+        AWS.PutRecordBatchCommand,
+      )[0].args[0].input.Records[0].Data.toString(),
     ).toMatchInlineSnapshot(`
       "[2016-06-20T12:08:10.000Z] [INFO] test1
       [2016-06-20T12:08:10.000Z] [WARN] test2
@@ -137,7 +137,7 @@ describe('tests for console log transport', () => {
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      1
+      1,
     );
     expect(consoleLog).toHaveBeenCalledTimes(1);
   });
@@ -163,15 +163,15 @@ describe('tests for console log transport', () => {
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      1
+      1,
     );
     expect(consoleLog).toHaveBeenCalledTimes(1);
     expect(
       JSON.parse(
         AWS.FirehoseMock.commandCalls(
-          AWS.PutRecordBatchCommand
-        )[0].args[0].input.Records[0].Data.toString()
-      )
+          AWS.PutRecordBatchCommand,
+        )[0].args[0].input.Records[0].Data.toString(),
+      ),
     ).toMatchInlineSnapshot(`
       {
         "foo": "bar",
@@ -219,12 +219,12 @@ describe('tests for console log transport', () => {
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      1
+      1,
     );
     expect(
       AWS.FirehoseMock.commandCalls(
-        AWS.PutRecordBatchCommand
-      )[0].args[0].input.Records[0].Data.toString()
+        AWS.PutRecordBatchCommand,
+      )[0].args[0].input.Records[0].Data.toString(),
     ).toMatchInlineSnapshot(`
       "{"timestamp":"2016-06-20T12:08:10.000Z","level":"INFO","message":"foo","foo":"foo"}
       {"timestamp":"2016-06-20T12:08:10.000Z","level":"ERROR","message":"bin","foo":"bar","bar":"bar"}

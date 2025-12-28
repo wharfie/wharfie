@@ -42,7 +42,7 @@ async function run(event, context, resource, operation) {
     },
     temporaryDatabaseName,
     temporaryTableName,
-    storage_id
+    storage_id,
   );
 
   const queries = await compaction.getCompactionQueries({
@@ -57,7 +57,7 @@ async function run(event, context, resource, operation) {
   });
 
   event_log.info(
-    `RUN_TEMP_COMPACTION:submitting ${queries.length} compaction queries`
+    `RUN_TEMP_COMPACTION:submitting ${queries.length} compaction queries`,
   );
   await query.enqueue(event, context, queries);
 

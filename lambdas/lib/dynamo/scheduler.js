@@ -15,7 +15,7 @@ const docClient = DynamoDBDocument.from(
     region: process.env.AWS_REGION,
     credentials,
   }),
-  { marshallOptions: { removeUndefinedValues: true } }
+  { marshallOptions: { removeUndefinedValues: true } },
 );
 
 const SCHEDULER_TABLE = process.env.SCHEDULER_TABLE || '';

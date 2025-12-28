@@ -204,7 +204,7 @@ async function checkActionPrerequisites(
   operation,
   action_type,
   logger,
-  includeQueries = true
+  includeQueries = true,
 ) {
   const current_action_id = operation.getActionIdByType(action_type);
   const prerequisite_action_ids =
@@ -212,8 +212,8 @@ async function checkActionPrerequisites(
   logger &&
     logger.debug(
       `checking that prerequisite actions are completed ${JSON.stringify(
-        prerequisite_action_ids
-      )}`
+        prerequisite_action_ids,
+      )}`,
     );
   let prerequisites_met = true;
   while (prerequisite_action_ids.length > 0) {
@@ -232,13 +232,13 @@ async function checkActionPrerequisites(
           if (data.status !== Action.Status.COMPLETED) {
             logger &&
               logger.info(
-                `prerequisite action ${operation.type}:${data.type} hasn't finished running yet`
+                `prerequisite action ${operation.type}:${data.type} hasn't finished running yet`,
               );
             prerequisites_met = false;
           }
           if (data.status === Action.Status.FAILED) {
             throw new Error(
-              `prerequisite action ${operation.type}:${data.type} failed`
+              `prerequisite action ${operation.type}:${data.type} failed`,
             );
           }
           break;
@@ -247,13 +247,13 @@ async function checkActionPrerequisites(
             incompleteQueries.push(data.id);
             logger &&
               logger.debug(
-                `incomplete prerequisite query ${JSON.stringify(data)}`
+                `incomplete prerequisite query ${JSON.stringify(data)}`,
               );
             prerequisites_met = false;
           }
           if (includeQueries && data.status && data.status === 'FAILED') {
             throw new Error(
-              `prerequisite query failed ${JSON.stringify(data)}`
+              `prerequisite query failed ${JSON.stringify(data)}`,
             );
           }
           break;
@@ -262,7 +262,7 @@ async function checkActionPrerequisites(
     incompleteQueries.length > 0 &&
       logger &&
       logger.info(
-        `prerequisite action ${operation.type}:${action_type} has ${incompleteQueries.length} incomplete queries`
+        `prerequisite action ${operation.type}:${action_type} has ${incompleteQueries.length} incomplete queries`,
       );
   }
   return prerequisites_met;
@@ -327,8 +327,8 @@ async function getRecords(resource_id, operation_id = '') {
               sort_key: '',
               data: item,
             },
-            operationBatch
-          )
+            operationBatch,
+          ),
         );
         operationBatch = [];
         break;
@@ -340,8 +340,8 @@ async function getRecords(resource_id, operation_id = '') {
               sort_key: '',
               data: item,
             },
-            actionBatch
-          )
+            actionBatch,
+          ),
         );
         operationBatch.push({
           action_record: {
@@ -359,7 +359,7 @@ async function getRecords(resource_id, operation_id = '') {
             resource_id: item.resource_id,
             sort_key: '',
             data: item,
-          })
+          }),
         );
         actionBatch.push({
           resource_id: item.resource_id,
@@ -406,8 +406,8 @@ async function getAllOperations() {
               sort_key: '',
               data: item,
             },
-            operationBatch
-          )
+            operationBatch,
+          ),
         );
         operationBatch = [];
         break;
@@ -447,7 +447,7 @@ async function getAllResources() {
         resource_id: data.id,
         sort_key: '',
         data,
-      })
+      }),
     );
   return operations;
 }

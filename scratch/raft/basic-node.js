@@ -138,7 +138,7 @@ export class BasicNode extends EventEmitter {
         if (ok) resolve();
         else
           reject(
-            new Error(`waitForPeers timed out at ${this.peers.size}/${target}`)
+            new Error(`waitForPeers timed out at ${this.peers.size}/${target}`),
           );
       };
 
@@ -186,7 +186,7 @@ export class BasicNode extends EventEmitter {
    */
   getPeers() {
     return Array.from(this.peers.values()).sort((a, b) =>
-      a.id.localeCompare(b.id)
+      a.id.localeCompare(b.id),
     );
   }
 

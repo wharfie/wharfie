@@ -111,20 +111,20 @@ class BaseResourceGroup extends BaseResource {
           acc.push(name);
           return acc;
         },
-        []
+        [],
       ),
     };
   }
 
   async _destroy() {
     await Promise.all(
-      this.getResources().map((resource) => resource.destroy())
+      this.getResources().map((resource) => resource.destroy()),
     );
   }
 
   async _reconcile() {
     await Promise.all(
-      this.getResources().map((resource) => resource.reconcile())
+      this.getResources().map((resource) => resource.reconcile()),
     );
   }
 }

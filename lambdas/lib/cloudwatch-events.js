@@ -91,7 +91,7 @@ class CloudWatchEvents {
    */
   async listTargetsByRule(params) {
     return await this.cloudwatchEvents.send(
-      new ListTargetsByRuleCommand(params)
+      new ListTargetsByRuleCommand(params),
     );
   }
 
@@ -101,7 +101,7 @@ class CloudWatchEvents {
    */
   async listTagsForResource(params) {
     return await this.cloudwatchEvents.send(
-      new ListTagsForResourceCommand(params)
+      new ListTagsForResourceCommand(params),
     );
   }
 

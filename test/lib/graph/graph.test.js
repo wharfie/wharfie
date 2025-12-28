@@ -257,8 +257,8 @@ describe('tests for graph', () => {
             action_record: action,
             query_records: [],
           };
-        })
-      )
+        }),
+      ),
     ).toStrictEqual(test_operation);
   });
 
@@ -327,7 +327,7 @@ describe('tests for graph', () => {
     });
 
     expect(
-      test_operation.getUpstreamActions(start_action)
+      test_operation.getUpstreamActions(start_action),
     ).toMatchInlineSnapshot(`[]`);
     expect(test_operation.getUpstreamActions(finish_action))
       .toMatchInlineSnapshot(`
@@ -452,7 +452,7 @@ describe('tests for graph', () => {
       ]
     `);
     expect(
-      test_operation.getDownstreamActions(finish_action)
+      test_operation.getDownstreamActions(finish_action),
     ).toMatchInlineSnapshot(`[]`);
   });
 

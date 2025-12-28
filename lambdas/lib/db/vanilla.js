@@ -41,7 +41,7 @@ function flush(root) {
 
     const tmp = join(
       dbDir,
-      `.tmp-${basename(dbFilePath)}-${process.pid}-${Date.now()}-${createId()}`
+      `.tmp-${basename(dbFilePath)}-${process.pid}-${Date.now()}-${createId()}`,
     );
 
     // open, write, fsync, close

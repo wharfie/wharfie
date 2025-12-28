@@ -14,7 +14,7 @@ const docClient = DynamoDBDocument.from(
     region: process.env.AWS_REGION,
     credentials,
   }),
-  { marshallOptions: { removeUndefinedValues: true } }
+  { marshallOptions: { removeUndefinedValues: true } },
 );
 
 const DEPENDENCY_TABLE = process.env.DEPENDENCY_TABLE || '';
@@ -25,7 +25,7 @@ const DEPENDENCY_TABLE = process.env.DEPENDENCY_TABLE || '';
  */
 async function putDependency(
   dependency,
-  tableName = process.env.DEPENDENCY_TABLE
+  tableName = process.env.DEPENDENCY_TABLE,
 ) {
   await docClient.put({
     TableName: tableName,
@@ -69,7 +69,7 @@ async function findDependencies(dependency) {
  */
 async function deleteDependency(
   dependency,
-  tableName = process.env.DEPENDENCY_TABLE
+  tableName = process.env.DEPENDENCY_TABLE,
 ) {
   await docClient.delete({
     TableName: tableName,

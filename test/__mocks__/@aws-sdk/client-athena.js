@@ -16,5 +16,5 @@ if (process.env.AWS_MOCKS) {
 
 module.exports = Object.assign(
   {},
-  { ...AWS, Athena, AthenaMock, paginateGetQueryResults }
+  { ...AWS, Athena, AthenaMock, paginateGetQueryResults },
 );

@@ -116,9 +116,9 @@ describe('iam policy IaC', () => {
 
     expect(policy.status).toBe('DESTROYED');
     await expect(
-      iam.getPolicy({ PolicyArn: policy.get('arn') })
+      iam.getPolicy({ PolicyArn: policy.get('arn') }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"policy test-policy does not exist"`
+      `"policy test-policy does not exist"`,
     );
   });
 });

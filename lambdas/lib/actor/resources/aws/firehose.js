@@ -36,16 +36,16 @@ class Firehose extends BaseResource {
         !currentTags.some(
           (currentTag) =>
             currentTag.Key === expectedTag.Key &&
-            currentTag.Value === expectedTag.Value
-        )
+            currentTag.Value === expectedTag.Value,
+        ),
     );
     const tagsToRemove = currentTags.filter(
       (currentTag) =>
         !expectedTags.some(
           (/** @type {import('@aws-sdk/client-firehose').Tag} */ expectedTag) =>
             expectedTag.Key === currentTag.Key &&
-            expectedTag.Value === currentTag.Value
-        )
+            expectedTag.Value === currentTag.Value,
+        ),
     );
     if (tagsToAdd.length > 0) {
       await this.firehose.tagDeliveryStream({

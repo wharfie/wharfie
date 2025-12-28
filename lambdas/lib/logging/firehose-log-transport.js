@@ -40,7 +40,7 @@ class FirehoseLogTransport extends Writable {
     if (this._FLUSH_INTERVAL > 0) {
       this._FLUSH_INTERVAL_ID = setInterval(
         this.flush.bind(this),
-        this._FLUSH_INTERVAL
+        this._FLUSH_INTERVAL,
       );
     }
   }
@@ -64,7 +64,7 @@ class FirehoseLogTransport extends Writable {
         'TRUNCATED' +
         record.slice(
           0,
-          FirehoseLogTransport._MAX_BIN_SIZE - 'TRUNCATED'.length
+          FirehoseLogTransport._MAX_BIN_SIZE - 'TRUNCATED'.length,
         );
     }
     if (
@@ -109,7 +109,7 @@ class FirehoseLogTransport extends Writable {
           r.remainder + current_remainder <=
             FirehoseLogTransport._BIN_COST_INCREMENT &&
           r.record_size + bin.length <= FirehoseLogTransport._MAX_BIN_SIZE &&
-          !packedRecords.has(r.bin_record_index)
+          !packedRecords.has(r.bin_record_index),
       );
       while (valid_bin_fill_records.length >= 0) {
         const remainder_fill = valid_bin_fill_records.shift();
@@ -123,7 +123,7 @@ class FirehoseLogTransport extends Writable {
             r.remainder + current_remainder <=
               FirehoseLogTransport._BIN_COST_INCREMENT &&
             r.record_size + bin.length <= FirehoseLogTransport._MAX_BIN_SIZE &&
-            !packedRecords.has(r.bin_record_index)
+            !packedRecords.has(r.bin_record_index),
         );
       }
       bins.push(bin);
@@ -141,22 +141,22 @@ class FirehoseLogTransport extends Writable {
             Records: this.naiveBinPackBufferRecords().map((record) => ({
               Data: Buffer.from(record),
             })),
-          }
+          },
         );
         if (FailedPutCount && FailedPutCount > 0) {
           reject(
             new Error(
               `Failed to send ${FailedPutCount} records to Firehose ${JSON.stringify(
-                RequestResponses
-              )}`
-            )
+                RequestResponses,
+              )}`,
+            ),
           );
         }
         this.buffer_records_size = 0;
         this.buffer_record_size_map = {};
         this.buffer_records = [];
         resolve(null);
-      })
+      }),
     );
   }
 

@@ -28,7 +28,7 @@ describe('tests for SNS', () => {
     expect(AWS.SNSMock).toHaveReceivedNthCommandWith(
       1,
       AWS.PublishCommand,
-      params
+      params,
     );
   });
 });

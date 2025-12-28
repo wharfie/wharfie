@@ -53,7 +53,7 @@ describe('tests for SQS', () => {
     expect(AWS.SQSMock).toHaveReceivedCommandTimes(AWS.SendMessageCommand, 1);
     expect(AWS.SQSMock).toHaveReceivedCommandWith(
       AWS.SendMessageCommand,
-      params
+      params,
     );
   });
 
@@ -76,7 +76,7 @@ describe('tests for SQS', () => {
         MessageBody: JSON.stringify(event),
         QueueUrl: process.env.DAEMON_QUEUE_URL,
         DelaySeconds: 60,
-      }
+      },
     );
     expect(AWS.SQSMock).toHaveReceivedNthCommandWith(
       2,
@@ -85,7 +85,7 @@ describe('tests for SQS', () => {
         MessageBody: JSON.stringify(event),
         QueueUrl: process.env.DAEMON_QUEUE_URL,
         DelaySeconds: 0,
-      }
+      },
     );
   });
 
@@ -118,10 +118,10 @@ describe('tests for SQS', () => {
 
     expect(AWS.SQSMock).toHaveReceivedCommandTimes(
       AWS.SendMessageBatchCommand,
-      3
+      3,
     );
     expect(
-      AWS.SQSMock.commandCalls(AWS.SendMessageBatchCommand)[0].args[0].input
+      AWS.SQSMock.commandCalls(AWS.SendMessageBatchCommand)[0].args[0].input,
     ).toMatchInlineSnapshot(`
       {
         "Entries": [
@@ -170,7 +170,7 @@ describe('tests for SQS', () => {
       }
     `);
     expect(
-      AWS.SQSMock.commandCalls(AWS.SendMessageBatchCommand)[1].args[0].input
+      AWS.SQSMock.commandCalls(AWS.SendMessageBatchCommand)[1].args[0].input,
     ).toMatchInlineSnapshot(`
       {
         "Entries": [
@@ -183,7 +183,7 @@ describe('tests for SQS', () => {
       }
     `);
     expect(
-      AWS.SQSMock.commandCalls(AWS.SendMessageBatchCommand)[2].args[0].input
+      AWS.SQSMock.commandCalls(AWS.SendMessageBatchCommand)[2].args[0].input,
     ).toMatchInlineSnapshot(`
       {
         "Entries": [
@@ -221,7 +221,7 @@ describe('tests for SQS', () => {
         MessageBody: JSON.stringify(event),
         QueueUrl: process.env.DAEMON_QUEUE_URL,
         DelaySeconds: 60,
-      }
+      },
     );
   });
 });

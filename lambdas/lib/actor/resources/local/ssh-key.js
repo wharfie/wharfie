@@ -32,7 +32,7 @@ class SSHKey extends BaseResource {
         passphrase: '',
         rounds: 64,
       },
-      properties
+      properties,
     );
     super({
       name,

@@ -51,7 +51,7 @@ class LambdaFunction extends BaseResource {
           },
         },
       },
-      properties
+      properties,
     );
     super({
       name,
@@ -89,20 +89,20 @@ class LambdaFunction extends BaseResource {
       {
         CodeHash: this.get('codeHash'),
       },
-      this.get('tags', {})
+      this.get('tags', {}),
     );
 
     const tagsToAdd = Object.entries(desiredTags).filter(
       ([key, value]) =>
         !Object.entries(currentTags).some(
-          ([tagKey, tagValue]) => tagKey === key && tagValue === value
-        )
+          ([tagKey, tagValue]) => tagKey === key && tagValue === value,
+        ),
     );
     const tagsToRemove = Object.entries(currentTags).filter(
       ([key, value]) =>
         !Object.entries(desiredTags).some(
-          ([tagKey, tagValue]) => tagKey === key && tagValue === value
-        )
+          ([tagKey, tagValue]) => tagKey === key && tagValue === value,
+        ),
     );
 
     if (tagsToAdd.length > 0) {
@@ -136,7 +136,7 @@ class LambdaFunction extends BaseResource {
           Configuration?.EphemeralStorage?.Size ||
         this._diffEnvironment(
           this.get('environment').Variables || {},
-          Configuration?.Environment?.Variables || {}
+          Configuration?.Environment?.Variables || {},
         ) ||
         this.get('deadLetterConfig').TargetArn !==
           Configuration?.DeadLetterConfig?.TargetArn

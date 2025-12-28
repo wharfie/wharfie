@@ -96,7 +96,7 @@ describe('tests for events lambda', () => {
           },
         ],
       },
-      {}
+      {},
     );
 
     expect(processor.run).toHaveBeenCalledTimes(1);
@@ -119,7 +119,7 @@ describe('tests for events lambda', () => {
           },
         ],
       },
-      {}
+      {},
     );
 
     expect(processor.run).toHaveBeenCalledTimes(1);
@@ -142,7 +142,7 @@ describe('tests for events lambda', () => {
           },
         ],
       },
-      {}
+      {},
     );
 
     expect(processor.run).toHaveBeenCalledTimes(1);
@@ -165,12 +165,12 @@ describe('tests for events lambda', () => {
               new SchedulerEntry({
                 resource_id: 'resource_id',
                 sort_key: 'sort_key',
-              }).toEvent()
+              }).toEvent(),
             ),
           },
         ],
       },
-      {}
+      {},
     );
 
     expect(scheduler.run).toHaveBeenCalledTimes(1);

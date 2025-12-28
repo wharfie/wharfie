@@ -55,7 +55,7 @@ class ActorSystem extends BuildResourceGroup {
     const propertiesWithDefaults = Object.assign(
       {},
       ActorSystem.DefaultProperties,
-      properties
+      properties,
     );
     super({
       name,
@@ -79,7 +79,7 @@ class ActorSystem extends BuildResourceGroup {
           return resource.initializeEnvironment();
         }
         return Promise.resolve();
-      })
+      }),
     );
   }
 
@@ -90,7 +90,7 @@ class ActorSystem extends BuildResourceGroup {
    */
   _defineTargetResources(
     parent,
-    { nodeVersion, platform, architecture, libc }
+    { nodeVersion, platform, architecture, libc },
   ) {
     /** @type {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} */
     const resources = [];
@@ -121,7 +121,7 @@ class ActorSystem extends BuildResourceGroup {
             }),
           },
         });
-      }
+      },
     );
     const build = new SeaBuild({
       name: `${this.name}-build-${nodeVersion}-${platform}-${architecture}`,
@@ -134,7 +134,7 @@ class ActorSystem extends BuildResourceGroup {
               import cli from '${path.resolve(
                 __dirname,
                 'actor-system-cli',
-                'index.js'
+                'index.js',
               )}';
               import sourceMapSupport from 'source-map-support';
               (async () => {
@@ -157,17 +157,17 @@ class ActorSystem extends BuildResourceGroup {
           return targetFunctions.reduce(
             (
               /** @type {{ [x: string]: string; }} */ acc,
-              /** @type {import('./function-resource.js').default} */ func
+              /** @type {import('./function-resource.js').default} */ func,
             ) => {
               acc[
                 func.name.replace(
                   `-${nodeVersion}-${platform}-${architecture}`,
-                  ''
+                  '',
                 )
               ] = func.get('singleExecutableAssetPath');
               return acc;
             },
-            {}
+            {},
           );
         },
       },

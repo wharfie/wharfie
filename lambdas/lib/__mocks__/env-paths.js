@@ -1,4 +1,4 @@
-// eslint-disable-next-line no-undef
+import { jest } from '@jest/globals';
 const envPaths = jest.fn(() => ({
   data: 'mock',
   config: 'mock',

@@ -16,7 +16,7 @@ const {
   AutoscalingPolicy,
 } = require('../../../lambdas/lib/actor/resources/aws/');
 const ApplicationAutoScaling = jest.requireMock(
-  '@aws-sdk/client-application-auto-scaling'
+  '@aws-sdk/client-application-auto-scaling',
 );
 
 const { load } = require('../../../lambdas/lib/actor/deserialize/full');

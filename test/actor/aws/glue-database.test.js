@@ -76,7 +76,7 @@ describe('glue database IaC', () => {
 
     expect(database.status).toBe('DESTROYED');
     await expect(
-      glue.getDatabase({ Name: database.name })
+      glue.getDatabase({ Name: database.name }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(`"Database not found"`);
   });
 });

@@ -67,7 +67,7 @@ class Node extends BaseResourceGroup {
   async _waitForPortOpen(
     host,
     port,
-    { timeoutMs = 5 * 60 * 1000, intervalMs = 1500 } = {}
+    { timeoutMs = 5 * 60 * 1000, intervalMs = 1500 } = {},
   ) {
     const start = Date.now();
     let delay = intervalMs;
@@ -93,7 +93,7 @@ class Node extends BaseResourceGroup {
       if (ok) return;
       if (Date.now() - start >= timeoutMs) {
         throw new Error(
-          `Port ${port} on ${host} did not open within ${timeoutMs}ms`
+          `Port ${port} on ${host} did not open within ${timeoutMs}ms`,
         );
       }
       await new Promise((resolve) => setTimeout(resolve, delay));
@@ -157,14 +157,14 @@ class Node extends BaseResourceGroup {
     const command = [cmd, ...params].join(' ');
     const { stdout, stderr, code } = await this.ssh.execCommand(
       command,
-      options
+      options,
     );
 
     if (code !== 0) {
       const err = new Error(
         `Remote command failed (${command}) with code ${code}: ${
           stderr || stdout
-        }`
+        }`,
       );
       // @ts-expect-error augmenting with extra fields for callers
       err.code = code;
@@ -195,7 +195,7 @@ class Node extends BaseResourceGroup {
     const args = this.get('serviceArgs', []);
 
     const envLines = Object.entries(env).map(
-      ([k, v]) => `Environment=${k}=${v}`
+      ([k, v]) => `Environment=${k}=${v}`,
     );
     const escapeArg = (/** @type {string} */ s) =>
       s.match(/[\s"'\\]/) ? `"${s.replace(/(["\\$`])/g, '\\$1')}"` : s;
@@ -233,7 +233,7 @@ class Node extends BaseResourceGroup {
     const remoteTmp = `/tmp/.${serviceName}.${Date.now()}.service`;
     const localTmp = join(
       process.cwd(),
-      `.tmp-${serviceName}.${Date.now()}.service`
+      `.tmp-${serviceName}.${Date.now()}.service`,
     );
 
     await writeFile(localTmp, unitContent, 'utf8');
@@ -302,7 +302,7 @@ class Node extends BaseResourceGroup {
 
     if (!localBinaryPath || !remoteBinaryPath) {
       throw new Error(
-        'binaryLocalPath and binaryRemotePath must be set in Node properties'
+        'binaryLocalPath and binaryRemotePath must be set in Node properties',
       );
     }
     await this._waitForPortOpen(ip, 22);

@@ -123,8 +123,8 @@ class Logger {
           new Promise((resolve) => {
             transport.on('close', resolve);
             transport.end();
-          })
-      )
+          }),
+      ),
     );
   }
 }

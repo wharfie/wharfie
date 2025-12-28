@@ -45,7 +45,7 @@ async function run(event, context, resource, operation) {
     },
     temporaryDatabaseName,
     temporaryTableName,
-    storage_id
+    storage_id,
   );
 
   event_log.info('RUN_TEMP_COMPACTION:fetching_compaction_partitions');
@@ -53,11 +53,11 @@ async function run(event, context, resource, operation) {
   const partition_queries = await resource_db.getQueries(
     resource.id,
     operation.id,
-    actionId
+    actionId,
   );
   if (operation.type === Operation.Type.MIGRATE) {
     resource = Resource.fromRecord(
-      operation.operation_inputs.migration_resource
+      operation.operation_inputs.migration_resource,
     );
   }
 
@@ -65,7 +65,7 @@ async function run(event, context, resource, operation) {
     event_log.info(
       `RUN_TEMP_COMPACTION:loading results of ${
         (partition_queries || []).length
-      } partition queries`
+      } partition queries`,
     );
   const partitions = [];
   while ((partition_queries || []).length > 0) {
@@ -89,7 +89,7 @@ async function run(event, context, resource, operation) {
   }
   if (partitions.length > Number(MAX_QUERIES_PER_ACTION)) {
     throw new Error(
-      `too many partitions targeted by action (${partitions.length}), consider reducing MaxDelay/Duration or modify the partitioning scheme`
+      `too many partitions targeted by action (${partitions.length}), consider reducing MaxDelay/Duration or modify the partitioning scheme`,
     );
   }
   if (
@@ -98,7 +98,7 @@ async function run(event, context, resource, operation) {
     resource.source_properties.partitionKeys.length > 0
   ) {
     event_log.info(
-      `RUN_TEMP_COMPACTION: no compactions to run, table has no partitions`
+      `RUN_TEMP_COMPACTION: no compactions to run, table has no partitions`,
     );
     return {
       status: 'COMPLETED',
@@ -119,7 +119,7 @@ async function run(event, context, resource, operation) {
   });
 
   event_log.info(
-    `RUN_TEMP_COMPACTION:submitting ${queries.length} compaction queries`
+    `RUN_TEMP_COMPACTION:submitting ${queries.length} compaction queries`,
   );
 
   await query.enqueue(event, context, queries);

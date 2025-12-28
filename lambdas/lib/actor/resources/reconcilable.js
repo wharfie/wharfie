@@ -160,10 +160,10 @@ class Reconcilable {
               Math.random() *
                 Math.min(
                   this._MAX_RETRY_TIMEOUT_SECONDS,
-                  1 * Math.pow(2, reconcile_attempts)
-                )
-            ) * 1000
-          )
+                  1 * Math.pow(2, reconcile_attempts),
+                ),
+            ) * 1000,
+          ),
         );
         reconcile_attempts++;
         last_error = error;
@@ -210,10 +210,10 @@ class Reconcilable {
               Math.random() *
                 Math.min(
                   this._MAX_RETRY_TIMEOUT_SECONDS,
-                  1 * Math.pow(2, destroy_attempts)
-                )
-            ) * 1000
-          )
+                  1 * Math.pow(2, destroy_attempts),
+                ),
+            ) * 1000,
+          ),
         );
         destroy_attempts++;
         last_error = error;

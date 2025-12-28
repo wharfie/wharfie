@@ -41,7 +41,7 @@ class WharfieResourceRecord extends BaseResource {
     const resource = Resource.fromRecord(this.get('data'));
     if (!resource.source_region && resource.source_properties.location) {
       const { bucket } = this.s3.parseS3Uri(
-        resource.source_properties.location
+        resource.source_properties.location,
       );
       resource.source_region = await this.s3.findBucketRegion({
         Bucket: bucket,
@@ -54,7 +54,7 @@ class WharfieResourceRecord extends BaseResource {
     try {
       await deleteResource(
         Resource.fromRecord(this.get('data')),
-        this.get('table_name')
+        this.get('table_name'),
       );
     } catch (e) {
       if (!(e instanceof ResourceNotFoundException)) {

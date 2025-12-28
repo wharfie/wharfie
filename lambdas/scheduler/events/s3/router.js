@@ -19,12 +19,12 @@ async function router(event, context) {
               bucket: record.s3.bucket.name,
               key: record.s3.object.key,
             },
-            context
+            context,
           );
         } else {
           throw new Error('Event not recognized');
         }
-      })
+      }),
     );
   } else if (event.source === 'aws.s3') {
     await run(
@@ -32,7 +32,7 @@ async function router(event, context) {
         bucket: event.detail.bucket.name,
         key: event.detail.object.key,
       },
-      context
+      context,
     );
   } else if (event.Event !== 's3:TestEvent') {
     throw new Error(`Unknown event type ${JSON.stringify(event)}`);

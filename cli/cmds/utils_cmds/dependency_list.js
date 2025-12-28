@@ -24,8 +24,8 @@ const view = async () => {
       const viewSql = JSON.parse(
         Buffer.from(
           viewOriginalText.substring(16, viewOriginalText.length - 3),
-          'base64'
-        ).toString()
+          'base64',
+        ).toString(),
       ).originalSql;
 
       const { sources } = athena.extractSources(viewSql);
@@ -53,8 +53,8 @@ const view = async () => {
         resources: wharfieResources,
       },
       null,
-      2
-    )
+      2,
+    ),
   );
 };
 

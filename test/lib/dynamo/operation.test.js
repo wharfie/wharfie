@@ -10,6 +10,56 @@ import {
   it,
   jest,
 } from '@jest/globals';
+
+process.env.SEMAPHORE_TABLE = 'test-sempahore-table';
+process.env.AWS_REGION = 'us-east-1';
+
+const update = jest.fn();
+const get = jest.fn();
+const del = jest.fn();
+
+// Mock dependencies *before* importing semaphore.js
+await jest.unstable_mockModule('@aws-sdk/lib-dynamodb', () => ({
+  DynamoDBDocument: {
+    from: () => ({
+      update,
+      get,
+      delete: del,
+    }),
+  },
+}));
+
+await jest.unstable_mockModule('@aws-sdk/client-dynamodb', () => {
+  class ConditionalCheckFailedException extends Error {}
+  class DynamoDB {
+    constructor() {}
+  }
+  return { DynamoDB, ConditionalCheckFailedException };
+});
+
+await jest.unstable_mockModule('@aws-sdk/credential-providers', () => ({
+  fromNodeProviderChain: () => () => ({
+    accessKeyId: 'test',
+    secretAccessKey: 'test',
+    sessionToken: 'test',
+  }),
+}));
+
+// If your BaseAWS.config does anything, stub it so construction is deterministic
+await jest.unstable_mockModule('../../../lambdas/lib/base.js', () => ({
+  default: {
+    config: (opts) => opts,
+  },
+}));
+
+const semaphore = await import('../../../lambdas/lib/dynamo/operations.js');
+
+beforeEach(() => {
+  update.mockReset();
+  get.mockReset();
+  del.mockReset();
+});
+
 import Logger from '../../../lambdas/lib/logging/logger.js';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
@@ -187,7 +237,7 @@ describe('dynamo resource db', () => {
           tableType: 'PHYSICAL',
           tags: {},
         },
-      })
+      }),
     );
 
     expect(put).toHaveBeenCalledTimes(1);
@@ -480,7 +530,7 @@ describe('dynamo resource db', () => {
           tableType: 'PHYSICAL',
           tags: {},
         },
-      })
+      }),
     );
 
     expect(query).toHaveBeenCalledTimes(1);
@@ -735,7 +785,7 @@ describe('dynamo resource db', () => {
       'resource_id',
       'operation_id',
       'action_id',
-      'query_id'
+      'query_id',
     );
 
     expect(query).toHaveBeenCalledTimes(1);
@@ -794,7 +844,7 @@ describe('dynamo resource db', () => {
     const result = await operation.getAction(
       'resource_id',
       'operation_id',
-      'action_id'
+      'action_id',
     );
 
     expect(query).toHaveBeenCalledTimes(1);
@@ -1155,7 +1205,7 @@ describe('dynamo resource db', () => {
     const prerequisites_met = await operation.checkActionPrerequisites(
       test_operation,
       Action.Type.FINISH,
-      logger
+      logger,
     );
 
     expect(query).toHaveBeenCalledTimes(1);
@@ -1175,14 +1225,14 @@ describe('dynamo resource db', () => {
     // @ts-ignore
     expect(AWSAthena.AthenaMock).toHaveReceivedCommandTimes(
       AWSAthena.GetQueryExecutionCommand,
-      1
+      1,
     );
     // @ts-ignore
     expect(AWSAthena.AthenaMock).toHaveReceivedCommandWith(
       AWSAthena.GetQueryExecutionCommand,
       {
         QueryExecutionId: 'execution_id',
-      }
+      },
     );
     expect(prerequisites_met).toBe(false);
 

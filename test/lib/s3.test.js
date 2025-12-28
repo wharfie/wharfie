@@ -127,7 +127,7 @@ describe('tests for S3', () => {
       {
         Bucket: 'example-bucket',
         Prefix: 'test/prefix/',
-      }
+      },
     );
     expect(AWS.S3Mock).toHaveReceivedNthCommandWith(
       4,
@@ -136,7 +136,7 @@ describe('tests for S3', () => {
         Bucket: 'example-bucket',
         ContinuationToken: 'token',
         Prefix: 'test/prefix/',
-      }
+      },
     );
     expect(AWS.S3Mock).toHaveReceivedCommandTimes(AWS.CopyObjectCommand, 3);
     expect(AWS.S3Mock).toHaveReceivedNthCommandWith(2, AWS.CopyObjectCommand, {
@@ -152,7 +152,7 @@ describe('tests for S3', () => {
     const s3 = new S3({ region: 'us-east-1' });
 
     expect(() => s3.parseS3Uri(123)).toThrowErrorMatchingInlineSnapshot(
-      `"uri (123) is not a string"`
+      `"uri (123) is not a string"`,
     );
   });
 
@@ -162,9 +162,9 @@ describe('tests for S3', () => {
     const s3 = new S3({ region: 'us-east-1' });
 
     expect(() =>
-      s3.parseS3Uri('s3://example-bucket')
+      s3.parseS3Uri('s3://example-bucket'),
     ).toThrowErrorMatchingInlineSnapshot(
-      `"s3://example-bucket is not of form s3://bucket/key or s3://bucket/"`
+      `"s3://example-bucket is not of form s3://bucket/key or s3://bucket/"`,
     );
   });
 
@@ -217,7 +217,7 @@ describe('tests for S3', () => {
       {
         Bucket: 'example-bucket',
         Prefix: 'test/prefix/',
-      }
+      },
     );
     expect(AWS.S3Mock).toHaveReceivedNthCommandWith(
       3,
@@ -226,7 +226,7 @@ describe('tests for S3', () => {
         Bucket: 'example-bucket',
         ContinuationToken: 'token',
         Prefix: 'test/prefix/',
-      }
+      },
     );
     expect(AWS.S3Mock).toHaveReceivedCommandTimes(AWS.DeleteObjectsCommand, 2);
     expect(AWS.S3Mock).toHaveReceivedNthCommandWith(
@@ -242,7 +242,7 @@ describe('tests for S3', () => {
             { Key: 'prefix/wharfie-temp-files/source_table/456.json' },
           ],
         },
-      }
+      },
     );
     expect(AWS.S3Mock).toHaveReceivedNthCommandWith(
       4,
@@ -254,7 +254,7 @@ describe('tests for S3', () => {
             { Key: 'prefix/some_key/wharfie-temp-files/source_table/789.json' },
           ],
         },
-      }
+      },
     );
   });
 
@@ -306,7 +306,7 @@ describe('tests for S3', () => {
         Prefix: 'test/prefix/',
         Delimiter: '/',
         ContinuationToken: 'continue_token',
-      }
+      },
     );
   });
 

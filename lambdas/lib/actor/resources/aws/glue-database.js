@@ -34,10 +34,10 @@ class GlueDatabase extends BaseResource {
     const desiredTags = this.get('tags') || {};
 
     const tagsToAdd = Object.entries(desiredTags).filter(
-      ([key, value]) => currentTags[key] !== value
+      ([key, value]) => currentTags[key] !== value,
     );
     const tagsToRemove = Object.keys(currentTags).filter(
-      (key) => !desiredTags[key]
+      (key) => !desiredTags[key],
     );
 
     if (tagsToAdd.length > 0) {
@@ -63,7 +63,7 @@ class GlueDatabase extends BaseResource {
         'arn',
         `arn:aws:glue:${this.get('deployment').region}:${
           this.get('deployment').accountId
-        }:database/${this.get('databaseName', this.name)}`
+        }:database/${this.get('databaseName', this.name)}`,
       );
     } catch (error) {
       if (error instanceof EntityNotFoundException) {
@@ -76,7 +76,7 @@ class GlueDatabase extends BaseResource {
           'arn',
           `arn:aws:glue:${this.get('deployment').region}:${
             this.get('deployment').accountId
-          }:database/${this.get('databaseName', this.name)}`
+          }:database/${this.get('databaseName', this.name)}`,
         );
       } else {
         throw error;

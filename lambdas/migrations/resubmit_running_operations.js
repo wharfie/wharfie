@@ -22,14 +22,14 @@ async function resubmit_running_operations(resource_id) {
                 action_type: 'START',
                 resource_id,
                 operation_started_at: new Date(
-                  operation.started_at * 1000
+                  operation.started_at * 1000,
                 ).toISOString(),
                 action_inputs: operation.operation_config,
               }),
               QueueUrl: DAEMON_QUEUE_URL,
             }),
-          ])
-      )
+          ]),
+      ),
     );
   }
 }

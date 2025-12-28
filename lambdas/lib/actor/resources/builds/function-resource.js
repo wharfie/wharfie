@@ -64,7 +64,7 @@ class FunctionResource extends BuildResource {
     const propertiesWithDefaults = Object.assign(
       {},
       FunctionResource.DefaultProperties,
-      properties
+      properties,
     );
     super({
       name,
@@ -110,7 +110,7 @@ class FunctionResource extends BuildResource {
             ...FunctionResource.REQUIRED_UNUSED_EXTERNALS,
             ...this.get('external', []).map(
               (/** @type {ExternalDependencyDescription} */ external) =>
-                external.name
+                external.name,
             ),
           ]
         : FunctionResource.REQUIRED_UNUSED_EXTERNALS,
@@ -152,7 +152,7 @@ class FunctionResource extends BuildResource {
         portable: true, // normalize perms/uid/gid
         noMtime: true, // omit mtimes for reproducibility
       },
-      ['.']
+      ['.'],
     );
     const externalsTar = await streamToBuffer(stream);
     return externalsTar.toString('base64');
@@ -175,7 +175,7 @@ class FunctionResource extends BuildResource {
     });
     const singleExecutableAssetPath = join(
       FunctionResource.TEMP_ASSET_PATH,
-      v4()
+      v4(),
     );
     writeFileSync(singleExecutableAssetPath, assetDescription);
     this.set('singleExecutableAssetPath', singleExecutableAssetPath);

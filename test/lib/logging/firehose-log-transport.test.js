@@ -35,17 +35,17 @@ describe('tests for firehose log transport', () => {
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      2
+      2,
     );
     expect(
       AWS.FirehoseMock.commandCalls(
-        AWS.PutRecordBatchCommand
-      )[0].args[0].input.Records[0].Data.toString()
+        AWS.PutRecordBatchCommand,
+      )[0].args[0].input.Records[0].Data.toString(),
     ).toMatchInlineSnapshot(`"test1 test2 test3 test4 "`);
     expect(
       AWS.FirehoseMock.commandCalls(
-        AWS.PutRecordBatchCommand
-      )[1].args[0].input.Records[0].Data.toString()
+        AWS.PutRecordBatchCommand,
+      )[1].args[0].input.Records[0].Data.toString(),
     ).toMatchInlineSnapshot(`"test5 test6 "`);
   });
 
@@ -66,12 +66,12 @@ describe('tests for firehose log transport', () => {
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      1
+      1,
     );
     expect(
       AWS.FirehoseMock.commandCalls(
-        AWS.PutRecordBatchCommand
-      )[0].args[0].input.Records[0].Data.toString()
+        AWS.PutRecordBatchCommand,
+      )[0].args[0].input.Records[0].Data.toString(),
     ).toMatchInlineSnapshot(`"test1 test2 test3 test4 "`);
   });
 
@@ -96,32 +96,32 @@ describe('tests for firehose log transport', () => {
 
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      5
+      5,
     );
     expect(
       AWS.FirehoseMock.commandCalls(
-        AWS.PutRecordBatchCommand
-      )[0].args[0].input.Records[0].Data.toString()
+        AWS.PutRecordBatchCommand,
+      )[0].args[0].input.Records[0].Data.toString(),
     ).toMatchInlineSnapshot(`"test1 "`);
     expect(
       AWS.FirehoseMock.commandCalls(
-        AWS.PutRecordBatchCommand
-      )[1].args[0].input.Records[0].Data.toString()
+        AWS.PutRecordBatchCommand,
+      )[1].args[0].input.Records[0].Data.toString(),
     ).toMatchInlineSnapshot(`"test2 "`);
     expect(
       AWS.FirehoseMock.commandCalls(
-        AWS.PutRecordBatchCommand
-      )[2].args[0].input.Records[0].Data.toString()
+        AWS.PutRecordBatchCommand,
+      )[2].args[0].input.Records[0].Data.toString(),
     ).toMatchInlineSnapshot(`"test4 "`);
     expect(
       AWS.FirehoseMock.commandCalls(
-        AWS.PutRecordBatchCommand
-      )[3].args[0].input.Records[0].Data.toString()
+        AWS.PutRecordBatchCommand,
+      )[3].args[0].input.Records[0].Data.toString(),
     ).toMatchInlineSnapshot(`"test5 "`);
     expect(
       AWS.FirehoseMock.commandCalls(
-        AWS.PutRecordBatchCommand
-      )[4].args[0].input.Records[0].Data.toString()
+        AWS.PutRecordBatchCommand,
+      )[4].args[0].input.Records[0].Data.toString(),
     ).toMatchInlineSnapshot(`"test6 "`);
   });
 });

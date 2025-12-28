@@ -121,9 +121,9 @@ describe('firehose IaC', () => {
     await expect(
       firehoseSDK.describeDeliveryStream({
         DeliveryStreamName: firehose.name,
-      })
+      }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"DeliveryStream test-table does not exist"`
+      `"DeliveryStream test-table does not exist"`,
     );
   });
 });

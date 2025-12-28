@@ -74,7 +74,7 @@ class Glue {
         new BatchCreatePartitionCommand({
           ...params,
           PartitionInputList: chunk,
-        })
+        }),
       );
       if (Errors && Errors.length > 0) {
         const reruns = [];
@@ -85,7 +85,7 @@ class Glue {
             continue;
           }
           const rerun = chunk.find(
-            (p) => p.Values?.join('/') === error.PartitionValues?.join('/')
+            (p) => p.Values?.join('/') === error.PartitionValues?.join('/'),
           );
           const retryableErrors = [
             'InternalServiceException',
@@ -140,7 +140,7 @@ class Glue {
           const rerun = chunk.find(
             (p) =>
               p.PartitionValueList?.join('/') ===
-              error.PartitionValueList?.join('/')
+              error.PartitionValueList?.join('/'),
           );
           const retryableErrors = [
             'InternalServiceException',
@@ -187,7 +187,7 @@ class Glue {
         new BatchDeletePartitionCommand({
           ...params,
           PartitionsToDelete: chunk,
-        })
+        }),
       );
       if (Errors && Errors.length > 0) {
         const reruns = [];
@@ -195,7 +195,7 @@ class Glue {
         while (Errors.length > 0) {
           const error = Errors.pop() ?? {};
           const rerun = chunk.find(
-            (p) => p.Values?.join('/') === error.PartitionValues?.join('/')
+            (p) => p.Values?.join('/') === error.PartitionValues?.join('/'),
           );
           const retryableErrors = [
             'InternalServiceException',
@@ -330,7 +330,7 @@ class Glue {
             [PartitionKeys[i].Name || 'undefined']: value,
             ...acc,
           }),
-          {}
+          {},
         ),
         location: partition.StorageDescriptor.Location,
       });
@@ -352,7 +352,7 @@ class Glue {
               [PartitionKeys[i].Name || 'undefined']: value,
               ...acc,
             }),
-            {}
+            {},
           ),
           location: partition.StorageDescriptor.Location,
         });
@@ -385,8 +385,8 @@ class Glue {
           },
         },
         partitions,
-        PartitionKeys
-      )
+        PartitionKeys,
+      ),
     );
     await Promise.all(promises);
     return partitions;
@@ -404,7 +404,7 @@ class Glue {
     params,
     databaseName,
     tableName,
-    storage_id
+    storage_id,
   ) {
     const { Table } = await this.getTable(params);
     if (!Table) throw Error(`Table does not exist`);

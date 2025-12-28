@@ -179,9 +179,9 @@ describe('lambda function IaC', () => {
 
     expect(lambdaFunction.status).toBe('DESTROYED');
     await expect(
-      lambda.getFunction({ FunctionName: lambdaFunction.name })
+      lambda.getFunction({ FunctionName: lambdaFunction.name }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"Function not found: test-function"`
+      `"Function not found: test-function"`,
     );
   });
 });

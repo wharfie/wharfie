@@ -38,7 +38,7 @@ async function update_partition(
   temporaryDatabaseName,
   temporaryTableName,
   partition,
-  references
+  references,
 ) {
   /** @type {import("@aws-sdk/client-glue").BatchUpdatePartitionRequestEntry[]} */
   const update = [];
@@ -72,7 +72,7 @@ async function update_partition(
   const s3 = new S3({ region, credentials });
 
   const partitionValues = destinationTable.PartitionKeys.map(
-    (partitionKey) => `${partition.partitionValues[partitionKey.Name || '']}`
+    (partitionKey) => `${partition.partitionValues[partitionKey.Name || '']}`,
   );
 
   event_log.debug('SWAP_TEMP_COMPACTION:GET_TEMP_PARTITION');
@@ -104,7 +104,7 @@ async function update_partition(
   const destinationPath = `${
     destinationTable.StorageDescriptor.Location
   }${destinationTable.PartitionKeys.map(
-    (key, index) => `${key.Name}=${partitionValues[index]}/`
+    (key, index) => `${key.Name}=${partitionValues[index]}/`,
   ).join('')}`;
   const { bucket, prefix } = s3.parseS3Uri(destinationPath);
   // build glue operations to perform
@@ -183,7 +183,7 @@ async function update_partitions(
   temporaryDatabaseName,
   temporaryTableName,
   partitions,
-  query_execution_id
+  query_execution_id,
 ) {
   const event_log = logging.getEventLogger(event, context);
   const region = resource.region;
@@ -228,7 +228,7 @@ async function update_partitions(
   } catch (error) {
     if (error instanceof NoSuchKey) {
       event_log.warn(
-        `query metadata missing for ${query_execution_id}, skipping symlink update for ${queryManifestLocation}`
+        `query metadata missing for ${query_execution_id}, skipping symlink update for ${queryManifestLocation}`,
       );
       return;
     }
@@ -248,12 +248,12 @@ async function update_partitions(
           const referencePattern = (destinationTable.PartitionKeys || [])
             .map(
               (key) =>
-                `${key.Name}=${partition.partitionValues[key.Name || '']}/`
+                `${key.Name}=${partition.partitionValues[key.Name || '']}/`,
             )
             .join('');
 
           const partitionReferences = references.filter((reference) =>
-            reference.includes(referencePattern)
+            reference.includes(referencePattern),
           );
           return update_partition(
             event,
@@ -263,9 +263,9 @@ async function update_partitions(
             temporaryDatabaseName,
             temporaryTableName,
             partition,
-            partitionReferences
+            partitionReferences,
           );
-        })
+        }),
       )
     ).reduce(
       (acc, w) => {
@@ -276,7 +276,7 @@ async function update_partitions(
       {
         update: [],
         create: [],
-      }
+      },
     );
     partitionUpdates.push(...work.update);
     partitionCreates.push(...work.create);
@@ -337,7 +337,7 @@ async function update_table(event, context, resource, query_execution_id) {
   ) {
     // If the compaction was a no-op no partition would be created
     event_log.debug(
-      `No temp table to swap for event: ${JSON.stringify(event)}`
+      `No temp table to swap for event: ${JSON.stringify(event)}`,
     );
     return;
   }
@@ -348,7 +348,7 @@ async function update_table(event, context, resource, query_execution_id) {
   if (!table || !table.StorageDescriptor || !table.StorageDescriptor.Location) {
     // If the compaction was a no-op no partition would be created
     event_log.debug(
-      `No destination table to swap for event: ${JSON.stringify(event)}`
+      `No destination table to swap for event: ${JSON.stringify(event)}`,
     );
     return;
   }
@@ -373,11 +373,11 @@ async function update_table(event, context, resource, query_execution_id) {
     },
   });
   const { bucket, prefix } = s3.parseS3Uri(
-    resource.destination_properties.location || ''
+    resource.destination_properties.location || '',
   );
   const { bucket: sourceBucket, prefix: sourcePrefix } = s3.parseS3Uri(
     resource.destination_properties.location ||
-      ''.replace('/references/', '/').replace('/migrate-refrences/', '/')
+      ''.replace('/references/', '/').replace('/migrate-refrences/', '/'),
   );
   const manifestCopyKey = `${prefix}files-${createId()}`;
   let runCleanup = true;
@@ -441,7 +441,7 @@ async function update_symlinks(event, context, resource, operation) {
   const event_log = logging.getEventLogger(event, context);
   if (!resource || !event.action_id) {
     event_log.warn(
-      'properties unexpectedly missing, maybe the resource was deleted?'
+      'properties unexpectedly missing, maybe the resource was deleted?',
     );
     return;
   }
@@ -458,15 +458,15 @@ async function update_symlinks(event, context, resource, operation) {
   const queries = await resource_db.getQueries(
     resource.id,
     operation.id,
-    compaction_action_id[0]
+    compaction_action_id[0],
   );
   if (operation.type === Operation.Type.MIGRATE) {
     resource = Resource.fromRecord(
-      operation.operation_inputs.migration_resource
+      operation.operation_inputs.migration_resource,
     );
   }
   event_log.info(
-    `registering data and updating symlinks for ${queries.length} queries`
+    `registering data and updating symlinks for ${queries.length} queries`,
   );
 
   // this is slow
@@ -486,10 +486,10 @@ async function update_symlinks(event, context, resource, operation) {
           temporaryDatabaseName,
           temporaryTableName,
           partitions,
-          query.execution_id
+          query.execution_id,
         );
       }
-    })
+    }),
   );
 }
 

@@ -16,7 +16,7 @@ const docClient = DynamoDBDocument.from(
     region: process.env.AWS_REGION,
     credentials,
   }),
-  { marshallOptions: { removeUndefinedValues: true } }
+  { marshallOptions: { removeUndefinedValues: true } },
 );
 
 const SEMAPHORE_TABLE = process.env.SEMAPHORE_TABLE || '';

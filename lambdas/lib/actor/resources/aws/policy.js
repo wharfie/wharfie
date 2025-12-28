@@ -28,7 +28,7 @@ class Policy extends BaseResource {
     this.set(
       'arn',
       () =>
-        `arn:aws:iam::${this.get('deployment').accountId}:policy/${this.name}`
+        `arn:aws:iam::${this.get('deployment').accountId}:policy/${this.name}`,
     );
   }
 
@@ -43,16 +43,16 @@ class Policy extends BaseResource {
         !exitingTags.some(
           (existingTag) =>
             existingTag.Key === desiredTag.Key &&
-            existingTag.Value === desiredTag.Value
-        )
+            existingTag.Value === desiredTag.Value,
+        ),
     );
     const tagsToRemove = exitingTags.filter(
       (existingTag) =>
         !desiredTags.some(
           (/** @type {import('@aws-sdk/client-iam').Tag} */ desiredTag) =>
             desiredTag.Key === existingTag.Key &&
-            desiredTag.Value === existingTag.Value
-        )
+            desiredTag.Value === existingTag.Value,
+        ),
     );
     if (tagsToAdd.length > 0) {
       await this.iam.tagPolicy({

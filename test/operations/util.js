@@ -64,7 +64,7 @@ function setLambdaTriggers(context) {
           body: m.Body,
         })),
       },
-      context
+      context,
     );
   }, 5);
 
@@ -78,7 +78,7 @@ function setLambdaTriggers(context) {
           body: m.Body,
         })),
       },
-      context
+      context,
     );
   }, 5);
 
@@ -92,7 +92,7 @@ function setLambdaTriggers(context) {
           body: m.Body,
         })),
       },
-      context
+      context,
     );
   }, 5);
 
@@ -106,7 +106,7 @@ function setLambdaTriggers(context) {
           body: m.Body,
         })),
       },
-      context
+      context,
     );
   }, 5);
 }

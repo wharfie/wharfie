@@ -92,9 +92,9 @@ describe('iam role IaC', () => {
 
     expect(role.status).toBe('DESTROYED');
     await expect(
-      iam.getRole({ RoleName: 'test-role' })
+      iam.getRole({ RoleName: 'test-role' }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"role test-role does not exist"`
+      `"role test-role does not exist"`,
     );
   });
 
@@ -242,9 +242,9 @@ describe('iam role IaC', () => {
 
     expect(role.status).toBe('DESTROYED');
     await expect(
-      iam.getRole({ RoleName: 'test-role' })
+      iam.getRole({ RoleName: 'test-role' }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"role test-role does not exist"`
+      `"role test-role does not exist"`,
     );
   });
 });

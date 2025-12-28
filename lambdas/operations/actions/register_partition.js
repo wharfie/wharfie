@@ -37,7 +37,7 @@ async function run(event, context, resource, operation) {
     resource.destination_properties.partitionKeys.length > 0;
   if (!isView && isPartitioned) {
     event_log.debug(
-      `registering partition in location ${operation.operation_inputs.partition.location}`
+      `registering partition in location ${operation.operation_inputs.partition.location}`,
     );
     await partition.registerPartition({
       partition: operation.operation_inputs.partition,

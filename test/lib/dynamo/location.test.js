@@ -1,11 +1,9 @@
 /* eslint-disable jest/no-hooks */
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-const AWS = require('@aws-sdk/lib-dynamodb');
+import AWS from '@aws-sdk/lib-dynamodb';
 
 process.env.LOCATION_TABLE = 'location_table';
-const location = require('../../../lambdas/lib/dynamo/location');
+const location = await import('../../../lambdas/lib/dynamo/location.js');
 
 let query, _delete, put;
 
@@ -66,7 +64,7 @@ describe('dynamo location db', () => {
         ],
       });
     const result = await location.findLocations(
-      's3://some_bucket/prefix/partion=a/a_key.json'
+      's3://some_bucket/prefix/partion=a/a_key.json',
     );
 
     expect(query).toHaveBeenCalledTimes(3);

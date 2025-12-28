@@ -7,7 +7,7 @@ const Glue = require('./glue');
 const SQS = require('./sqs');
 jest.mock('../../../lambdas/lib/dynamo/operations');
 const QueryParser = jest.requireActual(
-  '../../../lambdas/lib/athena/query-parser'
+  '../../../lambdas/lib/athena/query-parser',
 );
 const dynamo_resource = require('../../../lambdas/lib/dynamo/operations');
 
@@ -27,25 +27,25 @@ class QueryRunner {
     try {
       // wharfie query
       const query_event = JSON.parse(
-        query_string.split('\n').slice(-1)[0].substring(3)
+        query_string.split('\n').slice(-1)[0].substring(3),
       );
       const action = await dynamo_resource.getAction(
         query_event.resource_id,
         query_event.operation_id,
-        query_event.action_id
+        query_event.action_id,
       );
       const query = await dynamo_resource.getQuery(
         query_event.resource_id,
         query_event.operation_id,
         query_event.action_id,
-        query_event.query_id
+        query_event.query_id,
       );
       const operation = await dynamo_resource.getOperation(
         query_event.resource_id,
-        query_event.operation_id
+        query_event.operation_id,
       );
       const resource = await dynamo_resource.getResource(
-        query_event.resource_id
+        query_event.resource_id,
       );
       switch (query_event.action_type) {
         case 'RUN_SINGLE_COMPACTION':
@@ -55,7 +55,7 @@ class QueryRunner {
             resource,
             operation,
             action,
-            query
+            query,
           );
           break;
         default:
@@ -82,11 +82,11 @@ class QueryRunner {
     // eslint-disable-next-line no-unused-vars
     _action,
     // eslint-disable-next-line no-unused-vars
-    _query
+    _query,
   ) {
     if (operation?.operation_inputs?.partition) {
       const { bucket, prefix } = this.s3._parseS3Uri(
-        resource.destination_properties.location
+        resource.destination_properties.location,
       );
       const location_segments = (
         resource?.destination_properties?.location || ''
@@ -97,14 +97,14 @@ class QueryRunner {
 
       // eslint-disable-next-line no-unused-vars
       const { bucket: _bucket, prefix: manifest_key } = this.s3._parseS3Uri(
-        `${base_location}/query_metadata/${query_execution_id}-manifest.csv`
+        `${base_location}/query_metadata/${query_execution_id}-manifest.csv`,
       );
       const partition_path = Object.keys(
-        operation.operation_inputs?.partition.partitionValues
+        operation.operation_inputs?.partition.partitionValues,
       )
         .map(
           (key) =>
-            `${key}=${operation.operation_inputs?.partition.partitionValues[key]}`
+            `${key}=${operation.operation_inputs?.partition.partitionValues[key]}`,
         )
         .join('/');
 
@@ -132,7 +132,7 @@ class QueryRunner {
         {
           DatabaseName: process.env.TEMPORARY_GLUE_DATABASE,
           TableName: temp_table_name,
-        }
+        },
       );
       const partitionExists = existing_partitions.find((partition) => {
         return Object.keys(partition.Values).every((key) => {
@@ -148,7 +148,7 @@ class QueryRunner {
           TableName: temp_table_name,
           PartitionInput: {
             Values: Object.values(
-              operation.operation_inputs?.partition.partitionValues
+              operation.operation_inputs?.partition.partitionValues,
             ),
             StorageDescriptor: {
               Location: `s3://${bucket}/${prefix}${partition_path}/`,
@@ -161,7 +161,7 @@ class QueryRunner {
           TableName: temp_table_name,
           PartitionInput: {
             Values: Object.values(
-              operation.operation_inputs?.partition.partitionValues
+              operation.operation_inputs?.partition.partitionValues,
             ),
             StorageDescriptor: {
               Location: `s3://${bucket}/${prefix}${partition_path}/`,

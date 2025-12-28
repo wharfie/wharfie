@@ -29,7 +29,7 @@ const init = async () => {
         const valid = re.test(input);
         if (!valid) {
           displayFailure(
-            'Project name can only contain letters, numbers, spaces, and underscores.'
+            'Project name can only contain letters, numbers, spaces, and underscores.',
           );
         }
         return valid;
@@ -48,7 +48,7 @@ const init = async () => {
 
   if (_fs.existsSync(projectDir)) {
     throw new Error(
-      `Directory already exists with name ${answers.project_name}, please pick a different project name.`
+      `Directory already exists with name ${answers.project_name}, please pick a different project name.`,
     );
   }
 
@@ -64,13 +64,13 @@ const init = async () => {
     await fs.cp(
       path.join(__dirname, '..', '..', 'project', 'project_structure_examples'),
       projectDir,
-      { recursive: true }
+      { recursive: true },
     );
   }
 
   displaySuccess(
     `Project ${answers.project_name} initialized successfully!\n\n` +
-      `Run 'cd ${answers.project_name}' and 'wharfie project apply' to get started.`
+      `Run 'cd ${answers.project_name}' and 'wharfie project apply' to get started.`,
   );
 };
 

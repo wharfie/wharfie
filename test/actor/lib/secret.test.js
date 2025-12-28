@@ -26,13 +26,13 @@ describe('secret definition', () => {
     const secret = new Secret('my-secret-value');
 
     expect(() => secret.value).toThrow(
-      'Direct access to secret value is restricted'
+      'Direct access to secret value is restricted',
     );
     expect(() => secret.secretValue).toThrow(
-      'Direct access to secret value is restricted'
+      'Direct access to secret value is restricted',
     );
     expect(() => secret._value).toThrow(
-      'Direct access to secret value is restricted'
+      'Direct access to secret value is restricted',
     );
   });
 

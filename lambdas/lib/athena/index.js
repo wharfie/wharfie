@@ -119,14 +119,14 @@ class Athena {
       {
         client: this.athena,
       },
-      params
+      params,
     );
     /** @type {Object<string, any>[]} */
     const results = [];
     for await (const page of paginator) {
       // page contains a single paginated output.
       Athena.repackQueryResult(page).forEach(
-        (/** @type {Object<string, any>} */ record) => results.push(record)
+        (/** @type {Object<string, any>} */ record) => results.push(record),
       );
     }
     return results;
@@ -144,7 +144,7 @@ class Athena {
       !data.ResultSet.Rows
     )
       throw new Error(
-        'missing required fields for repacking athena query result'
+        'missing required fields for repacking athena query result',
       );
     const columns = data.ResultSet.ResultSetMetadata.ColumnInfo;
     const hasColumns = columns.length > 0;
@@ -227,17 +227,17 @@ class Athena {
         });
         if (!TableList)
           throw new Error(
-            `no TableList for Database: ${QueryExecution.QueryExecutionContext.Database}`
+            `no TableList for Database: ${QueryExecution.QueryExecutionContext.Database}`,
           );
         TableList.map(({ Name }) =>
-          validTopLevelTableNames.add((Name || '').replace(/['"]+/g, ''))
+          validTopLevelTableNames.add((Name || '').replace(/['"]+/g, '')),
         );
       } catch (err) {
         console.error(
           `Ignoring references to relative tables because of the following error ${
             // @ts-ignore
             err.stack || err
-          }`
+          }`,
         );
       }
     }
@@ -262,7 +262,7 @@ class Athena {
             TableName,
             DatabaseName: QueryExecution.QueryExecutionContext.Database.replace(
               /['"]+/g,
-              ''
+              '',
             ),
           };
         }
@@ -282,14 +282,14 @@ class Athena {
   async listTagsForResource(params) {
     const returnTags = [];
     let { Tags, NextToken, $metadata } = await this.athena.send(
-      new ListTagsForResourceCommand(params)
+      new ListTagsForResourceCommand(params),
     );
     if (Tags) returnTags.push(...Tags);
 
     while (NextToken) {
       const { Tags: nextTags, NextToken: nextNextToken } =
         await this.athena.send(
-          new ListTagsForResourceCommand({ ...params, NextToken })
+          new ListTagsForResourceCommand({ ...params, NextToken }),
         );
       if (nextTags) returnTags.push(...nextTags);
       NextToken = nextNextToken;

@@ -11,7 +11,7 @@ const foo = new Function(
         // { name: '@duckdb/node-api', version: getInstalledVersion('@duckdb/node-api') },
       ],
     },
-  }
+  },
 );
 
 const bar = new Function('relative_path/file.entrypoint', {

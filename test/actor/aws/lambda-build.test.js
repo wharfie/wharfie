@@ -139,7 +139,7 @@ describe('lambda function IaC', () => {
         deployment: getMockDeploymentProperties(),
         handler: path.resolve(
           __dirname,
-          '../../fixtures/lambda-build-test-handler.handler'
+          '../../fixtures/lambda-build-test-handler.handler',
         ),
         artifactBucket: bucket.get('bucketName'),
       },

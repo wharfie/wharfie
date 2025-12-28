@@ -32,7 +32,7 @@ async function mkTmpDir(prefix) {
   await fs.writeFile(
     path.join(root, 'package.json'),
     JSON.stringify({ name: prefix, version: '0.0.0' }),
-    'utf8'
+    'utf8',
   );
   return root;
 }
@@ -43,8 +43,8 @@ function hostTarget() {
     process.platform === 'win32'
       ? 'win32'
       : process.platform === 'darwin'
-      ? 'darwin'
-      : 'linux';
+        ? 'darwin'
+        : 'linux';
   /** @type {TargetArch} */
   const arch = ['x64', 'ia32', 'arm64'].includes(process.arch)
     ? process.arch
@@ -97,7 +97,7 @@ describe('installForTarget (integration)', () => {
     const conn = await instance.connect();
     const [row] = (
       await conn.runAndReadAll(
-        "select 1 as one, 2+2 as two, 'ok'::varchar as status"
+        "select 1 as one, 2+2 as two, 'ok'::varchar as status",
       )
     ).getRowObjects();
 
@@ -145,7 +145,7 @@ describe('installForTarget (integration)', () => {
       const conn = await instance.connect();
       (
         await conn.runAndReadAll(
-          "select 1 as one, 2+2 as two, 'ok'::varchar as status"
+          "select 1 as one, 2+2 as two, 'ok'::varchar as status",
         )
       ).getRowObjects();
     } catch (e) {
@@ -201,7 +201,7 @@ describe('installForTarget (integration)', () => {
 
     if (!threw)
       throw new Error(
-        'expected cross-target install of fake-native-addon to be blocked and throw'
+        'expected cross-target install of fake-native-addon to be blocked and throw',
       );
   });
 });

@@ -23,7 +23,7 @@ describe('tests for bootstrap lambda', () => {
 
     process.env.WHARFIE_UDF_HANDLER = `${path.join(
       __dirname,
-      'request_test_udf_1.js'
+      'request_test_udf_1.js',
     )}.handler`;
     jest.resetModules();
     const { handler } = require('../../lambdas/udf_entrypoint');

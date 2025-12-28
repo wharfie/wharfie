@@ -90,7 +90,7 @@ async function daemon(event, context) {
   // _operation will be null when the action is START
   const _operation = await resource_db.getOperation(
     resource.id,
-    event.operation_id
+    event.operation_id,
   );
 
   // CHECK THAT ACTION DEPENDENCIES ARE MET
@@ -101,11 +101,11 @@ async function daemon(event, context) {
       !(await resource_db.checkActionPrerequisites(
         _operation,
         event.action_type,
-        event_log
+        event_log,
       ))
     ) {
       event_log.info(
-        `action ${event.operation_type}:${event.action_type} prerequisites not met, reenqueueing`
+        `action ${event.operation_type}:${event.action_type} prerequisites not met, reenqueueing`,
       );
       await sqs.reenqueue(event, QUEUE_URL);
       return;
@@ -114,30 +114,30 @@ async function daemon(event, context) {
   if (!_operation && event.action_type !== 'START') {
     // operation was deleted, warn and return
     event_log.warn(
-      `operation ${event.operation_type} unexpectedly missing, maybe it was deleted?`
+      `operation ${event.operation_type} unexpectedly missing, maybe it was deleted?`,
     );
     return;
   }
   event_log.info(
-    `running action ${event.operation_type}:${event.action_type}....`
+    `running action ${event.operation_type}:${event.action_type}....`,
   );
 
   const action_output = await daemonRouter(
     event,
     context,
     resource,
-    _operation
+    _operation,
   );
 
   const action = await resource_db.getAction(
     resource.id,
     event.operation_id,
-    event.action_id
+    event.action_id,
   );
   if (!action) throw new Error('action missing unexpectedly');
   const operation = await resource_db.getOperation(
     resource.id,
-    event.operation_id
+    event.operation_id,
   );
   if (!operation) throw new Error('operation missing unexpectedly');
 
@@ -159,7 +159,7 @@ async function daemon(event, context) {
           !(await resource_db.checkActionPrerequisites(
             operation,
             operation.getActionTypeById(action_id),
-            event_log
+            event_log,
           ))
         )
           // action has other dependencies that are not met
@@ -172,7 +172,7 @@ async function daemon(event, context) {
             type: operation.getActionTypeById(action_id),
             status: Action.Status.PENDING,
           }),
-          Action.Status.RUNNING
+          Action.Status.RUNNING,
         );
         if (!updated_status) {
           // status already in RUNNING state, caused by action graph with reduce pattern
@@ -188,16 +188,16 @@ async function daemon(event, context) {
             retries: 0,
             action_inputs: action_output.outputs || {},
           },
-          QUEUE_URL
+          QUEUE_URL,
         );
-      })
+      }),
     );
     if (
       next_action_ids.length === 0 &&
       operation.status === Operation.Status.COMPLETED
     ) {
       event_log.info(
-        `operation ${event.operation_type} completed, cleaning up...`
+        `operation ${event.operation_type} completed, cleaning up...`,
       );
       await resource_db.deleteOperation(operation);
     }
@@ -212,11 +212,11 @@ async function daemon(event, context) {
 async function DLQ(event, context, err) {
   const operation = await resource_db.getOperation(
     event.resource_id,
-    event.operation_id || ''
+    event.operation_id || '',
   );
   if (!operation) {
     daemon_log.warn(
-      'properties unexpectedly missing, maybe the operation was deleted?'
+      'properties unexpectedly missing, maybe the operation was deleted?',
     );
     return;
   }
@@ -224,7 +224,7 @@ async function DLQ(event, context, err) {
   const resource = await getResource(event, context);
   if (!resource || !event.action_id) {
     daemon_log.warn(
-      'properties unexpectedly missing, maybe the resource was deleted?'
+      'properties unexpectedly missing, maybe the resource was deleted?',
     );
     return;
   }
@@ -237,11 +237,11 @@ async function DLQ(event, context, err) {
   const action = await resource_db.getAction(
     event.resource_id,
     event.operation_id || '',
-    event.action_id
+    event.action_id,
   );
   if (!action) {
     event_log.warn(
-      'properties unexpectedly missing, maybe the action was deleted?'
+      'properties unexpectedly missing, maybe the action was deleted?',
     );
     return;
   }
@@ -271,8 +271,8 @@ async function DLQ(event, context, err) {
           AlarmName: 'Wharfie Failure',
           AlarmDescription: `Processing Failed with error: ${err}`,
         }),
-      })
-    )
+      }),
+    ),
   );
 }
 
@@ -295,11 +295,11 @@ async function retry(event, context, err) {
     MessageBody: JSON.stringify(
       Object.assign(event, {
         retries: (event.retries || 0) + 1,
-      })
+      }),
     ),
     // full-jitter exp backoff (0 - 180 seconds)
     DelaySeconds: Math.floor(
-      Math.random() * Math.min(180, 1 * Math.pow(2, event.retries || 0))
+      Math.random() * Math.min(180, 1 * Math.pow(2, event.retries || 0)),
     ),
     QueueUrl: QUEUE_URL,
   });
@@ -325,7 +325,7 @@ async function processRecord(record, context) {
       `daemon caught error ${
         // @ts-ignore
         err.stack || err
-      }, retrying Record: ${JSON.stringify(event)}`
+      }, retrying Record: ${JSON.stringify(event)}`,
     );
     await retry(event, context, err);
   }
@@ -342,7 +342,7 @@ export async function handler(event, context) {
     (/** @type {import('aws-lambda').SQSRecord} */ record) => {
       return processRecord(record, context);
     },
-    { concurrency: 4 }
+    { concurrency: 4 },
   );
   daemon_log.info(process.memoryUsage());
   await logging.flush();

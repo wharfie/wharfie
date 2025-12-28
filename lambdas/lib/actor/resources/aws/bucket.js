@@ -31,7 +31,7 @@ class Bucket extends BaseResource {
         {
           bucketName: `${name.substring(0, 57)}-${createShortId()}`,
         },
-        properties
+        properties,
       );
       super({
         name,

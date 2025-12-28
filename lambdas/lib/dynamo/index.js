@@ -17,7 +17,7 @@ const docClient = DynamoDBDocument.from(
     region: process.env.AWS_REGION,
     credentials,
   }),
-  { marshallOptions: { removeUndefinedValues: true } }
+  { marshallOptions: { removeUndefinedValues: true } },
 );
 
 /**
@@ -84,10 +84,10 @@ async function putWithThroughputRetry(params) {
               Math.random() *
                 Math.min(
                   MAX_PUT_RETRY_TIMEOUT_SECONDS,
-                  1 * Math.pow(2, attempts)
-                )
-            ) * 1000
-          )
+                  1 * Math.pow(2, attempts),
+                ),
+            ) * 1000,
+          ),
         );
         attempts++;
         continue;

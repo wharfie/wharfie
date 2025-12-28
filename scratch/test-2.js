@@ -64,7 +64,7 @@ async function main() {
       await node.start();
       console.log(
         'listening on:',
-        node.getMultiaddrs().map((ma) => ma.toString())
+        node.getMultiaddrs().map((ma) => ma.toString()),
       );
     },
     {
@@ -78,7 +78,7 @@ async function main() {
           { name: 'libp2p', version: getInstalledVersion('libp2p') },
         ],
       },
-    }
+    },
   );
 
   const main = new ActorSystem({

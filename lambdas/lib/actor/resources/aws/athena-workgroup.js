@@ -41,14 +41,14 @@ class AthenaWorkGroup extends BaseResource {
     const current_tags = Tags || [];
     const tagsToAdd = this.get('tags', []).filter(
       (/** @type {import('@aws-sdk/client-athena').Tag} */ tag) =>
-        !current_tags.find((t) => t.Key === tag.Key && t.Value === tag.Value)
+        !current_tags.find((t) => t.Key === tag.Key && t.Value === tag.Value),
     );
     const tagsToRemove = current_tags.filter(
       (tag) =>
         !this.get('tags', []).find(
           (/** @type  {import('@aws-sdk/client-athena').Tag} */ t) =>
-            t.Key === tag.Key && t.Value === tag.Value
-        )
+            t.Key === tag.Key && t.Value === tag.Value,
+        ),
     );
     if (tagsToRemove.length > 0)
       await this.athena.untagResource({
@@ -67,7 +67,7 @@ class AthenaWorkGroup extends BaseResource {
       'arn',
       `arn:aws:athena:${this.get('deployment').region}:${
         this.get('deployment').accountId
-      }:workgroup/${this.name}`
+      }:workgroup/${this.name}`,
     );
     try {
       const { WorkGroup } = await this.athena.getWorkGroup({

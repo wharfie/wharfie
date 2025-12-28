@@ -12,7 +12,7 @@ const handler = async (
   integer,
   varchar,
   varbinary,
-  boolean
+  boolean,
 ) => {
   return `timestamp: ${timestamp}, date: ${date}, tinyint: ${tinyint}, smallint: ${smallint}, real: ${real}, double: ${double}, decimal: ${decimal}, bigint: ${bigint}, integer: ${integer}, varchar: ${varchar}, varbinary: ${varbinary}, boolean: ${boolean}`;
 };

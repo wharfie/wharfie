@@ -30,7 +30,7 @@ class AutoscalingTarget extends BaseResource {
       {
         tags: {},
       },
-      properties
+      properties,
     );
     super({
       name,

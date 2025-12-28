@@ -22,7 +22,7 @@ const docClient = DynamoDBDocument.from(
     region: process.env.AWS_REGION,
     credentials,
   }),
-  { marshallOptions: { removeUndefinedValues: true } }
+  { marshallOptions: { removeUndefinedValues: true } },
 );
 const OPERATIONS_TABLE = process.env.OPERATIONS_TABLE || '';
 
@@ -45,7 +45,7 @@ async function putResource(resource, tableName = process.env.OPERATIONS_TABLE) {
  */
 async function getResource(
   resource_id,
-  tableName = process.env.OPERATIONS_TABLE
+  tableName = process.env.OPERATIONS_TABLE,
 ) {
   try {
     const { Items } = await query({
@@ -74,7 +74,7 @@ async function getResource(
  */
 async function deleteResource(
   resource,
-  tableName = process.env.OPERATIONS_TABLE
+  tableName = process.env.OPERATIONS_TABLE,
 ) {
   let Items;
   try {
@@ -164,7 +164,7 @@ async function getOperations(resource_id) {
   // todo: use a less than key condition to filter out all queries that will have ids
   // longer than what an action's sortkey could possibly be
   return Items.filter(
-    (item) => item?.data?.record_type === Operation.RecordType
+    (item) => item?.data?.record_type === Operation.RecordType,
   ).map(Operation.fromRecord);
 }
 
@@ -230,7 +230,7 @@ async function getActions(operation) {
   // todo: use a less than key condition to filter out all queries that will have ids
   // longer than what an action's sortkey could possibly be
   return Items.filter(
-    (item) => item?.data?.record_type === Action.RecordType
+    (item) => item?.data?.record_type === Action.RecordType,
   ).map(Action.fromRecord);
 }
 
@@ -379,11 +379,11 @@ async function checkForStaleQuery(query_execution_id, logger) {
   if (queryState === 'FAILED' && QueryExecution && QueryExecution.Query) {
     logger &&
       logger.warn(
-        `STALE QUERY DETECTED, query execution id: ${query_execution_id}`
+        `STALE QUERY DETECTED, query execution id: ${query_execution_id}`,
       );
     try {
       const queryEvent = JSON.parse(
-        QueryExecution.Query.split('\n').slice(-1)[0].substring(3)
+        QueryExecution.Query.split('\n').slice(-1)[0].substring(3),
       );
       if (
         queryEvent.resource_id &&
@@ -416,13 +416,13 @@ async function checkForStaleQuery(query_execution_id, logger) {
         await sqs.enqueue(
           synthetic_athena_event,
           process.env.MONITOR_QUEUE_URL || '',
-          0
+          0,
         );
       }
     } catch (e) {
       logger &&
         logger.warn(
-          `failed to handle stale query ${e}, ${JSON.stringify(QueryExecution)}`
+          `failed to handle stale query ${e}, ${JSON.stringify(QueryExecution)}`,
         );
     }
   }
@@ -439,7 +439,7 @@ async function checkActionPrerequisites(
   operation,
   action_type,
   logger,
-  includeQueries = true
+  includeQueries = true,
 ) {
   const action_id_to_check = operation.getActionIdByType(action_type);
   const prerequisite_action_ids =
@@ -447,8 +447,8 @@ async function checkActionPrerequisites(
   logger &&
     logger.debug(
       `checking that prerequisite actions are completed ${JSON.stringify(
-        prerequisite_action_ids
-      )}`
+        prerequisite_action_ids,
+      )}`,
     );
   let prerequisites_met = true;
   while (prerequisite_action_ids.length > 0) {
@@ -476,13 +476,13 @@ async function checkActionPrerequisites(
           if (data.status !== Action.Status.COMPLETED) {
             logger &&
               logger.info(
-                `prerequisite action ${operation.type}:${data.type} hasn't finished running yet`
+                `prerequisite action ${operation.type}:${data.type} hasn't finished running yet`,
               );
             prerequisites_met = false;
           }
           if (data.status === Action.Status.FAILED) {
             throw new Error(
-              `prerequisite action ${operation.type}:${data.type} failed`
+              `prerequisite action ${operation.type}:${data.type} failed`,
             );
           }
           break;
@@ -491,13 +491,13 @@ async function checkActionPrerequisites(
             incompleteQueries.push(data.id);
             logger &&
               logger.debug(
-                `incomplete prerequisite query ${JSON.stringify(data)}`
+                `incomplete prerequisite query ${JSON.stringify(data)}`,
               );
             prerequisites_met = false;
           }
           if (includeQueries && data.status === Query.Status.FAILED) {
             throw new Error(
-              `prerequisite query failed ${JSON.stringify(data)}`
+              `prerequisite query failed ${JSON.stringify(data)}`,
             );
           }
           if (
@@ -514,7 +514,7 @@ async function checkActionPrerequisites(
     incompleteQueries.length > 0 &&
       logger &&
       logger.info(
-        `prerequisite action ${operation.type}:${action_type} has ${incompleteQueries.length} incomplete queries`
+        `prerequisite action ${operation.type}:${action_type} has ${incompleteQueries.length} incomplete queries`,
       );
   }
   return prerequisites_met;
@@ -551,7 +551,7 @@ async function getRecords(resource_id, operation_id = '') {
   if (!Items) return records;
 
   const processedItems = Items.sort((a, b) =>
-    a.sort_key.localeCompare(b.sort_key)
+    a.sort_key.localeCompare(b.sort_key),
   ).filter((item) => item.data.record_type !== Resource.RecordType);
 
   /**
@@ -587,7 +587,7 @@ async function getRecords(resource_id, operation_id = '') {
         break;
       default:
         throw new Error(
-          `unrecognized record_type, in record ${JSON.stringify(item)}`
+          `unrecognized record_type, in record ${JSON.stringify(item)}`,
         );
     }
   }

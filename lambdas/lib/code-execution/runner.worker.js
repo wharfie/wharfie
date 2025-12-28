@@ -83,7 +83,7 @@ function runBundleOnce({ codeString, pkgFile, entryFile, tmpRoot, env }) {
     '__filename',
     '__dirname',
     // 'process',
-    `"use strict";\n${codeString}\n`
+    `"use strict";\n${codeString}\n`,
   );
 
   // const moduleObj = { exports: {} };
@@ -93,7 +93,7 @@ function runBundleOnce({ codeString, pkgFile, entryFile, tmpRoot, env }) {
     // moduleObj,
     // moduleObj.exports,
     entryFile,
-    tmpRoot
+    tmpRoot,
     // sandboxProcess
   );
 
@@ -137,7 +137,7 @@ if (
       const fn = global[sym];
       if (typeof fn !== 'function') {
         throw new TypeError(
-          `Global entrypoint ${functionName} is not a function`
+          `Global entrypoint ${functionName} is not a function`,
         );
       }
 

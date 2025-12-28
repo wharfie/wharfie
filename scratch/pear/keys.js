@@ -28,9 +28,9 @@ function loadOrCreateKeypair(filePath) {
         secretKey: kp.secretKey.toString('hex'),
       },
       null,
-      2
+      2,
     ),
-    'utf8'
+    'utf8',
   );
   return kp;
 }

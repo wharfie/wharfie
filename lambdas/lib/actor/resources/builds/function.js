@@ -57,7 +57,7 @@ class Function {
     const functionDescriptionBuffer = Buffer.from(functionAssetBuffer);
     const assetDescription = JSON.parse(functionDescriptionBuffer.toString());
     const functionBuffer = brotliDecompressSync(
-      Buffer.from(assetDescription.codeBundle, 'base64')
+      Buffer.from(assetDescription.codeBundle, 'base64'),
     );
     const functionCodeString = functionBuffer.toString();
     console.time('WORKER time');
@@ -93,7 +93,7 @@ class Function {
     const candidate = this.entrypoint.export
       ? handler?.[this.entrypoint.export]
       : // for ESM default exports
-        handler?.default ?? handler;
+        (handler?.default ?? handler);
 
     await candidate();
   }

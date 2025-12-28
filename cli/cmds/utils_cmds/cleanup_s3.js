@@ -29,7 +29,7 @@ const cleanupS3 = async (resource_id) => {
     const resource = await getResource(resource_id);
     if (!resource) {
       throw new Error(
-        `Resource with ID "${resource_id}" does not exist in Wharfie deployment "${process.env.WHARFIE_DEPLOYMENT_NAME}".`
+        `Resource with ID "${resource_id}" does not exist in Wharfie deployment "${process.env.WHARFIE_DEPLOYMENT_NAME}".`,
       );
     }
     resources = [resource];

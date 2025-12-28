@@ -20,17 +20,17 @@ const configuration = {
 const check = ({ region, deployment_name, service_bucket }) => {
   if (!region) {
     throw new Error(
-      'wharfie region not found. Please make sure you set up the cli config correctly (run `wharfie config`)'
+      'wharfie region not found. Please make sure you set up the cli config correctly (run `wharfie config`)',
     );
   }
   if (!deployment_name) {
     throw new Error(
-      'wharfie service name not found. Please make sure you set up the cli config correctly (run `wharfie config`)'
+      'wharfie service name not found. Please make sure you set up the cli config correctly (run `wharfie config`)',
     );
   }
   if (!service_bucket) {
     throw new Error(
-      'wharfie service name not found. Please make sure you set up the cli config correctly (run `wharfie config`)'
+      'wharfie service name not found. Please make sure you set up the cli config correctly (run `wharfie config`)',
     );
   }
 };
@@ -48,7 +48,7 @@ async function validateConfig() {
   } catch (err) {
     throw new Error(
       // @ts-ignore
-      `AWS credentials are not configured for terminal, please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html \nfailed with this error:\n${err.message}`
+      `AWS credentials are not configured for terminal, please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html \nfailed with this error:\n${err.message}`,
     );
   }
   const keySet = credentials.accessKeyId && credentials.secretAccessKey;
@@ -56,7 +56,7 @@ async function validateConfig() {
 
   if (!keySet || !sessionSet) {
     throw new Error(
-      `AWS credentials are incomplete in terminal please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html`
+      `AWS credentials are incomplete in terminal please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html`,
     );
   }
 
@@ -64,7 +64,7 @@ async function validateConfig() {
   const region = await sts.sts.config.region();
   if (!region) {
     throw new Error(
-      `AWS Region is not configured for terminal, please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html`
+      `AWS Region is not configured for terminal, please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html`,
     );
   }
   check(configuration);

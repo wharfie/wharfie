@@ -270,7 +270,7 @@ describe('tests for Athena', () => {
           Body: outputCSV,
         });
       },
-      outputCSV
+      outputCSV,
     );
     const params = {
       WorkGroup: 'default',

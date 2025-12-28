@@ -75,19 +75,19 @@ describe('tests for s3 events processing', () => {
           partitionValues: ['a=1', 'b=abc'],
         },
       },
-      {}
+      {},
     );
 
     expect(scheduler_db.update).toHaveBeenCalledTimes(1);
     expect(AWSSQS.SQSMock).toHaveReceivedCommandTimes(
       AWSSQS.SendMessageCommand,
-      1
+      1,
     );
     expect(
       JSON.parse(
         AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       source: 'wharfie:scheduler',
       operation_started_at: '2016-06-20T12:08:10.000Z',
@@ -138,19 +138,19 @@ describe('tests for s3 events processing', () => {
           partitionValues: ['a=1', 'b=abc'],
         },
       },
-      {}
+      {},
     );
 
     expect(scheduler_db.update).toHaveBeenCalledTimes(1);
     expect(AWSSQS.SQSMock).toHaveReceivedCommandTimes(
       AWSSQS.SendMessageCommand,
-      1
+      1,
     );
     expect(
       JSON.parse(
         AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       source: 'wharfie:scheduler',
       operation_started_at: '2016-06-20T12:08:10.000Z',
@@ -205,19 +205,19 @@ describe('tests for s3 events processing', () => {
           partitionValues: ['2021', '10', '25'],
         },
       },
-      {}
+      {},
     );
 
     expect(scheduler_db.update).toHaveBeenCalledTimes(1);
     expect(AWSSQS.SQSMock).toHaveReceivedCommandTimes(
       AWSSQS.SendMessageCommand,
-      1
+      1,
     );
     expect(
       JSON.parse(
         AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       source: 'wharfie:scheduler',
       operation_started_at: '2016-06-20T12:08:10.000Z',
@@ -267,19 +267,19 @@ describe('tests for s3 events processing', () => {
           partitionValues: ['a=1', 'b=abc'],
         },
       },
-      {}
+      {},
     );
 
     expect(scheduler_db.update).toHaveBeenCalledTimes(1);
     expect(AWSSQS.SQSMock).toHaveReceivedCommandTimes(
       AWSSQS.SendMessageCommand,
-      1
+      1,
     );
     expect(
       JSON.parse(
         AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       action_inputs: {
         Duration: null,

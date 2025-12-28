@@ -14,5 +14,5 @@ if (process.env.AWS_MOCKS) {
 
 module.exports = Object.assign(
   {},
-  { ...AWS, ApplicationAutoScaling, ApplicationAutoScalingMock }
+  { ...AWS, ApplicationAutoScaling, ApplicationAutoScalingMock },
 );

@@ -44,8 +44,8 @@ class GlueTable extends BaseResource {
       'arn',
       () =>
         `arn:aws:glue:${this.get('region')}:${this.get(
-          'catalogId'
-        )}:table/${this.get('databaseName')}/${this.name}`
+          'catalogId',
+        )}:table/${this.get('databaseName')}/${this.name}`,
     );
   }
 
@@ -57,10 +57,10 @@ class GlueTable extends BaseResource {
     const desiredTags = this.get('tags') || {};
 
     const tagsToAdd = Object.entries(desiredTags).filter(
-      ([key, value]) => currentTags[key] !== value
+      ([key, value]) => currentTags[key] !== value,
     );
     const tagsToRemove = Object.keys(currentTags).filter(
-      (key) => !desiredTags[key]
+      (key) => !desiredTags[key],
     );
 
     if (tagsToAdd.length > 0) {
@@ -83,14 +83,14 @@ class GlueTable extends BaseResource {
         Name: column.name,
         Type: column.type,
         Comment: column.comment,
-      })
+      }),
     );
     const partitionKeys = (this.get('partitionKeys') || []).map(
       (/** @type {{ name: any; type: any; comment: any; }} */ column) => ({
         Name: column.name,
         Type: column.type,
         Comment: column.comment,
-      })
+      }),
     );
     try {
       const { Table } = await this.glue.getTable({

@@ -35,9 +35,9 @@ async function findLocations(location) {
       location.slice(-1) === '/'
         ? location.substring(
             0,
-            location.lastIndexOf('/', location.lastIndexOf('/') - 1) + 1
+            location.lastIndexOf('/', location.lastIndexOf('/') - 1) + 1,
           )
-        : location.substring(0, location.lastIndexOf('/') + 1)
+        : location.substring(0, location.lastIndexOf('/') + 1),
     );
   return items;
 }

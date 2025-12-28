@@ -16,7 +16,7 @@ const cleanupDynamo = async () => {
   const operations = await getAllOperations();
 
   const operationsToRemove = operations.filter(
-    (x) => x.started_at * 1000 < new Date().getTime() - 1000 * 60 * 60 * 24
+    (x) => x.started_at * 1000 < new Date().getTime() - 1000 * 60 * 60 * 24,
   );
 
   const operationsToRemoveCount = operationsToRemove.length;
@@ -28,7 +28,7 @@ const cleanupDynamo = async () => {
   displayInfo('Deleting stale operations...');
   const progressBar = new cliProgress.Bar(
     {},
-    cliProgress.Presets.shades_classic
+    cliProgress.Presets.shades_classic,
   );
   progressBar.start(operationsToRemoveCount, 0);
 
@@ -36,7 +36,7 @@ const cleanupDynamo = async () => {
   while (operationsToRemove.length > 0) {
     const operationChunk = operationsToRemove.splice(0, 10);
     await Promise.all(
-      operationChunk.map((operation) => deleteOperation(operation))
+      operationChunk.map((operation) => deleteOperation(operation)),
     );
     deletedOperations += operationChunk.length;
     progressBar.update(deletedOperations);

@@ -221,7 +221,7 @@ describe('glue table IaC', () => {
       glue.getTable({
         Name: table.name,
         DatabaseName: table.get('databaseName'),
-      })
+      }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(`"table not found"`);
   });
 });

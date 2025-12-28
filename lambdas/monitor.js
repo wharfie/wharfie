@@ -56,13 +56,13 @@ async function getWharfieQueryMetadata(queryExecutionId) {
 
   try {
     queryEvent = JSON.parse(
-      QueryExecution.Query.split('\n').slice(-1)[0].substring(3)
+      QueryExecution.Query.split('\n').slice(-1)[0].substring(3),
     );
   } catch (e) {
     daemon_log.warn(
       `failed to parse query event, this could be caused by users using Wharfie workgroups for ad hoc querying: ${e}, ${JSON.stringify(
-        QueryExecution
-      )}`
+        QueryExecution,
+      )}`,
     );
     return null;
   }
@@ -73,7 +73,7 @@ async function getWharfieQueryMetadata(queryExecutionId) {
     !queryEvent.query_id
   ) {
     daemon_log.warn(
-      `query event missing fields: ${JSON.stringify(queryEvent)}`
+      `query event missing fields: ${JSON.stringify(queryEvent)}`,
     );
     return null;
   }
@@ -127,13 +127,13 @@ async function _monitorWharfie(cloudwatchEvent, queryEvent, context) {
     queryEvent.resource_id,
     queryEvent.operation_id,
     queryEvent.action_id,
-    queryEvent.query_id
+    queryEvent.query_id,
   );
   // dynamo interruption could cause a race condition with getting query records, throw an error and retry
   if (!query) throw new Error('Could not find query record');
   const operation = await resource_db.getOperation(
     queryEvent.resource_id,
-    queryEvent.operation_id
+    queryEvent.operation_id,
   );
   if (!operation) {
     await semaphore_db.release('wharfie');
@@ -142,23 +142,23 @@ async function _monitorWharfie(cloudwatchEvent, queryEvent, context) {
   const action = await resource_db.getAction(
     queryEvent.resource_id,
     queryEvent.operation_id,
-    queryEvent.action_id
+    queryEvent.action_id,
   );
   if (!action) {
     await semaphore_db.release('wharfie');
     await semaphore_db.release(
-      `wharfie:${operation.type}:${operation.resource_id}`
+      `wharfie:${operation.type}:${operation.resource_id}`,
     );
     return;
   }
 
   await semaphore_db.release('wharfie');
   await semaphore_db.release(
-    `wharfie:${operation.type}:${operation.resource_id}`
+    `wharfie:${operation.type}:${operation.resource_id}`,
   );
   if (cloudwatchEvent.detail.currentState === 'SUCCEEDED') {
     event_log.info(
-      `Wharfie query succeeded with id ${query.id} and execution id: ${query.execution_id}`
+      `Wharfie query succeeded with id ${query.id} and execution id: ${query.execution_id}`,
     );
     query.status = Query.Status.COMPLETED;
     await resource_db.putQuery(query);
@@ -172,7 +172,7 @@ async function _monitorWharfie(cloudwatchEvent, queryEvent, context) {
           !(await resource_db.checkActionPrerequisites(
             operation,
             operation.getActionTypeById(action_id),
-            event_log
+            event_log,
           ))
         )
           // action has other dependencies that are not met
@@ -185,7 +185,7 @@ async function _monitorWharfie(cloudwatchEvent, queryEvent, context) {
             type: operation.getActionTypeById(action_id),
             status: Action.Status.PENDING,
           }),
-          Action.Status.RUNNING
+          Action.Status.RUNNING,
         );
         if (!updated_status) {
           // status already in RUNNING state, caused by action graph with reduce pattern
@@ -201,9 +201,9 @@ async function _monitorWharfie(cloudwatchEvent, queryEvent, context) {
             retries: 0,
             action_inputs: action.outputs || {},
           },
-          DAEMON_QUEUE_URL
+          DAEMON_QUEUE_URL,
         );
-      })
+      }),
     );
   } else if (
     query.status === Query.Status.RUNNING &&
@@ -215,14 +215,14 @@ async function _monitorWharfie(cloudwatchEvent, queryEvent, context) {
     if (retries < 3) {
       event_log.warn(
         `wharfie query failed with state: ${cloudwatchEvent.detail.currentState}, retrying...`,
-        { cloudwatchEvent }
+        { cloudwatchEvent },
       );
       await sqs.enqueue(
         Object.assign(queryEvent, {
           retries: retries + 1,
         }),
         DAEMON_QUEUE_URL,
-        Math.pow(2, retries) + Math.floor(Math.random() * 5)
+        Math.pow(2, retries) + Math.floor(Math.random() * 5),
       );
       query.status = Query.Status.RETRYING;
       await resource_db.putQuery(query);
@@ -230,7 +230,7 @@ async function _monitorWharfie(cloudwatchEvent, queryEvent, context) {
     }
     event_log.error(
       `wharfie query failed terminally with state: ${cloudwatchEvent.detail.currentState}`,
-      { cloudwatchEvent }
+      { cloudwatchEvent },
     );
     query.status = cloudwatchEvent.detail.currentState;
     await resource_db.putQuery(query);
@@ -241,7 +241,7 @@ async function _monitorWharfie(cloudwatchEvent, queryEvent, context) {
   ) {
     event_log.warn(
       `DUPLICATE_QUERY_EVENTS: stale query detection and athena produced events for same state change on query_id: ${query.id}, this could be caused by athena being slow to publish events`,
-      { cloudwatchEvent }
+      { cloudwatchEvent },
     );
   }
 }
@@ -258,7 +258,7 @@ async function monitorWharfie(cloudwatchEvent, context) {
   });
   if (!QueryExecution || !QueryExecution.Query) return;
   const queryEvent = await getWharfieQueryMetadata(
-    cloudwatchEvent.detail.queryExecutionId
+    cloudwatchEvent.detail.queryExecutionId,
   );
   if (
     !queryEvent ||
@@ -276,7 +276,7 @@ async function monitorWharfie(cloudwatchEvent, context) {
       `monitor caught error ${
         // @ts-ignore
         err.stack || err
-      }, for query event: ${JSON.stringify(queryEvent)}`
+      }, for query event: ${JSON.stringify(queryEvent)}`,
     );
     throw err;
   }
@@ -294,7 +294,7 @@ async function createMetrics(cloudwatchEvent) {
   // handle terminal current state
   if (TERMINAL_STATE.has(query.currentState)) {
     const athenaMetrics = await athena.getQueryMetrics(
-      cloudwatchEvent.detail.queryExecutionId
+      cloudwatchEvent.detail.queryExecutionId,
     );
 
     metricData.push({
@@ -327,7 +327,7 @@ async function createMetrics(cloudwatchEvent) {
       {
         databases: new Set(),
         tables: new Set(),
-      }
+      },
     );
 
     [...databases].forEach((database) => {
@@ -390,7 +390,7 @@ async function createMetrics(cloudwatchEvent) {
       cloudwatch.putMetricData({
         MetricData: metricData.splice(0, 20),
         Namespace: 'DataPlatform/Athena',
-      })
+      }),
     );
   await Promise.all(cwPromises);
 }
@@ -411,7 +411,7 @@ async function run(athenaEvent, context) {
  */
 async function DLQ(event, context, err) {
   const wharfieEvent = await getEventFromQueryExecution(
-    event.detail.queryExecutionId
+    event.detail.queryExecutionId,
   );
   if (!wharfieEvent) return;
   const event_log = logging.getEventLogger(wharfieEvent, context);
@@ -422,28 +422,28 @@ async function DLQ(event, context, err) {
   const resource = await getResource(wharfieEvent, context);
   if (!resource || !wharfieEvent.action_id || !wharfieEvent.operation_id) {
     daemon_log.warn(
-      'properties unexpectedly missing, maybe the resource was deleted?'
+      'properties unexpectedly missing, maybe the resource was deleted?',
     );
     return;
   }
   const operation = await resource_db.getOperation(
     wharfieEvent.resource_id,
-    wharfieEvent.operation_id
+    wharfieEvent.operation_id,
   );
   if (!operation) {
     daemon_log.warn(
-      'properties unexpectedly missing, maybe the resource was deleted?'
+      'properties unexpectedly missing, maybe the resource was deleted?',
     );
     return;
   }
   const action = await resource_db.getAction(
     wharfieEvent.resource_id,
     wharfieEvent.operation_id,
-    wharfieEvent.action_id
+    wharfieEvent.action_id,
   );
   if (!action) {
     daemon_log.warn(
-      'properties unexpectedly missing, maybe the resource was deleted?'
+      'properties unexpectedly missing, maybe the resource was deleted?',
     );
     return;
   }
@@ -472,8 +472,8 @@ async function DLQ(event, context, err) {
           AlarmName: 'Wharfie Failure',
           AlarmDescription: `Processing Failed with error: ${err}`,
         }),
-      })
-    )
+      }),
+    ),
   );
 }
 
@@ -496,11 +496,11 @@ async function retry(event, context, err) {
     MessageBody: JSON.stringify(
       Object.assign(event, {
         retries: (event.retries || 0) + 1,
-      })
+      }),
     ),
     // full-jitter exp backoff (0 - 180 seconds)
     DelaySeconds: Math.floor(
-      Math.random() * Math.min(180, 1 * Math.pow(2, event.retries || 0))
+      Math.random() * Math.min(180, 1 * Math.pow(2, event.retries || 0)),
     ),
     QueueUrl: QUEUE_URL,
   });
@@ -521,7 +521,7 @@ async function processRecord(record, context) {
       `monitor caught error ${
         // @ts-ignore
         err.stack || err
-      }, retrying Record: ${JSON.stringify(event)}`
+      }, retrying Record: ${JSON.stringify(event)}`,
     );
     await retry(event, context, err);
   }
@@ -538,7 +538,7 @@ async function handler(event, context) {
     (/** @type {import('aws-lambda').SQSRecord} */ record) => {
       return processRecord(record, context);
     },
-    { concurrency: 4 }
+    { concurrency: 4 },
   );
   daemon_log.info(process.memoryUsage());
   await logging.flush();

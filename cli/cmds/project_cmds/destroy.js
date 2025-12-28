@@ -90,7 +90,7 @@ const destroyCommand = new Command('destroy')
   .argument('[path]', 'The path to the Wharfie project root')
   .option(
     '-e, --environment <environment>',
-    'The Wharfie project environment to use'
+    'The Wharfie project environment to use',
   )
   .option('-y, --yes', 'Approve destruction without confirmation prompt')
   .action(async (path, options) => {

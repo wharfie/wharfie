@@ -14,7 +14,7 @@ const docClient = DynamoDBDocument.from(
     region: process.env.AWS_REGION,
     credentials,
   }),
-  { marshallOptions: { removeUndefinedValues: true } }
+  { marshallOptions: { removeUndefinedValues: true } },
 );
 
 /**
@@ -157,7 +157,7 @@ async function getResources(deploymentName, resourceKey) {
   });
   if (!Items || Items.length === 0) return [];
   const processedItems = Items.sort((a, b) =>
-    a.resource_key.localeCompare(b.resource_key)
+    a.resource_key.localeCompare(b.resource_key),
   );
   // the root is missing so we should return nothing
   if (processedItems[0].resource_key !== resourceKey) return [];

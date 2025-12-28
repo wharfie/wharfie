@@ -42,7 +42,7 @@ class GenericRecord extends BaseResource {
         keyName: 'key',
         sortKeyName: 'sort_key',
       },
-      properties
+      properties,
     );
     super({
       name,

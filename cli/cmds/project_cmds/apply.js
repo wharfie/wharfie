@@ -72,7 +72,7 @@ const applyCommand = new Command('apply')
   .argument('[path]', 'The path to the Wharfie project root')
   .option(
     '-e, --environment <environment>',
-    'The Wharfie project environment to use'
+    'The Wharfie project environment to use',
   )
   .action(async (path, options) => {
     const { environment } = options;

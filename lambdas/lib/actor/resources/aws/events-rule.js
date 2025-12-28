@@ -96,14 +96,14 @@ class EventsRule extends BaseResource {
     const desiredTags = this.get('tags') || [];
     const tagsToAdd = desiredTags.filter(
       (/** @type {import('@aws-sdk/client-cloudwatch-events').Tag} */ tag) =>
-        !Tags?.some((t) => t.Key === tag.Key)
+        !Tags?.some((t) => t.Key === tag.Key),
     );
     const tagsToRemove = (Tags || []).filter(
       (tag) =>
         !desiredTags.some(
           (/** @type {import('@aws-sdk/client-cloudwatch-events').Tag} */ t) =>
-            t.Key === tag.Key
-        )
+            t.Key === tag.Key,
+        ),
     );
 
     if (tagsToRemove?.length > 0)
@@ -207,9 +207,9 @@ class EventsRule extends BaseResource {
           resolve,
           Math.floor(
             Math.random() *
-              Math.min(MAX_RETRY_TIMEOUT_SECONDS, 1 * Math.pow(2, attempts))
-          ) * 1000
-        )
+              Math.min(MAX_RETRY_TIMEOUT_SECONDS, 1 * Math.pow(2, attempts)),
+          ) * 1000,
+        ),
       );
       attempts++;
     } while (currentStatus !== status);

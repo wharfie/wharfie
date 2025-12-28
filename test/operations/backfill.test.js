@@ -146,7 +146,7 @@ describe('backfill tests', () => {
           tableType: 'PHYSICAL',
           tags: {},
         },
-      })
+      }),
     );
 
     await daemon_lambda.handler(
@@ -166,7 +166,7 @@ describe('backfill tests', () => {
           },
         ],
       },
-      CONTEXT
+      CONTEXT,
     );
     let pollInterval;
     let completed_checks = 0;

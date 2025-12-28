@@ -46,7 +46,7 @@ class WharfieDeployment extends BaseResourceGroup {
         deployment: () => this.getDeploymentProperties(),
         createdAt: Date.now(),
       },
-      properties
+      properties,
     );
     super({
       name,
@@ -92,25 +92,25 @@ class WharfieDeployment extends BaseResourceGroup {
       TEMPORARY_GLUE_DATABASE:
         this.getDeploymentResources().getTemporaryDatabase().name,
       OPERATIONS_TABLE: this.getDeploymentResources().getResource(
-        `${this.name}-operations`
+        `${this.name}-operations`,
       ).name,
       SEMAPHORE_TABLE: this.getDeploymentResources().getResource(
-        `${this.name}-semaphore`
+        `${this.name}-semaphore`,
       ).name,
       LOCATION_TABLE: this.getDeploymentResources().getResource(
-        `${this.name}-locations`
+        `${this.name}-locations`,
       ).name,
       DEPENDENCY_TABLE: this.getDeploymentResources().getResource(
-        `${this.name}-dependencies`
+        `${this.name}-dependencies`,
       ).name,
       SCHEDULER_TABLE: this.getDeploymentResources().getResource(
-        `${this.name}-scheduler`
+        `${this.name}-scheduler`,
       ).name,
       WHARFIE_SERVICE_BUCKET: this.getDeploymentResources()
         .getBucket()
         .get('bucketName'),
       WHARFIE_LOGGING_FIREHOSE: this.getDeploymentResources().getResource(
-        `${this.name}-firehose`
+        `${this.name}-firehose`,
       ).name,
       ...actorQueues,
     };
@@ -229,13 +229,13 @@ class WharfieDeployment extends BaseResourceGroup {
               {
                 Events: ['s3:ObjectCreated:*'],
                 QueueArn: `arn:aws:sqs:${this.get('region')}:${this.get(
-                  'accountId'
+                  'accountId',
                 )}:${this.name}-events-queue`,
               },
               {
                 Events: ['s3:ObjectRemoved:*'],
                 QueueArn: `arn:aws:sqs:${this.get('region')}:${this.get(
-                  'accountId'
+                  'accountId',
                 )}:${this.name}-events-queue`,
               },
             ],

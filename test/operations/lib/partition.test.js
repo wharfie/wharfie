@@ -64,10 +64,10 @@ describe('partition', () => {
 
     expect(AWSGlue.GlueMock).toHaveReceivedCommandTimes(
       AWSGlue.GetTableCommand,
-      1
+      1,
     );
     expect(
-      AWSGlue.GlueMock.commandCalls(AWSGlue.GetTableCommand)[0].args[0].input
+      AWSGlue.GlueMock.commandCalls(AWSGlue.GetTableCommand)[0].args[0].input,
     ).toMatchInlineSnapshot(`
       {
         "DatabaseName": "test_db",
@@ -77,11 +77,11 @@ describe('partition', () => {
 
     expect(AWSGlue.GlueMock).toHaveReceivedCommandTimes(
       AWSGlue.CreatePartitionCommand,
-      1
+      1,
     );
     expect(
       AWSGlue.GlueMock.commandCalls(AWSGlue.CreatePartitionCommand)[0].args[0]
-        .input
+        .input,
     ).toMatchInlineSnapshot(`
       {
         "DatabaseName": "test_db",
@@ -101,11 +101,11 @@ describe('partition', () => {
 
     expect(AWSGlue.GlueMock).toHaveReceivedCommandTimes(
       AWSGlue.UpdatePartitionCommand,
-      1
+      1,
     );
     expect(
       AWSGlue.GlueMock.commandCalls(AWSGlue.UpdatePartitionCommand)[0].args[0]
-        .input
+        .input,
     ).toMatchInlineSnapshot(`
       {
         "DatabaseName": "test_db",
@@ -232,7 +232,7 @@ describe('partition', () => {
 
     expect(
       AWSGlue.GlueMock.commandCalls(AWSGlue.BatchDeletePartitionCommand)[0]
-        .args[0].input
+        .args[0].input,
     ).toMatchInlineSnapshot(`
       {
         "DatabaseName": "test_db",
@@ -255,7 +255,7 @@ describe('partition', () => {
     `);
     expect(
       AWSGlue.GlueMock.commandCalls(AWSGlue.BatchCreatePartitionCommand)[0]
-        .args[0].input
+        .args[0].input,
     ).toMatchInlineSnapshot(`
       {
         "DatabaseName": "test_db",

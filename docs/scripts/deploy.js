@@ -53,7 +53,7 @@ async function scanDirectory(localDir, baseDir = localDir) {
       const contentType = mime.lookup(fullPath) || 'application/octet-stream';
       const s3Key = path.posix.join(
         prefix,
-        relativePath.split(path.sep).join('/')
+        relativePath.split(path.sep).join('/'),
       );
       fileList.push({ fullPath, s3Key, contentType });
     }
@@ -73,7 +73,7 @@ async function uploadBatches(bucket, prefix, files) {
         Body: fileContent,
         ContentType: contentType,
       };
-    })
+    }),
   );
 
   await bluebirdPromise.map(
@@ -81,7 +81,7 @@ async function uploadBatches(bucket, prefix, files) {
     (params) => {
       return s3.putObject(params);
     },
-    { concurrency: 10 }
+    { concurrency: 10 },
   );
 }
 // Main function to scan and upload the directory

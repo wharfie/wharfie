@@ -49,7 +49,7 @@ const NON_CIRCULAR_CLASS_MAP = Object.assign(
   {
     WharfieProject,
     WharfieResource,
-  }
+  },
 );
 
 /**
@@ -80,7 +80,7 @@ async function load({ deploymentName, resourceKey }) {
     // @ts-ignore
     serializedResources[0],
     resourceMap,
-    NON_CIRCULAR_CLASS_MAP
+    NON_CIRCULAR_CLASS_MAP,
   );
 }
 

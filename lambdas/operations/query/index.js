@@ -12,10 +12,10 @@ const daemon_log = logging.getDaemonLogger();
 const sqs = new SQS({ region: process.env.AWS_REGION });
 
 const GLOBAL_QUERY_CONCURRENCY = Number(
-  process.env.GLOBAL_QUERY_CONCURRENCY || 10
+  process.env.GLOBAL_QUERY_CONCURRENCY || 10,
 );
 const RESOURCE_QUERY_CONCURRENCY = Number(
-  process.env.RESOURCE_QUERY_CONCURRENCY || 5
+  process.env.RESOURCE_QUERY_CONCURRENCY || 5,
 );
 const QUEUE_URL = process.env.DAEMON_QUEUE_URL || '';
 
@@ -56,7 +56,7 @@ async function enqueue(event, context, query_inputs) {
         query_string: query.query_string,
       },
     })),
-    QUEUE_URL
+    QUEUE_URL,
   );
   event_log.info(`finished enqueuing ${queries.length} query events`);
 }
@@ -80,7 +80,7 @@ async function _run(event, context, resource) {
     event.resource_id,
     event.operation_id,
     event.action_id,
-    event.query_id
+    event.query_id,
   );
   if (!query) throw new Error('Invalid or missing query');
   const query_string = event.action_inputs.query_string;
@@ -120,7 +120,7 @@ async function run(event, context) {
     throw new Error('Wharfie event missing fields');
   const operation = await resource_db.getOperation(
     event.resource_id,
-    event.operation_id
+    event.operation_id,
   );
   if (!operation) {
     daemon_log.warn('operation unexpectedly missing, maybe it was cancelled?');
@@ -130,7 +130,7 @@ async function run(event, context) {
 
   const isResourceLocked = await semaphore_db.increase(
     `wharfie:${event.operation_type}:${event.resource_id}`,
-    RESOURCE_QUERY_CONCURRENCY
+    RESOURCE_QUERY_CONCURRENCY,
   );
   if (!isResourceLocked) {
     event_log.debug(`Too many running queries running for resource`);
@@ -141,21 +141,21 @@ async function run(event, context) {
       }),
       QUEUE_URL,
       Math.floor(
-        Math.random() * Math.min(60, 1 * Math.pow(2, run_query_retries))
-      ) + 5
+        Math.random() * Math.min(60, 1 * Math.pow(2, run_query_retries)),
+      ) + 5,
     );
     return;
   }
   const isGlobalLocked = await semaphore_db.increase(
     'wharfie',
-    GLOBAL_QUERY_CONCURRENCY
+    GLOBAL_QUERY_CONCURRENCY,
   );
   if (!isGlobalLocked) {
     event_log.debug(
-      `Too many running queries running for all wharfie resources`
+      `Too many running queries running for all wharfie resources`,
     );
     await semaphore_db.release(
-      `wharfie:${event.operation_type}:${event.resource_id}`
+      `wharfie:${event.operation_type}:${event.resource_id}`,
     );
     const run_query_retries = event.run_query_retries || 0;
     await sqs.enqueue(
@@ -164,8 +164,8 @@ async function run(event, context) {
       }),
       QUEUE_URL,
       Math.floor(
-        Math.random() * Math.min(60, 1 * Math.pow(2, run_query_retries))
-      ) + 5
+        Math.random() * Math.min(60, 1 * Math.pow(2, run_query_retries)),
+      ) + 5,
     );
     return;
   }
@@ -181,7 +181,7 @@ async function run(event, context) {
   } catch (err) {
     await semaphore_db.release('wharfie');
     await semaphore_db.release(
-      `wharfie:${event.operation_type}:${event.resource_id}`
+      `wharfie:${event.operation_type}:${event.resource_id}`,
     );
     throw err;
   }

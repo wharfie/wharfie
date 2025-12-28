@@ -25,15 +25,15 @@ async function run(cleanupEvent, context) {
   if (!cleanupEvent.resource_id || !cleanupEvent.manifest_uri) {
     daemon_log.info(
       `invalid cleanup event ${JSON.stringify(cleanupEvent)}, ${JSON.stringify(
-        context
-      )}`
+        context,
+      )}`,
     );
     return;
   } else {
     daemon_log.debug(
       `cleanup event ${JSON.stringify(cleanupEvent)}, ${JSON.stringify(
-        context
-      )}`
+        context,
+      )}`,
     );
   }
   const resource = await getResource(cleanupEvent.resource_id);
@@ -83,11 +83,11 @@ async function retry(event) {
     MessageBody: JSON.stringify(
       Object.assign(event, {
         retries: (event.retries || 0) + 1,
-      })
+      }),
     ),
     // full-jitter exp backoff (0 - 180 seconds)
     DelaySeconds: Math.floor(
-      Math.random() * Math.min(180, 1 * Math.pow(2, event.retries || 0))
+      Math.random() * Math.min(180, 1 * Math.pow(2, event.retries || 0)),
     ),
     QueueUrl: QUEUE_URL,
   });
@@ -116,8 +116,8 @@ async function processRecord(record, context) {
     daemon_log.error(
       // @ts-ignore
       `caught error ${err.stack || err}, retrying Record: ${JSON.stringify(
-        event
-      )}`
+        event,
+      )}`,
     );
     await retry(event);
   }
@@ -135,7 +135,7 @@ const handler = async (event, context) => {
     (/** @type {import('aws-lambda').SQSRecord} */ record) => {
       return processRecord(record, context);
     },
-    { concurrency: 4 }
+    { concurrency: 4 },
   );
   daemon_log.info(process.memoryUsage());
   await logging.flush();

@@ -1,24 +1,32 @@
 /* eslint-disable jest/no-hooks */
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-const AWS = require('@aws-sdk/lib-dynamodb');
+
+import { applyAutoMocks } from '../../mocks/automocks.js';
+
+await applyAutoMocks({
+  projectRoot: process.cwd(),
+  debug: true,
+  stub: true,
+});
+
+// const AWS = await import('@aws-sdk/lib-dynamodb')
+console.log('HELLLLLO');
 
 process.env.QUERY_TABLE = 'query_table';
 
-const semaphore = require('../../../lambdas/lib/dynamo/semaphore');
+// const semaphore = await import('../../../lambdas/lib/dynamo/semaphore.js')
 let update, get, _delete;
 
 describe('dynamo semaphore db', () => {
-  beforeAll(() => {
-    update = AWS.spyOn('DynamoDBDocument', 'update');
-    get = AWS.spyOn('DynamoDBDocument', 'get');
-    _delete = AWS.spyOn('DynamoDBDocument', 'delete');
-  });
+  // beforeAll(() => {
+  //   update = AWS.spyOn('DynamoDBDocument', 'update');
+  //   get = AWS.spyOn('DynamoDBDocument', 'get');
+  //   _delete = AWS.spyOn('DynamoDBDocument', 'delete');
+  // });
 
-  afterAll(() => {
-    AWS.clearAllMocks();
-  });
+  // afterAll(() => {
+  //   AWS.clearAllMocks();
+  // });
 
   it('increase', async () => {
     expect.assertions(2);

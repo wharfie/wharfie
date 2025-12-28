@@ -17,7 +17,7 @@ function execp(file, args) {
       (err, stdout, stderr) => {
         if (err) return reject(err);
         resolve({ stdout, stderr });
-      }
+      },
     );
   });
 }

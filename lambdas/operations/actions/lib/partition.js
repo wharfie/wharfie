@@ -25,7 +25,7 @@ class Partition {
         .reverse()
         .map(
           ([partitionKey, partitionValue]) =>
-            `${partitionKey}='${partitionValue}'`
+            `${partitionKey}='${partitionValue}'`,
         )
         .join(', ');
       return `PARTITION (${keyStatements}) LOCATION '${partition.location}'`;
@@ -35,7 +35,7 @@ class Partition {
     while (partitionStatements.length > 0)
       queries.push(
         `ALTER TABLE ${databaseName}.${tableName} ADD IF NOT EXISTS
-          ${partitionStatements.splice(0, 100).join('\n')}`
+          ${partitionStatements.splice(0, 100).join('\n')}`,
       );
 
     return queries;
@@ -56,13 +56,13 @@ class Partition {
       const references = (body || '').toString().split('\n');
       if (references.length === 0) throw new Error('empty reference file');
       const { bucket: refBucket, prefix: refPrefix } = this.s3.parseS3Uri(
-        references[0]
+        references[0],
       );
       return {
         partitionValues: partition.partitionValues,
         location: `s3://${refBucket}/${refPrefix.substring(
           0,
-          refPrefix.lastIndexOf('/')
+          refPrefix.lastIndexOf('/'),
         )}`,
       };
     } catch (error) {
@@ -127,7 +127,7 @@ class Partition {
     const partitions = await this.s3.findPartitions(
       bucket,
       prefix,
-      partitionKeys
+      partitionKeys,
     );
 
     const { Table } = await this.glue.getTable({
@@ -138,7 +138,7 @@ class Partition {
       throw new Error('Table does not exist');
     }
     const symlinkedPartitions = await Promise.all(
-      partitions.map(this.followSymlinks, this)
+      partitions.map(this.followSymlinks, this),
     );
 
     await this.glue.batchCreatePartition({
@@ -163,7 +163,7 @@ class Partition {
     const logicalPartitions = await this.s3.findPartitions(
       bucket,
       prefix,
-      partitionKeys
+      partitionKeys,
     );
     const registeredPartitions = await this.glue.getPartitions({
       DatabaseName: databaseName,
@@ -180,35 +180,35 @@ class Partition {
       registeredPartitions.map((partition) =>
         partitionKeys
           .map((key) => partition.partitionValues[key.name])
-          .join('/')
-      )
+          .join('/'),
+      ),
     );
     const logicalPartitionsSet = new Set(
       logicalPartitions.map((partition) =>
         partitionKeys
           .map((key) => partition.partitionValues[key.name])
-          .join('/')
-      )
+          .join('/'),
+      ),
     );
     const missingPartitions = logicalPartitions.filter(
       (partition) =>
         !registeredPartitionsSet.has(
           partitionKeys
             .map((key) => partition.partitionValues[key.name])
-            .join('/')
-        )
+            .join('/'),
+        ),
     );
     const expiredPartitions = registeredPartitions.filter(
       (partition) =>
         !logicalPartitionsSet.has(
           partitionKeys
             .map((key) => partition.partitionValues[key.name])
-            .join('/')
-        )
+            .join('/'),
+        ),
     );
 
     const symlinkedPartitions = await Promise.all(
-      missingPartitions.map(this.followSymlinks, this)
+      missingPartitions.map(this.followSymlinks, this),
     );
 
     await Promise.all([
@@ -255,7 +255,7 @@ class Partition {
       return;
     }
     const partitionValues = (Table.PartitionKeys || []).map(
-      (key) => `${partition.partitionValues[key.Name || '']}`
+      (key) => `${partition.partitionValues[key.Name || '']}`,
     );
     try {
       await this.glue.createPartition({

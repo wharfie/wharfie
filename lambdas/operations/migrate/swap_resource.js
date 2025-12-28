@@ -20,7 +20,7 @@ async function swap_partitions(
   glue,
   s3,
   migrateTable,
-  destinationTable
+  destinationTable,
 ) {
   const event_log = logging.getEventLogger(event, context);
   event_log.info("MIGRATE_SWAP_RESOURCE: updating table's partitions");
@@ -62,7 +62,7 @@ async function swap_partitions(
           }`
         );
       },
-      ''
+      '',
     );
     existingPartitionsLookup[partitionLookupKey] = p;
   });
@@ -76,12 +76,12 @@ async function swap_partitions(
           }`
         );
       },
-      ''
+      '',
     );
     if (!existingPartitionsLookup[partitionLookup]) {
       partitionCreateOps.push({
         Values: migrationTablePartitionKeys.map(
-          (key) => `${p.partitionValues[key.Name || '']}`
+          (key) => `${p.partitionValues[key.Name || '']}`,
         ),
         StorageDescriptor: {
           ...migrateTable.StorageDescriptor,
@@ -90,7 +90,7 @@ async function swap_partitions(
         Parameters: migrateTable.Parameters,
       });
       const { bucket, prefix } = s3.parseS3Uri(
-        `${migrateTable.StorageDescriptor?.Location}`
+        `${migrateTable.StorageDescriptor?.Location}`,
       );
       partitionUpdateReferenceOps.push({
         CopySource: `/${bucket}/${prefix}${partitionLookup}/files`,
@@ -100,7 +100,7 @@ async function swap_partitions(
     }
     if (existingPartitionsLookup[partitionLookup]?.location !== p.location) {
       const partitionValues = migrationTablePartitionKeys.map(
-        (partitionKey) => `${p.partitionValues[partitionKey.Name || '']}`
+        (partitionKey) => `${p.partitionValues[partitionKey.Name || '']}`,
       );
       partitionUpdateOps.push({
         PartitionValueList: partitionValues,
@@ -114,7 +114,7 @@ async function swap_partitions(
         },
       });
       const { bucket, prefix } = s3.parseS3Uri(
-        `${migrateTable.StorageDescriptor?.Location}`
+        `${migrateTable.StorageDescriptor?.Location}`,
       );
       partitionUpdateReferenceOps.push({
         CopySource: `/${bucket}/${prefix}${partitionLookup}/files`,
@@ -128,9 +128,9 @@ async function swap_partitions(
   const partitionDeleteOps = Object.values(existingPartitionsLookup).map(
     (p) => ({
       Values: migrationTablePartitionKeys.map(
-        (key) => `${p.partitionValues[key.Name || '']}`
+        (key) => `${p.partitionValues[key.Name || '']}`,
       ),
-    })
+    }),
   );
   /** @type {import("@aws-sdk/client-s3").ObjectIdentifier[]} */
   const partitionDeleteObjects = Object.values(existingPartitionsLookup).map(
@@ -144,24 +144,24 @@ async function swap_partitions(
             }`
           );
         },
-        ''
+        '',
       );
       return {
         Key: `${migrateTable.StorageDescriptor?.Location}${partitionLookup}/files`,
       };
-    }
+    },
   );
 
   event_log.info(
-    `MIGRATE_SWAP_RESOURCE: creating ${partitionCreateOps.length} partitions`
+    `MIGRATE_SWAP_RESOURCE: creating ${partitionCreateOps.length} partitions`,
   );
 
   event_log.info(
-    `MIGRATE_SWAP_RESOURCE: updating ${partitionUpdateOps.length} partitions`
+    `MIGRATE_SWAP_RESOURCE: updating ${partitionUpdateOps.length} partitions`,
   );
 
   event_log.info(
-    `MIGRATE_SWAP_RESOURCE: deleting ${partitionDeleteOps.length} partitions`
+    `MIGRATE_SWAP_RESOURCE: deleting ${partitionDeleteOps.length} partitions`,
   );
 
   await Promise.all([
@@ -214,7 +214,7 @@ async function run(event, context, resource, operation) {
   const destinationTableName = resource.destination_properties.name;
 
   const migrationResource = Resource.fromRecord(
-    operation.operation_inputs.migration_resource
+    operation.operation_inputs.migration_resource,
   );
   const migrateDatabaseName =
     migrationResource.destination_properties.databaseName;
@@ -244,7 +244,7 @@ async function run(event, context, resource, operation) {
       glue,
       s3,
       migrateTable,
-      destinationTable
+      destinationTable,
     );
   }
   event_log.info(`destinationTable ${JSON.stringify(destinationTable)}`);

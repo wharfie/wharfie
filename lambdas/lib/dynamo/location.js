@@ -14,7 +14,7 @@ const docClient = DynamoDBDocument.from(
     region: process.env.AWS_REGION,
     credentials,
   }),
-  { marshallOptions: { removeUndefinedValues: true } }
+  { marshallOptions: { removeUndefinedValues: true } },
 );
 
 const LOCATION_TABLE = process.env.LOCATION_TABLE || '';
@@ -57,9 +57,9 @@ async function findLocations(location) {
       location.slice(-1) === '/'
         ? location.substring(
             0,
-            location.lastIndexOf('/', location.lastIndexOf('/') - 1) + 1
+            location.lastIndexOf('/', location.lastIndexOf('/') - 1) + 1,
           )
-        : location.substring(0, location.lastIndexOf('/') + 1)
+        : location.substring(0, location.lastIndexOf('/') + 1),
     );
   return Items.map((item) => ({
     location,
@@ -74,7 +74,7 @@ async function findLocations(location) {
  */
 async function deleteLocation(
   location,
-  tableName = process.env.LOCATION_TABLE
+  tableName = process.env.LOCATION_TABLE,
 ) {
   await docClient.delete({
     TableName: tableName,

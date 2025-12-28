@@ -1,8 +1,6 @@
 import Action from './action.js';
 import { createId } from '../id.js';
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-const { version: WHARFIE_VERSION } = require('../../../package.json');
+import { WHARFIE_VERSION } from '../version.js';
 
 /**
  * @typedef {(
@@ -253,11 +251,11 @@ class Operation {
     let result = '';
     for (const [actionName, Dependencies] of this.outgoingEdges) {
       const DependencyList = Dependencies.map((dep) =>
-        this.getActionTypeById(dep)
+        this.getActionTypeById(dep),
       ).join(', ');
       if (DependencyList.length > 0) {
         result += `${this.getActionTypeById(
-          actionName
+          actionName,
         )} -> ${DependencyList}\n`;
       } else {
         result += `${this.getActionTypeById(actionName)}\n`;

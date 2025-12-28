@@ -156,7 +156,7 @@ class Lambda {
   async listFunctions(params) {
     const allFunctions = [];
     const { Functions, NextMarker } = await this.lambda.send(
-      new ListFunctionsCommand(params)
+      new ListFunctionsCommand(params),
     );
     allFunctions.push(...(Functions || []));
     let Marker = NextMarker;
@@ -165,7 +165,7 @@ class Lambda {
         new ListFunctionsCommand({
           ...params,
           Marker,
-        })
+        }),
       );
       allFunctions.push(...(Functions || []));
       Marker = NextMarker;

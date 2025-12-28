@@ -33,7 +33,7 @@ class Queue extends BaseResource {
         delaySeconds: `0`,
         receiveMessageWaitTimeSeconds: `0`,
       },
-      properties
+      properties,
     );
     super({
       name,
@@ -52,10 +52,10 @@ class Queue extends BaseResource {
     const currentTags = Tags || {};
     const desiredTags = this.get('tags') || {};
     const tagsToAdd = Object.entries(desiredTags).filter(
-      ([key, value]) => currentTags[key] !== value
+      ([key, value]) => currentTags[key] !== value,
     );
     const tagsToRemove = Object.keys(currentTags).filter(
-      (key) => !(key in desiredTags)
+      (key) => !(key in desiredTags),
     );
     if (tagsToAdd.length > 0) {
       await this.sqs.tagQueue({
@@ -98,7 +98,7 @@ class Queue extends BaseResource {
             MessageRetentionPeriod: this.get('messageRetentionPeriod'),
             DelaySeconds: this.get('delaySeconds'),
             ReceiveMessageWaitTimeSeconds: this.get(
-              'receiveMessageWaitTimeSeconds'
+              'receiveMessageWaitTimeSeconds',
             ),
             ...(this.has('policy')
               ? { Policy: JSON.stringify(this.get('policy')) }
@@ -115,7 +115,7 @@ class Queue extends BaseResource {
             MessageRetentionPeriod: this.get('messageRetentionPeriod'),
             DelaySeconds: this.get('delaySeconds'),
             ReceiveMessageWaitTimeSeconds: this.get(
-              'receiveMessageWaitTimeSeconds'
+              'receiveMessageWaitTimeSeconds',
             ),
           },
           tags: this.get('tags') || {},

@@ -116,10 +116,10 @@ async function startLocalBootstrap() {
         throw new Error(
           `child ${c.pid} exited with code ${code}${
             signal ? ` (signal ${signal})` : ''
-          }`
+          }`,
         );
       }
-    })
+    }),
   );
   // await bootstrapNode.destroy();
 })();

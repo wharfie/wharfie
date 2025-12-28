@@ -44,7 +44,7 @@ class NodeBinary extends BaseResource {
       {
         version: '23',
       },
-      properties
+      properties,
     );
     super({
       name,
@@ -63,7 +63,7 @@ class NodeBinary extends BaseResource {
     if (this.has('exactVersion')) return this.get('exactVersion');
     const versions = await NodeBinary.getVersions();
     const matchingVersions = versions.filter((v) =>
-      v.version.startsWith(`v${this.get('version')}`)
+      v.version.startsWith(`v${this.get('version')}`),
     );
     if (matchingVersions.length === 0) {
       throw new Error(`No Node.js version found for ${this.get('version')}`);
@@ -104,7 +104,7 @@ class NodeBinary extends BaseResource {
   async getBinaryName() {
     const ext = this.get('platform') === 'win32' ? '.exe' : '';
     return `node-${await this.getExactVersion()}-${this.get(
-      'platform'
+      'platform',
     )}-${this.get('architecture')}${ext}`;
   }
 
@@ -119,7 +119,7 @@ class NodeBinary extends BaseResource {
     }
     this._setUNSAFE(
       'binaryPath',
-      join(NodeBinary.BINARIES_DIR, await this.getBinaryName())
+      join(NodeBinary.BINARIES_DIR, await this.getBinaryName()),
     );
     return this.get('binaryPath');
   }
@@ -132,7 +132,7 @@ class NodeBinary extends BaseResource {
     if (this._archivePath) return this._archivePath;
     const ext = this.get('platform') === 'win32' ? '.zip' : '.tar.gz';
     const archiveName = `node-${await this.getExactVersion()}-${this.get(
-      'platform'
+      'platform',
     )}-${this.get('architecture')}${ext}`;
     this._archivePath = join(NodeBinary.TEMP_DIR, archiveName);
     return this._archivePath;
@@ -209,7 +209,7 @@ class NodeBinary extends BaseResource {
     const { token, normPlatform, normArch, ext, packagingKey } =
       NodeBinary.resolveTargetSpec(
         this.get('platform'),
-        this.get('architecture')
+        this.get('architecture'),
       );
 
     // Validate that at least one acceptable "files" key exists
@@ -219,8 +219,8 @@ class NodeBinary extends BaseResource {
     if (!ok) {
       throw new Error(
         `Node.js ${version} does not publish binaries for ${token}-${normArch}. Available: ${meta.files.join(
-          ', '
-        )}`
+          ', ',
+        )}`,
       );
     }
     // node-v23.11.1-darwin-x64.tar.gz
@@ -253,7 +253,7 @@ class NodeBinary extends BaseResource {
           if (response.statusCode !== 200) {
             response.resume();
             return reject(
-              new Error(`Download failed: ${response.statusCode} ${url}`)
+              new Error(`Download failed: ${response.statusCode} ${url}`),
             );
           }
           const ct = (response.headers['content-type'] || '').toLowerCase();
@@ -261,7 +261,7 @@ class NodeBinary extends BaseResource {
           if (!/zip|tar|gzip|octet-stream/.test(ct)) {
             response.resume();
             return reject(
-              new Error(`Unexpected content-type '${ct}' from ${url}`)
+              new Error(`Unexpected content-type '${ct}' from ${url}`),
             );
           }
 
@@ -279,7 +279,7 @@ class NodeBinary extends BaseResource {
     let extractedBinary;
     if (this.get('platform') === 'win32') {
       extractedBinary = await this.extractWindowsZip(
-        await this.getArchivePath()
+        await this.getArchivePath(),
       );
     } else {
       extractedBinary = await this.extractUnixTar(await this.getArchivePath());
@@ -350,7 +350,7 @@ class NodeBinary extends BaseResource {
     const subDirs = await readdir(extractDir);
     if (subDirs.length !== 1) {
       throw new Error(
-        `Expected exactly 1 top-level dir in tar, got: ${subDirs.length}`
+        `Expected exactly 1 top-level dir in tar, got: ${subDirs.length}`,
       );
     }
 

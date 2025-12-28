@@ -14,5 +14,5 @@ if (process.env.AWS_MOCKS) {
 
 module.exports = Object.assign(
   {},
-  { ...AWS, CloudFormation, CloudFormationMock }
+  { ...AWS, CloudFormation, CloudFormationMock },
 );

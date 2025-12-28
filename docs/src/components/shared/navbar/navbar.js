@@ -228,7 +228,7 @@ export default function NavBar({ children }) {
         <div
           {...css(
             overlayBaseStyle,
-            sidebarOpen ? overlayOpenStyle : overlayClosedStyle
+            sidebarOpen ? overlayOpenStyle : overlayClosedStyle,
           )}
           onClick={onOverlayClick}
         />

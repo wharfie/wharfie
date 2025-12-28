@@ -64,7 +64,7 @@ async function dagster(event, context, resource, operation) {
           resolve(data);
         } else {
           reject(
-            new Error(`Request failed with status code: ${res.statusCode}`)
+            new Error(`Request failed with status code: ${res.statusCode}`),
           );
         }
       });

@@ -1,11 +1,14 @@
 /* eslint-disable jest/no-hooks */
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
 
-jest.mock('../../../lambdas/lib/dynamo/semaphore');
+import { applyAutoMocks } from '../../mocks/automocks.js';
 
-const semaphore = require('../../../lambdas/lib/dynamo/semaphore');
+await applyAutoMocks({
+  projectRoot: process.cwd(),
+  debug: true,
+});
+
+const semaphore = await import('../../../lambdas/lib/dynamo/semaphore.js');
 
 describe('dynamo semaphore db', () => {
   afterEach(() => {

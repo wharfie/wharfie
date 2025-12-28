@@ -128,7 +128,7 @@ class SQS {
             MessageBody: JSON.stringify(event),
           })),
           QueueUrl: queueUrl,
-        })
+        }),
       );
     }
     await Promise.all(promises);
@@ -159,7 +159,7 @@ class SQS {
   async listQueues(params) {
     const allQueueUrls = [];
     const { NextToken, QueueUrls } = await this.sqs.send(
-      new ListQueuesCommand(params)
+      new ListQueuesCommand(params),
     );
     allQueueUrls.push(...(QueueUrls || []));
     let Marker = NextToken;
@@ -168,7 +168,7 @@ class SQS {
         new ListQueuesCommand({
           ...params,
           NextToken: Marker,
-        })
+        }),
       );
       allQueueUrls.push(...(QueueUrls || []));
       Marker = NextToken;

@@ -50,7 +50,7 @@ describe('tests for cleanup lambda', () => {
         delays: 100,
         manifest_uri: 's3://a-bucket/prefix/refs/manifest',
       },
-      {}
+      {},
     );
 
     expect(resource_db.getResource).toHaveBeenCalledTimes(1);

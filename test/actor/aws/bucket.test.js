@@ -121,9 +121,9 @@ describe('bucket IaC', () => {
     await expect(
       s3.getBucketLocation({
         Bucket: bucket.get('bucketName'),
-      })
+      }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"The specified bucket does not exist: test-bucket-111111"`
+      `"The specified bucket does not exist: test-bucket-111111"`,
     );
   });
 });

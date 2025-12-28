@@ -18,8 +18,8 @@ const QUEUE_URL = process.env.EVENTS_QUEUE_URL || '';
 async function run(ScheduledEvent, context) {
   daemon_log.debug(
     `scheduled event record ${JSON.stringify(ScheduledEvent)}, ${JSON.stringify(
-      context
-    )}`
+      context,
+    )}`,
   );
   const start_time = Number(ScheduledEvent.sort_key.split(':')[1] || 0);
   if (Date.now() < start_time) {
@@ -59,7 +59,7 @@ async function run(ScheduledEvent, context) {
     const partitionValues = {};
     if (
       ScheduledEvent?.partition?.partitionValues.filter(
-        (/** @type {string} */ value) => value.includes('=')
+        (/** @type {string} */ value) => value.includes('='),
       ).length === ScheduledEvent?.partition?.partitionValues.length
     ) {
       (resource.destination_properties?.partitionKeys || [])
@@ -92,7 +92,7 @@ async function run(ScheduledEvent, context) {
               daemon_log.warn(`undefined partition value ${ScheduledEvent}`);
               partitionValues[partitionKey.name] = '';
             }
-          }
+          },
         );
     } else {
       (resource.destination_properties?.partitionKeys || [])
@@ -124,7 +124,7 @@ async function run(ScheduledEvent, context) {
               daemon_log.warn(`undefined partition value ${ScheduledEvent}`);
               partitionValues[partitionKey.name] = '';
             }
-          }
+          },
         );
     }
 

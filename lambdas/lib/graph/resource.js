@@ -1,7 +1,5 @@
 import { createId } from '../id.js';
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-const { version: WHARFIE_VERSION } = require('../../../package.json');
+import { WHARFIE_VERSION } from '../version.js';
 
 /**
  * @typedef {('ACTIVE'|

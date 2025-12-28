@@ -1,10 +1,14 @@
 /* eslint-disable jest/no-hooks */
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-jest.mock('../../../lambdas/lib/dynamo/scheduler');
 
-const scheduler = require('../../../lambdas/lib/dynamo/scheduler');
+import { applyAutoMocks } from '../../mocks/automocks.js';
+
+await applyAutoMocks({
+  projectRoot: process.cwd(),
+  debug: true,
+});
+
+const scheduler = await import('../../../lambdas/lib/dynamo/scheduler.js');
 
 describe('dynamo event db', () => {
   afterEach(() => {
@@ -94,7 +98,7 @@ describe('dynamo event db', () => {
         resource_id: 'test',
         sort_key: 'dt=10:112312',
       },
-      'running'
+      'running',
     );
 
     expect(scheduler.__getMockState()).toMatchInlineSnapshot(`

@@ -12,17 +12,17 @@ async function loadFile(dirent) {
   switch (fileExtension) {
     case 'json':
       return JSON.parse(
-        await fs.readFile(path.join(dirent.parentPath, dirent.name), 'utf8')
+        await fs.readFile(path.join(dirent.parentPath, dirent.name), 'utf8'),
       );
     case 'yaml':
     case 'yml':
       return yaml.load(
-        await fs.readFile(path.join(dirent.parentPath, dirent.name), 'utf8')
+        await fs.readFile(path.join(dirent.parentPath, dirent.name), 'utf8'),
       );
     default:
       return await fs.readFile(
         path.join(dirent.parentPath, dirent.name),
-        'utf8'
+        'utf8',
       );
   }
 }

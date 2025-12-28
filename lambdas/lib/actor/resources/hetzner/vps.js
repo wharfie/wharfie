@@ -52,7 +52,7 @@ class HetznerVPS extends BaseResource {
         image: 'ubuntu-22.04',
         location: 'nbg1',
       },
-      properties
+      properties,
     );
     super({
       name,

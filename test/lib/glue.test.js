@@ -52,7 +52,7 @@ describe('tests for Glue', () => {
     expect(AWS.GlueMock).toHaveReceivedCommandTimes(AWS.GetTablesCommand, 1);
     expect(AWS.GlueMock).toHaveReceivedCommandWith(
       AWS.GetTablesCommand,
-      params
+      params,
     );
   });
 
@@ -71,7 +71,7 @@ describe('tests for Glue', () => {
     expect(AWS.GlueMock).toHaveReceivedCommandTimes(AWS.GetPartitionCommand, 1);
     expect(AWS.GlueMock).toHaveReceivedCommandWith(
       AWS.GetPartitionCommand,
-      params
+      params,
     );
   });
 
@@ -109,11 +109,11 @@ describe('tests for Glue', () => {
 
     expect(AWS.GlueMock).toHaveReceivedCommandTimes(
       AWS.BatchCreatePartitionCommand,
-      2
+      2,
     );
     expect(
       AWS.GlueMock.commandCalls(AWS.BatchCreatePartitionCommand)[0].args[0]
-        .input
+        .input,
     ).toMatchInlineSnapshot(`
       {
         "DatabaseName": "database_name",
@@ -140,7 +140,7 @@ describe('tests for Glue', () => {
     `);
     expect(
       AWS.GlueMock.commandCalls(AWS.BatchCreatePartitionCommand)[1].args[0]
-        .input
+        .input,
     ).toMatchInlineSnapshot(`
       {
         "DatabaseName": "database_name",
@@ -176,11 +176,11 @@ describe('tests for Glue', () => {
 
     expect(AWS.GlueMock).toHaveReceivedCommandTimes(
       AWS.CreatePartitionCommand,
-      1
+      1,
     );
     expect(AWS.GlueMock).toHaveReceivedCommandWith(
       AWS.CreatePartitionCommand,
-      params
+      params,
     );
   });
 
@@ -226,11 +226,11 @@ describe('tests for Glue', () => {
 
     expect(AWS.GlueMock).toHaveReceivedCommandTimes(
       AWS.BatchUpdatePartitionCommand,
-      2
+      2,
     );
     expect(
       AWS.GlueMock.commandCalls(AWS.BatchUpdatePartitionCommand)[0].args[0]
-        .input
+        .input,
     ).toMatchInlineSnapshot(`
       {
         "DatabaseName": "database_name",
@@ -273,7 +273,7 @@ describe('tests for Glue', () => {
     `);
     expect(
       AWS.GlueMock.commandCalls(AWS.BatchUpdatePartitionCommand)[1].args[0]
-        .input
+        .input,
     ).toMatchInlineSnapshot(`
       {
         "DatabaseName": "database_name",
@@ -332,11 +332,11 @@ describe('tests for Glue', () => {
 
     expect(AWS.GlueMock).toHaveReceivedCommandTimes(
       AWS.BatchDeletePartitionCommand,
-      1
+      1,
     );
     expect(
       AWS.GlueMock.commandCalls(AWS.BatchDeletePartitionCommand)[0].args[0]
-        .input
+        .input,
     ).toMatchInlineSnapshot(`
       {
         "DatabaseName": "database_name",
@@ -380,11 +380,11 @@ describe('tests for Glue', () => {
 
     expect(AWS.GlueMock).toHaveReceivedCommandTimes(
       AWS.UpdatePartitionCommand,
-      1
+      1,
     );
     expect(AWS.GlueMock).toHaveReceivedCommandWith(
       AWS.UpdatePartitionCommand,
-      params
+      params,
     );
   });
 
@@ -402,7 +402,7 @@ describe('tests for Glue', () => {
     expect(AWS.GlueMock).toHaveReceivedCommandTimes(AWS.DeleteTableCommand, 1);
     expect(AWS.GlueMock).toHaveReceivedCommandWith(
       AWS.DeleteTableCommand,
-      params
+      params,
     );
   });
 
@@ -422,7 +422,7 @@ describe('tests for Glue', () => {
     expect(AWS.GlueMock).toHaveReceivedCommandTimes(AWS.CreateTableCommand, 1);
     expect(AWS.GlueMock).toHaveReceivedCommandWith(
       AWS.CreateTableCommand,
-      params
+      params,
     );
   });
 
@@ -457,14 +457,14 @@ describe('tests for Glue', () => {
       params,
       outputDatabaseName,
       outputTableName,
-      outputPrefix
+      outputPrefix,
     );
 
     expect(AWS.GlueMock).toHaveReceivedCommandTimes(AWS.GetTableCommand, 2);
     expect(AWS.GlueMock).toHaveReceivedNthCommandWith(
       1,
       AWS.GetTableCommand,
-      params
+      params,
     );
     expect(AWS.GlueMock).toHaveReceivedNthCommandWith(2, AWS.GetTableCommand, {
       DatabaseName: outputDatabaseName,
@@ -477,7 +477,7 @@ describe('tests for Glue', () => {
       {
         DatabaseName: outputDatabaseName,
         Name: outputTableName,
-      }
+      },
     );
     expect(AWS.GlueMock).toHaveReceivedCommandTimes(AWS.CreateTableCommand, 1);
     expect(AWS.GlueMock).toHaveReceivedNthCommandWith(
@@ -495,7 +495,7 @@ describe('tests for Glue', () => {
               'org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat',
           },
         },
-      }
+      },
     );
   });
 
@@ -531,14 +531,14 @@ describe('tests for Glue', () => {
       params,
       outputDatabaseName,
       outputTableName,
-      outputPrefix
+      outputPrefix,
     );
 
     expect(AWS.GlueMock).toHaveReceivedCommandTimes(AWS.GetTableCommand, 2);
     expect(AWS.GlueMock).toHaveReceivedNthCommandWith(
       1,
       AWS.GetTableCommand,
-      params
+      params,
     );
     expect(AWS.GlueMock).toHaveReceivedNthCommandWith(2, AWS.GetTableCommand, {
       DatabaseName: outputDatabaseName,
@@ -560,7 +560,7 @@ describe('tests for Glue', () => {
               'org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat',
           },
         },
-      }
+      },
     );
   });
 
@@ -605,7 +605,7 @@ describe('tests for Glue', () => {
         {
           Name: 'day',
         },
-      ]
+      ],
     );
 
     expect(partitions).toStrictEqual([
@@ -626,7 +626,7 @@ describe('tests for Glue', () => {
     ]);
     expect(AWS.GlueMock).toHaveReceivedCommandTimes(
       AWS.GetPartitionsCommand,
-      2
+      2,
     );
     expect(AWS.GlueMock).toHaveReceivedNthCommandWith(
       2,
@@ -635,7 +635,7 @@ describe('tests for Glue', () => {
         DatabaseName: 'database',
         Name: 'table_name',
         NextToken: 'continue_token',
-      }
+      },
     );
   });
 
@@ -703,7 +703,7 @@ describe('tests for Glue', () => {
     ]);
     expect(AWS.GlueMock).toHaveReceivedCommandTimes(
       AWS.GetPartitionsCommand,
-      10
+      10,
     );
     expect(AWS.GlueMock).toHaveReceivedCommandTimes(AWS.GetTableCommand, 1);
   });

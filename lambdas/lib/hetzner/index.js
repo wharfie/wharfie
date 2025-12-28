@@ -55,12 +55,12 @@ class HetznerCloud {
    * @param {import('./typedefs.js').HetznerClientOptions} [params] Initialization options for the client.
    */
   constructor(
-    params = /** @type {import('./typedefs.js').HetznerClientOptions} */ ({})
+    params = /** @type {import('./typedefs.js').HetznerClientOptions} */ ({}),
   ) {
     const token = params.token;
     const baseUrl = (params.baseUrl || 'https://api.hetzner.cloud/v1').replace(
       /\/+$/,
-      ''
+      '',
     );
 
     if (!token) throw new Error('token is required');
@@ -347,7 +347,7 @@ class HetznerCloud {
         });
         const found =
           page?.ssh_keys?.find(
-            (/** @type {{ name: string }} */ k) => k?.name === payload.name
+            (/** @type {{ name: string }} */ k) => k?.name === payload.name,
           ) || null;
         if (found) return found;
       }
@@ -566,7 +566,7 @@ class HetznerCloud {
    */
   async waitForServerRunning(
     id,
-    { intervalMs = 2000, timeoutMs = 15 * 60 * 1000, requireIPv4 = true } = {}
+    { intervalMs = 2000, timeoutMs = 15 * 60 * 1000, requireIPv4 = true } = {},
   ) {
     const start = Date.now();
     // eslint-disable-next-line no-constant-condition
@@ -750,9 +750,9 @@ class HetznerCloud {
       'sh',
       '-c',
       `install -o ${shellArg(user)} -g ${shellArg(
-        group
+        group,
       )} -m 0644 /dev/null ${shellArg(stdoutLog)} ${shellArg(
-        stderrLog
+        stderrLog,
       )} || true`,
     ]);
     runcmd.push(['systemctl', 'daemon-reload']);
@@ -903,7 +903,7 @@ class HetznerCloud {
    */
   async terminateServerFast(
     serverId,
-    { wait = true, intervalMs = 2000, timeoutMs = 15 * 60 * 1000 } = {}
+    { wait = true, intervalMs = 2000, timeoutMs = 15 * 60 * 1000 } = {},
   ) {
     await this.powerOffServer(serverId);
     const delRes = await this.deleteServer(serverId);
@@ -936,7 +936,7 @@ class HetznerCloud {
    */
   async waitForAction(
     actionId,
-    { intervalMs = 2000, timeoutMs = 15 * 60 * 1000 } = {}
+    { intervalMs = 2000, timeoutMs = 15 * 60 * 1000 } = {},
   ) {
     const start = Date.now();
     // eslint-disable-next-line no-constant-condition
@@ -1045,7 +1045,7 @@ class HetznerCloud {
    */
   _buildUrl(path, query) {
     const u = new URL(
-      path.startsWith('http') ? path : `${this.baseUrl}${path}`
+      path.startsWith('http') ? path : `${this.baseUrl}${path}`,
     );
     if (query) {
       for (const [k, v] of Object.entries(query)) {
@@ -1124,7 +1124,7 @@ function toCloudConfigYAML(obj) {
     if (Array.isArray(cmd)) {
       const rendered = cmd
         .map((c) =>
-          typeof c === 'string' ? JSON.stringify(c) : JSON.stringify(String(c))
+          typeof c === 'string' ? JSON.stringify(c) : JSON.stringify(String(c)),
         )
         .join(', ');
       lines.push(`  - [${rendered}]`);

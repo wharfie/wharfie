@@ -156,7 +156,7 @@ function buildProviderClientConfig(base, provider, providerOptions = {}) {
         : null);
     if (!endpoint)
       throw new Error(
-        'Hetzner requires providerOptions.location or endpoint (e.g., fsn1)'
+        'Hetzner requires providerOptions.location or endpoint (e.g., fsn1)',
       );
     const region = providerOptions.region || providerOptions.location || 'fsn1';
     cfg.region = region;
@@ -204,7 +204,7 @@ class S3 {
     const { clientConfig, providerMeta } = buildProviderClientConfig(
       baseConfig,
       provider,
-      providerOptions
+      providerOptions,
     );
 
     this.client_config = clientConfig;
@@ -378,14 +378,14 @@ class S3 {
       new HeadObjectCommand({
         Bucket: SourceBucket,
         Key: SourceKey,
-      })
+      }),
     );
     if (!ContentLength) throw new Error('failed to head object to copy');
     const { UploadId } = await this.s3.send(
       new CreateMultipartUploadCommand({
         Bucket,
         Key,
-      })
+      }),
     );
     if (!UploadId) throw new Error('failed to create multipart upload');
     const numOfParts = Math.floor(ContentLength / this.COPY_PART_SIZE_BYTES);
@@ -417,8 +417,8 @@ class S3 {
             Key,
             PartNumber: index + 1,
             UploadId,
-          })
-        )
+          }),
+        ),
       );
     }
     if (remainder >= this.COPY_PART_SIZE_MINIMUM_BYTES) {
@@ -435,8 +435,8 @@ class S3 {
             Key,
             PartNumber: index + 1,
             UploadId,
-          })
-        )
+          }),
+        ),
       );
     }
     try {
@@ -452,7 +452,7 @@ class S3 {
             })),
           },
           UploadId,
-        })
+        }),
       );
     } catch (err) {
       this.s3.send(
@@ -460,7 +460,7 @@ class S3 {
           Bucket,
           Key,
           UploadId,
-        })
+        }),
       );
       throw err;
     }
@@ -478,7 +478,7 @@ class S3 {
         !err.message ||
         // @ts-ignore
         !err.message.startsWith(
-          'The specified copy source is larger than the maximum allowable size for a copy source'
+          'The specified copy source is larger than the maximum allowable size for a copy source',
         )
       )
         throw err;
@@ -513,7 +513,7 @@ class S3 {
           Bucket: DestinationBucket,
           Key: `${DestinationPrefix}${object.Key}`,
           CopySource: `${SourceParams.Bucket}/${object.Key}`,
-        })
+        }),
       );
     }
     await Promise.all(promises);
@@ -525,7 +525,7 @@ class S3 {
           ContinuationToken: response.NextContinuationToken,
         },
         DestinationBucket,
-        DestinationPrefix
+        DestinationPrefix,
       );
     }
   }
@@ -538,7 +538,7 @@ class S3 {
     if (!response.Contents) return;
     if (response.Contents.length === 0) return;
     const objectsToDelete = response.Contents.filter(
-      (object) => object.Key
+      (object) => object.Key,
     ).map((object) => ({
       Key: object.Key || '',
     }));
@@ -571,7 +571,7 @@ class S3 {
       (object) =>
         object.Key &&
         object.LastModified &&
-        object.LastModified < expirationDate
+        object.LastModified < expirationDate,
     ).map((object) => ({
       Key: object.Key || '',
     }));
@@ -589,7 +589,7 @@ class S3 {
           ...params,
           ContinuationToken: response.NextContinuationToken,
         },
-        expirationDate
+        expirationDate,
       );
     }
   }
@@ -604,10 +604,10 @@ class S3 {
       new ListObjectsV2Command({
         ...params,
         Delimiter: '/',
-      })
+      }),
     );
     (response.CommonPrefixes || []).forEach(
-      (obj) => obj.Prefix && prefixes.push(obj.Prefix)
+      (obj) => obj.Prefix && prefixes.push(obj.Prefix),
     );
 
     if (response.NextContinuationToken) {
@@ -616,7 +616,7 @@ class S3 {
           ...params,
           ContinuationToken: response.NextContinuationToken,
         },
-        prefixes
+        prefixes,
       );
     }
     return prefixes;
@@ -635,7 +635,7 @@ class S3 {
     Prefix,
     partitionKeys,
     PartitionValues = {},
-    partitions = []
+    partitions = [],
   ) {
     const prefixes = await this.getCommonPrefixes({ Bucket, Prefix });
     const promises = prefixes.map(async (prefix) => {
@@ -647,7 +647,7 @@ class S3 {
             .replace(`${partitionKeys[0].name}=`, '')
             .replace(`${partitionKeys[0].name}}%3D`, ''),
         },
-        PartitionValues
+        PartitionValues,
       );
       // ignores kinesis firehose's failure prefix
       if (partitionValues[partitionKeys[0].name] === 'processing_failed')
@@ -658,7 +658,7 @@ class S3 {
             prefix,
             partitionKeys.slice(1),
             partitionValues,
-            partitions
+            partitions,
           )
         : partitions.push({
             partitionValues,
@@ -896,7 +896,7 @@ class S3 {
       const regionPromises = AWS_REGIONS.map(async (region) => {
         const { LocationConstraint } = await this.getBucketLocation(
           params,
-          region
+          region,
         );
         return LocationConstraint || 'us-east-1';
       });
@@ -927,7 +927,7 @@ class S3 {
           ContinuationToken: response.NextContinuationToken,
         },
         region,
-        byteSize
+        byteSize,
       );
     }
     return byteSize;

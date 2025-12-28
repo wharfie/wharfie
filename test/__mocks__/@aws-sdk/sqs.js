@@ -57,7 +57,7 @@ class SQSMock {
       });
     SQSMock.__state.queues[params.QueueUrl].Tags = Object.assign(
       SQSMock.__state.queues[params.QueueUrl].Tags,
-      params.Tags
+      params.Tags,
     );
   }
 
@@ -68,8 +68,8 @@ class SQSMock {
       });
     SQSMock.__state.queues[params.QueueUrl].Tags = Object.fromEntries(
       Object.entries(SQSMock.__state.queues[params.QueueUrl].Tags).filter(
-        ([key]) => !params.TagKeys.includes(key)
-      )
+        ([key]) => !params.TagKeys.includes(key),
+      ),
     );
   }
 
@@ -140,8 +140,9 @@ class SQSMock {
   async sendMessageBatch(params) {
     await Promise.all(
       params.Entries.map(
-        async (e) => await this.sendMessage({ QueueUrl: params.QueueUrl, ...e })
-      )
+        async (e) =>
+          await this.sendMessage({ QueueUrl: params.QueueUrl, ...e }),
+      ),
     );
     return {
       Failed: [],
@@ -159,7 +160,7 @@ class SQSMock {
       const messageIndex = Math.floor(Math.random() * limit);
       const _message = SQSMock.__state.queues[params.QueueUrl].queue.splice(
         messageIndex,
-        1
+        1,
       )[0];
       Messages.push({
         ..._message,

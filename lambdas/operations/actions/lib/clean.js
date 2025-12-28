@@ -26,7 +26,7 @@ class Clean {
         Bucket: bucket,
         Prefix: `${prefix}query_metadata/`,
       },
-      expirationDate
+      expirationDate,
     );
   }
 
@@ -62,7 +62,7 @@ class Clean {
       )
         throw new Error(`table does not exist ${databaseName}.${tableName}`);
       const { prefix: livePrefix } = this.s3.parseS3Uri(
-        table.StorageDescriptor.Location
+        table.StorageDescriptor.Location,
       );
 
       while (prefixes.length > 0) {
@@ -76,9 +76,9 @@ class Clean {
                 Bucket: bucket,
                 Prefix: prefix,
               },
-              expirationDate
+              expirationDate,
             );
-          })
+          }),
         );
       }
       return;
@@ -93,7 +93,7 @@ class Clean {
       const key = partitionKeys
         .map(
           (/** @type {Object.<string, string | number>} */ key) =>
-            `${key.Name}=${partition.partitionValues[key.Name]}/`
+            `${key.Name}=${partition.partitionValues[key.Name]}/`,
         )
         .join('');
       const { prefix } = this.s3.parseS3Uri(partition.location);
@@ -115,7 +115,7 @@ class Clean {
           const partitions = await this.s3.findPartitions(
             bucket,
             prefix,
-            partitionKeys
+            partitionKeys,
           );
           while (partitions.length > 0) {
             const partitionChunk = partitions.splice(0, 100);
@@ -124,7 +124,7 @@ class Clean {
                 const key = partitionKeys
                   .map(
                     (/** @type {Object.<string, string | number>} */ key) =>
-                      `${key.Name}=${partition.partitionValues[key.Name]}/`
+                      `${key.Name}=${partition.partitionValues[key.Name]}/`,
                   )
                   .join('');
                 const current = partitionLookup[key];
@@ -135,13 +135,13 @@ class Clean {
                       Bucket: bucket,
                       Prefix: prefix,
                     },
-                    expirationDate
+                    expirationDate,
                   );
                 }
-              })
+              }),
             );
           }
-        })
+        }),
       );
     }
   }
@@ -257,7 +257,7 @@ class Clean {
             Objects: delete_ops[bucket],
           },
         });
-      })
+      }),
     );
   }
 }

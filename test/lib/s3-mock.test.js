@@ -191,11 +191,11 @@ describe('tests for S3 Mock', () => {
     };
     await s3foo.createAppendableOrAppendToObject(
       params,
-      `${JSON.stringify({ foo: 'bar' })}\n`
+      `${JSON.stringify({ foo: 'bar' })}\n`,
     );
     await s3foo.createAppendableOrAppendToObject(
       params,
-      `${JSON.stringify({ biz: 'baz' })}\n`
+      `${JSON.stringify({ biz: 'baz' })}\n`,
     );
     const s3bar = new S3({ region: 'us-east-1' });
 
@@ -226,7 +226,7 @@ describe('tests for S3 Mock', () => {
     });
     await s3foo.createAppendableOrAppendToObject(
       params,
-      JSON.stringify({ biz: 'baz' })
+      JSON.stringify({ biz: 'baz' }),
     );
     const s3bar = new S3({ region: 'us-east-1' });
     const result = await s3bar.getObject(params);

@@ -21,7 +21,7 @@ const AWS = require('@aws-sdk/client-s3');
 if (AWS.S3Mock && typeof AWS.S3Mock.restore === 'function') {
   // eslint-disable-next-line no-console
   console.warn(
-    '[B2 live] Detected aws-sdk-client-mock-jest; restoring real S3Client...'
+    '[B2 live] Detected aws-sdk-client-mock-jest; restoring real S3Client...',
   );
   AWS.S3Mock.restore(); // unpatches S3Client.prototype.send
 }
@@ -37,7 +37,7 @@ const B2_REGION = process.env.B2_REGION || 'us-east-005';
 
 if (!B2_KEY_ID || !B2_APPLICATION_KEY) {
   throw new Error(
-    'Set B2_KEY_ID and B2_APPLICATION_KEY to run Backblaze live tests.'
+    'Set B2_KEY_ID and B2_APPLICATION_KEY to run Backblaze live tests.',
   );
 }
 
@@ -89,7 +89,7 @@ async function listAllKeys(s3, Bucket, Prefix) {
   let ContinuationToken;
   do {
     const page = await s3.s3.send(
-      new ListObjectsV2Command({ Bucket, Prefix, ContinuationToken })
+      new ListObjectsV2Command({ Bucket, Prefix, ContinuationToken }),
     );
     const contents = (page && page.Contents) || [];
     for (const o of contents) if (o && o.Key) keys.push(o.Key);
@@ -114,14 +114,14 @@ async function purgeBucket(s3, Bucket) {
   let cont;
   do {
     const page = await s3.s3.send(
-      new ListObjectsV2Command({ Bucket, ContinuationToken: cont })
+      new ListObjectsV2Command({ Bucket, ContinuationToken: cont }),
     );
     const Objects = ((page && page.Contents) || [])
       .filter((o) => o.Key)
       .map((o) => ({ Key: o.Key }));
     if (Objects.length) {
       await s3.s3.send(
-        new DeleteObjectsCommand({ Bucket, Delete: { Objects } })
+        new DeleteObjectsCommand({ Bucket, Delete: { Objects } }),
       );
     }
     cont = page && page.NextContinuationToken;
@@ -136,7 +136,7 @@ async function purgeBucket(s3, Bucket) {
         Bucket,
         KeyMarker: keyMarker,
         VersionIdMarker: versionIdMarker,
-      })
+      }),
     );
 
     const versionObjs =
@@ -153,7 +153,7 @@ async function purgeBucket(s3, Bucket) {
 
     if (Objects.length) {
       await s3.s3.send(
-        new DeleteObjectsCommand({ Bucket, Delete: { Objects } })
+        new DeleteObjectsCommand({ Bucket, Delete: { Objects } }),
       );
     }
 
@@ -273,7 +273,7 @@ describe('s3 wrapper – Backblaze B2 live tests (no mocks)', () => {
       [
         `${dstPrefix}${srcPrefix}source_database/source_table/123.json`,
         `${dstPrefix}${srcPrefix}source_database/source_table/456.json`,
-      ].sort()
+      ].sort(),
     );
 
     const content = await s3.getObject({
@@ -298,7 +298,7 @@ describe('s3 wrapper – Backblaze B2 live tests (no mocks)', () => {
     const local = makeClient();
 
     expect(() => local.parseS3Uri('s3://example-bucket')).toThrow(
-      's3://example-bucket is not of form s3://bucket/key or s3://bucket/'
+      's3://example-bucket is not of form s3://bucket/key or s3://bucket/',
     );
   });
 
@@ -325,7 +325,7 @@ describe('s3 wrapper – Backblaze B2 live tests (no mocks)', () => {
       `${delPrefix}some_key/wharfie-temp-files/source_table/789.json`,
     ];
     await Promise.all(
-      keys.map((Key) => s3.putObject({ Bucket: BUCKET, Key, Body: 'x' }))
+      keys.map((Key) => s3.putObject({ Bucket: BUCKET, Key, Body: 'x' })),
     );
 
     await s3.deletePath({ Bucket: BUCKET, Prefix: delPrefix });
@@ -355,7 +355,7 @@ describe('s3 wrapper – Backblaze B2 live tests (no mocks)', () => {
 
     // Wrapper returns full prefixes incl. the provided Prefix
     expect(result.sort()).toStrictEqual(
-      [`${base}first_prefix/`, `${base}second_prefix/`].sort()
+      [`${base}first_prefix/`, `${base}second_prefix/`].sort(),
     );
     expect(Array.isArray(result)).toBe(true);
   });
@@ -390,11 +390,11 @@ describe('s3 wrapper – Backblaze B2 live tests (no mocks)', () => {
       base,
       [{ name: 'month' }, { name: 'day' }],
       {},
-      []
+      [],
     );
 
     expect(
-      res.sort((a, b) => a.location.localeCompare(b.location))
+      res.sort((a, b) => a.location.localeCompare(b.location)),
     ).toStrictEqual(
       [
         {
@@ -409,7 +409,7 @@ describe('s3 wrapper – Backblaze B2 live tests (no mocks)', () => {
           location: `s3://${BUCKET}/${base}02/day=03/`,
           partitionValues: { month: '02', day: '03' },
         },
-      ].sort((a, b) => a.location.localeCompare(b.location))
+      ].sort((a, b) => a.location.localeCompare(b.location)),
     );
   });
 });

@@ -62,7 +62,7 @@ const start = async (event, context) => {
       devices.map((d) => {
         const vd = d.deviceDescriptor;
         return `${vd.idVendor.toString(16)}:${vd.idProduct.toString(16)}`;
-      })
+      }),
     );
   } catch (e) {
     console.warn('usb test skipped:', e && e.message);
@@ -80,7 +80,7 @@ const start = async (event, context) => {
     {
       const [row] = (
         await conn.runAndReadAll(
-          "select 1 as one, 2+2 as two, 'ok'::varchar as status"
+          "select 1 as one, 2+2 as two, 'ok'::varchar as status",
         )
       ).getRowObjects();
       if (row.one !== 1 || row.two !== 4 || row.status !== 'ok') {
@@ -104,7 +104,7 @@ const start = async (event, context) => {
       // Option A: cast in SQL so JS sees a number
       const [row] = (
         await conn.runAndReadAll(
-          'from range(5) select cast(sum(range) as int) as s'
+          'from range(5) select cast(sum(range) as int) as s',
         )
       ).getRowObjects();
       if (row.s !== 10) throw new Error('range(5) sum mismatch');

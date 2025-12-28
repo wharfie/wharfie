@@ -8,7 +8,7 @@ const swarm = new Hyperswarm();
 swarm.on('connection', (conn, info) => {
   console.log(
     '[client] connection',
-    Buffer.from(info.publicKey).toString('hex').slice(0, 16)
+    Buffer.from(info.publicKey).toString('hex').slice(0, 16),
   );
   conn.on('data', (d) => console.log('[client] got:', d.toString()));
   conn.write('hello from client');

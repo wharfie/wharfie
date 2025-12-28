@@ -294,7 +294,7 @@ async function fetchEsbuildBinary(platform, arch) {
   const subDirs = readdirSync(extractDir);
   if (subDirs.length !== 1) {
     throw new Error(
-      `Expected exactly 1 top-level dir in tar, got: ${subDirs.length}`
+      `Expected exactly 1 top-level dir in tar, got: ${subDirs.length}`,
     );
   }
   let esbuildBinary;
@@ -462,7 +462,7 @@ async function extractNodeUnixTar(archivePath) {
   const subDirs = readdirSync(extractDir);
   if (subDirs.length !== 1) {
     throw new Error(
-      `Expected exactly 1 top-level dir in tar, got: ${subDirs.length}`
+      `Expected exactly 1 top-level dir in tar, got: ${subDirs.length}`,
     );
   }
   const nodeBinary = join(extractDir, subDirs[0], 'bin', 'node');
@@ -553,7 +553,7 @@ function setupMacKeychain() {
 
   if (!MACOS_CERT_BASE64 || !MACOS_CERT_PASS || !MACOS_KEYCHAIN_PASS) {
     console.warn(
-      'Skipping keychain setup: environment variables not set (MACOS_CERT_BASE64, MACOS_CERT_PASS, MACOS_KEYCHAIN_PASS).'
+      'Skipping keychain setup: environment variables not set (MACOS_CERT_BASE64, MACOS_CERT_PASS, MACOS_KEYCHAIN_PASS).',
     );
     return;
   }
@@ -573,7 +573,7 @@ function setupMacKeychain() {
   const stdout = listResult.stdout.toString();
   if (stdout.includes(keychainPath)) {
     console.log(
-      `Keychain ${keychainPath} already exists. Skipping keychain setup.`
+      `Keychain ${keychainPath} already exists. Skipping keychain setup.`,
     );
     return; // Early return, so we don’t recreate or re-import.
   }

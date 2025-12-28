@@ -44,7 +44,7 @@ class BaseAWS {
               if (stringifiedInput.length > 1000) {
                 value.input = `TRUNCATED: ${stringifiedInput.slice(
                   0,
-                  1000
+                  1000,
                 )}...`;
               }
             }
@@ -73,7 +73,7 @@ class BaseAWS {
               if (stringifiedInput.length > 1000) {
                 value.input = `TRUNCATED: ${stringifiedInput.slice(
                   0,
-                  1000
+                  1000,
                 )}...`;
               }
             }
@@ -102,7 +102,7 @@ class BaseAWS {
               if (stringifiedInput.length > 1000) {
                 value.input = `TRUNCATED: ${stringifiedInput.slice(
                   0,
-                  1000
+                  1000,
                 )}...`;
               }
             }
@@ -134,7 +134,7 @@ class BaseAWS {
               if (stringifiedInput.length > 1000) {
                 value.input = `TRUNCATED: ${stringifiedInput.slice(
                   0,
-                  1000
+                  1000,
                 )}...`;
               }
             }
@@ -160,7 +160,7 @@ class BaseAWS {
       retryStrategy: new ConfiguredRetryStrategy(
         options?.maxAttempts || 20,
         (attempt) =>
-          Math.floor(Math.random() * Math.min(20, 1 * Math.pow(2, attempt))) // backoff function.
+          Math.floor(Math.random() * Math.min(20, 1 * Math.pow(2, attempt))), // backoff function.
       ),
       logger,
     };

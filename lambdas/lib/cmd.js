@@ -15,8 +15,8 @@ async function runCmd(cmd, args) {
         else
           reject(
             new Error(
-              `Command failed: ${cmd} ${args.join(' ')}, exit code ${code}`
-            )
+              `Command failed: ${cmd} ${args.join(' ')}, exit code ${code}`,
+            ),
           );
       } else {
         reject(new Error(`Command terminated with signal ${signal}`));
@@ -54,8 +54,8 @@ async function execFile(filepath, args = [], options = {}, silent = false) {
         else
           reject(
             new Error(
-              `Command failed: ${filepath} ${args.join(' ')}, exit code ${code}`
-            )
+              `Command failed: ${filepath} ${args.join(' ')}, exit code ${code}`,
+            ),
           );
       } else {
         reject(new Error(`Command terminated with signal ${signal}`));

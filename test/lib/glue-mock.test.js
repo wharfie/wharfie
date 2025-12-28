@@ -104,7 +104,7 @@ describe('tests for Glue', () => {
         Name: 'table_name',
       },
       'database_name',
-      'table_name_cloned'
+      'table_name_cloned',
     );
     const result = await glue.getTable({
       DatabaseName: 'database_name',

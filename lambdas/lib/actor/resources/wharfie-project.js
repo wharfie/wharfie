@@ -56,7 +56,7 @@ class WharfieProject extends BaseResourceGroup {
         project: { name },
         createdAt: Date.now(),
       },
-      properties
+      properties,
     );
     super({
       name,
@@ -76,44 +76,44 @@ class WharfieProject extends BaseResourceGroup {
       // if not deserialized this is required
       this.set('eventsQueueArn', () =>
         // @ts-ignore
-        deployment.getEventsActor().getQueue().get('arn')
+        deployment.getEventsActor().getQueue().get('arn'),
       );
       this.set('scheduleQueueArn', () =>
         // @ts-ignore
-        deployment.getEventsActor().getQueue().get('arn')
+        deployment.getEventsActor().getQueue().get('arn'),
       );
       this.set('scheduleQueueUrl', () =>
         // @ts-ignore
-        deployment.getEventsActor().getQueue().get('url')
+        deployment.getEventsActor().getQueue().get('url'),
       );
       this.set('daemonQueueUrl', () =>
         // @ts-ignore
-        deployment.getDaemonActor().getQueue().get('url')
+        deployment.getDaemonActor().getQueue().get('url'),
       );
       this.set('scheduleRoleArn', () =>
         deployment
           .getDeploymentResources()
           .getResource(`${deployment.name}-event-role`)
-          .get('arn')
+          .get('arn'),
       );
       this.set(
         'deploymentSharedPolicyArn',
         deployment
           .getDeploymentResources()
           .getResource(`${deployment.name}-shared-policy`)
-          .get('arn')
+          .get('arn'),
       );
       this.set('actorRoleArns', () =>
         deployment.getActors().map(
           // @ts-ignore
-          (actor) => actor.getRole().get('arn')
-        )
+          (actor) => actor.getRole().get('arn'),
+        ),
       );
       this.set('scheduleRoleArn', () =>
         deployment
           .getDeploymentResources()
           .getResource(`${deployment.name}-event-role`)
-          .get('arn')
+          .get('arn'),
       );
       this.set('deployment', deployment.getDeploymentProperties());
       this.set('operationTable', `${deployment.name}-operations`);
@@ -227,13 +227,13 @@ class WharfieProject extends BaseResourceGroup {
                           (location) =>
                             `arn:aws:s3:::${
                               this.s3.parseS3Uri(location).bucket
-                            }`
+                            }`,
                         ),
                         ...outputLocationsArray.map(
                           (location) =>
                             `arn:aws:s3:::${
                               this.s3.parseS3Uri(location).bucket
-                            }`
+                            }`,
                         ),
                       ],
                     },
@@ -246,7 +246,7 @@ class WharfieProject extends BaseResourceGroup {
                       Effect: 'Allow',
                       Action: ['s3:*'],
                       Resource: outputLocationsArray.map(
-                        (location) => `${this.s3.parseS3Uri(location).arn}*`
+                        (location) => `${this.s3.parseS3Uri(location).arn}*`,
                       ),
                     },
                   ]
@@ -258,7 +258,7 @@ class WharfieProject extends BaseResourceGroup {
                       Effect: 'Allow',
                       Action: ['s3:GetObject'],
                       Resource: inputLocationsArray.map(
-                        (location) => `${this.s3.parseS3Uri(location).arn}*`
+                        (location) => `${this.s3.parseS3Uri(location).arn}*`,
                       ),
                     },
                   ]
@@ -327,7 +327,7 @@ class WharfieProject extends BaseResourceGroup {
           parent: this.getName(),
           dependsOn: [this.getRole(), this.getBucket()],
           properties: newProperties,
-        })
+        }),
       );
       this.setStatus(Reconcilable.Status.DRIFTED);
       this.getRole().setStatus(Reconcilable.Status.DRIFTED);
@@ -453,7 +453,7 @@ class WharfieProject extends BaseResourceGroup {
         const existingResource = this.resources[`${options.name}-resource`];
         const diff = existingResource.diffProperty(
           'userInput',
-          options.properties.userInput
+          options.properties.userInput,
         );
         if (diff.delta) {
           diffs.updates[options.name] = {
@@ -473,7 +473,7 @@ class WharfieProject extends BaseResourceGroup {
   getWharfieResources() {
     // @ts-ignore
     return this.getResources().filter(
-      (resource) => resource instanceof WharfieResource
+      (resource) => resource instanceof WharfieResource,
     );
   }
 
@@ -485,7 +485,7 @@ class WharfieProject extends BaseResourceGroup {
     this.getWharfieResources().forEach(
       (resource) =>
         resource.has('outputLocation') &&
-        outputLocations.add(resource.get('outputLocation'))
+        outputLocations.add(resource.get('outputLocation')),
     );
     return Array.from(outputLocations);
   }
@@ -498,7 +498,7 @@ class WharfieProject extends BaseResourceGroup {
     this.getWharfieResources().forEach(
       (resource) =>
         resource.has('inputLocation') &&
-        inputLocations.add(resource.get('inputLocation'))
+        inputLocations.add(resource.get('inputLocation')),
     );
     return Array.from(inputLocations);
   }

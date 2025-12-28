@@ -90,7 +90,7 @@ class WharfieResource extends BaseResourceGroup {
         resourceKey: parent ? `${parent}#${name}` : name,
       },
       WharfieResource.DefaultProperties,
-      properties
+      properties,
     );
     super({
       name,
@@ -111,14 +111,14 @@ class WharfieResource extends BaseResourceGroup {
     const workgroup = new AthenaWorkGroup({
       // important to prefix with wharfie, else monitor lambda will ignore notifications
       name: `wharfie-${this.get('deployment').name}-${this.get(
-        'resourceName'
+        'resourceName',
       )}-workgroup`,
       parent,
       dependsOn: [],
       properties: {
         deployment: () => this.get('deployment'),
         description: `${this.get('deployment').name} resource ${this.get(
-          'resourceName'
+          'resourceName',
         )} workgroup`,
         outputLocation: `${this.get('outputLocation')}query_metadata/`,
       },
@@ -203,19 +203,19 @@ class WharfieResource extends BaseResourceGroup {
         properties: {
           deployment: () => this.get('deployment'),
           description: `${this.get('projectName')} resource ${this.get(
-            'resourceName'
+            'resourceName',
           )} rule`,
           state: this.has('schedule')
             ? EventsRule.ENABLED
             : EventsRule.DISABLED,
           scheduleExpression: generateSchedule(
-            Number(this.get('schedule', 1800))
+            Number(this.get('schedule', 1800)),
           ),
           roleArn: () => this.get('scheduleRoleArn'),
           targets: () => [
             {
               Id: `${this.get('projectName')}-${this.get(
-                'resourceName'
+                'resourceName',
               )}-rule-target`,
               Arn: this.get('scheduleQueueArn'),
               InputTransformer: {
@@ -235,7 +235,7 @@ class WharfieResource extends BaseResourceGroup {
     records.push(
       new WharfieResourceRecord({
         name: `${this.get('projectName')}-${this.get(
-          'resourceName'
+          'resourceName',
         )}-resource-record`,
         parent,
         dependsOn: [inputTable, outputTable, workgroup],
@@ -269,7 +269,7 @@ class WharfieResource extends BaseResourceGroup {
             return resource.toRecord();
           },
         },
-      })
+      }),
     );
     const isView = this.get('tableType') === 'VIRTUAL_VIEW';
     if (isView) {
@@ -277,8 +277,8 @@ class WharfieResource extends BaseResourceGroup {
       const view_sql = JSON.parse(
         Buffer.from(
           viewOriginalText.substring(16, viewOriginalText.length - 3),
-          'base64'
-        ).toString()
+          'base64',
+        ).toString(),
       ).originalSql;
       const { sources } = _athena.extractSources(view_sql);
       let dependencyCount = 0;
@@ -289,7 +289,7 @@ class WharfieResource extends BaseResourceGroup {
         records.push(
           new DependencyRecord({
             name: `${this.get('projectName')}-${this.get(
-              'resourceName'
+              'resourceName',
             )}-dependency-record-${dependencyCount}`,
             parent,
             dependsOn: [],
@@ -302,7 +302,7 @@ class WharfieResource extends BaseResourceGroup {
                 interval: this.get('interval'),
               },
             },
-          })
+          }),
         );
       }
     }
@@ -311,7 +311,7 @@ class WharfieResource extends BaseResourceGroup {
       records.push(
         new LocationRecord({
           name: `${this.get('projectName')}-${this.get(
-            'resourceName'
+            'resourceName',
           )}-location-record`,
           dependsOn: [],
           parent,
@@ -324,7 +324,7 @@ class WharfieResource extends BaseResourceGroup {
               interval: this.get('interval'),
             },
           },
-        })
+        }),
       );
     }
 
@@ -346,8 +346,8 @@ class WharfieResource extends BaseResourceGroup {
     const outputTable = this.getResource(this.get('resourceName'));
     const workgroup = this.getResource(
       `wharfie-${this.get('deployment').name}-${this.get(
-        'resourceName'
-      )}-workgroup`
+        'resourceName',
+      )}-workgroup`,
     );
     const resource = new Resource({
       id: this.get('resourceId'),
@@ -387,14 +387,14 @@ class WharfieResource extends BaseResourceGroup {
     // Check if `resourceId` has changed
     if (oldProperties?.resourceId !== newProperties.resourceId) {
       reasons.push(
-        `resourceId changed from ${oldProperties?.resourceId} to ${newProperties.resourceId}`
+        `resourceId changed from ${oldProperties?.resourceId} to ${newProperties.resourceId}`,
       );
     }
 
     // Check if `catalogId` has changed
     if (oldProperties?.catalogId !== newProperties.catalogId) {
       reasons.push(
-        `catalogId changed from ${oldProperties?.catalogId} to ${newProperties.catalogId}`
+        `catalogId changed from ${oldProperties?.catalogId} to ${newProperties.catalogId}`,
       );
     }
 
@@ -404,7 +404,7 @@ class WharfieResource extends BaseResourceGroup {
       newProperties?.serdeInfo?.SerializationLibrary
     ) {
       reasons.push(
-        `serdeInfo.SerializationLibrary changed from ${oldProperties?.serdeInfo?.SerializationLibrary} to ${newProperties?.serdeInfo?.SerializationLibrary}`
+        `serdeInfo.SerializationLibrary changed from ${oldProperties?.serdeInfo?.SerializationLibrary} to ${newProperties?.serdeInfo?.SerializationLibrary}`,
       );
     }
 
@@ -415,7 +415,7 @@ class WharfieResource extends BaseResourceGroup {
       Object.keys(oldParameters).length !== Object.keys(newParameters).length
     ) {
       reasons.push(
-        `serdeInfo.Parameters count changed from ${oldParameters.length} to ${newParameters.length}`
+        `serdeInfo.Parameters count changed from ${oldParameters.length} to ${newParameters.length}`,
       );
     } else {
       Object.keys(oldParameters).forEach((parameterName) => {
@@ -423,7 +423,7 @@ class WharfieResource extends BaseResourceGroup {
         const newParameterValue = newParameters[parameterName];
         if (oldParameterValue !== newParameterValue) {
           reasons.push(
-            `serdeInfo.Parameters.${parameterName} changed from ${oldParameterValue} to ${newParameterValue}`
+            `serdeInfo.Parameters.${parameterName} changed from ${oldParameterValue} to ${newParameterValue}`,
           );
         }
       });
@@ -431,21 +431,21 @@ class WharfieResource extends BaseResourceGroup {
     // Check if `outputFormat` has changed
     if (oldProperties?.outputFormat !== newProperties.outputFormat) {
       reasons.push(
-        `outputFormat changed from ${oldProperties?.outputFormat} to ${newProperties.outputFormat}`
+        `outputFormat changed from ${oldProperties?.outputFormat} to ${newProperties.outputFormat}`,
       );
     }
 
     // Check if `inputFormat` has changed
     if (oldProperties?.inputFormat !== newProperties.inputFormat) {
       reasons.push(
-        `inputFormat changed from ${oldProperties?.inputFormat} to ${newProperties.inputFormat}`
+        `inputFormat changed from ${oldProperties?.inputFormat} to ${newProperties.inputFormat}`,
       );
     }
 
     // Check if `numberOfBuckets` has changed
     if (oldProperties?.numberOfBuckets !== newProperties.numberOfBuckets) {
       reasons.push(
-        `numberOfBuckets changed from ${oldProperties?.numberOfBuckets} to ${newProperties.numberOfBuckets}`
+        `numberOfBuckets changed from ${oldProperties?.numberOfBuckets} to ${newProperties.numberOfBuckets}`,
       );
     }
 
@@ -455,28 +455,28 @@ class WharfieResource extends BaseResourceGroup {
       newProperties.storedAsSubDirectories
     ) {
       reasons.push(
-        `storedAsSubDirectories changed from ${oldProperties?.storedAsSubDirectories} to ${newProperties.storedAsSubDirectories}`
+        `storedAsSubDirectories changed from ${oldProperties?.storedAsSubDirectories} to ${newProperties.storedAsSubDirectories}`,
       );
     }
 
     // Check if `compressed` has changed
     if (oldProperties?.compressed !== newProperties.compressed) {
       reasons.push(
-        `compressed changed from ${oldProperties?.compressed} to ${newProperties.compressed}`
+        `compressed changed from ${oldProperties?.compressed} to ${newProperties.compressed}`,
       );
     }
 
     // Check if `inputLocation` has changed
     if (oldProperties?.inputLocation !== newProperties.inputLocation) {
       reasons.push(
-        `inputLocation changed from ${oldProperties?.inputLocation} to ${newProperties.inputLocation}`
+        `inputLocation changed from ${oldProperties?.inputLocation} to ${newProperties.inputLocation}`,
       );
     }
 
     // Check if `outputLocation` has changed
     if (oldProperties?.outputLocation !== newProperties.outputLocation) {
       reasons.push(
-        `outputLocation changed from ${oldProperties?.outputLocation} to ${newProperties.outputLocation}`
+        `outputLocation changed from ${oldProperties?.outputLocation} to ${newProperties.outputLocation}`,
       );
     }
 
@@ -485,18 +485,18 @@ class WharfieResource extends BaseResourceGroup {
     const newColumns = newProperties.columns || [];
     if (oldColumns.length !== newColumns.length) {
       reasons.push(
-        `column count changed from ${oldColumns.length} to ${newColumns.length}`
+        `column count changed from ${oldColumns.length} to ${newColumns.length}`,
       );
     } else {
       for (let i = 0; i < oldColumns.length; i++) {
         if (oldColumns[i].name !== newColumns[i].name) {
           reasons.push(
-            `column name changed at index ${i} from ${oldColumns[i].name} to ${newColumns[i].name}`
+            `column name changed at index ${i} from ${oldColumns[i].name} to ${newColumns[i].name}`,
           );
         }
         if (oldColumns[i].type !== newColumns[i].type) {
           reasons.push(
-            `column type changed at index ${i} from ${oldColumns[i].type} to ${newColumns[i].type}`
+            `column type changed at index ${i} from ${oldColumns[i].type} to ${newColumns[i].type}`,
           );
         }
       }
@@ -507,18 +507,18 @@ class WharfieResource extends BaseResourceGroup {
     const newPartitionKeys = newProperties.partitionKeys || [];
     if (oldPartitionKeys.length !== newPartitionKeys.length) {
       reasons.push(
-        `partition key count changed from ${oldPartitionKeys.length} to ${newPartitionKeys.length}`
+        `partition key count changed from ${oldPartitionKeys.length} to ${newPartitionKeys.length}`,
       );
     } else {
       for (let i = 0; i < oldPartitionKeys.length; i++) {
         if (oldPartitionKeys[i].name !== newPartitionKeys[i].name) {
           reasons.push(
-            `partition key name changed at index ${i} from ${oldPartitionKeys[i].name} to ${newPartitionKeys[i].name}`
+            `partition key name changed at index ${i} from ${oldPartitionKeys[i].name} to ${newPartitionKeys[i].name}`,
           );
         }
         if (oldPartitionKeys[i].type !== newPartitionKeys[i].type) {
           reasons.push(
-            `partition key type changed at index ${i} from ${oldPartitionKeys[i].type} to ${newPartitionKeys[i].type}`
+            `partition key type changed at index ${i} from ${oldPartitionKeys[i].type} to ${newPartitionKeys[i].type}`,
           );
         }
       }
@@ -533,13 +533,13 @@ class WharfieResource extends BaseResourceGroup {
   async _wait_for_op_complete(operation_id) {
     let operation = await operation_db.getOperation(
       this.get('resourceId'),
-      operation_id
+      operation_id,
     );
     while (operation && operation.status !== Status.COMPLETED) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
       operation = await operation_db.getOperation(
         this.get('resourceId'),
-        operation_id
+        operation_id,
       );
     }
   }
@@ -566,7 +566,7 @@ class WharfieResource extends BaseResourceGroup {
     const change = await this._getChange();
     if (change !== 'UPDATED') {
       await Promise.all(
-        this.getResources().map((resource) => resource.reconcile())
+        this.getResources().map((resource) => resource.reconcile()),
       );
     }
     if (

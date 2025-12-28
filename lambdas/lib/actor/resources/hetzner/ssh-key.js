@@ -40,7 +40,7 @@ class HetznerSSHKey extends BaseResource {
     const p = this.get('sshPublicKeyPath');
     if (typeof p !== 'string' || p.trim().length === 0) {
       throw new Error(
-        'properties.publicKeyPath is required and must be a non-empty string.'
+        'properties.publicKeyPath is required and must be a non-empty string.',
       );
     }
     const full = resolve(p);
@@ -64,7 +64,7 @@ class HetznerSSHKey extends BaseResource {
     const page = await this.hz.listSSHKeys({ name, per_page: 50 });
     const found =
       page?.ssh_keys?.find(
-        (/** @type {{ name: string; }} */ k) => k && k.name === name
+        (/** @type {{ name: string; }} */ k) => k && k.name === name,
       ) || null;
     return found;
   }

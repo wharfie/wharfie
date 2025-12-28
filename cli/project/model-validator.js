@@ -65,12 +65,12 @@ function validateModelSql(modelSqls, project, environment) {
       errors.push(
         new WharfieModelSQLError(
           `${chalk.bgWhite.black(
-            `Model::${modelSqlKey}`
+            `Model::${modelSqlKey}`,
           )} is invalid SQL \n${chalk.bgGrey.bold.white(
-            `Ln ${start.line}, Col ${start.column}`
+            `Ln ${start.line}, Col ${start.column}`,
             // @ts-ignore
-          )}  ${chalk.bold(highlightedErrorLine)} - ${error.message}`
-        )
+          )}  ${chalk.bold(highlightedErrorLine)} - ${error.message}`,
+        ),
       );
     }
     await Promise.all(
@@ -84,16 +84,16 @@ function validateModelSql(modelSqls, project, environment) {
         } catch (error) {
           if (error instanceof Glue.EntityNotFoundException) {
             const projectModel = project.models.find(
-              (model) => model.name === TableName
+              (model) => model.name === TableName,
             );
             const projectSource = project.sources.find(
-              (model) => model.name === TableName
+              (model) => model.name === TableName,
             );
             if (!projectModel || !projectSource) {
               errors.push(
                 new WharfieModelSQLError(
-                  `model (${modelSqlKey}) references table that does not exist ${DatabaseName}.${TableName}`
-                )
+                  `model (${modelSqlKey}) references table that does not exist ${DatabaseName}.${TableName}`,
+                ),
               );
             }
           } else {
@@ -101,7 +101,7 @@ function validateModelSql(modelSqls, project, environment) {
             errors.push(error);
           }
         }
-      })
+      }),
     );
   });
   return errors;

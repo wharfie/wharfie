@@ -47,17 +47,17 @@ describe('mock tests for firehose log transport', () => {
     await firehoseLogTransport.close();
 
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toHaveLength(2);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'].records[0].Data.toString()
+        ['test-stream'].records[0].Data.toString(),
     ).toMatchInlineSnapshot(`"test1 test2 test3 test4 "`);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'].records[1].Data.toString()
+        ['test-stream'].records[1].Data.toString(),
     ).toMatchInlineSnapshot(`"test5 test6 "`);
   });
 
@@ -65,7 +65,7 @@ describe('mock tests for firehose log transport', () => {
     expect.assertions(2);
 
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE + 2).join('a')
+      new Array(FirehoseLogTransport._MAX_BIN_SIZE + 2).join('a'),
     );
     await firehoseLogTransport.log('test2 ');
     await firehoseLogTransport.log('test3 ');
@@ -73,12 +73,12 @@ describe('mock tests for firehose log transport', () => {
     await firehoseLogTransport.close();
 
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toHaveLength(2);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'].records[1].Data.toString()
+        ['test-stream'].records[1].Data.toString(),
     ).toMatchInlineSnapshot(`"test2 test3 test4 "`);
   });
 
@@ -86,23 +86,23 @@ describe('mock tests for firehose log transport', () => {
     expect.assertions(1);
 
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('a')
+      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('a'),
     );
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('b')
+      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('b'),
     );
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('c')
+      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('c'),
     );
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('d')
+      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('d'),
     );
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('e')
+      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('e'),
     );
 
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toHaveLength(4);
   });
 
@@ -114,7 +114,7 @@ describe('mock tests for firehose log transport', () => {
     }
 
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toHaveLength(1);
   });
 
@@ -134,9 +134,9 @@ describe('mock tests for firehose log transport', () => {
     await firehoseLogTransport.flush();
 
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toStrictEqual(
-      firehoseLogTransportFoo.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransportFoo.firehose.__getMockState()['test-stream'].records,
     );
   });
 
@@ -144,18 +144,18 @@ describe('mock tests for firehose log transport', () => {
     expect.assertions(2);
 
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE + 1).join('a')
+      new Array(FirehoseLogTransport._MAX_BIN_SIZE + 1).join('a'),
     );
     await firehoseLogTransport.close();
 
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toHaveLength(1);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
         ['test-stream'].records[0].Data.toString()
-        .slice(0, 30)
+        .slice(0, 30),
     ).toMatchInlineSnapshot(`"TRUNCATEDaaaaaaaaaaaaaaaaaaaaa"`);
   });
 
@@ -170,12 +170,12 @@ describe('mock tests for firehose log transport', () => {
     await firehoseLogTransport.close();
 
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toHaveLength(1);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'].records[0].Data.toString()
+        ['test-stream'].records[0].Data.toString(),
     ).toMatchInlineSnapshot(`"test1 test2 test3 test4 "`);
   });
 
@@ -190,12 +190,12 @@ describe('mock tests for firehose log transport', () => {
     await firehoseLogTransport.flush();
 
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toHaveLength(1);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'].records[0].Data.toString()
+        ['test-stream'].records[0].Data.toString(),
     ).toMatchInlineSnapshot(`"test1 test2 test3 test4 "`);
   });
 });

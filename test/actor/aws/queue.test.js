@@ -86,9 +86,9 @@ describe('sqs queue IaC', () => {
 
     expect(queue.status).toBe('DESTROYED');
     await expect(
-      sqs.getQueueAttributes({ QueueUrl: 'test-queue' })
+      sqs.getQueueAttributes({ QueueUrl: 'test-queue' }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"queue test-queue does not exist"`
+      `"queue test-queue does not exist"`,
     );
   });
 });

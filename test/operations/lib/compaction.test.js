@@ -92,7 +92,7 @@ describe('compaction', () => {
         viewOriginalText: `/* Presto View: ${Buffer.from(
           JSON.stringify({
             originalSql: 'select * from test_db.test_table',
-          })
+          }),
         ).toString('base64')} */`,
       },
     };
@@ -242,7 +242,7 @@ describe('compaction', () => {
         viewOriginalText: `/* Presto View: ${Buffer.from(
           JSON.stringify({
             originalSql: `select *, concat(year, '-', month, '-', day) as creation_date from test_db.test_table`,
-          })
+          }),
         ).toString('base64')} */`,
       },
     };
@@ -589,7 +589,7 @@ describe('compaction', () => {
           viewOriginalText: `/* Presto View: ${Buffer.from(
             JSON.stringify({
               originalSql: 'select a, not_partition from test_db.test_table',
-            })
+            }),
           ).toString('base64')} */`,
         },
       },
@@ -657,7 +657,7 @@ describe('compaction', () => {
           viewOriginalText: `/* Presto View: ${Buffer.from(
             JSON.stringify({
               originalSql: 'select a, b from test_db.test_table',
-            })
+            }),
           ).toString('base64')} */`,
         },
       },
@@ -722,7 +722,7 @@ describe('compaction', () => {
           viewOriginalText: `/* Presto View: ${Buffer.from(
             JSON.stringify({
               originalSql: 'select a, b from test_db.test_table',
-            })
+            }),
           ).toString('base64')} */`,
         },
       },
@@ -793,7 +793,7 @@ describe('compaction', () => {
           viewOriginalText: `/* Presto View: ${Buffer.from(
             JSON.stringify({
               originalSql: 'select a, b from test_db.test_table',
-            })
+            }),
           ).toString('base64')} */`,
         },
       },

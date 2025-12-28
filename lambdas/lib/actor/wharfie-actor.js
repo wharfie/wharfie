@@ -204,7 +204,7 @@ class WharfieActor extends BaseResourceGroup {
 
   getQueue() {
     return this.getResource(
-      `${this.get('deployment').name}-${this.name}-queue`
+      `${this.get('deployment').name}-${this.name}-queue`,
     );
   }
 

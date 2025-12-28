@@ -105,8 +105,8 @@ class Compaction {
       const view_sql = JSON.parse(
         Buffer.from(
           viewOriginalText.substring(16, viewOriginalText.length - 3),
-          'base64'
-        ).toString()
+          'base64',
+        ).toString(),
       ).originalSql;
 
       const { sources: queryTableReferences, selectAsColumns } =
@@ -137,11 +137,11 @@ class Compaction {
             .map(
               (key) =>
                 partition.partitionValues[key] &&
-                `${key}=${partition.partitionValues[key]}`
+                `${key}=${partition.partitionValues[key]}`,
             )
             .filter((x) => !!x)
             .join('_');
-        }
+        },
       );
 
       /** @type {import('../../../typedefs.js').QueryEnqueueInput[]} */
@@ -245,8 +245,8 @@ class Compaction {
       const view_sql = JSON.parse(
         Buffer.from(
           viewOriginalText.substring(16, viewOriginalText.length - 3),
-          'base64'
-        ).toString()
+          'base64',
+        ).toString(),
       ).originalSql;
 
       const queryTableReferences = this.athena.extractSources(view_sql);
@@ -267,11 +267,11 @@ class Compaction {
       }
 
       partitionsOnly = !queryTableReferences.columns.some(
-        (column) => !referencePartitionKeys.has(column)
+        (column) => !referencePartitionKeys.has(column),
       );
       if (!partitionsOnly) {
         event_log.debug(
-          'view partitions refer to source columnns that are not partitions, performance impacted'
+          'view partitions refer to source columnns that are not partitions, performance impacted',
         );
       }
     }
@@ -279,14 +279,14 @@ class Compaction {
     if (SLA && SLA.ColumnExpression && SLA.MaxDelay) {
       this.athena
         .extractSources(
-          `SELECT ${SLA.ColumnExpression} FROM ${sourceDatabaseName}.${sourceTableName}`
+          `SELECT ${SLA.ColumnExpression} FROM ${sourceDatabaseName}.${sourceTableName}`,
         )
         .columns.forEach((slaColumn) => {
           if (
             !Table.PartitionKeys?.map((key) => key.Name).includes(slaColumn)
           ) {
             event_log.debug(
-              'view sla expressions refers to source columnns that are not partitions, performance impacted'
+              'view sla expressions refers to source columnns that are not partitions, performance impacted',
             );
             partitionsOnly = false;
           }
@@ -325,7 +325,7 @@ class Compaction {
           `;
 
           const alphabet = [...Array(26).keys()].map((i) =>
-            String.fromCharCode(i + 97)
+            String.fromCharCode(i + 97),
           );
           partitionNames.forEach((partitionKey) => {
             const partitionKeyIndex = partitionNames.indexOf(partitionKey);
@@ -355,8 +355,8 @@ class Compaction {
         } else {
           throw new Error(
             `partition query not implemented for ${JSON.stringify(
-              workGroupConfiguration
-            )}!`
+              workGroupConfiguration,
+            )}!`,
           );
         }
       } catch (err) {
@@ -368,7 +368,7 @@ class Compaction {
     if (SLA && SLA.ColumnExpression && SLA.MaxDelay) {
       const ScheduleOffset = getScheduleOffset(
         operationTime,
-        Number(resource?.daemon_config?.Schedule || 0)
+        Number(resource?.daemon_config?.Schedule || 0),
       );
       QueryString += `\n WHERE date_diff('minute', ${SLA.ColumnExpression}, from_unixtime(${operationTime})) <= ${SLA.MaxDelay} + ${ScheduleOffset}`;
       QueryString += `\n AND date_diff('minute', ${SLA.ColumnExpression}, from_unixtime(${operationTime})) >= 0`;

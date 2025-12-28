@@ -41,11 +41,11 @@ async function retry(event) {
     MessageBody: JSON.stringify(
       Object.assign(event, {
         retries: (event.retries || 0) + 1,
-      })
+      }),
     ),
     // full-jitter exp backoff (0 - 180 seconds)
     DelaySeconds: Math.floor(
-      Math.random() * Math.min(180, 1 * Math.pow(2, event.retries || 0))
+      Math.random() * Math.min(180, 1 * Math.pow(2, event.retries || 0)),
     ),
     QueueUrl: QUEUE_URL,
   });
@@ -74,7 +74,7 @@ async function processRecord(record, context) {
       `events caught error ${
         // @ts-ignore
         err.stack || err
-      }, retrying Record: ${JSON.stringify(event)}`
+      }, retrying Record: ${JSON.stringify(event)}`,
     );
     await retry(event);
   }
@@ -88,7 +88,7 @@ const handler = async (event, context) => {
   daemon_log.debug(JSON.stringify(event));
   daemon_log.debug(`processing ${event.Records.length} records....`);
   await Promise.all(
-    event.Records.map((record) => processRecord(record, context))
+    event.Records.map((record) => processRecord(record, context)),
   );
   daemon_log.info(process.memoryUsage());
   await logging.flush();

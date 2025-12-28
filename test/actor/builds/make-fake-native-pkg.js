@@ -43,7 +43,7 @@ const require = createRequire(import.meta.url);
 
   await fs.writeFile(
     path.join(pkgDir, 'package.json'),
-    JSON.stringify(pkgJson, null, 2)
+    JSON.stringify(pkgJson, null, 2),
   );
   await fs.mkdir(path.join(pkgDir, 'scripts'), { recursive: true });
   await fs.writeFile(path.join(pkgDir, 'scripts', 'install.js'), installJs);

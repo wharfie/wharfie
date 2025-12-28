@@ -20,7 +20,7 @@ const invalidSections = 'arn has not enough sections';
 const splitN = (
   /** @type {string} */ str,
   /** @type {string | RegExp} */ sep,
-  /** @type {number} */ limit
+  /** @type {number} */ limit,
 ) => {
   const re = new RegExp(sep, 'g');
   let lastLastIndex = 0;
@@ -71,7 +71,7 @@ const parse = (/** @type {string} */ arn) => {
 };
 
 const toString = (
-  /** @type {{ partition: string; service: string; region: string; accountID: string; resource: string; }} */ arn
+  /** @type {{ partition: string; service: string; region: string; accountID: string; resource: string; }} */ arn,
 ) => {
   return [
     arnScheme,

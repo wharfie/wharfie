@@ -69,7 +69,7 @@ class LambdaBuild extends BaseResource {
 
     this.set(
       'artifactKey',
-      `actor-artifacts/${this.name}/${functionCodeHash}.zip`
+      `actor-artifacts/${this.name}/${functionCodeHash}.zip`,
     );
 
     this.set('functionCodeHash', functionCodeHash);

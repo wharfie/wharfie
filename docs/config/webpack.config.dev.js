@@ -27,7 +27,7 @@ module.exports = {
       path
         .relative(
           path.resolve(__dirname, '..', 'src'),
-          info.absoluteResourcePath
+          info.absoluteResourcePath,
         )
         .replace(/\\/g, '/'),
   },
@@ -101,7 +101,7 @@ module.exports = {
             // 2) Your custom loader that rewrites <img> tags
             loader: path.resolve(
               __dirname,
-              'transform-markdown-images-loader.js'
+              'transform-markdown-images-loader.js',
             ),
           },
           {
@@ -131,7 +131,7 @@ module.exports = {
     new webpack.DefinePlugin({
       'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV),
       'process.env.PUBLIC_URL': JSON.stringify(
-        process.env.PUBLIC_URL || 'http://localhost:3000'
+        process.env.PUBLIC_URL || 'http://localhost:3000',
       ),
     }),
     // Lint your code on build

@@ -10,7 +10,7 @@ class ApplicationAutoScalingMock {
       targets: [],
       policies: [],
       tags: {},
-    }
+    },
   ) {
     ApplicationAutoScalingMock.__state = applicationAutoScalingState;
   }
@@ -90,7 +90,7 @@ class ApplicationAutoScalingMock {
       (target) =>
         target.ResourceId.includes(ResourceIds[0]) &&
         target.ServiceNamespace === ServiceNamespace &&
-        target.ScalableDimension === ScalableDimension
+        target.ScalableDimension === ScalableDimension,
     );
     return {
       ScalableTargets: targets,
@@ -116,7 +116,7 @@ class ApplicationAutoScalingMock {
       (target) =>
         target.ResourceId === ResourceId &&
         target.ScalableDimension === ScalableDimension &&
-        target.ServiceNamespace === ServiceNamespace
+        target.ServiceNamespace === ServiceNamespace,
     );
     if (targetIndex === -1) {
       throw new ResourceNotFoundException({
@@ -135,7 +135,7 @@ class ApplicationAutoScalingMock {
         PolicyNames.includes(policy.PolicyName) &&
         policy.ServiceNamespace === ServiceNamespace &&
         policy.ResourceId === ResourceId &&
-        policy.ScalableDimension === ScalableDimension
+        policy.ScalableDimension === ScalableDimension,
     );
     return {
       ScalingPolicies: policies,
@@ -150,7 +150,7 @@ class ApplicationAutoScalingMock {
         policy.PolicyName === PolicyName &&
         policy.ServiceNamespace === ServiceNamespace &&
         policy.ResourceId === ResourceId &&
-        policy.ScalableDimension === ScalableDimension
+        policy.ScalableDimension === ScalableDimension,
     );
     if (policyIndex === -1) {
       ApplicationAutoScalingMock.__state.policies.push(params);
@@ -167,7 +167,7 @@ class ApplicationAutoScalingMock {
         policy.PolicyName === PolicyName &&
         policy.ServiceNamespace === ServiceNamespace &&
         policy.ResourceId === ResourceId &&
-        policy.ScalableDimension === ScalableDimension
+        policy.ScalableDimension === ScalableDimension,
     );
     if (policyIndex === -1) {
       throw new ObjectNotFoundException({

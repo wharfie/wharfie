@@ -59,13 +59,13 @@ const modelSchema = joi.object({
     joi.object({
       name: joi.string().required(),
       type: joi.string().required(),
-    })
+    }),
   ),
   partitions: joi.array().items(
     joi.object({
       name: joi.string().required(),
       type: joi.string().required(),
-    })
+    }),
   ),
   service_level_agreement: serviceLevelAgreementSchema,
   side_effects: joi.array().items(
@@ -73,7 +73,7 @@ const modelSchema = joi.object({
       type: joi.string().required(),
       trigger: joi.string().valid('onChange').required(),
       config: joi.object(),
-    })
+    }),
   ),
 });
 
@@ -116,13 +116,13 @@ const sourceSchema = joi
       joi.object({
         name: joi.string().required(),
         type: joi.string().required(),
-      })
+      }),
     ),
     partitions: joi.array().items(
       joi.object({
         name: joi.string().required(),
         type: joi.string().required(),
-      })
+      }),
     ),
     service_level_agreement: serviceLevelAgreementSchema,
     side_effects: joi.array().items(
@@ -130,7 +130,7 @@ const sourceSchema = joi
         type: joi.string().required(),
         trigger: joi.string().valid('onChange').required(),
         config: joi.object(),
-      })
+      }),
     ),
   })
   .xor('format', 'custom_format');
@@ -226,13 +226,13 @@ function validateDynamicConfigs(project) {
   for (const def of project.definitions) {
     try {
       dynamicSchemasMapping[def.name] = generateConfigSchema(
-        def.configuration_definition
+        def.configuration_definition,
       );
     } catch (err) {
       throw new Error(
         `Invalid dynamic schema definition for '${def.name}': ${
           err instanceof Error ? err.message : err
-        }`
+        }`,
       );
     }
   }
@@ -282,12 +282,12 @@ function validateDynamicConfigs(project) {
         const schema = dynamicSchemasMapping[sideEffect.type];
         if (!schema) {
           throw new Error(
-            `side_effect type '${sideEffect.type}' used in model '${model.name}' does not exist in the project`
+            `side_effect type '${sideEffect.type}' used in model '${model.name}' does not exist in the project`,
           );
         }
         const { error, value: validatedConfig } = schema.validate(
           sideEffect.config,
-          { abortEarly: false }
+          { abortEarly: false },
         );
         if (error) {
           error.details = error.details.map((detail) => ({
@@ -308,12 +308,12 @@ function validateDynamicConfigs(project) {
         const schema = dynamicSchemasMapping[sideEffect.type];
         if (!schema) {
           throw new Error(
-            `side_effect type '${sideEffect.type}' used in model '${source.name}' does not exist in the project`
+            `side_effect type '${sideEffect.type}' used in model '${source.name}' does not exist in the project`,
           );
         }
         const { error, value: validatedConfig } = schema.validate(
           sideEffect.config,
-          { abortEarly: false }
+          { abortEarly: false },
         );
         if (error) {
           error.details = error.details.map((detail) => ({
@@ -355,7 +355,7 @@ function validateProject(project) {
       return {
         ...detail,
         message: `${chalk.bgWhite.black(
-          `${resourceType}::${resourceName}`
+          `${resourceType}::${resourceName}`,
         )} field(${chalk.bold(errorField)}) ${chalk.bold(detail.message)}`,
       };
     });

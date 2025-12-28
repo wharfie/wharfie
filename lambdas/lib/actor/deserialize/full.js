@@ -26,7 +26,7 @@ const FULL_CLASS_MAP = Object.assign(
     WharfieResource,
     WharfieDeployment,
     WharfieActor,
-  }
+  },
 );
 
 /**

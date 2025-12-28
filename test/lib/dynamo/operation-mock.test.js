@@ -9,19 +9,18 @@ import {
   it,
   jest,
 } from '@jest/globals';
-import Logger from '../../../lambdas/lib/logging/logger.js';
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
+import { applyAutoMocks } from '../../mocks/automocks.js';
 
-const {
-  Resource,
-  Operation,
-  Action,
-  Query,
-} = require('../../../lambdas/lib/graph');
-jest.mock('../../../lambdas/lib/dynamo/operations');
-// eslint-disable-next-line jest/no-untyped-mock-factory
-jest.mock('../../../package.json', () => ({ version: '0.0.1' }));
+await applyAutoMocks({
+  projectRoot: process.cwd(),
+  debug: true,
+});
+
+const Logger = (await import('../../../lambdas/lib/logging/logger.js')).default;
+const { Resource, Operation, Action, Query } =
+  await import('../../../lambdas/lib/graph/index.js');
+const operations = await import('../../../lambdas/lib/dynamo/operations.js');
+
 const FIXTURED_RESOURCE_PROPERTIES = {
   catalogId: '1234',
   columns: [
@@ -97,8 +96,6 @@ const FIXTURED_RESOURCE_PROPERTIES = {
   tableType: 'EXTERNAL_TABLE',
 };
 
-const operations = require('../../../lambdas/lib/dynamo/operations').default;
-
 describe('dynamo resource db', () => {
   beforeAll(() => {
     const mockedDate = new Date(1466424490000);
@@ -155,7 +152,7 @@ describe('dynamo resource db', () => {
           tableType: 'PHYSICAL',
           tags: {},
         },
-      })
+      }),
     );
 
     expect(operations.__getMockState()).toMatchInlineSnapshot(`
@@ -319,7 +316,7 @@ describe('dynamo resource db', () => {
           tableType: 'PHYSICAL',
           tags: {},
         },
-      })
+      }),
     );
     const result = await operations.getResource('StackName');
 
@@ -798,7 +795,7 @@ describe('dynamo resource db', () => {
     const result = await operations.getAction(
       'resource_id',
       'operation_id',
-      test_operation.getActionIdByType(Action.Type.START)
+      test_operation.getActionIdByType(Action.Type.START),
     );
 
     expect(result).toMatchInlineSnapshot(`
@@ -894,7 +891,7 @@ describe('dynamo resource db', () => {
     const result = await operations.getQueries(
       test_resource.id,
       test_operation.id,
-      test_action.id
+      test_action.id,
     );
 
     expect(result).toHaveLength(2);
@@ -988,7 +985,7 @@ describe('dynamo resource db', () => {
     const result = await operations.getAction(
       'resource_id',
       'operation_id',
-      'action_id'
+      'action_id',
     );
 
     expect(result).toMatchInlineSnapshot(`
@@ -1075,7 +1072,7 @@ describe('dynamo resource db', () => {
       'resource_id',
       'operation_id',
       'action_id',
-      'query_id'
+      'query_id',
     );
 
     expect(result).toMatchInlineSnapshot(`
@@ -1170,7 +1167,7 @@ describe('dynamo resource db', () => {
     const result = await operations.getQueries(
       'resource_id',
       'operation_id',
-      test_operation.getActionIdByType(Action.Type.START)
+      test_operation.getActionIdByType(Action.Type.START),
     );
 
     expect(result).toMatchInlineSnapshot(`
@@ -1229,13 +1226,13 @@ describe('dynamo resource db', () => {
 
     const operation = await operations.getOperation(
       'resource_id',
-      'operation_id'
+      'operation_id',
     );
     if (!operation) throw new Error('failed test');
     const result = await operations.checkActionPrerequisites(
       operation,
       Action.Type.FINISH,
-      new Logger()
+      new Logger(),
     );
 
     expect(result).toBe(true);
@@ -1263,13 +1260,13 @@ describe('dynamo resource db', () => {
 
     const operation = await operations.getOperation(
       'resource_id',
-      'operation_id'
+      'operation_id',
     );
     if (!operation) throw new Error('failed test');
     const result = await operations.checkActionPrerequisites(
       operation,
       Action.Type.FINISH,
-      new Logger()
+      new Logger(),
     );
 
     expect(result).toBe(false);
@@ -1317,7 +1314,7 @@ describe('dynamo resource db', () => {
 
     const operation = await operations.getOperation(
       'resource_id',
-      'operation_id'
+      'operation_id',
     );
     if (!operation) throw new Error('failed test');
 
@@ -1325,7 +1322,7 @@ describe('dynamo resource db', () => {
       await operations.checkActionPrerequisites(
         operation,
         'FINISH',
-        new Logger()
+        new Logger(),
       );
     }).rejects.toThrow(Error);
   });

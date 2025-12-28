@@ -579,7 +579,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
                 Effect: 'Allow',
                 Action: ['s3:*'],
                 Resource: `arn:aws:s3:::${systemBucket.get(
-                  'bucketName'
+                  'bucketName',
                 )}/logs/processed/*`,
               },
               {
@@ -587,7 +587,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
                 Effect: 'Allow',
                 Action: ['s3:GetObject'],
                 Resource: `arn:aws:s3:::${systemBucket.get(
-                  'bucketName'
+                  'bucketName',
                 )}/logs/raw/*`,
               },
             ],
@@ -654,7 +654,7 @@ class WharfieDeploymentResources extends BaseResourceGroup {
         projectName: this.get('deployment').name,
         databaseName: this.get('deployment').name,
         outputLocation: `s3://${systemBucket.get(
-          'bucketName'
+          'bucketName',
         )}/logs/processed/`,
         projectBucket: systemBucket.get('bucketName'),
         region: () => this.get('deployment').region,
@@ -710,19 +710,19 @@ class WharfieDeploymentResources extends BaseResourceGroup {
 
   getActorPolicyArn() {
     return this.getResource(`${this.get('deployment').name}-actor-policy`).get(
-      'arn'
+      'arn',
     );
   }
 
   getInfraPolicyArn() {
     return this.getResource(`${this.get('deployment').name}-infra-policy`).get(
-      'arn'
+      'arn',
     );
   }
 
   getTemporaryDatabase() {
     return this.getResource(
-      `${this.get('deployment').name}-temporary-database`
+      `${this.get('deployment').name}-temporary-database`,
     );
   }
 }

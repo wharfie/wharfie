@@ -132,7 +132,7 @@ class MacOSBinarySignature extends BaseResource {
     await promises.writeFile(
       entitlementsPath,
       this.get('entitlements'),
-      'utf8'
+      'utf8',
     );
   }
 
@@ -147,7 +147,7 @@ class MacOSBinarySignature extends BaseResource {
 
     const keychainPath = join(
       MacOSBinarySignature.KEYCHAINS_DIR,
-      `${keychainHash}.keychain`
+      `${keychainHash}.keychain`,
     );
     this._setUNSAFE('keychainPath', keychainPath);
     const entitlementsHash = createHash('md5')
@@ -155,7 +155,7 @@ class MacOSBinarySignature extends BaseResource {
       .digest('base64');
     const entitlementsPath = join(
       MacOSBinarySignature.ENTITLEMENTS_DIR,
-      `entitlements-${entitlementsHash}.plist`
+      `entitlements-${entitlementsHash}.plist`,
     );
     this._setUNSAFE('entitlementsPath', entitlementsPath);
     await this.writeEntitlements(entitlementsPath);

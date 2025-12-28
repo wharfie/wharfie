@@ -218,14 +218,14 @@ class RaftNode {
         }
         if (keepNew)
           console.log(
-            `[${this.nodeId}] switched socket for ${msg.from} (peers=${this.peers.size})`
+            `[${this.nodeId}] switched socket for ${msg.from} (peers=${this.peers.size})`,
           );
         return;
       }
       if (!existing) {
         this.peers.set(msg.from, socket);
         console.log(
-          `[${this.nodeId}] connected to peer ${msg.from} (peers=${this.peers.size})`
+          `[${this.nodeId}] connected to peer ${msg.from} (peers=${this.peers.size})`,
         );
       }
 
@@ -461,7 +461,7 @@ class RaftNode {
     this._lastLeaderHeard = Date.now();
     if (termChanged || leaderChanged)
       console.log(
-        `[${this.nodeId}] -> FOLLOWER term=${this.term} leader=${this.leaderId}`
+        `[${this.nodeId}] -> FOLLOWER term=${this.term} leader=${this.leaderId}`,
       );
   }
 

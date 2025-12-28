@@ -21,8 +21,8 @@ async function run({ bucket, key }, context) {
   } else {
     daemon_log.debug(
       `s3 event for location ${key} in bucket ${bucket}, ${JSON.stringify(
-        context
-      )}`
+        context,
+      )}`,
     );
   }
 
@@ -34,7 +34,7 @@ async function run({ bucket, key }, context) {
   bucket = decodeURIComponent(bucket);
 
   const location_records = await location_db.findLocations(
-    `s3://${bucket}/${key}`
+    `s3://${bucket}/${key}`,
   );
 
   if (!location_records || location_records.length === 0) {
@@ -66,7 +66,7 @@ async function run({ bucket, key }, context) {
     if (isPartitioned && !isView) {
       partition_parts = partitionFile.splice(0, partitionFile.length - 1);
       const partition_parts_filtered = partition_parts.filter(
-        (/** @type {string} */ value) => value.includes('=')
+        (/** @type {string} */ value) => value.includes('='),
       );
       if (partition_parts_filtered.length > 0)
         partition_parts = partition_parts_filtered;

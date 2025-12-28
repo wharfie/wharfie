@@ -142,7 +142,7 @@ async function ensureSandboxForName(name, codeString, externalsTar) {
   if (!(await pathExists(pkgFile))) {
     await writeFile(
       pkgFile,
-      JSON.stringify({ name: `${name}-sandbox`, private: true }, null, 2)
+      JSON.stringify({ name: `${name}-sandbox`, private: true }, null, 2),
     );
   }
 
@@ -175,7 +175,7 @@ async function runInSandbox(
   name,
   codeString,
   params,
-  { externalsTar, env = {} } = {}
+  { externalsTar, env = {} } = {},
 ) {
   // Prepare once per name (no repeated extraction/packaging or pkg writes)
   const sb = await ensureSandboxForName(name, codeString, externalsTar);

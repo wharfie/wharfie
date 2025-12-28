@@ -91,11 +91,11 @@ class WharfieOperationCompleted {
     }
     // Find downstream resources
     const dependencies = await dependency_db.findDependencies(
-      `${resource.destination_properties.databaseName}.${resource.destination_properties.name}`
+      `${resource.destination_properties.databaseName}.${resource.destination_properties.name}`,
     );
     if (!dependencies) {
       daemon_log.debug(
-        `no dependencies found for ${resource.destination_properties.databaseName}.${resource.destination_properties.name}`
+        `no dependencies found for ${resource.destination_properties.databaseName}.${resource.destination_properties.name}`,
       );
       return;
     }
@@ -109,12 +109,12 @@ class WharfieOperationCompleted {
       const before = nowInterval - 1000 * interval;
 
       const dependencyResource = await resource_db.getResource(
-        dependency.resource_id
+        dependency.resource_id,
       );
       // For each resource schedule an update
       if (!dependencyResource) {
         daemon_log.debug(
-          `no resource found for ${resource.destination_properties.databaseName}.${resource.destination_properties.name}`
+          `no resource found for ${resource.destination_properties.databaseName}.${resource.destination_properties.name}`,
         );
         continue;
       }

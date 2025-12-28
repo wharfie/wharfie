@@ -62,7 +62,7 @@ class SeaBuild extends BaseResource {
     const tempNodeBinaryPath = join(tmpBuildDir, 'node-binary');
     await promises.copyFile(
       await this.get('nodeBinaryPath'),
-      tempNodeBinaryPath
+      tempNodeBinaryPath,
     );
     await this.seaBuild(tmpBuildDir, tempNodeBinaryPath);
     if (!existsSync(SeaBuild.BINARIES_DIR)) {
@@ -80,7 +80,7 @@ class SeaBuild extends BaseResource {
     return Object.entries(this.get('environmentVariables', {}))
       .map(
         ([key, value]) =>
-          `process.env['${key.toString()}'] = '${value.toString()}';`
+          `process.env['${key.toString()}'] = '${value.toString()}';`,
       )
       .join('\n');
   }
@@ -171,7 +171,7 @@ class SeaBuild extends BaseResource {
       process.execPath,
       ['--no-warnings', '--experimental-sea-config', seaConfigPath],
       {},
-      true
+      true,
     );
     if (this.get('platform') === 'darwin') {
       await runCmd('codesign', ['--remove-signature', nodeBinaryPath]);
@@ -182,7 +182,7 @@ class SeaBuild extends BaseResource {
     await inject(nodeBinaryPath, 'NODE_SEA_BLOB', blobData, {
       sentinelFuse: Buffer.from(
         'Tk9ERV9TRUFfRlVTRV9mY2U2ODBhYjJjYzQ2N2I2ZTA3MmI4YjVkZjE5OTZiMg==',
-        'base64'
+        'base64',
       ).toString(),
       ...(this.get('platform') === 'darwin'
         ? { machoSegmentName: 'NODE_SEA' }
@@ -202,7 +202,7 @@ class SeaBuild extends BaseResource {
       Number(hostVersion.split('.')[0]) < Number(targetVersion.split('.')[0])
     ) {
       throw new Error(
-        `Cannot build target (${this.name}) with node version (${targetVersion}) when using ${hostVersion}. Upgrade to at least ${targetVersion}`
+        `Cannot build target (${this.name}) with node version (${targetVersion}) when using ${hostVersion}. Upgrade to at least ${targetVersion}`,
       );
     }
 

@@ -25,7 +25,7 @@ function mapType(typeStr) {
     case 'secret':
       return Joi.alternatives().try(
         Joi.string(),
-        Joi.object({ ref: Joi.string() })
+        Joi.object({ ref: Joi.string() }),
       );
     default:
       throw new Error(`Unsupported type: ${typeStr}`);
@@ -66,7 +66,7 @@ function generateConfigSchema(definition) {
         case 'array':
           if ('items' in definition && definition.items) {
             return Joi.array().items(
-              generateConfigSchema(definition.items).required()
+              generateConfigSchema(definition.items).required(),
             );
           }
           throw new Error('Array type definition must have an "items" field.');

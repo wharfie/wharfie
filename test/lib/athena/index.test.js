@@ -21,7 +21,7 @@ describe('tests for Athena', () => {
 
     const athena = new Athena({ region: 'us-east-1' });
     const result = await athena.extractSources(
-      'select * from test_database.test_table'
+      'select * from test_database.test_table',
     );
 
     expect(result).toMatchInlineSnapshot(`
@@ -52,7 +52,7 @@ describe('tests for Athena', () => {
 
     const athena = new Athena({ region: 'us-east-1' });
     const result = await athena.extractSources(
-      'select column1, column_2 from test_database.test_table'
+      'select column1, column_2 from test_database.test_table',
     );
 
     expect(result).toMatchInlineSnapshot(`
@@ -90,7 +90,7 @@ describe('tests for Athena', () => {
 
     const athena = new Athena({ region: 'us-east-1' });
     const result = await athena.extractSources(
-      'select CONCAT(first_name, " ", last_name) AS full_name, renamed_column as column2, column3, CONCAT(first_name, " ", last_name)  from test_table'
+      'select CONCAT(first_name, " ", last_name) AS full_name, renamed_column as column2, column3, CONCAT(first_name, " ", last_name)  from test_table',
     );
 
     expect(result).toMatchInlineSnapshot(`
@@ -150,7 +150,7 @@ describe('tests for Athena', () => {
 
     expect(AWS.AthenaMock).toHaveReceivedCommandWith(
       AWS.StartQueryExecutionCommand,
-      params
+      params,
     );
   });
 
@@ -164,7 +164,7 @@ describe('tests for Athena', () => {
 
     expect(AWS.AthenaMock).toHaveReceivedCommandWith(
       AWS.BatchGetQueryExecutionCommand,
-      params
+      params,
     );
   });
 
@@ -178,7 +178,7 @@ describe('tests for Athena', () => {
 
     expect(AWS.AthenaMock).toHaveReceivedCommandWith(
       AWS.GetQueryExecutionCommand,
-      params
+      params,
     );
   });
 
@@ -313,7 +313,7 @@ describe('tests for Athena', () => {
 
     expect(AWS.AthenaMock).toHaveReceivedCommandWith(
       AWS.GetQueryResultsCommand,
-      params
+      params,
     );
     expect(results).toMatchInlineSnapshot(`
       [
@@ -376,11 +376,11 @@ describe('tests for Athena', () => {
     `);
     expect(AWS.AthenaMock).toHaveReceivedCommandTimes(
       AWS.GetQueryExecutionCommand,
-      1
+      1,
     );
     expect(AWSGlue.GlueMock).toHaveReceivedCommandTimes(
       AWSGlue.GetTablesCommand,
-      1
+      1,
     );
   });
 
@@ -425,11 +425,11 @@ describe('tests for Athena', () => {
     `);
     expect(AWS.AthenaMock).toHaveReceivedCommandTimes(
       AWS.GetQueryExecutionCommand,
-      1
+      1,
     );
     expect(AWSGlue.GlueMock).toHaveReceivedCommandTimes(
       AWSGlue.GetTablesCommand,
-      1
+      1,
     );
   });
 });

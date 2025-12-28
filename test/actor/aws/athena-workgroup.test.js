@@ -255,9 +255,9 @@ describe('athena workgroup IaC', () => {
 
     expect(deserialized.status).toBe('DESTROYED');
     await expect(
-      athena.getWorkGroup({ WorkGroup: 'test-workgroup' })
+      athena.getWorkGroup({ WorkGroup: 'test-workgroup' }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"workgroup: test-workgroup does not exist"`
+      `"workgroup: test-workgroup does not exist"`,
     );
 
     const destroyingStatusUpdate = update.mock.calls;

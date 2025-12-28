@@ -4,7 +4,7 @@ const require = createRequire(import.meta.url);
 const crypto = require('crypto');
 
 const { InvalidRequestException } = jest.requireActual(
-  '@aws-sdk/client-athena'
+  '@aws-sdk/client-athena',
 );
 const { createId } = require('../../../lambdas/lib/id');
 const SQS = require('./sqs');
@@ -36,7 +36,7 @@ class AthenaMock {
       queryMocks: {},
       queryMockSideEffects: {},
       tags: {},
-    }
+    },
   ) {
     AthenaMock.__state = athenaState;
   }
@@ -97,7 +97,7 @@ class AthenaMock {
           Key: tagKey,
           Value: AthenaMock.__state.tags[params.ResourceARN][tagKey],
         };
-      }
+      },
     );
   }
 
@@ -300,8 +300,8 @@ class AthenaMock {
         async (QueryExecutionId) =>
           await this.getQueryExecution({
             QueryExecutionId,
-          })
-      )
+          }),
+      ),
     );
     return {
       QueryExecutions,

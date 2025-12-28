@@ -34,7 +34,7 @@ class Table extends BaseResource {
       {
         billingMode: BillingMode.PROVISIONED,
       },
-      properties
+      properties,
     );
     super({
       name,
@@ -72,16 +72,16 @@ class Table extends BaseResource {
         !currentTags.some(
           (currentTag) =>
             currentTag.Key === desiredTag.Key &&
-            currentTag.Value === desiredTag.Value
-        )
+            currentTag.Value === desiredTag.Value,
+        ),
     );
     const tagsToRemove = currentTags.filter(
       (currentTag) =>
         !desiredTags.some(
           (/** @type {import("@aws-sdk/client-dynamodb").Tag} */ desiredTag) =>
             desiredTag.Key === currentTag.Key &&
-            desiredTag.Value === currentTag.Value
-        )
+            desiredTag.Value === currentTag.Value,
+        ),
     );
     if (tagsToAdd.length > 0) {
       await this.dynamo.tagResource({

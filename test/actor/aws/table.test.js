@@ -136,9 +136,9 @@ describe('table IaC', () => {
 
     expect(table.status).toBe('DESTROYED');
     await expect(
-      dynamoDB.describeTable({ TableName: table.name })
+      dynamoDB.describeTable({ TableName: table.name }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"Requested resource not found"`
+      `"Requested resource not found"`,
     );
   });
 });

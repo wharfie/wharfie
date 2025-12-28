@@ -101,8 +101,8 @@ describe('tests for s3 event scheduling', () => {
     expect(
       JSON.parse(
         AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       resource_id: '1',
       sort_key: 'unpartitioned:1466424600000',

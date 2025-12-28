@@ -54,7 +54,7 @@ class AutoscalingPolicy extends BaseResource {
           ScalableDimension: this.get('scalableDimension'),
           PolicyType: this.get('policyType'),
           TargetTrackingScalingPolicyConfiguration: this.get(
-            'targetTrackingScalingPolicyConfiguration'
+            'targetTrackingScalingPolicyConfiguration',
           ),
         });
       } else {
@@ -65,7 +65,7 @@ class AutoscalingPolicy extends BaseResource {
           ScalableDimension: this.get('scalableDimension'),
           PolicyType: this.get('policyType'),
           StepScalingPolicyConfiguration: this.get(
-            'stepScalingPolicyConfiguration'
+            'stepScalingPolicyConfiguration',
           ),
         });
       }

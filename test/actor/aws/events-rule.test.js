@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url);
 process.env.AWS_MOCKS = '1';
 const { EventsRule } = require('../../../lambdas/lib/actor/resources/aws/');
 const { CloudWatchEvents } = jest.requireMock(
-  '@aws-sdk/client-cloudwatch-events'
+  '@aws-sdk/client-cloudwatch-events',
 );
 
 const { getMockDeploymentProperties } = require('../util');
@@ -130,7 +130,7 @@ describe('events rule IaC', () => {
     await expect(
       cloudWatchEvents.describeRule({
         Name: eventsRule.name,
-      })
+      }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(`"Rule not found"`);
   });
 });

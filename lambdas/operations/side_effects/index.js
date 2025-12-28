@@ -33,7 +33,7 @@ async function defineSideEffects(event, context, resource, operation) {
     operation.createAction({
       type: Action.Type.SIDE_EFFECT__WHARFIE,
       dependsOn: [finish_action],
-    })
+    }),
   );
 
   // resource.side_effects.map(side_effect => {
@@ -44,7 +44,7 @@ async function defineSideEffects(event, context, resource, operation) {
 
   try {
     side_effect_finish_id = operation.getActionIdByType(
-      Action.Type.SIDE_EFFECTS__FINISH
+      Action.Type.SIDE_EFFECTS__FINISH,
     );
   } catch (err) {
     operation.createAction({

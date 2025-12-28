@@ -41,14 +41,14 @@ class EventSourceMapping extends BaseResource {
     const tagsToAdd = Object.entries(this.get('tags') || {}).filter(
       ([key, value]) =>
         !Object.entries(currentTags).some(
-          ([tagKey, tagValue]) => tagKey === key && tagValue === value
-        )
+          ([tagKey, tagValue]) => tagKey === key && tagValue === value,
+        ),
     );
     const tagsToRemove = Object.entries(currentTags).filter(
       ([key, value]) =>
         !Object.entries(this.get('tags', {})).some(
-          ([tagKey, tagValue]) => tagKey === key && tagValue === value
-        )
+          ([tagKey, tagValue]) => tagKey === key && tagValue === value,
+        ),
     );
 
     if (tagsToAdd.length > 0) {
@@ -75,7 +75,7 @@ class EventSourceMapping extends BaseResource {
           BatchSize: this.get('batchSize'),
           Enabled: true,
           MaximumBatchingWindowInSeconds: this.get(
-            'maximumBatchingWindowInSeconds'
+            'maximumBatchingWindowInSeconds',
           ),
         });
         this.set('uuid', UUID);
@@ -83,7 +83,7 @@ class EventSourceMapping extends BaseResource {
           'arn',
           `arn:aws:lambda:${this.get('deployment').region}:${
             this.get('deployment').accountId
-          }:event-source-mapping:${UUID}`
+          }:event-source-mapping:${UUID}`,
         );
         await this.waitForEventSourceMappingStatus('Enabled');
       } catch (error) {
@@ -93,7 +93,7 @@ class EventSourceMapping extends BaseResource {
               FunctionName: this.get('functionName'),
             });
           const existingMapping = (EventSourceMappings || []).find(
-            (mapping) => mapping.EventSourceArn === this.get('eventSourceArn')
+            (mapping) => mapping.EventSourceArn === this.get('eventSourceArn'),
           );
           if (existingMapping && existingMapping.UUID) {
             await this.destroyMapping(existingMapping.UUID);
@@ -117,7 +117,7 @@ class EventSourceMapping extends BaseResource {
           BatchSize: this.get('batchSize'),
           Enabled: true,
           MaximumBatchingWindowInSeconds: this.get(
-            'maximumBatchingWindowInSeconds'
+            'maximumBatchingWindowInSeconds',
           ),
         });
       }
@@ -126,7 +126,7 @@ class EventSourceMapping extends BaseResource {
         'arn',
         `arn:aws:lambda:${this.get('deployment').region}:${
           this.get('deployment').accountId
-        }:event-source-mapping:${existingMapping.UUID}`
+        }:event-source-mapping:${existingMapping.UUID}`,
       );
       await this.waitForEventSourceMappingStatus('Enabled');
     }
@@ -176,9 +176,9 @@ class EventSourceMapping extends BaseResource {
           resolve,
           Math.floor(
             Math.random() *
-              Math.min(MAX_RETRY_TIMEOUT_SECONDS, 1 * Math.pow(2, attempts))
-          ) * 1000
-        )
+              Math.min(MAX_RETRY_TIMEOUT_SECONDS, 1 * Math.pow(2, attempts)),
+          ) * 1000,
+        ),
       );
       attempts++;
     } while (currentStatus !== status);

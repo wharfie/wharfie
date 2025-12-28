@@ -1,11 +1,14 @@
 /* eslint-disable jest/no-hooks */
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
 
-jest.mock('../../../lambdas/lib/dynamo/location');
+import { applyAutoMocks } from '../../mocks/automocks.js';
 
-const location = require('../../../lambdas/lib/dynamo/location');
+await applyAutoMocks({
+  projectRoot: process.cwd(),
+  debug: true,
+});
+
+const location = await import('../../../lambdas/lib/dynamo/location.js');
 
 describe('dynamo location db', () => {
   afterEach(() => {
@@ -48,7 +51,7 @@ describe('dynamo location db', () => {
       location: 's3://somebucket/prefix/foo/',
     });
     const result = await location.findLocations(
-      's3://some_bucket/prefix/partion=a/a_key.json'
+      's3://some_bucket/prefix/partion=a/a_key.json',
     );
 
     expect(result).toMatchInlineSnapshot(`[]`);

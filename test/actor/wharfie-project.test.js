@@ -241,7 +241,7 @@ describe('wharfie project IaC', () => {
     expect(deserialized.status).toBe('DESTROYED');
     expect(events).toHaveLength(290);
     expect(sqs.__getMockState().queues[SCHEDULE_QUEUE_URL].queue).toHaveLength(
-      6
+      6,
     );
   }, 10000);
 
@@ -368,7 +368,7 @@ describe('wharfie project IaC', () => {
     expect(deserialized.status).toBe('DESTROYED');
     expect(events).toHaveLength(290);
     expect(sqs.__getMockState().queues[SCHEDULE_QUEUE_URL].queue).toHaveLength(
-      6
+      6,
     );
   }, 10000);
 });

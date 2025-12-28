@@ -22,7 +22,7 @@ function _deserialize(
   serialized,
   serializedResourceMap,
   resourceMap,
-  classMap
+  classMap,
 ) {
   if (
     !serialized ||
@@ -44,7 +44,7 @@ function _deserialize(
       serializedResourceMap[resourceName],
       serializedResourceMap,
       resourceMap,
-      classMap
+      classMap,
     );
     deserializedResources[deserdResource.name] = deserdResource;
     resourceMap[deserdResource.name] = deserdResource;
@@ -81,7 +81,7 @@ function deserialize(serialized, serializedResourceMap, classMap) {
     serialized,
     serializedResourceMap,
     resourceMap,
-    classMap
+    classMap,
   );
   setDependsOn(deserializedResource, resourceMap);
   return deserializedResource;

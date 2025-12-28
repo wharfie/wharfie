@@ -30,7 +30,7 @@ class Role extends BaseResource {
         {
           roleName: `${name.substring(0, 64)}`,
         },
-        properties
+        properties,
       );
       super({
         name,
@@ -56,16 +56,16 @@ class Role extends BaseResource {
         !currentTags.some(
           (/** @type {import('@aws-sdk/client-iam').Tag} */ currentTag) =>
             currentTag.Key === desiredTag.Key &&
-            currentTag.Value === desiredTag.Value
-        )
+            currentTag.Value === desiredTag.Value,
+        ),
     );
     const tagsToRemove = currentTags.filter(
       (/** @type {import('@aws-sdk/client-iam').Tag} */ currentTag) =>
         !desiredTags.some(
           (/** @type {import('@aws-sdk/client-iam').Tag} */ desiredTag) =>
             desiredTag.Key === currentTag.Key &&
-            desiredTag.Value === currentTag.Value
-        )
+            desiredTag.Value === currentTag.Value,
+        ),
     );
     if (tagsToAdd.length > 0) {
       await this.iam.tagRole({
@@ -78,7 +78,7 @@ class Role extends BaseResource {
         RoleName: this.get('roleName'),
         TagKeys: tagsToRemove.map(
           (/** @type {import('@aws-sdk/client-iam').Tag} */ tag) =>
-            tag.Key || ''
+            tag.Key || '',
         ),
       });
     }
@@ -96,7 +96,7 @@ class Role extends BaseResource {
           RoleName: this.get('roleName'),
           Description: this.get('description'),
           AssumeRolePolicyDocument: JSON.stringify(
-            this.get('assumeRolePolicyDocument')
+            this.get('assumeRolePolicyDocument'),
           ),
           Tags: this.get('tags') || [],
         });
@@ -119,8 +119,8 @@ class Role extends BaseResource {
             this.iam.attachRolePolicy({
               RoleName: this.get('roleName'),
               PolicyArn: managedPolicyArn,
-            })
-        )
+            }),
+        ),
       );
     }
     await this._reconcileTags();

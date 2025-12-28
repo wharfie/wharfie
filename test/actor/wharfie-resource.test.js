@@ -640,9 +640,9 @@ describe('wharfie resource IaC', () => {
     expect(deserialized.status).toBe('STABLE');
     expect(state_db.__getMockState()).toStrictEqual(reconcile_state);
     expect(
-      sqs.__getMockState().queues[SCHEDULE_QUEUE_URL].queue[0].Body
+      sqs.__getMockState().queues[SCHEDULE_QUEUE_URL].queue[0].Body,
     ).toMatchInlineSnapshot(
-      `"{"resource_id":"test-wharfie-resource.amazon_berkely_objects","operation_type":"BACKFILL","type":"WHARFIE:OPERATION:SCHEDULE","version":"0.0.1","retries":0}"`
+      `"{"resource_id":"test-wharfie-resource.amazon_berkely_objects","operation_type":"BACKFILL","type":"WHARFIE:OPERATION:SCHEDULE","version":"0.0.1","retries":0}"`,
     );
     expect(sqs.__getMockState().queues[DAEMON_QUEUE_URL]).toBeUndefined();
 

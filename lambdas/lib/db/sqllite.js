@@ -83,7 +83,7 @@ class LocalDB {
    */
   put(key, value) {
     const stmt = this.db.prepare(
-      'INSERT OR REPLACE INTO store (key, value) VALUES (?, ?)'
+      'INSERT OR REPLACE INTO store (key, value) VALUES (?, ?)',
     );
     const result = stmt.run(this.namespace + key, JSON.stringify(value));
     if (!result || result.changes === 0) {
@@ -111,7 +111,7 @@ class LocalDB {
    */
   getBeginsWith(prefix) {
     const stmt = this.db.prepare(
-      'SELECT key, value FROM store WHERE key LIKE ?'
+      'SELECT key, value FROM store WHERE key LIKE ?',
     );
     const rows = stmt.all(this.namespace + prefix + '%');
     return rows.map((row) => {

@@ -26,14 +26,14 @@ class Monitor extends WharfieActor {
     const resources = super._defineGroupResources(parent);
     const queue = resources.find(
       (resource) =>
-        resource.name === `${this.get('deployment').name}-${this.name}-queue`
+        resource.name === `${this.get('deployment').name}-${this.name}-queue`,
     );
     if (!queue) {
       throw new Error(`could not find actor queue`);
     }
     const dlq = resources.find(
       (resource) =>
-        resource.name === `${this.get('deployment').name}-${this.name}-dlq`
+        resource.name === `${this.get('deployment').name}-${this.name}-dlq`,
     );
     if (!dlq) {
       throw new Error(`could not find actor dlq`);

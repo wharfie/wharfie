@@ -39,15 +39,15 @@ function generateSchedule(minutes) {
       ? between(0, 24)
       : `1/${hours}`
     : days
-    ? between(0, 24)
-    : '*';
+      ? between(0, 24)
+      : '*';
   const minuteExpression = min
     ? days || hours
       ? between(0, 60)
       : `1/${min}`
     : days || hours
-    ? between(0, 60)
-    : '*';
+      ? between(0, 60)
+      : '*';
 
   const expression = `cron(${minuteExpression} ${hourExpression} ? * ${daysExpression} *)`;
   return expression;

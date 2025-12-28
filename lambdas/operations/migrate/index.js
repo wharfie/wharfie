@@ -118,7 +118,7 @@ async function cleanup(event, context, resource, migration_to_cleanup) {
   const deletes = [];
   const StackName = `migrate-${resource.id}`;
   const migrationResource = Resource.fromRecord(
-    migration_to_cleanup.operation_inputs.migration_resource
+    migration_to_cleanup.operation_inputs.migration_resource,
   );
   deletes.push(resource_db.deleteResource(migrationResource));
   deletes.push(semaphore_db.deleteSemaphore(`wharfie:BACKFILL:${StackName}`));
@@ -182,7 +182,7 @@ async function route(event, context, resource, operation) {
   if (operation.resource_version <= resource.version) {
     const event_log = logging.getEventLogger(event, context);
     event_log.warn(
-      `resource version${resource.version} is ahead of operation's version ${operation.resource_version}`
+      `resource version${resource.version} is ahead of operation's version ${operation.resource_version}`,
     );
     return {
       status: 'COMPLETED',
@@ -194,27 +194,27 @@ async function route(event, context, resource, operation) {
         event,
         context,
         resource,
-        operation
+        operation,
       );
     case Action.Type.DESTROY_MIGRATION_RESOURCE:
       return await destroy_migration_resource.run(
         event,
         context,
         Resource.fromRecord(operation.operation_inputs.migration_resource),
-        operation
+        operation,
       );
     case Action.Type.REGISTER_MISSING_PARTITIONS:
       return await register_missing_partitions.run(
         event,
         context,
-        Resource.fromRecord(operation.operation_inputs.migration_resource)
+        Resource.fromRecord(operation.operation_inputs.migration_resource),
       );
     case Action.Type.FIND_COMPACTION_PARTITIONS:
       return await find_compaction_partitions.run(
         event,
         context,
         Resource.fromRecord(operation.operation_inputs.migration_resource),
-        operation
+        operation,
       );
     case Action.Type.RUN_COMPACTION:
       return await run_compaction.run(event, context, resource, operation);

@@ -42,7 +42,7 @@ async function installForTarget({ buildTarget, externals, tmpBuildDir }) {
   await mkdir(tmpBuildDir, { recursive: true });
   await writeFile(
     join(tmpBuildDir, 'package.json'),
-    JSON.stringify({ name: 'install-sandbox', private: true }, null, 2)
+    JSON.stringify({ name: 'install-sandbox', private: true }, null, 2),
   );
 
   // .npmrc for the target triplet; omit optionals in main pass; don’t run scripts
@@ -60,7 +60,7 @@ async function installForTarget({ buildTarget, externals, tmpBuildDir }) {
       'optional=false',
       'omit=optional',
       'ignore-scripts=true',
-    ].join('\n')
+    ].join('\n'),
   );
 
   /** @type {NpmConfigShim} */
@@ -100,7 +100,7 @@ async function installForTarget({ buildTarget, externals, tmpBuildDir }) {
   const specs = (externals || []).map((e) => `${e.name}@${e.version}`);
   const { normalSpecs, prebuiltSpecs } = await splitPrebuiltSpecs(
     specs,
-    npmConfig
+    npmConfig,
   );
 
   // Build + reify normal specs (no optionals in this pass)
@@ -133,13 +133,13 @@ async function installForTarget({ buildTarget, externals, tmpBuildDir }) {
       tmpBuildDir,
       prebuiltSpecs,
       npmConfig,
-      /* _buildTarget: */ buildTarget
+      /* _buildTarget: */ buildTarget,
     );
   }
 
   // OPTIONAL: now scan and add only target-matching optional deps (general)
   const optionals = await discoverOptionalDeps(
-    join(tmpBuildDir, 'node_modules')
+    join(tmpBuildDir, 'node_modules'),
   );
 
   await installMatchingOptionals({
@@ -218,7 +218,7 @@ async function extractPrebuiltSpecs(
   tmpBuildDir,
   prebuiltSpecs,
   npmConfig,
-  _buildTarget
+  _buildTarget,
 ) {
   for (const { name, spec } of prebuiltSpecs) {
     // sanity: if present already, skip
@@ -423,7 +423,7 @@ async function installMatchingOptionals({
  */
 function inferBaseFromOptional(pkgName) {
   const m = pkgName.match(
-    /^(@[^/]+\/)?([^/]+?)(?:[-_](?:linux|linuxmusl|darwin|mac|win|win32).*)$/i
+    /^(@[^/]+\/)?([^/]+?)(?:[-_](?:linux|linuxmusl|darwin|mac|win|win32).*)$/i,
   );
   if (!m) return null;
   const scope = m[1] || '';
@@ -445,7 +445,7 @@ function inferBaseFromOptional(pkgName) {
  */
 async function pruneBuildDirsForInstalledOptionals(
   tmpBuildDir,
-  installedOptionals
+  installedOptionals,
 ) {
   const bases = new Set(/** @type {string[]} */ ([]));
 

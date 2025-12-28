@@ -37,7 +37,7 @@ class HetznerNode extends Node {
     const propertiesWithDefaults = Object.assign(
       {},
       HetznerNode.DefaultProperties,
-      properties
+      properties,
     );
     super({
       name,

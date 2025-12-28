@@ -9,7 +9,7 @@ const webpackConfigPath = path.resolve(
   __dirname,
   '..',
   'config',
-  'webpack.config.prod.js'
+  'webpack.config.prod.js',
 );
 
 // Check if the webpack.prod.js configuration exists

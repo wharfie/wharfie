@@ -161,8 +161,8 @@ describe('tests for s3 event scheduling', () => {
     expect(
       JSON.parse(
         AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       resource_id: '1',
       sort_key: 'a=10/b=20:1466424600000',
@@ -204,8 +204,8 @@ describe('tests for s3 event scheduling', () => {
     expect(
       JSON.parse(
         AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       resource_id: '1',
       sort_key: 'a=1/b=abc:1466424600000',
@@ -247,8 +247,8 @@ describe('tests for s3 event scheduling', () => {
     expect(
       JSON.parse(
         AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       resource_id: '1',
       sort_key: 'a=1/b=abc:1466424600000',
@@ -290,8 +290,8 @@ describe('tests for s3 event scheduling', () => {
     expect(
       JSON.parse(
         AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       resource_id: '1',
       sort_key: '2021/10:1466424480000',
@@ -375,8 +375,8 @@ describe('tests for s3 event scheduling', () => {
     expect(
       JSON.parse(
         AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       resource_id: '1',
       sort_key:
@@ -462,8 +462,8 @@ describe('tests for s3 event scheduling', () => {
     expect(
       JSON.parse(
         AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       resource_id: '1',
       sort_key:

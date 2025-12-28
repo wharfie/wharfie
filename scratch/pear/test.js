@@ -14,7 +14,7 @@ const ITERATIONS = process.env.ITERATIONS || '8';
 const KEY_PATH = process.env.KEY_PATH || './semaphore.keys.json';
 
 console.log(
-  `Spawning ${N_WORKERS} workers against semaphore "${SEM_NAME}" (threshold=${SEM_THRESH})`
+  `Spawning ${N_WORKERS} workers against semaphore "${SEM_NAME}" (threshold=${SEM_THRESH})`,
 );
 console.log(`Storage base=${STORAGE_BASE} namespace=${NAMESPACE}`);
 
