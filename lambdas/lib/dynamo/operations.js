@@ -314,6 +314,7 @@ async function putQuery(query) {
   await docClient.put({
     TableName: OPERATIONS_TABLE,
     Item: putItem,
+    ReturnValues: 'NONE',
   });
 }
 
