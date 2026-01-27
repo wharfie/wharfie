@@ -8,9 +8,26 @@
  * 'BEGINS_WITH'
  * )} ConditionTypeEnum
  */
+/**
+ * @type {Object<ConditionTypeEnum,ConditionTypeEnum>}
+ */
 const CONDITION_TYPE = {
   EQUALS: 'EQUALS',
   BEGINS_WITH: 'BEGINS_WITH',
+};
+
+/**
+ * @typedef {(
+ * 'PRIMARY'|
+ * 'SORT'
+ * )} KeyTypeEnum
+ */
+/**
+ * @type {Object<KeyTypeEnum,KeyTypeEnum>}
+ */
+const KEY_TYPE = {
+  PRIMARY: 'PRIMARY',
+  SORT: 'SORT',
 };
 
 /**
@@ -18,6 +35,7 @@ const CONDITION_TYPE = {
  * @property {ConditionTypeEnum} conditionType -
  * @property {string} propertyName -
  * @property {any} propertyValue -
+ * @property {KeyTypeEnum} [keyType] -
  */
 /**
  * @typedef QueryParams
@@ -40,9 +58,8 @@ async function query(params) {
 
 /**
  * Delete request where either:
- *  - no sort key fields exist, OR
- *  - both sortKeyName and sortKeyValue exist
- *
+ * - no sort key fields exist, OR
+ * - both sortKeyName and sortKeyValue exist
  * @typedef {(
  *   { keyName: string, keyValue: string } &
  *   (
@@ -53,14 +70,17 @@ async function query(params) {
  */
 
 /**
- * @typedef {DBRecord} PutRequest
+ * @typedef PutRequest
+ * @property {DBRecord} record -
+ * @property {string} keyName -
+ * @property {string} [sortKeyName] -
  */
 
 /**
  * @typedef BatchWriteParams
  * @property {string} tableName -
- * @property {DeleteRequest[]} deleteRequests -
- * @property {PutRequest[]} putRequests -
+ * @property {DeleteRequest[]} [deleteRequests] -
+ * @property {PutRequest[]} [putRequests] -
  */
 
 /**
@@ -82,7 +102,7 @@ async function batchWrite(params) {}
 /**
  * @typedef UpdateParams
  * @property {string} tableName -
- * @property {DBRecord} record -
+ * @property {DBRecord} [record] -
  * @property {string} keyName -
  * @property {string} keyValue -
  * @property {string} [sortKeyName] -
@@ -104,6 +124,8 @@ async function update(params) {}
 /**
  * @typedef PutParams
  * @property {string} tableName -
+ * @property {string} keyName -
+ * @property {string} [sortKeyName] -
  * @property {DBRecord} record -
  */
 
@@ -199,4 +221,4 @@ export default function createDB() {
   };
 }
 
-export { CONDITION_TYPE };
+export { CONDITION_TYPE, KEY_TYPE };

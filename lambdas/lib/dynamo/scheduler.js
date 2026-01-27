@@ -1,106 +1,180 @@
-import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
-import { DynamoDB } from '@aws-sdk/client-dynamodb';
-import { query as queryDb, batchWrite } from './index.js';
-import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
+
+import { CONDITION_TYPE, KEY_TYPE } from '../db/base.js';
 import SchedulerEntry from '../../scheduler/scheduler-entry.js';
 
-import BaseAWS from '../base.js';
+/**
+ * @typedef {import('../db/base.js').DBClient} DBClient
+ */
 
-const credentials = fromNodeProviderChain();
-const docClient = DynamoDBDocument.from(
-  new DynamoDB({
-    ...BaseAWS.config({
-      maxAttempts: Number(process.env?.DYNAMO_MAX_RETRIES || 30),
-    }),
-    region: process.env.AWS_REGION,
-    credentials,
-  }),
-  { marshallOptions: { removeUndefinedValues: true } },
-);
+const TABLE_ENV_VAR = 'SCHEDULER_TABLE';
 
-const SCHEDULER_TABLE = process.env.SCHEDULER_TABLE || '';
+const KEY_NAME = 'resource_id';
+const SORT_KEY_NAME = 'sort_key';
+
+const THREE_DAYS_IN_SECONDS = 60 * 60 * 24 * 3;
 
 /**
- * @param {string} resource_id -
- * @param {string} partition -
- * @param {Array<number>} window -
- * @returns {Promise<import('../../scheduler/scheduler-entry.js').default[]>} -
+ * @param {string} propertyName -
+ * @param {string} propertyValue -
+ * @returns {import('../db/base.js').KeyCondition} -
  */
-async function query(resource_id, partition, window) {
-  const [start_by, end_by] = window;
-  const { Items } = await queryDb({
-    TableName: SCHEDULER_TABLE,
-    ConsistentRead: true,
-    KeyConditionExpression:
-      '#resource_id = :id AND #sort_key BETWEEN :start_by AND :end_by',
-    ExpressionAttributeValues: {
-      ':id': resource_id,
-      ':start_by': `${partition}:${start_by}`,
-      ':end_by': `${partition}:${end_by}`,
-    },
-    ExpressionAttributeNames: {
-      '#resource_id': 'resource_id',
-      '#sort_key': 'sort_key',
-    },
-  });
-
-  return (Items || []).map(SchedulerEntry.fromRecord);
+function pkEq(propertyName, propertyValue) {
+  return {
+    keyType: KEY_TYPE.PRIMARY,
+    conditionType: CONDITION_TYPE.EQUALS,
+    propertyName,
+    propertyValue,
+  };
 }
 
 /**
- * @param {import('../../scheduler/scheduler-entry.js').default} schedulerEvent -
+ * @param {string} propertyName -
+ * @param {string} propertyValue -
+ * @returns {import('../db/base.js').KeyCondition} -
  */
-async function schedule(schedulerEvent) {
-  schedulerEvent.ttl = Math.round(Date.now() / 1000) + 60 * 60 * 24 * 3; // 3 day ttl
-  await docClient.put({
-    TableName: SCHEDULER_TABLE,
-    Item: schedulerEvent.toRecord(),
-    ConditionExpression: 'attribute_not_exists(sort_key)',
-    ReturnValues: 'NONE',
-  });
+function skBegins(propertyName, propertyValue) {
+  return {
+    keyType: KEY_TYPE.SORT,
+    conditionType: CONDITION_TYPE.BEGINS_WITH,
+    propertyName,
+    propertyValue,
+  };
 }
 
-/**
- * @param {import('../../scheduler/scheduler-entry.js').default} schedulerEvent -
- * @param {import('../../scheduler/scheduler-entry.js').SchedulerEntryStatusEnum} status -
- */
-async function update(schedulerEvent, status) {
-  schedulerEvent.status = status;
-  schedulerEvent.ttl = Math.round(Date.now() / 1000) + 60 * 60 * 24 * 3; // 3 day ttl
-  await docClient.put({
-    TableName: SCHEDULER_TABLE,
-    Item: schedulerEvent.toRecord(),
-    ReturnValues: 'NONE',
-  });
-}
+const nowSeconds = () => Math.floor(Date.now() / 1000);
 
-/**
- * @param {string} resource_id -
- */
-async function delete_records(resource_id) {
-  const { Items } = await queryDb({
-    TableName: SCHEDULER_TABLE,
-    ProjectionExpression: 'resource_id, sort_key',
-    ConsistentRead: true,
-    KeyConditionExpression: '#resource_id = :resource_id',
-    ExpressionAttributeValues: {
-      ':resource_id': resource_id,
-    },
-    ExpressionAttributeNames: {
-      '#resource_id': 'resource_id',
-    },
-  });
-  if (!Items || Items.length === 0) return;
-  while (Items.length > 0)
-    await batchWrite({
-      RequestItems: {
-        [SCHEDULER_TABLE]: Items.splice(0, 25).map((Item) => ({
-          DeleteRequest: {
-            Key: { resource_id: Item.resource_id, sort_key: Item.sort_key },
-          },
-        })),
-      },
+const conditionalFailed = () => {
+  try {
+    return new ConditionalCheckFailedException({
+      message: 'ConditionalCheckFailedException',
+      $metadata: {},
     });
-}
+  } catch {
+    const err = new Error('ConditionalCheckFailedException');
+    err.name = 'ConditionalCheckFailedException';
+    return err;
+  }
+};
 
-export { schedule, update, query, delete_records };
+/**
+ * @typedef {Object} schedulerClient
+ * @property {(schedulerEvent: SchedulerEntry) => void} schedule -
+ * @property {(schedulerEvent: SchedulerEntry, status: import('../../scheduler/scheduler-entry.js').SchedulerEntryStatusEnum) => void} update -
+ * @property {(resource_id: string, partition: string, window: [number, number]) => void} query -
+ * @property {(resource_id: string) => void} delete_records -
+ */
+
+/**
+ * Factory: Scheduler table client.
+ * @param {object} params -
+ * @param {DBClient} params.db -
+ * @param {string} [params.tableName] -
+ * @returns {schedulerClient} -
+ */
+export function createSchedulerTable({
+  db,
+  tableName = process.env[TABLE_ENV_VAR] || '',
+}) {
+  /**
+   * @param {SchedulerEntry} schedulerEvent -
+   */
+  async function schedule(schedulerEvent) {
+    schedulerEvent.ttl = nowSeconds() + THREE_DAYS_IN_SECONDS;
+    const record =
+      typeof schedulerEvent?.toRecord === 'function'
+        ? schedulerEvent.toRecord()
+        : schedulerEvent;
+
+    const existing = await db.get({
+      tableName,
+      keyName: KEY_NAME,
+      keyValue: record.resource_id,
+      sortKeyName: SORT_KEY_NAME,
+      sortKeyValue: record.sort_key,
+      consistentRead: true,
+    });
+
+    if (existing) throw conditionalFailed();
+
+    await db.put({
+      tableName,
+      keyName: KEY_NAME,
+      sortKeyName: SORT_KEY_NAME,
+      record,
+    });
+  }
+
+  /**
+   * @param {SchedulerEntry} schedulerEvent -
+   * @param {import('../../scheduler/scheduler-entry.js').SchedulerEntryStatusEnum} status -
+   */
+  async function update(schedulerEvent, status) {
+    schedulerEvent.status = status;
+    schedulerEvent.ttl = nowSeconds() + THREE_DAYS_IN_SECONDS;
+
+    const record =
+      typeof schedulerEvent?.toRecord === 'function'
+        ? schedulerEvent.toRecord()
+        : schedulerEvent;
+
+    await db.put({
+      tableName,
+      keyName: KEY_NAME,
+      sortKeyName: SORT_KEY_NAME,
+      record,
+    });
+  }
+
+  /**
+   * @param {string} resource_id -
+   * @param {string} partition -
+   * @param {[number, number]} window -
+   * @returns {Promise<SchedulerEntry[]>} -
+   */
+  async function query(resource_id, partition, window) {
+    const [start_by, end_by] = window;
+    const startKey = `${partition}:${start_by}`;
+    const endKey = `${partition}:${end_by}`;
+
+    const items =
+      (await db.query({
+        tableName,
+        consistentRead: true,
+        keyConditions: [
+          pkEq(KEY_NAME, resource_id),
+          skBegins(SORT_KEY_NAME, `${partition}:`),
+        ],
+      })) || [];
+
+    return items
+      .filter((item) => item.sort_key >= startKey && item.sort_key <= endKey)
+      .map((item) => SchedulerEntry.fromRecord(item));
+  }
+
+  /**
+   * @param {string} resource_id -
+   */
+  async function delete_records(resource_id) {
+    const items =
+      (await db.query({
+        tableName,
+        consistentRead: true,
+        keyConditions: [pkEq(KEY_NAME, resource_id)],
+      })) || [];
+
+    if (!items.length) return;
+
+    await db.batchWrite({
+      tableName,
+      deleteRequests: items.map((item) => ({
+        keyName: KEY_NAME,
+        keyValue: item.resource_id,
+        sortKeyName: SORT_KEY_NAME,
+        sortKeyValue: item.sort_key,
+      })),
+    });
+  }
+
+  return { schedule, update, query, delete_records };
+}

@@ -1,123 +1,166 @@
-import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
-import {
-  DynamoDB,
-  ConditionalCheckFailedException,
-} from '@aws-sdk/client-dynamodb';
-import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
-
-import BaseAWS from '../base.js';
-
-const credentials = fromNodeProviderChain();
-const docClient = DynamoDBDocument.from(
-  new DynamoDB({
-    ...BaseAWS.config({
-      maxAttempts: Number(process.env?.DYNAMO_MAX_RETRIES || 30),
-    }),
-    region: process.env.AWS_REGION,
-    credentials,
-  }),
-  { marshallOptions: { removeUndefinedValues: true } },
-);
-
-const SEMAPHORE_TABLE = process.env.SEMAPHORE_TABLE || '';
+import { CONDITION_TYPE } from '../db/base.js';
 
 /**
- * @param {string} semaphore - name of dynamo sempahore record
- * @param {number} threshold - threshold that the semaphore needs to be <= in order to increment
- * @returns {Promise<boolean>} - if the semaphore was successfully entered
+ * @typedef {import('../db/base.js').DBClient} DBClient
  */
-async function increase(semaphore, threshold = 1) {
-  // `limit` is a number that can be manually managed in dynamodb in order to
-  // override the resource's athena query concurrency.  Global concurrency is
-  // still enforced if this limit value is set.
-  try {
-    await docClient.update({
-      TableName: SEMAPHORE_TABLE,
-      Key: {
-        semaphore,
-      },
-      UpdateExpression: 'SET #val = if_not_exists(#val, :zero) + :incr',
-      ExpressionAttributeNames: { '#val': 'value', '#limit': 'limit' },
-      ConditionExpression:
-        '( attribute_not_exists(#limit) AND ( attribute_not_exists(#val) OR (#val <= :threshold AND #val >= :zero) ) ) OR ( attribute_exists(#limit)     AND ( attribute_not_exists(#val) OR (#val <= #limit     AND #val >= :zero) ) )',
-      ExpressionAttributeValues: {
-        ':incr': 1,
-        ':zero': 0,
-        ':threshold': threshold - 1,
-      },
-      ReturnValues: 'NONE',
+
+const TABLE_ENV_VAR = 'SEMAPHORE_TABLE';
+const KEY_NAME = 'semaphore';
+
+const isConditionalCheckFailed = (/** @type {unknown} */ error) => {
+  if (error instanceof Error) {
+    return error?.name === 'ConditionalCheckFailedException';
+  }
+  return false;
+};
+
+/**
+ * @param {string} propertyName -
+ * @param {string} propertyValue -
+ * @returns {import('../db/base.js').KeyCondition} -
+ */
+function eq(propertyName, propertyValue) {
+  return {
+    conditionType: CONDITION_TYPE.EQUALS,
+    propertyName,
+    propertyValue,
+  };
+}
+
+const toNumber = (/** @type {any} */ value, fallback = 0) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+};
+
+/**
+ * @typedef {Object} semaphoreClient
+ * @property {(semaphore: string, threshold: number | undefined) => void} increase -
+ * @property {(semaphore: string) => void} release -
+ * @property {(semaphore: string) => void} deleteSemaphore -
+ */
+
+/**
+ * Factory: Semaphore table client.
+ * @param {object} params -
+ * @param {DBClient} params.db -
+ * @param {string} [params.tableName] -
+ * @returns {semaphoreClient} -
+ */
+export function createSemaphoreTable({
+  db,
+  tableName = process.env[TABLE_ENV_VAR] || '',
+}) {
+  const getRecord = (/** @type {string} */ semaphore) =>
+    db.get({
+      tableName,
+      keyName: KEY_NAME,
+      keyValue: semaphore,
+      consistentRead: true,
     });
-    return true;
-  } catch (error) {
-    if (error instanceof ConditionalCheckFailedException) {
-      return false;
-    }
-    throw error;
-  }
-}
 
-/**
- * @param {string} semaphore - name of dynamo sempahore record
- */
-async function release(semaphore) {
-  try {
-    await docClient.update({
-      TableName: SEMAPHORE_TABLE,
-      Key: {
-        semaphore,
-      },
-      UpdateExpression: 'SET #val = if_not_exists(#val, :default) + :incr',
-      ExpressionAttributeNames: { '#val': 'value' },
-      ConditionExpression: 'attribute_not_exists(#val) OR #val > :zero',
-      ExpressionAttributeValues: {
-        ':incr': -1,
-        ':zero': 0,
-        ':default': 1,
-      },
-      ReturnValues: 'NONE',
+  /**
+   * @param {string} semaphore -
+   * @param {number} [threshold] -
+   * @returns {Promise<boolean>} -
+   */
+  async function increase(semaphore, threshold = 1) {
+    const maxAttempts = 25;
+
+    for (let i = 0; i < maxAttempts; i += 1) {
+      const record = await getRecord(semaphore);
+      const currentValue = toNumber(record?.value, 0);
+      const limit =
+        record?.limit === undefined ? undefined : toNumber(record?.limit, 0);
+
+      const ceiling = typeof limit === 'number' ? limit : threshold;
+
+      if (currentValue < 0) return false;
+      if (currentValue >= ceiling) return false;
+
+      const nextValue = currentValue + 1;
+
+      if (!record) {
+        await db.put({
+          tableName,
+          keyName: KEY_NAME,
+          record: { semaphore, value: nextValue },
+        });
+
+        const afterPut = await getRecord(semaphore);
+        return toNumber(afterPut?.value, 0) >= 1;
+      }
+
+      try {
+        await db.update({
+          tableName,
+          keyName: KEY_NAME,
+          keyValue: semaphore,
+          updates: [{ property: ['value'], propertyValue: nextValue }],
+          conditions: [eq('value', currentValue.toString())],
+        });
+      } catch (error) {
+        if (isConditionalCheckFailed(error)) continue;
+        throw error;
+      }
+
+      const after = await getRecord(semaphore);
+      if (toNumber(after?.value, 0) === nextValue) return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * @param {string} semaphore -
+   */
+  async function release(semaphore) {
+    const maxAttempts = 25;
+
+    for (let i = 0; i < maxAttempts; i += 1) {
+      const record = await getRecord(semaphore);
+      const currentValue = toNumber(record?.value, 0);
+
+      if (!record) return;
+      if (currentValue <= 0) return;
+
+      const nextValue = currentValue - 1;
+
+      try {
+        await db.update({
+          tableName,
+          keyName: KEY_NAME,
+          keyValue: semaphore,
+          updates: [{ property: ['value'], propertyValue: nextValue }],
+          conditions: [eq('value', currentValue.toString())],
+        });
+      } catch (error) {
+        if (isConditionalCheckFailed(error)) continue;
+        throw error;
+      }
+
+      const after = await getRecord(semaphore);
+      if (toNumber(after?.value, 0) === nextValue) return;
+    }
+  }
+
+  /**
+   * @param {string} semaphore -
+   */
+  async function deleteSemaphore(semaphore) {
+    const record = await getRecord(semaphore);
+    let value = toNumber(record?.value, 0);
+
+    while (value > 0) {
+      await release('wharfie');
+      value -= 1;
+    }
+
+    await db.remove({
+      tableName,
+      keyName: KEY_NAME,
+      keyValue: semaphore,
     });
-  } catch (error) {
-    if (error instanceof ConditionalCheckFailedException) {
-      return;
-    }
-    throw error;
   }
-}
 
-/**
- * @param {string} semaphore - name of dynamo sempahore record
- * @returns {Promise<number>} - semaphore lock value
- */
-async function get(semaphore) {
-  const { Item } = await docClient.get({
-    TableName: SEMAPHORE_TABLE,
-    ConsistentRead: true,
-    Key: {
-      semaphore,
-    },
-  });
-  if (Item === undefined) {
-    return 0;
-  }
-  return Item.value;
+  return { increase, release, deleteSemaphore };
 }
-
-/**
- * @param {string} semaphore - name of dynamo semaphore record
- */
-async function deleteSemaphore(semaphore) {
-  // remove value from top-level `wharfie` semaphore
-  let result = await get(semaphore);
-  while (result > 0) {
-    await release(`wharfie`);
-    result = result - 1;
-  }
-  await docClient.delete({
-    TableName: SEMAPHORE_TABLE,
-    Key: {
-      semaphore,
-    },
-  });
-}
-
-export { increase, release, deleteSemaphore };

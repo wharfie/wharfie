@@ -1,153 +1,102 @@
-/* eslint-disable jest/no-hooks */
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
 
-import { applyAutoMocks } from '../../mocks/automocks.js';
+import { getAdapterMatrix } from '../../helpers/db-adapters.js';
+import { createSemaphoreTable } from '../../../lambdas/lib/dynamo/semaphore.js';
 
-await applyAutoMocks({
-  projectRoot: process.cwd(),
-  debug: true,
-  stub: true,
-});
+describe('semaphore table contract', () => {
+  for (const adapter of getAdapterMatrix()) {
+    describe(adapter.name, () => {
+      let db;
+      let cleanup;
+      const tableName = 'semaphore-contract';
 
-// const AWS = await import('@aws-sdk/lib-dynamodb')
-console.log('HELLLLLO');
+      beforeEach(async () => {
+        ({ db, cleanup } = await adapter.create());
+      });
 
-process.env.QUERY_TABLE = 'query_table';
+      afterEach(async () => {
+        await cleanup();
+      });
 
-// const semaphore = await import('../../../lambdas/lib/dynamo/semaphore.js')
-let update, get, _delete;
+      test('increase respects threshold', async () => {
+        const table = createSemaphoreTable({ db, tableName });
 
-describe('dynamo semaphore db', () => {
-  // beforeAll(() => {
-  //   update = AWS.spyOn('DynamoDBDocument', 'update');
-  //   get = AWS.spyOn('DynamoDBDocument', 'get');
-  //   _delete = AWS.spyOn('DynamoDBDocument', 'delete');
-  // });
+        expect(await table.increase('s1', 2)).toBe(true);
+        expect(await table.increase('s1', 2)).toBe(true);
+        expect(await table.increase('s1', 2)).toBe(false);
 
-  // afterAll(() => {
-  //   AWS.clearAllMocks();
-  // });
+        const record = await db.get({
+          tableName,
+          keyName: 'semaphore',
+          keyValue: 's1',
+          consistentRead: true,
+        });
 
-  it('increase', async () => {
-    expect.assertions(2);
+        expect(record.value).toBe(2);
+      });
 
-    update.mockResolvedValue({
-      $response: {},
+      test('release decrements and never goes below 0', async () => {
+        const table = createSemaphoreTable({ db, tableName });
+
+        await table.increase('s1', 3);
+        await table.release('s1');
+        await table.release('s1');
+
+        const record = await db.get({
+          tableName,
+          keyName: 'semaphore',
+          keyValue: 's1',
+          consistentRead: true,
+        });
+
+        expect(record.value).toBe(0);
+      });
+
+      test('limit overrides threshold', async () => {
+        await db.put({
+          tableName,
+          keyName: 'semaphore',
+          record: { semaphore: 'limited', value: 0, limit: 1 },
+        });
+
+        const table = createSemaphoreTable({ db, tableName });
+        expect(await table.increase('limited', 10)).toBe(true);
+        expect(await table.increase('limited', 10)).toBe(false);
+      });
+
+      test('deleteSemaphore releases global wharfie permits', async () => {
+        await db.put({
+          tableName,
+          keyName: 'semaphore',
+          record: { semaphore: 'wharfie', value: 2 },
+        });
+
+        await db.put({
+          tableName,
+          keyName: 'semaphore',
+          record: { semaphore: 'temp', value: 2 },
+        });
+
+        const table = createSemaphoreTable({ db, tableName });
+        await table.deleteSemaphore('temp');
+
+        const wharfie = await db.get({
+          tableName,
+          keyName: 'semaphore',
+          keyValue: 'wharfie',
+          consistentRead: true,
+        });
+
+        const temp = await db.get({
+          tableName,
+          keyName: 'semaphore',
+          keyValue: 'temp',
+          consistentRead: true,
+        });
+
+        expect(wharfie.value).toBe(0);
+        expect(temp).toBeUndefined();
+      });
     });
-    await semaphore.increase('semaphore_name');
-
-    expect(update).toHaveBeenCalledTimes(1);
-    expect(update.mock.calls[0]).toMatchInlineSnapshot(`
-      [
-        {
-          "ConditionExpression": "( attribute_not_exists(#limit) AND ( attribute_not_exists(#val) OR (#val <= :threshold AND #val >= :zero) ) ) OR ( attribute_exists(#limit)     AND ( attribute_not_exists(#val) OR (#val <= #limit     AND #val >= :zero) ) )",
-          "ExpressionAttributeNames": {
-            "#limit": "limit",
-            "#val": "value",
-          },
-          "ExpressionAttributeValues": {
-            ":incr": 1,
-            ":threshold": 0,
-            ":zero": 0,
-          },
-          "Key": {
-            "semaphore": "semaphore_name",
-          },
-          "ReturnValues": "NONE",
-          "TableName": "",
-          "UpdateExpression": "SET #val = if_not_exists(#val, :zero) + :incr",
-        },
-      ]
-    `);
-  });
-
-  it('release', async () => {
-    expect.assertions(2);
-
-    update.mockResolvedValue({
-      $response: {},
-    });
-    await semaphore.release('semaphore_name');
-
-    expect(update).toHaveBeenCalledTimes(2);
-    expect(update.mock.calls[1]).toMatchInlineSnapshot(`
-      [
-        {
-          "ConditionExpression": "attribute_not_exists(#val) OR #val > :zero",
-          "ExpressionAttributeNames": {
-            "#val": "value",
-          },
-          "ExpressionAttributeValues": {
-            ":default": 1,
-            ":incr": -1,
-            ":zero": 0,
-          },
-          "Key": {
-            "semaphore": "semaphore_name",
-          },
-          "ReturnValues": "NONE",
-          "TableName": "",
-          "UpdateExpression": "SET #val = if_not_exists(#val, :default) + :incr",
-        },
-      ]
-    `);
-  });
-
-  it('deleteSemaphore', async () => {
-    expect.assertions(6);
-
-    _delete.mockResolvedValue(undefined);
-    get.mockResolvedValue({
-      Item: {
-        value: 2,
-      },
-    });
-    await semaphore.deleteSemaphore('semaphore_name');
-
-    expect(get).toHaveBeenCalledTimes(1);
-    expect(get.mock.calls[0]).toMatchInlineSnapshot(`
-      [
-        {
-          "ConsistentRead": true,
-          "Key": {
-            "semaphore": "semaphore_name",
-          },
-          "TableName": "",
-        },
-      ]
-    `);
-    expect(update).toHaveBeenCalledTimes(4);
-    expect(update.mock.calls[2]).toMatchInlineSnapshot(`
-      [
-        {
-          "ConditionExpression": "attribute_not_exists(#val) OR #val > :zero",
-          "ExpressionAttributeNames": {
-            "#val": "value",
-          },
-          "ExpressionAttributeValues": {
-            ":default": 1,
-            ":incr": -1,
-            ":zero": 0,
-          },
-          "Key": {
-            "semaphore": "wharfie",
-          },
-          "ReturnValues": "NONE",
-          "TableName": "",
-          "UpdateExpression": "SET #val = if_not_exists(#val, :default) + :incr",
-        },
-      ]
-    `);
-    expect(_delete).toHaveBeenCalledTimes(1);
-    expect(_delete.mock.calls[0]).toMatchInlineSnapshot(`
-      [
-        {
-          "Key": {
-            "semaphore": "semaphore_name",
-          },
-          "TableName": "",
-        },
-      ]
-    `);
-  });
+  }
 });

@@ -1,151 +1,63 @@
-/* eslint-disable jest/no-hooks */
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
-import AWS from '@aws-sdk/lib-dynamodb';
+import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
 
-process.env.LOCATION_TABLE = 'location_table';
-const location = await import('../../../lambdas/lib/dynamo/location.js');
+import { getAdapterMatrix } from '../../helpers/db-adapters.js';
+import { createLocationTable } from '../../../lambdas/lib/dynamo/location.js';
 
-let query, _delete, put;
+describe('location table contract', () => {
+  for (const adapter of getAdapterMatrix()) {
+    describe(adapter.name, () => {
+      let db;
+      let cleanup;
+      const tableName = 'location-contract';
 
-describe('dynamo location db', () => {
-  beforeAll(() => {
-    put = AWS.spyOn('DynamoDBDocument', 'put');
-    query = AWS.spyOn('DynamoDBDocument', 'query');
-    _delete = AWS.spyOn('DynamoDBDocument', 'delete');
-  });
-
-  afterAll(() => {
-    AWS.clearAllMocks();
-  });
-
-  it('putLocation', async () => {
-    expect.assertions(2);
-
-    put.mockResolvedValue({
-      $response: {},
-    });
-    await location.putLocation({
-      resource_id: 'resource_id',
-      location: 's3://somebucket/prefix/',
-    });
-
-    expect(put).toHaveBeenCalledTimes(1);
-    expect(put.mock.calls[0]).toMatchInlineSnapshot(`
-      [
-        {
-          "Item": {
-            "interval": "300",
-            "location": "s3://somebucket/prefix/",
-            "resource_id": "resource_id",
-          },
-          "ReturnValues": "NONE",
-          "TableName": "location_table",
-        },
-      ]
-    `);
-  });
-
-  it('findLocations', async () => {
-    expect.assertions(5);
-
-    query
-      .mockResolvedValueOnce({
-        Items: [],
-      })
-      .mockResolvedValueOnce({
-        Items: [],
-      })
-      .mockResolvedValueOnce({
-        Items: [
-          {
-            resource_id: 'resource-123',
-            location: 's3://some_bucket/prefix/',
-          },
-        ],
+      beforeEach(async () => {
+        ({ db, cleanup } = await adapter.create());
       });
-    const result = await location.findLocations(
-      's3://some_bucket/prefix/partion=a/a_key.json',
-    );
 
-    expect(query).toHaveBeenCalledTimes(3);
-    expect(query.mock.calls[0]).toMatchInlineSnapshot(`
-      [
-        {
-          "ConsistentRead": true,
-          "ExpressionAttributeNames": {
-            "#location": "location",
-          },
-          "ExpressionAttributeValues": {
-            ":location": "s3://some_bucket/prefix/partion=a/a_key.json",
-          },
-          "KeyConditionExpression": "#location = :location",
-          "TableName": "location_table",
-        },
-      ]
-    `);
-    expect(query.mock.calls[1]).toMatchInlineSnapshot(`
-      [
-        {
-          "ConsistentRead": true,
-          "ExpressionAttributeNames": {
-            "#location": "location",
-          },
-          "ExpressionAttributeValues": {
-            ":location": "s3://some_bucket/prefix/partion=a/",
-          },
-          "KeyConditionExpression": "#location = :location",
-          "TableName": "location_table",
-        },
-      ]
-    `);
-    expect(query.mock.calls[2]).toMatchInlineSnapshot(`
-      [
-        {
-          "ConsistentRead": true,
-          "ExpressionAttributeNames": {
-            "#location": "location",
-          },
-          "ExpressionAttributeValues": {
-            ":location": "s3://some_bucket/prefix/",
-          },
-          "KeyConditionExpression": "#location = :location",
-          "TableName": "location_table",
-        },
-      ]
-    `);
-    expect(result).toMatchInlineSnapshot(`
-      [
-        {
-          "interval": "300",
-          "location": "s3://some_bucket/prefix/",
-          "resource_id": "resource-123",
-        },
-      ]
-    `);
-  });
+      afterEach(async () => {
+        await cleanup();
+      });
 
-  it('deleteLocation', async () => {
-    expect.assertions(2);
+      test('findLocations walks up prefixes', async () => {
+        const table = createLocationTable({ db, tableName });
 
-    _delete.mockResolvedValue({
-      $response: {},
+        await table.putLocation({
+          location: 's3://bucket/prefix/',
+          resource_id: 'r1',
+        });
+
+        const found = await table.findLocations('s3://bucket/prefix/file.json');
+        expect(found).toEqual([
+          {
+            location: 's3://bucket/prefix/',
+            resource_id: 'r1',
+            interval: '300',
+          },
+        ]);
+      });
+
+      test('deleteLocation removes routing', async () => {
+        const table = createLocationTable({ db, tableName });
+
+        await table.putLocation({
+          location: 's3://bucket/prefix/',
+          resource_id: 'r1',
+        });
+
+        await table.deleteLocation({
+          location: 's3://bucket/prefix/',
+          resource_id: 'r1',
+        });
+
+        const found = await table.findLocations('s3://bucket/prefix/file.json');
+        expect(found).toEqual([]);
+      });
+
+      test('terminal locations short-circuit', async () => {
+        const table = createLocationTable({ db, tableName });
+        expect(await table.findLocations('')).toEqual([]);
+        expect(await table.findLocations('s3://')).toEqual([]);
+      });
     });
-    await location.deleteLocation({
-      resource_id: 'resource_id',
-      location: 's3://somebucket/prefix/',
-    });
-
-    expect(_delete).toHaveBeenCalledTimes(1);
-    expect(_delete.mock.calls[0]).toMatchInlineSnapshot(`
-      [
-        {
-          "Key": {
-            "location": "s3://somebucket/prefix/",
-            "resource_id": "resource_id",
-          },
-          "TableName": "location_table",
-        },
-      ]
-    `);
-  });
+  }
 });

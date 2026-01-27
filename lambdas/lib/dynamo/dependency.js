@@ -1,83 +1,97 @@
-import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
-import { DynamoDB } from '@aws-sdk/client-dynamodb';
-import { query } from './index.js';
-import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
-
-import BaseAWS from '../base.js';
-
-const credentials = fromNodeProviderChain();
-const docClient = DynamoDBDocument.from(
-  new DynamoDB({
-    ...BaseAWS.config({
-      maxAttempts: Number(process.env?.DYNAMO_MAX_RETRIES || 30),
-    }),
-    region: process.env.AWS_REGION,
-    credentials,
-  }),
-  { marshallOptions: { removeUndefinedValues: true } },
-);
-
-const DEPENDENCY_TABLE = process.env.DEPENDENCY_TABLE || '';
+import { CONDITION_TYPE, KEY_TYPE } from '../db/base.js';
 
 /**
- * @param {import('../../typedefs.js').DependencyRecord} dependency -
- * @param {string} [tableName] -
+ * @typedef {import('../db/base.js').DBClient} DBClient
+ * @typedef {import('../../typedefs.js').DependencyRecord} DependencyRecord
  */
-async function putDependency(
-  dependency,
-  tableName = process.env.DEPENDENCY_TABLE,
-) {
-  await docClient.put({
-    TableName: tableName,
-    Item: {
-      resource_id: dependency.resource_id,
-      dependency: dependency.dependency,
-      interval: dependency.interval || '300',
-    },
-    ReturnValues: 'NONE',
-  });
+
+const DEFAULT_INTERVAL = '300';
+const TABLE_ENV_VAR = 'DEPENDENCY_TABLE';
+
+const KEY_NAME = 'dependency';
+const SORT_KEY_NAME = 'resource_id';
+
+/**
+ * @param {string} propertyName -
+ * @param {string} propertyValue -
+ * @returns {import('../db/base.js').KeyCondition} -
+ */
+function pkEq(propertyName, propertyValue) {
+  return {
+    keyType: KEY_TYPE.PRIMARY,
+    conditionType: CONDITION_TYPE.EQUALS,
+    propertyName,
+    propertyValue,
+  };
 }
 
 /**
- * @param {string} dependency -
- * @returns {Promise<Array<import('../../typedefs.js').DependencyRecord>?>} - event
+ * A DynamoDB wrapper client exposing the base DB methods.
+ * @typedef {Object} dependencyClient
+ * @property {(dependency: DependencyRecord) => void} putDependency -
+ * @property {(dependency: DependencyRecord) => Promise<DependencyRecord[]>} findDependencies -
+ * @property {(dependency: DependencyRecord) => void} deleteDependency -
  */
-async function findDependencies(dependency) {
-  if (!dependency) return [];
-  const { Items } = await query({
-    TableName: DEPENDENCY_TABLE,
-    ConsistentRead: true,
-    KeyConditionExpression: '#dependency = :dependency',
-    ExpressionAttributeValues: {
-      ':dependency': dependency,
-    },
-    ExpressionAttributeNames: {
-      '#dependency': 'dependency',
-    },
-  });
-  if (!Items) return [];
-  return Items.map((item) => ({
-    dependency,
-    resource_id: item.resource_id,
-    interval: item.interval || '300',
-  })).filter((item) => item.resource_id);
-}
 
 /**
- * @param {import('../../typedefs.js').DependencyRecord} dependency -
- * @param {string} [tableName] -
+ * Factory: Dependency table client.
+ * @param {object} params -
+ * @param {DBClient} params.db -
+ * @param {string} [params.tableName] -
+ * @returns {dependencyClient} -
  */
-async function deleteDependency(
-  dependency,
-  tableName = process.env.DEPENDENCY_TABLE,
-) {
-  await docClient.delete({
-    TableName: tableName,
-    Key: {
-      resource_id: dependency.resource_id,
-      dependency: dependency.dependency,
-    },
-  });
-}
+export function createDependencyTable({
+  db,
+  tableName = process.env[TABLE_ENV_VAR] || '',
+}) {
+  /**
+   * @param {DependencyRecord} dependency -
+   */
+  async function putDependency(dependency) {
+    await db.put({
+      tableName,
+      keyName: KEY_NAME,
+      sortKeyName: SORT_KEY_NAME,
+      record: {
+        ...dependency,
+        interval: dependency.interval || DEFAULT_INTERVAL,
+      },
+    });
+  }
 
-export { putDependency, findDependencies, deleteDependency };
+  /**
+   * @param {DependencyRecord} dependency -
+   * @returns {Promise<DependencyRecord[]>} -
+   */
+  async function findDependencies(dependency) {
+    const items =
+      (await db.query({
+        tableName,
+        consistentRead: true,
+        keyConditions: [pkEq(KEY_NAME, dependency.dependency)],
+      })) || [];
+
+    return items
+      .map((item) => ({
+        dependency: dependency.dependency,
+        resource_id: item.resource_id,
+        interval: item.interval || DEFAULT_INTERVAL,
+      }))
+      .filter((item) => item.resource_id);
+  }
+
+  /**
+   * @param {DependencyRecord} dependency -
+   */
+  async function deleteDependency(dependency) {
+    await db.remove({
+      tableName,
+      keyName: KEY_NAME,
+      keyValue: dependency.dependency,
+      sortKeyName: SORT_KEY_NAME,
+      sortKeyValue: dependency.resource_id,
+    });
+  }
+
+  return { putDependency, findDependencies, deleteDependency };
+}

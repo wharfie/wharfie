@@ -1,88 +1,123 @@
-import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
-import { DynamoDB } from '@aws-sdk/client-dynamodb';
-import { query } from './index.js';
-import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
-
-import BaseAWS from '../base.js';
-
-const credentials = fromNodeProviderChain();
-const docClient = DynamoDBDocument.from(
-  new DynamoDB({
-    ...BaseAWS.config({
-      maxAttempts: Number(process.env?.DYNAMO_MAX_RETRIES || 30),
-    }),
-    region: process.env.AWS_REGION,
-    credentials,
-  }),
-  { marshallOptions: { removeUndefinedValues: true } },
-);
-
-const LOCATION_TABLE = process.env.LOCATION_TABLE || '';
+import { CONDITION_TYPE, KEY_TYPE } from '../db/base.js';
 
 /**
- * @param {import('../../typedefs.js').LocationRecord} location -
- * @param {string} [tableName] -
+ * @typedef {import('../db/base.js').DBClient} DBClient
+ * @typedef {import('../../typedefs.js').LocationRecord} LocationRecord
  */
-async function putLocation(location, tableName = process.env.LOCATION_TABLE) {
-  await docClient.put({
-    TableName: tableName,
-    Item: {
-      resource_id: location.resource_id,
-      location: location.location,
-      interval: location.interval || '300',
-    },
-    ReturnValues: 'NONE',
-  });
-}
+
+const DEFAULT_INTERVAL = '300';
+const TABLE_ENV_VAR = 'LOCATION_TABLE';
+
+const KEY_NAME = 'location';
+const SORT_KEY_NAME = 'resource_id';
 
 /**
- * @param {string} location -
- * @returns {Promise<Array<import('../../typedefs.js').LocationRecord>?>} - event
+ * @param {string} propertyName -
+ * @param {string} propertyValue -
+ * @returns {import('../db/base.js').KeyCondition} -
  */
-async function findLocations(location) {
-  if (!location || location === 's3://') return [];
-  const { Items } = await query({
-    TableName: LOCATION_TABLE,
-    ConsistentRead: true,
-    KeyConditionExpression: '#location = :location',
-    ExpressionAttributeValues: {
-      ':location': location,
-    },
-    ExpressionAttributeNames: {
-      '#location': 'location',
-    },
-  });
-  if (!Items || Items.length === 0)
-    return findLocations(
-      location.slice(-1) === '/'
-        ? location.substring(
-            0,
-            location.lastIndexOf('/', location.lastIndexOf('/') - 1) + 1,
-          )
-        : location.substring(0, location.lastIndexOf('/') + 1),
-    );
-  return Items.map((item) => ({
-    location,
-    resource_id: item.resource_id,
-    interval: item.interval || '300',
-  })).filter((item) => item.resource_id);
+function pkEq(propertyName, propertyValue) {
+  return {
+    keyType: KEY_TYPE.PRIMARY,
+    conditionType: CONDITION_TYPE.EQUALS,
+    propertyName,
+    propertyValue,
+  };
 }
+
+const isTerminalLocation = (/** @type {string} */ location) =>
+  !location || location === 's3://';
+
+const parentLocation = (/** @type {string} */ location) => {
+  if (isTerminalLocation(location)) return '';
+
+  if (!location.endsWith('/')) {
+    const idx = location.lastIndexOf('/');
+    if (idx <= 0) return '';
+    return location.slice(0, idx + 1);
+  }
+
+  const trimmed = location.slice(0, -1);
+  const idx = trimmed.lastIndexOf('/');
+  if (idx <= 0) return '';
+  return trimmed.slice(0, idx + 1);
+};
 
 /**
- * @param {import('../../typedefs.js').LocationRecord} location -
- * @param {string} [tableName] -
+ * @typedef {Object} locationClient
+ * @property {(locationRecord: LocationRecord) => void} putLocation -
+ * @property {(location: string) => Promise<LocationRecord[]>} findLocations -
+ * @property {(locationRecord: LocationRecord) => void} deleteLocation -
  */
-async function deleteLocation(
-  location,
-  tableName = process.env.LOCATION_TABLE,
-) {
-  await docClient.delete({
-    TableName: tableName,
-    Key: {
-      resource_id: location.resource_id,
-      location: location.location,
-    },
-  });
-}
 
-export { putLocation, findLocations, deleteLocation };
+/**
+ * Factory: Location table client.
+ * @param {object} params -
+ * @param {DBClient} params.db -
+ * @param {string} [params.tableName] -
+ * @returns {locationClient} -
+ */
+export function createLocationTable({
+  db,
+  tableName = process.env[TABLE_ENV_VAR] || '',
+}) {
+  /**
+   * @param {LocationRecord} locationRecord -
+   */
+  async function putLocation(locationRecord) {
+    await db.put({
+      tableName,
+      keyName: KEY_NAME,
+      sortKeyName: SORT_KEY_NAME,
+      record: {
+        ...locationRecord,
+        interval: locationRecord.interval || DEFAULT_INTERVAL,
+      },
+    });
+  }
+
+  /**
+   * Walks up the location tree until it finds matches.
+   * @param {string} location -
+   * @returns {Promise<LocationRecord[]>} -
+   */
+  async function findLocations(location) {
+    if (isTerminalLocation(location)) return [];
+
+    const items =
+      (await db.query({
+        tableName,
+        consistentRead: true,
+        keyConditions: [pkEq(KEY_NAME, location)],
+      })) || [];
+
+    const records = items
+      .map((item) => ({
+        location: item.location || location,
+        resource_id: item.resource_id,
+        interval: item.interval || DEFAULT_INTERVAL,
+      }))
+      .filter((item) => item.resource_id);
+
+    if (records.length) return records;
+
+    const parent = parentLocation(location);
+    if (!parent || parent === location) return [];
+    return findLocations(parent);
+  }
+
+  /**
+   * @param {LocationRecord} locationRecord -
+   */
+  async function deleteLocation(locationRecord) {
+    await db.remove({
+      tableName,
+      keyName: KEY_NAME,
+      keyValue: locationRecord.location,
+      sortKeyName: SORT_KEY_NAME,
+      sortKeyValue: locationRecord.resource_id,
+    });
+  }
+
+  return { putLocation, findLocations, deleteLocation };
+}
