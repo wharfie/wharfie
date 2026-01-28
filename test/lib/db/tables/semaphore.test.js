@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
 
-import { getAdapterMatrix } from '../../helpers/db-adapters.js';
-import { createSemaphoreTable } from '../../../lambdas/lib/dynamo/semaphore.js';
+import { getAdapterMatrix } from '../../../helpers/db-adapters.js';
+import { createSemaphoreTable } from '../../../../lambdas/lib/db/tables/semaphore.js';
 
 describe('semaphore table contract', () => {
   for (const adapter of getAdapterMatrix()) {

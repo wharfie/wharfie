@@ -1,8 +1,8 @@
-import { CONDITION_TYPE, KEY_TYPE } from '../db/base.js';
+import { CONDITION_TYPE, KEY_TYPE } from '../../db/base.js';
 
 /**
- * @typedef {import('../db/base.js').DBClient} DBClient
- * @typedef {import('../../typedefs.js').LocationRecord} LocationRecord
+ * @typedef {import('../../db/base.js').DBClient} DBClient
+ * @typedef {import('../../../typedefs.js').LocationRecord} LocationRecord
  */
 
 const DEFAULT_INTERVAL = '300';
@@ -14,7 +14,7 @@ const SORT_KEY_NAME = 'resource_id';
 /**
  * @param {string} propertyName -
  * @param {string} propertyValue -
- * @returns {import('../db/base.js').KeyCondition} -
+ * @returns {import('../../db/base.js').KeyCondition} -
  */
 function pkEq(propertyName, propertyValue) {
   return {

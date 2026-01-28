@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
 
-import { getAdapterMatrix } from '../../helpers/db-adapters.js';
-import { createOperationsTable } from '../../../lambdas/lib/dynamo/operations.js';
+import { getAdapterMatrix } from '../../../helpers/db-adapters.js';
+import { createOperationsTable } from '../../../../lambdas/lib/db/tables/operations.js';
 
-import Action from '../../../lambdas/lib/graph/action.js';
-import Operation from '../../../lambdas/lib/graph/operation.js';
-import Query from '../../../lambdas/lib/graph/query.js';
-import Resource from '../../../lambdas/lib/graph/resource.js';
+import Action from '../../../../lambdas/lib/graph/action.js';
+import Operation from '../../../../lambdas/lib/graph/operation.js';
+import Query from '../../../../lambdas/lib/graph/query.js';
+import Resource from '../../../../lambdas/lib/graph/resource.js';
 
 describe('operations table contract', () => {
   for (const adapter of getAdapterMatrix()) {

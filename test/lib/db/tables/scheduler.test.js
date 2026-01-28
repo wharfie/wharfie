@@ -7,9 +7,9 @@ import {
   test,
 } from '@jest/globals';
 
-import { getAdapterMatrix } from '../../helpers/db-adapters.js';
-import { createSchedulerTable } from '../../../lambdas/lib/dynamo/scheduler.js';
-import SchedulerEntry from '../../../lambdas/scheduler/scheduler-entry.js';
+import { getAdapterMatrix } from '../../../helpers/db-adapters.js';
+import { createSchedulerTable } from '../../../../lambdas/lib/db/tables/scheduler.js';
+import SchedulerEntry from '../../../../lambdas/scheduler/scheduler-entry.js';
 
 const toSortKeyNumber = (entry) => Number(entry.sort_key.split(':')[1]);
 const sortBySortKeyNumber = (entries) =>

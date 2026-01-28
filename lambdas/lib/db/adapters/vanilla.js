@@ -164,13 +164,12 @@ export default function createVanillaDB(options = {}) {
    * Rules:
    * - Exactly one PRIMARY EQUALS condition is required (selects pk bucket)
    * - Optional SORT condition:
-   *   - EQUALS => at most one item
-   *   - BEGINS_WITH => prefix scan within the pk bucket
+   * - EQUALS => at most one item
+   * - BEGINS_WITH => prefix scan within the pk bucket
    * - Any conditions without keyType are treated as filters over the candidate set
    *
    * Immutability:
    * - returns deep clones of stored records
-   *
    * @param {import('../base.js').QueryParams} params -
    * @returns {import('../base.js').QueryReturn} -
    */
@@ -222,7 +221,6 @@ export default function createVanillaDB(options = {}) {
    *
    * Immutability:
    * - stores a deep clone
-   *
    * @param {import('../base.js').PutParams} params -
    * @returns {import('../base.js').PutReturn} -
    */
@@ -245,7 +243,6 @@ export default function createVanillaDB(options = {}) {
    *
    * Immutability:
    * - returns a deep clone
-   *
    * @param {import('../base.js').GetParams} params -
    * @returns {import('../base.js').GetReturn} -
    */
@@ -275,7 +272,6 @@ export default function createVanillaDB(options = {}) {
    *
    * Immutability:
    * - copy-on-write: does not mutate the stored object reference in-place
-   *
    * @param {import('../base.js').UpdateParams} params -
    * @returns {import('../base.js').UpdateReturn} -
    */
@@ -295,8 +291,11 @@ export default function createVanillaDB(options = {}) {
 
     if (params.conditions?.length) {
       for (const c of params.conditions) {
-        if (!matchesCondition(existing, c))
-          throw new Error('ConditionalCheckFailedException');
+        if (!matchesCondition(existing, c)) {
+          const err = new Error('ConditionalCheckFailedException');
+          err.name = 'ConditionalCheckFailedException';
+          throw err;
+        }
       }
     }
 
@@ -355,15 +354,21 @@ export default function createVanillaDB(options = {}) {
    *
    * Immutability:
    * - stores deep clones for puts
-   *
    * @param {import('../base.js').BatchWriteParams} params -
    * @returns {import('../base.js').BatchWriteReturn} -
    */
   async function batchWrite(params) {
     const table = ensureTable(params.tableName);
 
+    const deleteRequests = Array.isArray(params.deleteRequests)
+      ? params.deleteRequests
+      : [];
+    const putRequests = Array.isArray(params.putRequests)
+      ? params.putRequests
+      : [];
+
     // deletes
-    params.deleteRequests.forEach((del) => {
+    deleteRequests.forEach((del) => {
       assertSortPair(del);
 
       const pkTok = `${del.keyName}=${String(del.keyValue)}`;
@@ -377,7 +382,7 @@ export default function createVanillaDB(options = {}) {
     });
 
     // puts
-    params.putRequests
+    putRequests
       .filter((v) => v !== undefined && v !== null)
       .forEach((putReq) => {
         const record = putReq.record;

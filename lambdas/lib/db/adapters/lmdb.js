@@ -58,6 +58,10 @@ export default function createLMDB(options = {}) {
     return t;
   }
 
+  /**
+   *
+   * @param v
+   */
   function deepClone(v) {
     if (v === undefined || v === null) return v;
 
@@ -73,11 +77,20 @@ export default function createLMDB(options = {}) {
     return JSON.parse(JSON.stringify(v));
   }
 
+  /**
+   *
+   * @param v
+   * @param label
+   */
   function requireValue(v, label) {
     if (v === undefined || v === null) throw new Error(`${label} is required`);
     return String(v);
   }
 
+  /**
+   *
+   * @param params
+   */
   function assertSortPair(params) {
     const hasName = params.sortKeyName !== undefined;
     const hasValue = params.sortKeyValue !== undefined;
@@ -86,37 +99,74 @@ export default function createLMDB(options = {}) {
     }
   }
 
+  /**
+   *
+   * @param keyName
+   * @param record
+   */
   function pkTokenFromRecord(keyName, record) {
     return `${keyName}=${requireValue(record?.[keyName], `record.${keyName}`)}`;
   }
 
+  /**
+   *
+   * @param sortKeyName
+   * @param record
+   */
   function skTokenFromRecord(sortKeyName, record) {
     if (!sortKeyName) return NO_SORT;
     return `${sortKeyName}=${requireValue(record?.[sortKeyName], `record.${sortKeyName}`)}`;
   }
 
+  /**
+   *
+   * @param pk
+   */
   function pkTokenFromCondition(pk) {
     return `${pk.propertyName}=${String(pk.propertyValue)}`;
   }
 
+  /**
+   *
+   * @param sk
+   */
   function skPrefixFromCondition(sk) {
     return `${sk.propertyName}=${String(sk.propertyValue)}`;
   }
 
+  /**
+   *
+   * @param pkTok
+   * @param skTok
+   */
   function makeKey(pkTok, skTok) {
     return `${pkTok}${SEP}${skTok}`;
   }
 
+  /**
+   *
+   * @param pkTok
+   */
   function makePrefix(pkTok) {
     return `${pkTok}${SEP}`;
   }
 
+  /**
+   *
+   * @param path
+   */
   function assertNonEmptyPath(path) {
     if (!Array.isArray(path) || path.length === 0) {
       throw new Error('UpdateDefinition.property must be a non-empty string[]');
     }
   }
 
+  /**
+   *
+   * @param record
+   * @param path
+   * @param value
+   */
   function setPath(record, path, value) {
     /** @type {any} */
     let cur = record;
@@ -128,6 +178,11 @@ export default function createLMDB(options = {}) {
     cur[path[path.length - 1]] = value;
   }
 
+  /**
+   *
+   * @param record
+   * @param condition
+   */
   function matchesCondition(record, condition) {
     const value = record?.[condition.propertyName];
 
@@ -247,8 +302,11 @@ export default function createLMDB(options = {}) {
 
       if (params.conditions?.length) {
         for (const c of params.conditions) {
-          if (!matchesCondition(existing, c))
-            throw new Error('ConditionalCheckFailedException');
+          if (!matchesCondition(existing, c)) {
+            const err = new Error('ConditionalCheckFailedException');
+            err.name = 'ConditionalCheckFailedException';
+            throw err;
+          }
         }
       }
 
@@ -300,8 +358,15 @@ export default function createLMDB(options = {}) {
   async function batchWrite(params) {
     const table = ensureTable(params.tableName);
 
+    const deleteRequests = Array.isArray(params.deleteRequests)
+      ? params.deleteRequests
+      : [];
+    const putRequests = Array.isArray(params.putRequests)
+      ? params.putRequests
+      : [];
+
     table.transactionSync(() => {
-      for (const del of params.deleteRequests) {
+      for (const del of deleteRequests) {
         assertSortPair(del);
         const pkTok = `${del.keyName}=${String(del.keyValue)}`;
         const skTok = del.sortKeyName
@@ -310,7 +375,7 @@ export default function createLMDB(options = {}) {
         table.removeSync(makeKey(pkTok, skTok));
       }
 
-      for (const putReq of params.putRequests.filter(
+      for (const putReq of putRequests.filter(
         (v) => v !== undefined && v !== null,
       )) {
         const record = putReq.record;

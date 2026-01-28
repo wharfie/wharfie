@@ -8,7 +8,6 @@ import { CONDITION_TYPE, KEY_TYPE } from './base.js';
  * - PRIMARY must be EQUALS
  * - Optional SORT condition (at most one), must be EQUALS or BEGINS_WITH
  * - Any condition with no keyType is treated as a non-key filter (EQUALS or BEGINS_WITH)
- *
  * @param {import('./base.js').QueryParams | { keyConditions: import('./base.js').KeyCondition[] }} params -
  * @returns {{
  *   pk: import('./base.js').KeyCondition,

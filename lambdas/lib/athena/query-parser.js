@@ -1,10 +1,10 @@
 /* eslint-disable new-cap */
 'use strict';
-import { Parser } from 'node-sql-parser/build/athena.js';
+import * as athenaSqlParser from 'node-sql-parser/build/athena.js';
 
 class QueryParser {
   constructor() {
-    this.parser = new Parser();
+    this.parser = new athenaSqlParser.Parser();
   }
 
   /**

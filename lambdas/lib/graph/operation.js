@@ -6,7 +6,8 @@ import { WHARFIE_VERSION } from '../version.js';
  * @typedef {(
  * 'BACKFILL'|
  * 'LOAD'|
- * 'MIGRATE'
+ * 'MIGRATE'|
+ * 'PIPELINE'
  * )} WharfieOperationTypeEnum
  */
 
@@ -17,6 +18,7 @@ const Type = {
   BACKFILL: 'BACKFILL',
   LOAD: 'LOAD',
   MIGRATE: 'MIGRATE',
+  PIPELINE: 'PIPELINE',
 };
 
 /**
@@ -94,14 +96,16 @@ class Operation {
   }
 
   /**
-   * @typedef addActionOptions
+   * Options for creating a new action and adding it to this operation.
+   * @typedef CreateActionOptions
    * @property {import('./action.js').WharfieActionTypeEnum} type -
    * @property {Action[]} [dependsOn] -
    * @property {string} [id] -
    */
 
   /**
-   * @param {addActionOptions} options -
+   * Create a new action and add it to the operation graph.
+   * @param {CreateActionOptions} options -
    * @returns {Action} -
    */
   createAction({ type, dependsOn = [], id }) {
@@ -116,8 +120,28 @@ class Operation {
   }
 
   /**
+   * Options for adding an existing action instance to this operation.
+   * @typedef AddActionOptions
+   * @property {Action} action -
+   * @property {Action[]} [dependsOn] -
+   */
+
+  /**
+   * Add an already-created action to the operation graph.
+   *
+   * This is used by some table-contract tests and older call-sites.
+   * @param {AddActionOptions} options -
+   * @returns {Action} -
+   */
+  addAction({ action, dependsOn = [] }) {
+    this._addAction(action, dependsOn);
+    return action;
+  }
+
+  /**
    * @param {Action} action -
    * @param {Action[]} [dependencies] -
+   * @returns {void} -
    */
   _addAction(action, dependencies = []) {
     dependencies.forEach((dependency) => {
@@ -133,6 +157,7 @@ class Operation {
   /**
    * @param {string} originActionId -
    * @param {string} destinationActionId -
+   * @returns {void} -
    */
   _addDependency(originActionId, destinationActionId) {
     // Ensure outgoing edges for the origin action
@@ -412,6 +437,7 @@ class Operation {
 
   /**
    * @param {string} serializedGraph -
+   * @returns {void} -
    */
   deserializeGraph(serializedGraph) {
     const parsedData = JSON.parse(serializedGraph);

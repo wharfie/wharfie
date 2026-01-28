@@ -1,18 +1,12 @@
-import { createId } from '../id.js';
+import Resource from '../../graph/resource.js';
+import Operation from '../../graph/operation.js';
+import Action from '../../graph/action.js';
+import Query from '../../graph/query.js';
 
-import Athena from '../athena/index.js';
-import STS from '../sts.js';
-import SQS from '../sqs.js';
-
-import Resource from '../graph/resource.js';
-import Operation from '../graph/operation.js';
-import Action from '../graph/action.js';
-import Query from '../graph/query.js';
-
-import { CONDITION_TYPE, KEY_TYPE } from '../db/base.js';
+import { CONDITION_TYPE, KEY_TYPE } from '../../db/base.js';
 
 /**
- * @typedef {import('../db/base.js').DBClient} DBClient
+ * @typedef {import('../../db/base.js').DBClient} DBClient
  */
 
 const OPERATIONS_TABLE = process.env.OPERATIONS_TABLE || '';
@@ -23,7 +17,7 @@ const SORT_KEY_NAME = 'sort_key';
 /**
  * @param {string} propertyName -
  * @param {string} propertyValue -
- * @returns {import('../db/base.js').KeyCondition} -
+ * @returns {import('../../db/base.js').KeyCondition} -
  */
 function pkEq(propertyName, propertyValue) {
   return {
@@ -37,7 +31,7 @@ function pkEq(propertyName, propertyValue) {
 /**
  * @param {string} propertyName -
  * @param {string} propertyValue -
- * @returns {import('../db/base.js').KeyCondition} -
+ * @returns {import('../../db/base.js').KeyCondition} -
  */
 function skBegins(propertyName, propertyValue) {
   return {
@@ -51,7 +45,7 @@ function skBegins(propertyName, propertyValue) {
 /**
  * @param {string} propertyName -
  * @param {string} propertyValue -
- * @returns {import('../db/base.js').KeyCondition} -
+ * @returns {import('../../db/base.js').KeyCondition} -
  */
 function eq(propertyName, propertyValue) {
   return {
@@ -61,89 +55,71 @@ function eq(propertyName, propertyValue) {
   };
 }
 
-const isConditionalCheckFailed = (/** @type {unknown} */ error) => {
+/**
+ * @param {unknown} error -
+ * @returns {boolean} -
+ */
+const isConditionalCheckFailed = (error) => {
   if (error instanceof Error) {
     return error?.name === 'ConditionalCheckFailedException';
   }
   return false;
 };
 
-const isResourceNotFound = (/** @type {unknown} */ error) => {
+/**
+ * @param {unknown} error -
+ * @returns {boolean} -
+ */
+const isResourceNotFound = (error) => {
   if (error instanceof Error) {
     return error?.name === 'ResourceNotFoundException';
   }
   return false;
 };
 
-const chunk = (/** @type {any[]} */ arr, /** @type {number} */ size) => {
+/**
+ * @param {any[]} arr -
+ * @param {number} size -
+ * @returns {any[][]} -
+ */
+const chunk = (arr, size) => {
   const out = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
 };
 
-const normalizeRecord = (/** @type {Record<string, any>} */ record) => {
+/**
+ * The adapter stores action.status redundantly at the top-level for some backends.
+ * @param {Record<string, any>} record -
+ * @returns {Record<string, any>} -
+ */
+const normalizeRecord = (record) => {
   if (record?.data?.record_type === Action.RecordType) {
     return { ...record, status: record.data.status };
   }
   return record;
 };
 
-// /**
-//  * @param {Operation} operation -
-//  * @param {Query} query -
-//  * @param {{ Role: string; }} daemon_config -
-//  * @param {any} athena_workgroup -
-//  */
-// async function checkForStaleQuery(
-//   operation,
-//   query,
-//   daemon_config,
-//   athena_workgroup,
-// ) {
-//   const assumeRoleArn = daemon_config?.Role || ''
-//   if (!assumeRoleArn) return
-
-//   const sts = new STS({ region: operation.region })
-//   const { Credentials } = await sts.assumeRole({
-//     RoleArn: assumeRoleArn,
-//     RoleSessionName: `query-${createId()}`
-//   })
-//   if (!Credentials || !Credentials.AccessKeyId || !Credentials.SecretAccessKey || !Credentials.SessionToken) throw new Error('Failed to assume role')
-
-//   const athena = new Athena({
-//     region: operation.region,
-//     credentials: {
-//       accessKeyId: Credentials.AccessKeyId,
-//       secretAccessKey: Credentials.SecretAccessKey,
-//       sessionToken: Credentials.SessionToken,
-//     },
-//   })
-
-//   const {QueryExecution} = await athena.getQueryExecution({
-//     QueryExecutionId: query.execution_id
-//   })
-//   if (!QueryExecution) throw new Error('Failed to get query execution')
-//   const { Status } = QueryExecution
-//   if (!Status) throw new Error('no query status')
-
-//   if (
-//     Status.State === 'RUNNING' &&
-//     query.last_updated_at < Date.now() - 55 * 60 * 1000
-//   ) {
-//     const sqs = new SQS({ region: operation.region })
-
-//     await sqs.sendMessage({
-//       QueueUrl: operation.daemon_queue_url,
-//       MessageBody: JSON.stringify({ operation_id: operation.id, query_id: query.id })
-//     })
-//   }
-// }
-
 /**
- * @typedef {Object} operationClient
- * @property {(semaphore: string, threshold: number | undefined) => void} increase -
- * @property {(semaphore: string) => void} release -
- * @property {(semaphore: string) => void} deleteSemaphore -
+ * Operations table client.
+ * @typedef {Object} OperationsTableClient
+ * @property {(resource: Resource) => Promise<void>} putResource -
+ * @property {(resource_id: string) => Promise<Resource | null>} getResource -
+ * @property {(resource: Resource) => Promise<void>} deleteResource -
+ * @property {(operation: Operation) => Promise<void>} putOperation -
+ * @property {(resource_id: string, operation_id: string) => Promise<Operation | null>} getOperation -
+ * @property {(operation: Operation) => Promise<void>} deleteOperation -
+ * @property {(resource_id: string) => Promise<Operation[]>} getOperations -
+ * @property {(operation: Operation) => Promise<Action[]>} getActions -
+ * @property {(resource_id: string, operation_id: string, action_id: string) => Promise<Action | null>} getAction -
+ * @property {(action: { toRecords: () => Record<string, any>[] }) => Promise<void>} putAction -
+ * @property {(action: Action, new_status: string, overrideTableName?: string) => Promise<boolean>} updateActionStatus -
+ * @property {(query: { toRecord: () => any }) => Promise<void>} putQuery -
+ * @property {(queries: Array<{ toRecord: () => any }>) => Promise<void>} putQueries -
+ * @property {(resource_id: string, operation_id: string, action_id: string, query_id: string) => Promise<Query | null>} getQuery -
+ * @property {(resource_id: string, operation_id: string, action_id: string) => Promise<Query[]>} getQueries -
+ * @property {(operation: Operation, action_type: import('../../graph/action.js').WharfieActionTypeEnum) => Promise<boolean>} checkActionPrerequisites -
+ * @property {(resource_id: string, operation_id?: string) => Promise<{ operations: Operation[]; actions: Action[]; queries: Query[] }>} getRecords -
  */
 
 /**
@@ -151,7 +127,7 @@ const normalizeRecord = (/** @type {Record<string, any>} */ record) => {
  * @param {object} params -
  * @param {DBClient} params.db -
  * @param {string} [params.tableName] -
- * @returns {operationClient} -
+ * @returns {OperationsTableClient} -
  */
 export function createOperationsTable({
   db,
@@ -161,6 +137,7 @@ export function createOperationsTable({
 
   /**
    * @param {Resource} resource -
+   * @returns {Promise<void>} -
    */
   async function putResource(resource) {
     await db.put({
@@ -195,6 +172,7 @@ export function createOperationsTable({
 
   /**
    * @param {Resource} resource -
+   * @returns {Promise<void>} -
    */
   async function deleteResource(resource) {
     try {
@@ -229,6 +207,7 @@ export function createOperationsTable({
 
   /**
    * @param {Operation} operation -
+   * @returns {Promise<void>} -
    */
   async function putOperation(operation) {
     const records = operation.toRecords().map(normalizeRecord);
@@ -265,6 +244,7 @@ export function createOperationsTable({
 
   /**
    * @param {Operation} operation -
+   * @returns {Promise<void>} -
    */
   async function deleteOperation(operation) {
     const items =
@@ -353,7 +333,8 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {{ toRecords: () => Record<string, any>[]; }} action
+   * @param {{ toRecords: () => Record<string, any>[] }} action -
+   * @returns {Promise<void>} -
    */
   async function putAction(action) {
     const records = action.toRecords().map(normalizeRecord);
@@ -372,11 +353,10 @@ export function createOperationsTable({
 
   /**
    * Optimistic status transition.
-   *
-   * @param {Action} action
-   * @param {string} new_status
-   * @param {string} [overrideTableName]
-   * @returns {Promise<boolean>}
+   * @param {Action} action -
+   * @param {string} new_status -
+   * @param {string} [overrideTableName] -
+   * @returns {Promise<boolean>} -
    */
   async function updateActionStatus(
     action,
@@ -432,7 +412,8 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {{ toRecord: () => any; }} query
+   * @param {{ toRecord: () => any }} query -
+   * @returns {Promise<void>} -
    */
   async function putQuery(query) {
     await db.put({
@@ -444,12 +425,11 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {any[]} queries
+   * @param {Array<{ toRecord: () => any }>} queries -
+   * @returns {Promise<void>} -
    */
   async function putQueries(queries) {
-    const records = queries.map((/** @type {{ toRecord: () => any; }} */ q) =>
-      q.toRecord(),
-    );
+    const records = queries.map((q) => q.toRecord());
 
     for (const batch of chunk(records, 25)) {
       await db.batchWrite({
@@ -464,10 +444,11 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {any} resource_id
-   * @param {any} operation_id
-   * @param {any} action_id
-   * @param {any} query_id
+   * @param {string} resource_id -
+   * @param {string} operation_id -
+   * @param {string} action_id -
+   * @param {string} query_id -
+   * @returns {Promise<Query | null>} -
    */
   async function getQuery(resource_id, operation_id, action_id, query_id) {
     const item = await db.get({
@@ -483,9 +464,10 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {string} resource_id
-   * @param {any} operation_id
-   * @param {any} action_id
+   * @param {string} resource_id -
+   * @param {string} operation_id -
+   * @param {string} action_id -
+   * @returns {Promise<Query[]>} -
    */
   async function getQueries(resource_id, operation_id, action_id) {
     const prefix = `${resource_id}#${operation_id}#${action_id}#`;
@@ -504,11 +486,23 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {{ graph: { incomingEdges: { [x: string]: never[]; }; }; resource_id: string; id: any; }} operation
-   * @param {string | number} action_id
+   * Check whether prerequisite actions for a given action type have completed.
+   *
+   * The operation graph stores edges keyed by action *ids*; most call-sites refer
+   * to actions by their *type*.
+   * @param {Operation} operation -
+   * @param {import('../../graph/action.js').WharfieActionTypeEnum} action_type -
+   * @returns {Promise<boolean>} -
    */
-  async function checkActionPrerequisites(operation, action_id) {
-    const prerequisites = operation?.graph?.incomingEdges?.[action_id] || [];
+  async function checkActionPrerequisites(operation, action_type) {
+    let actionId;
+    try {
+      actionId = operation.getActionIdByType(action_type);
+    } catch {
+      return false;
+    }
+
+    const prerequisites = operation.getUpstreamActionIds(actionId) || [];
     if (!prerequisites.length) return true;
 
     for (const prerequisiteActionId of prerequisites) {
@@ -540,7 +534,7 @@ export function createOperationsTable({
       for (const queryRecord of queryRecords) {
         const q = Query.fromRecord(queryRecord);
         if (q.status === Query.Status.RUNNING) {
-          // await checkForStaleQuery(operation, q, operation.daemon_config, operation.athena_workgroup)
+          // Placeholder: stale query re-enqueueing logic lives in the daemon.
         }
       }
     }
@@ -549,7 +543,10 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {string} resource_id
+   * Load all operation/action/query records for a resource (optionally scoped to an operation id).
+   * @param {string} resource_id -
+   * @param {string} [operation_id] -
+   * @returns {Promise<{ operations: Operation[]; actions: Action[]; queries: Query[] }>} -
    */
   async function getRecords(resource_id, operation_id = '') {
     const prefix = `${resource_id}#${operation_id}`;
@@ -574,7 +571,7 @@ export function createOperationsTable({
       queries: [],
     };
 
-    let operationBatch = [];
+    const operationBatch = [];
     let actionBatch = [];
     let queryBatch = [];
 
@@ -590,13 +587,16 @@ export function createOperationsTable({
       }
 
       if (item?.data?.record_type === Action.RecordType) {
-        actionBatch.push({ action: item, queries: queryBatch });
+        actionBatch.push({ action_record: item, query_records: queryBatch });
         queryBatch = [];
         continue;
       }
 
       if (item?.data?.record_type === Operation.RecordType) {
-        operationBatch.push({ operation: item, actions: actionBatch });
+        operationBatch.push({
+          operation_record: item,
+          action_records: actionBatch,
+        });
         actionBatch = [];
         continue;
       }
@@ -604,15 +604,15 @@ export function createOperationsTable({
 
     for (const operationRecords of operationBatch) {
       const operation = Operation.fromRecords(
-        operationRecords.operation,
-        operationRecords.actions,
+        operationRecords.operation_record,
+        operationRecords.action_records,
       );
 
       records.operations.push(operation);
-      for (const actionRecords of operationRecords.actions) {
+      for (const actionRecords of operationRecords.action_records) {
         const action = Action.fromRecords(
-          actionRecords.action,
-          actionRecords.queries,
+          actionRecords.action_record,
+          actionRecords.query_records,
         );
         records.actions.push(action);
         records.queries.push(...action.queries);

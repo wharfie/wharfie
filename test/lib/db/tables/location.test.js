@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
 
-import { getAdapterMatrix } from '../../helpers/db-adapters.js';
-import { createLocationTable } from '../../../lambdas/lib/dynamo/location.js';
+import { getAdapterMatrix } from '../../../helpers/db-adapters.js';
+import { createLocationTable } from '../../../../lambdas/lib/db/tables/location.js';
 
 describe('location table contract', () => {
   for (const adapter of getAdapterMatrix()) {

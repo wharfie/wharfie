@@ -1,23 +1,28 @@
-import { CONDITION_TYPE } from '../db/base.js';
+import { CONDITION_TYPE } from '../../db/base.js';
 
 /**
- * @typedef {import('../db/base.js').DBClient} DBClient
+ * @typedef {import('../../db/base.js').DBClient} DBClient
  */
 
 const TABLE_ENV_VAR = 'SEMAPHORE_TABLE';
 const KEY_NAME = 'semaphore';
 
-const isConditionalCheckFailed = (/** @type {unknown} */ error) => {
-  if (error instanceof Error) {
-    return error?.name === 'ConditionalCheckFailedException';
-  }
-  return false;
+/**
+ * @param {unknown} error -
+ * @returns {boolean} -
+ */
+const isConditionalCheckFailed = (error) => {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.name === 'ConditionalCheckFailedException' ||
+    error.message === 'ConditionalCheckFailedException'
+  );
 };
 
 /**
  * @param {string} propertyName -
- * @param {string} propertyValue -
- * @returns {import('../db/base.js').KeyCondition} -
+ * @param {any} propertyValue -
+ * @returns {import('../../db/base.js').KeyCondition} -
  */
 function eq(propertyName, propertyValue) {
   return {
@@ -27,16 +32,21 @@ function eq(propertyName, propertyValue) {
   };
 }
 
-const toNumber = (/** @type {any} */ value, fallback = 0) => {
+/**
+ * @param {any} value -
+ * @param {number} [fallback] -
+ * @returns {number} -
+ */
+const toNumber = (value, fallback = 0) => {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 };
 
 /**
  * @typedef {Object} semaphoreClient
- * @property {(semaphore: string, threshold: number | undefined) => void} increase -
- * @property {(semaphore: string) => void} release -
- * @property {(semaphore: string) => void} deleteSemaphore -
+ * @property {(semaphore: string, threshold?: number) => Promise<boolean>} increase -
+ * @property {(semaphore: string) => Promise<void>} release -
+ * @property {(semaphore: string) => Promise<void>} deleteSemaphore -
  */
 
 /**
@@ -50,7 +60,13 @@ export function createSemaphoreTable({
   db,
   tableName = process.env[TABLE_ENV_VAR] || '',
 }) {
-  const getRecord = (/** @type {string} */ semaphore) =>
+  if (!db) throw new Error('createSemaphoreTable requires a db client');
+
+  /**
+   * @param {string} semaphore -
+   * @returns {Promise<import('../../db/base.js').DBRecord | void>} -
+   */
+  const getRecord = async (semaphore) =>
     db.get({
       tableName,
       keyName: KEY_NAME,
@@ -96,7 +112,7 @@ export function createSemaphoreTable({
           keyName: KEY_NAME,
           keyValue: semaphore,
           updates: [{ property: ['value'], propertyValue: nextValue }],
-          conditions: [eq('value', currentValue.toString())],
+          conditions: [eq('value', currentValue)],
         });
       } catch (error) {
         if (isConditionalCheckFailed(error)) continue;
@@ -112,6 +128,7 @@ export function createSemaphoreTable({
 
   /**
    * @param {string} semaphore -
+   * @returns {Promise<void>} -
    */
   async function release(semaphore) {
     const maxAttempts = 25;
@@ -131,7 +148,7 @@ export function createSemaphoreTable({
           keyName: KEY_NAME,
           keyValue: semaphore,
           updates: [{ property: ['value'], propertyValue: nextValue }],
-          conditions: [eq('value', currentValue.toString())],
+          conditions: [eq('value', currentValue)],
         });
       } catch (error) {
         if (isConditionalCheckFailed(error)) continue;
@@ -145,6 +162,7 @@ export function createSemaphoreTable({
 
   /**
    * @param {string} semaphore -
+   * @returns {Promise<void>} -
    */
   async function deleteSemaphore(semaphore) {
     const record = await getRecord(semaphore);

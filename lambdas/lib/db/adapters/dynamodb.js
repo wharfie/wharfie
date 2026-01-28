@@ -423,11 +423,13 @@ export default function createDynamoDB(
    * @returns {import('../base.js').BatchWriteReturn} -
    */
   async function batchWrite(params) {
-    const puts = params.putRequests.filter(
-      (v) => v !== undefined && v !== null,
-    );
+    const puts = (
+      Array.isArray(params.putRequests) ? params.putRequests : []
+    ).filter((v) => v !== undefined && v !== null);
 
-    const deleteRequests = params.deleteRequests.map((del) => ({
+    const deleteRequests = (
+      Array.isArray(params.deleteRequests) ? params.deleteRequests : []
+    ).map((del) => ({
       DeleteRequest: { Key: buildKey(del) },
     }));
 

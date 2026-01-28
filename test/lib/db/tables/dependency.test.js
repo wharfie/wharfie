@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
 
-import { getAdapterMatrix } from '../../helpers/db-adapters.js';
-import { createDependencyTable } from '../../../lambdas/lib/dynamo/dependency.js';
+import { getAdapterMatrix } from '../../../helpers/db-adapters.js';
+import { createDependencyTable } from '../../../../lambdas/lib/db/tables/dependency.js';
 
 const sortByResourceId = (arr) =>
   [...arr].sort((a, b) => a.resource_id.localeCompare(b.resource_id));
