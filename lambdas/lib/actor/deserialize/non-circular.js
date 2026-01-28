@@ -19,7 +19,7 @@ import BucketNotificationConfiguration from '../resources/aws/bucket-notificatio
 import RecordResources from '../resources/records/index.js';
 import WharfieProject from '../resources/wharfie-project.js';
 import WharfieResource from '../resources/wharfie-resource.js';
-import { getResources } from '../../db/state/aws.js';
+import { getResources } from '../../db/state/store.js';
 
 /**
  * @typedef {new (options: any) => import('../resources/base-resource.js').default} ResourceConstructor
@@ -69,7 +69,7 @@ async function load({ deploymentName, resourceKey }) {
   if (!serializedResources || serializedResources.length === 0) {
     throw new Error('No resource found');
   }
-
+  // @ts-ignore
   const resourceMap = serializedResources.slice(1).reduce((acc, item) => {
     // @ts-ignore
     acc[item.name] = item;

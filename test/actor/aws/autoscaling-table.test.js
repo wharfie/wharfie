@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
-jest.mock('../../../lambdas/lib/db/state/aws');
+jest.mock('../../../lambdas/lib/db/state/store');
 jest.mock('../../../lambdas/lib/id');
 const {
   AutoscalingTable,
@@ -19,7 +19,7 @@ describe('autoscaling table IaC', () => {
   it('basic', async () => {
     expect.assertions(8);
 
-    const state_db = require('../../../lambdas/lib/db/state/aws');
+    const state_db = require('../../../lambdas/lib/db/state/store');
     const events = [];
     Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
       events.push(`${event.status} - ${event.constructor}:${event.name}`);

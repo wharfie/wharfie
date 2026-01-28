@@ -16,7 +16,7 @@ import { __setMockState as ___setMockState } from '../lambdas/lib/dynamo/locatio
 import { __setMockState as ____setMockState } from '../lambdas/lib/dynamo/operations';
 import { __setMockState as _____setMockState } from '../lambdas/lib/dynamo/scheduler';
 import { __setMockState as ______setMockState } from '../lambdas/lib/dynamo/semaphore';
-import { __setMockState as _______setMockState } from '../lambdas/lib/db/state/aws';
+import stateStore from '../lambdas/lib/db/state/store.js';
 
 const s3 = new S3();
 const sts = new STS();
@@ -61,7 +61,7 @@ function resetDBMocks() {
   ____setMockState();
   _____setMockState();
   ______setMockState();
-  _______setMockState();
+  stateStore?.__setMockState?.();
 }
 
 export { resetAWSMocks, resetDBMocks };

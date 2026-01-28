@@ -9,7 +9,7 @@ process.env.AWS_MOCKS = '1';
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 jest.mock('../../lambdas/lib/env-paths');
-jest.mock('../../lambdas/lib/db/state/aws');
+jest.mock('../../lambdas/lib/db/state/store');
 jest.mock('../../lambdas/lib/dynamo/operations');
 jest.mock('../../lambdas/lib/dynamo/dependency');
 jest.mock('../../lambdas/lib/dynamo/location');
@@ -17,7 +17,7 @@ const WharfieResource = require('../../lambdas/lib/actor/resources/wharfie-resou
 const Reconcilable = require('../../lambdas/lib/actor/resources/reconcilable');
 const { load } = require('../../lambdas/lib/actor/deserialize/full');
 const { resetAWSMocks } = require('../util');
-const state_db = require('../../lambdas/lib/db/state/aws');
+const state_db = require('../../lambdas/lib/db/state/store');
 
 const { S3 } = require('@aws-sdk/client-s3');
 const { SQS } = require('@aws-sdk/client-sqs');

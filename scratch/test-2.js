@@ -15,7 +15,7 @@ const {
   getResourceStatus,
   getResources,
   deleteResource,
-} = require('../lambdas/lib/db/state/local');
+} = require('../lambdas/lib/db/state/store');
 BaseResource.stateDB = {
   putResource,
   putResourceStatus,

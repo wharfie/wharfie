@@ -59,8 +59,8 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   *
-   * @param v
+   * @param {import("../base.js").DBRecord | null | undefined} v -
+   * @returns {import("../base.js").DBRecord | null | undefined} -
    */
   function deepClone(v) {
     if (v === undefined || v === null) return v;
@@ -78,9 +78,9 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   *
-   * @param v
-   * @param label
+   * @param {null | undefined} v -
+   * @param {string} label -
+   * @returns {string} -
    */
   function requireValue(v, label) {
     if (v === undefined || v === null) throw new Error(`${label} is required`);
@@ -88,8 +88,7 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   *
-   * @param params
+   * @param {import("../base.js").DeleteRequest} params -
    */
   function assertSortPair(params) {
     const hasName = params.sortKeyName !== undefined;
@@ -100,18 +99,18 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   *
-   * @param keyName
-   * @param record
+   * @param {string} keyName -
+   * @param {import("../base.js").DBRecord} record -
+   * @returns {string} -
    */
   function pkTokenFromRecord(keyName, record) {
     return `${keyName}=${requireValue(record?.[keyName], `record.${keyName}`)}`;
   }
 
   /**
-   *
-   * @param sortKeyName
-   * @param record
+   * @param {string | number | undefined} sortKeyName -
+   * @param {import("../base.js").DBRecord} record -
+   * @returns {string} -
    */
   function skTokenFromRecord(sortKeyName, record) {
     if (!sortKeyName) return NO_SORT;
@@ -119,41 +118,40 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   *
-   * @param pk
+   * @param {{ conditionType?: import("../base.js").ConditionTypeEnum; propertyName: any; propertyValue: any; keyType?: import("../base.js").KeyTypeEnum | undefined; }} pk -
+   * @returns {string} -
    */
   function pkTokenFromCondition(pk) {
     return `${pk.propertyName}=${String(pk.propertyValue)}`;
   }
 
   /**
-   *
-   * @param sk
+   * @param {{ conditionType?: import("../base.js").ConditionTypeEnum; propertyName: any; propertyValue: any; keyType?: import("../base.js").KeyTypeEnum | undefined; }} sk -
+   * @returns {string} -
    */
   function skPrefixFromCondition(sk) {
     return `${sk.propertyName}=${String(sk.propertyValue)}`;
   }
 
   /**
-   *
-   * @param pkTok
-   * @param skTok
+   * @param {string} pkTok -
+   * @param {string} skTok -
+   * @returns {string} -
    */
   function makeKey(pkTok, skTok) {
     return `${pkTok}${SEP}${skTok}`;
   }
 
   /**
-   *
-   * @param pkTok
+   * @param {string} pkTok -
+   * @returns {string} -
    */
   function makePrefix(pkTok) {
     return `${pkTok}${SEP}`;
   }
 
   /**
-   *
-   * @param path
+   * @param {string | any[]} path
    */
   function assertNonEmptyPath(path) {
     if (!Array.isArray(path) || path.length === 0) {
@@ -162,10 +160,9 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   *
-   * @param record
-   * @param path
-   * @param value
+   * @param {import("../base.js").DBRecord | null | undefined} record
+   * @param {string | any[]} path
+   * @param {any} value
    */
   function setPath(record, path, value) {
     /** @type {any} */
@@ -179,9 +176,9 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   *
-   * @param record
-   * @param condition
+   * @param {{ [x: string]: any; }} record -
+   * @param {{ conditionType: any; propertyName: any; propertyValue: any; keyType?: import("../base.js").KeyTypeEnum | undefined; }} condition -
+   * @returns {boolean} -
    */
   function matchesCondition(record, condition) {
     const value = record?.[condition.propertyName];
@@ -215,6 +212,7 @@ export default function createLMDB(options = {}) {
       if (!row) return [];
       if (filters.length && !filters.every((c) => matchesCondition(row, c)))
         return [];
+      if (!row) return [];
       return [deepClone(row)];
     }
 

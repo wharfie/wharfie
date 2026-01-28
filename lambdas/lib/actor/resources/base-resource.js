@@ -1,13 +1,6 @@
 import Reconcilable from './reconcilable.js';
 
-import {
-  putResource,
-  getResource,
-  getResources,
-  getResourceStatus,
-  deleteResource,
-  putResourceStatus,
-} from '../../db/state/aws.js';
+import stateStore from '../../db/state/store.js';
 import Secret from '../lib/secret.js';
 import { isEqual } from 'es-toolkit';
 import { diff } from 'jsondiffpatch';
@@ -266,13 +259,6 @@ class BaseResource extends Reconcilable {
 /**
  * @type {StateStore}
  */
-BaseResource.stateDB = {
-  putResource,
-  putResourceStatus,
-  getResource,
-  getResources,
-  getResourceStatus,
-  deleteResource,
-};
+BaseResource.stateDB = stateStore;
 
 export default BaseResource;

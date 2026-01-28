@@ -6,7 +6,7 @@ import WharfieProject from '../resources/wharfie-project.js';
 import WharfieResource from '../resources/wharfie-resource.js';
 import WharfieDeployment from '../wharfie-deployment.js';
 import WharfieActor from '../wharfie-actor.js';
-import { getResources } from '../../db/state/aws.js';
+import { getResources } from '../../db/state/store.js';
 import { deserialize } from './shared.js';
 
 /**
@@ -47,6 +47,7 @@ async function load({ deploymentName, resourceKey }) {
     throw new Error('No resource found');
   }
 
+  // @ts-ignore
   const resourceMap = serializedResources.slice(1).reduce((acc, item) => {
     if (!item.name) {
       console.log(item);

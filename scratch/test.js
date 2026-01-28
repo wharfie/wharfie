@@ -9,7 +9,7 @@ import {
   getResourceStatus,
   getResources,
   deleteResource,
-} from '../lambdas/lib/db/state/local.js';
+} from '../lambdas/lib/db/state/store.js';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
