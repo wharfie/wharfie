@@ -1,6 +1,6 @@
 import './config.js';
 
-import { map } from 'bluebird';
+import { map } from './lib/promises.js';
 
 import SQS from './lib/sqs.js';
 import { getResource } from './lib/dynamo/operations.js';

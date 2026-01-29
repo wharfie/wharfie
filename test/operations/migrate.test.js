@@ -12,7 +12,6 @@ import {
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 // process.env.LOGGING_LEVEL = 'debug';
-const bluebird = require('bluebird');
 
 process.env.AWS_MOCKS = true;
 const {
@@ -52,9 +51,7 @@ const CONTEXT = {
 };
 
 describe('migrate tests', () => {
-  beforeAll(async () => {
-    bluebird.Promise.config({ cancellation: true });
-  });
+  beforeAll(async () => {});
 
   beforeEach(async () => {
     createLambdaQueues();
@@ -199,11 +196,19 @@ describe('migrate tests', () => {
         }
       }, 100);
     });
-    const timeout = bluebird.Promise.delay(5000).then(() => {
-      console.error('Timeout waiting for operation to complete');
+    let cancelTimeout = () => {};
+    const timeout = new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        console.error('Timeout waiting for operation to complete');
+        resolve();
+      }, 5000);
+      cancelTimeout = () => {
+        clearTimeout(timeoutId);
+        resolve();
+      };
     });
     await Promise.race([emptyQueues, timeout]);
-    timeout.cancel();
+    cancelTimeout();
     await reconcilePromise;
 
     expect(events).toMatchInlineSnapshot(`
@@ -577,11 +582,19 @@ describe('migrate tests', () => {
         }
       }, 100);
     });
-    const timeout = bluebird.Promise.delay(5000).then(() => {
-      console.error('Timeout waiting for operation to complete');
+    let cancelTimeout = () => {};
+    const timeout = new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        console.error('Timeout waiting for operation to complete');
+        resolve();
+      }, 5000);
+      cancelTimeout = () => {
+        clearTimeout(timeoutId);
+        resolve();
+      };
     });
     await Promise.race([emptyQueues, timeout]);
-    timeout.cancel();
+    cancelTimeout();
     await reconcilePromise;
 
     expect(events).toMatchInlineSnapshot(`

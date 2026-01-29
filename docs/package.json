@@ -81,7 +81,6 @@
     "removeScriptTags": false
   },
   "devDependencies": {
-    "bluebird": "^3.7.2",
     "mime-types": "^2.1.35"
   }
 }

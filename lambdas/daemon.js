@@ -1,5 +1,5 @@
 import './config.js';
-import { map } from 'bluebird';
+import { map } from './lib/promises.js';
 
 import * as logging from './lib/logging/index.js';
 

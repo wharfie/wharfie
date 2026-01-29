@@ -25,12 +25,11 @@ import {
   DeleteBucketTaggingCommand,
 } from '@aws-sdk/client-s3';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
-import bluebird from 'bluebird';
 import { Readable } from 'stream';
 
 import BaseAWS from './base.js';
 
-const { map, any } = bluebird;
+import { map } from './promises.js';
 /**
  * @typedef {'aws'|'fixed'} RegionResolver
  */
@@ -901,7 +900,7 @@ class S3 {
         );
         return LocationConstraint || 'us-east-1';
       });
-      return await any(regionPromises);
+      return await Promise.any(regionPromises);
     }
   }
 

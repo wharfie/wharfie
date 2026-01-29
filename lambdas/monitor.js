@@ -1,5 +1,5 @@
 import './config';
-import { map } from 'bluebird';
+import { map } from './lib/promises.js';
 
 import * as semaphore_db from './lib/dynamo/semaphore.js';
 import * as resource_db from './lib/dynamo/operations.js';
