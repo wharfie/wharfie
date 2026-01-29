@@ -262,6 +262,14 @@ class SQS {
     const command = new UntagQueueCommand(params);
     return await this.sqs.send(command);
   }
+
+  /**
+   * Close the underlying SQS client (useful for tests / CLIs to avoid open handles).
+   * @returns {Promise<void>}
+   */
+  async close() {
+    if (typeof this.sqs?.destroy === 'function') this.sqs.destroy();
+  }
 }
 
 export default SQS;

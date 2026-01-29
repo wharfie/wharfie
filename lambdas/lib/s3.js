@@ -25,11 +25,12 @@ import {
   DeleteBucketTaggingCommand,
 } from '@aws-sdk/client-s3';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
-import { map, any } from 'bluebird';
+import bluebird from 'bluebird';
 import { Readable } from 'stream';
 
 import BaseAWS from './base.js';
 
+const { map, any } = bluebird;
 /**
  * @typedef {'aws'|'fixed'} RegionResolver
  */

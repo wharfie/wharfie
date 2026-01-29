@@ -236,7 +236,6 @@ export function createStateTable({
    * - Queries `resource_key begins_with <prefix>`
    * - Sorts by resource_key
    * - If the exact root record (<prefix>) does not exist, returns []
-   *
    * @param {string} deploymentName -
    * @param {string} resourceKey -
    * @returns {Promise<any[]>}

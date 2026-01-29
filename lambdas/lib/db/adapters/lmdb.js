@@ -59,11 +59,11 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * @param {import("../base.js").DBRecord | null | undefined} v -
-   * @returns {import("../base.js").DBRecord | null | undefined} -
+   * @param {import("../base.js").DBRecord} v -
+   * @returns {import("../base.js").DBRecord} -
    */
   function deepClone(v) {
-    if (v === undefined || v === null) return v;
+    // if (v === undefined || v === null) return v;
 
     // Prefer structuredClone when available, with a safe fallback for plain objects.
     if (typeof structuredClone === 'function') {
@@ -88,7 +88,7 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * @param {import("../base.js").DeleteRequest} params -
+   * @param {import("../base.js").DeleteRequest | import("../base.js").GetParams} params -
    */
   function assertSortPair(params) {
     const hasName = params.sortKeyName !== undefined;
@@ -151,7 +151,7 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * @param {string | any[]} path
+   * @param {string | any[]} path -
    */
   function assertNonEmptyPath(path) {
     if (!Array.isArray(path) || path.length === 0) {
@@ -160,9 +160,9 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * @param {import("../base.js").DBRecord | null | undefined} record
-   * @param {string | any[]} path
-   * @param {any} value
+   * @param {import("../base.js").DBRecord | null | undefined} record -
+   * @param {string | any[]} path -
+   * @param {any} value -
    */
   function setPath(record, path, value) {
     /** @type {any} */
@@ -197,8 +197,8 @@ export default function createLMDB(options = {}) {
 
   /**
    * Query records by PRIMARY (+ optional SORT), with optional non-key filters.
-   * @param {import('../base.js').QueryParams} params
-   * @returns {Promise<import('../base.js').DBRecord[]>}
+   * @param {import('../base.js').QueryParams} params -
+   * @returns {Promise<import('../base.js').DBRecord[]>} -
    */
   async function query(params) {
     const { pk, sk, filters } = assertTightQuery(params);
@@ -212,8 +212,7 @@ export default function createLMDB(options = {}) {
       if (!row) return [];
       if (filters.length && !filters.every((c) => matchesCondition(row, c)))
         return [];
-      if (!row) return [];
-      return [deepClone(row)];
+      return row ? [deepClone(row)] : [];
     }
 
     /** @type {import('../base.js').DBRecord[]} */
@@ -243,7 +242,7 @@ export default function createLMDB(options = {}) {
 
   /**
    * Put (insert/overwrite) an item.
-   * @param {import('../base.js').PutParams} params
+   * @param {import('../base.js').PutParams} params -
    */
   async function put(params) {
     const table = ensureTable(params.tableName);
@@ -262,8 +261,8 @@ export default function createLMDB(options = {}) {
 
   /**
    * Get an item by key (immutable return).
-   * @param {import('../base.js').GetParams} params
-   * @returns {Promise<import('../base.js').DBRecord | undefined>}
+   * @param {import('../base.js').GetParams} params -
+   * @returns {Promise<import('../base.js').DBRecord | undefined>} -
    */
   async function get(params) {
     assertSortPair(params);
@@ -281,7 +280,7 @@ export default function createLMDB(options = {}) {
 
   /**
    * Update fields on an item by key.
-   * @param {import('../base.js').UpdateParams} params
+   * @param {import('../base.js').UpdateParams} params -
    */
   async function update(params) {
     assertSortPair(params);
@@ -335,7 +334,7 @@ export default function createLMDB(options = {}) {
 
   /**
    * Remove (delete) an item by key.
-   * @param {import('../base.js').RemoveParams} params
+   * @param {import('../base.js').RemoveParams} params -
    */
   async function remove(params) {
     assertSortPair(params);
@@ -351,7 +350,7 @@ export default function createLMDB(options = {}) {
 
   /**
    * BatchWrite of deletes and puts (single write transaction).
-   * @param {import('../base.js').BatchWriteParams} params
+   * @param {import('../base.js').BatchWriteParams} params -
    */
   async function batchWrite(params) {
     const table = ensureTable(params.tableName);
