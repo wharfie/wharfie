@@ -40,7 +40,10 @@
     "collectCoverageFrom": [
       "lambdas/**/*.js"
     ],
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "modulePathIgnorePatterns": [
+      "<rootDir>/mock/builds/"
+    ]
   },
   "eslintConfig": {
     "env": {
