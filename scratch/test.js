@@ -65,6 +65,20 @@ async function main() {
         },
         { name: 'usb', version: '2.13.0' },
       ],
+      resources: {
+        db: {
+          adapter: 'vanilla',
+          options: { path: path.resolve(import.meta.dirname, '.hello-world') },
+        },
+        queue: {
+          adapter: 'vanilla',
+          options: { path: path.resolve(import.meta.dirname, '.hello-world') },
+        },
+        objectStorage: {
+          adapter: 'vanilla',
+          options: { path: path.resolve(import.meta.dirname, '.hello-world') },
+        },
+      },
     },
   });
 
@@ -105,6 +119,20 @@ async function main() {
         //   architecture: 'x86',
         // },
       ],
+      resources: {
+        db: {
+          adapter: 'vanilla',
+          options: { path: path.resolve(import.meta.dirname, '.hello-world') },
+        },
+        queue: {
+          adapter: 'vanilla',
+          options: { path: path.resolve(import.meta.dirname, '.hello-world') },
+        },
+        objectStorage: {
+          adapter: 'vanilla',
+          options: { path: path.resolve(import.meta.dirname, '.hello-world') },
+        },
+      },
     },
   });
 

@@ -77,7 +77,14 @@ class Function {
     await worker._destroyWorker();
   }
 
-  async fn() {
+  /**
+   * Load the function entrypoint and invoke it in-process.
+   * This is primarily used by the (single-process) ActorSystem runtime.
+   * @param {any} [event] -
+   * @param {any} [context] -
+   * @returns {Promise<any>} -
+   */
+  async fn(event = {}, context = {}) {
     const entryPath = path.isAbsolute(this.entrypoint.path)
       ? this.entrypoint.path
       : path.resolve(this.entrypoint.path);
@@ -95,7 +102,18 @@ class Function {
       : // for ESM default exports
         (handler?.default ?? handler);
 
-    await candidate();
+    if (typeof candidate !== 'function') {
+      throw new TypeError(
+        `Invalid function entrypoint: ${this.entrypoint.path} export ${this.entrypoint.export || 'default'} is not a function`,
+      );
+    }
+
+    // Support both sync and async handlers.
+    const result = candidate(event, context);
+    if (result && typeof result.then === 'function') {
+      return await result;
+    }
+    return result;
   }
 
   // async recieve() {

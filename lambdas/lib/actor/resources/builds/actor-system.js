@@ -5,6 +5,7 @@ import FunctionResource from './function-resource.js';
 import SeaBuild from './sea-build.js';
 import MacOSBinarySignature from './macos-binary-signature.js';
 import cli from './actor-system-cli/index.js';
+import { createActorSystemResources } from '../../runtime/resources.js';
 
 import path from 'node:path';
 
@@ -23,8 +24,22 @@ import path from 'node:path';
  */
 
 /**
+ * @typedef ActorSystemResourceSpecObject
+ * @property {string} adapter -
+ * @property {Object<string, any>} [options] -
+ */
+
+/**
+ * @typedef ActorSystemResourcesSpec
+ * @property {string|ActorSystemResourceSpecObject|any} [db] -
+ * @property {string|ActorSystemResourceSpecObject|any} [queue] -
+ * @property {string|ActorSystemResourceSpecObject|any} [objectStorage] -
+ */
+
+/**
  * @typedef WharfieActorSystemProperties
  * @property {BuildTarget[] | function(): BuildTarget[]} targets -
+ * @property {ActorSystemResourcesSpec} [resources] -
  * @property {import('./function.js').default[]} [functions] -
  */
 
@@ -66,6 +81,8 @@ class ActorSystem extends BuildResourceGroup {
       dependsOn: [...(dependsOn ?? [])],
     });
     this.functions = functions;
+    /** @type {Promise<{ resources: any, close: () => Promise<void> }> | null} */
+    this._runtimeResourcesPromise = null;
     // normally _defineGroupResources is used but this is a workaround to make sure this.functions is set before defining things
     this.addResources(this.defineActorSystemResources(parent));
     // @ts-ignore
@@ -81,6 +98,84 @@ class ActorSystem extends BuildResourceGroup {
         return Promise.resolve();
       }),
     );
+  }
+
+  /**
+   * Lazily create and cache runtime resources from `properties.resources`.
+   * @returns {Promise<{ resources: any, close: () => Promise<void> }>} -
+   */
+  async _ensureRuntimeResources() {
+    if (this._runtimeResourcesPromise) return this._runtimeResourcesPromise;
+
+    const specs = /** @type {any} */ (this.get('resources', {}));
+    this._runtimeResourcesPromise = createActorSystemResources(specs);
+    return this._runtimeResourcesPromise;
+  }
+
+  /**
+   * Get the instantiated runtime resources for this ActorSystem.
+   *
+   * @returns {Promise<any>} -
+   */
+  async getRuntimeResources() {
+    const { resources } = await this._ensureRuntimeResources();
+    return resources;
+  }
+
+  /**
+   * Build a context object for actor invocation.
+   *
+   * - `context.resources` is always present (may be empty).
+   * - caller-provided `context.resources` overrides ActorSystem resources.
+   *
+   * @param {any} [context] -
+   * @returns {Promise<any>} -
+   */
+  async createContext(context = {}) {
+    const systemResources = await this.getRuntimeResources();
+    const overrideResources =
+      context?.resources && typeof context.resources === 'object'
+        ? context.resources
+        : {};
+    return {
+      ...context,
+      resources: {
+        ...(systemResources || {}),
+        ...(overrideResources || {}),
+      },
+    };
+  }
+
+  /**
+   * Invoke an actor function by name with runtime resources injected onto `context.resources`.
+   *
+   * @param {string} functionName -
+   * @param {any} [event] -
+   * @param {any} [context] -
+   * @returns {Promise<any>} -
+   */
+  async invoke(functionName, event = {}, context = {}) {
+    const fn = this.functions.find((f) => f.name === functionName);
+    if (!fn) {
+      const available = this.functions.map((f) => f.name).join(', ');
+      throw new Error(
+        `Unknown function '${functionName}'. Available: ${available || '(none)'}`,
+      );
+    }
+    const ctx = await this.createContext(context);
+    return await fn.fn(event, ctx);
+  }
+
+  /**
+   * Close all cached runtime resources (best-effort).
+   *
+   * @returns {Promise<void>} -
+   */
+  async closeRuntimeResources() {
+    if (!this._runtimeResourcesPromise) return;
+    const { close } = await this._ensureRuntimeResources();
+    await close();
+    this._runtimeResourcesPromise = null;
   }
 
   /**
@@ -238,6 +333,7 @@ class ActorSystem extends BuildResourceGroup {
 }
 ActorSystem.DefaultProperties = {
   functions: [],
+  resources: {},
 };
 
 export default ActorSystem;

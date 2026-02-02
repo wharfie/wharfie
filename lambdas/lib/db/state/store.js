@@ -2,9 +2,6 @@ import { join } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
-import createDynamoDB from '../adapters/dynamodb.js';
-import createLMDB from '../adapters/lmdb.js';
-import createVanillaDB from '../adapters/vanilla.js';
 import { createStateTable } from '../tables/state.js';
 
 /**
@@ -15,6 +12,8 @@ import { createStateTable } from '../tables/state.js';
  *
  * - If `WHARFIE_DB_ADAPTER` or `WHARFIE_STATE_ADAPTER` is set:
  *   - 'dynamodb' | 'lmdb' | 'vanilla'
+ * - Else if NODE_ENV === 'test':
+ *   - 'vanilla' (keeps tests isolated from developer AWS env)
  * - Else if we appear to be in AWS (AWS_REGION/AWS_EXECUTION_ENV):
  *   - 'dynamodb'
  * - Else:
@@ -28,6 +27,8 @@ import { createStateTable } from '../tables/state.js';
 let _db;
 /** @type {ReturnType<typeof createStateTable> | undefined} */
 let _store;
+/** @type {Promise<ReturnType<typeof createStateTable>> | null} */
+let _initPromise = null;
 
 /**
  * @returns {'dynamodb'|'lmdb'|'vanilla'} -
@@ -50,6 +51,12 @@ function resolveAdapterName() {
     );
   }
 
+  // Jest sets NODE_ENV=test automatically; developers often also have AWS_REGION set locally.
+  // Defaulting to vanilla keeps tests deterministic and avoids accidental AWS usage.
+  if (process.env.NODE_ENV === 'test') {
+    return 'vanilla';
+  }
+
   if (process.env.AWS_REGION || process.env.AWS_EXECUTION_ENV) {
     return 'dynamodb';
   }
@@ -59,14 +66,16 @@ function resolveAdapterName() {
 
 /**
  * @param {'dynamodb'|'lmdb'|'vanilla'} adapterName -
- * @returns {import('../base.js').DBClient} -
+ * @returns {Promise<import('../base.js').DBClient>} -
  */
-function createDB(adapterName) {
+async function createDB(adapterName) {
   if (adapterName === 'dynamodb') {
+    const { default: createDynamoDB } = await import('../adapters/dynamodb.js');
     return createDynamoDB({ region: process.env.AWS_REGION });
   }
 
   if (adapterName === 'lmdb') {
+    const { default: createLMDB } = await import('../adapters/lmdb.js');
     return createLMDB({
       // Optional; adapter defaults to OS-specific wharfie data dir.
       path: process.env.WHARFIE_STATE_DB_PATH,
@@ -74,6 +83,8 @@ function createDB(adapterName) {
   }
 
   // vanilla
+  const { default: createVanillaDB } = await import('../adapters/vanilla.js');
+
   if (process.env.NODE_ENV === 'test') {
     // Isolate tests from developer machines by default.
     const dir = mkdtempSync(join(tmpdir(), 'wharfie-state-'));
@@ -87,16 +98,33 @@ function createDB(adapterName) {
 }
 
 /**
+ * @returns {Promise<ReturnType<typeof createStateTable>>}
+ */
+async function ensureStore() {
+  if (_store) return _store;
+  if (_initPromise) return _initPromise;
+
+  _initPromise = (async () => {
+    const adapterName = resolveAdapterName();
+    _db = await createDB(adapterName);
+    _store = createStateTable({ db: _db });
+    return _store;
+  })();
+
+  return _initPromise;
+}
+
+/**
+ * Returns the state store proxy.
+ *
+ * Note: the real store (and underlying adapter) is initialized lazily on first call
+ * to any method. This avoids pulling AWS SDK dependencies into test/local runtimes
+ * unless the dynamodb adapter is actually selected.
+ *
  * @returns {ReturnType<typeof createStateTable>}
  */
 export function getStateStore() {
-  if (_store) return _store;
-
-  const adapterName = resolveAdapterName();
-  _db = createDB(adapterName);
-  _store = createStateTable({ db: _db });
-
-  return _store;
+  return stateStore;
 }
 
 /**
@@ -105,16 +133,41 @@ export function getStateStore() {
  * @returns {Promise<void>}
  */
 export async function closeStateStore() {
+  // Wait for any in-flight init so we can close reliably.
+  if (_initPromise) {
+    try {
+      await _initPromise;
+    } catch {
+      // ignore init errors; still clear caches
+    }
+  }
+
   const db = _db;
   _db = undefined;
   _store = undefined;
+  _initPromise = null;
 
   if (db?.close) {
     await db.close();
   }
 }
 
-const stateStore = getStateStore();
+/**
+ * Lazy state store proxy.
+ *
+ * @type {ReturnType<typeof createStateTable>}
+ */
+const stateStore = {
+  putResource: async (...args) => (await ensureStore()).putResource(...args),
+  putResourceStatus: async (...args) =>
+    (await ensureStore()).putResourceStatus(...args),
+  getResource: async (...args) => (await ensureStore()).getResource(...args),
+  getResources: async (...args) => (await ensureStore()).getResources(...args),
+  getResourceStatus: async (...args) =>
+    (await ensureStore()).getResourceStatus(...args),
+  deleteResource: async (...args) =>
+    (await ensureStore()).deleteResource(...args),
+};
 
 export const {
   putResource,
