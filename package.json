@@ -24,28 +24,42 @@
   "main": "./client/",
   "scripts": {
     "typecheck": "tsc",
-    "test:js": "TZ=UTC jest --silent --coverage ./test/",
-    "test:update": "TZ=UTC jest --silent --updateSnapshot ./test/",
+    "test:js": "TZ=UTC node --experimental-vm-modules node_modules/jest/bin/jest.js --silent --coverage",
+    "test:update": "TZ=UTC node --experimental-vm-modules node_modules/jest/bin/jest.js --silent --updateSnapshot",
     "test": "npm run test:js",
     "test:ci": "npm run lint && npm run typecheck && npm run test",
     "lint:js": "eslint . && prettier --check \"{*,**/*}.{js,json}\"",
     "lint": "npm run lint:js",
-    "lint:fix": "eslint --fix . && prettier --write \"{*,**/*}.{js,json}\""
+    "lint:fix": "eslint --fix . && prettier --write \"{*,**/*}.{js,json}\"",
+    "test:watch": "TZ=UTC node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+    "test:watchAll": "TZ=UTC node --experimental-vm-modules node_modules/jest/bin/jest.js --watchAll"
   },
   "prettier": {
     "singleQuote": true,
     "arrowParens": "always"
   },
   "jest": {
-    "collectCoverageFrom": [
-      "lambdas/lib/actor/**/*.js"
-    ],
     "testEnvironment": "node",
+    "extensionsToTreatAsEsm": [
+      ".js"
+    ],
+    "transform": {},
+    "testMatch": [
+      "<rootDir>/test/actor/runtime/**/*.test.js"
+    ],
+    "collectCoverageFrom": [
+      "lambdas/lib/actor/runtime/**/*.js",
+      "lambdas/lib/actor/resources/builds/**/*.js",
+      "lambdas/lib/actor/resources/base-resource.js",
+      "lambdas/lib/actor/resources/base-resource-group.js",
+      "lambdas/lib/actor/resources/reconcilable.js",
+      "lambdas/lib/code-execution/**/*.js",
+      "lambdas/lib/db/**/*.js",
+      "lambdas/lib/queue/base.js",
+      "lambdas/lib/object-storage/base.js"
+    ],
     "modulePathIgnorePatterns": [
       "<rootDir>/mock/builds/"
-    ],
-    "testMatch": [
-      "<rootDir>/test/actor/**/*.test.js"
     ]
   },
   "eslintConfig": {
