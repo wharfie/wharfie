@@ -102,6 +102,7 @@ class ActorSystem extends BuildResourceGroup {
 
   /**
    * Lazily create and cache runtime resources from `properties.resources`.
+   *
    * @returns {Promise<{ resources: any, close: () => Promise<void> }>} -
    */
   async _ensureRuntimeResources() {

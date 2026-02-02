@@ -2,7 +2,6 @@ import { getAsset } from 'node:sea';
 import worker from '../../../code-execution/worker.js';
 import { brotliDecompressSync } from 'node:zlib';
 
-// import { createRequire } from 'node:module';
 import path from 'node:path';
 
 /**
@@ -30,6 +29,62 @@ import path from 'node:path';
  * @property {FunctionProperties} [properties] -
  */
 
+/**
+ * @typedef FunctionRunOptions
+ * @property {Record<string, any>} [resources] - In-process resource instances to expose to the sandbox via RPC.
+ */
+
+/**
+ * @param {any} v
+ * @returns {boolean}
+ */
+function isObject(v) {
+  return !!v && typeof v === 'object';
+}
+
+/**
+ * Split a context object into:
+ * - a clone-safe context (no resource client instances)
+ * - an RPC resource map to be hosted in the parent process
+ *
+ * We conservatively treat `context.resources.{db,queue,objectStorage}` as RPC candidates
+ * when the value looks like a client instance (has at least one function property).
+ *
+ * @param {any} context
+ * @returns {{ safeContext: any, rpcResources: Record<string, any> | null }}
+ */
+function splitContextForWorker(context) {
+  if (!isObject(context)) return { safeContext: context, rpcResources: null };
+
+  const res = context.resources;
+  if (!isObject(res)) return { safeContext: context, rpcResources: null };
+
+  /** @type {Record<string, any>} */
+  const rpcResources = {};
+  const safeResources = { ...res };
+
+  for (const key of ['db', 'queue', 'objectStorage']) {
+    const v = res[key];
+    if (!isObject(v)) continue;
+
+    // Heuristic: client instances have at least one function property.
+    const hasFn = Object.values(v).some((x) => typeof x === 'function');
+    if (!hasFn) continue;
+
+    rpcResources[key] = v;
+    delete safeResources[key];
+  }
+
+  if (Object.keys(rpcResources).length === 0) {
+    return { safeContext: context, rpcResources: null };
+  }
+
+  return {
+    safeContext: { ...context, resources: safeResources },
+    rpcResources,
+  };
+}
+
 class Function {
   /**
    * @param {FunctionOptions} options -
@@ -48,11 +103,18 @@ class Function {
   }
 
   /**
+   * Run a bundled function in the sandbox worker.
+   *
+   * If `options.resources` (or `context.resources.{db,queue,objectStorage}`) contains
+   * in-process resource client instances, they are exposed to the worker via an RPC
+   * bridge, and the worker sees them as `context.resources.*` proxies.
+   *
    * @param {string} name -
    * @param {any} event -
    * @param {any} context -
+   * @param {FunctionRunOptions} [options] -
    */
-  static async run(name, event, context) {
+  static async run(name, event, context = {}, options = {}) {
     const functionAssetBuffer = await getAsset(name);
     const functionDescriptionBuffer = Buffer.from(functionAssetBuffer);
     const assetDescription = JSON.parse(functionDescriptionBuffer.toString());
@@ -60,26 +122,41 @@ class Function {
       Buffer.from(assetDescription.codeBundle, 'base64'),
     );
     const functionCodeString = functionBuffer.toString();
+
+    let rpcResources = options?.resources || null;
+    let safeContext = context;
+
+    if (rpcResources && Object.keys(rpcResources).length > 0) {
+      // Ensure we don't try to structured-clone the client instances inside context.
+      if (isObject(safeContext) && isObject(safeContext.resources)) {
+        const safeRes = { ...safeContext.resources };
+        for (const k of Object.keys(rpcResources)) delete safeRes[k];
+        safeContext = { ...safeContext, resources: safeRes };
+      }
+    } else {
+      const split = splitContextForWorker(context);
+      safeContext = split.safeContext;
+      rpcResources = split.rpcResources;
+    }
+
     console.time('WORKER time');
-    await worker.runInSandbox(name, functionCodeString, [event, context], {
+    await worker.runInSandbox(name, functionCodeString, [event, safeContext], {
       externalsTar: Buffer.from(assetDescription.externalsTar, 'base64'),
+      rpc:
+        rpcResources && Object.keys(rpcResources).length > 0
+          ? { resources: rpcResources, contextIndex: 1 }
+          : undefined,
     });
     console.timeEnd('WORKER time');
-    // let t = 0
-    // while (t < 10) {
-    //   console.time('WORKER time');
-    //   await worker.runInSandbox(name, functionCodeString, [event, context], {
-    //     externalsTar: Buffer.from(assetDescription.externalsTar, 'base64'),
-    //   });
-    //   console.timeEnd('WORKER time');
-    //   t += 1
-    // }
+
     await worker._destroyWorker();
   }
 
   /**
    * Load the function entrypoint and invoke it in-process.
+   *
    * This is primarily used by the (single-process) ActorSystem runtime.
+   *
    * @param {any} [event] -
    * @param {any} [context] -
    * @returns {Promise<any>} -
@@ -104,7 +181,9 @@ class Function {
 
     if (typeof candidate !== 'function') {
       throw new TypeError(
-        `Invalid function entrypoint: ${this.entrypoint.path} export ${this.entrypoint.export || 'default'} is not a function`,
+        `Invalid function entrypoint: ${this.entrypoint.path} export ${
+          this.entrypoint.export || 'default'
+        } is not a function`,
       );
     }
 
@@ -115,10 +194,6 @@ class Function {
     }
     return result;
   }
-
-  // async recieve() {
-  //   await Function.run({}, {});
-  // }
 }
 
 export default Function;

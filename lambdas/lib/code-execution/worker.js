@@ -1,12 +1,17 @@
 import { join } from 'node:path';
 import { access, mkdir, writeFile } from 'node:fs/promises';
-import { constants as FS } from 'node:fs';
+import { constants as FS, readFileSync } from 'node:fs';
 import { Worker } from 'node:worker_threads';
 import { x } from 'tar';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { buffer as streamToBuffer } from 'node:stream/consumers';
+import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 // esbuild inlines this file as text (configure: loader { '.worker.js': 'text' })
+// In normal Node/Jest execution, this import resolves to the module default export (a function),
+// NOT the source text. We fall back to reading the file from disk when needed.
 // @ts-ignore
 // eslint-disable-next-line import/default
 import workerSource from './runner.worker.js';
@@ -23,15 +28,210 @@ let nextId = 1;
 const pending = new Map();
 
 /**
+ * Active RPC sessions, keyed by `sessionId`.
+ *
+ * Each session maps a resource name (db/queue/objectStorage/etc) to an in-process client instance.
+ *
+ * @type {Map<string, { resources: Record<string, any> }>}
+ */
+const rpcSessions = new Map();
+
+/**
+ * @returns {string}
+ */
+function getWorkerSourceText() {
+  if (typeof workerSource === 'string') return workerSource;
+
+  // Node/Jest path: load the worker source code from disk.
+  const p = fileURLToPath(new URL('./runner.worker.js', import.meta.url));
+  return readFileSync(p, 'utf8');
+}
+
+/**
+ * @param {any} v
+ * @returns {boolean}
+ */
+function isNodeReadable(v) {
+  return (
+    !!v &&
+    typeof v === 'object' &&
+    typeof v.pipe === 'function' &&
+    typeof v.on === 'function'
+  );
+}
+
+/**
+ * Make a value safe to structured-clone across the worker boundary.
+ *
+ * Notes:
+ * - Buffers are cloneable
+ * - Node Readable streams are NOT cloneable; we materialize them into a Buffer and tag them
+ *   so the worker can rehydrate a Readable.
+ *
+ * @param {any} value
+ * @returns {Promise<any>}
+ */
+async function makeCloneable(value) {
+  if (value === null || value === undefined) return value;
+
+  // primitives
+  const t = typeof value;
+  if (t === 'string' || t === 'number' || t === 'boolean') return value;
+
+  // Buffer / ArrayBuffer / typed arrays are cloneable
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof ArrayBuffer) return value;
+  if (ArrayBuffer.isView(value)) return value;
+
+  // If it is directly a Readable, materialize
+  if (isNodeReadable(value)) {
+    const buf = await streamToBuffer(value);
+    return { __wharfie_type: 'readable', data: buf };
+  }
+
+  // Common S3 shape: { Body: stream }
+  if (value && typeof value === 'object' && 'Body' in value) {
+    const body = value.Body;
+
+    // AWS SDK v3 adds these mixins
+    if (body && typeof body.transformToString === 'function') {
+      // Prefer string when possible (smaller + common usage).
+      const s = await body.transformToString('utf8');
+      return { ...value, Body: s };
+    }
+    if (body && typeof body.transformToByteArray === 'function') {
+      const arr = await body.transformToByteArray();
+      return {
+        ...value,
+        Body: { __wharfie_type: 'readable', data: Buffer.from(arr) },
+      };
+    }
+    if (isNodeReadable(body)) {
+      const buf = await streamToBuffer(body);
+      return { ...value, Body: { __wharfie_type: 'readable', data: buf } };
+    }
+  }
+
+  // Best-effort: rely on structured clone, which will throw if unsupported.
+  return value;
+}
+
+/**
+ * @param {Worker} w
+ * @param {any} msg
+ * @returns {Promise<void>}
+ */
+async function handleRpcMessage(w, msg) {
+  const id = msg?.id;
+  const sessionId = msg?.sessionId;
+  const resourceName = msg?.resource;
+  const methodName = msg?.method;
+  const args = Array.isArray(msg?.args) ? msg.args : [];
+
+  const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
+
+  if (!sessionId || typeof sessionId !== 'string') {
+    w.postMessage({
+      kind: 'rpc_response',
+      id,
+      ok: false,
+      error: 'RPC error: missing sessionId',
+    });
+    return;
+  }
+
+  const session = rpcSessions.get(sessionId);
+  if (!session) {
+    w.postMessage({
+      kind: 'rpc_response',
+      id,
+      ok: false,
+      error: `RPC error: unknown sessionId ${sessionId}`,
+    });
+    return;
+  }
+
+  if (!resourceName || typeof resourceName !== 'string') {
+    w.postMessage({
+      kind: 'rpc_response',
+      id,
+      ok: false,
+      error: 'RPC error: missing resource name',
+    });
+    return;
+  }
+
+  const resource = session.resources?.[resourceName];
+  if (!resource) {
+    w.postMessage({
+      kind: 'rpc_response',
+      id,
+      ok: false,
+      error: `RPC error: unknown resource '${resourceName}'`,
+    });
+    return;
+  }
+
+  if (
+    !methodName ||
+    typeof methodName !== 'string' ||
+    forbidden.has(methodName)
+  ) {
+    w.postMessage({
+      kind: 'rpc_response',
+      id,
+      ok: false,
+      error: `RPC error: invalid method '${String(methodName)}'`,
+    });
+    return;
+  }
+
+  const fn = resource?.[methodName];
+  if (typeof fn !== 'function') {
+    w.postMessage({
+      kind: 'rpc_response',
+      id,
+      ok: false,
+      error: `RPC error: '${resourceName}.${methodName}' is not a function`,
+    });
+    return;
+  }
+
+  try {
+    const result = fn.apply(resource, args);
+    const awaited =
+      result && typeof result.then === 'function' ? await result : result;
+
+    const cloneable = await makeCloneable(awaited);
+
+    w.postMessage({
+      kind: 'rpc_response',
+      id,
+      ok: true,
+      value: cloneable,
+    });
+  } catch (err) {
+    w.postMessage({
+      kind: 'rpc_response',
+      id,
+      ok: false,
+      // @ts-ignore
+      error: err && err.stack ? err.stack : String(err),
+    });
+  }
+}
+
+/**
  * @param {string} name -
  * @returns {Worker} -
  */
 function ensureWorker(name) {
   if (worker) return worker;
-  console.log('ENSURE WORKER');
+
+  const src = getWorkerSourceText();
 
   // @ts-ignore
-  const w = new Worker(workerSource, {
+  const w = new Worker(src, {
     eval: true,
     stdout: true,
     stderr: true,
@@ -50,6 +250,13 @@ function ensureWorker(name) {
       return;
     }
 
+    // Worker -> host RPC requests
+    if (msg && msg.kind === 'rpc') {
+      handleRpcMessage(w, msg);
+      return;
+    }
+
+    // Normal exec response path
     const p = msg && pending.get(msg.id);
     if (!p) return;
     pending.delete(msg.id);
@@ -59,25 +266,23 @@ function ensureWorker(name) {
     } else {
       p.reject(new Error(msg.error));
     }
-
-    console.log('message', msg);
   });
 
   w.on('error', (err) => {
-    console.log('error', err);
     for (const { reject } of pending.values()) reject(err);
     pending.clear();
+    rpcSessions.clear();
     worker = null;
   });
 
   w.on('exit', (code) => {
-    console.log('EXIT', code);
     if (code !== 0) {
       for (const { reject } of pending.values()) {
         reject(new Error(`Worker exited with code ${code}`));
       }
       pending.clear();
     }
+    rpcSessions.clear();
     worker = null;
   });
 
@@ -127,7 +332,6 @@ async function pathExists(p) {
 async function ensureSandboxForName(name, codeString, externalsTar) {
   let sb = sandboxes.get(name);
   if (sb) return sb;
-  console.log('ENSURE SANDBOX');
 
   await mkdir(VM_PATH, { recursive: true });
 
@@ -159,9 +363,18 @@ async function ensureSandboxForName(name, codeString, externalsTar) {
 }
 
 /**
+ * @typedef ResourceRPCOptions
+ * @property {Record<string, any>} resources
+ * @property {number} [contextIndex] - Which arg is treated as the invocation context (default: 1)
+ * @property {string} [sessionId] - Optional session id (default: random UUID)
+ * @property {string[]} [resourceNames] - Explicit list of resources to expose (default: Object.keys(resources))
+ */
+
+/**
  * @typedef VMSandboxOptions
  * @property {Buffer} [externalsTar] -
  * @property {Object<string,string>} [env] -
+ * @property {ResourceRPCOptions} [rpc] - Optional RPC wiring for `context.resources.*`
  */
 
 /**
@@ -175,33 +388,56 @@ async function runInSandbox(
   name,
   codeString,
   params,
-  { externalsTar, env = {} } = {},
+  { externalsTar, env = {}, rpc } = {},
 ) {
   // Prepare once per name (no repeated extraction/packaging or pkg writes)
   const sb = await ensureSandboxForName(name, codeString, externalsTar);
 
-  const __ENTRY_ARGS__ = Array.isArray(params) ? params : [params];
+  /** @type {any[]} */
+  const __ENTRY_ARGS__ = Array.isArray(params) ? [...params] : [params];
+
+  // Optional resource RPC session for `context.resources`
+  let cleanupRpc = null;
+  if (rpc && rpc.resources && Object.keys(rpc.resources).length > 0) {
+    const sessionId = rpc.sessionId || randomUUID();
+    const contextIndex =
+      Number.isInteger(rpc.contextIndex) && rpc.contextIndex >= 0
+        ? rpc.contextIndex
+        : 1;
+
+    rpcSessions.set(sessionId, { resources: rpc.resources });
+    cleanupRpc = () => {
+      rpcSessions.delete(sessionId);
+    };
+
+    while (__ENTRY_ARGS__.length <= contextIndex) __ENTRY_ARGS__.push({});
+    const ctx = __ENTRY_ARGS__[contextIndex];
+    const safeCtx = ctx && typeof ctx === 'object' ? ctx : {};
+    const existingResources =
+      safeCtx.resources && typeof safeCtx.resources === 'object'
+        ? safeCtx.resources
+        : {};
+
+    const resourceNames = Array.isArray(rpc.resourceNames)
+      ? rpc.resourceNames
+      : Object.keys(rpc.resources);
+
+    __ENTRY_ARGS__[contextIndex] = {
+      ...safeCtx,
+      resources: {
+        ...existingResources,
+        __wharfie_rpc: true,
+        __wharfie_rpc_sessionId: sessionId,
+        __wharfie_rpc_resources: resourceNames,
+      },
+    };
+  }
 
   const w = ensureWorker(name);
   const id = nextId++;
 
-  const msg = await new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    w.postMessage({
-      id,
-      kind: 'exec',
-      codeString: sb.codeString,
-      entryFile: sb.entryFile,
-      tmpRoot: sb.root,
-      pkgFile: sb.pkgFile,
-      env,
-      __ENTRY_ARGS__,
-      functionName: name,
-    });
-  });
-  let runs = 0;
-  while (runs < 9) {
-    await new Promise((resolve, reject) => {
+  try {
+    const msg = await new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject });
       w.postMessage({
         id,
@@ -215,11 +451,12 @@ async function runInSandbox(
         functionName: name,
       });
     });
-    runs += 1;
-  }
 
-  if (!msg || !msg.ok) {
-    throw new Error(msg && msg.error ? msg.error : 'Unknown worker error');
+    if (!msg || !msg.ok) {
+      throw new Error(msg && msg.error ? msg.error : 'Unknown worker error');
+    }
+  } finally {
+    if (cleanupRpc) cleanupRpc();
   }
 }
 
@@ -231,6 +468,7 @@ export default {
         await worker.terminate();
       } finally {
         worker = null;
+        rpcSessions.clear();
       }
     }
   },

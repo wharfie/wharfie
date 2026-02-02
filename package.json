@@ -38,11 +38,14 @@
   },
   "jest": {
     "collectCoverageFrom": [
-      "lambdas/**/*.js"
+      "lambdas/lib/actor/**/*.js"
     ],
     "testEnvironment": "node",
     "modulePathIgnorePatterns": [
       "<rootDir>/mock/builds/"
+    ],
+    "testMatch": [
+      "<rootDir>/test/actor/**/*.test.js"
     ]
   },
   "eslintConfig": {

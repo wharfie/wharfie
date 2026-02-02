@@ -3,8 +3,10 @@
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "target": "ES2020",
-    "lib": ["ES2020", "dom"],
-
+    "lib": [
+      "ES2020",
+      "dom"
+    ],
     "strict": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
@@ -12,16 +14,15 @@
     "checkJs": true,
     "noEmit": true,
     "resolveJsonModule": true,
-    "types": ["jest", "node"]
+    "types": [
+      "jest",
+      "node"
+    ]
   },
   "include": [
-    "build.js",
-    "scratch/**/*.js",
-    "lambdas/**/*.js",
-    "cli/**/*.js",
-    "bin/wharfie",
-    "test/lib/dynamo/operation.test.js",
-    "test/lib/dynamo/operation-mock.test.js"
+    "lambdas/lib/actor/**/*.js"
   ],
-  "exclude": ["lambdas/udf_entrypoint.js"]
+  "exclude": [
+    "lambdas/udf_entrypoint.js"
+  ]
 }
