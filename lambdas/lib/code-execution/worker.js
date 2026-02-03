@@ -400,9 +400,13 @@ async function runInSandbox(
   let cleanupRpc = null;
   if (rpc && rpc.resources && Object.keys(rpc.resources).length > 0) {
     const sessionId = rpc.sessionId || randomUUID();
+
+    const maybeContextIndex = rpc.contextIndex;
     const contextIndex =
-      Number.isInteger(rpc.contextIndex) && rpc.contextIndex >= 0
-        ? rpc.contextIndex
+      typeof maybeContextIndex === 'number' &&
+      Number.isInteger(maybeContextIndex) &&
+      maybeContextIndex >= 0
+        ? maybeContextIndex
         : 1;
 
     rpcSessions.set(sessionId, { resources: rpc.resources });

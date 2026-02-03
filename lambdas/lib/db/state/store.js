@@ -158,14 +158,17 @@ export async function closeStateStore() {
  * @type {ReturnType<typeof createStateTable>}
  */
 const stateStore = {
-  putResource: async (...args) => (await ensureStore()).putResource(...args),
-  putResourceStatus: async (...args) =>
+  putResource: async (/** @type {any[]} */ ...args) =>
+    (await ensureStore()).putResource(...args),
+  putResourceStatus: async (/** @type {any[]} */ ...args) =>
     (await ensureStore()).putResourceStatus(...args),
-  getResource: async (...args) => (await ensureStore()).getResource(...args),
-  getResources: async (...args) => (await ensureStore()).getResources(...args),
-  getResourceStatus: async (...args) =>
+  getResource: async (/** @type {any[]} */ ...args) =>
+    (await ensureStore()).getResource(...args),
+  getResources: async (/** @type {any[]} */ ...args) =>
+    (await ensureStore()).getResources(...args),
+  getResourceStatus: async (/** @type {any[]} */ ...args) =>
     (await ensureStore()).getResourceStatus(...args),
-  deleteResource: async (...args) =>
+  deleteResource: async (/** @type {any[]} */ ...args) =>
     (await ensureStore()).deleteResource(...args),
 };
 

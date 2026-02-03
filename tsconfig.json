@@ -1,12 +1,12 @@
 {
   "compilerOptions": {
     "module": "nodenext",
-    "target": "ES2022",
+    "moduleResolution": "nodenext",
+    "target": "ES2021",
     "lib": [
-      "ES2022",
+      "ES2021",
       "dom"
     ],
-    "moduleResolution": "nodenext",
     "strict": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
@@ -14,41 +14,26 @@
     "checkJs": true,
     "noEmit": true,
     "resolveJsonModule": true,
+    "skipLibCheck": true,
     "types": [
-      "node",
-      "jest"
-    ],
-    "skipLibCheck": true
+      "jest",
+      "node"
+    ]
   },
   "include": [
     "lambdas/lib/actor/runtime/**/*.js",
     "lambdas/lib/actor/resources/builds/**/*.js",
-    "lambdas/lib/actor/resources/base-resource.js",
-    "lambdas/lib/actor/resources/base-resource-group.js",
-    "lambdas/lib/actor/resources/reconcilable.js",
-    "lambdas/lib/actor/lib/**/*.js",
     "lambdas/lib/code-execution/**/*.js",
-    "lambdas/lib/db/base.js",
-    "lambdas/lib/db/state/store.js",
-    "lambdas/lib/db/tables/**/*.js",
-    "lambdas/lib/queue/base.js",
-    "lambdas/lib/object-storage/base.js",
+    "lambdas/lib/paths.js",
     "lambdas/lib/typedefs.js",
-    "lambdas/typedefs.js",
     "test/actor/runtime/**/*.test.js",
     "test/fixtures/actors/**/*.js"
   ],
   "exclude": [
+    "lambdas/udf_entrypoint.js",
     "lambdas/lib/actor/resources/aws/**",
+    "lambdas/lib/actor/resources/records/**",
     "test/actor/aws/**",
-    "test/actor/builds/**",
-    "test/actor/lib/**",
-    "test/actor/records/**",
-    "test/actor/wharfie-*.test.js",
-    "test/duckdb/**",
-    "test/dynamo/**",
-    "test/lambdas/**",
-    "test/etl/**",
-    "test/state/**"
+    "test/actor/records/**"
   ]
 }

@@ -55,7 +55,8 @@ function reviveCloneable(v) {
  * @returns {Promise<any>}
  */
 function rpcCall(sessionId, resource, method, args) {
-  if (!parentPort) {
+  const port = parentPort;
+  if (!port) {
     throw new Error('RPC unavailable: parentPort is not defined');
   }
 
@@ -63,7 +64,7 @@ function rpcCall(sessionId, resource, method, args) {
 
   return new Promise((resolve, reject) => {
     rpcPending.set(id, { resolve, reject });
-    parentPort.postMessage({
+    port.postMessage({
       kind: 'rpc',
       id,
       sessionId,
@@ -94,10 +95,12 @@ function createRpcProxy(sessionId, resourceName) {
         // Only string method names are supported over the wire.
         if (typeof prop !== 'string') return undefined;
 
-        return async (...args) => {
+        /** @type {(...args: any[]) => Promise<any>} */
+        const fn = async (...args) => {
           const res = await rpcCall(sessionId, resourceName, prop, args);
           return reviveCloneable(res);
         };
+        return fn;
       },
     },
   );

@@ -37,7 +37,7 @@
 
 /**
  * @param {any} v
- * @returns {boolean}
+ * @returns {v is Record<string, any>}
  */
 function isPlainObject(v) {
   if (!v || typeof v !== 'object') return false;
@@ -57,7 +57,7 @@ function looksLikeSpecObject(v) {
 
 /**
  * @param {any} v
- * @returns {v is { close?: () => any }}
+ * @returns {v is { close: () => any }}
  */
 function looksClosable(v) {
   return !!v && typeof v === 'object' && typeof v.close === 'function';
@@ -134,28 +134,18 @@ async function cachedImport(key, loader) {
  * @returns {Promise<(options?: any) => import('../../db/base.js').DBClient>}
  */
 async function loadDBFactory(adapter) {
-  switch (adapter) {
-    case 'vanilla': {
-      return cachedImport(
-        'db:vanilla',
-        async () => (await import('../../db/adapters/vanilla.js')).default,
-      );
-    }
-    case 'dynamodb': {
-      return cachedImport(
-        'db:dynamodb',
-        async () => (await import('../../db/adapters/dynamodb.js')).default,
-      );
-    }
-    case 'lmdb': {
-      return cachedImport(
-        'db:lmdb',
-        async () => (await import('../../db/adapters/lmdb.js')).default,
-      );
-    }
-    default:
-      throw new Error(`Unsupported db adapter: ${adapter}`);
+  const allowed = new Set(['vanilla', 'dynamodb', 'lmdb']);
+  if (!allowed.has(adapter)) {
+    throw new Error(`Unsupported db adapter: ${adapter}`);
   }
+
+  // NOTE: Build the specifier at runtime so TypeScript doesn't eagerly
+  // typecheck adapter implementations while this refactor is in-flight.
+  const specifier = ['..', '..', 'db', 'adapters', `${adapter}.js`].join('/');
+  return cachedImport(
+    `db:${adapter}`,
+    async () => (await import(specifier)).default,
+  );
 }
 
 /**
@@ -163,28 +153,18 @@ async function loadDBFactory(adapter) {
  * @returns {Promise<(options?: any) => import('../../queue/base.js').QueueClient>}
  */
 async function loadQueueFactory(adapter) {
-  switch (adapter) {
-    case 'vanilla': {
-      return cachedImport(
-        'queue:vanilla',
-        async () => (await import('../../queue/adapters/vanilla.js')).default,
-      );
-    }
-    case 'sqs': {
-      return cachedImport(
-        'queue:sqs',
-        async () => (await import('../../queue/adapters/sqs.js')).default,
-      );
-    }
-    case 'lmdb': {
-      return cachedImport(
-        'queue:lmdb',
-        async () => (await import('../../queue/adapters/lmdb.js')).default,
-      );
-    }
-    default:
-      throw new Error(`Unsupported queue adapter: ${adapter}`);
+  const allowed = new Set(['vanilla', 'sqs', 'lmdb']);
+  if (!allowed.has(adapter)) {
+    throw new Error(`Unsupported queue adapter: ${adapter}`);
   }
+
+  const specifier = ['..', '..', 'queue', 'adapters', `${adapter}.js`].join(
+    '/',
+  );
+  return cachedImport(
+    `queue:${adapter}`,
+    async () => (await import(specifier)).default,
+  );
 }
 
 /**
@@ -192,38 +172,22 @@ async function loadQueueFactory(adapter) {
  * @returns {Promise<(options?: any) => import('../../object-storage/base.js').ObjectStorageClient>}
  */
 async function loadObjectStorageFactory(adapter) {
-  switch (adapter) {
-    case 'vanilla': {
-      return cachedImport(
-        'objectStorage:vanilla',
-        async () =>
-          (await import('../../object-storage/adapters/vanilla.js')).default,
-      );
-    }
-    case 's3': {
-      return cachedImport(
-        'objectStorage:s3',
-        async () =>
-          (await import('../../object-storage/adapters/s3.js')).default,
-      );
-    }
-    case 'r2': {
-      return cachedImport(
-        'objectStorage:r2',
-        async () =>
-          (await import('../../object-storage/adapters/r2.js')).default,
-      );
-    }
-    case 'b2': {
-      return cachedImport(
-        'objectStorage:b2',
-        async () =>
-          (await import('../../object-storage/adapters/b2.js')).default,
-      );
-    }
-    default:
-      throw new Error(`Unsupported objectStorage adapter: ${adapter}`);
+  const allowed = new Set(['vanilla', 's3', 'r2', 'b2']);
+  if (!allowed.has(adapter)) {
+    throw new Error(`Unsupported objectStorage adapter: ${adapter}`);
   }
+
+  const specifier = [
+    '..',
+    '..',
+    'object-storage',
+    'adapters',
+    `${adapter}.js`,
+  ].join('/');
+  return cachedImport(
+    `objectStorage:${adapter}`,
+    async () => (await import(specifier)).default,
+  );
 }
 
 /**
