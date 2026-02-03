@@ -22,6 +22,9 @@ describe('ActorSystem runtime resources', () => {
       queue: { adapter: 'vanilla', options: { path: tmp } },
       objectStorage: { adapter: 'vanilla', options: { path: tmp } },
     });
+    if (!resources.db || !resources.queue || !resources.objectStorage) {
+      throw new Error('Expected runtime resources to be initialized');
+    }
 
     expect(typeof resources.db?.put).toBe('function');
     expect(typeof resources.queue?.sendMessage).toBe('function');
@@ -87,6 +90,9 @@ describe('ActorSystem runtime resources', () => {
       queue: { adapter: 'vanilla', options: { path: tmp } },
       objectStorage: { adapter: 'vanilla', options: { path: tmp } },
     });
+    if (!resources.db || !resources.queue || !resources.objectStorage) {
+      throw new Error('Expected runtime resources to be initialized');
+    }
 
     const fnName = `wharfie-worker-hello-${Date.now()}-${Math.floor(
       Math.random() * 1e9,
@@ -136,7 +142,10 @@ describe('ActorSystem runtime resources', () => {
         keyValue: 'greeting',
       });
 
-      expect(rec).toBeTruthy();
+      if (!rec) {
+        throw new Error('Expected db record to exist');
+      }
+
       expect(rec.message).toBe('hello jest-worker');
       expect(rec.extraValue).toBe('from-host');
 

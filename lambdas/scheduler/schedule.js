@@ -33,6 +33,7 @@ async function schedule({ resource_id, interval, window, partition }) {
   const ms = 1000 * interval; // convert s to ms
   const nowInterval = Math.round(now / ms) * ms;
   const [after, before] = window;
+  /** @type {import('./scheduler-entry.js').default[]} */
   const events = await scheduler_db.query(resource_id, partition_prefix, [
     after,
     before,

@@ -3,10 +3,7 @@
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "target": "ES2021",
-    "lib": [
-      "ES2021",
-      "dom"
-    ],
+    "lib": ["ES2021", "dom"],
     "strict": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
@@ -15,10 +12,7 @@
     "noEmit": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "types": [
-      "jest",
-      "node"
-    ]
+    "types": ["jest", "node"]
   },
   "include": [
     "lambdas/lib/actor/runtime/**/*.js",

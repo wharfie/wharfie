@@ -22,7 +22,7 @@ import { ListObjectsV2Command } from '@aws-sdk/client-s3';
  */
 class ReferencesMetastore {
   /**
-   * @param {ReferencesMetastoreOptions} options -
+   * @param {Partial<ReferencesMetastoreOptions>} [options] -
    */
   constructor({ referencesUri, partitionKeys = [], s3 } = {}) {
     if (!referencesUri) throw new Error('referencesUri is required');
@@ -183,6 +183,7 @@ class ReferencesMetastore {
     /** @type {string[]} */
     const manifests = [];
 
+    /** @param {string} dir */
     const walk = async (dir) => {
       const entries = await fs.readdir(dir, { withFileTypes: true });
       for (const ent of entries) {
@@ -314,6 +315,7 @@ class ReferencesMetastore {
    * @returns {Record<string, string>} -
    */
   _parsePartitionValuesFromManifest(manifestUri) {
+    /** @type {Record<string, string>} */
     const out = {};
     const rel = this._relativeTo(this.referencesUri, manifestUri);
     const segments = rel.split('/').filter(Boolean);
@@ -379,6 +381,7 @@ class ReferencesMetastore {
     /** @type {string[]} */
     const files = [];
 
+    /** @param {string} dir */
     const walk = async (dir) => {
       const entries = await fs.readdir(dir, { withFileTypes: true });
       for (const ent of entries) {
@@ -409,6 +412,7 @@ class ReferencesMetastore {
 
     // NOTE: We intentionally do not use Delimiter='/' to avoid missing nested paths.
     while (true) {
+      /** @type {import('@aws-sdk/client-s3').ListObjectsV2CommandOutput} */
       const resp = await this.s3.s3.send(
         new ListObjectsV2Command({
           Bucket: bucket,

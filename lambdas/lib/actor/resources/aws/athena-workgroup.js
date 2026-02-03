@@ -1,7 +1,18 @@
-import Athena from '../../../athena/index.js';
 import BaseResource from '../base-resource.js';
+import BaseAWS from '../../../base.js';
 
-import { InvalidRequestException } from '@aws-sdk/client-athena';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
+import {
+  AthenaClient,
+  CreateWorkGroupCommand,
+  DeleteWorkGroupCommand,
+  GetWorkGroupCommand,
+  ListTagsForResourceCommand,
+  TagResourceCommand,
+  UntagResourceCommand,
+  UpdateWorkGroupCommand,
+  InvalidRequestException,
+} from '@aws-sdk/client-athena';
 
 /**
  * @typedef AthenaWorkgroupProperties
@@ -19,6 +30,76 @@ import { InvalidRequestException } from '@aws-sdk/client-athena';
  * @property {import('../reconcilable.js').default[]} [dependsOn] -
  */
 
+class AthenaService {
+  /**
+   * @param {import('@aws-sdk/client-athena').AthenaClientConfig} [options] -
+   */
+  constructor(options = {}) {
+    const credentials = fromNodeProviderChain();
+    this.client = new AthenaClient({
+      ...BaseAWS.config(),
+      credentials,
+      ...options,
+    });
+  }
+
+  /**
+   * @param {import('@aws-sdk/client-athena').ListTagsForResourceCommandInput} params -
+   * @returns {Promise<import('@aws-sdk/client-athena').ListTagsForResourceCommandOutput>} -
+   */
+  async listTagsForResource(params) {
+    return this.client.send(new ListTagsForResourceCommand(params));
+  }
+
+  /**
+   * @param {import('@aws-sdk/client-athena').UntagResourceCommandInput} params -
+   * @returns {Promise<import('@aws-sdk/client-athena').UntagResourceCommandOutput>} -
+   */
+  async untagResource(params) {
+    return this.client.send(new UntagResourceCommand(params));
+  }
+
+  /**
+   * @param {import('@aws-sdk/client-athena').TagResourceCommandInput} params -
+   * @returns {Promise<import('@aws-sdk/client-athena').TagResourceCommandOutput>} -
+   */
+  async tagResource(params) {
+    return this.client.send(new TagResourceCommand(params));
+  }
+
+  /**
+   * @param {import('@aws-sdk/client-athena').GetWorkGroupCommandInput} params -
+   * @returns {Promise<import('@aws-sdk/client-athena').GetWorkGroupCommandOutput>} -
+   */
+  async getWorkGroup(params) {
+    return this.client.send(new GetWorkGroupCommand(params));
+  }
+
+  /**
+   * @param {import('@aws-sdk/client-athena').UpdateWorkGroupCommandInput} params -
+   * @returns {Promise<import('@aws-sdk/client-athena').UpdateWorkGroupCommandOutput>} -
+   */
+  async updateWorkGroup(params) {
+    return this.client.send(new UpdateWorkGroupCommand(params));
+  }
+
+  /**
+   * @param {import('@aws-sdk/client-athena').CreateWorkGroupCommandInput} params -
+   * @returns {Promise<import('@aws-sdk/client-athena').CreateWorkGroupCommandOutput>} -
+   */
+  async createWorkGroup(params) {
+    return this.client.send(new CreateWorkGroupCommand(params));
+  }
+
+  /**
+   * @param {import('@aws-sdk/client-athena').DeleteWorkGroupCommandInput} params -
+   * @returns {Promise<import('@aws-sdk/client-athena').DeleteWorkGroupCommandOutput>} -
+   */
+  async deleteWorkGroup(params) {
+    return this.client.send(new DeleteWorkGroupCommand(params));
+  }
+}
+
 class AthenaWorkGroup extends BaseResource {
   /**
    * @param {AthenaWorkgroupOptions} options -
@@ -31,24 +112,24 @@ class AthenaWorkGroup extends BaseResource {
       properties,
       dependsOn,
     });
-    this.athena = new Athena({});
+    this.athena = new AthenaService();
   }
 
   async _reconcileTags() {
     const { Tags } = await this.athena.listTagsForResource({
       ResourceARN: this.get('arn'),
     });
+    /** @type {import('@aws-sdk/client-athena').Tag[]} */
     const current_tags = Tags || [];
-    const tagsToAdd = this.get('tags', []).filter(
-      (/** @type {import('@aws-sdk/client-athena').Tag} */ tag) =>
+    /** @type {import('@aws-sdk/client-athena').Tag[]} */
+    const desiredTags = this.get('tags', []);
+    const tagsToAdd = desiredTags.filter(
+      (tag) =>
         !current_tags.find((t) => t.Key === tag.Key && t.Value === tag.Value),
     );
     const tagsToRemove = current_tags.filter(
       (tag) =>
-        !this.get('tags', []).find(
-          (/** @type  {import('@aws-sdk/client-athena').Tag} */ t) =>
-            t.Key === tag.Key && t.Value === tag.Value,
-        ),
+        !desiredTags.find((t) => t.Key === tag.Key && t.Value === tag.Value),
     );
     if (tagsToRemove.length > 0)
       await this.athena.untagResource({

@@ -124,9 +124,7 @@ const normalizeRecord = (record) => {
 
 /**
  * Factory: Operations table client.
- * @param {object} params -
- * @param {DBClient} params.db -
- * @param {string} [params.tableName] -
+ * @param {{ db?: DBClient, tableName?: string }} [params] -
  * @returns {OperationsTableClient} -
  */
 export function createOperationsTable({
@@ -134,13 +132,15 @@ export function createOperationsTable({
   tableName = OPERATIONS_TABLE,
 } = {}) {
   if (!db) throw new Error('createOperationsTable requires a db client');
+  /** @type {DBClient} */
+  const dbClient = db;
 
   /**
    * @param {Resource} resource -
    * @returns {Promise<void>} -
    */
   async function putResource(resource) {
-    await db.put({
+    await dbClient.put({
       tableName,
       keyName: KEY_NAME,
       sortKeyName: SORT_KEY_NAME,
@@ -154,7 +154,7 @@ export function createOperationsTable({
    */
   async function getResource(resource_id) {
     try {
-      const item = await db.get({
+      const item = await dbClient.get({
         tableName,
         keyName: KEY_NAME,
         keyValue: resource_id,
@@ -163,7 +163,13 @@ export function createOperationsTable({
         consistentRead: true,
       });
 
-      return item ? Resource.fromRecord(item) : null;
+      return item
+        ? Resource.fromRecord(
+            /** @type {import('../../graph/typedefs.js').ResourceRecord} */ (
+              item
+            ),
+          )
+        : null;
     } catch (error) {
       if (isResourceNotFound(error)) return null;
       throw error;
@@ -177,7 +183,7 @@ export function createOperationsTable({
   async function deleteResource(resource) {
     try {
       const items =
-        (await db.query({
+        (await dbClient.query({
           tableName,
           consistentRead: true,
           keyConditions: [
@@ -189,7 +195,7 @@ export function createOperationsTable({
       if (!items.length) return;
 
       for (const batch of chunk(items, 25)) {
-        await db.batchWrite({
+        await dbClient.batchWrite({
           tableName,
           deleteRequests: batch.map((item) => ({
             keyName: KEY_NAME,
@@ -213,7 +219,7 @@ export function createOperationsTable({
     const records = operation.toRecords().map(normalizeRecord);
 
     for (const batch of chunk(records, 25)) {
-      await db.batchWrite({
+      await dbClient.batchWrite({
         tableName,
         putRequests: batch.map((record) => ({
           keyName: KEY_NAME,
@@ -230,7 +236,7 @@ export function createOperationsTable({
    * @returns {Promise<Operation | null>} -
    */
   async function getOperation(resource_id, operation_id) {
-    const item = await db.get({
+    const item = await dbClient.get({
       tableName,
       keyName: KEY_NAME,
       keyValue: resource_id,
@@ -248,7 +254,7 @@ export function createOperationsTable({
    */
   async function deleteOperation(operation) {
     const items =
-      (await db.query({
+      (await dbClient.query({
         tableName,
         consistentRead: true,
         keyConditions: [
@@ -260,7 +266,7 @@ export function createOperationsTable({
     if (!items.length) return;
 
     for (const batch of chunk(items, 25)) {
-      await db.batchWrite({
+      await dbClient.batchWrite({
         tableName,
         deleteRequests: batch.map((item) => ({
           keyName: KEY_NAME,
@@ -278,7 +284,7 @@ export function createOperationsTable({
    */
   async function getOperations(resource_id) {
     const items =
-      (await db.query({
+      (await dbClient.query({
         tableName,
         consistentRead: true,
         keyConditions: [
@@ -299,7 +305,7 @@ export function createOperationsTable({
   async function getActions(operation) {
     const prefix = `${operation.resource_id}#${operation.id}#`;
     const items =
-      (await db.query({
+      (await dbClient.query({
         tableName,
         consistentRead: true,
         keyConditions: [
@@ -320,7 +326,7 @@ export function createOperationsTable({
    * @returns {Promise<Action | null>} -
    */
   async function getAction(resource_id, operation_id, action_id) {
-    const item = await db.get({
+    const item = await dbClient.get({
       tableName,
       keyName: KEY_NAME,
       keyValue: resource_id,
@@ -340,7 +346,7 @@ export function createOperationsTable({
     const records = action.toRecords().map(normalizeRecord);
 
     for (const batch of chunk(records, 25)) {
-      await db.batchWrite({
+      await dbClient.batchWrite({
         tableName,
         putRequests: batch.map((record) => ({
           keyName: KEY_NAME,
@@ -365,7 +371,7 @@ export function createOperationsTable({
   ) {
     const key = `${action.resource_id}#${action.operation_id}#${action.id}`;
 
-    const current = await db.get({
+    const current = await dbClient.get({
       tableName: overrideTableName,
       keyName: KEY_NAME,
       keyValue: action.resource_id,
@@ -380,7 +386,7 @@ export function createOperationsTable({
     if (storedStatus !== action.status) return false;
 
     try {
-      await db.update({
+      await dbClient.update({
         tableName: overrideTableName,
         keyName: KEY_NAME,
         keyValue: action.resource_id,
@@ -398,7 +404,7 @@ export function createOperationsTable({
       throw error;
     }
 
-    const after = await db.get({
+    const after = await dbClient.get({
       tableName: overrideTableName,
       keyName: KEY_NAME,
       keyValue: action.resource_id,
@@ -416,7 +422,7 @@ export function createOperationsTable({
    * @returns {Promise<void>} -
    */
   async function putQuery(query) {
-    await db.put({
+    await dbClient.put({
       tableName,
       keyName: KEY_NAME,
       sortKeyName: SORT_KEY_NAME,
@@ -432,7 +438,7 @@ export function createOperationsTable({
     const records = queries.map((q) => q.toRecord());
 
     for (const batch of chunk(records, 25)) {
-      await db.batchWrite({
+      await dbClient.batchWrite({
         tableName,
         putRequests: batch.map((record) => ({
           keyName: KEY_NAME,
@@ -451,7 +457,7 @@ export function createOperationsTable({
    * @returns {Promise<Query | null>} -
    */
   async function getQuery(resource_id, operation_id, action_id, query_id) {
-    const item = await db.get({
+    const item = await dbClient.get({
       tableName,
       keyName: KEY_NAME,
       keyValue: resource_id,
@@ -473,7 +479,7 @@ export function createOperationsTable({
     const prefix = `${resource_id}#${operation_id}#${action_id}#`;
 
     const items =
-      (await db.query({
+      (await dbClient.query({
         tableName,
         consistentRead: true,
         keyConditions: [
@@ -509,7 +515,7 @@ export function createOperationsTable({
       const prefix = `${operation.resource_id}#${operation.id}#${prerequisiteActionId}`;
 
       const items =
-        (await db.query({
+        (await dbClient.query({
           tableName,
           consistentRead: true,
           keyConditions: [
@@ -552,7 +558,7 @@ export function createOperationsTable({
     const prefix = `${resource_id}#${operation_id}`;
 
     const items =
-      (await db.query({
+      (await dbClient.query({
         tableName,
         consistentRead: true,
         keyConditions: [
@@ -565,6 +571,7 @@ export function createOperationsTable({
       .filter((i) => i?.data?.record_type !== Resource.RecordType)
       .sort((a, b) => a.sort_key.localeCompare(b.sort_key));
 
+    /** @type {{ operations: Operation[]; actions: Action[]; queries: Query[] }} */
     const records = {
       operations: [],
       actions: [],

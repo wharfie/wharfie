@@ -69,8 +69,11 @@ class DuckDBQueryEngine {
    */
   async _getConnection() {
     if (!this._connectionPromise) {
-      this._instancePromise = DuckDBInstance.create(this.databasePath);
-      this._connectionPromise = this._instancePromise.then((i) => i.connect());
+      const instancePromise = DuckDBInstance.create(this.databasePath);
+      this._instancePromise = instancePromise;
+      this._connectionPromise = instancePromise.then((/** @type {any} */ i) =>
+        i.connect(),
+      );
       if (this.enableS3) {
         // Best effort: configure S3 before the first query runs.
         const conn = await this._connectionPromise;
