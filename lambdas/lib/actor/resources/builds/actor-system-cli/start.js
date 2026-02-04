@@ -5,6 +5,10 @@ import NodeAgent from '../../../runtime/services/node-agent.js';
 import { loadResourcesSpec } from './control_cmds/state_cmds/util/resources.js';
 import { getSelfSpawnCommand } from './control_cmds/state_cmds/util/spawn-self.js';
 
+/**
+ * @typedef {'SIGINT'|'SIGTERM'} Signal
+ */
+
 const startCmd = new Command('start')
   .description(
     'Start the node agent: supervises lambda/db/queue services and exposes a control-plane health endpoint',
@@ -34,16 +38,29 @@ const startCmd = new Command('start')
   .option(
     '--poll-queue-url <queueUrl>',
     'Queue URL to poll for lambda invocations (repeatable)',
+    /**
+     * @param {string} v - v.
+     * @param {string[]} prev - prev.
+     * @returns {string[]} - Result.
+     */
     (v, prev) => {
       const arr = Array.isArray(prev) ? prev : [];
-      arr.push(String(v));
-      return arr;
+      return [...arr, String(v)];
     },
-    [],
+    /** @type {string[]} */ ([]),
   )
   .action(async (opts) => {
     const nodeId = randomUUID();
-    const role = String(opts.role || 'all');
+    const roleRaw = String(opts.role || 'all');
+    /** @type {'all'|'leader'|'worker'} */
+    let role = 'all';
+    if (roleRaw === 'all' || roleRaw === 'leader' || roleRaw === 'worker') {
+      role = roleRaw;
+    } else {
+      throw new Error(
+        `Invalid --role: ${roleRaw} (expected all|leader|worker)`,
+      );
+    }
 
     const resourcesSpec = loadResourcesSpec(opts);
 
@@ -72,6 +89,9 @@ const startCmd = new Command('start')
 
     await agent.start();
 
+    /**
+     * @param {Signal} signal - signal.
+     */
     const shutdown = async (signal) => {
       await agent.stop(signal);
     };

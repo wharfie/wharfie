@@ -196,6 +196,7 @@
 
 /**
  * @typedef S3Location
+ * @property {string} uri - S3 URI
  * @property {string} bucket - S3 bucket name
  * @property {string} prefix - S3 prefix
  * @property {string} arn - S3 arn

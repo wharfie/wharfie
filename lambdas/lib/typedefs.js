@@ -15,7 +15,7 @@
 
 /**
  * @typedef {Object} Partition
- * @property {Record<string, string>} partitionValues - partitionValues.
+ * @property {Record<string, string | number>} partitionValues - partitionValues.
  * @property {string} location - location.
  */
 

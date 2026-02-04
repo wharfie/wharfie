@@ -135,18 +135,21 @@ function normalizeSpec(spec, kind) {
   return { instance: spec };
 }
 
+/** @type {Record<string, (options?: any) => import('../../db/base.js').DBClient>} */
 const DB_FACTORIES = {
   vanilla: createVanillaDB,
   dynamodb: createDynamoDB,
   lmdb: createLmdbDB,
 };
 
+/** @type {Record<string, (options?: any) => import('../../queue/base.js').QueueClient>} */
 const QUEUE_FACTORIES = {
   vanilla: createVanillaQueue,
   sqs: createSqsQueue,
   lmdb: createLmdbQueue,
 };
 
+/** @type {Record<string, (options?: any) => import('../../object-storage/base.js').ObjectStorageClient>} */
 const OBJECT_STORAGE_FACTORIES = {
   vanilla: createVanillaObjectStorage,
   s3: createS3ObjectStorage,

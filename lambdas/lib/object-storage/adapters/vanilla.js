@@ -91,6 +91,24 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
+   * @param {string | undefined} Bucket - Bucket.
+   * @returns {string} - Result.
+   */
+  function requireBucket(Bucket) {
+    if (!Bucket) throw new Error('Bucket is required');
+    return Bucket;
+  }
+
+  /**
+   * @param {string | undefined} Key - Key.
+   * @returns {string} - Result.
+   */
+  function requireKey(Key) {
+    if (!Key) throw new Error('Key is required');
+    return Key;
+  }
+
+  /**
    * Prevent path traversal via keys like "../../etc/passwd".
    * @param {string} base - base.
    * @param {string} candidate - candidate.
@@ -193,7 +211,8 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<VanillaBucketMeta>} - Result.
    */
   async function readBucketMeta(Bucket) {
-    if (metaCache.has(Bucket)) return metaCache.get(Bucket);
+    const cached = metaCache.get(Bucket);
+    if (cached) return cached;
 
     const metaFile = bucketMetaPath(Bucket);
     /** @type {VanillaBucketMeta} */
@@ -254,6 +273,7 @@ export default function createVanillaObjectStorage(options = {}) {
      * @returns {Promise<void>} - Result.
      */
     async function walk(dir) {
+      /** @type {import('node:fs').Dirent[]} */
       let entries = [];
       try {
         entries = await fsp.readdir(dir, { withFileTypes: true });
@@ -285,12 +305,13 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<any>} - Result.
    */
   async function listObjectsV2Internal(params) {
-    await assertBucketExists(params.Bucket);
+    const bucket = requireBucket(params.Bucket);
+    await assertBucketExists(bucket);
 
     const Prefix = params.Prefix || '';
     const Delimiter = params.Delimiter;
 
-    const keys = await listAllKeys(params.Bucket);
+    const keys = await listAllKeys(bucket);
     const matching = keys.filter((k) => k.startsWith(Prefix));
 
     if (Delimiter) {
@@ -321,7 +342,7 @@ export default function createVanillaObjectStorage(options = {}) {
 
     const contents = [];
     for (const k of matching) {
-      const p = objectFilePath(params.Bucket, k);
+      const p = objectFilePath(bucket, k);
       const st = await fsp.stat(p);
       contents.push({
         Key: k,
@@ -333,7 +354,7 @@ export default function createVanillaObjectStorage(options = {}) {
     contents.sort((a, b) => a.Key.localeCompare(b.Key));
 
     return {
-      Bucket: params.Bucket,
+      Bucket: bucket,
       Contents: contents,
     };
   }
@@ -344,22 +365,22 @@ export default function createVanillaObjectStorage(options = {}) {
    */
   async function createBucket(params) {
     await ensureRoot();
-    if (!params?.Bucket) throw new Error('Bucket is required');
+    const bucket = requireBucket(params?.Bucket);
 
-    if (await bucketExists(params.Bucket)) {
-      const err = new Error(`BucketAlreadyExists: ${params.Bucket}`);
+    if (await bucketExists(bucket)) {
+      const err = new Error(`BucketAlreadyExists: ${bucket}`);
       err.name = 'BucketAlreadyExists';
       throw err;
     }
 
-    await fsp.mkdir(bucketObjectsDir(params.Bucket), { recursive: true });
+    await fsp.mkdir(bucketObjectsDir(bucket), { recursive: true });
 
     const region =
       params?.CreateBucketConfiguration?.LocationConstraint ||
       options.region ||
       'us-east-1';
 
-    await writeBucketMeta(params.Bucket, {
+    await writeBucketMeta(bucket, {
       region,
       tags: [],
       notificationConfiguration: undefined,
@@ -375,19 +396,20 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<import("@aws-sdk/client-s3").DeleteBucketCommandOutput>} - Result.
    */
   async function deleteBucket(params) {
-    await assertBucketExists(params.Bucket);
+    const bucket = requireBucket(params?.Bucket);
+    await assertBucketExists(bucket);
 
-    const keys = await listAllKeys(params.Bucket);
+    const keys = await listAllKeys(bucket);
     if (keys.length > 0) {
       const err = new Error(
-        `BucketNotEmpty: ${params.Bucket} (${keys.length} objects)`,
+        `BucketNotEmpty: ${bucket} (${keys.length} objects)`,
       );
       err.name = 'BucketNotEmpty';
       throw err;
     }
 
-    await fsp.rm(bucketDir(params.Bucket), { recursive: true, force: true });
-    metaCache.delete(params.Bucket);
+    await fsp.rm(bucketDir(bucket), { recursive: true, force: true });
+    metaCache.delete(bucket);
     return /** @type {any} */ ({});
   }
 
@@ -397,6 +419,7 @@ export default function createVanillaObjectStorage(options = {}) {
    */
   async function listBuckets(_params) {
     await ensureRoot();
+    /** @type {import('node:fs').Dirent[]} */
     let entries = [];
     try {
       entries = await fsp.readdir(bucketsDir, { withFileTypes: true });
@@ -429,11 +452,12 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<import("@aws-sdk/client-s3").PutObjectCommandOutput>} - Result.
    */
   async function putObject(params) {
-    await assertBucketExists(params.Bucket);
-    const key = normalizeKey(params.Key);
+    const bucket = requireBucket(params?.Bucket);
+    const key = normalizeKey(requireKey(params?.Key));
+    await assertBucketExists(bucket);
 
     const body = await bodyToBuffer(params.Body);
-    await writeFileAtomic(objectFilePath(params.Bucket, key), body);
+    await writeFileAtomic(objectFilePath(bucket, key), body);
 
     return /** @type {any} */ ({});
   }
@@ -443,15 +467,16 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<string>} - Result.
    */
   async function getObject(params) {
-    await assertBucketExists(params.Bucket);
-    const key = normalizeKey(params.Key);
+    const bucket = requireBucket(params?.Bucket);
+    const key = normalizeKey(requireKey(params?.Key));
+    await assertBucketExists(bucket);
 
-    const p = objectFilePath(params.Bucket, key);
+    const p = objectFilePath(bucket, key);
     try {
       const buf = await fsp.readFile(p);
       return buf.toString('utf8');
     } catch {
-      const err = new Error(`NoSuchKey: ${params.Bucket}/${key}`);
+      const err = new Error(`NoSuchKey: ${bucket}/${key}`);
       err.name = 'NoSuchKey';
       throw err;
     }
@@ -462,15 +487,16 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<import("@aws-sdk/client-s3").HeadObjectCommandOutput>} - Result.
    */
   async function headObject(params) {
-    await assertBucketExists(params.Bucket);
-    const key = normalizeKey(params.Key);
+    const bucket = requireBucket(params?.Bucket);
+    const key = normalizeKey(requireKey(params?.Key));
+    await assertBucketExists(bucket);
 
-    const p = objectFilePath(params.Bucket, key);
+    const p = objectFilePath(bucket, key);
     try {
       const st = await fsp.stat(p);
       return /** @type {any} */ ({ ContentLength: st.size });
     } catch {
-      const err = new Error(`NotFound: ${params.Bucket}/${key}`);
+      const err = new Error(`NotFound: ${bucket}/${key}`);
       err.name = 'NotFound';
       throw err;
     }
@@ -481,13 +507,15 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<void>} - Result.
    */
   async function deleteObjects(params) {
-    await assertBucketExists(params.Bucket);
+    const bucket = requireBucket(params?.Bucket);
+    await assertBucketExists(bucket);
 
     const objs = params?.Delete?.Objects || [];
     await Promise.all(
       objs.map(async (o) => {
+        if (!o || !o.Key) return;
         const key = normalizeKey(o.Key);
-        const p = objectFilePath(params.Bucket, key);
+        const p = objectFilePath(bucket, key);
         try {
           await fsp.rm(p, { force: true });
         } catch {
@@ -533,17 +561,19 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<void>} - Result.
    */
   async function copyObjectWithMultiPartFallback(params) {
-    await assertBucketExists(params.Bucket);
+    const bucket = requireBucket(params?.Bucket);
+    const key = normalizeKey(requireKey(params?.Key));
+    const copySource = params?.CopySource;
+    if (!copySource) throw new Error('CopySource is required');
+    await assertBucketExists(bucket);
 
-    const { Bucket: srcBucket, Key: srcKey } = parseCopySource(
-      params.CopySource,
-    );
+    const { Bucket: srcBucket, Key: srcKey } = parseCopySource(copySource);
     await assertBucketExists(srcBucket);
 
     const srcPath = objectFilePath(srcBucket, srcKey);
     const body = await fsp.readFile(srcPath);
 
-    await writeFileAtomic(objectFilePath(params.Bucket, params.Key), body);
+    await writeFileAtomic(objectFilePath(bucket, key), body);
   }
 
   /**
@@ -570,13 +600,15 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<void>} - Result.
    */
   async function copyPath(SourceParams, DestinationBucket, DestinationPrefix) {
+    const sourceBucket = requireBucket(SourceParams.Bucket);
     const response = await listObjectsV2Internal(SourceParams);
     if (!response.Contents) throw new Error('No Contents returned');
 
     while (response.Contents.length > 0) {
       const object = response.Contents.splice(0, 1)[0];
+      if (!object || !object.Key) continue;
       await copyObjectWithMultiPartFallback({
-        CopySource: `${SourceParams.Bucket}/${object.Key}`,
+        CopySource: `${sourceBucket}/${object.Key}`,
         Bucket: DestinationBucket,
         Key: `${DestinationPrefix}${object.Key}`,
       });
@@ -588,14 +620,19 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<void>} - Result.
    */
   async function deletePath(params) {
+    const bucket = requireBucket(params?.Bucket);
     const response = await listObjectsV2Internal(params);
     if (!response.Contents) throw new Error('No Contents returned');
 
-    const objectsToDelete = response.Contents.map((o) => ({ Key: o.Key }));
+    /** @type {import("@aws-sdk/client-s3")._Object[]} */
+    const contents = response.Contents || [];
+    const objectsToDelete = contents
+      .filter((o) => o && o.Key)
+      .map((o) => ({ Key: /** @type {string} */ (o.Key) }));
     if (objectsToDelete.length === 0) return;
 
     await deleteObjects({
-      Bucket: params.Bucket,
+      Bucket: bucket,
       Delete: {
         Objects: objectsToDelete,
       },
@@ -608,17 +645,22 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<void>} - Result.
    */
   async function expireObjects(params, expirationDate = new Date()) {
+    const bucket = requireBucket(params?.Bucket);
     const response = await listObjectsV2Internal(params);
     if (!response.Contents) throw new Error('No Contents returned');
 
-    const objectsToDelete = response.Contents.filter(
-      (o) => o.LastModified < expirationDate,
-    ).map((o) => ({ Key: o.Key }));
+    /** @type {import("@aws-sdk/client-s3")._Object[]} */
+    const contents = response.Contents || [];
+    const objectsToDelete = contents
+      .filter(
+        (o) => o && o.Key && o.LastModified && o.LastModified < expirationDate,
+      )
+      .map((o) => ({ Key: /** @type {string} */ (o.Key) }));
 
     if (objectsToDelete.length === 0) return;
 
     await deleteObjects({
-      Bucket: params.Bucket,
+      Bucket: bucket,
       Delete: {
         Objects: objectsToDelete,
       },
@@ -630,13 +672,19 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<string[]>} - Result.
    */
   async function getCommonPrefixes(params) {
+    const bucket = requireBucket(params?.Bucket);
     const response = await listObjectsV2Internal({
-      Bucket: params.Bucket,
+      Bucket: bucket,
       Prefix: params.Prefix,
       Delimiter: '/',
     });
 
-    const prefixes = (response.CommonPrefixes || []).map((p) => p.Prefix);
+    /** @type {Array<{ Prefix?: string }>} */
+    const commonPrefixes = response.CommonPrefixes || [];
+    const prefixes = commonPrefixes.reduce((acc, p) => {
+      if (typeof p.Prefix === 'string') acc.push(p.Prefix);
+      return acc;
+    }, /** @type {string[]} */ ([]));
     prefixes.sort((a, b) => a.localeCompare(b));
     return prefixes;
   }
@@ -656,6 +704,7 @@ export default function createVanillaObjectStorage(options = {}) {
 
     await Promise.all(
       prefixes.map(async (prefix) => {
+        /** @type {Record<string, string>} */
         const partitionValues = {};
         partitionValues[partitionKeys[0].name] = prefix
           .replace(Prefix, '')
@@ -698,12 +747,14 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<import("@aws-sdk/client-s3").CreateMultipartUploadCommandOutput>} - Result.
    */
   async function createMultipartUpload(params) {
-    await assertBucketExists(params.Bucket);
+    const bucket = requireBucket(params?.Bucket);
+    const key = normalizeKey(requireKey(params?.Key));
+    await assertBucketExists(bucket);
 
     const uploadId = createId();
     multipartUploads.set(uploadId, {
-      Bucket: params.Bucket,
-      Key: normalizeKey(params.Key),
+      Bucket: bucket,
+      Key: key,
       Parts: [],
     });
 
@@ -715,8 +766,10 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCommandOutput>} - Result.
    */
   async function uploadPart(params) {
-    const upload = multipartUploads.get(params.UploadId);
-    if (!upload) throw new Error(`InvalidUploadId: ${params.UploadId}`);
+    const uploadId = params?.UploadId;
+    if (!uploadId) throw new Error('UploadId is required');
+    const upload = multipartUploads.get(uploadId);
+    if (!upload) throw new Error(`InvalidUploadId: ${uploadId}`);
 
     upload.Parts.push({
       PartNumber: params.PartNumber,
@@ -731,8 +784,10 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCopyCommandOutput>} - Result.
    */
   async function uploadPartCopy(params) {
-    const upload = multipartUploads.get(params.UploadId);
-    if (!upload) throw new Error(`InvalidUploadId: ${params.UploadId}`);
+    const uploadId = params?.UploadId;
+    if (!uploadId) throw new Error('UploadId is required');
+    const upload = multipartUploads.get(uploadId);
+    if (!upload) throw new Error(`InvalidUploadId: ${uploadId}`);
 
     upload.Parts.push({
       PartNumber: params.PartNumber,
@@ -747,8 +802,10 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<import("@aws-sdk/client-s3").CompleteMultipartUploadCommandOutput>} - Result.
    */
   async function completeMultipartUpload(params) {
-    const upload = multipartUploads.get(params.UploadId);
-    if (!upload) throw new Error(`InvalidUploadId: ${params.UploadId}`);
+    const uploadId = params?.UploadId;
+    if (!uploadId) throw new Error('UploadId is required');
+    const upload = multipartUploads.get(uploadId);
+    if (!upload) throw new Error(`InvalidUploadId: ${uploadId}`);
 
     /** @type {Array<{ PartNumber: number, Body?: Buffer, CopySource?: string }>} */
     const parts = upload.Parts.sort((a, b) => a.PartNumber - b.PartNumber);
@@ -779,7 +836,7 @@ export default function createVanillaObjectStorage(options = {}) {
       Body: Buffer.concat(buffers),
     });
 
-    multipartUploads.delete(params.UploadId);
+    multipartUploads.delete(uploadId);
     return /** @type {any} */ ({});
   }
 
@@ -792,19 +849,20 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<void>} - Result.
    */
   async function createAppendableOrAppendToObject(params, data) {
-    await assertBucketExists(params.Bucket);
+    const bucket = requireBucket(params?.Bucket);
+    const key = normalizeKey(requireKey(params?.Key));
+    await assertBucketExists(bucket);
 
-    const key = normalizeKey(params.Key);
     let existing = '';
     try {
-      existing = await getObject({ Bucket: params.Bucket, Key: key });
+      existing = await getObject({ Bucket: bucket, Key: key });
     } catch {
       existing = '';
     }
 
     const next =
       existing + (Buffer.isBuffer(data) ? data.toString('utf8') : String(data));
-    await putObject({ Bucket: params.Bucket, Key: key, Body: next });
+    await putObject({ Bucket: bucket, Key: key, Body: next });
   }
 
   /**
@@ -812,10 +870,11 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<import("@aws-sdk/client-s3").PutBucketNotificationConfigurationCommandOutput>} - Result.
    */
   async function putBucketNotificationConfiguration(params) {
-    await assertBucketExists(params.Bucket);
-    const meta = await readBucketMeta(params.Bucket);
+    const bucket = requireBucket(params?.Bucket);
+    await assertBucketExists(bucket);
+    const meta = await readBucketMeta(bucket);
     meta.notificationConfiguration = params.NotificationConfiguration;
-    await writeBucketMeta(params.Bucket, meta);
+    await writeBucketMeta(bucket, meta);
     return /** @type {any} */ ({});
   }
 
@@ -824,8 +883,9 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<import("@aws-sdk/client-s3").GetBucketNotificationConfigurationCommandOutput>} - Result.
    */
   async function getBucketNotificationConfiguration(params) {
-    await assertBucketExists(params.Bucket);
-    const meta = await readBucketMeta(params.Bucket);
+    const bucket = requireBucket(params?.Bucket);
+    await assertBucketExists(bucket);
+    const meta = await readBucketMeta(bucket);
     const cfg = meta.notificationConfiguration || {};
     return /** @type {any} */ ({
       ...(cfg || {}),
@@ -840,10 +900,11 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<import("@aws-sdk/client-s3").PutBucketLifecycleConfigurationCommandOutput>} - Result.
    */
   async function putBucketLifecycleConfigutation(params) {
-    await assertBucketExists(params.Bucket);
-    const meta = await readBucketMeta(params.Bucket);
+    const bucket = requireBucket(params?.Bucket);
+    await assertBucketExists(bucket);
+    const meta = await readBucketMeta(bucket);
     meta.lifecycleConfiguration = params.LifecycleConfiguration;
-    await writeBucketMeta(params.Bucket, meta);
+    await writeBucketMeta(bucket, meta);
     return /** @type {any} */ ({});
   }
 
@@ -854,8 +915,9 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<import("@aws-sdk/client-s3").GetBucketLifecycleConfigurationCommandOutput>} - Result.
    */
   async function getBucketLifecycleConfigutation(params) {
-    await assertBucketExists(params.Bucket);
-    const meta = await readBucketMeta(params.Bucket);
+    const bucket = requireBucket(params?.Bucket);
+    await assertBucketExists(bucket);
+    const meta = await readBucketMeta(bucket);
     return /** @type {any} */ ({
       Rules: meta.lifecycleConfiguration?.Rules || [],
     });
@@ -876,8 +938,9 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<import("@aws-sdk/client-s3").GetBucketLocationCommandOutput>} - Result.
    */
   async function getBucketLocation(params, _region) {
-    await assertBucketExists(params.Bucket);
-    const meta = await readBucketMeta(params.Bucket);
+    const bucket = requireBucket(params?.Bucket);
+    await assertBucketExists(bucket);
+    const meta = await readBucketMeta(bucket);
     return /** @type {any} */ ({
       LocationConstraint: meta.region || 'us-east-1',
     });
@@ -901,7 +964,9 @@ export default function createVanillaObjectStorage(options = {}) {
   async function getPrefixByteSize(params, _region, byteSize = 0) {
     const response = await listObjectsV2Internal(params);
     if (!response.Contents) throw new Error('No Contents returned');
-    response.Contents.forEach((obj) => {
+    /** @type {import("@aws-sdk/client-s3")._Object[]} */
+    const contents = response.Contents || [];
+    contents.forEach((obj) => {
       byteSize += Number(obj.Size || 0);
     });
     return byteSize;
@@ -912,10 +977,18 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<import("@aws-sdk/client-s3").PutBucketTaggingCommandOutput>} - Result.
    */
   async function putBucketTagging(params) {
-    await assertBucketExists(params.Bucket);
-    const meta = await readBucketMeta(params.Bucket);
-    meta.tags = params.Tagging?.TagSet || [];
-    await writeBucketMeta(params.Bucket, meta);
+    const bucket = requireBucket(params?.Bucket);
+    await assertBucketExists(bucket);
+    const meta = await readBucketMeta(bucket);
+    /** @type {Array<{ Key: string, Value: string }>} */
+    const tags = [];
+    for (const t of params.Tagging?.TagSet || []) {
+      if (t && typeof t.Key === 'string' && typeof t.Value === 'string') {
+        tags.push({ Key: t.Key, Value: t.Value });
+      }
+    }
+    meta.tags = tags;
+    await writeBucketMeta(bucket, meta);
     return /** @type {any} */ ({});
   }
 
@@ -924,8 +997,9 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<import("@aws-sdk/client-s3").GetBucketTaggingCommandOutput>} - Result.
    */
   async function getBucketTagging(params) {
-    await assertBucketExists(params.Bucket);
-    const meta = await readBucketMeta(params.Bucket);
+    const bucket = requireBucket(params?.Bucket);
+    await assertBucketExists(bucket);
+    const meta = await readBucketMeta(bucket);
     return /** @type {any} */ ({ TagSet: meta.tags || [] });
   }
 
@@ -934,10 +1008,11 @@ export default function createVanillaObjectStorage(options = {}) {
    * @returns {Promise<import("@aws-sdk/client-s3").DeleteBucketTaggingCommandOutput>} - Result.
    */
   async function deleteBucketTagging(params) {
-    await assertBucketExists(params.Bucket);
-    const meta = await readBucketMeta(params.Bucket);
+    const bucket = requireBucket(params?.Bucket);
+    await assertBucketExists(bucket);
+    const meta = await readBucketMeta(bucket);
     meta.tags = [];
-    await writeBucketMeta(params.Bucket, meta);
+    await writeBucketMeta(bucket, meta);
     return /** @type {any} */ ({});
   }
 

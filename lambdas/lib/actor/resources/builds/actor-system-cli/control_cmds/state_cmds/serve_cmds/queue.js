@@ -2,6 +2,10 @@ import { Command } from 'commander';
 import { loadResourcesSpec } from '../util/resources.js';
 import { startQueueService } from '../../../../../../runtime/services/queue-service.js';
 
+/**
+ * @typedef {'SIGINT'|'SIGTERM'} Signal
+ */
+
 const queueCmd = new Command('queue')
   .description('Serve the Queue resource over gRPC')
   .option(
@@ -32,7 +36,7 @@ const queueCmd = new Command('queue')
     const keepAlive = setInterval(() => {}, 60_000);
 
     /**
-     * @param {import('node:process').Signals} signal - signal.
+     * @param {Signal} signal - signal.
      */
     const shutdown = async (signal) => {
       console.log(`[queue-service] shutting down (${signal})`);
@@ -41,8 +45,11 @@ const queueCmd = new Command('queue')
     };
 
     await new Promise((resolve) => {
+      /**
+       * @param {Signal} signal - signal.
+       */
       const onSignal = (signal) => {
-        shutdown(signal).finally(resolve);
+        shutdown(signal).finally(() => resolve(undefined));
       };
 
       process.on('SIGINT', () => onSignal('SIGINT'));

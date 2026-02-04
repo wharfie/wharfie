@@ -119,7 +119,7 @@ export default class NodeAgent {
     this.queueAddress = normalizeAddress(options.queueAddressOverride);
 
     this._stopping = false;
-    /** @type {null | (() => void)} */
+    /** @type {null | ((value?: any) => void)} */
     this._resolveStop = null;
     this._stopPromise = new Promise((resolve) => {
       this._resolveStop = resolve;

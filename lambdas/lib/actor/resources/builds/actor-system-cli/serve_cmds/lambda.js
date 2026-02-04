@@ -6,6 +6,10 @@ import { startLambdaService } from '../../../../runtime/services/lambda-service.
 
 import { loadResourcesSpec } from '../control_cmds/state_cmds/util/resources.js';
 
+/**
+ * @typedef {'SIGINT'|'SIGTERM'} Signal
+ */
+
 const lambdaCmd = new Command('lambda')
   .description('Serve the Lambda execution plane over gRPC')
   .option(
@@ -20,12 +24,17 @@ const lambdaCmd = new Command('lambda')
   .option(
     '--poll-queue-url <queueUrl>',
     'Queue URL to poll for lambda invocations (repeatable)',
+    /**
+     * @param {string} v - v.
+     * @param {string[]} prev - prev.
+     * @returns {string[]} - Result.
+     */
     (v, prev) => {
       const arr = Array.isArray(prev) ? prev : [];
       arr.push(String(v));
       return arr;
     },
-    [],
+    /** @type {string[]} */ ([]),
   )
   .option(
     '--poll-wait-seconds <n>',
@@ -111,7 +120,7 @@ const lambdaCmd = new Command('lambda')
     const keepAlive = setInterval(() => {}, 60_000);
 
     /**
-     * @param {import('node:process').Signals} signal - signal.
+     * @param {Signal} signal - signal.
      */
     const shutdown = async (signal) => {
       console.log(`[lambda-service] shutting down (${signal})`);
@@ -127,8 +136,11 @@ const lambdaCmd = new Command('lambda')
     };
 
     await new Promise((resolve) => {
+      /**
+       * @param {Signal} signal - signal.
+       */
       const onSignal = (signal) => {
-        shutdown(signal).finally(resolve);
+        shutdown(signal).finally(() => resolve(undefined));
       };
 
       process.on('SIGINT', () => onSignal('SIGINT'));

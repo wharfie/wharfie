@@ -2,6 +2,10 @@ import { Command } from 'commander';
 import { loadResourcesSpec } from '../control_cmds/state_cmds/util/resources.js';
 import { startDbService } from '../../../../runtime/services/db-service.js';
 
+/**
+ * @typedef {'SIGINT'|'SIGTERM'} Signal
+ */
+
 const dbCmd = new Command('db')
   .description('Serve the DB resource over gRPC')
   .option(
@@ -30,7 +34,7 @@ const dbCmd = new Command('db')
     const keepAlive = setInterval(() => {}, 60_000);
 
     /**
-     * @param {import('node:process').Signals} signal - signal.
+     * @param {Signal} signal - signal.
      */
     const shutdown = async (signal) => {
       console.log(`[db-service] shutting down (${signal})`);
@@ -39,8 +43,11 @@ const dbCmd = new Command('db')
     };
 
     await new Promise((resolve) => {
+      /**
+       * @param {Signal} signal - signal.
+       */
       const onSignal = (signal) => {
-        shutdown(signal).finally(resolve);
+        shutdown(signal).finally(() => resolve(undefined));
       };
 
       process.on('SIGINT', () => onSignal('SIGINT'));

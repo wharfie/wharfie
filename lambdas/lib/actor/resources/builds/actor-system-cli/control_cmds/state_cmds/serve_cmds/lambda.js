@@ -6,6 +6,10 @@ import { startLambdaService } from '../../../../../../runtime/services/lambda-se
 
 import { loadResourcesSpec } from '../util/resources.js';
 
+/**
+ * @typedef {'SIGINT'|'SIGTERM'} Signal
+ */
+
 const lambdaCmd = new Command('lambda')
   .description('Serve the Lambda execution plane over gRPC')
   .option(
@@ -115,7 +119,7 @@ const lambdaCmd = new Command('lambda')
     const keepAlive = setInterval(() => {}, 60_000);
 
     /**
-     * @param {import('node:process').Signals} signal - signal.
+     * @param {Signal} signal - signal.
      */
     const shutdown = async (signal) => {
       console.log(`[lambda-service] shutting down (${signal})`);
@@ -131,8 +135,11 @@ const lambdaCmd = new Command('lambda')
     };
 
     await new Promise((resolve) => {
+      /**
+       * @param {Signal} signal - signal.
+       */
       const onSignal = (signal) => {
-        shutdown(signal).finally(resolve);
+        shutdown(signal).finally(() => resolve(undefined));
       };
 
       process.on('SIGINT', () => onSignal('SIGINT'));

@@ -352,11 +352,12 @@ async function ensureSandboxForName(name, codeString, externalsTar) {
   if (externalsTar) {
     // NOTE: Buffers/Uint8Arrays are iterable in JS (yielding numbers), which breaks tar extraction.
     // Wrap them as a single chunk so Readable.from() emits bytes correctly.
+    /** @type {Iterable<any> | AsyncIterable<any> | null} */
     let tarInput = externalsTar;
 
     if (Buffer.isBuffer(externalsTar) || externalsTar instanceof Uint8Array) {
       const buf = Buffer.from(externalsTar);
-      tarInput = buf.length > 0 ? [buf] : undefined;
+      tarInput = buf.length > 0 ? [buf] : null;
     }
 
     if (tarInput) {
@@ -409,9 +410,11 @@ async function runInSandbox(
   let cleanupRpc = null;
   if (rpc && rpc.resources && Object.keys(rpc.resources).length > 0) {
     const sessionId = rpc.sessionId || randomUUID();
+    const rawContextIndex =
+      typeof rpc.contextIndex === 'number' ? rpc.contextIndex : -1;
     const contextIndex =
-      Number.isInteger(rpc.contextIndex) && rpc.contextIndex >= 0
-        ? rpc.contextIndex
+      Number.isInteger(rawContextIndex) && rawContextIndex >= 0
+        ? rawContextIndex
         : 1;
 
     rpcSessions.set(sessionId, { resources: rpc.resources });

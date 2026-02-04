@@ -55,7 +55,7 @@ describe('Lambda service queue poll loop (gRPC)', () => {
 
     // Mock SEA asset lookup to serve our in-memory bundle.
     jest.unstable_mockModule('node:sea', () => ({
-      getAsset: async (name) => {
+      getAsset: async (/** @type {string} */ name) => {
         if (name !== fnName) {
           throw new Error(`Unexpected asset request: ${name}`);
         }
@@ -145,7 +145,7 @@ describe('Lambda service queue poll loop (gRPC)', () => {
  */
 async function waitFor(fn, options = {}) {
   const timeoutMs = Number.isFinite(options.timeoutMs)
-    ? options.timeoutMs
+    ? Number(options.timeoutMs)
     : 2000;
   const intervalMs = Number.isFinite(options.intervalMs)
     ? options.intervalMs

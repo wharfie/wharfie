@@ -362,6 +362,7 @@ class S3 {
       throw new Error(uri + ' is not of form s3://bucket/key or s3://bucket/');
     const parts = uri.split('//')[1].split('/');
     return {
+      uri,
       bucket: parts[0],
       prefix: parts.slice(1).join('/'),
       arn: `arn:aws:s3:::${parts[0]}/${parts.slice(1).join('/')}`,

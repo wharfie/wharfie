@@ -105,6 +105,9 @@ describe('ActorSystem resources over service RPC (gRPC)', () => {
       const body = q?.Messages?.[0]?.Body;
       expect(body).toBe(JSON.stringify({ hello: 'world' }));
 
+      if (!objectStorage) {
+        throw new Error('objectStorage not available');
+      }
       const objectBody = await objectStorage.getObject({
         Bucket: 'test-bucket',
         Key: 'greeting.txt',

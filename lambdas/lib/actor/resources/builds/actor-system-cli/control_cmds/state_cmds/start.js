@@ -5,6 +5,10 @@ import NodeAgent from '../../../../../runtime/services/node-agent.js';
 import { loadResourcesSpec } from './util/resources.js';
 import { getSelfSpawnCommand } from './util/spawn-self.js';
 
+/**
+ * @typedef {'SIGINT'|'SIGTERM'} Signal
+ */
+
 const startCmd = new Command('start')
   .description(
     'Start the node agent: supervises lambda/db/queue services and exposes a control-plane health endpoint',
@@ -89,7 +93,7 @@ const startCmd = new Command('start')
     await agent.start();
 
     /**
-     * @param {import('node:process').Signals} signal - signal.
+     * @param {Signal} signal - signal.
      */
     const shutdown = async (signal) => {
       await agent.stop(signal);

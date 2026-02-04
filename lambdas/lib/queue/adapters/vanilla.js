@@ -76,6 +76,13 @@ export default function createVanillaQueue(options = {}) {
   }
 
   /**
+   * @returns {import('@smithy/types').ResponseMetadata} - Result.
+   */
+  function emptyMetadata() {
+    return /** @type {any} */ ({});
+  }
+
+  /**
    * @param {any} n - n.
    * @param {number} min - min.
    * @param {number} max - max.
@@ -217,7 +224,7 @@ export default function createVanillaQueue(options = {}) {
       q.Tags = { ...q.Tags, ...deepClone(tags) };
     }
 
-    return { QueueUrl: name };
+    return { $metadata: emptyMetadata(), QueueUrl: name };
   }
 
   /**
@@ -228,7 +235,7 @@ export default function createVanillaQueue(options = {}) {
     const queueUrl = params?.QueueUrl;
     if (!queueUrl) throw new Error('QueueUrl is required');
     delete state.queues[queueUrl];
-    return {};
+    return { $metadata: emptyMetadata() };
   }
 
   /**
@@ -239,7 +246,7 @@ export default function createVanillaQueue(options = {}) {
     const name = params?.QueueName;
     if (!name) throw new Error('QueueName is required');
     requireQueue(name);
-    return { QueueUrl: name };
+    return { $metadata: emptyMetadata(), QueueUrl: name };
   }
 
   /**
@@ -257,7 +264,7 @@ export default function createVanillaQueue(options = {}) {
 
     if (names.includes('All')) {
       Object.assign(Attributes, deepClone(q.Attributes || {}));
-      return { Attributes };
+      return { $metadata: emptyMetadata(), Attributes };
     }
 
     for (const n of names) {
@@ -265,7 +272,7 @@ export default function createVanillaQueue(options = {}) {
         Attributes[n] = q.Attributes[n];
       }
     }
-    return { Attributes };
+    return { $metadata: emptyMetadata(), Attributes };
   }
 
   /**
@@ -277,7 +284,7 @@ export default function createVanillaQueue(options = {}) {
     if (!queueUrl) throw new Error('QueueUrl is required');
     const q = requireQueue(queueUrl);
     q.Attributes = { ...q.Attributes, ...(deepClone(params.Attributes) || {}) };
-    return {};
+    return { $metadata: emptyMetadata() };
   }
 
   /**
@@ -288,7 +295,7 @@ export default function createVanillaQueue(options = {}) {
     const queueUrl = params?.QueueUrl;
     if (!queueUrl) throw new Error('QueueUrl is required');
     const q = requireQueue(queueUrl);
-    return { Tags: deepClone(q.Tags || {}) };
+    return { $metadata: emptyMetadata(), Tags: deepClone(q.Tags || {}) };
   }
 
   /**
@@ -300,7 +307,7 @@ export default function createVanillaQueue(options = {}) {
     if (!queueUrl) throw new Error('QueueUrl is required');
     const q = requireQueue(queueUrl);
     q.Tags = { ...q.Tags, ...(deepClone(params.Tags) || {}) };
-    return {};
+    return { $metadata: emptyMetadata() };
   }
 
   /**
@@ -315,7 +322,7 @@ export default function createVanillaQueue(options = {}) {
     q.Tags = Object.fromEntries(
       Object.entries(q.Tags || {}).filter(([k]) => !remove.has(k)),
     );
-    return {};
+    return { $metadata: emptyMetadata() };
   }
 
   /**
@@ -388,21 +395,30 @@ export default function createVanillaQueue(options = {}) {
     if (!queueUrl) throw new Error('QueueUrl is required');
 
     const entries = params.Entries || [];
+    /** @type {import("@aws-sdk/client-sqs").SendMessageBatchResultEntry[]} */
+    const Successful = [];
     /** @type {import("@aws-sdk/client-sqs").BatchResultErrorEntry[]} */
     const Failed = [];
 
     await Promise.all(
       entries.map(async (e, idx) => {
         try {
-          await sendMessage({
+          const result = await sendMessage({
             QueueUrl: queueUrl,
             MessageBody: e.MessageBody,
             DelaySeconds: e.DelaySeconds,
             MessageAttributes: e.MessageAttributes,
           });
+          const messageId = result.MessageId || createId();
+          Successful.push({
+            Id: e.Id || String(idx),
+            MessageId: messageId,
+            MD5OfMessageBody: '00000000000000000000000000000000',
+          });
         } catch (err) {
           Failed.push({
             Id: e.Id || String(idx),
+            Code: err instanceof Error ? err.name || 'Error' : 'Error',
             Message: err instanceof Error ? err.message : String(err),
             SenderFault: true,
           });
@@ -410,8 +426,7 @@ export default function createVanillaQueue(options = {}) {
       }),
     );
 
-    // Match AWS SDK shape enough for callers that look at Failed.
-    return { Failed };
+    return { Successful, Failed };
   }
 
   /**
@@ -504,6 +519,8 @@ export default function createVanillaQueue(options = {}) {
     if (!queueUrl) throw new Error('QueueUrl is required');
     const entries = params.Entries || [];
 
+    /** @type {import("@aws-sdk/client-sqs").DeleteMessageBatchResultEntry[]} */
+    const Successful = [];
     /** @type {import("@aws-sdk/client-sqs").BatchResultErrorEntry[]} */
     const Failed = [];
 
@@ -514,16 +531,18 @@ export default function createVanillaQueue(options = {}) {
           QueueUrl: queueUrl,
           ReceiptHandle: e.ReceiptHandle,
         });
+        Successful.push({ Id: e.Id || String(i) });
       } catch (err) {
         Failed.push({
-          Id: e.Id || e.MessageId || String(i),
+          Id: e.Id || String(i),
+          Code: err instanceof Error ? err.name || 'Error' : 'Error',
           Message: err instanceof Error ? err.message : String(err),
           SenderFault: true,
         });
       }
     }
 
-    return { Failed };
+    return { Successful, Failed };
   }
 
   /**
