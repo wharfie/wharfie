@@ -1,6 +1,6 @@
 /**
- * @param {number} min -
- * @param {number} max -
+ * @param {number} min - min.
+ * @param {number} max - max.
  * @returns {number} - a random number between min and max
  */
 function between(min, max) {
@@ -8,8 +8,8 @@ function between(min, max) {
 }
 
 /**
- * @param {number} operationTime -
- * @param {number} schedule -
+ * @param {number} operationTime - operationTime.
+ * @param {number} schedule - schedule.
  * @returns {number} - offset in minutes of cron expression
  */
 function getScheduleOffset(operationTime, schedule) {
@@ -26,7 +26,7 @@ function getScheduleOffset(operationTime, schedule) {
 }
 
 /**
- * @param {number} minutes -
+ * @param {number} minutes - minutes.
  * @returns {string} - a randomized cron expression
  */
 function generateSchedule(minutes) {

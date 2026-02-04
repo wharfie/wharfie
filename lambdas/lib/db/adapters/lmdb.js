@@ -24,8 +24,8 @@ const SEP = '\u001f';
  * - Use synchronous mutations (putSync/removeSync) and avoid queued async puts/removes
  * - Avoid transactionSync for reads (no readOnly flag exists); reads are synchronous already
  * - close() awaits DB/env close to release native resources
- * @param {CreateLMDBDBOptions} [options] -
- * @returns {import('../base.js').DBClient} -
+ * @param {CreateLMDBDBOptions} [options] - options.
+ * @returns {import('../base.js').DBClient} - Result.
  */
 export default function createLMDB(options = {}) {
   const dbRoot = options.path
@@ -46,8 +46,8 @@ export default function createLMDB(options = {}) {
   const tables = new Map();
 
   /**
-   * @param {string} tableName -
-   * @returns {any} -
+   * @param {string} tableName - tableName.
+   * @returns {any} - Result.
    */
   function ensureTable(tableName) {
     let t = tables.get(tableName);
@@ -59,8 +59,8 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * @param {import("../base.js").DBRecord} v -
-   * @returns {import("../base.js").DBRecord} -
+   * @param {import("../base.js").DBRecord} v - v.
+   * @returns {import("../base.js").DBRecord} - Result.
    */
   function deepClone(v) {
     // if (v === undefined || v === null) return v;
@@ -78,9 +78,9 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * @param {null | undefined} v -
-   * @param {string} label -
-   * @returns {string} -
+   * @param {null | undefined} v - v.
+   * @param {string} label - label.
+   * @returns {string} - Result.
    */
   function requireValue(v, label) {
     if (v === undefined || v === null) throw new Error(`${label} is required`);
@@ -88,7 +88,7 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * @param {import("../base.js").DeleteRequest | import("../base.js").GetParams} params -
+   * @param {import("../base.js").DeleteRequest | import("../base.js").GetParams} params - params.
    */
   function assertSortPair(params) {
     const hasName = params.sortKeyName !== undefined;
@@ -99,18 +99,18 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * @param {string} keyName -
-   * @param {import("../base.js").DBRecord} record -
-   * @returns {string} -
+   * @param {string} keyName - keyName.
+   * @param {import("../base.js").DBRecord} record - record.
+   * @returns {string} - Result.
    */
   function pkTokenFromRecord(keyName, record) {
     return `${keyName}=${requireValue(record?.[keyName], `record.${keyName}`)}`;
   }
 
   /**
-   * @param {string | number | undefined} sortKeyName -
-   * @param {import("../base.js").DBRecord} record -
-   * @returns {string} -
+   * @param {string | number | undefined} sortKeyName - sortKeyName.
+   * @param {import("../base.js").DBRecord} record - record.
+   * @returns {string} - Result.
    */
   function skTokenFromRecord(sortKeyName, record) {
     if (!sortKeyName) return NO_SORT;
@@ -119,7 +119,7 @@ export default function createLMDB(options = {}) {
 
   /**
    * @param {{ conditionType?: import("../base.js").ConditionTypeEnum; propertyName: any; propertyValue: any; keyType?: import("../base.js").KeyTypeEnum | undefined; }} pk -
-   * @returns {string} -
+   * @returns {string} - Result.
    */
   function pkTokenFromCondition(pk) {
     return `${pk.propertyName}=${String(pk.propertyValue)}`;
@@ -127,31 +127,31 @@ export default function createLMDB(options = {}) {
 
   /**
    * @param {{ conditionType?: import("../base.js").ConditionTypeEnum; propertyName: any; propertyValue: any; keyType?: import("../base.js").KeyTypeEnum | undefined; }} sk -
-   * @returns {string} -
+   * @returns {string} - Result.
    */
   function skPrefixFromCondition(sk) {
     return `${sk.propertyName}=${String(sk.propertyValue)}`;
   }
 
   /**
-   * @param {string} pkTok -
-   * @param {string} skTok -
-   * @returns {string} -
+   * @param {string} pkTok - pkTok.
+   * @param {string} skTok - skTok.
+   * @returns {string} - Result.
    */
   function makeKey(pkTok, skTok) {
     return `${pkTok}${SEP}${skTok}`;
   }
 
   /**
-   * @param {string} pkTok -
-   * @returns {string} -
+   * @param {string} pkTok - pkTok.
+   * @returns {string} - Result.
    */
   function makePrefix(pkTok) {
     return `${pkTok}${SEP}`;
   }
 
   /**
-   * @param {string | any[]} path -
+   * @param {string | any[]} path - path.
    */
   function assertNonEmptyPath(path) {
     if (!Array.isArray(path) || path.length === 0) {
@@ -160,9 +160,9 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * @param {import("../base.js").DBRecord | null | undefined} record -
-   * @param {string | any[]} path -
-   * @param {any} value -
+   * @param {import("../base.js").DBRecord | null | undefined} record - record.
+   * @param {string | any[]} path - path.
+   * @param {any} value - value.
    */
   function setPath(record, path, value) {
     /** @type {any} */
@@ -178,7 +178,7 @@ export default function createLMDB(options = {}) {
   /**
    * @param {{ [x: string]: any; }} record -
    * @param {{ conditionType: any; propertyName: any; propertyValue: any; keyType?: import("../base.js").KeyTypeEnum | undefined; }} condition -
-   * @returns {boolean} -
+   * @returns {boolean} - Result.
    */
   function matchesCondition(record, condition) {
     const value = record?.[condition.propertyName];
@@ -197,8 +197,8 @@ export default function createLMDB(options = {}) {
 
   /**
    * Query records by PRIMARY (+ optional SORT), with optional non-key filters.
-   * @param {import('../base.js').QueryParams} params -
-   * @returns {Promise<import('../base.js').DBRecord[]>} -
+   * @param {import('../base.js').QueryParams} params - params.
+   * @returns {Promise<import('../base.js').DBRecord[]>} - Result.
    */
   async function query(params) {
     const { pk, sk, filters } = assertTightQuery(params);
@@ -242,7 +242,7 @@ export default function createLMDB(options = {}) {
 
   /**
    * Put (insert/overwrite) an item.
-   * @param {import('../base.js').PutParams} params -
+   * @param {import('../base.js').PutParams} params - params.
    */
   async function put(params) {
     const table = ensureTable(params.tableName);
@@ -261,8 +261,8 @@ export default function createLMDB(options = {}) {
 
   /**
    * Get an item by key (immutable return).
-   * @param {import('../base.js').GetParams} params -
-   * @returns {Promise<import('../base.js').DBRecord | undefined>} -
+   * @param {import('../base.js').GetParams} params - params.
+   * @returns {Promise<import('../base.js').DBRecord | undefined>} - Result.
    */
   async function get(params) {
     assertSortPair(params);
@@ -280,7 +280,7 @@ export default function createLMDB(options = {}) {
 
   /**
    * Update fields on an item by key.
-   * @param {import('../base.js').UpdateParams} params -
+   * @param {import('../base.js').UpdateParams} params - params.
    */
   async function update(params) {
     assertSortPair(params);
@@ -334,7 +334,7 @@ export default function createLMDB(options = {}) {
 
   /**
    * Remove (delete) an item by key.
-   * @param {import('../base.js').RemoveParams} params -
+   * @param {import('../base.js').RemoveParams} params - params.
    */
   async function remove(params) {
     assertSortPair(params);
@@ -350,7 +350,7 @@ export default function createLMDB(options = {}) {
 
   /**
    * BatchWrite of deletes and puts (single write transaction).
-   * @param {import('../base.js').BatchWriteParams} params -
+   * @param {import('../base.js').BatchWriteParams} params - params.
    */
   async function batchWrite(params) {
     const table = ensureTable(params.tableName);

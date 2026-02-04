@@ -84,7 +84,7 @@ class SQS {
 
   /**
    *
-   * @param {import("@aws-sdk/client-sqs").DeleteMessageRequest} params -
+   * @param {import("@aws-sdk/client-sqs").DeleteMessageRequest} params - params.
    */
   async deleteMessage(params) {
     const command = new DeleteMessageCommand(params);
@@ -101,9 +101,9 @@ class SQS {
   }
 
   /**
-   * @param {import('../typedefs.js').WharfieEvent | import('../typedefs.js').AthenaEvent} event -
-   * @param {string} queueUrl -
-   * @param {number} [delay] -
+   * @param {import('../typedefs.js').WharfieEvent | import('../typedefs.js').AthenaEvent} event - event.
+   * @param {string} queueUrl - queueUrl.
+   * @param {number} [delay] - delay.
    */
   async enqueue(event, queueUrl, delay = 0) {
     const command = new SendMessageCommand({
@@ -115,8 +115,8 @@ class SQS {
   }
 
   /**
-   * @param {import('../typedefs.js').WharfieEvent[]} events -
-   * @param {string} queueUrl -
+   * @param {import('../typedefs.js').WharfieEvent[]} events - events.
+   * @param {string} queueUrl - queueUrl.
    */
   async enqueueBatch(events, queueUrl) {
     const promises = [];
@@ -135,8 +135,8 @@ class SQS {
   }
 
   /**
-   * @param {import('../typedefs.js').WharfieEvent} event -
-   * @param {string} queueUrl -
+   * @param {import('../typedefs.js').WharfieEvent} event - event.
+   * @param {string} queueUrl - queueUrl.
    */
   async reenqueue(event, queueUrl) {
     await this.sendMessage({
@@ -148,8 +148,8 @@ class SQS {
 
   /**
    * @typedef listQueuesOutput
-   * @property {string[]} QueueUrls -
-   * @property {Object<string, any>} QueueDetails -
+   * @property {string[]} QueueUrls - QueueUrls.
+   * @property {Object<string, any>} QueueDetails - QueueDetails.
    */
 
   /**
@@ -265,7 +265,7 @@ class SQS {
 
   /**
    * Close the underlying SQS client (useful for tests / CLIs to avoid open handles).
-   * @returns {Promise<void>}
+   * @returns {Promise<void>} - Result.
    */
   async close() {
     if (typeof this.sqs?.destroy === 'function') this.sqs.destroy();

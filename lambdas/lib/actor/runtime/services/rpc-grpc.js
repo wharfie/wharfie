@@ -1,4 +1,10 @@
-import grpc from '@grpc/grpc-js';
+import {
+  Client,
+  Metadata,
+  Server,
+  ServerCredentials,
+  credentials,
+} from '@grpc/grpc-js';
 
 /**
  * Minimal gRPC helpers for Wharfie services.
@@ -10,9 +16,9 @@ import grpc from '@grpc/grpc-js';
  */
 
 /**
- * @param {any} _key
- * @param {any} value
- * @returns {any}
+ * @param {any} _key - _key.
+ * @param {any} value - value.
+ * @returns {any} - Result.
  */
 function jsonReplacer(_key, value) {
   // Preserve Buffers/Uint8Arrays as base64 so we don't blow up JSON.stringify.
@@ -42,9 +48,9 @@ function jsonReplacer(_key, value) {
 }
 
 /**
- * @param {any} _key
- * @param {any} value
- * @returns {any}
+ * @param {any} _key - _key.
+ * @param {any} value - value.
+ * @returns {any} - Result.
  */
 function jsonReviver(_key, value) {
   if (!value || typeof value !== 'object') return value;
@@ -65,8 +71,8 @@ function jsonReviver(_key, value) {
 }
 
 /**
- * @param {any} v
- * @returns {Buffer}
+ * @param {any} v - v.
+ * @returns {Buffer} - Result.
  */
 export function encodeJson(v) {
   const s = JSON.stringify(v ?? null, jsonReplacer);
@@ -74,8 +80,8 @@ export function encodeJson(v) {
 }
 
 /**
- * @param {Buffer} buf
- * @returns {any}
+ * @param {Buffer} buf - buf.
+ * @returns {any} - Result.
  */
 export function decodeJson(buf) {
   if (!buf) return null;
@@ -88,7 +94,6 @@ export function decodeJson(buf) {
  * Service definition: Resource RPC (generic method dispatch).
  *
  * Path names follow standard gRPC convention: "/<package>.<Service>/<Method>"
- *
  * @type {import('@grpc/grpc-js').ServiceDefinition<any>}
  */
 export const ResourceRpcServiceDefinition = {
@@ -114,7 +119,6 @@ export const ResourceRpcServiceDefinition = {
 
 /**
  * Service definition: Lambda execution plane.
- *
  * @type {import('@grpc/grpc-js').ServiceDefinition<any>}
  */
 export const LambdaServiceDefinition = {
@@ -140,18 +144,17 @@ export const LambdaServiceDefinition = {
 
 /**
  * @typedef StartGrpcServerOptions
- * @property {string} [host]
- * @property {number} [port]
- * @property {import('@grpc/grpc-js').ServiceDefinition<any>} serviceDefinition
- * @property {import('@grpc/grpc-js').UntypedServiceImplementation} implementation
- * @property {(msg: string, extra?: any) => void} [log]
+ * @property {string} [host] - host.
+ * @property {number} [port] - port.
+ * @property {import('@grpc/grpc-js').ServiceDefinition<any>} serviceDefinition - serviceDefinition.
+ * @property {import('@grpc/grpc-js').UntypedServiceImplementation} implementation - implementation.
+ * @property {(msg: string, extra?: any) => void} [log] - log.
  */
 
 /**
  * Start a gRPC server.
- *
- * @param {StartGrpcServerOptions} options
- * @returns {Promise<{ address: string, host: string, port: number, close: () => Promise<void> }>}
+ * @param {StartGrpcServerOptions} options - options.
+ * @returns {Promise<{ address: string, host: string, port: number, close: () => Promise<void> }>} - Result.
  */
 export async function startGrpcServer({
   host = '127.0.0.1',
@@ -160,7 +163,7 @@ export async function startGrpcServer({
   implementation,
   log,
 }) {
-  const server = new grpc.Server();
+  const server = new Server();
 
   // grpc-js types are strict; our implementations are dynamic/untyped by design.
   server.addService(serviceDefinition, /** @type {any} */ (implementation));
@@ -169,7 +172,7 @@ export async function startGrpcServer({
   const boundPort = await new Promise((resolve, reject) => {
     server.bindAsync(
       address,
-      grpc.ServerCredentials.createInsecure(),
+      ServerCredentials.createInsecure(),
       (err, actualPort) => {
         if (err) return reject(err);
         resolve(actualPort);
@@ -196,17 +199,16 @@ export async function startGrpcServer({
 
 /**
  * @typedef GrpcUnaryOptions
- * @property {number} [deadlineMs]
+ * @property {number} [deadlineMs] - deadlineMs.
  */
 
 /**
  * Make a unary gRPC request using a raw grpc.Client.
- *
- * @param {import('@grpc/grpc-js').Client} client
- * @param {string} path
- * @param {any} request
- * @param {GrpcUnaryOptions} [options]
- * @returns {Promise<any>}
+ * @param {import('@grpc/grpc-js').Client} client - client.
+ * @param {string} path - path.
+ * @param {any} request - request.
+ * @param {GrpcUnaryOptions} [options] - options.
+ * @returns {Promise<any>} - Result.
  */
 export function grpcUnary(client, path, request, options = {}) {
   const deadlineMs =
@@ -215,7 +217,7 @@ export function grpcUnary(client, path, request, options = {}) {
       : 60_000;
 
   // grpc-js expects a Metadata instance when passing CallOptions.
-  const metadata = new grpc.Metadata();
+  const metadata = new Metadata();
 
   return new Promise((resolve, reject) => {
     client.makeUnaryRequest(
@@ -237,12 +239,10 @@ export function grpcUnary(client, path, request, options = {}) {
  * Create a generic gRPC RPC client that exposes remote methods as async functions.
  *
  * The remote service must implement ResourceRpcServiceDefinition.
- *
  * @typedef CreateGrpcRpcClientOptions
  * @property {string} address - "host:port"
- * @property {(msg: string, extra?: any) => void} [log]
- *
- * @param {CreateGrpcRpcClientOptions} options
+ * @property {(msg: string, extra?: any) => void} [log] - log.
+ * @param {CreateGrpcRpcClientOptions} options - options.
  * @returns {any} - Proxy with dynamic async methods + __wharfie_closeTransport()
  */
 export function createGrpcRpcClient({ address, log }) {
@@ -252,12 +252,12 @@ export function createGrpcRpcClient({ address, log }) {
     );
   }
 
-  const client = new grpc.Client(address, grpc.credentials.createInsecure());
+  const client = new Client(address, credentials.createInsecure());
 
   /**
-   * @param {string} method
-   * @param {any[]} args
-   * @returns {Promise<any>}
+   * @param {string} method - method.
+   * @param {any[]} args - args.
+   * @returns {Promise<any>} - Result.
    */
   const call = async (method, args) => {
     const isReceive = method === 'receiveMessage';
@@ -323,12 +323,11 @@ export function createGrpcRpcClient({ address, log }) {
 
 /**
  * Create a Lambda service client.
- *
- * @param {{ address: string }} options
- * @returns {{ invoke: (req: { functionName: string, event?: any, context?: any }) => Promise<void>, close: () => void }}
+ * @param {{ address: string }} options - options.
+ * @returns {{ invoke: (req: { functionName: string, event?: any, context?: any }) => Promise<void>, close: () => void }} - Result.
  */
 export function createLambdaClient({ address }) {
-  const client = new grpc.Client(address, grpc.credentials.createInsecure());
+  const client = new Client(address, credentials.createInsecure());
 
   return {
     invoke: async ({ functionName, event, context }) => {

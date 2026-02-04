@@ -8,17 +8,17 @@ import BaseResourceGroup from './base-resource-group.js';
 /**
  * Node-specific properties used when configuring the resource.
  * @typedef {Object} NodeProperties
- * @property {string} sshPrivateKeyPath -
- * @property {string} binaryLocalPath -
- * @property {string} binaryRemotePath -
- * @property {string} serviceName -
- * @property {string} serviceUser -
- * @property {string} workingDirectory -
- * @property {string} restartPolicy -
- * @property {Number} serviceRestartSec -
- * @property {Object<string,string>} env -
- * @property {string} description -
- * @property {string[]} serviceArgs -
+ * @property {string} sshPrivateKeyPath - sshPrivateKeyPath.
+ * @property {string} binaryLocalPath - binaryLocalPath.
+ * @property {string} binaryRemotePath - binaryRemotePath.
+ * @property {string} serviceName - serviceName.
+ * @property {string} serviceUser - serviceUser.
+ * @property {string} workingDirectory - workingDirectory.
+ * @property {string} restartPolicy - restartPolicy.
+ * @property {Number} serviceRestartSec - serviceRestartSec.
+ * @property {Object<string,string>} env - env.
+ * @property {string} description - description.
+ * @property {string[]} serviceArgs - serviceArgs.
  */
 
 /**

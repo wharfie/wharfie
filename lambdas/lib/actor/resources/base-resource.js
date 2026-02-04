@@ -7,11 +7,11 @@ import { diff } from 'jsondiffpatch';
 
 /**
  * @typedef BaseResourceOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {Reconcilable.Status} [status] -
- * @property {Reconcilable[]} [dependsOn] -
- * @property {Object<string, any> & import('../typedefs.js').SharedProperties} properties -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {Reconcilable.Status} [status] - status.
+ * @property {Reconcilable[]} [dependsOn] - dependsOn.
+ * @property {Object<string, any> & import('../typedefs.js').SharedProperties} properties - properties.
  */
 class BaseResource extends Reconcilable {
   /**
@@ -25,15 +25,15 @@ class BaseResource extends Reconcilable {
   }
 
   /**
-   * @returns {string} -
+   * @returns {string} - Result.
    */
   getName() {
     return this.parent ? `${this.parent}#${this.name}` : this.name;
   }
 
   /**
-   * @param {any} value -
-   * @returns {any} -
+   * @param {any} value - value.
+   * @returns {any} - Result.
    */
   _resolveProperty(value) {
     if (typeof value === 'function') {
@@ -53,9 +53,9 @@ class BaseResource extends Reconcilable {
   }
 
   /**
-   * @param {string} key -
-   * @param {any} [defaultReturn] -
-   * @returns {any} -
+   * @param {string} key - key.
+   * @param {any} [defaultReturn] - defaultReturn.
+   * @returns {any} - Result.
    */
   get(key, defaultReturn) {
     if (!(key in this.properties) && defaultReturn) {
@@ -67,7 +67,7 @@ class BaseResource extends Reconcilable {
   }
 
   /**
-   * @param {any} properties -
+   * @param {any} properties - properties.
    */
   setProperties(properties) {
     if (this.checkPropertyEquality(properties)) return;
@@ -78,8 +78,8 @@ class BaseResource extends Reconcilable {
   }
 
   /**
-   * @param {string} key -
-   * @param {any} value -
+   * @param {string} key - key.
+   * @param {any} value - value.
    */
   set(key, value) {
     if (this.get(key) === this._resolveProperty(value)) {
@@ -93,8 +93,8 @@ class BaseResource extends Reconcilable {
 
   /**
    * sets a property without marking the resource as drifted, should only be used internally by the reconcile method
-   * @param {string} key -
-   * @param {any} value -
+   * @param {string} key - key.
+   * @param {any} value - value.
    */
   _setUNSAFE(key, value) {
     if (this.get(key) === this._resolveProperty(value)) {
@@ -104,17 +104,17 @@ class BaseResource extends Reconcilable {
   }
 
   /**
-   * @param {string} key -
-   * @returns {boolean} -
+   * @param {string} key - key.
+   * @returns {boolean} - Result.
    */
   has(key) {
     return key in this.properties;
   }
 
   /**
-   * @param {string} key -
-   * @param {any} newValue -
-   * @returns {boolean} -
+   * @param {string} key - key.
+   * @param {any} newValue - newValue.
+   * @returns {boolean} - Result.
    */
   assert(key, newValue) {
     const oldValue = this.get(key);
@@ -123,8 +123,8 @@ class BaseResource extends Reconcilable {
   }
 
   /**
-   * @param {any} other -
-   * @returns {boolean} -
+   * @param {any} other - other.
+   * @returns {boolean} - Result.
    */
   checkPropertyEquality(other = {}) {
     const allKeys = new Set([
@@ -141,15 +141,15 @@ class BaseResource extends Reconcilable {
 
   /**
    * @typedef PropertyDiff
-   * @property {any} old -
-   * @property {any} new -
-   * @property {import('jsondiffpatch').Delta | undefined} delta -
+   * @property {any} old - old.
+   * @property {any} new - new.
+   * @property {import('jsondiffpatch').Delta | undefined} delta - delta.
    */
 
   /**
-   * @param {string} key -
-   * @param {any} otherValue -
-   * @returns {PropertyDiff} -
+   * @param {string} key - key.
+   * @param {any} otherValue - otherValue.
+   * @returns {PropertyDiff} - Result.
    */
   diffProperty(key, otherValue) {
     const currentPropertyValue = this.get(key);
@@ -162,7 +162,7 @@ class BaseResource extends Reconcilable {
   }
 
   /**
-   * @returns {Object<string,any>} -
+   * @returns {Object<string,any>} - Result.
    */
   resolveProperties() {
     /** @type {Object<string,any>} */
@@ -176,7 +176,7 @@ class BaseResource extends Reconcilable {
   }
 
   /**
-   * @returns {import('../typedefs.js').SerializedBaseResource} -
+   * @returns {import('../typedefs.js').SerializedBaseResource} - Result.
    */
   serialize() {
     return {
@@ -216,7 +216,7 @@ class BaseResource extends Reconcilable {
   }
 
   /**
-   * @returns {Promise<Reconcilable.Status?>} -
+   * @returns {Promise<Reconcilable.Status?>} - Result.
    */
   async getStatus() {
     return await BaseResource.stateDB.getResourceStatus(this);
@@ -227,15 +227,15 @@ class BaseResource extends Reconcilable {
   }
 
   /**
-   * @returns {Promise<import('../typedefs.js').SerializedBaseResource?>} -
+   * @returns {Promise<import('../typedefs.js').SerializedBaseResource?>} - Result.
    */
   async fetchStoredData() {
     return await BaseResource.stateDB.getResource(this);
   }
 
   /**
-   * @param {import('../typedefs.js').SerializedBaseResource} [storedResource] -
-   * @returns {Promise<boolean>} -
+   * @param {import('../typedefs.js').SerializedBaseResource} [storedResource] - storedResource.
+   * @returns {Promise<boolean>} - Result.
    */
   async needsUpdate(storedResource) {
     const _storedResource = storedResource || (await this.fetchStoredData());
@@ -248,12 +248,12 @@ class BaseResource extends Reconcilable {
 }
 /**
  * @typedef StateStore
- * @property {function(BaseResource): Promise<void>} putResource -
- * @property {function(BaseResource): Promise<void>} putResourceStatus -
- * @property {function(BaseResource): Promise<import("../typedefs.js").SerializedBaseResource?>} getResource -
- * @property {function(BaseResource): Promise<Reconcilable.Status?>} getResourceStatus -
- * @property {function(string, string): Promise<import("../typedefs.js").SerializedBaseResource[]>} getResources -
- * @property {function(BaseResource): Promise<void>} deleteResource -
+ * @property {function(BaseResource): Promise<void>} putResource - putResource.
+ * @property {function(BaseResource): Promise<void>} putResourceStatus - putResourceStatus.
+ * @property {function(BaseResource): Promise<import("../typedefs.js").SerializedBaseResource?>} getResource - getResource.
+ * @property {function(BaseResource): Promise<Reconcilable.Status?>} getResourceStatus - getResourceStatus.
+ * @property {function(string, string): Promise<import("../typedefs.js").SerializedBaseResource[]>} getResources - getResources.
+ * @property {function(BaseResource): Promise<void>} deleteResource - deleteResource.
  */
 
 /**

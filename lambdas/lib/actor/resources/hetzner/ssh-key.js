@@ -75,7 +75,7 @@ class HetznerSSHKey extends BaseResource {
    * - If identical: no-op (idempotent).
    * - If exists but mismatched: delete + recreate (Hetzner cannot update key material).
    * - If missing: create.
-   * @returns {Promise<void>}
+   * @returns {Promise<void>} - Result.
    */
   async _reconcile() {
     const publicKey = await this._readPublicKeyFromPath();
@@ -112,7 +112,7 @@ class HetznerSSHKey extends BaseResource {
   /**
    * Destroy: remove the Hetzner SSH key named `this.name`.
    * Idempotent: ignores "already deleted".
-   * @returns {Promise<void>}
+   * @returns {Promise<void>} - Result.
    */
   async _destroy() {
     if (typeof this.get('sshKeyId') === 'number') {

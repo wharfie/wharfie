@@ -4,7 +4,7 @@ import { spawn, execFile as _execFile, spawnSync } from 'node:child_process';
  * Run a shell command and throw on error.
  * @param {string} cmd - The command to execute.
  * @param {string[]} args - Arguments for the command.
- * @returns {Promise<void>}
+ * @returns {Promise<void>} - Result.
  */
 async function runCmd(cmd, args) {
   return new Promise((resolve, reject) => {
@@ -35,7 +35,7 @@ async function runCmd(cmd, args) {
  * @param {string[]} [args] - Arguments for the command.
  * @param {import('node:child_process').ExecFileOptions} [options] - Arguments for the command.
  * @param {boolean} silent - If true, don't print output.
- * @returns {Promise<void>}
+ * @returns {Promise<void>} - Result.
  */
 async function execFile(filepath, args = [], options = {}, silent = false) {
   return new Promise((resolve, reject) => {

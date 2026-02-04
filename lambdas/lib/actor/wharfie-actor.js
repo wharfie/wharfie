@@ -7,41 +7,41 @@ import LambdaBuild from './resources/aws/lambda-build.js';
 
 /**
  * @typedef ExtendedWharfieActorProperties
- * @property {string[] | function(): string[]} actorPolicyArns -
- * @property {string | function(): string} artifactBucket -
- * @property {Object<string,string> | function(): Object<string,string>} environmentVariables -
+ * @property {string[] | function(): string[]} actorPolicyArns - actorPolicyArns.
+ * @property {string | function(): string} artifactBucket - artifactBucket.
+ * @property {Object<string,string> | function(): Object<string,string>} environmentVariables - environmentVariables.
  */
 
 /**
  * @typedef ExtendedWharfieActorOptions
- * @property {string} parent -
- * @property {import('./resources/reconcilable.js').default.Status} [status] -
- * @property {ExtendedWharfieActorProperties & import('./typedefs.js').SharedProperties} properties -
- * @property {import('./resources/reconcilable.js').default[]} [dependsOn] -
- * @property {Object<string, import('./resources/base-resource.js').default | import('./resources/base-resource-group.js').default>} [resources] -
+ * @property {string} parent - parent.
+ * @property {import('./resources/reconcilable.js').default.Status} [status] - status.
+ * @property {ExtendedWharfieActorProperties & import('./typedefs.js').SharedProperties} properties - properties.
+ * @property {import('./resources/reconcilable.js').default[]} [dependsOn] - dependsOn.
+ * @property {Object<string, import('./resources/base-resource.js').default | import('./resources/base-resource-group.js').default>} [resources] - resources.
  */
 
 /**
  * @typedef WharfieActorProperties
- * @property {string} handler -
- * @property {string[] | function(): string[]} actorPolicyArns -
- * @property {string | function(): string} artifactBucket -
- * @property {Object<string,string> | function(): Object<string,string>} environmentVariables -
+ * @property {string} handler - handler.
+ * @property {string[] | function(): string[]} actorPolicyArns - actorPolicyArns.
+ * @property {string | function(): string} artifactBucket - artifactBucket.
+ * @property {Object<string,string> | function(): Object<string,string>} environmentVariables - environmentVariables.
  */
 
 /**
  * @typedef WharfieActorOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('./resources/reconcilable.js').default.Status} [status] -
- * @property {WharfieActorProperties & import('./typedefs.js').SharedProperties} properties -
- * @property {import('./resources/reconcilable.js').default[]} [dependsOn] -
- * @property {Object<string, import('./resources/base-resource.js').default | import('./resources/base-resource-group.js').default>} [resources] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('./resources/reconcilable.js').default.Status} [status] - status.
+ * @property {WharfieActorProperties & import('./typedefs.js').SharedProperties} properties - properties.
+ * @property {import('./resources/reconcilable.js').default[]} [dependsOn] - dependsOn.
+ * @property {Object<string, import('./resources/base-resource.js').default | import('./resources/base-resource-group.js').default>} [resources] - resources.
  */
 
 class WharfieActor extends BaseResourceGroup {
   /**
-   * @param {WharfieActorOptions} options -
+   * @param {WharfieActorOptions} options - options.
    */
   constructor({ name, parent, status, properties, resources, dependsOn }) {
     if (!properties.handler) throw new Error('No handler defined');
@@ -56,8 +56,8 @@ class WharfieActor extends BaseResourceGroup {
   }
 
   /**
-   * @param {string} parent -
-   * @returns {(import('./resources/base-resource.js').default | import('./resources/base-resource-group.js').default)[]} -
+   * @param {string} parent - parent.
+   * @returns {(import('./resources/base-resource.js').default | import('./resources/base-resource-group.js').default)[]} - Result.
    */
   _defineGroupResources(parent) {
     const build = new LambdaBuild({

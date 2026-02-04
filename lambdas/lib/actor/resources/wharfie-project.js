@@ -9,33 +9,33 @@ import S3 from '../../s3.js';
 
 /**
  * @typedef WharfieProjectProperties
- * @property {string} eventsQueueArn -
- * @property {string[]} actorRoleArns -
- * @property {string} deploymentSharedPolicyArn -
- * @property {string} scheduleQueueArn -
- * @property {string} scheduleQueueUrl -
- * @property {string} daemonQueueUrl -
- * @property {string} scheduleRoleArn -
- * @property {string} operationTable -
- * @property {string} dependencyTable -
- * @property {string} locationTable -
- * @property {number} [createdAt] -
+ * @property {string} eventsQueueArn - eventsQueueArn.
+ * @property {string[]} actorRoleArns - actorRoleArns.
+ * @property {string} deploymentSharedPolicyArn - deploymentSharedPolicyArn.
+ * @property {string} scheduleQueueArn - scheduleQueueArn.
+ * @property {string} scheduleQueueUrl - scheduleQueueUrl.
+ * @property {string} daemonQueueUrl - daemonQueueUrl.
+ * @property {string} scheduleRoleArn - scheduleRoleArn.
+ * @property {string} operationTable - operationTable.
+ * @property {string} dependencyTable - dependencyTable.
+ * @property {string} locationTable - locationTable.
+ * @property {number} [createdAt] - createdAt.
  */
 
 /**
  * @typedef WharfieProjectOptions
- * @property {import('../wharfie-deployment.js').default} [deployment] -
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('./reconcilable.js').default.Status} [status] -
- * @property {WharfieProjectProperties & import('../typedefs.js').SharedProperties} [properties] -
- * @property {import('./reconcilable.js').default[]} [dependsOn] -
- * @property {Object<string, import('./base-resource.js').default | BaseResourceGroup>} [resources] -
+ * @property {import('../wharfie-deployment.js').default} [deployment] - deployment.
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('./reconcilable.js').default.Status} [status] - status.
+ * @property {WharfieProjectProperties & import('../typedefs.js').SharedProperties} [properties] - properties.
+ * @property {import('./reconcilable.js').default[]} [dependsOn] - dependsOn.
+ * @property {Object<string, import('./base-resource.js').default | BaseResourceGroup>} [resources] - resources.
  */
 
 class WharfieProject extends BaseResourceGroup {
   /**
-   * @param {WharfieProjectOptions} options -
+   * @param {WharfieProjectOptions} options - options.
    */
   constructor({
     deployment,
@@ -123,7 +123,7 @@ class WharfieProject extends BaseResourceGroup {
   }
 
   /**
-   * @returns {import('../typedefs.js').ProjectEnvironmentProperties} -
+   * @returns {import('../typedefs.js').ProjectEnvironmentProperties} - Result.
    */
   _getProjectProperties() {
     return {
@@ -132,8 +132,8 @@ class WharfieProject extends BaseResourceGroup {
   }
 
   /**
-   * @param {string} parent -
-   * @returns {(import('./base-resource.js').default | BaseResourceGroup)[]} -
+   * @param {string} parent - parent.
+   * @returns {(import('./base-resource.js').default | BaseResourceGroup)[]} - Result.
    */
   _defineGroupResources(parent) {
     const database = new GlueDatabase({
@@ -272,8 +272,8 @@ class WharfieProject extends BaseResourceGroup {
   }
 
   /**
-   * @param {UserDefinedWharfieResourceOptions} options -
-   * @returns {import('./wharfie-resource.js').WharfieResourceProperties & import('../typedefs.js').SharedProperties} -
+   * @param {UserDefinedWharfieResourceOptions} options - options.
+   * @returns {import('./wharfie-resource.js').WharfieResourceProperties & import('../typedefs.js').SharedProperties} - Result.
    */
   assembleResourceProperties(options) {
     return {
@@ -304,7 +304,7 @@ class WharfieProject extends BaseResourceGroup {
   }
 
   /**
-   * @param {UserDefinedWharfieResourceOptions} options -
+   * @param {UserDefinedWharfieResourceOptions} options - options.
    */
   addWharfieResource(options) {
     const name = `${options.name}-resource`;
@@ -335,7 +335,7 @@ class WharfieProject extends BaseResourceGroup {
   }
 
   /**
-   * @param {string} name -
+   * @param {string} name - name.
    */
   removeWharfieResource(name) {
     if (!this.resources[`${name}-resource`]) return;
@@ -347,31 +347,31 @@ class WharfieProject extends BaseResourceGroup {
   }
   /**
    * @typedef UserDefinedWharfieResourceProperties
-   * @property {string} description -
-   * @property {string} tableType -
-   * @property {any} parameters -
-   * @property {import('../typedefs.js').WharfieTableColumn[]} partitionKeys -
-   * @property {import('../typedefs.js').WharfieTableColumn[]} columns -
-   * @property {string} [inputFormat] -
-   * @property {string} [outputFormat] -
-   * @property {any} [serdeInfo] -
-   * @property {any[]} [tags] -
-   * @property {string} [inputLocation] -
-   * @property {number} [numberOfBuckets] -
-   * @property {boolean} [storedAsSubDirectories] -
-   * @property {boolean} [compressed] -
-   * @property {string} [viewOriginalText] -
-   * @property {string} [viewExpandedText] -
-   * @property {import('../../../../cli/project/typedefs.js').Model | import('../../../../cli/project/typedefs.js').Source} userInput -
+   * @property {string} description - description.
+   * @property {string} tableType - tableType.
+   * @property {any} parameters - parameters.
+   * @property {import('../typedefs.js').WharfieTableColumn[]} partitionKeys - partitionKeys.
+   * @property {import('../typedefs.js').WharfieTableColumn[]} columns - columns.
+   * @property {string} [inputFormat] - inputFormat.
+   * @property {string} [outputFormat] - outputFormat.
+   * @property {any} [serdeInfo] - serdeInfo.
+   * @property {any[]} [tags] - tags.
+   * @property {string} [inputLocation] - inputLocation.
+   * @property {number} [numberOfBuckets] - numberOfBuckets.
+   * @property {boolean} [storedAsSubDirectories] - storedAsSubDirectories.
+   * @property {boolean} [compressed] - compressed.
+   * @property {string} [viewOriginalText] - viewOriginalText.
+   * @property {string} [viewExpandedText] - viewExpandedText.
+   * @property {import('../../../../cli/project/typedefs.js').Model | import('../../../../cli/project/typedefs.js').Source} userInput - userInput.
    */
   /**
    * @typedef UserDefinedWharfieResourceOptions
-   * @property {string} name -
-   * @property {UserDefinedWharfieResourceProperties} properties -
+   * @property {string} name - name.
+   * @property {UserDefinedWharfieResourceProperties} properties - properties.
    */
 
   /**
-   * @param {UserDefinedWharfieResourceOptions[]} resourceOptions -
+   * @param {UserDefinedWharfieResourceOptions[]} resourceOptions - resourceOptions.
    */
   registerWharfieResources(resourceOptions) {
     /** @type {Object<string,UserDefinedWharfieResourceOptions>} */
@@ -408,21 +408,21 @@ class WharfieProject extends BaseResourceGroup {
 
   /**
    * @typedef WharfieResourceDiff
-   * @property {import('../../../../cli/project/typedefs.js').Model | import('../../../../cli/project/typedefs.js').Source} old -
-   * @property {import('../../../../cli/project/typedefs.js').Model | import('../../../../cli/project/typedefs.js').Source} new -
-   * @property {import('jsondiffpatch').Delta} delta -
+   * @property {import('../../../../cli/project/typedefs.js').Model | import('../../../../cli/project/typedefs.js').Source} old - old.
+   * @property {import('../../../../cli/project/typedefs.js').Model | import('../../../../cli/project/typedefs.js').Source} new - new.
+   * @property {import('jsondiffpatch').Delta} delta - delta.
    */
 
   /**
    * @typedef WharfieProjeceDiffs
-   * @property {Object<string,import('../../../../cli/project/typedefs.js').Model | import('../../../../cli/project/typedefs.js').Source>} additions -
-   * @property {Object<string,import('../../../../cli/project/typedefs.js').Model | import('../../../../cli/project/typedefs.js').Source>} removals -
-   * @property {Object<string,WharfieResourceDiff>} updates -
+   * @property {Object<string,import('../../../../cli/project/typedefs.js').Model | import('../../../../cli/project/typedefs.js').Source>} additions - additions.
+   * @property {Object<string,import('../../../../cli/project/typedefs.js').Model | import('../../../../cli/project/typedefs.js').Source>} removals - removals.
+   * @property {Object<string,WharfieResourceDiff>} updates - updates.
    */
 
   /**
-   * @param {UserDefinedWharfieResourceOptions[]} resourceOptions -
-   * @returns {WharfieProjeceDiffs} -
+   * @param {UserDefinedWharfieResourceOptions[]} resourceOptions - resourceOptions.
+   * @returns {WharfieProjeceDiffs} - Result.
    */
   diffWharfieResources(resourceOptions) {
     /** @type {WharfieProjeceDiffs} */
@@ -468,7 +468,7 @@ class WharfieProject extends BaseResourceGroup {
   }
 
   /**
-   * @returns {WharfieResource[]} -
+   * @returns {WharfieResource[]} - Result.
    */
   getWharfieResources() {
     // @ts-ignore
@@ -478,7 +478,7 @@ class WharfieProject extends BaseResourceGroup {
   }
 
   /**
-   * @returns {String[]} -
+   * @returns {String[]} - Result.
    */
   getOutputLocations() {
     const outputLocations = new Set();
@@ -491,7 +491,7 @@ class WharfieProject extends BaseResourceGroup {
   }
 
   /**
-   * @returns {String[]} -
+   * @returns {String[]} - Result.
    */
   getInputLocations() {
     const inputLocations = new Set();

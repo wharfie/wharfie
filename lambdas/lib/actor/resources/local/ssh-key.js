@@ -15,10 +15,10 @@ import BaseResource from '../base-resource.js';
 /**
  * @typedef SSHKeyOptions
  * @property {string} name - Logical name for this SSH key resource (used for default path/comment).
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {SSHKeyProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {SSHKeyProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class SSHKey extends BaseResource {
@@ -69,7 +69,7 @@ class SSHKey extends BaseResource {
    * - If keys already exist and overwrite=false → no-op.
    * - If missing or overwrite=true → (re)generate with provided options.
    * - Stores publicKey + path on the resource for downstream consumers.
-   * @returns {Promise<void>}
+   * @returns {Promise<void>} - Result.
    */
   async _reconcile() {
     const outPrefix = this.get('path');
@@ -112,7 +112,7 @@ class SSHKey extends BaseResource {
    * Idempotent destroy:
    * - Best-effort removal (missing files are ignored).
    * - Safe to call repeatedly.
-   * @returns {Promise<void>}
+   * @returns {Promise<void>} - Result.
    */
   async _destroy() {
     const outPrefix = this._outPrefix();

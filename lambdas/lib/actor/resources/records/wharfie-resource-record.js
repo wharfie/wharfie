@@ -9,22 +9,22 @@ import { ResourceNotFoundException } from '@aws-sdk/client-dynamodb';
 
 /**
  * @typedef WharfieResourceRecordProperties
- * @property {import('../../../../lib/graph/typedefs.js').ResourceRecord | function(): import('../../../../lib/graph/typedefs.js').ResourceRecord} data -
- * @property {string} table_name -
+ * @property {import('../../../../lib/graph/typedefs.js').ResourceRecord | function(): import('../../../../lib/graph/typedefs.js').ResourceRecord} data - data.
+ * @property {string} table_name - table_name.
  */
 
 /**
  * @typedef WharfieResourceRecordOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {WharfieResourceRecordProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {WharfieResourceRecordProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class WharfieResourceRecord extends BaseResource {
   /**
-   * @param {WharfieResourceRecordOptions} options -
+   * @param {WharfieResourceRecordOptions} options - options.
    */
   constructor({ name, parent, status, dependsOn = [], properties }) {
     super({

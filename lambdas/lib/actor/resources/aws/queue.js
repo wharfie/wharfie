@@ -4,26 +4,26 @@ import { QueueDoesNotExist } from '@aws-sdk/client-sqs';
 
 /**
  * @typedef QueueProperties
- * @property {string} [visibilityTimeout] -
- * @property {string} [messageRetentionPeriod] -
- * @property {string} [delaySeconds] -
- * @property {string} [receiveMessageWaitTimeSeconds] -
- * @property {any | function(): Promise<any>} [policy] -
- * @property {Record<string, string>} [tags] -
+ * @property {string} [visibilityTimeout] - visibilityTimeout.
+ * @property {string} [messageRetentionPeriod] - messageRetentionPeriod.
+ * @property {string} [delaySeconds] - delaySeconds.
+ * @property {string} [receiveMessageWaitTimeSeconds] - receiveMessageWaitTimeSeconds.
+ * @property {any | function(): Promise<any>} [policy] - policy.
+ * @property {Record<string, string>} [tags] - tags.
  */
 
 /**
  * @typedef QueueOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {QueueProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {QueueProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class Queue extends BaseResource {
   /**
-   * @param {QueueOptions} options -
+   * @param {QueueOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     const propertiesWithDefaults = Object.assign(

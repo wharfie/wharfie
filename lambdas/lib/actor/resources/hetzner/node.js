@@ -10,9 +10,9 @@ import HetznerVPS from './vps.js';
  * @property {string} binaryLocalPath - Absolute path to the local binary that should be uploaded to the VPS.
  * @property {string} sshPublicKeyPath - Absolute path to the SSH pub key used to connect to the node.
  * @property {string} sshPrivateKeyPath - Absolute path to the SSH private key used to connect to the node.
- * @property {string} serverType -
- * @property {string} image -
- * @property {string} location -
+ * @property {string} serverType - serverType.
+ * @property {string} image - image.
+ * @property {string} location - location.
  */
 
 /**
@@ -31,7 +31,7 @@ import HetznerVPS from './vps.js';
  */
 class HetznerNode extends Node {
   /**
-   * @param {HetznerNodeOptions} options -
+   * @param {HetznerNodeOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn, resources }) {
     const propertiesWithDefaults = Object.assign(
@@ -50,8 +50,8 @@ class HetznerNode extends Node {
   }
 
   /**
-   * @param {string} parent -
-   * @returns {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} -
+   * @param {string} parent - parent.
+   * @returns {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} - Result.
    */
   _defineGroupResources(parent) {
     const hetzner_key = new HetznerSSHKey({

@@ -2,7 +2,7 @@ import { Writable } from 'stream';
 
 /**
  * @typedef ConsoleLogTransportOptions
- * @property {number} [flushInterval] -
+ * @property {number} [flushInterval] - flushInterval.
  */
 
 class ConsoleLogTransport extends Writable {
@@ -14,7 +14,7 @@ class ConsoleLogTransport extends Writable {
   }
 
   /**
-   * @param {(error: Error | null | undefined) => void} callback -
+   * @param {(error: Error | null | undefined) => void} callback - callback.
    */
   async _final(callback) {
     try {
@@ -29,9 +29,9 @@ class ConsoleLogTransport extends Writable {
   }
 
   /**
-   * @param {any} chunk -
-   * @param {string} _encoding -
-   * @param {(error: Error | null | undefined) => void} callback -
+   * @param {any} chunk - chunk.
+   * @param {string} _encoding - _encoding.
+   * @param {(error: Error | null | undefined) => void} callback - callback.
    */
   async _write(chunk, _encoding, callback) {
     try {

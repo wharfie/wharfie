@@ -31,13 +31,12 @@ const pending = new Map();
  * Active RPC sessions, keyed by `sessionId`.
  *
  * Each session maps a resource name (db/queue/objectStorage/etc) to an in-process client instance.
- *
  * @type {Map<string, { resources: Record<string, any> }>}
  */
 const rpcSessions = new Map();
 
 /**
- * @returns {string}
+ * @returns {string} - Result.
  */
 function getWorkerSourceText() {
   if (typeof workerSource === 'string') return workerSource;
@@ -48,8 +47,8 @@ function getWorkerSourceText() {
 }
 
 /**
- * @param {any} v
- * @returns {boolean}
+ * @param {any} v - v.
+ * @returns {boolean} - Result.
  */
 function isNodeReadable(v) {
   return (
@@ -66,10 +65,9 @@ function isNodeReadable(v) {
  * Notes:
  * - Buffers are cloneable
  * - Node Readable streams are NOT cloneable; we materialize them into a Buffer and tag them
- *   so the worker can rehydrate a Readable.
- *
- * @param {any} value
- * @returns {Promise<any>}
+ * so the worker can rehydrate a Readable.
+ * @param {any} value - value.
+ * @returns {Promise<any>} - Result.
  */
 async function makeCloneable(value) {
   if (value === null || value === undefined) return value;
@@ -117,9 +115,9 @@ async function makeCloneable(value) {
 }
 
 /**
- * @param {Worker} w
- * @param {any} msg
- * @returns {Promise<void>}
+ * @param {Worker} w - w.
+ * @param {any} msg - msg.
+ * @returns {Promise<void>} - Result.
  */
 async function handleRpcMessage(w, msg) {
   const id = msg?.id;
@@ -222,8 +220,8 @@ async function handleRpcMessage(w, msg) {
 }
 
 /**
- * @param {string} name -
- * @returns {Worker} -
+ * @param {string} name - name.
+ * @returns {Worker} - Result.
  */
 function ensureWorker(name) {
   if (worker) return worker;
@@ -297,12 +295,12 @@ function ensureWorker(name) {
 
 /**
  * @typedef Sandbox
- * @property {string} root -
- * @property {string} nodeModules -
- * @property {string} pkgFile -
- * @property {string} entryFile -
- * @property {boolean} prepared -
- * @property {string} codeString -
+ * @property {string} root - root.
+ * @property {string} nodeModules - nodeModules.
+ * @property {string} pkgFile - pkgFile.
+ * @property {string} entryFile - entryFile.
+ * @property {boolean} prepared - prepared.
+ * @property {string} codeString - codeString.
  */
 
 /**
@@ -311,8 +309,8 @@ function ensureWorker(name) {
 const sandboxes = new Map();
 
 /**
- * @param {import("fs").PathLike} p -
- * @returns {Promise<boolean>} -
+ * @param {import("fs").PathLike} p - p.
+ * @returns {Promise<boolean>} - Result.
  */
 async function pathExists(p) {
   try {
@@ -324,10 +322,10 @@ async function pathExists(p) {
 }
 
 /**
- * @param {string} name -
- * @param {string} codeString -
- * @param {Iterable<any> | AsyncIterable<any> | undefined} externalsTar -
- * @returns {Promise<Sandbox>} -
+ * @param {string} name - name.
+ * @param {string} codeString - codeString.
+ * @param {Iterable<any> | AsyncIterable<any> | undefined} externalsTar - externalsTar.
+ * @returns {Promise<Sandbox>} - Result.
  */
 async function ensureSandboxForName(name, codeString, externalsTar) {
   let sb = sandboxes.get(name);
@@ -375,7 +373,7 @@ async function ensureSandboxForName(name, codeString, externalsTar) {
 
 /**
  * @typedef ResourceRPCOptions
- * @property {Record<string, any>} resources
+ * @property {Record<string, any>} resources - resources.
  * @property {number} [contextIndex] - Which arg is treated as the invocation context (default: 1)
  * @property {string} [sessionId] - Optional session id (default: random UUID)
  * @property {string[]} [resourceNames] - Explicit list of resources to expose (default: Object.keys(resources))
@@ -383,16 +381,16 @@ async function ensureSandboxForName(name, codeString, externalsTar) {
 
 /**
  * @typedef VMSandboxOptions
- * @property {Buffer} [externalsTar] -
- * @property {Object<string,string>} [env] -
+ * @property {Buffer} [externalsTar] - externalsTar.
+ * @property {Object<string,string>} [env] - env.
  * @property {ResourceRPCOptions} [rpc] - Optional RPC wiring for `context.resources.*`
  */
 
 /**
- * @param {string} name -
- * @param {string} codeString -
- * @param {any[] | any} params -
- * @param {VMSandboxOptions} options -
+ * @param {string} name - name.
+ * @param {string} codeString - codeString.
+ * @param {any[] | any} params - params.
+ * @param {VMSandboxOptions} options - options.
  * @returns {Promise<void>}  // you don't care about return value
  */
 async function runInSandbox(

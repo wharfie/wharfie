@@ -16,23 +16,23 @@ import {
 
 /**
  * @typedef AthenaWorkgroupProperties
- * @property {string} outputLocation -
- * @property {string} description -
- * @property {import('@aws-sdk/client-athena').Tag[]} [tags] -
+ * @property {string} outputLocation - outputLocation.
+ * @property {string} description - description.
+ * @property {import('@aws-sdk/client-athena').Tag[]} [tags] - tags.
  */
 
 /**
  * @typedef AthenaWorkgroupOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {AthenaWorkgroupProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {AthenaWorkgroupProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class AthenaService {
   /**
-   * @param {import('@aws-sdk/client-athena').AthenaClientConfig} [options] -
+   * @param {import('@aws-sdk/client-athena').AthenaClientConfig} [options] - options.
    */
   constructor(options = {}) {
     const credentials = fromNodeProviderChain();
@@ -44,56 +44,56 @@ class AthenaService {
   }
 
   /**
-   * @param {import('@aws-sdk/client-athena').ListTagsForResourceCommandInput} params -
-   * @returns {Promise<import('@aws-sdk/client-athena').ListTagsForResourceCommandOutput>} -
+   * @param {import('@aws-sdk/client-athena').ListTagsForResourceCommandInput} params - params.
+   * @returns {Promise<import('@aws-sdk/client-athena').ListTagsForResourceCommandOutput>} - Result.
    */
   async listTagsForResource(params) {
     return this.client.send(new ListTagsForResourceCommand(params));
   }
 
   /**
-   * @param {import('@aws-sdk/client-athena').UntagResourceCommandInput} params -
-   * @returns {Promise<import('@aws-sdk/client-athena').UntagResourceCommandOutput>} -
+   * @param {import('@aws-sdk/client-athena').UntagResourceCommandInput} params - params.
+   * @returns {Promise<import('@aws-sdk/client-athena').UntagResourceCommandOutput>} - Result.
    */
   async untagResource(params) {
     return this.client.send(new UntagResourceCommand(params));
   }
 
   /**
-   * @param {import('@aws-sdk/client-athena').TagResourceCommandInput} params -
-   * @returns {Promise<import('@aws-sdk/client-athena').TagResourceCommandOutput>} -
+   * @param {import('@aws-sdk/client-athena').TagResourceCommandInput} params - params.
+   * @returns {Promise<import('@aws-sdk/client-athena').TagResourceCommandOutput>} - Result.
    */
   async tagResource(params) {
     return this.client.send(new TagResourceCommand(params));
   }
 
   /**
-   * @param {import('@aws-sdk/client-athena').GetWorkGroupCommandInput} params -
-   * @returns {Promise<import('@aws-sdk/client-athena').GetWorkGroupCommandOutput>} -
+   * @param {import('@aws-sdk/client-athena').GetWorkGroupCommandInput} params - params.
+   * @returns {Promise<import('@aws-sdk/client-athena').GetWorkGroupCommandOutput>} - Result.
    */
   async getWorkGroup(params) {
     return this.client.send(new GetWorkGroupCommand(params));
   }
 
   /**
-   * @param {import('@aws-sdk/client-athena').UpdateWorkGroupCommandInput} params -
-   * @returns {Promise<import('@aws-sdk/client-athena').UpdateWorkGroupCommandOutput>} -
+   * @param {import('@aws-sdk/client-athena').UpdateWorkGroupCommandInput} params - params.
+   * @returns {Promise<import('@aws-sdk/client-athena').UpdateWorkGroupCommandOutput>} - Result.
    */
   async updateWorkGroup(params) {
     return this.client.send(new UpdateWorkGroupCommand(params));
   }
 
   /**
-   * @param {import('@aws-sdk/client-athena').CreateWorkGroupCommandInput} params -
-   * @returns {Promise<import('@aws-sdk/client-athena').CreateWorkGroupCommandOutput>} -
+   * @param {import('@aws-sdk/client-athena').CreateWorkGroupCommandInput} params - params.
+   * @returns {Promise<import('@aws-sdk/client-athena').CreateWorkGroupCommandOutput>} - Result.
    */
   async createWorkGroup(params) {
     return this.client.send(new CreateWorkGroupCommand(params));
   }
 
   /**
-   * @param {import('@aws-sdk/client-athena').DeleteWorkGroupCommandInput} params -
-   * @returns {Promise<import('@aws-sdk/client-athena').DeleteWorkGroupCommandOutput>} -
+   * @param {import('@aws-sdk/client-athena').DeleteWorkGroupCommandInput} params - params.
+   * @returns {Promise<import('@aws-sdk/client-athena').DeleteWorkGroupCommandOutput>} - Result.
    */
   async deleteWorkGroup(params) {
     return this.client.send(new DeleteWorkGroupCommand(params));
@@ -102,7 +102,7 @@ class AthenaService {
 
 class AthenaWorkGroup extends BaseResource {
   /**
-   * @param {AthenaWorkgroupOptions} options -
+   * @param {AthenaWorkgroupOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     super({

@@ -2,6 +2,9 @@ import { join } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
+import createDynamoDB from '../adapters/dynamodb.js';
+import createLMDB from '../adapters/lmdb.js';
+import createVanillaDB from '../adapters/vanilla.js';
 import { createStateTable } from '../tables/state.js';
 
 /**
@@ -31,7 +34,7 @@ let _store;
 let _initPromise = null;
 
 /**
- * @returns {'dynamodb'|'lmdb'|'vanilla'} -
+ * @returns {'dynamodb'|'lmdb'|'vanilla'} - Result.
  */
 function resolveAdapterName() {
   const explicit =
@@ -65,17 +68,15 @@ function resolveAdapterName() {
 }
 
 /**
- * @param {'dynamodb'|'lmdb'|'vanilla'} adapterName -
- * @returns {Promise<import('../base.js').DBClient>} -
+ * @param {'dynamodb'|'lmdb'|'vanilla'} adapterName - adapterName.
+ * @returns {Promise<import('../base.js').DBClient>} - Result.
  */
 async function createDB(adapterName) {
   if (adapterName === 'dynamodb') {
-    const { default: createDynamoDB } = await import('../adapters/dynamodb.js');
     return createDynamoDB({ region: process.env.AWS_REGION });
   }
 
   if (adapterName === 'lmdb') {
-    const { default: createLMDB } = await import('../adapters/lmdb.js');
     return createLMDB({
       // Optional; adapter defaults to OS-specific wharfie data dir.
       path: process.env.WHARFIE_STATE_DB_PATH,
@@ -83,8 +84,6 @@ async function createDB(adapterName) {
   }
 
   // vanilla
-  const { default: createVanillaDB } = await import('../adapters/vanilla.js');
-
   if (process.env.NODE_ENV === 'test') {
     // Isolate tests from developer machines by default.
     const dir = mkdtempSync(join(tmpdir(), 'wharfie-state-'));
@@ -98,7 +97,7 @@ async function createDB(adapterName) {
 }
 
 /**
- * @returns {Promise<ReturnType<typeof createStateTable>>}
+ * @returns {Promise<ReturnType<typeof createStateTable>>} - Result.
  */
 async function ensureStore() {
   if (_store) return _store;
@@ -120,7 +119,7 @@ async function ensureStore() {
  * Note: the real store (and underlying adapter) is initialized lazily on first call
  * to any method. This avoids pulling AWS SDK dependencies into test/local runtimes
  * unless the dynamodb adapter is actually selected.
- * @returns {ReturnType<typeof createStateTable>}
+ * @returns {ReturnType<typeof createStateTable>} - Result.
  */
 export function getStateStore() {
   return stateStore;
@@ -129,7 +128,7 @@ export function getStateStore() {
 /**
  * Close the underlying DB (if any) and clear the cached singleton.
  * Primarily useful for local CLI flows.
- * @returns {Promise<void>}
+ * @returns {Promise<void>} - Result.
  */
 export async function closeStateStore() {
   // Wait for any in-flight init so we can close reliably.

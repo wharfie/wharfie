@@ -5,8 +5,8 @@ import { getDB, resetDB } from './_shared.js';
 const _tables = new Map();
 
 /**
- * @param {string} [tableName] -
- * @returns {Promise<ReturnType<typeof createSemaphoreTable>>} -
+ * @param {string} [tableName] - tableName.
+ * @returns {Promise<ReturnType<typeof createSemaphoreTable>>} - Result.
  */
 async function getTable(tableName) {
   const key = tableName || '__default__';
@@ -24,22 +24,25 @@ async function getTable(tableName) {
 }
 
 /**
- * @param {string} semaphore -
- * @param {number} [threshold] -
+ * @param {string} semaphore - semaphore.
+ * @param {number} [threshold] - threshold.
+ * @returns {Promise<any>} - Result.
  */
 export async function increase(semaphore, threshold) {
   return (await getTable()).increase(semaphore, threshold);
 }
 
 /**
- * @param {string} semaphore -
+ * @param {string} semaphore - semaphore.
+ * @returns {Promise<any>} - Result.
  */
 export async function release(semaphore) {
   return (await getTable()).release(semaphore);
 }
 
 /**
- * @param {string} semaphore -
+ * @param {string} semaphore - semaphore.
+ * @returns {Promise<any>} - Result.
  */
 export async function deleteSemaphore(semaphore) {
   return (await getTable()).deleteSemaphore(semaphore);
@@ -47,6 +50,7 @@ export async function deleteSemaphore(semaphore) {
 
 /**
  *
+ * @returns {void} - Result.
  */
 export function __setMockState() {
   _tables.clear();

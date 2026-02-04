@@ -8,8 +8,8 @@ const TABLE_ENV_VAR = 'SEMAPHORE_TABLE';
 const KEY_NAME = 'semaphore';
 
 /**
- * @param {unknown} error -
- * @returns {boolean} -
+ * @param {unknown} error - error.
+ * @returns {boolean} - Result.
  */
 const isConditionalCheckFailed = (error) => {
   if (!(error instanceof Error)) return false;
@@ -20,9 +20,9 @@ const isConditionalCheckFailed = (error) => {
 };
 
 /**
- * @param {string} propertyName -
- * @param {any} propertyValue -
- * @returns {import('../../db/base.js').KeyCondition} -
+ * @param {string} propertyName - propertyName.
+ * @param {any} propertyValue - propertyValue.
+ * @returns {import('../../db/base.js').KeyCondition} - Result.
  */
 function eq(propertyName, propertyValue) {
   return {
@@ -33,9 +33,9 @@ function eq(propertyName, propertyValue) {
 }
 
 /**
- * @param {any} value -
- * @param {number} [fallback] -
- * @returns {number} -
+ * @param {any} value - value.
+ * @param {number} [fallback] - fallback.
+ * @returns {number} - Result.
  */
 const toNumber = (value, fallback = 0) => {
   const n = Number(value);
@@ -44,17 +44,17 @@ const toNumber = (value, fallback = 0) => {
 
 /**
  * @typedef {Object} semaphoreClient
- * @property {(semaphore: string, threshold?: number) => Promise<boolean>} increase -
- * @property {(semaphore: string) => Promise<void>} release -
- * @property {(semaphore: string) => Promise<void>} deleteSemaphore -
+ * @property {(semaphore: string, threshold?: number) => Promise<boolean>} increase - increase.
+ * @property {(semaphore: string) => Promise<void>} release - release.
+ * @property {(semaphore: string) => Promise<void>} deleteSemaphore - deleteSemaphore.
  */
 
 /**
  * Factory: Semaphore table client.
- * @param {object} params -
- * @param {DBClient} params.db -
- * @param {string} [params.tableName] -
- * @returns {semaphoreClient} -
+ * @param {object} params - params.
+ * @param {DBClient} params.db - params.db.
+ * @param {string} [params.tableName] - params.tableName.
+ * @returns {semaphoreClient} - Result.
  */
 export function createSemaphoreTable({
   db,
@@ -63,8 +63,8 @@ export function createSemaphoreTable({
   if (!db) throw new Error('createSemaphoreTable requires a db client');
 
   /**
-   * @param {string} semaphore -
-   * @returns {Promise<import('../../db/base.js').DBRecord | void>} -
+   * @param {string} semaphore - semaphore.
+   * @returns {Promise<import('../../db/base.js').DBRecord | void>} - Result.
    */
   const getRecord = async (semaphore) =>
     db.get({
@@ -75,9 +75,9 @@ export function createSemaphoreTable({
     });
 
   /**
-   * @param {string} semaphore -
-   * @param {number} [threshold] -
-   * @returns {Promise<boolean>} -
+   * @param {string} semaphore - semaphore.
+   * @param {number} [threshold] - threshold.
+   * @returns {Promise<boolean>} - Result.
    */
   async function increase(semaphore, threshold = 1) {
     const maxAttempts = 25;
@@ -127,8 +127,8 @@ export function createSemaphoreTable({
   }
 
   /**
-   * @param {string} semaphore -
-   * @returns {Promise<void>} -
+   * @param {string} semaphore - semaphore.
+   * @returns {Promise<void>} - Result.
    */
   async function release(semaphore) {
     const maxAttempts = 25;
@@ -161,8 +161,8 @@ export function createSemaphoreTable({
   }
 
   /**
-   * @param {string} semaphore -
-   * @returns {Promise<void>} -
+   * @param {string} semaphore - semaphore.
+   * @returns {Promise<void>} - Result.
    */
   async function deleteSemaphore(semaphore) {
     const record = await getRecord(semaphore);

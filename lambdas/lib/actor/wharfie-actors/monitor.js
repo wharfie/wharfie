@@ -3,7 +3,7 @@ import EventsRule from '../resources/aws/events-rule.js';
 
 class Monitor extends WharfieActor {
   /**
-   * @param {import('../wharfie-actor.js').ExtendedWharfieActorOptions} options -
+   * @param {import('../wharfie-actor.js').ExtendedWharfieActorOptions} options - options.
    */
   constructor({ status, parent, resources, properties }) {
     super({
@@ -19,8 +19,8 @@ class Monitor extends WharfieActor {
   }
 
   /**
-   * @param {string} parent -
-   * @returns {(import('../resources/base-resource.js').default | import('../resources/base-resource-group.js').default)[]} -
+   * @param {string} parent - parent.
+   * @returns {(import('../resources/base-resource.js').default | import('../resources/base-resource-group.js').default)[]} - Result.
    */
   _defineGroupResources(parent) {
     const resources = super._defineGroupResources(parent);

@@ -13,8 +13,8 @@ import { buffer as streamToBuffer } from 'node:stream/consumers';
 
 /**
  * @typedef ExternalDependencyDescription
- * @property {string} name -
- * @property {string} version -
+ * @property {string} name - name.
+ * @property {string} version - version.
  */
 
 /**
@@ -25,40 +25,40 @@ import { buffer as streamToBuffer } from 'node:stream/consumers';
 
 /**
  * @typedef BuildTarget
- * @property {string | function(): string} nodeVersion -
- * @property {TargetPlatform | function(): TargetPlatform} platform -
- * @property {TargetArch | function(): TargetArch} architecture -
- * @property {TargetLibc | function(): TargetLibc} [libc] -
+ * @property {string | function(): string} nodeVersion - nodeVersion.
+ * @property {TargetPlatform | function(): TargetPlatform} platform - platform.
+ * @property {TargetArch | function(): TargetArch} architecture - architecture.
+ * @property {TargetLibc | function(): TargetLibc} [libc] - libc.
  */
 
 /**
  * @typedef FunctionEntrypoint
- * @property {string} path -
- * @property {string} [export] -
+ * @property {string} path - path.
+ * @property {string} [export] - export.
  */
 
 /**
  * @typedef FunctionProperties
- * @property {string} functionName -
- * @property {FunctionEntrypoint} entrypoint -
- * @property {BuildTarget | function(): BuildTarget} buildTarget -
- * @property {ExternalDependencyDescription[]} [external] -
- * @property {Object<string,string>} [environmentVariables] -
- * @property {Object<string,string> | function(): Object<string,string>} [assets] -
+ * @property {string} functionName - functionName.
+ * @property {FunctionEntrypoint} entrypoint - entrypoint.
+ * @property {BuildTarget | function(): BuildTarget} buildTarget - buildTarget.
+ * @property {ExternalDependencyDescription[]} [external] - external.
+ * @property {Object<string,string>} [environmentVariables] - environmentVariables.
+ * @property {Object<string,string> | function(): Object<string,string>} [assets] - assets.
  */
 
 /**
  * @typedef FunctionOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {FunctionProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {FunctionProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class FunctionResource extends BuildResource {
   /**
-   * @param {FunctionOptions} options -
+   * @param {FunctionOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn }) {
     const propertiesWithDefaults = Object.assign(
@@ -80,7 +80,7 @@ class FunctionResource extends BuildResource {
   }
 
   /**
-   * @returns {Promise<string>} -
+   * @returns {Promise<string>} - Result.
    */
   async esbuild() {
     console.log('HELLO');
@@ -134,7 +134,7 @@ class FunctionResource extends BuildResource {
   }
 
   /**
-   * @returns {Promise<string>} -
+   * @returns {Promise<string>} - Result.
    */
   async bundleExternals() {
     const externals = this.get('external', []);

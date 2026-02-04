@@ -22,7 +22,7 @@ import { ListObjectsV2Command } from '@aws-sdk/client-s3';
  */
 class ReferencesMetastore {
   /**
-   * @param {Partial<ReferencesMetastoreOptions>} [options] -
+   * @param {Partial<ReferencesMetastoreOptions>} [options] - options.
    */
   constructor({ referencesUri, partitionKeys = [], s3 } = {}) {
     if (!referencesUri) throw new Error('referencesUri is required');
@@ -33,31 +33,31 @@ class ReferencesMetastore {
   }
 
   /**
-   * @param {string} uri -
-   * @returns {boolean} -
+   * @param {string} uri - uri.
+   * @returns {boolean} - Result.
    */
   static _isS3Uri(uri) {
     return uri.startsWith('s3://');
   }
 
   /**
-   * @param {string} uri -
-   * @returns {boolean} -
+   * @param {string} uri - uri.
+   * @returns {boolean} - Result.
    */
   static _isFileUri(uri) {
     return uri.startsWith('file://');
   }
 
   /**
-   * @param {string} uri -
-   * @returns {string} -
+   * @param {string} uri - uri.
+   * @returns {string} - Result.
    */
   static _ensureTrailingSlash(uri) {
     return uri.endsWith('/') ? uri : `${uri}/`;
   }
 
   /**
-   * @param {string} s3Uri -
+   * @param {string} s3Uri - s3Uri.
    * @returns {{ bucket: string, key: string }} -
    */
   static _parseS3Uri(s3Uri) {
@@ -67,8 +67,8 @@ class ReferencesMetastore {
   }
 
   /**
-   * @param {string} uri -
-   * @returns {string} -
+   * @param {string} uri - uri.
+   * @returns {string} - Result.
    */
   static _toLocalPath(uri) {
     if (ReferencesMetastore._isFileUri(uri)) return fileURLToPath(uri);
@@ -76,9 +76,9 @@ class ReferencesMetastore {
   }
 
   /**
-   * @param {string} baseUri -
-   * @param {string} childPath -
-   * @returns {string} -
+   * @param {string} baseUri - baseUri.
+   * @param {string} childPath - childPath.
+   * @returns {string} - Result.
    */
   static _joinUri(baseUri, childPath) {
     if (ReferencesMetastore._isS3Uri(baseUri)) {
@@ -92,8 +92,8 @@ class ReferencesMetastore {
 
   /**
    * Read a manifest.
-   * @param {string} manifestUri -
-   * @returns {Promise<string[]>} -
+   * @param {string} manifestUri - manifestUri.
+   * @returns {Promise<string[]>} - Result.
    */
   async readFiles(manifestUri) {
     if (ReferencesMetastore._isS3Uri(manifestUri)) {
@@ -117,8 +117,8 @@ class ReferencesMetastore {
 
   /**
    * Write a manifest (newline-separated).
-   * @param {string} manifestUri -
-   * @param {string[]} files -
+   * @param {string} manifestUri - manifestUri.
+   * @param {string[]} files - files.
    */
   async writeFiles(manifestUri, files) {
     const body = `${files.join('\n')}\n`;
@@ -142,7 +142,7 @@ class ReferencesMetastore {
 
   /**
    * Delete a manifest.
-   * @param {string} manifestUri -
+   * @param {string} manifestUri - manifestUri.
    */
   async deleteManifest(manifestUri) {
     if (ReferencesMetastore._isS3Uri(manifestUri)) {
@@ -160,7 +160,7 @@ class ReferencesMetastore {
   /**
    * Lists all manifest URIs under the references root.
    * For partitioned datasets, this will include manifests per partition.
-   * @returns {Promise<string[]>} -
+   * @returns {Promise<string[]>} - Result.
    */
   async listManifestUris() {
     if (ReferencesMetastore._isS3Uri(this.referencesUri)) {
@@ -179,7 +179,7 @@ class ReferencesMetastore {
     /** @type {string[]} */
     const manifests = [];
 
-    /** @param {string} dir */
+    /** @param {string} dir - dir. */
     const walk = async (dir) => {
       const entries = await fs.readdir(dir, { withFileTypes: true });
       for (const ent of entries) {
@@ -216,7 +216,7 @@ class ReferencesMetastore {
 
   /**
    * Returns the union of all parquet files referenced by all manifests.
-   * @returns {Promise<string[]>} -
+   * @returns {Promise<string[]>} - Result.
    */
   async getAllReferencedFiles() {
     const manifests = await this.listManifestUris();
@@ -231,7 +231,7 @@ class ReferencesMetastore {
    * This scans the snapshot directory for parquet files and rewrites the relevant manifests.
    * By default this is *incremental* (write-only): it updates manifests for partitions present
    * in the snapshot and does not delete any others.
-   * @param {Object} params -
+   * @param {Object} params - params.
    * @param {string} params.dataSnapshotUri - Root of the snapshot (ex: .../data/<storage_id>/).
    * @param {boolean} [params.replaceAll] - If true, deletes any stale manifests not present in the snapshot.
    */
@@ -287,9 +287,9 @@ class ReferencesMetastore {
 
   /**
    * Updates a specific partition's manifest.
-   * @param {Object} params -
-   * @param {Record<string, string>} params.partitionValues -
-   * @param {string[]} params.files -
+   * @param {Object} params - params.
+   * @param {Record<string, string>} params.partitionValues - params.partitionValues.
+   * @param {string[]} params.files - params.files.
    */
   async updatePartition({ partitionValues, files }) {
     const partitionPath = this.partitionKeys
@@ -303,8 +303,8 @@ class ReferencesMetastore {
   }
 
   /**
-   * @param {string} manifestUri -
-   * @returns {Record<string, string>} -
+   * @param {string} manifestUri - manifestUri.
+   * @returns {Record<string, string>} - Result.
    */
   _parsePartitionValuesFromManifest(manifestUri) {
     /** @type {Record<string, string>} */
@@ -327,9 +327,9 @@ class ReferencesMetastore {
   }
 
   /**
-   * @param {string} baseUri -
-   * @param {string} fullUri -
-   * @returns {string} -
+   * @param {string} baseUri - baseUri.
+   * @param {string} fullUri - fullUri.
+   * @returns {string} - Result.
    */
   _relativeTo(baseUri, fullUri) {
     if (ReferencesMetastore._isS3Uri(baseUri)) {
@@ -350,8 +350,8 @@ class ReferencesMetastore {
 
   /**
    * List all parquet files under a snapshot directory.
-   * @param {string} dataSnapshotUri -
-   * @returns {Promise<string[]>} -
+   * @param {string} dataSnapshotUri - dataSnapshotUri.
+   * @returns {Promise<string[]>} - Result.
    */
   async _listParquetFiles(dataSnapshotUri) {
     if (ReferencesMetastore._isS3Uri(dataSnapshotUri)) {
@@ -372,7 +372,7 @@ class ReferencesMetastore {
     /** @type {string[]} */
     const files = [];
 
-    /** @param {string} dir */
+    /** @param {string} dir - dir. */
     const walk = async (dir) => {
       const entries = await fs.readdir(dir, { withFileTypes: true });
       for (const ent of entries) {
@@ -387,9 +387,9 @@ class ReferencesMetastore {
   }
 
   /**
-   * @param {string} bucket -
-   * @param {string} prefix -
-   * @returns {Promise<string[]>} -
+   * @param {string} bucket - bucket.
+   * @param {string} prefix - prefix.
+   * @returns {Promise<string[]>} - Result.
    */
   async _listAllS3Keys(bucket, prefix) {
     if (!this.s3) throw new Error('s3 client is required');

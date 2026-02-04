@@ -4,23 +4,23 @@ import { NoSuchEntityException } from '@aws-sdk/client-iam';
 
 /**
  * @typedef PolicyProperties
- * @property {string} description -
- * @property {any |function(): any} document -
- * @property {import('@aws-sdk/client-iam').Tag[]} [tags] -
+ * @property {string} description - description.
+ * @property {any |function(): any} document - document.
+ * @property {import('@aws-sdk/client-iam').Tag[]} [tags] - tags.
  */
 
 /**
  * @typedef PolicyOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {PolicyProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {PolicyProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class Policy extends BaseResource {
   /**
-   * @param {PolicyOptions} options -
+   * @param {PolicyOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     super({ name, parent, status, properties, dependsOn });

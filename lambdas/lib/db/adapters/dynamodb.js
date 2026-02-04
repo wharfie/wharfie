@@ -24,8 +24,8 @@ import { assertTightQuery } from '../utils.js';
  * - `marshallOptions.removeUndefinedValues` is enabled, so undefined properties are removed.
  * - SDK retry behavior is also enabled via `maxAttempts`, but this wrapper adds targeted retries
  *   for bursty throughput / eventual-consistency table creation races on a couple operations.
- * @param {CreateDynamoDBOptions} [options] -
- * @returns {import('../base.js').DBClient} -
+ * @param {CreateDynamoDBOptions} [options] - options.
+ * @returns {import('../base.js').DBClient} - Result.
  */
 export default function createDynamoDB(
   { region } = { region: process.env.AWS_REGION },
@@ -45,7 +45,7 @@ export default function createDynamoDB(
   /**
    * @param {number} attempt 0-based attempt number
    * @param {number} maxSeconds max sleep per attempt
-   * @returns {Promise<void>}
+   * @returns {Promise<void>} - Result.
    */
   async function sleepBackoff(attempt, maxSeconds) {
     const seconds = Math.floor(
@@ -65,8 +65,8 @@ export default function createDynamoDB(
    *   keyValue: any,
    *   sortKeyName?: string,
    *   sortKeyValue?: any,
-   * }} params -
-   * @returns {Record<string, any>} -
+   * }} params - params.
+   * @returns {Record<string, any>} - Result.
    */
   function buildKey(params) {
     /** @type {Record<string, any>} */
@@ -88,7 +88,7 @@ export default function createDynamoDB(
    * Build Query expressions:
    * - KeyConditionExpression from PRIMARY (+ optional SORT)
    * - FilterExpression from all non-key filters (conditions with no keyType)
-   * @param {import('../base.js').KeyCondition[]} keyConditions -
+   * @param {import('../base.js').KeyCondition[]} keyConditions - keyConditions.
    * @returns {{
    *   KeyConditionExpression: string,
    *   FilterExpression?: string,
@@ -155,8 +155,8 @@ export default function createDynamoDB(
    * - Exactly one PRIMARY EQUALS condition is required
    * - Optional SORT condition (EQUALS or BEGINS_WITH)
    * - Any additional conditions without keyType become FilterExpression
-   * @param {import('../base.js').QueryParams} params -
-   * @returns {import('../base.js').QueryReturn} -
+   * @param {import('../base.js').QueryParams} params - params.
+   * @returns {import('../base.js').QueryReturn} - Result.
    */
   async function query(params) {
     assertTightQuery(params);
@@ -198,8 +198,8 @@ export default function createDynamoDB(
    * Retries:
    * - ProvisionedThroughputExceededException (bursty workloads)
    * - ResourceNotFoundException (table create eventual-consistency races)
-   * @param {import('../base.js').PutParams} params -
-   * @returns {import('../base.js').PutReturn} -
+   * @param {import('../base.js').PutParams} params - params.
+   * @returns {import('../base.js').PutReturn} - Result.
    */
   async function put(params) {
     if (!params.record || typeof params.record !== 'object')
@@ -252,8 +252,8 @@ export default function createDynamoDB(
    * Conditions:
    * - `params.conditions` is interpreted as a **ConditionExpression** (not KeyConditionExpression).
    * - Supports `EQUALS` and `BEGINS_WITH` in ConditionExpression.
-   * @param {import('../base.js').UpdateParams} params -
-   * @returns {import('../base.js').UpdateReturn} -
+   * @param {import('../base.js').UpdateParams} params - params.
+   * @returns {import('../base.js').UpdateReturn} - Result.
    */
   async function update(params) {
     const Key = buildKey(params);
@@ -334,8 +334,8 @@ export default function createDynamoDB(
 
   /**
    * Get an item by key.
-   * @param {import('../base.js').GetParams} params -
-   * @returns {import('../base.js').GetReturn} -
+   * @param {import('../base.js').GetParams} params - params.
+   * @returns {import('../base.js').GetReturn} - Result.
    */
   async function get(params) {
     const dynamoParams = {
@@ -349,8 +349,8 @@ export default function createDynamoDB(
 
   /**
    * Delete an item by key.
-   * @param {import('../base.js').RemoveParams} params -
-   * @returns {import('../base.js').RemoveReturn} -
+   * @param {import('../base.js').RemoveParams} params - params.
+   * @returns {import('../base.js').RemoveReturn} - Result.
    */
   async function remove(params) {
     const dynamoParams = {
@@ -372,8 +372,8 @@ export default function createDynamoDB(
 
   /**
    * Approximate request size; DynamoDB counts the marshalled payload, but JSON bytes is a solid guardrail.
-   * @param {any} obj -
-   * @returns {number} -
+   * @param {any} obj - obj.
+   * @returns {number} - Result.
    */
   function approxBytes(obj) {
     return Buffer.byteLength(JSON.stringify(obj));
@@ -381,8 +381,8 @@ export default function createDynamoDB(
 
   /**
    * Pull up to 25 ops without exceeding a safe payload size.
-   * @param {WriteRequest[]} queue -
-   * @returns {WriteRequest[]} -
+   * @param {WriteRequest[]} queue - queue.
+   * @returns {WriteRequest[]} - Result.
    */
   function takeBatch(queue) {
     /** @type {WriteRequest[]} */
@@ -419,8 +419,8 @@ export default function createDynamoDB(
    * PutRequests:
    * - each entry is { record, keyName, sortKeyName? }
    * - record must contain record[keyName] (+ record[sortKeyName] if provided)
-   * @param {import('../base.js').BatchWriteParams} params -
-   * @returns {import('../base.js').BatchWriteReturn} -
+   * @param {import('../base.js').BatchWriteParams} params - params.
+   * @returns {import('../base.js').BatchWriteReturn} - Result.
    */
   async function batchWrite(params) {
     const puts = (
@@ -514,7 +514,7 @@ export default function createDynamoDB(
     /**
      * Close underlying resources (best-effort).
      * DynamoDB v3 clients keep sockets; destroy() closes them.
-     * @returns {import('../base.js').CloseReturn} -
+     * @returns {import('../base.js').CloseReturn} - Result.
      */
     close: async () => {
       if (typeof docClient.destroy === 'function') docClient.destroy();

@@ -31,16 +31,16 @@ const Status = {
  * @property {string} [id] - Id of the query
  * @property {QueryStatusEnum} [status] - status of the query
  * @property {string} [execution_id] - execution Id of the query
- * @property {any} [query_data] -
- * @property {string} [query_string] -
+ * @property {any} [query_data] - query_data.
+ * @property {string} [query_string] - query_string.
  * @property {number} [started_at] - start timestamp
  * @property {number} [last_updated_at] - update_at_timestamp
- * @property {string} [wharfie_version] -
+ * @property {string} [wharfie_version] - wharfie_version.
  */
 
 class Query {
   /**
-   * @param {QueryOptions} options -
+   * @param {QueryOptions} options - options.
    */
   constructor({
     resource_id,
@@ -73,7 +73,7 @@ class Query {
   }
 
   /**
-   * @returns {import('./typedefs.js').QueryRecord} -
+   * @returns {import('./typedefs.js').QueryRecord} - Result.
    */
   toRecord() {
     return {
@@ -97,8 +97,8 @@ class Query {
   }
 
   /**
-   * @param {Record<string,any>} query_record -
-   * @returns {Query} -
+   * @param {Record<string,any>} query_record - query_record.
+   * @returns {Query} - Result.
    */
   static fromRecord(query_record) {
     return new Query({

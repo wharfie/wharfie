@@ -4,12 +4,11 @@ import fs from 'node:fs';
  * Load an ActorSystem-style resources spec object.
  *
  * Supports:
- *  - --resources-file <path> (JSON)
- *  - --resources <json>
- *  - env WHARFIE_RESOURCES (JSON)
- *
- * @param {{ resourcesFile?: string, resources_file?: string, resources?: string }} opts
- * @returns {any}
+ * - --resources-file <path> (JSON)
+ * - --resources <json>
+ * - env WHARFIE_RESOURCES (JSON)
+ * @param {{ resourcesFile?: string, resources_file?: string, resources?: string }} opts - opts.
+ * @returns {any} - Result.
  */
 export function loadResourcesSpec(opts = {}) {
   const resourcesFile = opts.resourcesFile || opts.resources_file;

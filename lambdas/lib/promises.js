@@ -11,7 +11,7 @@
 /**
  * Concurrent async map with stable result ordering.
  * @template T, U
- * @param {Iterable<T> | ArrayLike<T>} iterable - Input values.
+ * @param {Iterable<T> | Array<T>} iterable - Input values.
  * @param {(value: T, index: number, items: T[]) => (U | Promise<U>)} mapper - Mapping function.
  * @param {{ concurrency?: number }} [options] - Options.
  * @returns {Promise<U[]>} Results in the same order as the input.

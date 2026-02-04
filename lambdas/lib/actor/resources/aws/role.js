@@ -3,26 +3,26 @@ import BaseResource from '../base-resource.js';
 import { NoSuchEntityException } from '@aws-sdk/client-iam';
 /**
  * @typedef RoleProperties
- * @property {string} [roleName] -
- * @property {string} description -
- * @property {any | function } assumeRolePolicyDocument -
- * @property {string[] | (() => string[]) } [managedPolicyArns] -
- * @property {any} [rolePolicyDocument] -
- * @property {import('@aws-sdk/client-iam').Tag[]} [tags] -
+ * @property {string} [roleName] - roleName.
+ * @property {string} description - description.
+ * @property {any | function } assumeRolePolicyDocument - assumeRolePolicyDocument.
+ * @property {string[] | (() => string[]) } [managedPolicyArns] - managedPolicyArns.
+ * @property {any} [rolePolicyDocument] - rolePolicyDocument.
+ * @property {import('@aws-sdk/client-iam').Tag[]} [tags] - tags.
  */
 
 /**
  * @typedef RoleOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {RoleProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {RoleProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class Role extends BaseResource {
   /**
-   * @param {RoleOptions} options -
+   * @param {RoleOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     if (!properties.roleName) {

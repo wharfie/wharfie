@@ -21,8 +21,8 @@ const docClient = DynamoDBDocument.from(
 );
 
 /**
- * @param {import("@aws-sdk/lib-dynamodb").QueryCommandInput} params -
- * @returns {Promise<import("@aws-sdk/lib-dynamodb").QueryCommandOutput>} -
+ * @param {import("@aws-sdk/lib-dynamodb").QueryCommandInput} params - params.
+ * @returns {Promise<import("@aws-sdk/lib-dynamodb").QueryCommandOutput>} - Result.
  */
 async function query(params) {
   /** @type {Object<string, import("@aws-sdk/client-dynamodb").AttributeValue>[]} */
@@ -47,7 +47,7 @@ async function query(params) {
 }
 
 /**
- * @param {import("@aws-sdk/lib-dynamodb").BatchWriteCommandInput} params -
+ * @param {import("@aws-sdk/lib-dynamodb").BatchWriteCommandInput} params - params.
  */
 async function batchWrite(params) {
   let { UnprocessedItems: items } = await docClient.batchWrite(params);
@@ -63,8 +63,8 @@ async function batchWrite(params) {
 const MAX_PUT_RETRY_TIMEOUT_SECONDS = 20;
 const MAX_PUT_RETRY_ATTEMPTS = 100;
 /**
- * @param {import("@aws-sdk/lib-dynamodb").PutCommandInput} params -
- * @returns {Promise<import("@aws-sdk/lib-dynamodb").PutCommandOutput>} -
+ * @param {import("@aws-sdk/lib-dynamodb").PutCommandInput} params - params.
+ * @returns {Promise<import("@aws-sdk/lib-dynamodb").PutCommandOutput>} - Result.
  */
 async function putWithThroughputRetry(params) {
   let attempts = 0;

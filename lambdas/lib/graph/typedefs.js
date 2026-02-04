@@ -6,21 +6,21 @@
  * @property {string} region - aws region of the resource
  * @property {string} [source_region] - aws region of the source data, not set for models
  * @property {string} athena_workgroup - name of the stack's athena workgroup
- * @property {import('../../typedefs.js').DaemonConfig} daemon_config -
- * @property {import('../actor/resources/wharfie-resource.js').WharfieResourceProperties & import('../actor/typedefs.js').SharedProperties} resource_properties -
- * @property {import('../../typedefs.js').TableProperties} source_properties -
- * @property {import('../../typedefs.js').TableProperties} destination_properties -
+ * @property {import('../../typedefs.js').DaemonConfig} daemon_config - daemon_config.
+ * @property {import('../actor/resources/wharfie-resource.js').WharfieResourceProperties & import('../actor/typedefs.js').SharedProperties} resource_properties - resource_properties.
+ * @property {import('../../typedefs.js').TableProperties} source_properties - source_properties.
+ * @property {import('../../typedefs.js').TableProperties} destination_properties - destination_properties.
  * @property {number} created_at - created timestamp
  * @property {number} last_updated_at - update_at_timestamp
  * @property {string} wharfie_version - version of wharfie
- * @property {'RESOURCE'} record_type -
+ * @property {'RESOURCE'} record_type - record_type.
  */
 
 /**
  * @typedef ResourceRecord
  * @property {string} resource_id - Id of the resource
  * @property {string} sort_key - sort key for the query
- * @property {ResourceRecordData} data -
+ * @property {ResourceRecordData} data - data.
  */
 
 /**
@@ -35,14 +35,14 @@
  * @property {number} started_at - started_at
  * @property {number} last_updated_at - update_at_timestamp
  * @property {string} wharfie_version - version of wharfie
- * @property {'OPERATION'} record_type -
+ * @property {'OPERATION'} record_type - record_type.
  */
 
 /**
  * @typedef OperationRecord
  * @property {string} resource_id - Id of the resource
  * @property {string} sort_key - sort key for the query
- * @property {OperationRecordData} data -
+ * @property {OperationRecordData} data - data.
  */
 
 /**
@@ -55,14 +55,14 @@
  * @property {number} started_at - started_at
  * @property {number} last_updated_at - update_at_timestamp
  * @property {string} wharfie_version - version of wharfie
- * @property {'ACTION'} record_type -
+ * @property {'ACTION'} record_type - record_type.
  */
 
 /**
  * @typedef ActionRecord
  * @property {string} resource_id - Id of the resource
  * @property {string} sort_key - sort key for the action
- * @property {ActionRecordData} data -
+ * @property {ActionRecordData} data - data.
  */
 
 /**
@@ -78,14 +78,14 @@
  * @property {number} started_at - started_at
  * @property {number} last_updated_at - update_at_timestamp
  * @property {string} wharfie_version - version of wharfie
- * @property {'QUERY'} record_type -
+ * @property {'QUERY'} record_type - record_type.
  */
 
 /**
  * @typedef QueryRecord
  * @property {string} resource_id - Id of the resource
  * @property {string} sort_key - sort key for the query
- * @property {QueryRecordData} data -
+ * @property {QueryRecordData} data - data.
  */
 
 export {};

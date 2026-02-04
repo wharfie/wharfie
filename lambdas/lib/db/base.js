@@ -32,16 +32,16 @@ const KEY_TYPE = {
 
 /**
  * @typedef KeyCondition
- * @property {ConditionTypeEnum} conditionType -
- * @property {string} propertyName -
- * @property {any} propertyValue -
- * @property {KeyTypeEnum} [keyType] -
+ * @property {ConditionTypeEnum} conditionType - conditionType.
+ * @property {string} propertyName - propertyName.
+ * @property {any} propertyValue - propertyValue.
+ * @property {KeyTypeEnum} [keyType] - keyType.
  */
 /**
  * @typedef QueryParams
- * @property {string} tableName -
- * @property {boolean} consistentRead -
- * @property {KeyCondition[]} keyConditions -
+ * @property {string} tableName - tableName.
+ * @property {boolean} consistentRead - consistentRead.
+ * @property {KeyCondition[]} keyConditions - keyConditions.
  */
 
 /**
@@ -49,8 +49,8 @@ const KEY_TYPE = {
  */
 
 /**
- * @param {QueryParams} params -
- * @returns {QueryReturn} -
+ * @param {QueryParams} params - params.
+ * @returns {QueryReturn} - Result.
  */
 async function query(params) {
   return [];
@@ -71,16 +71,16 @@ async function query(params) {
 
 /**
  * @typedef PutRequest
- * @property {DBRecord} record -
- * @property {string} keyName -
- * @property {string} [sortKeyName] -
+ * @property {DBRecord} record - record.
+ * @property {string} keyName - keyName.
+ * @property {string} [sortKeyName] - sortKeyName.
  */
 
 /**
  * @typedef BatchWriteParams
- * @property {string} tableName -
- * @property {DeleteRequest[]} [deleteRequests] -
- * @property {PutRequest[]} [putRequests] -
+ * @property {string} tableName - tableName.
+ * @property {DeleteRequest[]} [deleteRequests] - deleteRequests.
+ * @property {PutRequest[]} [putRequests] - putRequests.
  */
 
 /**
@@ -88,27 +88,27 @@ async function query(params) {
  */
 
 /**
- * @param {BatchWriteParams} params -
- * @returns {BatchWriteReturn} -
+ * @param {BatchWriteParams} params - params.
+ * @returns {BatchWriteReturn} - Result.
  */
 async function batchWrite(params) {}
 
 /**
  * @typedef UpdateDefinition
- * @property {string[]} property -
- * @property {any} propertyValue -
+ * @property {string[]} property - property.
+ * @property {any} propertyValue - propertyValue.
  */
 
 /**
  * @typedef UpdateParams
- * @property {string} tableName -
- * @property {DBRecord} [record] -
- * @property {string} keyName -
- * @property {string} keyValue -
- * @property {string} [sortKeyName] -
- * @property {string} [sortKeyValue] -
- * @property {KeyCondition[]} [conditions] -
- * @property {UpdateDefinition[]} [updates] -
+ * @property {string} tableName - tableName.
+ * @property {DBRecord} [record] - record.
+ * @property {string} keyName - keyName.
+ * @property {string} keyValue - keyValue.
+ * @property {string} [sortKeyName] - sortKeyName.
+ * @property {string} [sortKeyValue] - sortKeyValue.
+ * @property {KeyCondition[]} [conditions] - conditions.
+ * @property {UpdateDefinition[]} [updates] - updates.
  */
 
 /**
@@ -116,17 +116,17 @@ async function batchWrite(params) {}
  */
 
 /**
- * @param {UpdateParams} params -
- * @returns {UpdateReturn} -
+ * @param {UpdateParams} params - params.
+ * @returns {UpdateReturn} - Result.
  */
 async function update(params) {}
 
 /**
  * @typedef PutParams
- * @property {string} tableName -
- * @property {string} keyName -
- * @property {string} [sortKeyName] -
- * @property {DBRecord} record -
+ * @property {string} tableName - tableName.
+ * @property {string} keyName - keyName.
+ * @property {string} [sortKeyName] - sortKeyName.
+ * @property {DBRecord} record - record.
  */
 
 /**
@@ -134,19 +134,19 @@ async function update(params) {}
  */
 
 /**
- * @param {PutParams} params -
- * @returns {PutReturn} -
+ * @param {PutParams} params - params.
+ * @returns {PutReturn} - Result.
  */
 async function put(params) {}
 
 /**
  * @typedef GetParams
- * @property {string} tableName -
- * @property {boolean} [consistentRead] -
- * @property {string} keyName -
- * @property {string} keyValue -
- * @property {string} [sortKeyName] -
- * @property {string} [sortKeyValue] -
+ * @property {string} tableName - tableName.
+ * @property {boolean} [consistentRead] - consistentRead.
+ * @property {string} keyName - keyName.
+ * @property {string} keyValue - keyValue.
+ * @property {string} [sortKeyName] - sortKeyName.
+ * @property {string} [sortKeyValue] - sortKeyValue.
  */
 
 /**
@@ -154,18 +154,18 @@ async function put(params) {}
  */
 
 /**
- * @param {GetParams} params -
- * @returns {GetReturn} -
+ * @param {GetParams} params - params.
+ * @returns {GetReturn} - Result.
  */
 async function get(params) {}
 
 /**
  * @typedef RemoveParams
- * @property {string} tableName -
- * @property {string} keyName -
- * @property {string} keyValue -
- * @property {string} [sortKeyName] -
- * @property {string} [sortKeyValue] -
+ * @property {string} tableName - tableName.
+ * @property {string} keyName - keyName.
+ * @property {string} keyValue - keyValue.
+ * @property {string} [sortKeyName] - sortKeyName.
+ * @property {string} [sortKeyValue] - sortKeyValue.
  */
 
 /**
@@ -173,8 +173,8 @@ async function get(params) {}
  */
 
 /**
- * @param {RemoveParams} params -
- * @returns {RemoveReturn} -
+ * @param {RemoveParams} params - params.
+ * @returns {RemoveReturn} - Result.
  */
 async function remove(params) {}
 
@@ -183,7 +183,7 @@ async function remove(params) {}
  */
 
 /**
- * @returns {CloseReturn} -
+ * @returns {CloseReturn} - Result.
  */
 async function close() {}
 
@@ -196,18 +196,18 @@ async function close() {}
 /**
  * A DynamoDB wrapper client exposing the base DB methods.
  * @typedef {Object} DBClient
- * @property {(params: QueryParams) => QueryReturn} query -
- * @property {(params: PutParams) => PutReturn} put -
- * @property {(params: UpdateParams) => UpdateReturn} update -
- * @property {(params: GetParams) => GetReturn} get -
- * @property {(params: RemoveParams) => RemoveReturn} remove -
- * @property {(params: BatchWriteParams) => BatchWriteReturn} batchWrite -
- * @property {() => CloseReturn} close -
+ * @property {(params: QueryParams) => QueryReturn} query - query.
+ * @property {(params: PutParams) => PutReturn} put - put.
+ * @property {(params: UpdateParams) => UpdateReturn} update - update.
+ * @property {(params: GetParams) => GetReturn} get - get.
+ * @property {(params: RemoveParams) => RemoveReturn} remove - remove.
+ * @property {(params: BatchWriteParams) => BatchWriteReturn} batchWrite - batchWrite.
+ * @property {() => CloseReturn} close - close.
  */
 
 /**
  * Factory function that creates a DynamoDB wrapper client.
- * @returns {DBClient} -
+ * @returns {DBClient} - Result.
  */
 export default function createDB() {
   return {

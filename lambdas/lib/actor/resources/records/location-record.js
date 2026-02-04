@@ -7,22 +7,22 @@ import {
 
 /**
  * @typedef LocationRecordProperties
- * @property {import('../../../../typedefs.js').LocationRecord | function(): import('../../../../typedefs.js').LocationRecord} data -
- * @property {string} table_name -
+ * @property {import('../../../../typedefs.js').LocationRecord | function(): import('../../../../typedefs.js').LocationRecord} data - data.
+ * @property {string} table_name - table_name.
  */
 
 /**
  * @typedef LocationRecordOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {LocationRecordProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {LocationRecordProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class LocationRecord extends BaseResource {
   /**
-   * @param {LocationRecordOptions} options -
+   * @param {LocationRecordOptions} options - options.
    */
   constructor({ name, parent, status, dependsOn = [], properties }) {
     super({

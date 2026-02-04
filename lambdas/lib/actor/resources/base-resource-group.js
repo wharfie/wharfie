@@ -3,12 +3,12 @@ import Reconcilable from './reconcilable.js';
 
 /**
  * @typedef BaseResourceGroupOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {Reconcilable.Status} [status] -
- * @property {Reconcilable[]} [dependsOn] -
- * @property {Object<string, any> & import('../typedefs.js').SharedProperties} properties -
- * @property {Object<string, BaseResource | BaseResourceGroup>} [resources] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {Reconcilable.Status} [status] - status.
+ * @property {Reconcilable[]} [dependsOn] - dependsOn.
+ * @property {Object<string, any> & import('../typedefs.js').SharedProperties} properties - properties.
+ * @property {Object<string, BaseResource | BaseResourceGroup>} [resources] - resources.
  */
 class BaseResourceGroup extends BaseResource {
   /**
@@ -25,15 +25,15 @@ class BaseResourceGroup extends BaseResource {
   }
 
   /**
-   * @param {string} parent -
-   * @returns {(BaseResource | BaseResourceGroup)[]} -
+   * @param {string} parent - parent.
+   * @returns {(BaseResource | BaseResourceGroup)[]} - Result.
    */
   _defineGroupResources(parent) {
     return [];
   }
 
   /**
-   * @param {BaseResource | BaseResourceGroup} resource -
+   * @param {BaseResource | BaseResourceGroup} resource - resource.
    */
   addResource(resource) {
     if (this.resources[resource.name]) {
@@ -43,7 +43,7 @@ class BaseResourceGroup extends BaseResource {
   }
 
   /**
-   * @param {(BaseResource | BaseResourceGroup)[]} resources -
+   * @param {(BaseResource | BaseResourceGroup)[]} resources - resources.
    */
   addResources(resources) {
     resources.forEach((resource) => {
@@ -52,8 +52,8 @@ class BaseResourceGroup extends BaseResource {
   }
 
   /**
-   * @param {string} name -
-   * @returns {BaseResource | BaseResourceGroup} -
+   * @param {string} name - name.
+   * @returns {BaseResource | BaseResourceGroup} - Result.
    */
   getResource(name) {
     if (!this.resources[name]) {
@@ -63,15 +63,15 @@ class BaseResourceGroup extends BaseResource {
   }
 
   /**
-   * @returns {(BaseResource | BaseResourceGroup)[]} -
+   * @returns {(BaseResource | BaseResourceGroup)[]} - Result.
    */
   getResources() {
     return Object.values(this.resources || {});
   }
 
   /**
-   * @param {string} name -
-   * @returns {boolean} -
+   * @param {string} name - name.
+   * @returns {boolean} - Result.
    */
   hasResource(name) {
     return !!this.resources[name];
@@ -79,11 +79,11 @@ class BaseResourceGroup extends BaseResource {
 
   /**
    * @typedef BaseResourceGroupEvent
-   * @property {string} name -
-   * @property {string} constructor -
-   * @property {Reconcilable.Status} status -
-   * @property {string[]} resources -
-   * @returns {BaseResourceGroupEvent} -
+   * @property {string} name - name.
+   * @property {string} constructor - constructor.
+   * @property {Reconcilable.Status} status - status.
+   * @property {string[]} resources - resources.
+   * @returns {BaseResourceGroupEvent} - Result.
    */
   asEvent() {
     return {
@@ -95,7 +95,7 @@ class BaseResourceGroup extends BaseResource {
   }
 
   /**
-   * @returns {import('../typedefs.js').SerializedBaseResourceGroup} -
+   * @returns {import('../typedefs.js').SerializedBaseResourceGroup} - Result.
    */
   serialize() {
     return {

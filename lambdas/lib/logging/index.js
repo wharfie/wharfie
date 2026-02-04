@@ -43,9 +43,9 @@ const WHARFIE_DB_LOGGER = ROOT_LOGGER.child({
 });
 
 /**
- * @param {import('../../typedefs.js').WharfieEvent} event -
- * @param {import('aws-lambda').Context} context -
- * @returns {Logger} -
+ * @param {import('../../typedefs.js').WharfieEvent} event - event.
+ * @param {import('aws-lambda').Context} context - context.
+ * @returns {Logger} - Result.
  */
 function getEventLogger(event, context) {
   return ROOT_LOGGER.child({
@@ -63,21 +63,21 @@ function getEventLogger(event, context) {
 }
 
 /**
- * @returns {Logger} -
+ * @returns {Logger} - Result.
  */
 function getDaemonLogger() {
   return ROOT_LOGGER;
 }
 
 /**
- * @returns {Logger} -
+ * @returns {Logger} - Result.
  */
 function getAWSSDKLogger() {
   return AWS_SDK_LOGGER;
 }
 
 /**
- * @returns {Logger} -
+ * @returns {Logger} - Result.
  */
 function getWharfieDBLogger() {
   return WHARFIE_DB_LOGGER;

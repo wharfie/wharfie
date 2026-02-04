@@ -28,60 +28,60 @@ const sqs = new SQS({});
 
 /**
  * @typedef WharfieResourceProperties
- * @property {string} resourceName -
- * @property {string} [resourceId] -
- * @property {string} [resourceKey] -
- * @property {number} [version] -
- * @property {string} projectName -
- * @property {string} databaseName -
- * @property {string | function(): string} catalogId -
- * @property {string} [schedule] -
- * @property {string} description -
- * @property {string} tableType -
- * @property {any} parameters -
- * @property {import('../typedefs.js').WharfieTableColumn[]} partitionKeys -
- * @property {import('../typedefs.js').WharfieTableColumn[]} columns -
- * @property {string} [inputFormat] -
- * @property {string} [outputFormat] -
- * @property {string} [inputLocation] -
- * @property {string} outputLocation -
- * @property {number} [numberOfBuckets] -
- * @property {boolean} [storedAsSubDirectories] -
- * @property {any} [serdeInfo] -
- * @property {boolean} [compressed] -
- * @property {string} [viewOriginalText] -
- * @property {string} [viewExpandedText] -
- * @property {any[]} [tags] -
- * @property {string} projectBucket -
- * @property {string | function(): string} region -
- * @property {number} [interval] -
- * @property {number} [createdAt] -
- * @property {string | function(): string} scheduleQueueArn -
- * @property {string | function(): string} scheduleQueueUrl -
- * @property {string | function(): string} daemonQueueUrl -
- * @property {string} [scheduleRoleArn] -
- * @property {string | function(): string} roleArn -
- * @property {string} operationTable -
- * @property {string} dependencyTable -
- * @property {string} locationTable -
- * @property {boolean} [migrationResource] -
- * @property {import('../../../typedefs.js').SideEffect[]} [sideEffects] -
- * @property {import('../../../../cli/project/typedefs.js').Model | import('../../../../cli/project/typedefs.js').Source} [userInput] -
+ * @property {string} resourceName - resourceName.
+ * @property {string} [resourceId] - resourceId.
+ * @property {string} [resourceKey] - resourceKey.
+ * @property {number} [version] - version.
+ * @property {string} projectName - projectName.
+ * @property {string} databaseName - databaseName.
+ * @property {string | function(): string} catalogId - catalogId.
+ * @property {string} [schedule] - schedule.
+ * @property {string} description - description.
+ * @property {string} tableType - tableType.
+ * @property {any} parameters - parameters.
+ * @property {import('../typedefs.js').WharfieTableColumn[]} partitionKeys - partitionKeys.
+ * @property {import('../typedefs.js').WharfieTableColumn[]} columns - columns.
+ * @property {string} [inputFormat] - inputFormat.
+ * @property {string} [outputFormat] - outputFormat.
+ * @property {string} [inputLocation] - inputLocation.
+ * @property {string} outputLocation - outputLocation.
+ * @property {number} [numberOfBuckets] - numberOfBuckets.
+ * @property {boolean} [storedAsSubDirectories] - storedAsSubDirectories.
+ * @property {any} [serdeInfo] - serdeInfo.
+ * @property {boolean} [compressed] - compressed.
+ * @property {string} [viewOriginalText] - viewOriginalText.
+ * @property {string} [viewExpandedText] - viewExpandedText.
+ * @property {any[]} [tags] - tags.
+ * @property {string} projectBucket - projectBucket.
+ * @property {string | function(): string} region - region.
+ * @property {number} [interval] - interval.
+ * @property {number} [createdAt] - createdAt.
+ * @property {string | function(): string} scheduleQueueArn - scheduleQueueArn.
+ * @property {string | function(): string} scheduleQueueUrl - scheduleQueueUrl.
+ * @property {string | function(): string} daemonQueueUrl - daemonQueueUrl.
+ * @property {string} [scheduleRoleArn] - scheduleRoleArn.
+ * @property {string | function(): string} roleArn - roleArn.
+ * @property {string} operationTable - operationTable.
+ * @property {string} dependencyTable - dependencyTable.
+ * @property {string} locationTable - locationTable.
+ * @property {boolean} [migrationResource] - migrationResource.
+ * @property {import('../../../typedefs.js').SideEffect[]} [sideEffects] - sideEffects.
+ * @property {import('../../../../cli/project/typedefs.js').Model | import('../../../../cli/project/typedefs.js').Source} [userInput] - userInput.
  */
 
 /**
  * @typedef WharfieResourceOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('./reconcilable.js').default.Status} [status] -
- * @property {WharfieResourceProperties & import('../typedefs.js').SharedProperties} properties -
- * @property {import('./reconcilable.js').default[]} [dependsOn] -
- * @property {Object<string, import('./base-resource.js').default | BaseResourceGroup>} [resources] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('./reconcilable.js').default.Status} [status] - status.
+ * @property {WharfieResourceProperties & import('../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('./reconcilable.js').default[]} [dependsOn] - dependsOn.
+ * @property {Object<string, import('./base-resource.js').default | BaseResourceGroup>} [resources] - resources.
  */
 
 class WharfieResource extends BaseResourceGroup {
   /**
-   * @param {WharfieResourceOptions} options -
+   * @param {WharfieResourceOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn, resources }) {
     const propertiesWithDefaults = Object.assign(
@@ -103,8 +103,8 @@ class WharfieResource extends BaseResourceGroup {
   }
 
   /**
-   * @param {string} parent -
-   * @returns {(import('./base-resource.js').default | BaseResourceGroup)[]} -
+   * @param {string} parent - parent.
+   * @returns {(import('./base-resource.js').default | BaseResourceGroup)[]} - Result.
    */
   _defineGroupResources(parent) {
     const resources = [];
@@ -332,7 +332,7 @@ class WharfieResource extends BaseResourceGroup {
   }
 
   /**
-   * @returns {Promise<Resource>} -
+   * @returns {Promise<Resource>} - Result.
    */
   async getResourceDef() {
     let source_region;
@@ -376,8 +376,8 @@ class WharfieResource extends BaseResourceGroup {
   }
 
   /**
-   * @param {Object<string, any>?} oldProperties -
-   * @returns {Promise<boolean>} -
+   * @param {Object<string, any>?} oldProperties - oldProperties.
+   * @returns {Promise<boolean>} - Result.
    */
   async needsMigration(oldProperties) {
     const reasons = [];
@@ -528,7 +528,7 @@ class WharfieResource extends BaseResourceGroup {
   }
 
   /**
-   * @param {string} operation_id -
+   * @param {string} operation_id - operation_id.
    */
   async _wait_for_op_complete(operation_id) {
     let operation = await operation_db.getOperation(
@@ -619,7 +619,7 @@ class WharfieResource extends BaseResourceGroup {
   }
 
   /**
-   * @param {BaseResource | BaseResourceGroup} resource -
+   * @param {BaseResource | BaseResourceGroup} resource - resource.
    */
   updateResource(resource) {
     if (!this.resources[resource.name]) {
@@ -630,7 +630,7 @@ class WharfieResource extends BaseResourceGroup {
   }
 
   /**
-   * @param {(BaseResource | BaseResourceGroup)[]} resources -
+   * @param {(BaseResource | BaseResourceGroup)[]} resources - resources.
    */
   updateResources(resources) {
     resources.forEach((resource) => {
@@ -639,7 +639,7 @@ class WharfieResource extends BaseResourceGroup {
   }
 
   /**
-   * @param {any} properties -
+   * @param {any} properties - properties.
    */
   async setProperties(properties) {
     super.setProperties(properties);
@@ -647,8 +647,8 @@ class WharfieResource extends BaseResourceGroup {
   }
 
   /**
-   * @param {string} key -
-   * @param {any} value -
+   * @param {string} key - key.
+   * @param {any} value - value.
    */
   set(key, value) {
     super.set(key, value);

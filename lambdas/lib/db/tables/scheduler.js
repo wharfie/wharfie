@@ -15,9 +15,9 @@ const SORT_KEY_NAME = 'sort_key';
 const THREE_DAYS_IN_SECONDS = 60 * 60 * 24 * 3;
 
 /**
- * @param {string} propertyName -
- * @param {string} propertyValue -
- * @returns {import('../../db/base.js').KeyCondition} -
+ * @param {string} propertyName - propertyName.
+ * @param {string} propertyValue - propertyValue.
+ * @returns {import('../../db/base.js').KeyCondition} - Result.
  */
 function pkEq(propertyName, propertyValue) {
   return {
@@ -29,9 +29,9 @@ function pkEq(propertyName, propertyValue) {
 }
 
 /**
- * @param {string} propertyName -
- * @param {string} propertyValue -
- * @returns {import('../../db/base.js').KeyCondition} -
+ * @param {string} propertyName - propertyName.
+ * @param {string} propertyValue - propertyValue.
+ * @returns {import('../../db/base.js').KeyCondition} - Result.
  */
 function skBegins(propertyName, propertyValue) {
   return {
@@ -43,12 +43,12 @@ function skBegins(propertyName, propertyValue) {
 }
 
 /**
- * @returns {number} -
+ * @returns {number} - Result.
  */
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 /**
- * @returns {Error} -
+ * @returns {Error} - Result.
  */
 const conditionalFailed = () => {
   try {
@@ -64,8 +64,8 @@ const conditionalFailed = () => {
 };
 
 /**
- * @param {string} sortKey -
- * @returns {number | null} -
+ * @param {string} sortKey - sortKey.
+ * @returns {number | null} - Result.
  */
 const sortKeyToNumber = (sortKey) => {
   const idx = sortKey.indexOf(':');
@@ -76,18 +76,18 @@ const sortKeyToNumber = (sortKey) => {
 
 /**
  * @typedef {Object} schedulerClient
- * @property {(schedulerEvent: SchedulerEntry) => Promise<void>} schedule -
- * @property {(schedulerEvent: SchedulerEntry, status: import('../../../scheduler/scheduler-entry.js').SchedulerEntryStatusEnum) => Promise<void>} update -
- * @property {(resource_id: string, partition: string, window: [number, number]) => Promise<SchedulerEntry[]>} query -
- * @property {(resource_id: string) => Promise<void>} delete_records -
+ * @property {(schedulerEvent: SchedulerEntry) => Promise<void>} schedule - schedule.
+ * @property {(schedulerEvent: SchedulerEntry, status: import('../../../scheduler/scheduler-entry.js').SchedulerEntryStatusEnum) => Promise<void>} update - update.
+ * @property {(resource_id: string, partition: string, window: [number, number]) => Promise<SchedulerEntry[]>} query - query.
+ * @property {(resource_id: string) => Promise<void>} delete_records - delete_records.
  */
 
 /**
  * Factory: Scheduler table client.
- * @param {object} params -
- * @param {DBClient} params.db -
- * @param {string} [params.tableName] -
- * @returns {schedulerClient} -
+ * @param {object} params - params.
+ * @param {DBClient} params.db - params.db.
+ * @param {string} [params.tableName] - params.tableName.
+ * @returns {schedulerClient} - Result.
  */
 export function createSchedulerTable({
   db,
@@ -96,8 +96,8 @@ export function createSchedulerTable({
   if (!db) throw new Error('createSchedulerTable requires a db client');
 
   /**
-   * @param {SchedulerEntry} schedulerEvent -
-   * @returns {Promise<void>} -
+   * @param {SchedulerEntry} schedulerEvent - schedulerEvent.
+   * @returns {Promise<void>} - Result.
    */
   async function schedule(schedulerEvent) {
     schedulerEvent.ttl = nowSeconds() + THREE_DAYS_IN_SECONDS;
@@ -126,9 +126,9 @@ export function createSchedulerTable({
   }
 
   /**
-   * @param {SchedulerEntry} schedulerEvent -
-   * @param {import('../../../scheduler/scheduler-entry.js').SchedulerEntryStatusEnum} status -
-   * @returns {Promise<void>} -
+   * @param {SchedulerEntry} schedulerEvent - schedulerEvent.
+   * @param {import('../../../scheduler/scheduler-entry.js').SchedulerEntryStatusEnum} status - status.
+   * @returns {Promise<void>} - Result.
    */
   async function update(schedulerEvent, status) {
     schedulerEvent.status = status;
@@ -154,10 +154,10 @@ export function createSchedulerTable({
   }
 
   /**
-   * @param {string} resource_id -
-   * @param {string} partition -
-   * @param {[number, number]} window -
-   * @returns {Promise<SchedulerEntry[]>} -
+   * @param {string} resource_id - resource_id.
+   * @param {string} partition - partition.
+   * @param {[number, number]} window - window.
+   * @returns {Promise<SchedulerEntry[]>} - Result.
    */
   async function query(resource_id, partition, window) {
     const [startBy, endBy] = window;
@@ -181,8 +181,8 @@ export function createSchedulerTable({
   }
 
   /**
-   * @param {string} resource_id -
-   * @returns {Promise<void>} -
+   * @param {string} resource_id - resource_id.
+   * @returns {Promise<void>} - Result.
    */
   async function delete_records(resource_id) {
     const items =

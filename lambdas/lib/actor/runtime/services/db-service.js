@@ -4,14 +4,14 @@ import { startGrpcServer, ResourceRpcServiceDefinition } from './rpc-grpc.js';
 /**
  * @typedef DbServiceOptions
  * @property {any} dbSpec - ActorSystem-style db resource spec (string | {adapter,options} | instance)
- * @property {string} [host]
- * @property {number} [port]
- * @property {(msg: string, extra?: any) => void} [log]
+ * @property {string} [host] - host.
+ * @property {number} [port] - port.
+ * @property {(msg: string, extra?: any) => void} [log] - log.
  */
 
 /**
- * @param {string} method
- * @returns {boolean}
+ * @param {string} method - method.
+ * @returns {boolean} - Result.
  */
 function isForbiddenMethod(method) {
   return (
@@ -27,9 +27,8 @@ function isForbiddenMethod(method) {
  * Start a DB service.
  *
  * This hosts a real DB adapter client in-process and exposes it via a gRPC endpoint.
- *
- * @param {DbServiceOptions} options
- * @returns {Promise<{ address: string, host: string, port: number, close: () => Promise<void> }>}
+ * @param {DbServiceOptions} options - options.
+ * @returns {Promise<{ address: string, host: string, port: number, close: () => Promise<void> }>} - Result.
  */
 export async function startDbService({
   dbSpec,
@@ -50,8 +49,8 @@ export async function startDbService({
     log,
     implementation: {
       /**
-       * @param {any} call
-       * @param {(err: any, resp: any) => void} callback
+       * @param {any} call - call.
+       * @param {(err: any, resp: any) => void} callback - callback.
        */
       Call: async (call, callback) => {
         try {
@@ -94,8 +93,8 @@ export async function startDbService({
       },
 
       /**
-       * @param {any} _call
-       * @param {(err: any, resp: any) => void} callback
+       * @param {any} _call - _call.
+       * @param {(err: any, resp: any) => void} callback - callback.
        */
       Health: async (_call, callback) => {
         callback(null, { ok: true });

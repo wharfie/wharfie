@@ -35,10 +35,10 @@ import BaseResource from '../base-resource.js';
 /**
  * @typedef VPSOptions
  * @property {string} name - Unique server name within the project.
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {VPSProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {VPSProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class HetznerVPS extends BaseResource {
@@ -82,7 +82,7 @@ class HetznerVPS extends BaseResource {
    * Build user_data from either properties.cloudInit (raw YAML)
    * or properties.service (structured systemd spec). If both are provided,
    * they are merged (raw first, then service section appended).
-   * @returns {string|undefined} -
+   * @returns {string|undefined} - Result.
    * @private
    */
   _composeUserData() {
@@ -115,7 +115,7 @@ class HetznerVPS extends BaseResource {
    * Ensure the server exists and is running; inject SSH key on first creation if provided.
    * If cloud-init/systemd is supplied, it is applied **only on first creation** (cannot be updated later).
    * Idempotent lifecycle.
-   * @returns {Promise<void>}
+   * @returns {Promise<void>} - Result.
    */
   async _reconcile() {
     // 1) Resolve existing server (by cached id first, then by name)
@@ -191,7 +191,7 @@ class HetznerVPS extends BaseResource {
   /**
    * Terminate the server if it exists.
    * Idempotent: ignores "already gone". Clears cached state.
-   * @returns {Promise<void>}
+   * @returns {Promise<void>} - Result.
    */
   async _destroy() {
     let serverId = this.get('hetzner_id');

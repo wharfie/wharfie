@@ -8,27 +8,27 @@ import { NoSuchBucket } from '@aws-sdk/client-s3';
 
 /**
  * @typedef EventsRuleProperties
- * @property {string} description -
- * @property {string} [scheduleExpression] -
- * @property {string} [eventPattern] -
- * @property {string | function} [roleArn] -
- * @property {import('@aws-sdk/client-cloudwatch-events').RuleState} state -
- * @property {import('@aws-sdk/client-cloudwatch-events').Target[] | function(): import('@aws-sdk/client-cloudwatch-events').Target[]} targets -
- * @property {import('@aws-sdk/client-cloudwatch-events').Tag[]} [tags] -
+ * @property {string} description - description.
+ * @property {string} [scheduleExpression] - scheduleExpression.
+ * @property {string} [eventPattern] - eventPattern.
+ * @property {string | function} [roleArn] - roleArn.
+ * @property {import('@aws-sdk/client-cloudwatch-events').RuleState} state - state.
+ * @property {import('@aws-sdk/client-cloudwatch-events').Target[] | function(): import('@aws-sdk/client-cloudwatch-events').Target[]} targets - targets.
+ * @property {import('@aws-sdk/client-cloudwatch-events').Tag[]} [tags] - tags.
  */
 
 /**
  * @typedef EventsRuleOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {EventsRuleProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {EventsRuleProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class EventsRule extends BaseResource {
   /**
-   * @param {EventsRuleOptions} options -
+   * @param {EventsRuleOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     super({ name, parent, status, properties, dependsOn });
@@ -191,7 +191,7 @@ class EventsRule extends BaseResource {
   }
 
   /**
-   * @param {string} status -
+   * @param {string} status - status.
    */
   async waitForEventsRuleStatus(status) {
     let currentStatus = '';

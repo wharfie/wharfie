@@ -1,3 +1,14 @@
+import createVanillaDB from '../../db/adapters/vanilla.js';
+import createDynamoDB from '../../db/adapters/dynamodb.js';
+import createLmdbDB from '../../db/adapters/lmdb.js';
+import createVanillaQueue from '../../queue/adapters/vanilla.js';
+import createSqsQueue from '../../queue/adapters/sqs.js';
+import createLmdbQueue from '../../queue/adapters/lmdb.js';
+import createVanillaObjectStorage from '../../object-storage/adapters/vanilla.js';
+import createS3ObjectStorage from '../../object-storage/adapters/s3.js';
+import createR2ObjectStorage from '../../object-storage/adapters/r2.js';
+import createB2ObjectStorage from '../../object-storage/adapters/b2.js';
+
 /**
  * Actor-system runtime resources.
  *
@@ -17,24 +28,39 @@
 
 /**
  * @typedef {'auto'|'vanilla'|'dynamodb'|'lmdb'} DBAdapter
- * @typedef {'auto'|'vanilla'|'sqs'|'lmdb'} QueueAdapter
- * @typedef {'auto'|'vanilla'|'s3'|'r2'|'b2'} ObjectStorageAdapter
- * @typedef ResourceSpecObject
- * @property {string} adapter
- * @property {Record<string, any>} [options]
- * @typedef ActorSystemResourceSpecs
- * @property {string | ResourceSpecObject | any} [db]
- * @property {string | ResourceSpecObject | any} [queue]
- * @property {string | ResourceSpecObject | any} [objectStorage]
- * @typedef ActorSystemResources
- * @property {import('../../db/base.js').DBClient} [db]
- * @property {import('../../queue/base.js').QueueClient} [queue]
- * @property {import('../../object-storage/base.js').ObjectStorageClient} [objectStorage]
  */
 
 /**
- * @param {any} v
- * @returns {v is Record<string, any>}
+ * @typedef {'auto'|'vanilla'|'sqs'|'lmdb'} QueueAdapter
+ */
+
+/**
+ * @typedef {'auto'|'vanilla'|'s3'|'r2'|'b2'} ObjectStorageAdapter
+ */
+
+/**
+ * @typedef ResourceSpecObject
+ * @property {string} adapter - Adapter name.
+ * @property {Record<string, any>} [options] - Adapter options.
+ */
+
+/**
+ * @typedef ActorSystemResourceSpecs
+ * @property {string | ResourceSpecObject | any} [db] - DB adapter spec or instance.
+ * @property {string | ResourceSpecObject | any} [queue] - Queue adapter spec or instance.
+ * @property {string | ResourceSpecObject | any} [objectStorage] - Object storage spec or instance.
+ */
+
+/**
+ * @typedef ActorSystemResources
+ * @property {import('../../db/base.js').DBClient} [db] - DB client instance.
+ * @property {import('../../queue/base.js').QueueClient} [queue] - Queue client instance.
+ * @property {import('../../object-storage/base.js').ObjectStorageClient} [objectStorage] - Object storage client instance.
+ */
+
+/**
+ * @param {any} v - v.
+ * @returns {v is Record<string, any>} - Result.
  */
 function isPlainObject(v) {
   if (!v || typeof v !== 'object') return false;
@@ -43,8 +69,8 @@ function isPlainObject(v) {
 }
 
 /**
- * @param {any} v
- * @returns {v is ResourceSpecObject}
+ * @param {any} v - v.
+ * @returns {v is ResourceSpecObject} - Result.
  */
 function looksLikeSpecObject(v) {
   return (
@@ -53,23 +79,23 @@ function looksLikeSpecObject(v) {
 }
 
 /**
- * @param {any} v
- * @returns {v is { close: () => any }}
+ * @param {any} v - v.
+ * @returns {v is { close: () => any }} - Result.
  */
 function looksClosable(v) {
   return !!v && typeof v === 'object' && typeof v.close === 'function';
 }
 
 /**
- * @returns {boolean}
+ * @returns {boolean} - Result.
  */
 function inAWS() {
   return !!(process.env.AWS_REGION || process.env.AWS_EXECUTION_ENV);
 }
 
 /**
- * @param {'db'|'queue'|'objectStorage'} kind
- * @returns {string}
+ * @param {'db'|'queue'|'objectStorage'} kind - kind.
+ * @returns {string} - Result.
  */
 function defaultAdapter(kind) {
   if (kind === 'db') return inAWS() ? 'dynamodb' : 'vanilla';
@@ -80,9 +106,9 @@ function defaultAdapter(kind) {
 
 /**
  * Normalize a resource spec into `{ adapter, options }` or return an instance unchanged.
- * @param {any} spec
- * @param {'db'|'queue'|'objectStorage'} kind
- * @returns {{ adapter: string, options: Record<string, any> } | { instance: any } | undefined}
+ * @param {any} spec - spec.
+ * @param {'db'|'queue'|'objectStorage'} kind - kind.
+ * @returns {{ adapter: string, options: Record<string, any> } | { instance: any } | undefined} - Result.
  */
 function normalizeSpec(spec, kind) {
   if (spec === undefined || spec === null) return undefined;
@@ -109,87 +135,65 @@ function normalizeSpec(spec, kind) {
   return { instance: spec };
 }
 
-/** Adapter module caches (avoid repeated dynamic imports). */
-const _adapterModuleCache = new Map();
+const DB_FACTORIES = {
+  vanilla: createVanillaDB,
+  dynamodb: createDynamoDB,
+  lmdb: createLmdbDB,
+};
+
+const QUEUE_FACTORIES = {
+  vanilla: createVanillaQueue,
+  sqs: createSqsQueue,
+  lmdb: createLmdbQueue,
+};
+
+const OBJECT_STORAGE_FACTORIES = {
+  vanilla: createVanillaObjectStorage,
+  s3: createS3ObjectStorage,
+  r2: createR2ObjectStorage,
+  b2: createB2ObjectStorage,
+};
 
 /**
- * @param {string} key
- * @param {() => Promise<any>} loader
- * @returns {Promise<any>}
- */
-async function cachedImport(key, loader) {
-  const existing = _adapterModuleCache.get(key);
-  if (existing) return existing;
-  const p = loader();
-  _adapterModuleCache.set(key, p);
-  return p;
-}
-
-/**
- * @param {string} adapter
- * @returns {Promise<(options?: any) => import('../../db/base.js').DBClient>}
+ * @param {string} adapter - adapter.
+ * @returns {Promise<(options?: any) => import('../../db/base.js').DBClient>} - Result.
  */
 async function loadDBFactory(adapter) {
-  const allowed = new Set(['vanilla', 'dynamodb', 'lmdb']);
-  if (!allowed.has(adapter)) {
+  const factory = DB_FACTORIES[adapter];
+  if (!factory) {
     throw new Error(`Unsupported db adapter: ${adapter}`);
   }
-
-  // NOTE: Build the specifier at runtime so TypeScript doesn't eagerly
-  // typecheck adapter implementations while this refactor is in-flight.
-  const specifier = ['..', '..', 'db', 'adapters', `${adapter}.js`].join('/');
-  return cachedImport(
-    `db:${adapter}`,
-    async () => (await import(specifier)).default,
-  );
+  return factory;
 }
 
 /**
- * @param {string} adapter
- * @returns {Promise<(options?: any) => import('../../queue/base.js').QueueClient>}
+ * @param {string} adapter - adapter.
+ * @returns {Promise<(options?: any) => import('../../queue/base.js').QueueClient>} - Result.
  */
 async function loadQueueFactory(adapter) {
-  const allowed = new Set(['vanilla', 'sqs', 'lmdb']);
-  if (!allowed.has(adapter)) {
+  const factory = QUEUE_FACTORIES[adapter];
+  if (!factory) {
     throw new Error(`Unsupported queue adapter: ${adapter}`);
   }
-
-  const specifier = ['..', '..', 'queue', 'adapters', `${adapter}.js`].join(
-    '/',
-  );
-  return cachedImport(
-    `queue:${adapter}`,
-    async () => (await import(specifier)).default,
-  );
+  return factory;
 }
 
 /**
- * @param {string} adapter
- * @returns {Promise<(options?: any) => import('../../object-storage/base.js').ObjectStorageClient>}
+ * @param {string} adapter - adapter.
+ * @returns {Promise<(options?: any) => import('../../object-storage/base.js').ObjectStorageClient>} - Result.
  */
 async function loadObjectStorageFactory(adapter) {
-  const allowed = new Set(['vanilla', 's3', 'r2', 'b2']);
-  if (!allowed.has(adapter)) {
+  const factory = OBJECT_STORAGE_FACTORIES[adapter];
+  if (!factory) {
     throw new Error(`Unsupported objectStorage adapter: ${adapter}`);
   }
-
-  const specifier = [
-    '..',
-    '..',
-    'object-storage',
-    'adapters',
-    `${adapter}.js`,
-  ].join('/');
-  return cachedImport(
-    `objectStorage:${adapter}`,
-    async () => (await import(specifier)).default,
-  );
+  return factory;
 }
 
 /**
  * Create resources for an actor-system.
- * @param {ActorSystemResourceSpecs} [specs]
- * @returns {Promise<{ resources: ActorSystemResources, close: () => Promise<void> }>}
+ * @param {ActorSystemResourceSpecs} [specs] - specs.
+ * @returns {Promise<{ resources: ActorSystemResources, close: () => Promise<void> }>} - Result.
  */
 export async function createActorSystemResources(specs = {}) {
   /** @type {ActorSystemResources} */

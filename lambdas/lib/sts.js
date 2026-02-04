@@ -80,8 +80,8 @@ class STS {
 }
 /**
  * @typedef CachedCredentials
- * @property {number} expiration -
- * @property {Credentials} credentials -
+ * @property {number} expiration - expiration.
+ * @property {Credentials} credentials - credentials.
  */
 /** @type {Object<string, CachedCredentials>} */
 STS._sessions = {};

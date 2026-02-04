@@ -31,12 +31,12 @@ const FULL_CLASS_MAP = Object.assign(
 
 /**
  * @typedef WharfieDeploymentLoadOptions
- * @property {string} deploymentName -
- * @property {string} [resourceKey] -
+ * @property {string} deploymentName - deploymentName.
+ * @property {string} [resourceKey] - resourceKey.
  */
 /**
- * @param {WharfieDeploymentLoadOptions} options -
- * @returns {Promise<WharfieDeployment | WharfieProject>} -
+ * @param {WharfieDeploymentLoadOptions} options - options.
+ * @returns {Promise<WharfieDeployment | WharfieProject>} - Result.
  */
 async function load({ deploymentName, resourceKey }) {
   if (!resourceKey) {

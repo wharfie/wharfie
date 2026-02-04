@@ -17,46 +17,46 @@ import path from 'node:path';
 
 /**
  * @typedef BuildTarget
- * @property {string | function(): string} nodeVersion -
- * @property {TargetPlatform | function(): TargetPlatform} platform -
- * @property {TargetArch | function(): TargetArch} architecture -
- * @property {TargetLibc | function(): TargetLibc} [libc] -
+ * @property {string | function(): string} nodeVersion - nodeVersion.
+ * @property {TargetPlatform | function(): TargetPlatform} platform - platform.
+ * @property {TargetArch | function(): TargetArch} architecture - architecture.
+ * @property {TargetLibc | function(): TargetLibc} [libc] - libc.
  */
 
 /**
  * @typedef ActorSystemResourceSpecObject
- * @property {string} adapter -
- * @property {Object<string, any>} [options] -
+ * @property {string} adapter - adapter.
+ * @property {Object<string, any>} [options] - options.
  */
 
 /**
  * @typedef ActorSystemResourcesSpec
- * @property {string|ActorSystemResourceSpecObject|any} [db] -
- * @property {string|ActorSystemResourceSpecObject|any} [queue] -
- * @property {string|ActorSystemResourceSpecObject|any} [objectStorage] -
+ * @property {string|ActorSystemResourceSpecObject|any} [db] - db.
+ * @property {string|ActorSystemResourceSpecObject|any} [queue] - queue.
+ * @property {string|ActorSystemResourceSpecObject|any} [objectStorage] - objectStorage.
  */
 
 /**
  * @typedef WharfieActorSystemProperties
- * @property {BuildTarget[] | function(): BuildTarget[]} targets -
- * @property {ActorSystemResourcesSpec} [resources] -
- * @property {import('./function.js').default[]} [functions] -
+ * @property {BuildTarget[] | function(): BuildTarget[]} targets - targets.
+ * @property {ActorSystemResourcesSpec} [resources] - resources.
+ * @property {import('./function.js').default[]} [functions] - functions.
  */
 
 /**
  * @typedef WharfieActorSystemOptions
- * @property {string} name -
- * @property {import('./function.js').default[]} [functions] -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {WharfieActorSystemProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
- * @property {Object<string, import('../base-resource.js').default | import('../base-resource-group.js').default>} [resources] -
+ * @property {string} name - name.
+ * @property {import('./function.js').default[]} [functions] - functions.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {WharfieActorSystemProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
+ * @property {Object<string, import('../base-resource.js').default | import('../base-resource-group.js').default>} [resources] - resources.
  */
 
 class ActorSystem extends BuildResourceGroup {
   /**
-   * @param {WharfieActorSystemOptions} options -
+   * @param {WharfieActorSystemOptions} options - options.
    */
   constructor({
     name,
@@ -114,7 +114,7 @@ class ActorSystem extends BuildResourceGroup {
 
   /**
    * Get the instantiated runtime resources for this ActorSystem.
-   * @returns {Promise<any>} -
+   * @returns {Promise<any>} - Result.
    */
   async getRuntimeResources() {
     const { resources } = await this._ensureRuntimeResources();
@@ -126,8 +126,8 @@ class ActorSystem extends BuildResourceGroup {
    *
    * - `context.resources` is always present (may be empty).
    * - caller-provided `context.resources` overrides ActorSystem resources.
-   * @param {any} [context] -
-   * @returns {Promise<any>} -
+   * @param {any} [context] - context.
+   * @returns {Promise<any>} - Result.
    */
   async createContext(context = {}) {
     const systemResources = await this.getRuntimeResources();
@@ -146,10 +146,10 @@ class ActorSystem extends BuildResourceGroup {
 
   /**
    * Invoke an actor function by name with runtime resources injected onto `context.resources`.
-   * @param {string} functionName -
-   * @param {any} [event] -
-   * @param {any} [context] -
-   * @returns {Promise<any>} -
+   * @param {string} functionName - functionName.
+   * @param {any} [event] - event.
+   * @param {any} [context] - context.
+   * @returns {Promise<any>} - Result.
    */
   async invoke(functionName, event = {}, context = {}) {
     const fn = this.functions.find((f) => f.name === functionName);
@@ -165,7 +165,7 @@ class ActorSystem extends BuildResourceGroup {
 
   /**
    * Close all cached runtime resources (best-effort).
-   * @returns {Promise<void>} -
+   * @returns {Promise<void>} - Result.
    */
   async closeRuntimeResources() {
     if (!this._runtimeResourcesPromise) return;
@@ -175,9 +175,9 @@ class ActorSystem extends BuildResourceGroup {
   }
 
   /**
-   * @param {string|undefined} parent -
-   * @param {BuildTarget} target -
-   * @returns {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} -
+   * @param {string|undefined} parent - parent.
+   * @param {BuildTarget} target - target.
+   * @returns {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} - Result.
    */
   _defineTargetResources(
     parent,
@@ -283,8 +283,8 @@ class ActorSystem extends BuildResourceGroup {
   }
 
   /**
-   * @param {string|undefined} parent -
-   * @returns {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} -
+   * @param {string|undefined} parent - parent.
+   * @returns {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} - Result.
    */
   defineActorSystemResources(parent) {
     /** @type {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} */

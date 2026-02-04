@@ -26,8 +26,8 @@ const NO_SORT = '__no_sort__';
  * Tokens embed the attribute name to avoid collisions across different key attribute names:
  *   pkToken = `${keyName}=${String(pkValue)}`
  *   skToken = `${sortKeyName}=${String(skValue)}` or NO_SORT
- * @param {CreateVanillaDBOptions} [options] -
- * @returns {import('../base.js').DBClient} -
+ * @param {CreateVanillaDBOptions} [options] - options.
+ * @returns {import('../base.js').DBClient} - Result.
  */
 export default function createVanillaDB(options = {}) {
   /**
@@ -53,8 +53,8 @@ export default function createVanillaDB(options = {}) {
    * Fast-ish deep clone for JSON-safe records.
    * Assumption: records are JSON-serializable (matches persistence format).
    * @template T
-   * @param {T} v -
-   * @returns {T} -
+   * @param {T} v - v.
+   * @returns {T} - Result.
    */
   function deepClone(v) {
     if (v === undefined) return /** @type {any} */ (undefined);
@@ -62,8 +62,8 @@ export default function createVanillaDB(options = {}) {
   }
 
   /**
-   * @param {string} tableName -
-   * @returns {Record<string, Record<string, import('../base.js').DBRecord>>} -
+   * @param {string} tableName - tableName.
+   * @returns {Record<string, Record<string, import('../base.js').DBRecord>>} - Result.
    */
   function ensureTable(tableName) {
     if (!database[tableName]) database[tableName] = {};
@@ -71,9 +71,9 @@ export default function createVanillaDB(options = {}) {
   }
 
   /**
-   * @param {any} v -
-   * @param {string} label -
-   * @returns {string} -
+   * @param {any} v - v.
+   * @param {string} label - label.
+   * @returns {string} - Result.
    */
   function requireValue(v, label) {
     if (v === undefined || v === null) throw new Error(`${label} is required`);
@@ -93,18 +93,18 @@ export default function createVanillaDB(options = {}) {
   }
 
   /**
-   * @param {string} keyName -
-   * @param {import('../base.js').DBRecord} record -
-   * @returns {string} -
+   * @param {string} keyName - keyName.
+   * @param {import('../base.js').DBRecord} record - record.
+   * @returns {string} - Result.
    */
   function pkTokenFromRecord(keyName, record) {
     return `${keyName}=${requireValue(record?.[keyName], `record.${keyName}`)}`;
   }
 
   /**
-   * @param {string | undefined} sortKeyName -
-   * @param {import('../base.js').DBRecord} record -
-   * @returns {string} -
+   * @param {string | undefined} sortKeyName - sortKeyName.
+   * @param {import('../base.js').DBRecord} record - record.
+   * @returns {string} - Result.
    */
   function skTokenFromRecord(sortKeyName, record) {
     if (!sortKeyName) return NO_SORT;
@@ -112,8 +112,8 @@ export default function createVanillaDB(options = {}) {
   }
 
   /**
-   * @param {import('../base.js').UpdateDefinition['property']} path -
-   * @returns {void} -
+   * @param {import('../base.js').UpdateDefinition['property']} path - path.
+   * @returns {void} - Result.
    */
   function assertNonEmptyPath(path) {
     if (!Array.isArray(path) || path.length === 0) {
@@ -122,10 +122,10 @@ export default function createVanillaDB(options = {}) {
   }
 
   /**
-   * @param {import('../base.js').DBRecord} record -
-   * @param {string[]} path -
-   * @param {any} value -
-   * @returns {void} -
+   * @param {import('../base.js').DBRecord} record - record.
+   * @param {string[]} path - path.
+   * @param {any} value - value.
+   * @returns {void} - Result.
    */
   function setPath(record, path, value) {
     /** @type {any} */
@@ -139,9 +139,9 @@ export default function createVanillaDB(options = {}) {
   }
 
   /**
-   * @param {import('../base.js').DBRecord} record -
-   * @param {import('../base.js').KeyCondition} condition -
-   * @returns {boolean} -
+   * @param {import('../base.js').DBRecord} record - record.
+   * @param {import('../base.js').KeyCondition} condition - condition.
+   * @returns {boolean} - Result.
    */
   function matchesCondition(record, condition) {
     const value = record?.[condition.propertyName];
@@ -170,8 +170,8 @@ export default function createVanillaDB(options = {}) {
    *
    * Immutability:
    * - returns deep clones of stored records
-   * @param {import('../base.js').QueryParams} params -
-   * @returns {import('../base.js').QueryReturn} -
+   * @param {import('../base.js').QueryParams} params - params.
+   * @returns {import('../base.js').QueryReturn} - Result.
    */
   async function query(params) {
     const { pk, sk, filters } = assertTightQuery(params);
@@ -221,8 +221,8 @@ export default function createVanillaDB(options = {}) {
    *
    * Immutability:
    * - stores a deep clone
-   * @param {import('../base.js').PutParams} params -
-   * @returns {import('../base.js').PutReturn} -
+   * @param {import('../base.js').PutParams} params - params.
+   * @returns {import('../base.js').PutReturn} - Result.
    */
   async function put(params) {
     const table = ensureTable(params.tableName);
@@ -243,8 +243,8 @@ export default function createVanillaDB(options = {}) {
    *
    * Immutability:
    * - returns a deep clone
-   * @param {import('../base.js').GetParams} params -
-   * @returns {import('../base.js').GetReturn} -
+   * @param {import('../base.js').GetParams} params - params.
+   * @returns {import('../base.js').GetReturn} - Result.
    */
   async function get(params) {
     assertSortPair(params);
@@ -272,8 +272,8 @@ export default function createVanillaDB(options = {}) {
    *
    * Immutability:
    * - copy-on-write: does not mutate the stored object reference in-place
-   * @param {import('../base.js').UpdateParams} params -
-   * @returns {import('../base.js').UpdateReturn} -
+   * @param {import('../base.js').UpdateParams} params - params.
+   * @returns {import('../base.js').UpdateReturn} - Result.
    */
   async function update(params) {
     assertSortPair(params);
@@ -323,8 +323,8 @@ export default function createVanillaDB(options = {}) {
 
   /**
    * Remove (delete) an item by key.
-   * @param {import('../base.js').RemoveParams} params -
-   * @returns {import('../base.js').RemoveReturn} -
+   * @param {import('../base.js').RemoveParams} params - params.
+   * @returns {import('../base.js').RemoveReturn} - Result.
    */
   async function remove(params) {
     assertSortPair(params);
@@ -354,8 +354,8 @@ export default function createVanillaDB(options = {}) {
    *
    * Immutability:
    * - stores deep clones for puts
-   * @param {import('../base.js').BatchWriteParams} params -
-   * @returns {import('../base.js').BatchWriteReturn} -
+   * @param {import('../base.js').BatchWriteParams} params - params.
+   * @returns {import('../base.js').BatchWriteReturn} - Result.
    */
   async function batchWrite(params) {
     const table = ensureTable(params.tableName);
@@ -402,7 +402,7 @@ export default function createVanillaDB(options = {}) {
 
   /**
    * Persist the in-memory DB to disk (atomic replace).
-   * @returns {import('../base.js').CloseReturn} -
+   * @returns {import('../base.js').CloseReturn} - Result.
    */
   async function close() {
     const data = JSON.stringify(database);

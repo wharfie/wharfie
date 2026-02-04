@@ -7,22 +7,22 @@ import {
 
 /**
  * @typedef DependencyRecordProperties
- * @property {import('../../../../typedefs.js').DependencyRecord | function(): import('../../../../typedefs.js').DependencyRecord} data -
- * @property {string} table_name -
+ * @property {import('../../../../typedefs.js').DependencyRecord | function(): import('../../../../typedefs.js').DependencyRecord} data - data.
+ * @property {string} table_name - table_name.
  */
 
 /**
  * @typedef DependencyRecordOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {DependencyRecordProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {DependencyRecordProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class DependencyRecord extends BaseResource {
   /**
-   * @param {DependencyRecordOptions} options -
+   * @param {DependencyRecordOptions} options - options.
    */
   constructor({ name, parent, status, dependsOn = [], properties }) {
     super({

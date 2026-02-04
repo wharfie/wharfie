@@ -8,17 +8,17 @@ const { env } = process;
 
 /**
  * @typedef EnvPaths
- * @property {string} data -
- * @property {string} config -
- * @property {string} cache -
- * @property {string} log -
- * @property {string} temp -
+ * @property {string} data - data.
+ * @property {string} config - config.
+ * @property {string} cache - cache.
+ * @property {string} log - log.
+ * @property {string} temp - temp.
  */
 
 /**
  *
- * @param {string} name -
- * @returns {EnvPaths} -
+ * @param {string} name - name.
+ * @returns {EnvPaths} - Result.
  */
 function macos(name) {
   const library = join(homedir, 'Library');
@@ -34,8 +34,8 @@ function macos(name) {
 
 /**
  *
- * @param {string} name -
- * @returns {EnvPaths} -
+ * @param {string} name - name.
+ * @returns {EnvPaths} - Result.
  */
 function windows(name) {
   const appData = env.APPDATA || join(homedir, 'AppData', 'Roaming');
@@ -53,8 +53,8 @@ function windows(name) {
 
 /**
  *
- * @param {string} name -
- * @returns {EnvPaths} -
+ * @param {string} name - name.
+ * @returns {EnvPaths} - Result.
  */
 function linux(name) {
   const username = basename(homedir);
@@ -71,14 +71,14 @@ function linux(name) {
 
 /**
  * @typedef EnvPathsOptions
- * @property {string} [suffix] -
+ * @property {string} [suffix] - suffix.
  */
 
 /**
  *
- * @param {string} name -
- * @param {EnvPathsOptions} [options] -
- * @returns {EnvPaths} -
+ * @param {string} name - name.
+ * @param {EnvPathsOptions} [options] - options.
+ * @returns {EnvPaths} - Result.
  */
 function envPaths(name, { suffix = 'nodejs' } = {}) {
   if (typeof name !== 'string') {

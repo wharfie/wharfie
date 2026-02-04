@@ -1,6 +1,6 @@
 class Secret {
   /**
-   * @param {string} value -
+   * @param {string} value - value.
    */
   constructor(value) {
     // Capture the secret value in a closure.
@@ -56,8 +56,8 @@ class Secret {
   }
 
   /**
-   * @param {any} value -
-   * @returns {boolean} -
+   * @param {any} value - value.
+   * @returns {boolean} - Result.
    */
   static isSecret(value) {
     return value instanceof Secret;

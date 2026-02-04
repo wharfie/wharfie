@@ -7,14 +7,14 @@ const daemon_log = getDaemonLogger();
 
 /**
  * @typedef BaseAWSConfig
- * @property {number} [maxAttempts] -
+ * @property {number} [maxAttempts] - maxAttempts.
  */
 
 class BaseAWS {
   /**
    * '$' is not allowed in the name of a property in the JSON format and breaks querying
-   * @param {any} log -
-   * @returns {any} -
+   * @param {any} log - log.
+   * @returns {any} - Result.
    */
   static formatJsonLog(log) {
     if (log.message && log.message.error) {
@@ -31,7 +31,7 @@ class BaseAWS {
   }
 
   /**
-   * @param {BaseAWSConfig} [options] -
+   * @param {BaseAWSConfig} [options] - options.
    * @returns {import("@aws-sdk/client-sts").STSClientConfig} - sdk options
    */
   static config(options = { maxAttempts: 20 }) {

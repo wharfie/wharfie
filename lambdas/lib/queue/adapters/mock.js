@@ -4,7 +4,7 @@ import { jest } from '@jest/globals';
 /**
  * Mock queue adapter. Intended for unit tests that only need spies and do not
  * require SQS-like delivery semantics.
- * @returns {import('../base.js').QueueClient} -
+ * @returns {import('../base.js').QueueClient} - Result.
  */
 export default function createMockQueue() {
   const sendMessage = jest.fn(async (_params) => {

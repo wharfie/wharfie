@@ -20,17 +20,17 @@ import envPaths from '../../env-paths.js';
 
 /**
  * @typedef CreateStateTableOptions
- * @property {DBClient} db -
- * @property {(deploymentName: string) => string} [tableNameResolver] -
+ * @property {DBClient} db - db.
+ * @property {(deploymentName: string) => string} [tableNameResolver] - tableNameResolver.
  */
 
 const KEY_NAME = 'deployment';
 const SORT_KEY_NAME = 'resource_key';
 
 /**
- * @param {string} propertyName -
- * @param {any} propertyValue -
- * @returns {import('../base.js').KeyCondition} -
+ * @param {string} propertyName - propertyName.
+ * @param {any} propertyValue - propertyValue.
+ * @returns {import('../base.js').KeyCondition} - Result.
  */
 function pkEq(propertyName, propertyValue) {
   return {
@@ -42,9 +42,9 @@ function pkEq(propertyName, propertyValue) {
 }
 
 /**
- * @param {string} propertyName -
- * @param {any} propertyValue -
- * @returns {import('../base.js').KeyCondition} -
+ * @param {string} propertyName - propertyName.
+ * @param {any} propertyValue - propertyValue.
+ * @returns {import('../base.js').KeyCondition} - Result.
  */
 function skBegins(propertyName, propertyValue) {
   return {
@@ -56,8 +56,8 @@ function skBegins(propertyName, propertyValue) {
 }
 
 /**
- * @param {any} resource -
- * @returns {string} -
+ * @param {any} resource - resource.
+ * @returns {string} - Result.
  */
 function resourceKeyOf(resource) {
   const parent = resource?.parent || '';
@@ -66,8 +66,8 @@ function resourceKeyOf(resource) {
 }
 
 /**
- * @param {any} resource -
- * @returns {import('../../actor/typedefs.js').DeploymentEnvironmentProperties} -
+ * @param {any} resource - resource.
+ * @returns {import('../../actor/typedefs.js').DeploymentEnvironmentProperties} - Result.
  */
 function requireDeployment(resource) {
   let has_deployment = false;
@@ -92,9 +92,9 @@ function requireDeployment(resource) {
 }
 
 /**
- * @param {import('../../actor/typedefs.js').DeploymentEnvironmentProperties} deployment -
- * @param {(deploymentName: string) => string} tableNameResolver -
- * @returns {string} -
+ * @param {import('../../actor/typedefs.js').DeploymentEnvironmentProperties} deployment - deployment.
+ * @param {(deploymentName: string) => string} tableNameResolver - tableNameResolver.
+ * @returns {string} - Result.
  */
 function tableNameOf(deployment, tableNameResolver) {
   return deployment.stateTable || tableNameResolver(deployment.name);
@@ -105,8 +105,8 @@ function tableNameOf(deployment, tableNameResolver) {
  *
  * The client is intentionally "resource-aware" because the state table name is
  * derived from the deployment embedded in the resource properties.
- * @param {CreateStateTableOptions} options -
- * @returns {any} -
+ * @param {CreateStateTableOptions} options - options.
+ * @returns {any} - Result.
  */
 export function createStateTable({
   db,
@@ -116,8 +116,8 @@ export function createStateTable({
 
   /**
    * Persist (upsert) the full serialized resource + status.
-   * @param {any} resource -
-   * @returns {Promise<void>}
+   * @param {any} resource - resource.
+   * @returns {Promise<void>} - Result.
    */
   async function putResource(resource) {
     const deployment = requireDeployment(resource);
@@ -145,8 +145,8 @@ export function createStateTable({
    * Important behavior: this is an **upsert**.
    * - If the record exists: it updates status fields in-place.
    * - If it does not exist: it creates a minimal record (keys + status).
-   * @param {any} resource -
-   * @returns {Promise<void>}
+   * @param {any} resource - resource.
+   * @returns {Promise<void>} - Result.
    */
   async function putResourceStatus(resource) {
     const deployment = requireDeployment(resource);
@@ -201,8 +201,8 @@ export function createStateTable({
 
   /**
    * Fetch stored status for a resource.
-   * @param {any} resource -
-   * @returns {Promise<any | undefined>}
+   * @param {any} resource - resource.
+   * @returns {Promise<any | undefined>} - Result.
    */
   async function getResourceStatus(resource) {
     const deployment = requireDeployment(resource);
@@ -222,8 +222,8 @@ export function createStateTable({
 
   /**
    * Fetch stored serialized resource.
-   * @param {any} resource -
-   * @returns {Promise<any | undefined>}
+   * @param {any} resource - resource.
+   * @returns {Promise<any | undefined>} - Result.
    */
   async function getResource(resource) {
     const deployment = requireDeployment(resource);
@@ -248,9 +248,9 @@ export function createStateTable({
    * - Queries `resource_key begins_with <prefix>`
    * - Sorts by resource_key
    * - If the exact root record (<prefix>) does not exist, returns []
-   * @param {string} deploymentName -
-   * @param {string} resourceKey -
-   * @returns {Promise<any[]>}
+   * @param {string} deploymentName - deploymentName.
+   * @param {string} resourceKey - resourceKey.
+   * @returns {Promise<any[]>} - Result.
    */
   async function getResources(deploymentName, resourceKey) {
     const tableName = tableNameResolver(deploymentName);
@@ -282,8 +282,8 @@ export function createStateTable({
 
   /**
    * Delete resource state record.
-   * @param {any} resource -
-   * @returns {Promise<void>}
+   * @param {any} resource - resource.
+   * @returns {Promise<void>} - Result.
    */
   async function deleteResource(resource) {
     const deployment = requireDeployment(resource);

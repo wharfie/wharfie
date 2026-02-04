@@ -2,7 +2,7 @@ import WharfieActor from '../wharfie-actor.js';
 
 class Daemon extends WharfieActor {
   /**
-   * @param {import('../wharfie-actor.js').ExtendedWharfieActorOptions} options -
+   * @param {import('../wharfie-actor.js').ExtendedWharfieActorOptions} options - options.
    */
   constructor({ status, parent, resources, properties }) {
     super({

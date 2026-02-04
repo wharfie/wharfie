@@ -39,8 +39,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").GetRoleCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").GetRoleCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").GetRoleCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").GetRoleCommandOutput>} - Result.
    */
   async getRole(params) {
     const command = new GetRoleCommand(params);
@@ -48,8 +48,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").CreateRoleCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").CreateRoleCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").CreateRoleCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").CreateRoleCommandOutput>} - Result.
    */
   async createRole(params) {
     const command = new CreateRoleCommand(params);
@@ -57,8 +57,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").UpdateRoleCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").UpdateRoleCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").UpdateRoleCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").UpdateRoleCommandOutput>} - Result.
    */
   async updateRole(params) {
     const command = new UpdateRoleCommand(params);
@@ -66,8 +66,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").DeleteRoleCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").DeleteRoleCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").DeleteRoleCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").DeleteRoleCommandOutput>} - Result.
    */
   async deleteRole(params) {
     const command = new DeleteRoleCommand(params);
@@ -75,8 +75,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").PutRolePolicyCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").PutRolePolicyCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").PutRolePolicyCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").PutRolePolicyCommandOutput>} - Result.
    */
   async putRolePolicy(params) {
     const command = new PutRolePolicyCommand(params);
@@ -84,8 +84,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").ListRolePoliciesCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").ListRolePoliciesCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").ListRolePoliciesCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").ListRolePoliciesCommandOutput>} - Result.
    */
   async listRolePolicies(params) {
     const command = new ListRolePoliciesCommand(params);
@@ -93,8 +93,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").DeleteRolePolicyCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").DeleteRolePolicyCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").DeleteRolePolicyCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").DeleteRolePolicyCommandOutput>} - Result.
    */
   async deleteRolePolicy(params) {
     const command = new DeleteRolePolicyCommand(params);
@@ -102,8 +102,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").CreatePolicyCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").CreatePolicyCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").CreatePolicyCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").CreatePolicyCommandOutput>} - Result.
    */
   async createPolicy(params) {
     const command = new CreatePolicyCommand(params);
@@ -111,8 +111,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").GetPolicyCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").GetPolicyCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").GetPolicyCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").GetPolicyCommandOutput>} - Result.
    */
   async getPolicy(params) {
     const command = new GetPolicyCommand(params);
@@ -120,8 +120,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").DeletePolicyCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").DeletePolicyCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").DeletePolicyCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").DeletePolicyCommandOutput>} - Result.
    */
   async deletePolicy(params) {
     const command = new DeletePolicyCommand(params);
@@ -129,8 +129,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").AttachRolePolicyCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").AttachRolePolicyCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").AttachRolePolicyCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").AttachRolePolicyCommandOutput>} - Result.
    */
   async attachRolePolicy(params) {
     const command = new AttachRolePolicyCommand(params);
@@ -138,8 +138,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").DetachRolePolicyCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").DetachRolePolicyCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").DetachRolePolicyCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").DetachRolePolicyCommandOutput>} - Result.
    */
   async detachRolePolicy(params) {
     const command = new DetachRolePolicyCommand(params);
@@ -147,8 +147,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").ListAttachedRolePoliciesCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").ListAttachedRolePoliciesCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").ListAttachedRolePoliciesCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").ListAttachedRolePoliciesCommandOutput>} - Result.
    */
   async listAttachedRolePolicies(params) {
     const command = new ListAttachedRolePoliciesCommand(params);
@@ -156,8 +156,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").ListEntitiesForPolicyCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").ListEntitiesForPolicyCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").ListEntitiesForPolicyCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").ListEntitiesForPolicyCommandOutput>} - Result.
    */
   async listEntitiesForPolicy(params) {
     const command = new ListEntitiesForPolicyCommand(params);
@@ -165,8 +165,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").ListPolicyTagsCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").ListPolicyTagsCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").ListPolicyTagsCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").ListPolicyTagsCommandOutput>} - Result.
    */
   async listPolicyTags(params) {
     const command = new ListPolicyTagsCommand(params);
@@ -174,8 +174,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").TagPolicyCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").TagPolicyCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").TagPolicyCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").TagPolicyCommandOutput>} - Result.
    */
   async tagPolicy(params) {
     const command = new TagPolicyCommand(params);
@@ -183,8 +183,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").UntagPolicyCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").UntagPolicyCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").UntagPolicyCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").UntagPolicyCommandOutput>} - Result.
    */
   async untagPolicy(params) {
     const command = new UntagPolicyCommand(params);
@@ -192,8 +192,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").ListRoleTagsCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").ListRoleTagsCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").ListRoleTagsCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").ListRoleTagsCommandOutput>} - Result.
    */
   async listRoleTags(params) {
     const command = new ListRoleTagsCommand(params);
@@ -201,8 +201,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").TagRoleCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").TagRoleCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").TagRoleCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").TagRoleCommandOutput>} - Result.
    */
   async tagRole(params) {
     const command = new TagRoleCommand(params);
@@ -210,8 +210,8 @@ class IAM {
   }
 
   /**
-   * @param {import("@aws-sdk/client-iam").UntagRoleCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-iam").UntagRoleCommandOutput>} -
+   * @param {import("@aws-sdk/client-iam").UntagRoleCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-iam").UntagRoleCommandOutput>} - Result.
    */
   async untagRole(params) {
     const command = new UntagRoleCommand(params);

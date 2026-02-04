@@ -12,9 +12,9 @@ const KEY_NAME = 'dependency';
 const SORT_KEY_NAME = 'resource_id';
 
 /**
- * @param {string} propertyName -
- * @param {string} propertyValue -
- * @returns {import('../../db/base.js').KeyCondition} -
+ * @param {string} propertyName - propertyName.
+ * @param {string} propertyValue - propertyValue.
+ * @returns {import('../../db/base.js').KeyCondition} - Result.
  */
 function pkEq(propertyName, propertyValue) {
   return {
@@ -28,24 +28,24 @@ function pkEq(propertyName, propertyValue) {
 /**
  * A DynamoDB wrapper client exposing the base DB methods.
  * @typedef {Object} dependencyClient
- * @property {(dependency: DependencyRecord) => void} putDependency -
- * @property {(dependency: DependencyRecord) => Promise<DependencyRecord[]>} findDependencies -
- * @property {(dependency: DependencyRecord) => void} deleteDependency -
+ * @property {(dependency: DependencyRecord) => void} putDependency - putDependency.
+ * @property {(dependency: DependencyRecord) => Promise<DependencyRecord[]>} findDependencies - findDependencies.
+ * @property {(dependency: DependencyRecord) => void} deleteDependency - deleteDependency.
  */
 
 /**
  * Factory: Dependency table client.
- * @param {object} params -
- * @param {DBClient} params.db -
- * @param {string} [params.tableName] -
- * @returns {dependencyClient} -
+ * @param {object} params - params.
+ * @param {DBClient} params.db - params.db.
+ * @param {string} [params.tableName] - params.tableName.
+ * @returns {dependencyClient} - Result.
  */
 export function createDependencyTable({
   db,
   tableName = process.env[TABLE_ENV_VAR] || '',
 }) {
   /**
-   * @param {DependencyRecord} dependency -
+   * @param {DependencyRecord} dependency - dependency.
    */
   async function putDependency(dependency) {
     await db.put({
@@ -60,8 +60,8 @@ export function createDependencyTable({
   }
 
   /**
-   * @param {DependencyRecord} dependency -
-   * @returns {Promise<DependencyRecord[]>} -
+   * @param {DependencyRecord} dependency - dependency.
+   * @returns {Promise<DependencyRecord[]>} - Result.
    */
   async function findDependencies(dependency) {
     const items =
@@ -81,7 +81,7 @@ export function createDependencyTable({
   }
 
   /**
-   * @param {DependencyRecord} dependency -
+   * @param {DependencyRecord} dependency - dependency.
    */
   async function deleteDependency(dependency) {
     await db.remove({

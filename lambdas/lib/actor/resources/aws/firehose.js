@@ -3,22 +3,22 @@ import BaseResource from '../base-resource.js';
 import { ResourceNotFoundException } from '@aws-sdk/client-firehose';
 /**
  * @typedef FirehoseProperties
- * @property {import('@aws-sdk/client-firehose').S3DestinationConfiguration | function(): import('@aws-sdk/client-firehose').S3DestinationConfiguration} s3DestinationConfiguration -
- * @property {import('@aws-sdk/client-firehose').Tag[]} [tags] -
+ * @property {import('@aws-sdk/client-firehose').S3DestinationConfiguration | function(): import('@aws-sdk/client-firehose').S3DestinationConfiguration} s3DestinationConfiguration - s3DestinationConfiguration.
+ * @property {import('@aws-sdk/client-firehose').Tag[]} [tags] - tags.
  */
 
 /**
  * @typedef FirehoseOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {FirehoseProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {FirehoseProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class Firehose extends BaseResource {
   /**
-   * @param {FirehoseOptions} options -
+   * @param {FirehoseOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     super({ name, parent, status, properties, dependsOn });
@@ -100,7 +100,7 @@ class Firehose extends BaseResource {
   }
 
   /**
-   * @param {string} status -
+   * @param {string} status - status.
    */
   async waitForDeliveryStreamStatus(status) {
     let currentStatus = '';

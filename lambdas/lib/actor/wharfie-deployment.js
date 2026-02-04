@@ -15,25 +15,25 @@ const require = createRequire(import.meta.url);
 
 /**
  * @typedef WharfieDeploymentProperties
- * @property {number} [globalQueryConcurrency] -
- * @property {number} [resourceQueryConcurrency] -
- * @property {number} [maxQueriesPerAction] -
- * @property {string} [loggingLevel] -
- * @property {number} [createdAt] -
+ * @property {number} [globalQueryConcurrency] - globalQueryConcurrency.
+ * @property {number} [resourceQueryConcurrency] - resourceQueryConcurrency.
+ * @property {number} [maxQueriesPerAction] - maxQueriesPerAction.
+ * @property {string} [loggingLevel] - loggingLevel.
+ * @property {number} [createdAt] - createdAt.
  */
 
 /**
  * @typedef WharfieDeploymentOptions
- * @property {string} name -
- * @property {import('./resources/reconcilable.js').default.Status} [status] -
- * @property {WharfieDeploymentProperties} [properties] -
- * @property {import('./resources/reconcilable.js').default[]} [dependsOn] -
- * @property {Object<string, import('./resources/base-resource.js').default | import('./resources/base-resource-group.js').default>} [resources] -
+ * @property {string} name - name.
+ * @property {import('./resources/reconcilable.js').default.Status} [status] - status.
+ * @property {WharfieDeploymentProperties} [properties] - properties.
+ * @property {import('./resources/reconcilable.js').default[]} [dependsOn] - dependsOn.
+ * @property {Object<string, import('./resources/base-resource.js').default | import('./resources/base-resource-group.js').default>} [resources] - resources.
  */
 
 class WharfieDeployment extends BaseResourceGroup {
   /**
-   * @param {WharfieDeploymentOptions} options -
+   * @param {WharfieDeploymentOptions} options - options.
    */
   constructor({ name, status, properties, dependsOn, resources }) {
     const propertiesWithDefaults = Object.assign(
@@ -114,8 +114,8 @@ class WharfieDeployment extends BaseResourceGroup {
   }
 
   /**
-   * @param {string} parent -
-   * @returns {(import('./resources/base-resource.js').default | import('./resources/base-resource-group.js').default)[]} -
+   * @param {string} parent - parent.
+   * @returns {(import('./resources/base-resource.js').default | import('./resources/base-resource-group.js').default)[]} - Result.
    */
   _defineGroupResources(parent) {
     const systemTable = new Table({
@@ -264,7 +264,7 @@ class WharfieDeployment extends BaseResourceGroup {
   }
 
   /**
-   * @returns {WharfieDeploymentResources} -
+   * @returns {WharfieDeploymentResources} - Result.
    */
   getDeploymentResources() {
     // @ts-ignore
@@ -272,7 +272,7 @@ class WharfieDeployment extends BaseResourceGroup {
   }
 
   /**
-   * @returns {WharfieDeploymentResources} -
+   * @returns {WharfieDeploymentResources} - Result.
    */
   getSystemStateTable() {
     // @ts-ignore
@@ -280,7 +280,7 @@ class WharfieDeployment extends BaseResourceGroup {
   }
 
   /**
-   * @returns {WharfieActor[]} -
+   * @returns {WharfieActor[]} - Result.
    */
   getActors() {
     // @ts-ignore
@@ -288,7 +288,7 @@ class WharfieDeployment extends BaseResourceGroup {
   }
 
   /**
-   * @returns {Events} -
+   * @returns {Events} - Result.
    */
   getEventsActor() {
     // @ts-ignore
@@ -296,7 +296,7 @@ class WharfieDeployment extends BaseResourceGroup {
   }
 
   /**
-   * @returns {Daemon} -
+   * @returns {Daemon} - Result.
    */
   getDaemonActor() {
     // @ts-ignore
@@ -304,7 +304,7 @@ class WharfieDeployment extends BaseResourceGroup {
   }
 
   /**
-   * @returns {import('./resources/aws/bucket.js')} -
+   * @returns {import('./resources/aws/bucket.js')} - Result.
    */
   getBucket() {
     // @ts-ignore

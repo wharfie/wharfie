@@ -2,7 +2,7 @@
 import { jest } from '@jest/globals';
 
 /**
- * @returns {import('../base.js').DBClient} -
+ * @returns {import('../base.js').DBClient} - Result.
  */
 export default function createMockDB() {
   const query = jest.fn(async (_params) => {

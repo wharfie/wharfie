@@ -9,20 +9,20 @@ import { createId } from '../../id.js';
  * @typedef {Record<string, string>} QueueAttributes
  * @typedef {Record<string, string>} QueueTags
  * @typedef QueueMessageRecord
- * @property {string} MessageId
- * @property {string} Body
- * @property {any} [MessageAttributes]
- * @property {number} SentTimestamp
- * @property {number} AvailableAt
- * @property {number} [InvisibleUntil]
- * @property {string} [ReceiptHandle]
- * @property {number} ReceiveCount
+ * @property {string} MessageId - MessageId.
+ * @property {string} Body - Body.
+ * @property {any} [MessageAttributes] - MessageAttributes.
+ * @property {number} SentTimestamp - SentTimestamp.
+ * @property {number} AvailableAt - AvailableAt.
+ * @property {number} [InvisibleUntil] - InvisibleUntil.
+ * @property {string} [ReceiptHandle] - ReceiptHandle.
+ * @property {number} ReceiveCount - ReceiveCount.
  * @typedef QueueRecord
- * @property {QueueAttributes} Attributes
- * @property {QueueTags} Tags
- * @property {QueueMessageRecord[]} messages
+ * @property {QueueAttributes} Attributes - Attributes.
+ * @property {QueueTags} Tags - Tags.
+ * @property {QueueMessageRecord[]} messages - messages.
  * @typedef QueueState
- * @property {Record<string, QueueRecord>} queues
+ * @property {Record<string, QueueRecord>} queues - queues.
  */
 
 /**
@@ -36,8 +36,8 @@ import { createId } from '../../id.js';
  * Implementation notes (mirrors the DB LMDB adapter intent):
  * - Use synchronous LMDB writes to avoid background commit scheduling keeping Jest alive.
  * - Persist state on each mutation so callers don’t need to call close() for durability.
- * @param {CreateLMDBQueueOptions} [options] -
- * @returns {import('../base.js').QueueClient} -
+ * @param {CreateLMDBQueueOptions} [options] - options.
+ * @returns {import('../base.js').QueueClient} - Result.
  */
 export default function createLMDBQueue(options = {}) {
   const dbRoot = options.path
@@ -60,8 +60,8 @@ export default function createLMDBQueue(options = {}) {
 
   /**
    * @template T
-   * @param {T} v
-   * @returns {T}
+   * @param {T} v - v.
+   * @returns {T} - Result.
    */
   function deepClone(v) {
     if (v === undefined) return /** @type {any} */ (undefined);
@@ -76,11 +76,11 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {any} n
-   * @param {number} min
-   * @param {number} max
-   * @param {number} fallback
-   * @returns {number}
+   * @param {any} n - n.
+   * @param {number} min - min.
+   * @param {number} max - max.
+   * @param {number} fallback - fallback.
+   * @returns {number} - Result.
    */
   function clampNumber(n, min, max, fallback) {
     const x = Number(n);
@@ -89,8 +89,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {string} queueUrl
-   * @returns {QueueRecord}
+   * @param {string} queueUrl - queueUrl.
+   * @returns {QueueRecord} - Result.
    */
   function ensureQueue(queueUrl) {
     if (!state.queues[queueUrl]) {
@@ -113,8 +113,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {string} queueUrl
-   * @returns {QueueRecord}
+   * @param {string} queueUrl - queueUrl.
+   * @returns {QueueRecord} - Result.
    */
   function requireQueue(queueUrl) {
     const q = state.queues[queueUrl];
@@ -123,8 +123,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {QueueRecord} queue
-   * @param {number} now
+   * @param {QueueRecord} queue - queue.
+   * @param {number} now - now.
    */
   function pruneExpired(queue, now) {
     const retentionSeconds = clampNumber(
@@ -140,9 +140,9 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {QueueMessageRecord} m
-   * @param {number} now
-   * @returns {boolean}
+   * @param {QueueMessageRecord} m - m.
+   * @param {number} now - now.
+   * @returns {boolean} - Result.
    */
   function isVisible(m, now) {
     if (now < (m.AvailableAt || 0)) return false;
@@ -152,11 +152,11 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {QueueRecord} queue
-   * @param {number} max
-   * @param {number} now
-   * @param {number} visibilityTimeoutMs
-   * @returns {import("@aws-sdk/client-sqs").Message[]}
+   * @param {QueueRecord} queue - queue.
+   * @param {number} max - max.
+   * @param {number} now - now.
+   * @param {number} visibilityTimeoutMs - visibilityTimeoutMs.
+   * @returns {import("@aws-sdk/client-sqs").Message[]} - Result.
    */
   function takeVisible(queue, max, now, visibilityTimeoutMs) {
     /** @type {number[]} */
@@ -203,8 +203,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-sqs").CreateQueueCommandInput} params
-   * @returns {Promise<import("@aws-sdk/client-sqs").CreateQueueCommandOutput>}
+   * @param {import("@aws-sdk/client-sqs").CreateQueueCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-sqs").CreateQueueCommandOutput>} - Result.
    */
   async function createQueue(params) {
     const name = params?.QueueName;
@@ -226,8 +226,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-sqs").DeleteQueueCommandInput} params
-   * @returns {Promise<import("@aws-sdk/client-sqs").DeleteQueueCommandOutput>}
+   * @param {import("@aws-sdk/client-sqs").DeleteQueueCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-sqs").DeleteQueueCommandOutput>} - Result.
    */
   async function deleteQueue(params) {
     const queueUrl = params?.QueueUrl;
@@ -240,8 +240,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-sqs").GetQueueUrlCommandInput} params
-   * @returns {Promise<import("@aws-sdk/client-sqs").GetQueueUrlCommandOutput>}
+   * @param {import("@aws-sdk/client-sqs").GetQueueUrlCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-sqs").GetQueueUrlCommandOutput>} - Result.
    */
   async function getQueueUrl(params) {
     const name = params?.QueueName;
@@ -251,8 +251,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-sqs").GetQueueAttributesCommandInput} params
-   * @returns {Promise<import("@aws-sdk/client-sqs").GetQueueAttributesCommandOutput>}
+   * @param {import("@aws-sdk/client-sqs").GetQueueAttributesCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-sqs").GetQueueAttributesCommandOutput>} - Result.
    */
   async function getQueueAttributes(params) {
     const queueUrl = params?.QueueUrl;
@@ -277,8 +277,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-sqs").SetQueueAttributesCommandInput} params
-   * @returns {Promise<import("@aws-sdk/client-sqs").SetQueueAttributesCommandOutput>}
+   * @param {import("@aws-sdk/client-sqs").SetQueueAttributesCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-sqs").SetQueueAttributesCommandOutput>} - Result.
    */
   async function setQueueAttributes(params) {
     const queueUrl = params?.QueueUrl;
@@ -290,8 +290,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-sqs").ListQueueTagsCommandInput} params
-   * @returns {Promise<import("@aws-sdk/client-sqs").ListQueueTagsCommandOutput>}
+   * @param {import("@aws-sdk/client-sqs").ListQueueTagsCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-sqs").ListQueueTagsCommandOutput>} - Result.
    */
   async function listQueueTags(params) {
     const queueUrl = params?.QueueUrl;
@@ -301,8 +301,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-sqs").TagQueueCommandInput} params
-   * @returns {Promise<import("@aws-sdk/client-sqs").TagQueueCommandOutput>}
+   * @param {import("@aws-sdk/client-sqs").TagQueueCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-sqs").TagQueueCommandOutput>} - Result.
    */
   async function tagQueue(params) {
     const queueUrl = params?.QueueUrl;
@@ -314,8 +314,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-sqs").UntagQueueCommandInput} params
-   * @returns {Promise<import("@aws-sdk/client-sqs").UntagQueueCommandOutput>}
+   * @param {import("@aws-sdk/client-sqs").UntagQueueCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-sqs").UntagQueueCommandOutput>} - Result.
    */
   async function untagQueue(params) {
     const queueUrl = params?.QueueUrl;
@@ -330,8 +330,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-sqs").ListQueuesCommandInput} [params]
-   * @returns {Promise<import("../base.js").listQueuesOutput>}
+   * @param {import("@aws-sdk/client-sqs").ListQueuesCommandInput} [params] - params.
+   * @returns {Promise<import("../base.js").listQueuesOutput>} - Result.
    */
   async function listQueues(params = {}) {
     const prefix = params.QueueNamePrefix
@@ -356,8 +356,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-sqs").SendMessageRequest} params
-   * @returns {Promise<import("@aws-sdk/client-sqs").SendMessageResult>}
+   * @param {import("@aws-sdk/client-sqs").SendMessageRequest} params - params.
+   * @returns {Promise<import("@aws-sdk/client-sqs").SendMessageResult>} - Result.
    */
   async function sendMessage(params) {
     const queueUrl = params?.QueueUrl;
@@ -392,7 +392,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-sqs").SendMessageBatchRequest} params
+   * @param {import("@aws-sdk/client-sqs").SendMessageBatchRequest} params - params.
+   * @returns {Promise<import("@aws-sdk/client-sqs").SendMessageBatchResult>} - Result.
    */
   async function sendMessageBatch(params) {
     const queueUrl = params?.QueueUrl;
@@ -425,8 +426,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-sqs").ReceiveMessageRequest} params
-   * @returns {Promise<import("@aws-sdk/client-sqs").ReceiveMessageResult>}
+   * @param {import("@aws-sdk/client-sqs").ReceiveMessageRequest} params - params.
+   * @returns {Promise<import("@aws-sdk/client-sqs").ReceiveMessageResult>} - Result.
    */
   async function receiveMessage(params) {
     const queueUrl = params?.QueueUrl;
@@ -482,7 +483,7 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-sqs").DeleteMessageRequest} params
+   * @param {import("@aws-sdk/client-sqs").DeleteMessageRequest} params - params.
    */
   async function deleteMessage(params) {
     const queueUrl = params?.QueueUrl;
@@ -505,7 +506,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-sqs").DeleteMessageBatchRequest} params
+   * @param {import("@aws-sdk/client-sqs").DeleteMessageBatchRequest} params - params.
+   * @returns {Promise<import("@aws-sdk/client-sqs").DeleteMessageBatchResult>} - Result.
    */
   async function deleteMessageBatch(params) {
     const queueUrl = params?.QueueUrl;
@@ -535,9 +537,9 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {any} event -
-   * @param {string} queueUrl -
-   * @param {number} [delay] -
+   * @param {any} event - event.
+   * @param {string} queueUrl - queueUrl.
+   * @param {number} [delay] - delay.
    */
   async function enqueue(event, queueUrl, delay = 0) {
     await sendMessage({
@@ -548,8 +550,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {any[]} events -
-   * @param {string} queueUrl -
+   * @param {any[]} events - events.
+   * @param {string} queueUrl - queueUrl.
    */
   async function enqueueBatch(events, queueUrl) {
     const copy = [...events];
@@ -569,8 +571,8 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @param {any} event -
-   * @param {string} queueUrl -
+   * @param {any} event - event.
+   * @param {string} queueUrl - queueUrl.
    */
   async function reenqueue(event, queueUrl) {
     await sendMessage({
@@ -582,7 +584,7 @@ export default function createLMDBQueue(options = {}) {
 
   /**
    * Close LMDB resources.
-   * @returns {Promise<void>}
+   * @returns {Promise<void>} - Result.
    */
   async function close() {
     if (closed) return;

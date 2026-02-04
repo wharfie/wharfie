@@ -41,58 +41,58 @@ import { createId } from '../id.js';
 
 /**
  * @typedef listQueuesOutput
- * @property {string[]} QueueUrls -
- * @property {Object<string, any>} QueueDetails -
+ * @property {string[]} QueueUrls - QueueUrls.
+ * @property {Object<string, any>} QueueDetails - QueueDetails.
  */
 
 /**
  * @typedef {Object} QueueClient
- * @property {(params: SendMessageRequest) => Promise<SendMessageResult>} sendMessage -
- * @property {(params: SendMessageBatchRequest) => Promise<any>} sendMessageBatch -
- * @property {(params: DeleteMessageBatchRequest) => Promise<any>} deleteMessageBatch -
- * @property {(params: DeleteMessageRequest) => Promise<void>} deleteMessage -
- * @property {(params: ReceiveMessageRequest) => Promise<ReceiveMessageResult>} receiveMessage -
- * @property {(event: any, queueUrl: string, delay?: number) => Promise<void>} enqueue -
- * @property {(events: any[], queueUrl: string) => Promise<void>} enqueueBatch -
- * @property {(event: any, queueUrl: string) => Promise<void>} reenqueue -
- * @property {(params: ListQueuesCommandInput) => Promise<listQueuesOutput>} listQueues -
- * @property {(params: GetQueueUrlCommandInput) => Promise<GetQueueUrlCommandOutput>} getQueueUrl -
- * @property {(params: GetQueueAttributesCommandInput) => Promise<GetQueueAttributesCommandOutput>} getQueueAttributes -
- * @property {(params: SetQueueAttributesCommandInput) => Promise<SetQueueAttributesCommandOutput>} setQueueAttributes -
- * @property {(params: CreateQueueCommandInput) => Promise<CreateQueueCommandOutput>} createQueue -
- * @property {(params: DeleteQueueCommandInput) => Promise<DeleteQueueCommandOutput>} deleteQueue -
- * @property {(params: ListQueueTagsCommandInput) => Promise<ListQueueTagsCommandOutput>} listQueueTags -
- * @property {(params: TagQueueCommandInput) => Promise<TagQueueCommandOutput>} tagQueue -
- * @property {(params: UntagQueueCommandInput) => Promise<UntagQueueCommandOutput>} untagQueue -
- * @property {() => Promise<void>} close -
+ * @property {(params: SendMessageRequest) => Promise<SendMessageResult>} sendMessage - sendMessage.
+ * @property {(params: SendMessageBatchRequest) => Promise<any>} sendMessageBatch - sendMessageBatch.
+ * @property {(params: DeleteMessageBatchRequest) => Promise<any>} deleteMessageBatch - deleteMessageBatch.
+ * @property {(params: DeleteMessageRequest) => Promise<void>} deleteMessage - deleteMessage.
+ * @property {(params: ReceiveMessageRequest) => Promise<ReceiveMessageResult>} receiveMessage - receiveMessage.
+ * @property {(event: any, queueUrl: string, delay?: number) => Promise<void>} enqueue - enqueue.
+ * @property {(events: any[], queueUrl: string) => Promise<void>} enqueueBatch - enqueueBatch.
+ * @property {(event: any, queueUrl: string) => Promise<void>} reenqueue - reenqueue.
+ * @property {(params: ListQueuesCommandInput) => Promise<listQueuesOutput>} listQueues - listQueues.
+ * @property {(params: GetQueueUrlCommandInput) => Promise<GetQueueUrlCommandOutput>} getQueueUrl - getQueueUrl.
+ * @property {(params: GetQueueAttributesCommandInput) => Promise<GetQueueAttributesCommandOutput>} getQueueAttributes - getQueueAttributes.
+ * @property {(params: SetQueueAttributesCommandInput) => Promise<SetQueueAttributesCommandOutput>} setQueueAttributes - setQueueAttributes.
+ * @property {(params: CreateQueueCommandInput) => Promise<CreateQueueCommandOutput>} createQueue - createQueue.
+ * @property {(params: DeleteQueueCommandInput) => Promise<DeleteQueueCommandOutput>} deleteQueue - deleteQueue.
+ * @property {(params: ListQueueTagsCommandInput) => Promise<ListQueueTagsCommandOutput>} listQueueTags - listQueueTags.
+ * @property {(params: TagQueueCommandInput) => Promise<TagQueueCommandOutput>} tagQueue - tagQueue.
+ * @property {(params: UntagQueueCommandInput) => Promise<UntagQueueCommandOutput>} untagQueue - untagQueue.
+ * @property {() => Promise<void>} close - close.
  */
 
 /**
- * @param {SendMessageRequest} _params -
- * @returns {Promise<SendMessageResult>} -
+ * @param {SendMessageRequest} _params - _params.
+ * @returns {Promise<SendMessageResult>} - Result.
  */
 async function sendMessage(_params) {
   return /** @type {any} */ ({ MessageId: '' });
 }
 
 /**
- * @param {SendMessageBatchRequest} _params -
+ * @param {SendMessageBatchRequest} _params - _params.
  */
 async function sendMessageBatch(_params) {}
 
 /**
- * @param {DeleteMessageBatchRequest} _params -
+ * @param {DeleteMessageBatchRequest} _params - _params.
  */
 async function deleteMessageBatch(_params) {}
 
 /**
- * @param {DeleteMessageRequest} _params -
+ * @param {DeleteMessageRequest} _params - _params.
  */
 async function deleteMessage(_params) {}
 
 /**
- * @param {ReceiveMessageRequest} _params -
- * @returns {Promise<ReceiveMessageResult>} -
+ * @param {ReceiveMessageRequest} _params - _params.
+ * @returns {Promise<ReceiveMessageResult>} - Result.
  */
 async function receiveMessage(_params) {
   return /** @type {any} */ ({ Messages: [] });
@@ -100,9 +100,9 @@ async function receiveMessage(_params) {
 
 /**
  * @this {QueueClient}
- * @param {any} event -
- * @param {string} queueUrl -
- * @param {number} [delay] -
+ * @param {any} event - event.
+ * @param {string} queueUrl - queueUrl.
+ * @param {number} [delay] - delay.
  */
 async function enqueue(event, queueUrl, delay = 0) {
   await this.sendMessage({
@@ -114,8 +114,8 @@ async function enqueue(event, queueUrl, delay = 0) {
 
 /**
  * @this {QueueClient}
- * @param {any[]} events -
- * @param {string} queueUrl -
+ * @param {any[]} events - events.
+ * @param {string} queueUrl - queueUrl.
  */
 async function enqueueBatch(events, queueUrl) {
   const promises = [];
@@ -138,8 +138,8 @@ async function enqueueBatch(events, queueUrl) {
 
 /**
  * @this {QueueClient}
- * @param {any} event -
- * @param {string} queueUrl -
+ * @param {any} event - event.
+ * @param {string} queueUrl - queueUrl.
  */
 async function reenqueue(event, queueUrl) {
   await this.sendMessage({
@@ -150,85 +150,85 @@ async function reenqueue(event, queueUrl) {
 }
 
 /**
- * @param {ListQueuesCommandInput} _params -
- * @returns {Promise<listQueuesOutput>} -
+ * @param {ListQueuesCommandInput} _params - _params.
+ * @returns {Promise<listQueuesOutput>} - Result.
  */
 async function listQueues(_params) {
   return { QueueUrls: [], QueueDetails: {} };
 }
 
 /**
- * @param {GetQueueUrlCommandInput} _params -
- * @returns {Promise<GetQueueUrlCommandOutput>} -
+ * @param {GetQueueUrlCommandInput} _params - _params.
+ * @returns {Promise<GetQueueUrlCommandOutput>} - Result.
  */
 async function getQueueUrl(_params) {
   return /** @type {any} */ ({ QueueUrl: '' });
 }
 
 /**
- * @param {GetQueueAttributesCommandInput} _params -
- * @returns {Promise<GetQueueAttributesCommandOutput>} -
+ * @param {GetQueueAttributesCommandInput} _params - _params.
+ * @returns {Promise<GetQueueAttributesCommandOutput>} - Result.
  */
 async function getQueueAttributes(_params) {
   return /** @type {any} */ ({ Attributes: {} });
 }
 
 /**
- * @param {SetQueueAttributesCommandInput} _params -
- * @returns {Promise<SetQueueAttributesCommandOutput>} -
+ * @param {SetQueueAttributesCommandInput} _params - _params.
+ * @returns {Promise<SetQueueAttributesCommandOutput>} - Result.
  */
 async function setQueueAttributes(_params) {
   return /** @type {any} */ ({});
 }
 
 /**
- * @param {CreateQueueCommandInput} _params -
- * @returns {Promise<CreateQueueCommandOutput>} -
+ * @param {CreateQueueCommandInput} _params - _params.
+ * @returns {Promise<CreateQueueCommandOutput>} - Result.
  */
 async function createQueueCmd(_params) {
   return /** @type {any} */ ({ QueueUrl: '' });
 }
 
 /**
- * @param {DeleteQueueCommandInput} _params -
- * @returns {Promise<DeleteQueueCommandOutput>} -
+ * @param {DeleteQueueCommandInput} _params - _params.
+ * @returns {Promise<DeleteQueueCommandOutput>} - Result.
  */
 async function deleteQueue(_params) {
   return /** @type {any} */ ({});
 }
 
 /**
- * @param {ListQueueTagsCommandInput} _params -
- * @returns {Promise<ListQueueTagsCommandOutput>} -
+ * @param {ListQueueTagsCommandInput} _params - _params.
+ * @returns {Promise<ListQueueTagsCommandOutput>} - Result.
  */
 async function listQueueTags(_params) {
   return /** @type {any} */ ({ Tags: {} });
 }
 
 /**
- * @param {TagQueueCommandInput} _params -
- * @returns {Promise<TagQueueCommandOutput>} -
+ * @param {TagQueueCommandInput} _params - _params.
+ * @returns {Promise<TagQueueCommandOutput>} - Result.
  */
 async function tagQueue(_params) {
   return /** @type {any} */ ({});
 }
 
 /**
- * @param {UntagQueueCommandInput} _params -
- * @returns {Promise<UntagQueueCommandOutput>} -
+ * @param {UntagQueueCommandInput} _params - _params.
+ * @returns {Promise<UntagQueueCommandOutput>} - Result.
  */
 async function untagQueue(_params) {
   return /** @type {any} */ ({});
 }
 
 /**
- * @returns {Promise<void>}
+ * @returns {Promise<void>} - Result.
  */
 async function close() {}
 
 /**
  * Factory function that creates a queue client exposing the base queue methods.
- * @returns {QueueClient} -
+ * @returns {QueueClient} - Result.
  */
 export default function createQueue() {
   return {

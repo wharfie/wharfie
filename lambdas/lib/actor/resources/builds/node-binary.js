@@ -21,23 +21,23 @@ import BaseResource from '../base-resource.js';
  */
 /**
  * @typedef NodeBinaryProperties
- * @property {string | function(): string} version -
- * @property {TargetPlatform | function(): TargetPlatform} platform -
- * @property {TargetArch | function(): TargetArch} architecture -
+ * @property {string | function(): string} version - version.
+ * @property {TargetPlatform | function(): TargetPlatform} platform - platform.
+ * @property {TargetArch | function(): TargetArch} architecture - architecture.
  */
 
 /**
  * @typedef NodeBinaryOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
- * @property {NodeBinaryProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
+ * @property {NodeBinaryProperties & import('../../typedefs.js').SharedProperties} properties - properties.
  */
 
 class NodeBinary extends BaseResource {
   /**
-   * @param {NodeBinaryOptions} options -
+   * @param {NodeBinaryOptions} options - options.
    */
   constructor({ name, parent, status, dependsOn, properties }) {
     const propertiesWithDefaults = Object.assign(
@@ -140,22 +140,22 @@ class NodeBinary extends BaseResource {
 
   /**
    * @typedef targetSpec
-   * @property {string} token -
-   * @property {string} normPlatform -
-   * @property {string} normArch -
-   * @property {string} ext -
-   * @property {string} packagingKey -
-   * @property {boolean} isWin -
-   * @property {boolean} isMac -
+   * @property {string} token - token.
+   * @property {string} normPlatform - normPlatform.
+   * @property {string} normArch - normArch.
+   * @property {string} ext - ext.
+   * @property {string} packagingKey - packagingKey.
+   * @property {boolean} isWin - isWin.
+   * @property {boolean} isMac - isMac.
    */
   /**
    * Map Node/OS tokens and choose packaging for our extractor.
    * - We extract .zip on Windows.
    * - We extract .tar.gz on macOS (Node publishes osx-*-tar).
    * - For everything else we keep your existing .tar.gz assumption.
-   * @param {string} platform -
-   * @param {string} arch -
-   * @returns {targetSpec} -
+   * @param {string} platform - platform.
+   * @param {string} arch - arch.
+   * @returns {targetSpec} - Result.
    */
   static resolveTargetSpec(platform, arch) {
     // Normalize platform
@@ -178,10 +178,10 @@ class NodeBinary extends BaseResource {
    * Build candidate "files" keys to validate against index.json.
    * Node's `files` array sometimes lists either a base key (linux-x64)
    * and sometimes keyed by packaging (osx-arm64-tar, win-x64-zip).
-   * @param {string} token -
-   * @param {string} normArch -
-   * @param {string} packagingKey -
-   * @returns {string[]} -
+   * @param {string} token - token.
+   * @param {string} normArch - normArch.
+   * @param {string} packagingKey - packagingKey.
+   * @returns {string[]} - Result.
    */
   static candidateFilesKeys(token, normArch, packagingKey) {
     const base = `${token}-${normArch}`;
@@ -295,7 +295,7 @@ class NodeBinary extends BaseResource {
   /**
    * Extract a .zip for Windows, returning path to the 'node.exe'.
    * Uses JSZip for in-memory extraction.
-   * @param {string} archivePath -
+   * @param {string} archivePath - archivePath.
    * @returns {Promise<string>} - Path to the extracted 'node.exe' binary.
    */
   async extractWindowsZip(archivePath) {
@@ -333,7 +333,7 @@ class NodeBinary extends BaseResource {
 
   /**
    * Extract a .tar.xz and return the path to the extracted 'node' binary.
-   * @param {string} archivePath -
+   * @param {string} archivePath - archivePath.
    * @returns {Promise<string>} - Path to the extracted 'node' binary.
    */
   async extractUnixTar(archivePath) {

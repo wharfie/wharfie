@@ -35,9 +35,9 @@ const startCmd = new Command('start')
     '--poll-queue-url <queueUrl>',
     'Queue URL to poll for lambda invocations (repeatable)',
     /**
-     * @param {string} v
-     * @param {string[]} prev
-     * @returns {string[]}
+     * @param {string} v - v.
+     * @param {string[]} prev - prev.
+     * @returns {string[]} - Result.
      */
     (v, prev) => {
       const arr = Array.isArray(prev) ? prev : [];
@@ -89,11 +89,10 @@ const startCmd = new Command('start')
     await agent.start();
 
     /**
-     * @param {NodeJS.Signals} signal
+     * @param {import('node:process').Signals} signal - signal.
      */
     const shutdown = async (signal) => {
       await agent.stop(signal);
-      process.exit(0);
     };
 
     process.on('SIGINT', () => shutdown('SIGINT'));

@@ -7,27 +7,27 @@ import BaseResource from '../base-resource.js';
 
 /**
  * @typedef GenericRecordProperties
- * @property {string} tableName -
- * @property {string} keyValue -
- * @property {string} [keyName] -
- * @property {string} [sortKeyValue] -
- * @property {string} [sortKeyName] -
- * @property {any} [data] -
+ * @property {string} tableName - tableName.
+ * @property {string} keyValue - keyValue.
+ * @property {string} [keyName] - keyName.
+ * @property {string} [sortKeyValue] - sortKeyValue.
+ * @property {string} [sortKeyName] - sortKeyName.
+ * @property {any} [data] - data.
  */
 
 /**
  * @typedef GenericRecordOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {GenericRecordProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {() => Promise<Object<string,any>>} [dataResolver] -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {GenericRecordProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {() => Promise<Object<string,any>>} [dataResolver] - dataResolver.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class GenericRecord extends BaseResource {
   /**
-   * @param {GenericRecordOptions} options -
+   * @param {GenericRecordOptions} options - options.
    */
   constructor({
     name,

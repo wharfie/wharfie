@@ -7,25 +7,25 @@ import {
 
 /**
  * @typedef EventSourceMappingProperties
- * @property {string} functionName -
- * @property {string | function(): string} eventSourceArn -
- * @property {number} batchSize -
- * @property {number} maximumBatchingWindowInSeconds -
- * @property {Record<string, string>} [tags] -
+ * @property {string} functionName - functionName.
+ * @property {string | function(): string} eventSourceArn - eventSourceArn.
+ * @property {number} batchSize - batchSize.
+ * @property {number} maximumBatchingWindowInSeconds - maximumBatchingWindowInSeconds.
+ * @property {Record<string, string>} [tags] - tags.
  */
 
 /**
  * @typedef EventSourceMappingOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {EventSourceMappingProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {EventSourceMappingProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class EventSourceMapping extends BaseResource {
   /**
-   * @param {EventSourceMappingOptions} options -
+   * @param {EventSourceMappingOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     super({ name, parent, status, properties, dependsOn });
@@ -139,7 +139,7 @@ class EventSourceMapping extends BaseResource {
   }
 
   /**
-   * @param {string} uuid -
+   * @param {string} uuid - uuid.
    */
   async destroyMapping(uuid) {
     try {
@@ -159,8 +159,8 @@ class EventSourceMapping extends BaseResource {
   }
 
   /**
-   * @param {string} status -
-   * @param {string} [uuid] -
+   * @param {string} status - status.
+   * @param {string} [uuid] - uuid.
    */
   async waitForEventSourceMappingStatus(status, uuid = this.get('uuid')) {
     let currentStatus = '';

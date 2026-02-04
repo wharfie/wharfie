@@ -4,9 +4,9 @@ import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
 
 /**
  * @typedef LambdaInvokeRequest
- * @property {string} functionName
- * @property {any} [event]
- * @property {any} [context]
+ * @property {string} functionName - functionName.
+ * @property {any} [event] - event.
+ * @property {any} [context] - context.
  */
 
 /**
@@ -16,16 +16,16 @@ import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
  * @property {number} [waitTimeSeconds] - Long poll seconds (0-20).
  * @property {number} [maxNumberOfMessages] - 1-10.
  * @property {number} [visibilityTimeout] - seconds
- * @property {(msg: string, extra?: any) => void} [log]
+ * @property {(msg: string, extra?: any) => void} [log] - log.
  */
 
 /**
  * @typedef LambdaServiceOptions
- * @property {string} [host]
- * @property {number} [port]
+ * @property {string} [host] - host.
+ * @property {number} [port] - port.
  * @property {(req: LambdaInvokeRequest) => Promise<void>} execute - Executes a function invocation.
  * @property {LambdaPollOptions} [poll] - Optional queue poll loop configuration.
- * @property {(msg: string, extra?: any) => void} [log]
+ * @property {(msg: string, extra?: any) => void} [log] - log.
  */
 
 /**
@@ -35,10 +35,9 @@ import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
  * - Optionally runs one or more queue poll loops that decode messages into invocations.
  *
  * Message format (Queue Message Body):
- *   { "functionName": "my-function", "event": { ... }, "context": { ... } }
- *
- * @param {LambdaServiceOptions} options
- * @returns {Promise<{ address: string, host: string, port: number, close: () => Promise<void> }>}
+ * { "functionName": "my-function", "event": { ... }, "context": { ... } }
+ * @param {LambdaServiceOptions} options - options.
+ * @returns {Promise<{ address: string, host: string, port: number, close: () => Promise<void> }>} - Result.
  */
 export async function startLambdaService({
   host = '127.0.0.1',
@@ -74,7 +73,7 @@ export async function startLambdaService({
     const pollLog = poll.log || log;
 
     /**
-     * @param {string} queueUrl
+     * @param {string} queueUrl - queueUrl.
      */
     const startPollLoop = (queueUrl) => {
       const task = (async () => {
@@ -199,8 +198,8 @@ export async function startLambdaService({
     log,
     implementation: {
       /**
-       * @param {any} call
-       * @param {(err: any, resp: any) => void} callback
+       * @param {any} call - call.
+       * @param {(err: any, resp: any) => void} callback - callback.
        */
       Invoke: async (call, callback) => {
         try {
@@ -230,8 +229,8 @@ export async function startLambdaService({
       },
 
       /**
-       * @param {any} _call
-       * @param {(err: any, resp: any) => void} callback
+       * @param {any} _call - _call.
+       * @param {(err: any, resp: any) => void} callback - callback.
        */
       Health: async (_call, callback) => {
         callback(null, { ok: true });
@@ -252,11 +251,11 @@ export async function startLambdaService({
 }
 
 /**
- * @param {any} v
- * @param {number} min
- * @param {number} max
- * @param {number} def
- * @returns {number}
+ * @param {any} v - v.
+ * @param {number} min - min.
+ * @param {number} max - max.
+ * @param {number} def - def.
+ * @returns {number} - Result.
  */
 function clampNumber(v, min, max, def) {
   const n = Number(v);

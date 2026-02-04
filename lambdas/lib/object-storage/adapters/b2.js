@@ -14,7 +14,7 @@ import S3 from '../../s3.js';
  * This is a thin wrapper around the existing `lambdas/lib/s3.js` helper class,
  * pinned to the `b2` provider.
  * @param {CreateB2ObjectStorageOptions & any} [options] - Options forwarded to `new S3(options)`.
- * @returns {import('../base.js').ObjectStorageClient} -
+ * @returns {import('../base.js').ObjectStorageClient} - Result.
  */
 export default function createB2ObjectStorage(options = {}) {
   const { region, endpoint, credentials, forcePathStyle, ...rest } = options;

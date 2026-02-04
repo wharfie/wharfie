@@ -1,9 +1,9 @@
 import { Command } from 'commander';
 import { randomUUID } from 'node:crypto';
 
-import NodeAgent from '../../../../../runtime/services/node-agent.js';
-import { loadResourcesSpec } from './util/resources.js';
-import { getSelfSpawnCommand } from './util/spawn-self.js';
+import NodeAgent from '../../../runtime/services/node-agent.js';
+import { loadResourcesSpec } from './control_cmds/state_cmds/util/resources.js';
+import { getSelfSpawnCommand } from './control_cmds/state_cmds/util/spawn-self.js';
 
 const startCmd = new Command('start')
   .description(
@@ -74,7 +74,6 @@ const startCmd = new Command('start')
 
     const shutdown = async (signal) => {
       await agent.stop(signal);
-      process.exit(0);
     };
 
     process.on('SIGINT', () => shutdown('SIGINT'));

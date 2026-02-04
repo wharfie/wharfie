@@ -39,21 +39,21 @@ const Status = {
 
 /**
  * @typedef OperationOptions
- * @property {string} resource_id -
- * @property {number} resource_version -
- * @property {string} [id] -
- * @property {WharfieOperationTypeEnum} type -
- * @property {WharfieOperationStatusEnum} [status] -
- * @property {any} [operation_config] -
- * @property {any} [operation_inputs] -
+ * @property {string} resource_id - resource_id.
+ * @property {number} resource_version - resource_version.
+ * @property {string} [id] - id.
+ * @property {WharfieOperationTypeEnum} type - type.
+ * @property {WharfieOperationStatusEnum} [status] - status.
+ * @property {any} [operation_config] - operation_config.
+ * @property {any} [operation_inputs] - operation_inputs.
  * @property {number} [started_at] - start timestamp
  * @property {number} [last_updated_at] - update_at_timestamp
- * @property {string} [wharfie_version] -
+ * @property {string} [wharfie_version] - wharfie_version.
  */
 
 class Operation {
   /**
-   * @param {OperationOptions} options -
+   * @param {OperationOptions} options - options.
    */
   constructor({
     resource_id,
@@ -98,15 +98,15 @@ class Operation {
   /**
    * Options for creating a new action and adding it to this operation.
    * @typedef CreateActionOptions
-   * @property {import('./action.js').WharfieActionTypeEnum} type -
-   * @property {Action[]} [dependsOn] -
-   * @property {string} [id] -
+   * @property {import('./action.js').WharfieActionTypeEnum} type - type.
+   * @property {Action[]} [dependsOn] - dependsOn.
+   * @property {string} [id] - id.
    */
 
   /**
    * Create a new action and add it to the operation graph.
-   * @param {CreateActionOptions} options -
-   * @returns {Action} -
+   * @param {CreateActionOptions} options - options.
+   * @returns {Action} - Result.
    */
   createAction({ type, dependsOn = [], id }) {
     const action = new Action({
@@ -122,16 +122,16 @@ class Operation {
   /**
    * Options for adding an existing action instance to this operation.
    * @typedef AddActionOptions
-   * @property {Action} action -
-   * @property {Action[]} [dependsOn] -
+   * @property {Action} action - action.
+   * @property {Action[]} [dependsOn] - dependsOn.
    */
 
   /**
    * Add an already-created action to the operation graph.
    *
    * This is used by some table-contract tests and older call-sites.
-   * @param {AddActionOptions} options -
-   * @returns {Action} -
+   * @param {AddActionOptions} options - options.
+   * @returns {Action} - Result.
    */
   addAction({ action, dependsOn = [] }) {
     this._addAction(action, dependsOn);
@@ -139,9 +139,9 @@ class Operation {
   }
 
   /**
-   * @param {Action} action -
-   * @param {Action[]} [dependencies] -
-   * @returns {void} -
+   * @param {Action} action - action.
+   * @param {Action[]} [dependencies] - dependencies.
+   * @returns {void} - Result.
    */
   _addAction(action, dependencies = []) {
     dependencies.forEach((dependency) => {
@@ -155,9 +155,9 @@ class Operation {
   }
 
   /**
-   * @param {string} originActionId -
-   * @param {string} destinationActionId -
-   * @returns {void} -
+   * @param {string} originActionId - originActionId.
+   * @param {string} destinationActionId - destinationActionId.
+   * @returns {void} - Result.
    */
   _addDependency(originActionId, destinationActionId) {
     // Ensure outgoing edges for the origin action
@@ -185,15 +185,15 @@ class Operation {
   }
 
   /**
-   * @returns {Action[]} -
+   * @returns {Action[]} - Result.
    */
   getActions() {
     return [...this.actions.values()];
   }
 
   /**
-   * @param {string} id -
-   * @returns {Action} -
+   * @param {string} id - id.
+   * @returns {Action} - Result.
    */
   getAction(id) {
     const matchedAction = this.actions.get(id);
@@ -204,8 +204,8 @@ class Operation {
   }
 
   /**
-   * @param {import('./action.js').WharfieActionTypeEnum} type -
-   * @returns {string} -
+   * @param {import('./action.js').WharfieActionTypeEnum} type - type.
+   * @returns {string} - Result.
    */
   getActionIdByType(type) {
     const matchedActionId = Array.from(this.actionIdsToTypes.entries())
@@ -220,8 +220,8 @@ class Operation {
   }
 
   /**
-   * @param {string} id -
-   * @returns {import('./action.js').WharfieActionTypeEnum} -
+   * @param {string} id - id.
+   * @returns {import('./action.js').WharfieActionTypeEnum} - Result.
    */
   getActionTypeById(id) {
     const type = this.actionIdsToTypes.get(id);
@@ -232,8 +232,8 @@ class Operation {
   }
 
   /**
-   * @param {Action} action -
-   * @returns {Action[]} -
+   * @param {Action} action - action.
+   * @returns {Action[]} - Result.
    */
   getDownstreamActions(action) {
     return [
@@ -243,16 +243,16 @@ class Operation {
   }
 
   /**
-   * @param {string} actionId -
-   * @returns {string[]} -
+   * @param {string} actionId - actionId.
+   * @returns {string[]} - Result.
    */
   getDownstreamActionIds(actionId) {
     return [...(this.outgoingEdges.get(actionId) || [])];
   }
 
   /**
-   * @param {Action} action -
-   * @returns {Action[]} -
+   * @param {Action} action - action.
+   * @returns {Action[]} - Result.
    */
   getUpstreamActions(action) {
     return [
@@ -262,15 +262,15 @@ class Operation {
   }
 
   /**
-   * @param {string} actionId -
-   * @returns {string[]} -
+   * @param {string} actionId - actionId.
+   * @returns {string[]} - Result.
    */
   getUpstreamActionIds(actionId) {
     return [...(this.incomingEdges.get(actionId) || [])];
   }
 
   /**
-   * @returns {string} -
+   * @returns {string} - Result.
    */
   toString() {
     let result = '';
@@ -290,7 +290,7 @@ class Operation {
   }
 
   /**
-   * @returns {Action[]} -
+   * @returns {Action[]} - Result.
    */
   getSequentialActionOrder() {
     const actions = this.getActions();
@@ -305,7 +305,7 @@ class Operation {
     const queue = [];
 
     /**
-     * @param {Action} action -
+     * @param {Action} action - action.
      * @this {Operation}
      */
     function bfs(action) {
@@ -341,7 +341,7 @@ class Operation {
   }
 
   /**
-   * @returns {string} -
+   * @returns {string} - Result.
    */
   serializeGraph() {
     return JSON.stringify({
@@ -352,7 +352,7 @@ class Operation {
   }
 
   /**
-   * @returns {Record<string, any>[]} -
+   * @returns {Record<string, any>[]} - Result.
    */
   toRecords() {
     const records = [];
@@ -381,8 +381,8 @@ class Operation {
   }
 
   /**
-   * @param {Record<string, any>} operation_record -
-   * @returns {Operation} -
+   * @param {Record<string, any>} operation_record - operation_record.
+   * @returns {Operation} - Result.
    */
   static fromRecord(operation_record) {
     const operation = new Operation({
@@ -403,14 +403,14 @@ class Operation {
 
   /**
    * @typedef ActionRecordGroup
-   * @property {Record<string, any>} action_record -
-   * @property {Record<string, any>[]} query_records -
+   * @property {Record<string, any>} action_record - action_record.
+   * @property {Record<string, any>[]} query_records - query_records.
    */
 
   /**
-   * @param {Record<string, any>} operation_record -
-   * @param {ActionRecordGroup[]} action_records -
-   * @returns {Operation} -
+   * @param {Record<string, any>} operation_record - operation_record.
+   * @param {ActionRecordGroup[]} action_records - action_records.
+   * @returns {Operation} - Result.
    */
   static fromRecords(operation_record, action_records) {
     const operation = new Operation({
@@ -436,8 +436,8 @@ class Operation {
   }
 
   /**
-   * @param {string} serializedGraph -
-   * @returns {void} -
+   * @param {string} serializedGraph - serializedGraph.
+   * @returns {void} - Result.
    */
   deserializeGraph(serializedGraph) {
     const parsedData = JSON.parse(serializedGraph);

@@ -34,9 +34,9 @@ const Events = {
 
 /**
  * @typedef ReconcilableOptions
- * @property {string} name -
- * @property {StatusEnum} [status] -
- * @property {Reconcilable[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {StatusEnum} [status] - status.
+ * @property {Reconcilable[]} [dependsOn] - dependsOn.
  */
 
 class Reconcilable {
@@ -91,7 +91,7 @@ class Reconcilable {
   }
 
   /**
-   * @param {StatusEnum} status -
+   * @param {StatusEnum} status - status.
    */
   setStatus(status) {
     this.status = status;
@@ -104,10 +104,10 @@ class Reconcilable {
 
   /**
    * @typedef ReconcilableEvent
-   * @property {string} name -
-   * @property {string} constructor -
-   * @property {import('./reconcilable.js').default.Status} status -
-   * @returns {ReconcilableEvent} -
+   * @property {string} name - name.
+   * @property {string} constructor - constructor.
+   * @property {import('./reconcilable.js').default.Status} status - status.
+   * @returns {ReconcilableEvent} - Result.
    */
   asEvent() {
     return {

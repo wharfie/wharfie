@@ -1,6 +1,4 @@
 import { Command } from 'commander';
-import { setTimeout as delay } from 'node:timers/promises';
-
 import { loadResourcesSpec } from '../util/resources.js';
 import { startDbService } from '../../../../../../runtime/services/db-service.js';
 
@@ -29,23 +27,25 @@ const dbCmd = new Command('db')
 
     console.log(`[db-service] listening at ${svc.address}`);
 
+    const keepAlive = setInterval(() => {}, 60_000);
+
     /**
-     * @param {NodeJS.Signals} signal
+     * @param {import('node:process').Signals} signal - signal.
      */
     const shutdown = async (signal) => {
       console.log(`[db-service] shutting down (${signal})`);
       await svc.close();
-      process.exit(0);
+      clearInterval(keepAlive);
     };
 
-    process.on('SIGINT', () => shutdown('SIGINT'));
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    await new Promise((resolve) => {
+      const onSignal = (signal) => {
+        shutdown(signal).finally(resolve);
+      };
 
-    // keep alive
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      await delay(60_000);
-    }
+      process.on('SIGINT', () => onSignal('SIGINT'));
+      process.on('SIGTERM', () => onSignal('SIGTERM'));
+    });
   });
 
 export default dbCmd;

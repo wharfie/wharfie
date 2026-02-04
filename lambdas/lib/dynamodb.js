@@ -30,8 +30,8 @@ class DynamoDB {
   }
 
   /**
-   * @param {import("@aws-sdk/client-dynamodb").CreateTableCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-dynamodb").CreateTableCommandOutput>} -
+   * @param {import("@aws-sdk/client-dynamodb").CreateTableCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-dynamodb").CreateTableCommandOutput>} - Result.
    */
   async createTable(params) {
     const command = new CreateTableCommand(params);
@@ -39,8 +39,8 @@ class DynamoDB {
   }
 
   /**
-   * @param {import("@aws-sdk/client-dynamodb").DeleteTableCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-dynamodb").DeleteTableCommandOutput>} -
+   * @param {import("@aws-sdk/client-dynamodb").DeleteTableCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-dynamodb").DeleteTableCommandOutput>} - Result.
    */
   async deleteTable(params) {
     const command = new DeleteTableCommand(params);
@@ -48,8 +48,8 @@ class DynamoDB {
   }
 
   /**
-   * @param {import("@aws-sdk/client-dynamodb").DescribeTableCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-dynamodb").DescribeTableCommandOutput>} -
+   * @param {import("@aws-sdk/client-dynamodb").DescribeTableCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-dynamodb").DescribeTableCommandOutput>} - Result.
    */
   async describeTable(params) {
     const command = new DescribeTableCommand(params);
@@ -57,8 +57,8 @@ class DynamoDB {
   }
 
   /**
-   * @param {import("@aws-sdk/client-dynamodb").UpdateTableCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-dynamodb").UpdateTableCommandOutput>} -
+   * @param {import("@aws-sdk/client-dynamodb").UpdateTableCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-dynamodb").UpdateTableCommandOutput>} - Result.
    */
   async updateTable(params) {
     const command = new UpdateTableCommand(params);
@@ -66,8 +66,8 @@ class DynamoDB {
   }
 
   /**
-   * @param {import("@aws-sdk/client-dynamodb").DescribeTimeToLiveCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-dynamodb").DescribeTimeToLiveCommandOutput>} -
+   * @param {import("@aws-sdk/client-dynamodb").DescribeTimeToLiveCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-dynamodb").DescribeTimeToLiveCommandOutput>} - Result.
    */
   async describeTimeToLive(params) {
     const command = new DescribeTimeToLiveCommand(params);
@@ -75,8 +75,8 @@ class DynamoDB {
   }
 
   /**
-   * @param {import("@aws-sdk/client-dynamodb").UpdateTimeToLiveCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-dynamodb").UpdateTimeToLiveCommandOutput>} -
+   * @param {import("@aws-sdk/client-dynamodb").UpdateTimeToLiveCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-dynamodb").UpdateTimeToLiveCommandOutput>} - Result.
    */
   async updateTimeToLive(params) {
     const command = new UpdateTimeToLiveCommand(params);
@@ -84,8 +84,8 @@ class DynamoDB {
   }
 
   /**
-   * @param {import("@aws-sdk/client-dynamodb").ListTagsOfResourceCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-dynamodb").ListTagsOfResourceCommandOutput>} -
+   * @param {import("@aws-sdk/client-dynamodb").ListTagsOfResourceCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-dynamodb").ListTagsOfResourceCommandOutput>} - Result.
    */
   async listTagsOfResource(params) {
     const command = new ListTagsOfResourceCommand(params);
@@ -93,8 +93,8 @@ class DynamoDB {
   }
 
   /**
-   * @param {import("@aws-sdk/client-dynamodb").TagResourceCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-dynamodb").TagResourceCommandOutput>} -
+   * @param {import("@aws-sdk/client-dynamodb").TagResourceCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-dynamodb").TagResourceCommandOutput>} - Result.
    */
   async tagResource(params) {
     const command = new TagResourceCommand(params);
@@ -102,8 +102,8 @@ class DynamoDB {
   }
 
   /**
-   * @param {import("@aws-sdk/client-dynamodb").UntagResourceCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-dynamodb").UntagResourceCommandOutput>} -
+   * @param {import("@aws-sdk/client-dynamodb").UntagResourceCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-dynamodb").UntagResourceCommandOutput>} - Result.
    */
   async untagResource(params) {
     const command = new UntagResourceCommand(params);

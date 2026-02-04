@@ -13,20 +13,20 @@ import BaseResource from '../base-resource.js';
  */
 /**
  * @typedef MacOSBinarySignatureProperties
- * @property {string | function(): string} binaryPath -
- * @property {string | function(): string} macosCertBase64 -
- * @property {string | function(): string} macosCertPassword -
- * @property {string | function(): string} macosKeychainPassword -
- * @property {string | function(): string} [entitlements] -
+ * @property {string | function(): string} binaryPath - binaryPath.
+ * @property {string | function(): string} macosCertBase64 - macosCertBase64.
+ * @property {string | function(): string} macosCertPassword - macosCertPassword.
+ * @property {string | function(): string} macosKeychainPassword - macosKeychainPassword.
+ * @property {string | function(): string} [entitlements] - entitlements.
  */
 
 /**
  * @typedef MacOSBinarySignatureOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
- * @property {MacOSBinarySignatureProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
+ * @property {MacOSBinarySignatureProperties & import('../../typedefs.js').SharedProperties} properties - properties.
  */
 
 class MacOSBinarySignature extends BaseResource {
@@ -49,7 +49,7 @@ class MacOSBinarySignature extends BaseResource {
 
   /**
    * Setup the macOS keychain for signing.
-   * @param {string} keychainPath -
+   * @param {string} keychainPath - keychainPath.
    */
   setupMacKeychain(keychainPath) {
     const macosCertBase64 = this.get('macosCertBase64');
@@ -125,7 +125,7 @@ class MacOSBinarySignature extends BaseResource {
 
   /**
    * write entitlements for macos
-   * @param {string} entitlementsPath -
+   * @param {string} entitlementsPath - entitlementsPath.
    */
   async writeEntitlements(entitlementsPath) {
     if (existsSync(entitlementsPath)) return;

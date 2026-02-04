@@ -8,26 +8,26 @@ import {
 import BaseResource from '../base-resource.js';
 /**
  * @typedef TableProperties
- * @property {import("@aws-sdk/client-dynamodb").AttributeDefinition[]} attributeDefinitions -
- * @property {import("@aws-sdk/client-dynamodb").KeySchemaElement[]} keySchema -
- * @property {import("@aws-sdk/client-dynamodb").ProvisionedThroughput} [provisionedThroughput] -
- * @property {import("@aws-sdk/client-dynamodb").TimeToLiveSpecification} [timeToLiveSpecification] -
- * @property {import("@aws-sdk/client-dynamodb").BillingMode} [billingMode] -
- * @property {import("@aws-sdk/client-dynamodb").Tag[]} [tags] -
+ * @property {import("@aws-sdk/client-dynamodb").AttributeDefinition[]} attributeDefinitions - attributeDefinitions.
+ * @property {import("@aws-sdk/client-dynamodb").KeySchemaElement[]} keySchema - keySchema.
+ * @property {import("@aws-sdk/client-dynamodb").ProvisionedThroughput} [provisionedThroughput] - provisionedThroughput.
+ * @property {import("@aws-sdk/client-dynamodb").TimeToLiveSpecification} [timeToLiveSpecification] - timeToLiveSpecification.
+ * @property {import("@aws-sdk/client-dynamodb").BillingMode} [billingMode] - billingMode.
+ * @property {import("@aws-sdk/client-dynamodb").Tag[]} [tags] - tags.
  */
 
 /**
  * @typedef TableOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {TableProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {TableProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class Table extends BaseResource {
   /**
-   * @param {TableOptions} options -
+   * @param {TableOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     const propertiesWithDefaults = Object.assign(
@@ -166,7 +166,7 @@ class Table extends BaseResource {
   }
 
   /**
-   * @param {import("@aws-sdk/client-dynamodb").TableStatus} desiredStatus -
+   * @param {import("@aws-sdk/client-dynamodb").TableStatus} desiredStatus - desiredStatus.
    */
   async waitForTableStatus(desiredStatus) {
     let status = '';
@@ -202,8 +202,8 @@ class Table extends BaseResource {
   }
 
   /**
-   * @param {Omit<import("@aws-sdk/lib-dynamodb").PutCommandInput, 'TableName'>} params -
-   * @returns {Promise<import("@aws-sdk/lib-dynamodb").PutCommandOutput>} -
+   * @param {Omit<import("@aws-sdk/lib-dynamodb").PutCommandInput, 'TableName'>} params - params.
+   * @returns {Promise<import("@aws-sdk/lib-dynamodb").PutCommandOutput>} - Result.
    */
   async put(params) {
     return this.dynamoDocument.put({

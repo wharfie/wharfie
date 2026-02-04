@@ -2,8 +2,8 @@ import { Command } from 'commander';
 import Function from '../../function.js';
 
 /**
- * @param {string} functionName -
- * @param {any} message -
+ * @param {string} functionName - functionName.
+ * @param {any} message - message.
  */
 async function run(functionName, message) {
   console.log(`running function ${functionName}`);

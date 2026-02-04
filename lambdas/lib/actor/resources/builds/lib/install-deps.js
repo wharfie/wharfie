@@ -10,15 +10,15 @@ import pacote from 'pacote';
  * @typedef {import('node:process')['arch']} TargetArch
  * @typedef {'glibc' | 'musl'} TargetLibc
  * @typedef BuildTarget
- * @property {string} nodeVersion -
- * @property {TargetPlatform} platform -
- * @property {TargetArch} architecture -
- * @property {TargetLibc} [libc] -
+ * @property {string} nodeVersion - nodeVersion.
+ * @property {TargetPlatform} platform - platform.
+ * @property {TargetArch} architecture - architecture.
+ * @property {TargetLibc} [libc] - libc.
  * @typedef ExternalDep
- * @property {string} name -
- * @property {string} version -
+ * @property {string} name - name.
+ * @property {string} version - version.
  * @typedef NpmConfigShim
- * @property {(k: string) => unknown} get -
+ * @property {(k: string) => unknown} get - get.
  */
 
 /**
@@ -27,8 +27,8 @@ import pacote from 'pacote';
  *   buildTarget: BuildTarget,
  *   externals: ExternalDep[] | undefined,
  *   tmpBuildDir: string
- * }} params -
- * @returns {Promise<void>}
+ * }} params - params.
+ * @returns {Promise<void>} - Result.
  */
 async function installForTarget({ buildTarget, externals, tmpBuildDir }) {
   if (!externals?.length) return;
@@ -158,9 +158,9 @@ async function installForTarget({ buildTarget, externals, tmpBuildDir }) {
 
 /**
  * rm but ignore "not exists" and similar errors.
- * @param {string} p -
- * @param {import('node:fs').RmOptions} opts -
- * @returns {Promise<void>}
+ * @param {string} p - p.
+ * @param {import('node:fs').RmOptions} opts - opts.
+ * @returns {Promise<void>} - Result.
  */
 async function rmSafe(p, opts) {
   try {
@@ -172,8 +172,8 @@ async function rmSafe(p, opts) {
 
 /**
  * Decide which specs are “platform-gated” and should be extracted (not added).
- * @param {string[]} specs -
- * @param {NpmConfigShim} npmConfig -
+ * @param {string[]} specs - specs.
+ * @param {NpmConfigShim} npmConfig - npmConfig.
  * @returns {Promise<{ normalSpecs: string[], prebuiltSpecs: Array<{ name: string, spec: string }> }>} -
  */
 async function splitPrebuiltSpecs(specs, npmConfig) {
@@ -208,11 +208,11 @@ async function splitPrebuiltSpecs(specs, npmConfig) {
 
 /**
  * Extract user-requested platform packages directly to node_modules (bypasses EBADPLATFORM).
- * @param {string} tmpBuildDir -
+ * @param {string} tmpBuildDir - tmpBuildDir.
  * @param {Array<{ name: string, spec: string }>} prebuiltSpecs -
- * @param {NpmConfigShim} npmConfig -
+ * @param {NpmConfigShim} npmConfig - npmConfig.
  * @param {BuildTarget} _buildTarget - unused; reserved for future logic
- * @returns {Promise<void>}
+ * @returns {Promise<void>} - Result.
  */
 async function extractPrebuiltSpecs(
   tmpBuildDir,
@@ -234,8 +234,8 @@ async function extractPrebuiltSpecs(
 
 /**
  * Recursively merge optionalDependencies from installed packages.
- * @param {string} nodeModulesRoot -
- * @returns {Promise<Map<string, string>>} -
+ * @param {string} nodeModulesRoot - nodeModulesRoot.
+ * @returns {Promise<Map<string, string>>} - Result.
  */
 async function discoverOptionalDeps(nodeModulesRoot) {
   /** @type {Map<string, string>} */
@@ -297,9 +297,9 @@ async function discoverOptionalDeps(nodeModulesRoot) {
 
 /**
  * npm semantics helpers for os/cpu/libc lists.
- * @param {string} value -
- * @param {unknown[]} list -
- * @returns {boolean} -
+ * @param {string} value - value.
+ * @param {unknown[]} list - list.
+ * @returns {boolean} - Result.
  */
 function listMatches(value, list) {
   if (!Array.isArray(list) || list.length === 0) return true;
@@ -310,9 +310,9 @@ function listMatches(value, list) {
 
 /**
  * libc matcher variant.
- * @param {TargetLibc | undefined} value -
- * @param {unknown[]} list -
- * @returns {boolean} -
+ * @param {TargetLibc | undefined} value - value.
+ * @param {unknown[]} list - list.
+ * @returns {boolean} - Result.
  */
 function libcMatches(value, list) {
   if (!value) return true;
@@ -324,9 +324,9 @@ function libcMatches(value, list) {
 
 /**
  * Heuristic name check for target (@img/sharp-linux-x64, etc.).
- * @param {string} name -
+ * @param {string} name - name.
  * @param {{ os: TargetPlatform, cpu: TargetArch, libc?: TargetLibc }} target -
- * @returns {boolean} -
+ * @returns {boolean} - Result.
  */
 function nameMatchesTarget(name, { os, cpu, libc }) {
   const n = name.toLowerCase();
@@ -365,8 +365,8 @@ function nameMatchesTarget(name, { os, cpu, libc }) {
  *   optionals: Map<string, string> | undefined,
  *   target: { os: TargetPlatform, cpu: TargetArch, libc?: TargetLibc },
  *   npmConfig: NpmConfigShim
- * }} args -
- * @returns {Promise<void>}
+ * }} args - args.
+ * @returns {Promise<void>} - Result.
  */
 async function installMatchingOptionals({
   tmpBuildDir,
@@ -418,8 +418,8 @@ async function installMatchingOptionals({
 
 /**
  * Infer a base package from an optional’s platform-specific name.
- * @param {string} pkgName -
- * @returns {string | null} -
+ * @param {string} pkgName - pkgName.
+ * @returns {string | null} - Result.
  */
 function inferBaseFromOptional(pkgName) {
   const m = pkgName.match(
@@ -439,9 +439,9 @@ function inferBaseFromOptional(pkgName) {
 
 /**
  * Remove build/ directories from the base packages of installed optionals.
- * @param {string} tmpBuildDir -
- * @param {string[]} installedOptionals -
- * @returns {Promise<void>} -
+ * @param {string} tmpBuildDir - tmpBuildDir.
+ * @param {string[]} installedOptionals - installedOptionals.
+ * @returns {Promise<void>} - Result.
  */
 async function pruneBuildDirsForInstalledOptionals(
   tmpBuildDir,

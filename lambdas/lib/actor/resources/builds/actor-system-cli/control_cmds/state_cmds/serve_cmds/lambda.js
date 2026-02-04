@@ -1,6 +1,4 @@
 import { Command } from 'commander';
-import { setTimeout as delay } from 'node:timers/promises';
-
 import Function from '../../../../function.js';
 import { createActorSystemResources } from '../../../../../../runtime/resources.js';
 import { createGrpcRpcClient } from '../../../../../../runtime/services/rpc-grpc.js';
@@ -23,9 +21,9 @@ const lambdaCmd = new Command('lambda')
     '--poll-queue-url <queueUrl>',
     'Queue URL to poll for lambda invocations (repeatable)',
     /**
-     * @param {string} v
-     * @param {string[]} prev
-     * @returns {string[]}
+     * @param {string} v - v.
+     * @param {string[]} prev - prev.
+     * @returns {string[]} - Result.
      */
     (v, prev) => {
       const arr = Array.isArray(prev) ? prev : [];
@@ -114,8 +112,10 @@ const lambdaCmd = new Command('lambda')
       );
     }
 
+    const keepAlive = setInterval(() => {}, 60_000);
+
     /**
-     * @param {NodeJS.Signals} signal
+     * @param {import('node:process').Signals} signal - signal.
      */
     const shutdown = async (signal) => {
       console.log(`[lambda-service] shutting down (${signal})`);
@@ -127,17 +127,17 @@ const lambdaCmd = new Command('lambda')
       try {
         queue.__wharfie_closeTransport && queue.__wharfie_closeTransport();
       } catch {}
-      process.exit(0);
+      clearInterval(keepAlive);
     };
 
-    process.on('SIGINT', () => shutdown('SIGINT'));
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    await new Promise((resolve) => {
+      const onSignal = (signal) => {
+        shutdown(signal).finally(resolve);
+      };
 
-    // keep alive
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      await delay(60_000);
-    }
+      process.on('SIGINT', () => onSignal('SIGINT'));
+      process.on('SIGTERM', () => onSignal('SIGTERM'));
+    });
   });
 
 export default lambdaCmd;

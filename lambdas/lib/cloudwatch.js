@@ -18,7 +18,7 @@ class CloudWatch {
 
   /**
    * @param {import("@aws-sdk/client-cloudwatch").PutMetricDataCommandInput} params - params for putMetricData request
-   * @returns {Promise<import("@aws-sdk/client-cloudwatch").PutMetricDataCommandOutput>} -
+   * @returns {Promise<import("@aws-sdk/client-cloudwatch").PutMetricDataCommandOutput>} - Result.
    */
   async putMetricData(params) {
     return await this.cloudwatch.putMetricData(params);

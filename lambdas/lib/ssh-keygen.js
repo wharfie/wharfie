@@ -29,7 +29,7 @@ function execp(file, args) {
 class SSHKeygen {
   /**
    * Check whether `ssh-keygen` is available on PATH.
-   * @returns {Promise<boolean>} -
+   * @returns {Promise<boolean>} - Result.
    */
   static async isAvailable() {
     try {
@@ -89,7 +89,7 @@ class SSHKeygen {
   /**
    * Read OpenSSH public key from `<outPrefix>.pub`.
    * @param {string} outPrefix - Path prefix used when generating the key.
-   * @returns {Promise<string>} -
+   * @returns {Promise<string>} - Result.
    */
   static async readPublicKey(outPrefix) {
     const contents = await readFile(`${outPrefix}.pub`, 'utf8');
@@ -113,7 +113,7 @@ class SSHKeygen {
   /**
    * Remove generated keypair files if they exist.
    * @param {string} outPrefix - Path prefix used when generating.
-   * @returns {Promise<void>}
+   * @returns {Promise<void>} - Result.
    */
   static async remove(outPrefix) {
     await Promise.allSettled([unlink(outPrefix), unlink(`${outPrefix}.pub`)]);
@@ -122,7 +122,7 @@ class SSHKeygen {
   /**
    * Check if a file exists.
    * @param {string} path - Filesystem path.
-   * @returns {Promise<boolean>} -
+   * @returns {Promise<boolean>} - Result.
    */
   static async exists(path) {
     try {
@@ -138,7 +138,7 @@ class SSHKeygen {
   /**
    * Ensure a file does not already exist (unless overwriting).
    * @param {string} path - Filesystem path to check.
-   * @returns {Promise<void>}
+   * @returns {Promise<void>} - Result.
    */
   static async assertNotExists(path) {
     try {

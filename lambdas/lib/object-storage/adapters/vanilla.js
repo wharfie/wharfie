@@ -7,11 +7,11 @@ import { createId } from '../../id.js';
 
 /**
  * @typedef VanillaBucketMeta
- * @property {string} [region]
- * @property {Array<{ Key: string, Value: string }>} [tags]
- * @property {any} [notificationConfiguration]
- * @property {any} [lifecycleConfiguration]
- * @property {string} [createdAt]
+ * @property {string} [region] - region.
+ * @property {Array<{ Key: string, Value: string }>} [tags] - tags.
+ * @property {any} [notificationConfiguration] - notificationConfiguration.
+ * @property {any} [lifecycleConfiguration] - lifecycleConfiguration.
+ * @property {string} [createdAt] - createdAt.
  */
 
 /**
@@ -34,8 +34,8 @@ import { createId } from '../../id.js';
  * Notes:
  * - This adapter intentionally does NOT try to emulate all S3 edge cases.
  * - It does implement the subset used in this repository with straightforward behavior.
- * @param {CreateVanillaObjectStorageOptions} [options] -
- * @returns {import('../base.js').ObjectStorageClient & { close?: () => Promise<void> }} -
+ * @param {CreateVanillaObjectStorageOptions} [options] - options.
+ * @returns {import('../base.js').ObjectStorageClient & { close?: () => Promise<void> }} - Result.
  */
 export default function createVanillaObjectStorage(options = {}) {
   const rootDir = options.path
@@ -51,39 +51,39 @@ export default function createVanillaObjectStorage(options = {}) {
   const multipartUploads = new Map();
 
   /**
-   * @returns {Promise<void>} -
+   * @returns {Promise<void>} - Result.
    */
   async function ensureRoot() {
     await fsp.mkdir(bucketsDir, { recursive: true });
   }
 
   /**
-   * @param {string} Bucket -
-   * @returns {string} -
+   * @param {string} Bucket - Bucket.
+   * @returns {string} - Result.
    */
   function bucketDir(Bucket) {
     return join(bucketsDir, Bucket);
   }
 
   /**
-   * @param {string} Bucket -
-   * @returns {string} -
+   * @param {string} Bucket - Bucket.
+   * @returns {string} - Result.
    */
   function bucketObjectsDir(Bucket) {
     return join(bucketDir(Bucket), 'objects');
   }
 
   /**
-   * @param {string} Bucket -
-   * @returns {string} -
+   * @param {string} Bucket - Bucket.
+   * @returns {string} - Result.
    */
   function bucketMetaPath(Bucket) {
     return join(bucketDir(Bucket), 'bucket.json');
   }
 
   /**
-   * @param {string} Key -
-   * @returns {string} -
+   * @param {string} Key - Key.
+   * @returns {string} - Result.
    */
   function normalizeKey(Key) {
     if (typeof Key !== 'string') throw new TypeError('Key must be a string');
@@ -92,9 +92,9 @@ export default function createVanillaObjectStorage(options = {}) {
 
   /**
    * Prevent path traversal via keys like "../../etc/passwd".
-   * @param {string} base -
-   * @param {string} candidate -
-   * @returns {string} -
+   * @param {string} base - base.
+   * @param {string} candidate - candidate.
+   * @returns {string} - Result.
    */
   function assertWithin(base, candidate) {
     const b = resolve(base);
@@ -107,9 +107,9 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {string} Bucket -
-   * @param {string} Key -
-   * @returns {string} -
+   * @param {string} Bucket - Bucket.
+   * @param {string} Key - Key.
+   * @returns {string} - Result.
    */
   function objectFilePath(Bucket, Key) {
     const safeKey = normalizeKey(Key);
@@ -119,9 +119,9 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {string} path -
-   * @param {Uint8Array|string} data -
-   * @returns {Promise<void>} -
+   * @param {string} path - path.
+   * @param {Uint8Array|string} data - data.
+   * @returns {Promise<void>} - Result.
    */
   async function writeFileAtomic(path, data) {
     await fsp.mkdir(dirname(path), { recursive: true });
@@ -155,8 +155,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {any} Body -
-   * @returns {Promise<Buffer>} -
+   * @param {any} Body - Body.
+   * @returns {Promise<Buffer>} - Result.
    */
   async function bodyToBuffer(Body) {
     if (Body == null) return Buffer.from('');
@@ -175,8 +175,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {string} Bucket -
-   * @returns {Promise<boolean>} -
+   * @param {string} Bucket - Bucket.
+   * @returns {Promise<boolean>} - Result.
    */
   async function bucketExists(Bucket) {
     await ensureRoot();
@@ -189,8 +189,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {string} Bucket -
-   * @returns {Promise<VanillaBucketMeta>} -
+   * @param {string} Bucket - Bucket.
+   * @returns {Promise<VanillaBucketMeta>} - Result.
    */
   async function readBucketMeta(Bucket) {
     if (metaCache.has(Bucket)) return metaCache.get(Bucket);
@@ -216,9 +216,9 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {string} Bucket -
-   * @param {VanillaBucketMeta} meta -
-   * @returns {Promise<void>} -
+   * @param {string} Bucket - Bucket.
+   * @param {VanillaBucketMeta} meta - meta.
+   * @returns {Promise<void>} - Result.
    */
   async function writeBucketMeta(Bucket, meta) {
     metaCache.set(Bucket, meta);
@@ -226,8 +226,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {string} Bucket -
-   * @returns {Promise<void>} -
+   * @param {string} Bucket - Bucket.
+   * @returns {Promise<void>} - Result.
    */
   async function assertBucketExists(Bucket) {
     if (!(await bucketExists(Bucket))) {
@@ -239,8 +239,8 @@ export default function createVanillaObjectStorage(options = {}) {
 
   /**
    * Recursively list all object keys under a bucket.
-   * @param {string} Bucket -
-   * @returns {Promise<string[]>} -
+   * @param {string} Bucket - Bucket.
+   * @returns {Promise<string[]>} - Result.
    */
   async function listAllKeys(Bucket) {
     await assertBucketExists(Bucket);
@@ -250,8 +250,8 @@ export default function createVanillaObjectStorage(options = {}) {
     const keys = [];
 
     /**
-     * @param {string} dir -
-     * @returns {Promise<void>} -
+     * @param {string} dir - dir.
+     * @returns {Promise<void>} - Result.
      */
     async function walk(dir) {
       let entries = [];
@@ -281,8 +281,8 @@ export default function createVanillaObjectStorage(options = {}) {
 
   /**
    * Internal ListObjectsV2-like helper.
-   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params -
-   * @returns {Promise<any>} -
+   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params - params.
+   * @returns {Promise<any>} - Result.
    */
   async function listObjectsV2Internal(params) {
     await assertBucketExists(params.Bucket);
@@ -339,8 +339,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").CreateBucketCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").CreateBucketCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").CreateBucketCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").CreateBucketCommandOutput>} - Result.
    */
   async function createBucket(params) {
     await ensureRoot();
@@ -371,8 +371,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").DeleteBucketCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").DeleteBucketCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").DeleteBucketCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").DeleteBucketCommandOutput>} - Result.
    */
   async function deleteBucket(params) {
     await assertBucketExists(params.Bucket);
@@ -392,8 +392,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").ListBucketsCommandInput} _params -
-   * @returns {Promise<import("@aws-sdk/client-s3").ListBucketsCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").ListBucketsCommandInput} _params - _params.
+   * @returns {Promise<import("@aws-sdk/client-s3").ListBucketsCommandOutput>} - Result.
    */
   async function listBuckets(_params) {
     await ensureRoot();
@@ -425,8 +425,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").PutObjectCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").PutObjectCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").PutObjectCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").PutObjectCommandOutput>} - Result.
    */
   async function putObject(params) {
     await assertBucketExists(params.Bucket);
@@ -439,8 +439,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").GetObjectCommandInput} params -
-   * @returns {Promise<string>} -
+   * @param {import("@aws-sdk/client-s3").GetObjectCommandInput} params - params.
+   * @returns {Promise<string>} - Result.
    */
   async function getObject(params) {
     await assertBucketExists(params.Bucket);
@@ -458,8 +458,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").HeadObjectCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").HeadObjectCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").HeadObjectCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").HeadObjectCommandOutput>} - Result.
    */
   async function headObject(params) {
     await assertBucketExists(params.Bucket);
@@ -477,8 +477,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").DeleteObjectsCommandInput} params -
-   * @returns {Promise<void>} -
+   * @param {import("@aws-sdk/client-s3").DeleteObjectsCommandInput} params - params.
+   * @returns {Promise<void>} - Result.
    */
   async function deleteObjects(params) {
     await assertBucketExists(params.Bucket);
@@ -498,8 +498,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {string} uri -
-   * @returns {import("../../typedefs.js").S3Location} -
+   * @param {string} uri - uri.
+   * @returns {import("../../typedefs.js").S3Location} - Result.
    */
   function parseS3Uri(uri) {
     if (typeof uri !== 'string') throw new TypeError('uri is not a string');
@@ -516,7 +516,7 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {string} CopySource -
+   * @param {string} CopySource - CopySource.
    * @returns {{ Bucket: string, Key: string }} -
    */
   function parseCopySource(CopySource) {
@@ -529,8 +529,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput} params -
-   * @returns {Promise<void>} -
+   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput} params - params.
+   * @returns {Promise<void>} - Result.
    */
   async function copyObjectWithMultiPartFallback(params) {
     await assertBucketExists(params.Bucket);
@@ -547,8 +547,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput} params -
-   * @returns {Promise<void>} -
+   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput} params - params.
+   * @returns {Promise<void>} - Result.
    */
   async function multiPartCopyObject(params) {
     // Local adapter does not have S3's 5GB single-copy limit, so a normal copy is sufficient.
@@ -556,18 +556,18 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput[]} params -
-   * @returns {Promise<void>} -
+   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput[]} params - params.
+   * @returns {Promise<void>} - Result.
    */
   async function copyObjectsWithMultiPartFallback(params) {
     await Promise.all(params.map((p) => copyObjectWithMultiPartFallback(p)));
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} SourceParams -
-   * @param {string} DestinationBucket -
-   * @param {string} DestinationPrefix -
-   * @returns {Promise<void>} -
+   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} SourceParams - SourceParams.
+   * @param {string} DestinationBucket - DestinationBucket.
+   * @param {string} DestinationPrefix - DestinationPrefix.
+   * @returns {Promise<void>} - Result.
    */
   async function copyPath(SourceParams, DestinationBucket, DestinationPrefix) {
     const response = await listObjectsV2Internal(SourceParams);
@@ -584,8 +584,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params -
-   * @returns {Promise<void>} -
+   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params - params.
+   * @returns {Promise<void>} - Result.
    */
   async function deletePath(params) {
     const response = await listObjectsV2Internal(params);
@@ -603,9 +603,9 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params -
-   * @param {Date} [expirationDate] -
-   * @returns {Promise<void>} -
+   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params - params.
+   * @param {Date} [expirationDate] - expirationDate.
+   * @returns {Promise<void>} - Result.
    */
   async function expireObjects(params, expirationDate = new Date()) {
     const response = await listObjectsV2Internal(params);
@@ -626,8 +626,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params -
-   * @returns {Promise<string[]>} -
+   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params - params.
+   * @returns {Promise<string[]>} - Result.
    */
   async function getCommonPrefixes(params) {
     const response = await listObjectsV2Internal({
@@ -642,10 +642,10 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {string} Bucket -
-   * @param {string} Prefix -
+   * @param {string} Bucket - Bucket.
+   * @param {string} Prefix - Prefix.
    * @param {Array<{ name: string }>} partitionKeys -
-   * @returns {Promise<import("../../typedefs.js").Partition[]>} -
+   * @returns {Promise<import("../../typedefs.js").Partition[]>} - Result.
    */
   async function findPartitions(Bucket, Prefix, partitionKeys) {
     if (partitionKeys.length === 0) return [];
@@ -694,8 +694,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").CreateMultipartUploadCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").CreateMultipartUploadCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").CreateMultipartUploadCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").CreateMultipartUploadCommandOutput>} - Result.
    */
   async function createMultipartUpload(params) {
     await assertBucketExists(params.Bucket);
@@ -711,8 +711,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").UploadPartCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").UploadPartCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCommandOutput>} - Result.
    */
   async function uploadPart(params) {
     const upload = multipartUploads.get(params.UploadId);
@@ -727,8 +727,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").UploadPartCopyCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCopyCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").UploadPartCopyCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCopyCommandOutput>} - Result.
    */
   async function uploadPartCopy(params) {
     const upload = multipartUploads.get(params.UploadId);
@@ -743,8 +743,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").CompleteMultipartUploadCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").CompleteMultipartUploadCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").CompleteMultipartUploadCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").CompleteMultipartUploadCommandOutput>} - Result.
    */
   async function completeMultipartUpload(params) {
     const upload = multipartUploads.get(params.UploadId);
@@ -787,9 +787,9 @@ export default function createVanillaObjectStorage(options = {}) {
    * Local adapter implementation: append bytes to an object.
    *
    * Unlike S3, we do not need multipart gymnastics for small files.
-   * @param {import("@aws-sdk/client-s3").HeadObjectCommandInput} params -
-   * @param {any} data -
-   * @returns {Promise<void>} -
+   * @param {import("@aws-sdk/client-s3").HeadObjectCommandInput} params - params.
+   * @param {any} data - data.
+   * @returns {Promise<void>} - Result.
    */
   async function createAppendableOrAppendToObject(params, data) {
     await assertBucketExists(params.Bucket);
@@ -808,8 +808,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").PutBucketNotificationConfigurationCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketNotificationConfigurationCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").PutBucketNotificationConfigurationCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketNotificationConfigurationCommandOutput>} - Result.
    */
   async function putBucketNotificationConfiguration(params) {
     await assertBucketExists(params.Bucket);
@@ -820,8 +820,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").GetBucketNotificationConfigurationCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketNotificationConfigurationCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").GetBucketNotificationConfigurationCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketNotificationConfigurationCommandOutput>} - Result.
    */
   async function getBucketNotificationConfiguration(params) {
     await assertBucketExists(params.Bucket);
@@ -836,8 +836,8 @@ export default function createVanillaObjectStorage(options = {}) {
   /**
    * NOTE: intentionally matches the misspelling in `lambdas/lib/s3.js`:
    * `putBucketLifecycleConfigutation` (not Configuration).
-   * @param {import("@aws-sdk/client-s3").PutBucketLifecycleConfigurationCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketLifecycleConfigurationCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").PutBucketLifecycleConfigurationCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketLifecycleConfigurationCommandOutput>} - Result.
    */
   async function putBucketLifecycleConfigutation(params) {
     await assertBucketExists(params.Bucket);
@@ -850,8 +850,8 @@ export default function createVanillaObjectStorage(options = {}) {
   /**
    * NOTE: intentionally matches the misspelling in `lambdas/lib/s3.js`:
    * `getBucketLifecycleConfigutation` (not Configuration).
-   * @param {import("@aws-sdk/client-s3").GetBucketLifecycleConfigurationCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketLifecycleConfigurationCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").GetBucketLifecycleConfigurationCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketLifecycleConfigurationCommandOutput>} - Result.
    */
   async function getBucketLifecycleConfigutation(params) {
     await assertBucketExists(params.Bucket);
@@ -862,18 +862,18 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {string} bucketName -
-   * @param {string} _expectedOwnerId -
-   * @returns {Promise<boolean>} -
+   * @param {string} bucketName - bucketName.
+   * @param {string} _expectedOwnerId - _expectedOwnerId.
+   * @returns {Promise<boolean>} - Result.
    */
   async function checkBucketOwnership(bucketName, _expectedOwnerId) {
     return await bucketExists(bucketName);
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").GetBucketLocationCommandInput} params -
-   * @param {string} [_region] -
-   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketLocationCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").GetBucketLocationCommandInput} params - params.
+   * @param {string} [_region] - _region.
+   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketLocationCommandOutput>} - Result.
    */
   async function getBucketLocation(params, _region) {
     await assertBucketExists(params.Bucket);
@@ -884,8 +884,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").GetBucketLocationCommandInput} params -
-   * @returns {Promise<string>} -
+   * @param {import("@aws-sdk/client-s3").GetBucketLocationCommandInput} params - params.
+   * @returns {Promise<string>} - Result.
    */
   async function findBucketRegion(params) {
     const loc = await getBucketLocation(params);
@@ -893,10 +893,10 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params -
-   * @param {string} [_region] -
-   * @param {number} [byteSize] -
-   * @returns {Promise<number>} -
+   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params - params.
+   * @param {string} [_region] - _region.
+   * @param {number} [byteSize] - byteSize.
+   * @returns {Promise<number>} - Result.
    */
   async function getPrefixByteSize(params, _region, byteSize = 0) {
     const response = await listObjectsV2Internal(params);
@@ -908,8 +908,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").PutBucketTaggingCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketTaggingCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").PutBucketTaggingCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketTaggingCommandOutput>} - Result.
    */
   async function putBucketTagging(params) {
     await assertBucketExists(params.Bucket);
@@ -920,8 +920,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").GetBucketTaggingCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketTaggingCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").GetBucketTaggingCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketTaggingCommandOutput>} - Result.
    */
   async function getBucketTagging(params) {
     await assertBucketExists(params.Bucket);
@@ -930,8 +930,8 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").DeleteBucketTaggingCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").DeleteBucketTaggingCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").DeleteBucketTaggingCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").DeleteBucketTaggingCommandOutput>} - Result.
    */
   async function deleteBucketTagging(params) {
     await assertBucketExists(params.Bucket);
@@ -943,7 +943,7 @@ export default function createVanillaObjectStorage(options = {}) {
 
   /**
    * Best-effort close (noop for vanilla).
-   * @returns {Promise<void>} -
+   * @returns {Promise<void>} - Result.
    */
   async function close() {
     // All writes are persisted immediately; nothing to flush.

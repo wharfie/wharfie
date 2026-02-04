@@ -2,13 +2,17 @@ import { join } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
+import createDynamoDB from '../db/adapters/dynamodb.js';
+import createLMDB from '../db/adapters/lmdb.js';
+import createVanillaDB from '../db/adapters/vanilla.js';
+
 /** @type {import('../db/base.js').DBClient | undefined} */
 let _db;
 /** @type {Promise<import('../db/base.js').DBClient> | null} */
 let _initPromise = null;
 
 /**
- * @returns {'dynamodb'|'lmdb'|'vanilla'} -
+ * @returns {'dynamodb'|'lmdb'|'vanilla'} - Result.
  */
 function resolveAdapterName() {
   const explicit = process.env.WHARFIE_DB_ADAPTER;
@@ -37,25 +41,19 @@ function resolveAdapterName() {
 }
 
 /**
- * @param {'dynamodb'|'lmdb'|'vanilla'} adapterName -
- * @returns {Promise<import('../db/base.js').DBClient>} -
+ * @param {'dynamodb'|'lmdb'|'vanilla'} adapterName - adapterName.
+ * @returns {Promise<import('../db/base.js').DBClient>} - Result.
  */
 async function createDB(adapterName) {
   if (adapterName === 'dynamodb') {
-    const { default: createDynamoDB } =
-      await import('../db/adapters/dynamodb.js');
     return createDynamoDB({ region: process.env.AWS_REGION });
   }
 
   if (adapterName === 'lmdb') {
-    const { default: createLMDB } = await import('../db/adapters/lmdb.js');
     return createLMDB({
       path: process.env.WHARFIE_DB_PATH,
     });
   }
-
-  const { default: createVanillaDB } =
-    await import('../db/adapters/vanilla.js');
 
   if (process.env.NODE_ENV === 'test') {
     const dir = mkdtempSync(join(tmpdir(), 'wharfie-dynamo-'));
@@ -68,7 +66,7 @@ async function createDB(adapterName) {
 }
 
 /**
- * @returns {Promise<import('../db/base.js').DBClient>} -
+ * @returns {Promise<import('../db/base.js').DBClient>} - Result.
  */
 export async function getDB() {
   if (_db) return _db;

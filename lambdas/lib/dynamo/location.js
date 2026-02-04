@@ -5,8 +5,8 @@ import { getDB, resetDB } from './_shared.js';
 const _tables = new Map();
 
 /**
- * @param {string} [tableName] -
- * @returns {Promise<ReturnType<typeof createLocationTable>>} -
+ * @param {string} [tableName] - tableName.
+ * @returns {Promise<ReturnType<typeof createLocationTable>>} - Result.
  */
 async function getTable(tableName) {
   const key = tableName || '__default__';
@@ -24,24 +24,27 @@ async function getTable(tableName) {
 }
 
 /**
- * @param {import('../../typedefs.js').LocationRecord} locationRecord -
- * @param {string} [tableName] -
+ * @param {import('../../typedefs.js').LocationRecord} locationRecord - locationRecord.
+ * @param {string} [tableName] - tableName.
+ * @returns {Promise<any>} - Result.
  */
 export async function putLocation(locationRecord, tableName) {
   return (await getTable(tableName)).putLocation(locationRecord);
 }
 
 /**
- * @param {string} location -
- * @param {string} [tableName] -
+ * @param {string} location - location.
+ * @param {string} [tableName] - tableName.
+ * @returns {Promise<any>} - Result.
  */
 export async function findLocations(location, tableName) {
   return (await getTable(tableName)).findLocations(location);
 }
 
 /**
- * @param {import('../../typedefs.js').LocationRecord} locationRecord -
- * @param {string} [tableName] -
+ * @param {import('../../typedefs.js').LocationRecord} locationRecord - locationRecord.
+ * @param {string} [tableName] - tableName.
+ * @returns {Promise<any>} - Result.
  */
 export async function deleteLocation(locationRecord, tableName) {
   return (await getTable(tableName)).deleteLocation(locationRecord);
@@ -49,6 +52,7 @@ export async function deleteLocation(locationRecord, tableName) {
 
 /**
  *
+ * @returns {void} - Result.
  */
 export function __setMockState() {
   _tables.clear();

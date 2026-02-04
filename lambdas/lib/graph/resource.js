@@ -23,18 +23,18 @@ const Status = {
  * @property {string} region - aws region of the resource
  * @property {string} [source_region] - aws region of the source data, not set for models
  * @property {string} athena_workgroup - name of the stack's athena workgroup
- * @property {import('../../typedefs.js').DaemonConfig} daemon_config -
- * @property {import('../actor/resources/wharfie-resource.js').WharfieResourceProperties & import('../actor/typedefs.js').SharedProperties} resource_properties -
- * @property {import('../../typedefs.js').TableProperties} source_properties -
- * @property {import('../../typedefs.js').TableProperties} destination_properties -
+ * @property {import('../../typedefs.js').DaemonConfig} daemon_config - daemon_config.
+ * @property {import('../actor/resources/wharfie-resource.js').WharfieResourceProperties & import('../actor/typedefs.js').SharedProperties} resource_properties - resource_properties.
+ * @property {import('../../typedefs.js').TableProperties} source_properties - source_properties.
+ * @property {import('../../typedefs.js').TableProperties} destination_properties - destination_properties.
  * @property {number} [created_at] - created timestamp
  * @property {number} [last_updated_at] - update_at_timestamp
- * @property {string} [wharfie_version] -
+ * @property {string} [wharfie_version] - wharfie_version.
  */
 
 class Resource {
   /**
-   * @param {ResourceOptions} options -
+   * @param {ResourceOptions} options - options.
    */
   constructor({
     id = createId(),
@@ -71,7 +71,7 @@ class Resource {
   }
 
   /**
-   * @returns {import('./typedefs.js').ResourceRecord} -
+   * @returns {import('./typedefs.js').ResourceRecord} - Result.
    */
   toRecord() {
     return {
@@ -97,8 +97,8 @@ class Resource {
   }
 
   /**
-   * @param {import('./typedefs.js').ResourceRecord} resource_record -
-   * @returns {Resource} -
+   * @param {import('./typedefs.js').ResourceRecord} resource_record - resource_record.
+   * @returns {Resource} - Result.
    */
   static fromRecord(resource_record) {
     return new Resource({

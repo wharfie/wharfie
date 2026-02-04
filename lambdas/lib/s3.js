@@ -36,9 +36,9 @@ import { map } from './promises.js';
 
 /**
  * @typedef ProviderMeta
- * @property {Provider} provider -
- * @property {RegionResolver} regionResolver -
- * @property {string} [fixedRegion] -
+ * @property {Provider} provider - provider.
+ * @property {RegionResolver} regionResolver - regionResolver.
+ * @property {string} [fixedRegion] - fixedRegion.
  */
 
 /**
@@ -47,18 +47,18 @@ import { map } from './promises.js';
 
 /**
  * @typedef ProviderCredentials
- * @property {string} accessKeyId -
- * @property {string} secretAccessKey -
+ * @property {string} accessKeyId - accessKeyId.
+ * @property {string} secretAccessKey - secretAccessKey.
  */
 
 /**
  * @typedef ProviderOptions
- * @property {string} [endpoint] -
- * @property {string} [region] -
+ * @property {string} [endpoint] - endpoint.
+ * @property {string} [region] - region.
  * @property {string} [accountId]   // R2
  * @property {string} [location]    // Hetzner
- * @property {ProviderCredentials} [credentials] -
- * @property {boolean} [forcePathStyle] -
+ * @property {ProviderCredentials} [credentials] - credentials.
+ * @property {boolean} [forcePathStyle] - forcePathStyle.
  */
 
 /**
@@ -66,14 +66,14 @@ import { map } from './promises.js';
  * S3ClientConfig via `&`; we just list the extra fields and the common ones we use.
  * If you want perfect typing, use the .d.ts option below.
  * @typedef S3Options
- * @property {Provider} [provider] -
- * @property {ProviderOptions} [providerOptions] -
- * @property {any} [credentials] -
- * @property {string} [region] -
- * @property {string} [endpoint] -
- * @property {boolean} [forcePathStyle] -
- * @property {boolean} [useArnRegion] -
- * @property {boolean} [followRegionRedirects] -
+ * @property {Provider} [provider] - provider.
+ * @property {ProviderOptions} [providerOptions] - providerOptions.
+ * @property {any} [credentials] - credentials.
+ * @property {string} [region] - region.
+ * @property {string} [endpoint] - endpoint.
+ * @property {boolean} [forcePathStyle] - forcePathStyle.
+ * @property {boolean} [useArnRegion] - useArnRegion.
+ * @property {boolean} [followRegionRedirects] - followRegionRedirects.
  */
 
 const AWS_REGIONS = [
@@ -96,7 +96,7 @@ const AWS_REGIONS = [
 
 /**
  * @param {import("@aws-sdk/client-sts").STSClientConfig} options - client configuration
- * @returns {import("@aws-sdk/client-s3").S3ClientConfig} -
+ * @returns {import("@aws-sdk/client-s3").S3ClientConfig} - Result.
  */
 function formatClientOptions(options) {
   // aws-sdk v3 has diverged in options between sdks
@@ -107,9 +107,9 @@ function formatClientOptions(options) {
 
 /**
  * Normalize provider & endpoint into S3Client config.
- * @param {import("@aws-sdk/client-s3").S3ClientConfig} base -
- * @param {Provider} provider -
- * @param {ProviderOptions} providerOptions -
+ * @param {import("@aws-sdk/client-s3").S3ClientConfig} base - base.
+ * @param {Provider} provider - provider.
+ * @param {ProviderOptions} providerOptions - providerOptions.
  * @returns {{clientConfig: import("@aws-sdk/client-s3").S3ClientConfig, providerMeta: ProviderMeta}} -
  */
 function buildProviderClientConfig(base, provider, providerOptions = {}) {
@@ -186,7 +186,7 @@ function buildProviderClientConfig(base, provider, providerOptions = {}) {
 
 class S3 {
   /**
-   * @param {S3Options} [options] -
+   * @param {S3Options} [options] - options.
    */
   constructor(options = {}) {
     const { provider = 'aws', providerOptions = {}, ...s3Options } = options;
@@ -228,7 +228,7 @@ class S3 {
 
   /**
    * @param {string} region - params for PutObject request
-   * @returns {import("@aws-sdk/client-s3").S3} -
+   * @returns {import("@aws-sdk/client-s3").S3} - Result.
    */
   _getRegionClient(region) {
     if (!this._allowRegionFanout) {
@@ -246,7 +246,7 @@ class S3 {
 
   /**
    * @param {import("@aws-sdk/client-s3").PutObjectCommandInput} params - params for PutObject request
-   * @returns {Promise<import("@aws-sdk/client-s3").PutObjectCommandOutput>} -
+   * @returns {Promise<import("@aws-sdk/client-s3").PutObjectCommandOutput>} - Result.
    */
   async putObject(params) {
     const command = new PutObjectCommand(params);
@@ -255,7 +255,7 @@ class S3 {
 
   /**
    * @param {import("@aws-sdk/client-s3").GetObjectCommandInput} params - params for GetObject request
-   * @returns {Promise<string>} -
+   * @returns {Promise<string>} - Result.
    */
   async getObject(params) {
     const command = new GetObjectCommand(params);
@@ -277,7 +277,7 @@ class S3 {
 
   /**
    * @param {import("@aws-sdk/client-s3").HeadObjectCommandInput} params - params for HeadObject request
-   * @returns {Promise<import("@aws-sdk/client-s3").HeadObjectCommandOutput>} -
+   * @returns {Promise<import("@aws-sdk/client-s3").HeadObjectCommandOutput>} - Result.
    */
   async headObject(params) {
     const command = new HeadObjectCommand(params);
@@ -286,7 +286,7 @@ class S3 {
 
   /**
    * @param {import("@aws-sdk/client-s3").CreateBucketCommandInput} params - params for createBucket request
-   * @returns {Promise<import("@aws-sdk/client-s3").CreateBucketCommandOutput>} -
+   * @returns {Promise<import("@aws-sdk/client-s3").CreateBucketCommandOutput>} - Result.
    */
   async createBucket(params) {
     const command = new CreateBucketCommand(params);
@@ -295,7 +295,7 @@ class S3 {
 
   /**
    * @param {import("@aws-sdk/client-s3").DeleteBucketCommandInput} params - params for deleteBucket request
-   * @returns {Promise<import("@aws-sdk/client-s3").DeleteBucketCommandOutput>} -
+   * @returns {Promise<import("@aws-sdk/client-s3").DeleteBucketCommandOutput>} - Result.
    */
   async deleteBucket(params) {
     const command = new DeleteBucketCommand(params);
@@ -304,7 +304,7 @@ class S3 {
 
   /**
    * @param {import("@aws-sdk/client-s3").ListBucketsCommandInput} params - params for listBuckets request
-   * @returns {Promise<import("@aws-sdk/client-s3").ListBucketsCommandOutput>} -
+   * @returns {Promise<import("@aws-sdk/client-s3").ListBucketsCommandOutput>} - Result.
    */
   async listBuckets(params) {
     const command = new ListBucketsCommand(params);
@@ -369,7 +369,7 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput} params -
+   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput} params - params.
    */
   async multiPartCopyObject({ Bucket, Key, CopySource }) {
     if (!CopySource) throw new Error('CopySource is required');
@@ -467,7 +467,7 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput} params -
+   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput} params - params.
    */
   async copyObjectWithMultiPartFallback(params) {
     try {
@@ -487,7 +487,7 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput[]} params -
+   * @param {import("@aws-sdk/client-s3").CopyObjectCommandInput[]} params - params.
    */
   async copyObjectsWithMultiPartFallback(params) {
     await map(params, this.copyObjectWithMultiPartFallback.bind(this), {
@@ -496,9 +496,9 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} SourceParams -
-   * @param {string} DestinationBucket -
-   * @param {string} DestinationPrefix -
+   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} SourceParams - SourceParams.
+   * @param {string} DestinationBucket - DestinationBucket.
+   * @param {string} DestinationPrefix - DestinationPrefix.
    */
   async copyPath(SourceParams, DestinationBucket, DestinationPrefix) {
     const response = await this.s3.send(new ListObjectsV2Command(SourceParams));
@@ -531,7 +531,7 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params -
+   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params - params.
    */
   async deletePath(params) {
     const response = await this.s3.send(new ListObjectsV2Command(params));
@@ -559,8 +559,8 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params -
-   * @param {Date} expirationDate -
+   * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params - params.
+   * @param {Date} expirationDate - expirationDate.
    */
   async expireObjects(params, expirationDate = new Date()) {
     const response = await this.s3.send(new ListObjectsV2Command(params));
@@ -671,8 +671,8 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").CreateMultipartUploadCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").CreateMultipartUploadCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").CreateMultipartUploadCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").CreateMultipartUploadCommandOutput>} - Result.
    */
   async createMultipartUpload(params) {
     const command = new CreateMultipartUploadCommand(params);
@@ -680,8 +680,8 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").CompleteMultipartUploadCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").CompleteMultipartUploadCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").CompleteMultipartUploadCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").CompleteMultipartUploadCommandOutput>} - Result.
    */
   async completeMultipartUpload(params) {
     const command = new CompleteMultipartUploadCommand(params);
@@ -689,8 +689,8 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").UploadPartCopyCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCopyCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").UploadPartCopyCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCopyCommandOutput>} - Result.
    */
   async uploadPartCopy(params) {
     const command = new UploadPartCopyCommand(params);
@@ -698,8 +698,8 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").UploadPartCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").UploadPartCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").UploadPartCommandOutput>} - Result.
    */
   async uploadPart(params) {
     const command = new UploadPartCommand(params);
@@ -707,8 +707,8 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").PutObjectCommandInput} params -
-   * @param {Buffer} data -
+   * @param {import("@aws-sdk/client-s3").PutObjectCommandInput} params - params.
+   * @param {Buffer} data - data.
    */
   async createAppendableOrAppendToObject(params, data) {
     let existingObject;
@@ -812,8 +812,8 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").PutBucketNotificationConfigurationCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketNotificationConfigurationCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").PutBucketNotificationConfigurationCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketNotificationConfigurationCommandOutput>} - Result.
    */
   async putBucketNotificationConfiguration(params) {
     const command = new PutBucketNotificationConfigurationCommand(params);
@@ -821,8 +821,8 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").GetBucketNotificationConfigurationCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketNotificationConfigurationCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").GetBucketNotificationConfigurationCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketNotificationConfigurationCommandOutput>} - Result.
    */
   async getBucketNotificationConfiguration(params) {
     const command = new GetBucketNotificationConfigurationCommand(params);
@@ -830,8 +830,8 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").PutBucketLifecycleConfigurationCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketLifecycleConfigurationCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").PutBucketLifecycleConfigurationCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketLifecycleConfigurationCommandOutput>} - Result.
    */
   async putBucketLifecycleConfigutation(params) {
     const command = new PutBucketLifecycleConfigurationCommand(params);
@@ -839,8 +839,8 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").GetBucketLifecycleConfigurationCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketLifecycleConfigurationCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").GetBucketLifecycleConfigurationCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketLifecycleConfigurationCommandOutput>} - Result.
    */
   async getBucketLifecycleConfigutation(params) {
     const command = new GetBucketLifecycleConfigurationCommand(params);
@@ -848,9 +848,9 @@ class S3 {
   }
 
   /**
-   * @param {string} bucketName -
-   * @param {string} expectedOwnerId -
-   * @returns {Promise<boolean>} -
+   * @param {string} bucketName - bucketName.
+   * @param {string} expectedOwnerId - expectedOwnerId.
+   * @returns {Promise<boolean>} - Result.
    */
   async checkBucketOwnership(bucketName, expectedOwnerId) {
     const command = new HeadBucketCommand({
@@ -866,9 +866,9 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").GetBucketLocationCommandInput} params -
-   * @param {string} [region] -
-   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketLocationCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").GetBucketLocationCommandInput} params - params.
+   * @param {string} [region] - region.
+   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketLocationCommandOutput>} - Result.
    */
   async getBucketLocation(params, region) {
     const command = new GetBucketLocationCommand({
@@ -880,8 +880,8 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").GetBucketLocationCommandInput} params -
-   * @returns {Promise<string>} -
+   * @param {import("@aws-sdk/client-s3").GetBucketLocationCommandInput} params - params.
+   * @returns {Promise<string>} - Result.
    */
   async findBucketRegion(params) {
     const key = JSON.stringify(params);
@@ -906,9 +906,9 @@ class S3 {
 
   /**
    * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params - params for ListObjectV2 request
-   * @param {string} [region] -
+   * @param {string} [region] - region.
    * @param {Number} [byteSize] - accumulator for common prefixes
-   * @returns {Promise<Number>} -
+   * @returns {Promise<Number>} - Result.
    */
   async getPrefixByteSize(params, region, byteSize = 0) {
     const listCommand = new ListObjectsV2Command({
@@ -934,8 +934,8 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").PutBucketTaggingCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketTaggingCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").PutBucketTaggingCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").PutBucketTaggingCommandOutput>} - Result.
    */
   async putBucketTagging(params) {
     const command = new PutBucketTaggingCommand(params);
@@ -943,8 +943,8 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").GetBucketTaggingCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketTaggingCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").GetBucketTaggingCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").GetBucketTaggingCommandOutput>} - Result.
    */
   async getBucketTagging(params) {
     const command = new GetBucketTaggingCommand(params);
@@ -963,8 +963,8 @@ class S3 {
   }
 
   /**
-   * @param {import("@aws-sdk/client-s3").DeleteBucketTaggingCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-s3").DeleteBucketTaggingCommandOutput>} -
+   * @param {import("@aws-sdk/client-s3").DeleteBucketTaggingCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-s3").DeleteBucketTaggingCommandOutput>} - Result.
    */
   async deleteBucketTagging(params) {
     const command = new DeleteBucketTaggingCommand(params);

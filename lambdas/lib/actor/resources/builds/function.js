@@ -6,27 +6,27 @@ import path from 'node:path';
 
 /**
  * @typedef ExternalDependencyDescription
- * @property {string} name -
- * @property {string} version -
+ * @property {string} name - name.
+ * @property {string} version - version.
  */
 
 /**
  * @typedef FunctionProperties
- * @property {ExternalDependencyDescription[]} [external] -
- * @property {Object<string,string>} [environmentVariables] -
+ * @property {ExternalDependencyDescription[]} [external] - external.
+ * @property {Object<string,string>} [environmentVariables] - environmentVariables.
  */
 
 /**
  * @typedef FunctionEntrypoint
- * @property {string} path -
- * @property {string} [export] -
+ * @property {string} path - path.
+ * @property {string} [export] - export.
  */
 
 /**
  * @typedef FunctionOptions
- * @property {string} name -
- * @property {FunctionEntrypoint} entrypoint -
- * @property {FunctionProperties} [properties] -
+ * @property {string} name - name.
+ * @property {FunctionEntrypoint} entrypoint - entrypoint.
+ * @property {FunctionProperties} [properties] - properties.
  */
 
 /**
@@ -35,8 +35,8 @@ import path from 'node:path';
  */
 
 /**
- * @param {any} v
- * @returns {boolean}
+ * @param {any} v - v.
+ * @returns {boolean} - Result.
  */
 function isObject(v) {
   return !!v && typeof v === 'object';
@@ -49,8 +49,8 @@ function isObject(v) {
  *
  * We conservatively treat `context.resources.{db,queue,objectStorage}` as RPC candidates
  * when the value looks like a client instance (has at least one function property).
- * @param {any} context
- * @returns {{ safeContext: any, rpcResources: Record<string, any> | null }}
+ * @param {any} context - context.
+ * @returns {{ safeContext: any, rpcResources: Record<string, any> | null }} - Result.
  */
 function splitContextForWorker(context) {
   if (!isObject(context)) return { safeContext: context, rpcResources: null };
@@ -86,7 +86,7 @@ function splitContextForWorker(context) {
 
 class Function {
   /**
-   * @param {FunctionOptions} options -
+   * @param {FunctionOptions} options - options.
    */
   constructor({ name, entrypoint, properties = {} }) {
     if (!name) {
@@ -107,10 +107,10 @@ class Function {
    * If `options.resources` (or `context.resources.{db,queue,objectStorage}`) contains
    * in-process resource client instances, they are exposed to the worker via an RPC
    * bridge, and the worker sees them as `context.resources.*` proxies.
-   * @param {string} name -
-   * @param {any} event -
-   * @param {any} context -
-   * @param {FunctionRunOptions} [options] -
+   * @param {string} name - name.
+   * @param {any} event - event.
+   * @param {any} context - context.
+   * @param {FunctionRunOptions} [options] - options.
    */
   static async run(name, event, context = {}, options = {}) {
     const functionAssetBuffer = await getAsset(name);
@@ -160,9 +160,9 @@ class Function {
    * Load the function entrypoint and invoke it in-process.
    *
    * This is primarily used by the (single-process) ActorSystem runtime.
-   * @param {any} [event] -
-   * @param {any} [context] -
-   * @returns {Promise<any>} -
+   * @param {any} [event] - event.
+   * @param {any} [context] - context.
+   * @returns {Promise<any>} - Result.
    */
   async fn(event = {}, context = {}) {
     const entryPath = path.isAbsolute(this.entrypoint.path)

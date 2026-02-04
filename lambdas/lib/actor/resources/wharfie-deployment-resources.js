@@ -10,23 +10,23 @@ import Policy from './aws/policy.js';
 
 /**
  * @typedef WharfieDeploymentResourcesProperties
- * @property {string} loggingLevel -
- * @property {number} [createdAt] -
+ * @property {string} loggingLevel - loggingLevel.
+ * @property {number} [createdAt] - createdAt.
  */
 
 /**
  * @typedef WharfieDeploymentResourcesOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('./reconcilable.js').default.Status} [status] -
- * @property {WharfieDeploymentResourcesProperties &  import('../typedefs.js').SharedProperties} properties -
- * @property {Object<string, import('./base-resource.js').default | BaseResourceGroup>} [resources] -
- * @property {import('./reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('./reconcilable.js').default.Status} [status] - status.
+ * @property {WharfieDeploymentResourcesProperties &  import('../typedefs.js').SharedProperties} properties - properties.
+ * @property {Object<string, import('./base-resource.js').default | BaseResourceGroup>} [resources] - resources.
+ * @property {import('./reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class WharfieDeploymentResources extends BaseResourceGroup {
   /**
-   * @param {WharfieDeploymentResourcesOptions} options -
+   * @param {WharfieDeploymentResourcesOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn, resources }) {
     super({
@@ -40,8 +40,8 @@ class WharfieDeploymentResources extends BaseResourceGroup {
   }
 
   /**
-   * @param {string} parent -
-   * @returns {(import('./base-resource.js').default | BaseResourceGroup)[]} -
+   * @param {string} parent - parent.
+   * @returns {(import('./base-resource.js').default | BaseResourceGroup)[]} - Result.
    */
   _defineGroupResources(parent) {
     const systemBucket = new Bucket({

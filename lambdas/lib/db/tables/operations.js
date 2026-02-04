@@ -1,7 +1,7 @@
 import Resource from '../../graph/resource.js';
 import Operation from '../../graph/operation.js';
-import Action from '../../graph/action.js';
-import Query from '../../graph/query.js';
+import Action, { Status as ActionStatus } from '../../graph/action.js';
+import Query, { Status as QueryStatus } from '../../graph/query.js';
 
 import { CONDITION_TYPE, KEY_TYPE } from '../../db/base.js';
 
@@ -15,9 +15,9 @@ const KEY_NAME = 'resource_id';
 const SORT_KEY_NAME = 'sort_key';
 
 /**
- * @param {string} propertyName -
- * @param {string} propertyValue -
- * @returns {import('../../db/base.js').KeyCondition} -
+ * @param {string} propertyName - propertyName.
+ * @param {string} propertyValue - propertyValue.
+ * @returns {import('../../db/base.js').KeyCondition} - Result.
  */
 function pkEq(propertyName, propertyValue) {
   return {
@@ -29,9 +29,9 @@ function pkEq(propertyName, propertyValue) {
 }
 
 /**
- * @param {string} propertyName -
- * @param {string} propertyValue -
- * @returns {import('../../db/base.js').KeyCondition} -
+ * @param {string} propertyName - propertyName.
+ * @param {string} propertyValue - propertyValue.
+ * @returns {import('../../db/base.js').KeyCondition} - Result.
  */
 function skBegins(propertyName, propertyValue) {
   return {
@@ -43,9 +43,9 @@ function skBegins(propertyName, propertyValue) {
 }
 
 /**
- * @param {string} propertyName -
- * @param {string} propertyValue -
- * @returns {import('../../db/base.js').KeyCondition} -
+ * @param {string} propertyName - propertyName.
+ * @param {string} propertyValue - propertyValue.
+ * @returns {import('../../db/base.js').KeyCondition} - Result.
  */
 function eq(propertyName, propertyValue) {
   return {
@@ -56,8 +56,8 @@ function eq(propertyName, propertyValue) {
 }
 
 /**
- * @param {unknown} error -
- * @returns {boolean} -
+ * @param {unknown} error - error.
+ * @returns {boolean} - Result.
  */
 const isConditionalCheckFailed = (error) => {
   if (error instanceof Error) {
@@ -67,8 +67,8 @@ const isConditionalCheckFailed = (error) => {
 };
 
 /**
- * @param {unknown} error -
- * @returns {boolean} -
+ * @param {unknown} error - error.
+ * @returns {boolean} - Result.
  */
 const isResourceNotFound = (error) => {
   if (error instanceof Error) {
@@ -78,9 +78,9 @@ const isResourceNotFound = (error) => {
 };
 
 /**
- * @param {any[]} arr -
- * @param {number} size -
- * @returns {any[][]} -
+ * @param {any[]} arr - arr.
+ * @param {number} size - size.
+ * @returns {any[][]} - Result.
  */
 const chunk = (arr, size) => {
   const out = [];
@@ -90,8 +90,8 @@ const chunk = (arr, size) => {
 
 /**
  * The adapter stores action.status redundantly at the top-level for some backends.
- * @param {Record<string, any>} record -
- * @returns {Record<string, any>} -
+ * @param {Record<string, any>} record - record.
+ * @returns {Record<string, any>} - Result.
  */
 const normalizeRecord = (record) => {
   if (record?.data?.record_type === Action.RecordType) {
@@ -103,29 +103,29 @@ const normalizeRecord = (record) => {
 /**
  * Operations table client.
  * @typedef {Object} OperationsTableClient
- * @property {(resource: Resource) => Promise<void>} putResource -
- * @property {(resource_id: string) => Promise<Resource | null>} getResource -
- * @property {(resource: Resource) => Promise<void>} deleteResource -
- * @property {(operation: Operation) => Promise<void>} putOperation -
- * @property {(resource_id: string, operation_id: string) => Promise<Operation | null>} getOperation -
- * @property {(operation: Operation) => Promise<void>} deleteOperation -
- * @property {(resource_id: string) => Promise<Operation[]>} getOperations -
- * @property {(operation: Operation) => Promise<Action[]>} getActions -
- * @property {(resource_id: string, operation_id: string, action_id: string) => Promise<Action | null>} getAction -
+ * @property {(resource: Resource) => Promise<void>} putResource - putResource.
+ * @property {(resource_id: string) => Promise<Resource | null>} getResource - getResource.
+ * @property {(resource: Resource) => Promise<void>} deleteResource - deleteResource.
+ * @property {(operation: Operation) => Promise<void>} putOperation - putOperation.
+ * @property {(resource_id: string, operation_id: string) => Promise<Operation | null>} getOperation - getOperation.
+ * @property {(operation: Operation) => Promise<void>} deleteOperation - deleteOperation.
+ * @property {(resource_id: string) => Promise<Operation[]>} getOperations - getOperations.
+ * @property {(operation: Operation) => Promise<Action[]>} getActions - getActions.
+ * @property {(resource_id: string, operation_id: string, action_id: string) => Promise<Action | null>} getAction - getAction.
  * @property {(action: { toRecords: () => Record<string, any>[] }) => Promise<void>} putAction -
- * @property {(action: Action, new_status: string, overrideTableName?: string) => Promise<boolean>} updateActionStatus -
+ * @property {(action: Action, new_status: string, overrideTableName?: string) => Promise<boolean>} updateActionStatus - updateActionStatus.
  * @property {(query: { toRecord: () => any }) => Promise<void>} putQuery -
  * @property {(queries: Array<{ toRecord: () => any }>) => Promise<void>} putQueries -
- * @property {(resource_id: string, operation_id: string, action_id: string, query_id: string) => Promise<Query | null>} getQuery -
- * @property {(resource_id: string, operation_id: string, action_id: string) => Promise<Query[]>} getQueries -
- * @property {(operation: Operation, action_type: import('../../graph/action.js').WharfieActionTypeEnum) => Promise<boolean>} checkActionPrerequisites -
+ * @property {(resource_id: string, operation_id: string, action_id: string, query_id: string) => Promise<Query | null>} getQuery - getQuery.
+ * @property {(resource_id: string, operation_id: string, action_id: string) => Promise<Query[]>} getQueries - getQueries.
+ * @property {(operation: Operation, action_type: import('../../graph/action.js').WharfieActionTypeEnum) => Promise<boolean>} checkActionPrerequisites - checkActionPrerequisites.
  * @property {(resource_id: string, operation_id?: string) => Promise<{ operations: Operation[]; actions: Action[]; queries: Query[] }>} getRecords -
  */
 
 /**
  * Factory: Operations table client.
  * @param {{ db?: DBClient, tableName?: string }} [params] -
- * @returns {OperationsTableClient} -
+ * @returns {OperationsTableClient} - Result.
  */
 export function createOperationsTable({
   db,
@@ -136,8 +136,8 @@ export function createOperationsTable({
   const dbClient = db;
 
   /**
-   * @param {Resource} resource -
-   * @returns {Promise<void>} -
+   * @param {Resource} resource - resource.
+   * @returns {Promise<void>} - Result.
    */
   async function putResource(resource) {
     await dbClient.put({
@@ -149,8 +149,8 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {string} resource_id -
-   * @returns {Promise<Resource | null>} -
+   * @param {string} resource_id - resource_id.
+   * @returns {Promise<Resource | null>} - Result.
    */
   async function getResource(resource_id) {
     try {
@@ -177,8 +177,8 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {Resource} resource -
-   * @returns {Promise<void>} -
+   * @param {Resource} resource - resource.
+   * @returns {Promise<void>} - Result.
    */
   async function deleteResource(resource) {
     try {
@@ -212,8 +212,8 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {Operation} operation -
-   * @returns {Promise<void>} -
+   * @param {Operation} operation - operation.
+   * @returns {Promise<void>} - Result.
    */
   async function putOperation(operation) {
     const records = operation.toRecords().map(normalizeRecord);
@@ -231,9 +231,9 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {string} resource_id -
-   * @param {string} operation_id -
-   * @returns {Promise<Operation | null>} -
+   * @param {string} resource_id - resource_id.
+   * @param {string} operation_id - operation_id.
+   * @returns {Promise<Operation | null>} - Result.
    */
   async function getOperation(resource_id, operation_id) {
     const item = await dbClient.get({
@@ -249,8 +249,8 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {Operation} operation -
-   * @returns {Promise<void>} -
+   * @param {Operation} operation - operation.
+   * @returns {Promise<void>} - Result.
    */
   async function deleteOperation(operation) {
     const items =
@@ -279,8 +279,8 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {string} resource_id -
-   * @returns {Promise<Operation[]>} -
+   * @param {string} resource_id - resource_id.
+   * @returns {Promise<Operation[]>} - Result.
    */
   async function getOperations(resource_id) {
     const items =
@@ -299,8 +299,8 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {Operation} operation -
-   * @returns {Promise<Action[]>} -
+   * @param {Operation} operation - operation.
+   * @returns {Promise<Action[]>} - Result.
    */
   async function getActions(operation) {
     const prefix = `${operation.resource_id}#${operation.id}#`;
@@ -320,10 +320,10 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {string} resource_id -
-   * @param {string} operation_id -
-   * @param {string} action_id -
-   * @returns {Promise<Action | null>} -
+   * @param {string} resource_id - resource_id.
+   * @param {string} operation_id - operation_id.
+   * @param {string} action_id - action_id.
+   * @returns {Promise<Action | null>} - Result.
    */
   async function getAction(resource_id, operation_id, action_id) {
     const item = await dbClient.get({
@@ -340,7 +340,7 @@ export function createOperationsTable({
 
   /**
    * @param {{ toRecords: () => Record<string, any>[] }} action -
-   * @returns {Promise<void>} -
+   * @returns {Promise<void>} - Result.
    */
   async function putAction(action) {
     const records = action.toRecords().map(normalizeRecord);
@@ -359,10 +359,10 @@ export function createOperationsTable({
 
   /**
    * Optimistic status transition.
-   * @param {Action} action -
-   * @param {string} new_status -
-   * @param {string} [overrideTableName] -
-   * @returns {Promise<boolean>} -
+   * @param {Action} action - action.
+   * @param {string} new_status - new_status.
+   * @param {string} [overrideTableName] - overrideTableName.
+   * @returns {Promise<boolean>} - Result.
    */
   async function updateActionStatus(
     action,
@@ -419,7 +419,7 @@ export function createOperationsTable({
 
   /**
    * @param {{ toRecord: () => any }} query -
-   * @returns {Promise<void>} -
+   * @returns {Promise<void>} - Result.
    */
   async function putQuery(query) {
     await dbClient.put({
@@ -432,7 +432,7 @@ export function createOperationsTable({
 
   /**
    * @param {Array<{ toRecord: () => any }>} queries -
-   * @returns {Promise<void>} -
+   * @returns {Promise<void>} - Result.
    */
   async function putQueries(queries) {
     const records = queries.map((q) => q.toRecord());
@@ -450,11 +450,11 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {string} resource_id -
-   * @param {string} operation_id -
-   * @param {string} action_id -
-   * @param {string} query_id -
-   * @returns {Promise<Query | null>} -
+   * @param {string} resource_id - resource_id.
+   * @param {string} operation_id - operation_id.
+   * @param {string} action_id - action_id.
+   * @param {string} query_id - query_id.
+   * @returns {Promise<Query | null>} - Result.
    */
   async function getQuery(resource_id, operation_id, action_id, query_id) {
     const item = await dbClient.get({
@@ -470,10 +470,10 @@ export function createOperationsTable({
   }
 
   /**
-   * @param {string} resource_id -
-   * @param {string} operation_id -
-   * @param {string} action_id -
-   * @returns {Promise<Query[]>} -
+   * @param {string} resource_id - resource_id.
+   * @param {string} operation_id - operation_id.
+   * @param {string} action_id - action_id.
+   * @returns {Promise<Query[]>} - Result.
    */
   async function getQueries(resource_id, operation_id, action_id) {
     const prefix = `${resource_id}#${operation_id}#${action_id}#`;
@@ -496,9 +496,9 @@ export function createOperationsTable({
    *
    * The operation graph stores edges keyed by action *ids*; most call-sites refer
    * to actions by their *type*.
-   * @param {Operation} operation -
-   * @param {import('../../graph/action.js').WharfieActionTypeEnum} action_type -
-   * @returns {Promise<boolean>} -
+   * @param {Operation} operation - operation.
+   * @param {import('../../graph/action.js').WharfieActionTypeEnum} action_type - action_type.
+   * @returns {Promise<boolean>} - Result.
    */
   async function checkActionPrerequisites(operation, action_type) {
     let actionId;
@@ -532,14 +532,14 @@ export function createOperationsTable({
       if (!actionRecord) return false;
 
       const prerequisiteAction = Action.fromRecord(actionRecord);
-      if (prerequisiteAction.status !== Action.Status.COMPLETED) return false;
+      if (prerequisiteAction.status !== ActionStatus.COMPLETED) return false;
 
       const queryRecords = items.filter(
         (i) => i?.data?.record_type === Query.RecordType,
       );
       for (const queryRecord of queryRecords) {
         const q = Query.fromRecord(queryRecord);
-        if (q.status === Query.Status.RUNNING) {
+        if (q.status === QueryStatus.RUNNING) {
           // Placeholder: stale query re-enqueueing logic lives in the daemon.
         }
       }
@@ -550,8 +550,8 @@ export function createOperationsTable({
 
   /**
    * Load all operation/action/query records for a resource (optionally scoped to an operation id).
-   * @param {string} resource_id -
-   * @param {string} [operation_id] -
+   * @param {string} resource_id - resource_id.
+   * @param {string} [operation_id] - operation_id.
    * @returns {Promise<{ operations: Operation[]; actions: Action[]; queries: Query[] }>} -
    */
   async function getRecords(resource_id, operation_id = '') {

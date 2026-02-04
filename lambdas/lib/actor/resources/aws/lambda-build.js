@@ -29,22 +29,22 @@ const HANDLERS = {
 
 /**
  * @typedef LambdaBuildProperties
- * @property {string | function(): string} handler -
- * @property {string | function(): string} artifactBucket -
+ * @property {string | function(): string} handler - handler.
+ * @property {string | function(): string} artifactBucket - artifactBucket.
  */
 
 /**
  * @typedef LambdaBuildOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {LambdaBuildProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {LambdaBuildProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class LambdaBuild extends BaseResource {
   /**
-   * @param {LambdaBuildOptions} options -
+   * @param {LambdaBuildOptions} options - options.
    */
   constructor({ name, parent, status, dependsOn = [], properties }) {
     super({ name, parent, status, properties, dependsOn });
@@ -120,8 +120,8 @@ class LambdaBuild extends BaseResource {
   }
 
   /**
-   * @param {string} handler -
-   * @returns {Promise<string>} -
+   * @param {string} handler - handler.
+   * @returns {Promise<string>} - Result.
    */
   async _build(handler) {
     const requirePathParts = handler.split('.');

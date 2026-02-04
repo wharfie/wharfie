@@ -16,24 +16,24 @@ import BaseResource from '../base-resource.js';
 
 /**
  * @typedef SeaBuildProperties
- * @property {string | function(): string} entryCode -
- * @property {string | function(): string} resolveDir -
- * @property {string | function(): string} nodeBinaryPath -
- * @property {string | function(): string} nodeVersion -
- * @property {TargetPlatform | function(): TargetPlatform} platform -
- * @property {TargetArch | function(): TargetArch} architecture -
- * @property {TargetLibc | function(): TargetLibc} [libc] -
- * @property {Object<string,string> | function(): Object<string,string>} [environmentVariables] -
- * @property {Object<string,string> | function(): Object<string,string>} [assets] -
+ * @property {string | function(): string} entryCode - entryCode.
+ * @property {string | function(): string} resolveDir - resolveDir.
+ * @property {string | function(): string} nodeBinaryPath - nodeBinaryPath.
+ * @property {string | function(): string} nodeVersion - nodeVersion.
+ * @property {TargetPlatform | function(): TargetPlatform} platform - platform.
+ * @property {TargetArch | function(): TargetArch} architecture - architecture.
+ * @property {TargetLibc | function(): TargetLibc} [libc] - libc.
+ * @property {Object<string,string> | function(): Object<string,string>} [environmentVariables] - environmentVariables.
+ * @property {Object<string,string> | function(): Object<string,string>} [assets] - assets.
  */
 
 /**
  * @typedef SeaBuildOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
- * @property {SeaBuildProperties & import('../../typedefs.js').SharedProperties} properties -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
+ * @property {SeaBuildProperties & import('../../typedefs.js').SharedProperties} properties - properties.
  */
 
 class SeaBuild extends BaseResource {
@@ -106,7 +106,7 @@ class SeaBuild extends BaseResource {
   }
 
   /**
-   * @param {string} buildDir -
+   * @param {string} buildDir - buildDir.
    */
   async esbuild(buildDir) {
     const outputPath = join(buildDir, 'esbundle.js');
@@ -151,8 +151,8 @@ class SeaBuild extends BaseResource {
   }
 
   /**
-   * @param {string} buildDir -
-   * @param {string} nodeBinaryPath -
+   * @param {string} buildDir - buildDir.
+   * @param {string} nodeBinaryPath - nodeBinaryPath.
    */
   async seaBuild(buildDir, nodeBinaryPath) {
     const seaConfigPath = join(buildDir, 'sea-config.json');

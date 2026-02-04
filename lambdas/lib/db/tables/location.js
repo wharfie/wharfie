@@ -12,9 +12,9 @@ const KEY_NAME = 'location';
 const SORT_KEY_NAME = 'resource_id';
 
 /**
- * @param {string} propertyName -
- * @param {string} propertyValue -
- * @returns {import('../../db/base.js').KeyCondition} -
+ * @param {string} propertyName - propertyName.
+ * @param {string} propertyValue - propertyValue.
+ * @returns {import('../../db/base.js').KeyCondition} - Result.
  */
 function pkEq(propertyName, propertyValue) {
   return {
@@ -45,24 +45,24 @@ const parentLocation = (/** @type {string} */ location) => {
 
 /**
  * @typedef {Object} locationClient
- * @property {(locationRecord: LocationRecord) => void} putLocation -
- * @property {(location: string) => Promise<LocationRecord[]>} findLocations -
- * @property {(locationRecord: LocationRecord) => void} deleteLocation -
+ * @property {(locationRecord: LocationRecord) => void} putLocation - putLocation.
+ * @property {(location: string) => Promise<LocationRecord[]>} findLocations - findLocations.
+ * @property {(locationRecord: LocationRecord) => void} deleteLocation - deleteLocation.
  */
 
 /**
  * Factory: Location table client.
- * @param {object} params -
- * @param {DBClient} params.db -
- * @param {string} [params.tableName] -
- * @returns {locationClient} -
+ * @param {object} params - params.
+ * @param {DBClient} params.db - params.db.
+ * @param {string} [params.tableName] - params.tableName.
+ * @returns {locationClient} - Result.
  */
 export function createLocationTable({
   db,
   tableName = process.env[TABLE_ENV_VAR] || '',
 }) {
   /**
-   * @param {LocationRecord} locationRecord -
+   * @param {LocationRecord} locationRecord - locationRecord.
    */
   async function putLocation(locationRecord) {
     await db.put({
@@ -78,8 +78,8 @@ export function createLocationTable({
 
   /**
    * Walks up the location tree until it finds matches.
-   * @param {string} location -
-   * @returns {Promise<LocationRecord[]>} -
+   * @param {string} location - location.
+   * @returns {Promise<LocationRecord[]>} - Result.
    */
   async function findLocations(location) {
     if (isTerminalLocation(location)) return [];
@@ -107,7 +107,7 @@ export function createLocationTable({
   }
 
   /**
-   * @param {LocationRecord} locationRecord -
+   * @param {LocationRecord} locationRecord - locationRecord.
    */
   async function deleteLocation(locationRecord) {
     await db.remove({

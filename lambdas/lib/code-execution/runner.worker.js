@@ -23,8 +23,8 @@ const rpcPending = new Map();
 let nextRpcId = 1;
 
 /**
- * @param {any} v
- * @returns {any}
+ * @param {any} v - v.
+ * @returns {any} - Result.
  */
 function reviveCloneable(v) {
   if (!v) return v;
@@ -47,11 +47,11 @@ function reviveCloneable(v) {
 }
 
 /**
- * @param {string} sessionId
- * @param {string} resource
- * @param {string} method
- * @param {any[]} args
- * @returns {Promise<any>}
+ * @param {string} sessionId - sessionId.
+ * @param {string} resource - resource.
+ * @param {string} method - method.
+ * @param {any[]} args - args.
+ * @returns {Promise<any>} - Result.
  */
 function rpcCall(sessionId, resource, method, args) {
   const port = parentPort;
@@ -75,9 +75,9 @@ function rpcCall(sessionId, resource, method, args) {
 }
 
 /**
- * @param {string} sessionId
- * @param {string} resourceName
- * @returns {any}
+ * @param {string} sessionId - sessionId.
+ * @param {string} resourceName - resourceName.
+ * @returns {any} - Result.
  */
 function createRpcProxy(sessionId, resourceName) {
   return new Proxy(
@@ -106,8 +106,8 @@ function createRpcProxy(sessionId, resourceName) {
 }
 
 /**
- * @param {any} ctx
- * @returns {any}
+ * @param {any} ctx - ctx.
+ * @returns {any} - Result.
  */
 function hydrateContextResources(ctx) {
   if (!ctx || typeof ctx !== 'object') return ctx;
@@ -152,14 +152,14 @@ async function drainOneTick() {
 // Run the esbuild bundle exactly ONCE per codeString
 /**
  * @typedef RunBundleOptions
- * @property {string} codeString -
- * @property {string} pkgFile -
- * @property {string} entryFile -
- * @property {string} tmpRoot -
- * @property {Object<string,string>} env -
+ * @property {string} codeString - codeString.
+ * @property {string} pkgFile - pkgFile.
+ * @property {string} entryFile - entryFile.
+ * @property {string} tmpRoot - tmpRoot.
+ * @property {Object<string,string>} env - env.
  */
 /**
- * @param {RunBundleOptions} options -
+ * @param {RunBundleOptions} options - options.
  */
 function runBundleOnce({ codeString, pkgFile, entryFile, tmpRoot, env }) {
   // Use codeString as the key – if it’s the same bundle, don’t re-run it

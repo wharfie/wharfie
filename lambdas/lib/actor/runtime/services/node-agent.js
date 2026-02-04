@@ -23,34 +23,34 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 /**
  * @typedef ServiceChild
- * @property {string} name
- * @property {import('node:child_process').ChildProcess} child
+ * @property {string} name - name.
+ * @property {import('node:child_process').ChildProcess} child - child.
  */
 
 /**
  * @typedef NodeAgentOptions
- * @property {string} nodeId
- * @property {'all'|'leader'|'worker'} role
- * @property {any} resourcesSpec
- * @property {string} cmd
- * @property {string[]} prefixArgs
- * @property {string} lambdaHost
- * @property {number} lambdaPort
- * @property {string} dbHost
- * @property {number} dbPort
- * @property {string} queueHost
- * @property {number} queuePort
- * @property {string} controlHost
- * @property {number} controlPort
- * @property {string|null} dbAddressOverride
- * @property {string|null} queueAddressOverride
- * @property {string[]} pollQueueUrls
+ * @property {string} nodeId - nodeId.
+ * @property {'all'|'leader'|'worker'} role - role.
+ * @property {any} resourcesSpec - resourcesSpec.
+ * @property {string} cmd - cmd.
+ * @property {string[]} prefixArgs - prefixArgs.
+ * @property {string} lambdaHost - lambdaHost.
+ * @property {number} lambdaPort - lambdaPort.
+ * @property {string} dbHost - dbHost.
+ * @property {number} dbPort - dbPort.
+ * @property {string} queueHost - queueHost.
+ * @property {number} queuePort - queuePort.
+ * @property {string} controlHost - controlHost.
+ * @property {number} controlPort - controlPort.
+ * @property {string|null} dbAddressOverride - dbAddressOverride.
+ * @property {string|null} queueAddressOverride - queueAddressOverride.
+ * @property {string[]} pollQueueUrls - pollQueueUrls.
  */
 
 /**
- * @param {import('node:http').ServerResponse} res
- * @param {number} status
- * @param {any} body
+ * @param {import('node:http').ServerResponse} res - res.
+ * @param {number} status - status.
+ * @param {any} body - body.
  */
 function sendJson(res, status, body) {
   const payload = JSON.stringify(body ?? null);
@@ -61,11 +61,11 @@ function sendJson(res, status, body) {
 }
 
 /**
- * @param {string} name
- * @param {string} cmd
- * @param {string[]} args
- * @param {Record<string,string>} env
- * @returns {ServiceChild}
+ * @param {string} name - name.
+ * @param {string} cmd - cmd.
+ * @param {string[]} args - args.
+ * @param {Record<string,string>} env - env.
+ * @returns {ServiceChild} - Result.
  */
 function spawnService(name, cmd, args, env) {
   const child = spawn(cmd, args, {
@@ -81,8 +81,8 @@ function spawnService(name, cmd, args, env) {
 }
 
 /**
- * @param {any} v
- * @returns {string|null}
+ * @param {any} v - v.
+ * @returns {string|null} - Result.
  */
 function normalizeAddress(v) {
   if (!v) return null;
@@ -104,7 +104,7 @@ function normalizeAddress(v) {
 
 export default class NodeAgent {
   /**
-   * @param {NodeAgentOptions} options
+   * @param {NodeAgentOptions} options - options.
    */
   constructor(options) {
     this.options = options;
@@ -119,6 +119,11 @@ export default class NodeAgent {
     this.queueAddress = normalizeAddress(options.queueAddressOverride);
 
     this._stopping = false;
+    /** @type {null | (() => void)} */
+    this._resolveStop = null;
+    this._stopPromise = new Promise((resolve) => {
+      this._resolveStop = resolve;
+    });
   }
 
   /**
@@ -257,11 +262,15 @@ export default class NodeAgent {
 
   /**
    * Stop services (best-effort).
-   * @param {string} signal
+   * @param {string} signal - signal.
    */
   async stop(signal = 'SIGTERM') {
     if (this._stopping) return;
     this._stopping = true;
+    if (this._resolveStop) {
+      this._resolveStop();
+      this._resolveStop = null;
+    }
 
     console.log(`[node-agent] shutting down (${signal})`);
 
@@ -292,9 +301,6 @@ export default class NodeAgent {
    * Keep process alive (until SIGINT/SIGTERM).
    */
   async waitForever() {
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      await delay(60_000);
-    }
+    await this._stopPromise;
   }
 }

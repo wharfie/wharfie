@@ -7,16 +7,16 @@
 
 /**
  * @typedef {Object} S3Location
- * @property {string} uri
- * @property {string} arn
- * @property {string} bucket
- * @property {string} prefix
+ * @property {string} uri - uri.
+ * @property {string} arn - arn.
+ * @property {string} bucket - bucket.
+ * @property {string} prefix - prefix.
  */
 
 /**
  * @typedef {Object} Partition
- * @property {Record<string, string>} partitionValues
- * @property {string} location
+ * @property {Record<string, string>} partitionValues - partitionValues.
+ * @property {string} location - location.
  */
 
 // Export concrete values so `import("./typedefs.js").S3Location` works in JSDoc

@@ -3,15 +3,15 @@ import BaseResource from '../base-resource.js';
 /**
  * @typedef BuildResourceOptions
  * @property {string} name - Resource name.
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
- * @property {import('../../typedefs.js').SharedProperties} properties -
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
+ * @property {import('../../typedefs.js').SharedProperties} properties - properties.
  */
 
 class BuildResource extends BaseResource {
   /**
-   * @param {BuildResourceOptions} options -
+   * @param {BuildResourceOptions} options - options.
    */
   constructor({ name, parent, status, dependsOn, properties }) {
     super({ name, parent, status, dependsOn, properties });

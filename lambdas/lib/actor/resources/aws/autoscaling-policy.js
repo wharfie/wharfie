@@ -3,26 +3,26 @@ import ApplicationAutoScaling from '../../../application-auto-scaling.js';
 
 /**
  * @typedef AutoscalingPolicyProperties
- * @property {string} resourceId -
- * @property {import('@aws-sdk/client-application-auto-scaling').ScalableDimension} scalableDimension -
- * @property {import('@aws-sdk/client-application-auto-scaling').ServiceNamespace} serviceNamespace -
- * @property {import('@aws-sdk/client-application-auto-scaling').PolicyType} policyType -
- * @property {import('@aws-sdk/client-application-auto-scaling').TargetTrackingScalingPolicyConfiguration} targetTrackingScalingPolicyConfiguration -
- * @property {import('@aws-sdk/client-application-auto-scaling').StepScalingPolicyConfiguration} [stepScalingPolicyConfiguration] -
+ * @property {string} resourceId - resourceId.
+ * @property {import('@aws-sdk/client-application-auto-scaling').ScalableDimension} scalableDimension - scalableDimension.
+ * @property {import('@aws-sdk/client-application-auto-scaling').ServiceNamespace} serviceNamespace - serviceNamespace.
+ * @property {import('@aws-sdk/client-application-auto-scaling').PolicyType} policyType - policyType.
+ * @property {import('@aws-sdk/client-application-auto-scaling').TargetTrackingScalingPolicyConfiguration} targetTrackingScalingPolicyConfiguration - targetTrackingScalingPolicyConfiguration.
+ * @property {import('@aws-sdk/client-application-auto-scaling').StepScalingPolicyConfiguration} [stepScalingPolicyConfiguration] - stepScalingPolicyConfiguration.
  */
 
 /**
  * @typedef AutoscalingPolicyOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable.js').default.Status} [status] -
- * @property {AutoscalingPolicyProperties & import('../../typedefs.js').SharedProperties} properties -
- * @property {import('../reconcilable.js').default[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {AutoscalingPolicyProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class AutoscalingPolicy extends BaseResource {
   /**
-   * @param {AutoscalingPolicyOptions} options -
+   * @param {AutoscalingPolicyOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     super({

@@ -5,8 +5,8 @@ import { getDB, resetDB } from './_shared.js';
 const _tables = new Map();
 
 /**
- * @param {string} [tableName] -
- * @returns {Promise<ReturnType<typeof createDependencyTable>>} -
+ * @param {string} [tableName] - tableName.
+ * @returns {Promise<ReturnType<typeof createDependencyTable>>} - Result.
  */
 async function getTable(tableName) {
   const key = tableName || '__default__';
@@ -24,16 +24,18 @@ async function getTable(tableName) {
 }
 
 /**
- * @param {import('../../typedefs.js').DependencyRecord} dependency -
- * @param {string} [tableName] -
+ * @param {import('../../typedefs.js').DependencyRecord} dependency - dependency.
+ * @param {string} [tableName] - tableName.
+ * @returns {Promise<any>} - Result.
  */
 export async function putDependency(dependency, tableName) {
   return (await getTable(tableName)).putDependency(dependency);
 }
 
 /**
- * @param {import('../../typedefs.js').DependencyRecord | string} dependency -
- * @param {string} [tableName] -
+ * @param {import('../../typedefs.js').DependencyRecord | string} dependency - dependency.
+ * @param {string} [tableName] - tableName.
+ * @returns {Promise<any>} - Result.
  */
 export async function findDependencies(dependency, tableName) {
   const record =
@@ -44,8 +46,9 @@ export async function findDependencies(dependency, tableName) {
 }
 
 /**
- * @param {import('../../typedefs.js').DependencyRecord} dependency -
- * @param {string} [tableName] -
+ * @param {import('../../typedefs.js').DependencyRecord} dependency - dependency.
+ * @param {string} [tableName] - tableName.
+ * @returns {Promise<any>} - Result.
  */
 export async function deleteDependency(dependency, tableName) {
   return (await getTable(tableName)).deleteDependency(dependency);
@@ -53,6 +56,7 @@ export async function deleteDependency(dependency, tableName) {
 
 /**
  *
+ * @returns {void} - Result.
  */
 export function __setMockState() {
   _tables.clear();

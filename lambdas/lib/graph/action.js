@@ -65,21 +65,21 @@ const Status = {
 
 /**
  * @typedef ActionOptions
- * @property {string} [id] -
- * @property {string} resource_id -
- * @property {string} operation_id -
- * @property {WharfieActionTypeEnum} type -
- * @property {WharfieActionStatusEnum} [status] -
- * @property {import('./query.js').default[]} [queries] -
+ * @property {string} [id] - id.
+ * @property {string} resource_id - resource_id.
+ * @property {string} operation_id - operation_id.
+ * @property {WharfieActionTypeEnum} type - type.
+ * @property {WharfieActionStatusEnum} [status] - status.
+ * @property {import('./query.js').default[]} [queries] - queries.
  * @property {number} [started_at] - start timestamp
  * @property {number} [last_updated_at] - update_at_timestamp
- * @property {string} [wharfie_version] -
- * @property {any} [outputs] -
+ * @property {string} [wharfie_version] - wharfie_version.
+ * @property {any} [outputs] - outputs.
  */
 
 class Action {
   /**
-   * @param {ActionOptions} options -
+   * @param {ActionOptions} options - options.
    */
   constructor({
     id = createId(),
@@ -106,14 +106,14 @@ class Action {
   }
 
   /**
-   * @returns {string} -
+   * @returns {string} - Result.
    */
   toString() {
     return this.id;
   }
 
   /**
-   * @returns {(import('./typedefs.js').ActionRecord | import('./typedefs.js').QueryRecord)[]} -
+   * @returns {(import('./typedefs.js').ActionRecord | import('./typedefs.js').QueryRecord)[]} - Result.
    */
   toRecords() {
     const records = [];
@@ -140,9 +140,9 @@ class Action {
   }
 
   /**
-   * @param {Record<string,any>} action_record -
-   * @param {Record<string,any>[]} query_records -
-   * @returns {Action} -
+   * @param {Record<string,any>} action_record - action_record.
+   * @param {Record<string,any>[]} query_records - query_records.
+   * @returns {Action} - Result.
    */
   static fromRecords(action_record, query_records) {
     const new_action = new Action({
@@ -163,8 +163,8 @@ class Action {
   }
 
   /**
-   * @param {Record<string,any>} action_record -
-   * @returns {Action} -
+   * @param {Record<string,any>} action_record - action_record.
+   * @returns {Action} - Result.
    */
   static fromRecord(action_record) {
     return new Action({

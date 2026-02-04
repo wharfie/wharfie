@@ -5,8 +5,8 @@ import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
 /**
  * @typedef FirehoseLogTransportOptions
- * @property {string} [logDeliveryStreamName] -
- * @property {number} [flushInterval] -
+ * @property {string} [logDeliveryStreamName] - logDeliveryStreamName.
+ * @property {number} [flushInterval] - flushInterval.
  */
 
 class FirehoseLogTransport extends Writable {
@@ -46,8 +46,8 @@ class FirehoseLogTransport extends Writable {
   }
 
   /**
-   * @param {import("@aws-sdk/client-firehose").PutRecordBatchCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-firehose").PutRecordBatchCommandOutput>} -
+   * @param {import("@aws-sdk/client-firehose").PutRecordBatchCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-firehose").PutRecordBatchCommandOutput>} - Result.
    */
   async putRecordsBatch(params) {
     const command = new PutRecordBatchCommand(params);
@@ -55,8 +55,8 @@ class FirehoseLogTransport extends Writable {
   }
 
   /**
-   * @param {string} record -
-   * @returns {Promise<void>} -
+   * @param {string} record - record.
+   * @returns {Promise<void>} - Result.
    */
   async log(record) {
     if (record.length >= FirehoseLogTransport._MAX_BIN_SIZE) {
@@ -81,7 +81,7 @@ class FirehoseLogTransport extends Writable {
 
   /**
    * Naively bin packs records into bins minimizing unused _BIN_COST_INCREMENT
-   * @returns {string[]} -
+   * @returns {string[]} - Result.
    */
   naiveBinPackBufferRecords() {
     const bins = [];
@@ -168,7 +168,7 @@ class FirehoseLogTransport extends Writable {
   }
 
   /**
-   * @param {(error: Error | null | undefined) => void} callback -
+   * @param {(error: Error | null | undefined) => void} callback - callback.
    */
   async _final(callback) {
     try {
@@ -184,9 +184,9 @@ class FirehoseLogTransport extends Writable {
   }
 
   /**
-   * @param {any} chunk -
-   * @param {string} _encoding -
-   * @param {(error: Error | null | undefined) => void} callback -
+   * @param {any} chunk - chunk.
+   * @param {string} _encoding - _encoding.
+   * @param {(error: Error | null | undefined) => void} callback - callback.
    */
   async _write(chunk, _encoding, callback) {
     try {
