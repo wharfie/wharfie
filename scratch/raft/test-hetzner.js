@@ -1,15 +1,15 @@
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-
-const BaseResource = require('../../lambdas/lib/actor/resources/base-resource');
-const {
+import BaseResource from '../../lambdas/lib/actor/resources/base-resource.js';
+import SSHKey from '../../lambdas/lib/actor/resources/local/ssh-key.js';
+import HetznerNode from '../../lambdas/lib/actor/resources/hetzner/node.js';
+import {
   putResource,
   putResourceStatus,
   getResource,
   getResourceStatus,
   getResources,
   deleteResource,
-} = require('../../lambdas/lib/db/state/store');
+} from '../../lambdas/lib/db/state/store.js';
+
 BaseResource.stateDB = {
   putResource,
   putResourceStatus,
@@ -18,11 +18,6 @@ BaseResource.stateDB = {
   getResources,
   deleteResource,
 };
-
-const SSHKey =
-  require('../../lambdas/lib/actor/resources/local/ssh-key').default;
-const HetznerNode =
-  require('../../lambdas/lib/actor/resources/hetzner/node').default;
 
 const HZ_TOKEN = process.env.HETZNER_TOKEN;
 const BINARY_FILE =
