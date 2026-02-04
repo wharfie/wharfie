@@ -47,6 +47,9 @@ export async function deleteLocation(locationRecord, tableName) {
   return (await getTable(tableName)).deleteLocation(locationRecord);
 }
 
+/**
+ *
+ */
 export function __setMockState() {
   _tables.clear();
   resetDB();

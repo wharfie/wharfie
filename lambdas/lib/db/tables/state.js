@@ -1,4 +1,5 @@
 import { CONDITION_TYPE, KEY_TYPE } from '../../db/base.js';
+import envPaths from '../../env-paths.js';
 
 /**
  * State table schema:
@@ -69,8 +70,19 @@ function resourceKeyOf(resource) {
  * @returns {import('../../actor/typedefs.js').DeploymentEnvironmentProperties} -
  */
 function requireDeployment(resource) {
-  if (!resource?.has?.('deployment')) {
-    throw new Error('Deployment not found in resource properties');
+  let has_deployment = false;
+  if (resource?.has?.('deployment')) {
+    has_deployment = true;
+  } else if (resource?.properties?.deployment) {
+    has_deployment = true;
+  }
+  if (!has_deployment) {
+    return {
+      envPaths: envPaths('default'),
+      version: '0.0.0',
+      stateTable: 'default-state',
+      name: 'default',
+    };
   }
   const deployment = resource.get('deployment');
   if (!deployment?.name) {

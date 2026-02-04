@@ -92,7 +92,6 @@ class ReferencesMetastore {
 
   /**
    * Read a manifest.
-   *
    * @param {string} manifestUri -
    * @returns {Promise<string[]>} -
    */
@@ -118,7 +117,6 @@ class ReferencesMetastore {
 
   /**
    * Write a manifest (newline-separated).
-   *
    * @param {string} manifestUri -
    * @param {string[]} files -
    */
@@ -144,7 +142,6 @@ class ReferencesMetastore {
 
   /**
    * Delete a manifest.
-   *
    * @param {string} manifestUri -
    */
   async deleteManifest(manifestUri) {
@@ -163,7 +160,6 @@ class ReferencesMetastore {
   /**
    * Lists all manifest URIs under the references root.
    * For partitioned datasets, this will include manifests per partition.
-   *
    * @returns {Promise<string[]>} -
    */
   async listManifestUris() {
@@ -208,7 +204,6 @@ class ReferencesMetastore {
 
   /**
    * Lists current partitions discovered from manifest locations.
-   *
    * @returns {Promise<Array<{ partitionValues: Record<string, string>, manifestUri: string }>>} -
    */
   async listPartitions() {
@@ -221,7 +216,6 @@ class ReferencesMetastore {
 
   /**
    * Returns the union of all parquet files referenced by all manifests.
-   *
    * @returns {Promise<string[]>} -
    */
   async getAllReferencedFiles() {
@@ -237,7 +231,6 @@ class ReferencesMetastore {
    * This scans the snapshot directory for parquet files and rewrites the relevant manifests.
    * By default this is *incremental* (write-only): it updates manifests for partitions present
    * in the snapshot and does not delete any others.
-   *
    * @param {Object} params -
    * @param {string} params.dataSnapshotUri - Root of the snapshot (ex: .../data/<storage_id>/).
    * @param {boolean} [params.replaceAll] - If true, deletes any stale manifests not present in the snapshot.
@@ -294,7 +287,6 @@ class ReferencesMetastore {
 
   /**
    * Updates a specific partition's manifest.
-   *
    * @param {Object} params -
    * @param {Record<string, string>} params.partitionValues -
    * @param {string[]} params.files -
@@ -358,7 +350,6 @@ class ReferencesMetastore {
 
   /**
    * List all parquet files under a snapshot directory.
-   *
    * @param {string} dataSnapshotUri -
    * @returns {Promise<string[]>} -
    */
@@ -408,7 +399,7 @@ class ReferencesMetastore {
 
     /** @type {string[]} */
     const out = [];
-    let token = undefined;
+    let token;
 
     // NOTE: We intentionally do not use Delimiter='/' to avoid missing nested paths.
     while (true) {

@@ -25,7 +25,6 @@ class QueryParser {
    * Normalize a node-sql-parser reference token.
    *
    * node-sql-parser sometimes emits the literal string "null" for missing schema/table segments.
-   *
    * @param {unknown} token - Raw token.
    * @returns {string} - Normalized token (empty string if missing).
    */
@@ -42,7 +41,6 @@ class QueryParser {
    * - `<statement>::<schema>::<table>`
    * - `<statement>::<table>`
    * - `<statement>::<schema>::<table>::<column>`
-   *
    * @param {string} ref - Reference string produced by node-sql-parser.
    * @returns {{ statement: string, parts: string[] }} - Statement name and the remaining parts.
    */
@@ -55,7 +53,6 @@ class QueryParser {
 
   /**
    * Extract referenced sources and columns from a SQL query.
-   *
    * @param {string} query - SQL query text.
    * @returns {{
    *  sources: Array<{DatabaseName: string, TableName: string}>,
@@ -141,10 +138,9 @@ class QueryParser {
    * Extract an identifier name from a node-sql-parser identifier node.
    *
    * The PostgreSQL dialect frequently represents identifiers as:
-   *   { type: 'default', value: 'col_name' }
+   * { type: 'default', value: 'col_name' }
    *
    * Some shapes nest under an `expr` property.
-   *
    * @param {unknown} ident - Identifier candidate.
    * @returns {string | null} - Identifier name (or null if not an identifier).
    */
@@ -178,7 +174,6 @@ class QueryParser {
 
   /**
    * Walk an expression AST and collect any referenced column names.
-   *
    * @param {any} node - AST node to traverse.
    * @param {Set<string>} columns - Accumulator set for column names.
    * @returns {Set<string>} - The same accumulator set.

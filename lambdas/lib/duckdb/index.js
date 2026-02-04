@@ -64,7 +64,6 @@ class DuckDBQueryEngine {
 
   /**
    * Get or create a DuckDB connection.
-   *
    * @returns {Promise<any>} - DuckDB connection.
    */
   async _getConnection() {
@@ -85,7 +84,6 @@ class DuckDBQueryEngine {
 
   /**
    * Configure DuckDB for s3:// reads/writes (httpfs extension).
-   *
    * @param {any} conn - DuckDB connection.
    * @param {DuckDBS3Config | undefined} cfg - S3 configuration.
    * @returns {Promise<void>} - Resolves when configuration is applied.
@@ -167,7 +165,6 @@ class DuckDBQueryEngine {
 
   /**
    * Escape a SQL single-quoted string literal.
-   *
    * @param {string} value - Raw value.
    * @returns {string} - Escaped value.
    */
@@ -177,7 +174,6 @@ class DuckDBQueryEngine {
 
   /**
    * Escape a SQL identifier for double-quoting.
-   *
    * @param {string} ident - Raw identifier.
    * @returns {string} - Escaped identifier.
    */
@@ -187,7 +183,6 @@ class DuckDBQueryEngine {
 
   /**
    * Convert DuckDB row objects to JSON-friendly output.
-   *
    * @param {Record<string, any>} row - Row object.
    * @returns {Record<string, any>} - Normalized row object.
    */
@@ -204,7 +199,6 @@ class DuckDBQueryEngine {
 
   /**
    * Determine whether a URI points to a remote object store.
-   *
    * @param {string} uri - Output URI.
    * @returns {boolean} - True if the URI is remote (s3/http/https).
    */
@@ -222,7 +216,6 @@ class DuckDBQueryEngine {
    *
    * DuckDB COPY works best with plain local filesystem paths. If the caller provides a file:// URI
    * we convert it to a local path for both directory creation and the DuckDB COPY target.
-   *
    * @param {string} outputUri - Destination path/URI.
    * @returns {string} - Normalized destination (local path or remote URI).
    */
@@ -237,7 +230,6 @@ class DuckDBQueryEngine {
 
   /**
    * Parse SQL in user-land and extract referenced sources/columns.
-   *
    * @param {string} query - SQL text.
    * @returns {{sources: Array<{DatabaseName: string, TableName: string}>, columns: string[], selectAsColumns: Record<string, string[]>}} - Parsed refs.
    */
@@ -247,7 +239,6 @@ class DuckDBQueryEngine {
 
   /**
    * Run a statement without reading results.
-   *
    * @param {string} sql - SQL statement.
    * @returns {Promise<void>} - Resolves when complete.
    */
@@ -258,7 +249,6 @@ class DuckDBQueryEngine {
 
   /**
    * Run a query and return all rows as objects.
-   *
    * @param {string} sql - SQL query.
    * @returns {Promise<Array<Record<string, any>>>} - Rows.
    */
@@ -272,7 +262,6 @@ class DuckDBQueryEngine {
 
   /**
    * Create/overwrite a DuckDB view for a logical table backed by parquet files.
-   *
    * @param {Object} params - Parameters.
    * @param {string} params.schema - DuckDB schema name (usually your logical database name).
    * @param {string} params.table - View name.
@@ -309,7 +298,6 @@ class DuckDBQueryEngine {
 
   /**
    * Create/overwrite a DuckDB view backed by the current state of a references metastore.
-   *
    * @param {Object} params - Parameters.
    * @param {string} params.schema - DuckDB schema name.
    * @param {string} params.table - View name.
@@ -335,7 +323,6 @@ class DuckDBQueryEngine {
 
   /**
    * Write the result of a SELECT to partitioned parquet output (DuckDB COPY).
-   *
    * @param {Object} params - Parameters.
    * @param {string} params.selectSql - A SELECT statement (without the surrounding COPY()).
    * @param {string} params.outputUri - Destination directory (local path, file://..., or s3://...).
@@ -369,7 +356,6 @@ class DuckDBQueryEngine {
 
   /**
    * Execute immediately and store results in-memory by QueryExecutionId.
-   *
    * @param {{QueryString: string}} params - Query parameters.
    * @returns {Promise<{QueryExecutionId: string}>} - Query execution id.
    */
@@ -405,7 +391,6 @@ class DuckDBQueryEngine {
 
   /**
    * Read query execution status and query text.
-   *
    * @param {{QueryExecutionId: string}} params - Query execution id wrapper.
    * @returns {Promise<{QueryExecution: { QueryExecutionId: string, Query: string, Status: { State: string, StateChangeReason?: string }}}>} - Execution details.
    */
@@ -439,7 +424,6 @@ class DuckDBQueryEngine {
 
   /**
    * Read query results (only available for succeeded executions).
-   *
    * @param {{QueryExecutionId: string}} params - Query execution id wrapper.
    * @returns {Promise<Array<Record<string, any>>>} - Result rows.
    */
@@ -452,7 +436,6 @@ class DuckDBQueryEngine {
 
   /**
    * Close DuckDB resources.
-   *
    * @returns {Promise<void>} - Resolves once closed.
    */
   async close() {

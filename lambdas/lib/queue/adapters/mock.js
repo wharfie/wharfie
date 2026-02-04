@@ -4,7 +4,6 @@ import { jest } from '@jest/globals';
 /**
  * Mock queue adapter. Intended for unit tests that only need spies and do not
  * require SQS-like delivery semantics.
- *
  * @returns {import('../base.js').QueueClient} -
  */
 export default function createMockQueue() {

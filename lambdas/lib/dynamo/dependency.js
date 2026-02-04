@@ -51,6 +51,9 @@ export async function deleteDependency(dependency, tableName) {
   return (await getTable(tableName)).deleteDependency(dependency);
 }
 
+/**
+ *
+ */
 export function __setMockState() {
   _tables.clear();
   resetDB();

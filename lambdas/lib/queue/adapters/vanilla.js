@@ -7,7 +7,6 @@ import { createId } from '../../id.js';
 /**
  * @typedef {Record<string, string>} QueueAttributes
  * @typedef {Record<string, string>} QueueTags
- *
  * @typedef QueueMessageRecord
  * @property {string} MessageId
  * @property {string} Body
@@ -17,12 +16,10 @@ import { createId } from '../../id.js';
  * @property {number} [InvisibleUntil]
  * @property {string} [ReceiptHandle]
  * @property {number} ReceiveCount
- *
  * @typedef QueueRecord
  * @property {QueueAttributes} Attributes
  * @property {QueueTags} Tags
  * @property {QueueMessageRecord[]} messages
- *
  * @typedef QueueState
  * @property {Record<string, QueueRecord>} queues
  */
@@ -44,7 +41,6 @@ import { createId } from '../../id.js';
  * Persistence:
  * - State is loaded from disk on startup (if present)
  * - State is written to disk on close()
- *
  * @param {CreateVanillaQueueOptions} [options] -
  * @returns {import('../base.js').QueueClient} -
  */

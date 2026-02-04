@@ -17,7 +17,6 @@ if (!global.__wharfieWorkerInit) {
 
 /**
  * Pending RPC calls made by resource proxies.
- *
  * @type {Map<number, { resolve: (v: any) => void, reject: (e: any) => void }>}
  */
 const rpcPending = new Map();

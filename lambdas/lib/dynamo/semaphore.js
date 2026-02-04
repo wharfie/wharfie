@@ -45,6 +45,9 @@ export async function deleteSemaphore(semaphore) {
   return (await getTable()).deleteSemaphore(semaphore);
 }
 
+/**
+ *
+ */
 export function __setMockState() {
   _tables.clear();
   resetDB();

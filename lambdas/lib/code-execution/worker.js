@@ -352,9 +352,20 @@ async function ensureSandboxForName(name, codeString, externalsTar) {
 
   // Extract externals only once per name
   if (externalsTar) {
-    const src = Readable.from(externalsTar);
-    const extractor = x({ C: root, preserveOwner: false, unlink: true });
-    await pipeline(src, extractor);
+    // NOTE: Buffers/Uint8Arrays are iterable in JS (yielding numbers), which breaks tar extraction.
+    // Wrap them as a single chunk so Readable.from() emits bytes correctly.
+    let tarInput = externalsTar;
+
+    if (Buffer.isBuffer(externalsTar) || externalsTar instanceof Uint8Array) {
+      const buf = Buffer.from(externalsTar);
+      tarInput = buf.length > 0 ? [buf] : undefined;
+    }
+
+    if (tarInput) {
+      const src = Readable.from(tarInput);
+      const extractor = x({ C: root, preserveOwner: false, unlink: true });
+      await pipeline(src, extractor);
+    }
   }
 
   sb = { root, nodeModules, pkgFile, entryFile, prepared: true, codeString };
@@ -400,13 +411,9 @@ async function runInSandbox(
   let cleanupRpc = null;
   if (rpc && rpc.resources && Object.keys(rpc.resources).length > 0) {
     const sessionId = rpc.sessionId || randomUUID();
-
-    const maybeContextIndex = rpc.contextIndex;
     const contextIndex =
-      typeof maybeContextIndex === 'number' &&
-      Number.isInteger(maybeContextIndex) &&
-      maybeContextIndex >= 0
-        ? maybeContextIndex
+      Number.isInteger(rpc.contextIndex) && rpc.contextIndex >= 0
+        ? rpc.contextIndex
         : 1;
 
     rpcSessions.set(sessionId, { resources: rpc.resources });

@@ -170,6 +170,9 @@ export async function getRecords(resource_id, operation_id) {
   return (await getTable()).getRecords(resource_id, operation_id);
 }
 
+/**
+ *
+ */
 export function __setMockState() {
   _tables.clear();
   resetDB();

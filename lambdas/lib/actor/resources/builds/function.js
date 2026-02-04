@@ -49,7 +49,6 @@ function isObject(v) {
  *
  * We conservatively treat `context.resources.{db,queue,objectStorage}` as RPC candidates
  * when the value looks like a client instance (has at least one function property).
- *
  * @param {any} context
  * @returns {{ safeContext: any, rpcResources: Record<string, any> | null }}
  */
@@ -108,7 +107,6 @@ class Function {
    * If `options.resources` (or `context.resources.{db,queue,objectStorage}`) contains
    * in-process resource client instances, they are exposed to the worker via an RPC
    * bridge, and the worker sees them as `context.resources.*` proxies.
-   *
    * @param {string} name -
    * @param {any} event -
    * @param {any} context -
@@ -122,6 +120,12 @@ class Function {
       Buffer.from(assetDescription.codeBundle, 'base64'),
     );
     const functionCodeString = functionBuffer.toString();
+
+    const externalsTarB64 = assetDescription.externalsTar;
+    const externalsTar =
+      typeof externalsTarB64 === 'string' && externalsTarB64.length > 0
+        ? Buffer.from(externalsTarB64, 'base64')
+        : null;
 
     let rpcResources = options?.resources || null;
     let safeContext = context;
@@ -141,7 +145,7 @@ class Function {
 
     console.time('WORKER time');
     await worker.runInSandbox(name, functionCodeString, [event, safeContext], {
-      externalsTar: Buffer.from(assetDescription.externalsTar, 'base64'),
+      ...(externalsTar && externalsTar.length > 0 ? { externalsTar } : {}),
       rpc:
         rpcResources && Object.keys(rpcResources).length > 0
           ? { resources: rpcResources, contextIndex: 1 }
@@ -156,7 +160,6 @@ class Function {
    * Load the function entrypoint and invoke it in-process.
    *
    * This is primarily used by the (single-process) ActorSystem runtime.
-   *
    * @param {any} [event] -
    * @param {any} [context] -
    * @returns {Promise<any>} -

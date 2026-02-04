@@ -120,7 +120,6 @@ async function ensureStore() {
  * Note: the real store (and underlying adapter) is initialized lazily on first call
  * to any method. This avoids pulling AWS SDK dependencies into test/local runtimes
  * unless the dynamodb adapter is actually selected.
- *
  * @returns {ReturnType<typeof createStateTable>}
  */
 export function getStateStore() {
@@ -154,7 +153,6 @@ export async function closeStateStore() {
 
 /**
  * Lazy state store proxy.
- *
  * @type {ReturnType<typeof createStateTable>}
  */
 const stateStore = {

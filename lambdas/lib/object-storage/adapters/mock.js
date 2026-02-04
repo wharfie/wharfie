@@ -7,7 +7,6 @@ import { jest } from '@jest/globals';
  * Intended for unit tests that only need spies and do not require real S3-like
  * semantics. For a local, semantics-correct implementation use the vanilla
  * adapter.
- *
  * @returns {import('../base.js').ObjectStorageClient & { close?: () => Promise<void> }} -
  */
 export default function createMockObjectStorage() {

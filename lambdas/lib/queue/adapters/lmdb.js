@@ -8,7 +8,6 @@ import { createId } from '../../id.js';
 /**
  * @typedef {Record<string, string>} QueueAttributes
  * @typedef {Record<string, string>} QueueTags
- *
  * @typedef QueueMessageRecord
  * @property {string} MessageId
  * @property {string} Body
@@ -18,12 +17,10 @@ import { createId } from '../../id.js';
  * @property {number} [InvisibleUntil]
  * @property {string} [ReceiptHandle]
  * @property {number} ReceiveCount
- *
  * @typedef QueueRecord
  * @property {QueueAttributes} Attributes
  * @property {QueueTags} Tags
  * @property {QueueMessageRecord[]} messages
- *
  * @typedef QueueState
  * @property {Record<string, QueueRecord>} queues
  */
@@ -39,7 +36,6 @@ import { createId } from '../../id.js';
  * Implementation notes (mirrors the DB LMDB adapter intent):
  * - Use synchronous LMDB writes to avoid background commit scheduling keeping Jest alive.
  * - Persist state on each mutation so callers don’t need to call close() for durability.
- *
  * @param {CreateLMDBQueueOptions} [options] -
  * @returns {import('../base.js').QueueClient} -
  */
@@ -60,7 +56,7 @@ export default function createLMDBQueue(options = {}) {
   let closed = false;
 
   /** @type {QueueState} */
-  let state = store.get('state') || { queues: {} };
+  const state = store.get('state') || { queues: {} };
 
   /**
    * @template T

@@ -203,6 +203,7 @@
     "@aws-sdk/s3-request-presigner": "^3.910.0",
     "@aws-sdk/util-dynamodb": "^3.658.1",
     "@duckdb/node-api": "^1.4.2-r.1",
+    "@grpc/grpc-js": "^1.14.3",
     "@npmcli/arborist": "^9.1.4",
     "@paralleldrive/cuid2": "^2.2.2",
     "@smithy/util-retry": "^3.0.3",

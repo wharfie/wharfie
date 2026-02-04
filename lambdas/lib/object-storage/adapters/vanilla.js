@@ -28,13 +28,12 @@ import { createId } from '../../id.js';
  * - Persist objects + bucket metadata to disk (so local runs survive process restarts)
  *
  * Storage layout:
- *   <root>/buckets/<bucket>/objects/<key...>
- *   <root>/buckets/<bucket>/bucket.json
+ * <root>/buckets/<bucket>/objects/<key...>
+ * <root>/buckets/<bucket>/bucket.json
  *
  * Notes:
  * - This adapter intentionally does NOT try to emulate all S3 edge cases.
  * - It does implement the subset used in this repository with straightforward behavior.
- *
  * @param {CreateVanillaObjectStorageOptions} [options] -
  * @returns {import('../base.js').ObjectStorageClient & { close?: () => Promise<void> }} -
  */
@@ -240,7 +239,6 @@ export default function createVanillaObjectStorage(options = {}) {
 
   /**
    * Recursively list all object keys under a bucket.
-   *
    * @param {string} Bucket -
    * @returns {Promise<string[]>} -
    */
@@ -283,7 +281,6 @@ export default function createVanillaObjectStorage(options = {}) {
 
   /**
    * Internal ListObjectsV2-like helper.
-   *
    * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params -
    * @returns {Promise<any>} -
    */
@@ -790,7 +787,6 @@ export default function createVanillaObjectStorage(options = {}) {
    * Local adapter implementation: append bytes to an object.
    *
    * Unlike S3, we do not need multipart gymnastics for small files.
-   *
    * @param {import("@aws-sdk/client-s3").HeadObjectCommandInput} params -
    * @param {any} data -
    * @returns {Promise<void>} -

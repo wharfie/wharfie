@@ -102,7 +102,6 @@ class ActorSystem extends BuildResourceGroup {
 
   /**
    * Lazily create and cache runtime resources from `properties.resources`.
-   *
    * @returns {Promise<{ resources: any, close: () => Promise<void> }>} -
    */
   async _ensureRuntimeResources() {
@@ -115,7 +114,6 @@ class ActorSystem extends BuildResourceGroup {
 
   /**
    * Get the instantiated runtime resources for this ActorSystem.
-   *
    * @returns {Promise<any>} -
    */
   async getRuntimeResources() {
@@ -128,7 +126,6 @@ class ActorSystem extends BuildResourceGroup {
    *
    * - `context.resources` is always present (may be empty).
    * - caller-provided `context.resources` overrides ActorSystem resources.
-   *
    * @param {any} [context] -
    * @returns {Promise<any>} -
    */
@@ -149,7 +146,6 @@ class ActorSystem extends BuildResourceGroup {
 
   /**
    * Invoke an actor function by name with runtime resources injected onto `context.resources`.
-   *
    * @param {string} functionName -
    * @param {any} [event] -
    * @param {any} [context] -
@@ -169,7 +165,6 @@ class ActorSystem extends BuildResourceGroup {
 
   /**
    * Close all cached runtime resources (best-effort).
-   *
    * @returns {Promise<void>} -
    */
   async closeRuntimeResources() {

@@ -66,9 +66,6 @@ class WharfieDeployment extends BaseResourceGroup {
       envPaths: this.get('envPaths', envPaths(this.name)),
       version: this.get('version', require('../../../package.json').version),
       stateTable: `${this.name}-state`,
-      stateTableArn: this.get('stateTableArn'),
-      region: this.get('region'),
-      accountId: this.get('accountId'),
       name: this.name,
     };
   }

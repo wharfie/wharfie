@@ -54,6 +54,9 @@ export async function delete_records(resource_id) {
   return (await getTable()).delete_records(resource_id);
 }
 
+/**
+ *
+ */
 export function __setMockState() {
   _tables.clear();
   resetDB();

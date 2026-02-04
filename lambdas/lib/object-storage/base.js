@@ -366,7 +366,6 @@ async function deleteBucketTagging(_params) {
 /**
  * Factory function that creates an object-storage client exposing the base methods.
  * Adapters should return an implementation of {@link ObjectStorageClient}.
- *
  * @returns {ObjectStorageClient} -
  */
 export default function createObjectStorage() {

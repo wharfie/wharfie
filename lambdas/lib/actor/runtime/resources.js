@@ -19,16 +19,13 @@
  * @typedef {'auto'|'vanilla'|'dynamodb'|'lmdb'} DBAdapter
  * @typedef {'auto'|'vanilla'|'sqs'|'lmdb'} QueueAdapter
  * @typedef {'auto'|'vanilla'|'s3'|'r2'|'b2'} ObjectStorageAdapter
- *
  * @typedef ResourceSpecObject
  * @property {string} adapter
  * @property {Record<string, any>} [options]
- *
  * @typedef ActorSystemResourceSpecs
  * @property {string | ResourceSpecObject | any} [db]
  * @property {string | ResourceSpecObject | any} [queue]
  * @property {string | ResourceSpecObject | any} [objectStorage]
- *
  * @typedef ActorSystemResources
  * @property {import('../../db/base.js').DBClient} [db]
  * @property {import('../../queue/base.js').QueueClient} [queue]
@@ -83,7 +80,6 @@ function defaultAdapter(kind) {
 
 /**
  * Normalize a resource spec into `{ adapter, options }` or return an instance unchanged.
- *
  * @param {any} spec
  * @param {'db'|'queue'|'objectStorage'} kind
  * @returns {{ adapter: string, options: Record<string, any> } | { instance: any } | undefined}
@@ -192,7 +188,6 @@ async function loadObjectStorageFactory(adapter) {
 
 /**
  * Create resources for an actor-system.
- *
  * @param {ActorSystemResourceSpecs} [specs]
  * @returns {Promise<{ resources: ActorSystemResources, close: () => Promise<void> }>}
  */
@@ -245,6 +240,9 @@ export async function createActorSystemResources(specs = {}) {
     }
   }
 
+  /**
+   *
+   */
   async function close() {
     // Close in reverse creation order (best-effort dependency safety)
     for (const fn of closers.slice().reverse()) {
