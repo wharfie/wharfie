@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* eslint-disable node/shebang */
+/* eslint-disable n/shebang */
 /* eslint-disable no-console */
 
 /**
@@ -29,7 +29,7 @@ import { build } from './lambdas/lib/esbuild.js';
 import https from 'https';
 import http from 'http';
 import JSZip from 'jszip';
-// eslint-disable-next-line node/no-unpublished-require
+// eslint-disable-next-line n/no-unpublished-require
 import { extract } from 'tar';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
@@ -81,7 +81,7 @@ const DEFAULT_BUILDS = [
   console.log('\n\x1b[32mAll requested builds have finished.\x1b[0m');
 })().catch((err) => {
   console.error(err);
-  // eslint-disable-next-line no-process-exit
+  // eslint-disable-next-line n/no-process-exit
   process.exit(1);
 });
 
@@ -226,7 +226,7 @@ async function buildWithEsbuild(entryPoint, outFile) {
   });
   if (errors.length > 0) {
     console.error(errors);
-    // eslint-disable-next-line no-process-exit
+    // eslint-disable-next-line n/no-process-exit
     process.exit(1);
   }
   if (warnings.length > 0) {

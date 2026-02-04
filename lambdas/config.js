@@ -1,4 +1,4 @@
-/* eslint-disable node/no-unsupported-features/node-builtins */
+/* eslint-disable n/no-unsupported-features/node-builtins */
 if (process.env.NODE_ENV !== 'test') {
   // @ts-ignore
   process.report.reportOnFatalError = true;

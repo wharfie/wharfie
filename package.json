@@ -97,7 +97,7 @@
     ],
     "extends": [
       "plugin:jsdoc/recommended",
-      "plugin:node/recommended",
+      "plugin:n/recommended",
       "plugin:import/recommended",
       "plugin:import/typescript",
       "eslint-config-standard",
@@ -173,7 +173,7 @@
     "eslint-plugin-import": "^2.31.0",
     "eslint-plugin-jest": "^29.2.1",
     "eslint-plugin-jsdoc": "^44.0.0",
-    "eslint-plugin-node": "^11.1.0",
+    "eslint-plugin-n": "^16.0.0",
     "husky": "^3.1.0",
     "jest": "^29.7.0",
     "lint-staged": "^9.4.3",

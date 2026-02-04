@@ -1,4 +1,4 @@
-import './config';
+import './config.js';
 
 import router from './scheduler/router.js';
 import SQS from './lib/sqs.js';

@@ -140,7 +140,7 @@ class SeaBuild extends BaseResource {
 
     if (errors.length > 0) {
       console.error(errors);
-      // eslint-disable-next-line no-process-exit
+      // eslint-disable-next-line n/no-process-exit
       process.exit(1);
     }
 

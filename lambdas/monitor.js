@@ -1,4 +1,4 @@
-import './config';
+import './config.js';
 import { map } from './lib/promises.js';
 
 import * as semaphore_db from './lib/dynamo/semaphore.js';

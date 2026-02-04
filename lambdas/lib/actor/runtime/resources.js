@@ -1,14 +1,3 @@
-import createVanillaDB from '../../db/adapters/vanilla.js';
-import createDynamoDB from '../../db/adapters/dynamodb.js';
-import createLmdbDB from '../../db/adapters/lmdb.js';
-import createVanillaQueue from '../../queue/adapters/vanilla.js';
-import createSqsQueue from '../../queue/adapters/sqs.js';
-import createLmdbQueue from '../../queue/adapters/lmdb.js';
-import createVanillaObjectStorage from '../../object-storage/adapters/vanilla.js';
-import createS3ObjectStorage from '../../object-storage/adapters/s3.js';
-import createR2ObjectStorage from '../../object-storage/adapters/r2.js';
-import createB2ObjectStorage from '../../object-storage/adapters/b2.js';
-
 /**
  * Actor-system runtime resources.
  *
@@ -135,38 +124,33 @@ function normalizeSpec(spec, kind) {
   return { instance: spec };
 }
 
-/** @type {Record<string, (options?: any) => import('../../db/base.js').DBClient>} */
-const DB_FACTORIES = {
-  vanilla: createVanillaDB,
-  dynamodb: createDynamoDB,
-  lmdb: createLmdbDB,
-};
-
-/** @type {Record<string, (options?: any) => import('../../queue/base.js').QueueClient>} */
-const QUEUE_FACTORIES = {
-  vanilla: createVanillaQueue,
-  sqs: createSqsQueue,
-  lmdb: createLmdbQueue,
-};
-
-/** @type {Record<string, (options?: any) => import('../../object-storage/base.js').ObjectStorageClient>} */
-const OBJECT_STORAGE_FACTORIES = {
-  vanilla: createVanillaObjectStorage,
-  s3: createS3ObjectStorage,
-  r2: createR2ObjectStorage,
-  b2: createB2ObjectStorage,
-};
+/**
+ * Lazy-load adapter factories.
+ *
+ * Important: Some adapters pull in optional/native deps (AWS SDK, LMDB, etc).
+ * We avoid importing them at module load time so local/unit-test use-cases
+ * (vanilla adapters) don't require the full dependency graph.
+ */
 
 /**
  * @param {string} adapter - adapter.
  * @returns {Promise<(options?: any) => import('../../db/base.js').DBClient>} - Result.
  */
 async function loadDBFactory(adapter) {
-  const factory = DB_FACTORIES[adapter];
-  if (!factory) {
-    throw new Error(`Unsupported db adapter: ${adapter}`);
+  if (adapter === 'vanilla') {
+    const mod = await import('../../db/adapters/vanilla.js');
+    return mod.default;
   }
-  return factory;
+  if (adapter === 'dynamodb') {
+    const mod = await import('../../db/adapters/dynamodb.js');
+    return mod.default;
+  }
+  if (adapter === 'lmdb') {
+    const mod = await import('../../db/adapters/lmdb.js');
+    return mod.default;
+  }
+
+  throw new Error(`Unsupported db adapter: ${adapter}`);
 }
 
 /**
@@ -174,11 +158,20 @@ async function loadDBFactory(adapter) {
  * @returns {Promise<(options?: any) => import('../../queue/base.js').QueueClient>} - Result.
  */
 async function loadQueueFactory(adapter) {
-  const factory = QUEUE_FACTORIES[adapter];
-  if (!factory) {
-    throw new Error(`Unsupported queue adapter: ${adapter}`);
+  if (adapter === 'vanilla') {
+    const mod = await import('../../queue/adapters/vanilla.js');
+    return mod.default;
   }
-  return factory;
+  if (adapter === 'sqs') {
+    const mod = await import('../../queue/adapters/sqs.js');
+    return mod.default;
+  }
+  if (adapter === 'lmdb') {
+    const mod = await import('../../queue/adapters/lmdb.js');
+    return mod.default;
+  }
+
+  throw new Error(`Unsupported queue adapter: ${adapter}`);
 }
 
 /**
@@ -186,11 +179,24 @@ async function loadQueueFactory(adapter) {
  * @returns {Promise<(options?: any) => import('../../object-storage/base.js').ObjectStorageClient>} - Result.
  */
 async function loadObjectStorageFactory(adapter) {
-  const factory = OBJECT_STORAGE_FACTORIES[adapter];
-  if (!factory) {
-    throw new Error(`Unsupported objectStorage adapter: ${adapter}`);
+  if (adapter === 'vanilla') {
+    const mod = await import('../../object-storage/adapters/vanilla.js');
+    return mod.default;
   }
-  return factory;
+  if (adapter === 's3') {
+    const mod = await import('../../object-storage/adapters/s3.js');
+    return mod.default;
+  }
+  if (adapter === 'r2') {
+    const mod = await import('../../object-storage/adapters/r2.js');
+    return mod.default;
+  }
+  if (adapter === 'b2') {
+    const mod = await import('../../object-storage/adapters/b2.js');
+    return mod.default;
+  }
+
+  throw new Error(`Unsupported objectStorage adapter: ${adapter}`);
 }
 
 /**

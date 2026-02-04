@@ -174,8 +174,7 @@ class Function {
       typeof require === 'function'
         ? // eslint-disable-next-line import/no-dynamic-require, no-undef
           require(entryPath)
-        : // eslint-disable-next-line node/no-unsupported-features/es-syntax
-          await import(entryPath);
+        : await import(entryPath);
 
     const candidate = this.entrypoint.export
       ? handler?.[this.entrypoint.export]
