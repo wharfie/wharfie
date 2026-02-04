@@ -2,9 +2,6 @@ import { join } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
-import createDynamoDB from '../adapters/dynamodb.js';
-import createLMDB from '../adapters/lmdb.js';
-import createVanillaDB from '../adapters/vanilla.js';
 import { createStateTable } from '../tables/state.js';
 
 /**
@@ -73,15 +70,22 @@ function resolveAdapterName() {
  */
 async function createDB(adapterName) {
   if (adapterName === 'dynamodb') {
+    const mod = await import('../adapters/dynamodb.js');
+    const createDynamoDB = mod.default;
     return createDynamoDB({ region: process.env.AWS_REGION });
   }
 
   if (adapterName === 'lmdb') {
+    const mod = await import('../adapters/lmdb.js');
+    const createLMDB = mod.default;
     return createLMDB({
       // Optional; adapter defaults to OS-specific wharfie data dir.
       path: process.env.WHARFIE_STATE_DB_PATH,
     });
   }
+
+  const mod = await import('../adapters/vanilla.js');
+  const createVanillaDB = mod.default;
 
   // vanilla
   if (process.env.NODE_ENV === 'test') {
@@ -117,8 +121,8 @@ async function ensureStore() {
  * Returns the state store proxy.
  *
  * Note: the real store (and underlying adapter) is initialized lazily on first call
- * to any method. This avoids pulling AWS SDK dependencies into test/local runtimes
- * unless the dynamodb adapter is actually selected.
+ * to any method. This avoids pulling optional/native deps (AWS SDK, LMDB) into
+ * test/local runtimes unless the corresponding adapter is actually selected.
  * @returns {ReturnType<typeof createStateTable>} - Result.
  */
 export function getStateStore() {
