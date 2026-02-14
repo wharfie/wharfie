@@ -8,6 +8,124 @@ import { runCmd, execFile } from '../../../cmd.js';
 import { inject } from 'postject';
 import BaseResource from '../base-resource.js';
 
+const LIEF_SECTION_NAME_WARNING =
+  "Can't find string offset for section name '.note";
+
+let _postjectWarningSuppressionDepth = 0;
+/** @type {typeof process.stdout.write | null} */
+let _originalStdoutWrite = null;
+/** @type {typeof process.stderr.write | null} */
+let _originalStderrWrite = null;
+
+/**
+ * postject uses LIEF under the hood. When injecting into the official Node.js Linux binaries,
+ * LIEF may emit noisy (but harmless) warnings about `.note.*` sections.
+ *
+ * Examples:
+ * - warning: Can't find string offset for section name '.note.100'
+ * - warning: Can't find string offset for section name '.note'
+ *
+ * See: https://github.com/nodejs/postject/issues/76
+ * @param {unknown} chunk - A chunk passed to stream.write().
+ * @param {unknown} encoding - Optional encoding passed to stream.write().
+ * @returns {boolean} - True if the chunk should be suppressed.
+ */
+function _shouldSuppressPostjectChunk(chunk, encoding) {
+  if (chunk == null) return false;
+
+  try {
+    if (typeof chunk === 'string') {
+      return chunk.includes(LIEF_SECTION_NAME_WARNING);
+    }
+
+    if (chunk instanceof Uint8Array) {
+      const enc = typeof encoding === 'string' ? encoding : undefined;
+      const text = Buffer.from(chunk).toString(enc);
+      return text.includes(LIEF_SECTION_NAME_WARNING);
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {NodeJS.WriteStream} stream - Stream to wrap.
+ * @param {typeof process.stdout.write} originalWrite - Original write function.
+ * @returns {typeof process.stdout.write} - Wrapped write function.
+ */
+function _wrapWrite(stream, originalWrite) {
+  return function write(chunk, encoding, callback) {
+    /** @type {unknown} */
+    let enc = encoding;
+    /** @type {unknown} */
+    let cb = callback;
+
+    if (typeof enc === 'function') {
+      cb = enc;
+      enc = undefined;
+    }
+
+    if (_shouldSuppressPostjectChunk(chunk, enc)) {
+      if (typeof cb === 'function') {
+        cb();
+      }
+      return true;
+    }
+
+    // @ts-ignore - stream.write accepts several overloads
+    return originalWrite.call(stream, chunk, enc, cb);
+  };
+}
+
+/**
+ * @returns {void}
+ */
+function _installPostjectWarningFilter() {
+  if (_originalStdoutWrite || _originalStderrWrite) return;
+
+  _originalStdoutWrite = process.stdout.write;
+  _originalStderrWrite = process.stderr.write;
+
+  process.stdout.write = _wrapWrite(process.stdout, _originalStdoutWrite);
+  process.stderr.write = _wrapWrite(process.stderr, _originalStderrWrite);
+}
+
+/**
+ * @returns {void}
+ */
+function _uninstallPostjectWarningFilter() {
+  if (!_originalStdoutWrite || !_originalStderrWrite) return;
+
+  process.stdout.write = _originalStdoutWrite;
+  process.stderr.write = _originalStderrWrite;
+
+  _originalStdoutWrite = null;
+  _originalStderrWrite = null;
+}
+
+/**
+ * @template T
+ * @param {() => Promise<T>} fn - Function to run.
+ * @returns {Promise<T>} - Result.
+ */
+async function _withSuppressedPostjectWarnings(fn) {
+  _postjectWarningSuppressionDepth += 1;
+  if (_postjectWarningSuppressionDepth === 1) {
+    _installPostjectWarningFilter();
+  }
+
+  try {
+    return await fn();
+  } finally {
+    _postjectWarningSuppressionDepth -= 1;
+    if (_postjectWarningSuppressionDepth === 0) {
+      _uninstallPostjectWarningFilter();
+    }
+  }
+}
+
 /**
  * @typedef {import('node:process')['platform']} TargetPlatform -
  * @typedef {import('node:process')['arch']} TargetArch -
@@ -179,14 +297,16 @@ class SeaBuild extends BaseResource {
     const blobData = readFileSync(blobPath);
     // base64 encoded fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
     // see https://github.com/nodejs/postject/issues/92#issuecomment-2283508514
-    await inject(nodeBinaryPath, 'NODE_SEA_BLOB', blobData, {
-      sentinelFuse: Buffer.from(
-        'Tk9ERV9TRUFfRlVTRV9mY2U2ODBhYjJjYzQ2N2I2ZTA3MmI4YjVkZjE5OTZiMg==',
-        'base64',
-      ).toString(),
-      ...(this.get('platform') === 'darwin'
-        ? { machoSegmentName: 'NODE_SEA' }
-        : {}),
+    await _withSuppressedPostjectWarnings(async () => {
+      await inject(nodeBinaryPath, 'NODE_SEA_BLOB', blobData, {
+        sentinelFuse: Buffer.from(
+          'Tk9ERV9TRUFfRlVTRV9mY2U2ODBhYjJjYzQ2N2I2ZTA3MmI4YjVkZjE5OTZiMg==',
+          'base64',
+        ).toString(),
+        ...(this.get('platform') === 'darwin'
+          ? { machoSegmentName: 'NODE_SEA' }
+          : {}),
+      });
     });
   }
 

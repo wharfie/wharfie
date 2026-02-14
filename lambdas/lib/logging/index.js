@@ -3,9 +3,7 @@ import ConsoleLogTransport from './console-log-transport.js';
 import FirehoseLogTransport from './firehose-log-transport.js';
 import { hostname as _hostname } from 'os';
 
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-const { version } = require('../../../package.json');
+import { WHARFIE_VERSION } from '../version.js';
 
 const ROOT_LOGGER = new Logger({
   level: process.env.LOGGING_LEVEL || 'info',
@@ -13,7 +11,7 @@ const ROOT_LOGGER = new Logger({
   base: {
     pid: process.pid,
     hostname: _hostname,
-    wharfie_version: version,
+    wharfie_version: WHARFIE_VERSION,
   },
   transports: [
     ...(process.env.WHARFIE_LOGGING_FIREHOSE
