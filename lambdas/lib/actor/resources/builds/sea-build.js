@@ -39,7 +39,11 @@ function _shouldSuppressPostjectChunk(chunk, encoding) {
     }
 
     if (chunk instanceof Uint8Array) {
-      const enc = typeof encoding === 'string' ? encoding : undefined;
+      /** @type {import('node:buffer').BufferEncoding | undefined} */
+      const enc =
+        typeof encoding === 'string' && Buffer.isEncoding(encoding)
+          ? /** @type {import('node:buffer').BufferEncoding} */ (encoding)
+          : undefined;
       const text = Buffer.from(chunk).toString(enc);
       return text.includes(LIEF_SECTION_NAME_WARNING);
     }
@@ -51,12 +55,13 @@ function _shouldSuppressPostjectChunk(chunk, encoding) {
 }
 
 /**
- * @param {NodeJS.WriteStream} stream - Stream to wrap.
+ * @param {import('node:stream').Writable} stream - Stream to wrap.
  * @param {typeof process.stdout.write} originalWrite - Original write function.
  * @returns {typeof process.stdout.write} - Wrapped write function.
  */
 function _wrapWrite(stream, originalWrite) {
-  return function write(chunk, encoding, callback) {
+  /** @type {typeof process.stdout.write} */
+  const write = function write(chunk, encoding, callback) {
     /** @type {unknown} */
     let enc = encoding;
     /** @type {unknown} */
@@ -77,6 +82,7 @@ function _wrapWrite(stream, originalWrite) {
     // @ts-ignore - stream.write accepts several overloads
     return originalWrite.call(stream, chunk, enc, cb);
   };
+  return write;
 }
 
 /**

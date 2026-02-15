@@ -17,8 +17,6 @@ import Table from '../resources/aws/table.js';
 import BucketNotificationConfiguration from '../resources/aws/bucket-notification-configuration.js';
 
 import RecordResources from '../resources/records/index.js';
-import WharfieProject from '../resources/wharfie-project.js';
-import WharfieResource from '../resources/wharfie-resource.js';
 import { getResources } from '../../db/state/store.js';
 
 /**
@@ -46,10 +44,6 @@ const NON_CIRCULAR_CLASS_MAP = Object.assign(
     Table,
   },
   RecordResources,
-  {
-    WharfieProject,
-    WharfieResource,
-  },
 );
 
 /**
