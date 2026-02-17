@@ -12,12 +12,8 @@ import { createStateTable } from '../tables/state.js';
  *
  * - If `WHARFIE_DB_ADAPTER` or `WHARFIE_STATE_ADAPTER` is set:
  *   - 'dynamodb' | 'lmdb' | 'vanilla'
- * - Else if NODE_ENV === 'test':
- *   - 'vanilla' (keeps tests isolated from developer AWS env)
- * - Else if we appear to be in AWS (AWS_REGION/AWS_EXECUTION_ENV):
- *   - 'dynamodb'
  * - Else:
- *   - 'vanilla'
+ *   - 'vanilla' (provider-neutral default; avoids accidental cloud coupling)
  *
  * Local adapters will persist on close, but most runtime use-cases never call close,
  * so they behave as in-memory stores by default.
@@ -51,17 +47,17 @@ function resolveAdapterName() {
     );
   }
 
-  // Jest sets NODE_ENV=test automatically; developers often also have AWS_REGION set locally.
-  // Defaulting to vanilla keeps tests deterministic and avoids accidental AWS usage.
-  if (process.env.NODE_ENV === 'test') {
-    return 'vanilla';
-  }
-
-  if (process.env.AWS_REGION || process.env.AWS_EXECUTION_ENV) {
-    return 'dynamodb';
-  }
-
+  // Provider-neutral default: never infer cloud adapters from ambient environment variables.
+  // Use WHARFIE_STATE_ADAPTER/WHARFIE_DB_ADAPTER for explicit selection.
   return 'vanilla';
+}
+
+/**
+ * Test helper: expose adapter resolution without initializing the store.
+ * @returns {'dynamodb'|'lmdb'|'vanilla'} - Result.
+ */
+export function __resolveAdapterName() {
+  return resolveAdapterName();
 }
 
 /**
