@@ -22,7 +22,7 @@ import {
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
 import BaseAWS from './base.js';
-import { Resource } from './graph/index.js';
+import { Resource } from '../graph/index.js';
 
 class Glue {
   /**

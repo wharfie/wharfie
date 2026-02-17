@@ -1,7 +1,7 @@
 import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 
 import { CONDITION_TYPE, KEY_TYPE } from '../../db/base.js';
-import SchedulerEntry from '../../../scheduler/scheduler-entry.js';
+import SchedulerEntry from './scheduler-entry.js';
 
 /**
  * @typedef {import('../../db/base.js').DBClient} DBClient

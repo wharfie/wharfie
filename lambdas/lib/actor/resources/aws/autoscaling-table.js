@@ -2,7 +2,7 @@ import Role from './role.js';
 import Table from './table.js';
 import AutoScalingPolicy from './autoscaling-policy.js';
 import AutoScalingTarget from './autoscaling-target.js';
-import ApplicationAutoScaling from '../../../application-auto-scaling.js';
+import ApplicationAutoScaling from '../../../aws/application-auto-scaling.js';
 import BaseResourceGroup from '../base-resource-group.js';
 
 /**

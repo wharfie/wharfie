@@ -2,7 +2,7 @@ import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
 import { DynamoDB, ResourceNotFoundException } from '@aws-sdk/client-dynamodb';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-import baseAWS from '../../../base.js';
+import baseAWS from '../../../aws/base.js';
 import BaseResource from '../base-resource.js';
 
 /**

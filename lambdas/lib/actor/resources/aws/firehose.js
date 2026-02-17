@@ -1,4 +1,4 @@
-import FirehoseSDK from '../../../firehose.js';
+import FirehoseSDK from '../../../aws/firehose.js';
 import BaseResource from '../base-resource.js';
 import { ResourceNotFoundException } from '@aws-sdk/client-firehose';
 /**

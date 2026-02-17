@@ -1,4 +1,4 @@
-import S3 from '../../../s3.js';
+import S3 from '../../../aws/s3.js';
 import BaseResource from '../base-resource.js';
 import { NoSuchBucket } from '@aws-sdk/client-s3';
 

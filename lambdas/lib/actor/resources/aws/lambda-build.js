@@ -4,7 +4,7 @@ import JSZip from 'jszip';
 import { NotFound } from '@aws-sdk/client-s3';
 import { build as __build } from 'esbuild';
 import { getAsset, isSea } from 'node:sea';
-import S3 from '../../../s3.js';
+import S3 from '../../../aws/s3.js';
 import BaseResource from '../base-resource.js';
 
 const __dirname = import.meta.dirname;

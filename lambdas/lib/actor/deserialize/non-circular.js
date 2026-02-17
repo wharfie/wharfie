@@ -53,7 +53,7 @@ const NON_CIRCULAR_CLASS_MAP = Object.assign(
  */
 /**
  * @param {WharfieDeploymentLoadOptions} options - options.
- * @returns {Promise<WharfieProject>} - Result.
+ * @returns {Promise<any>} - Result.
  */
 async function load({ deploymentName, resourceKey }) {
   if (!resourceKey) {

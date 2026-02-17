@@ -1,4 +1,4 @@
-import Glue from '../../../glue.js';
+import Glue from '../../../aws/glue.js';
 import BaseResource from '../base-resource.js';
 import { EntityNotFoundException } from '@aws-sdk/client-glue';
 

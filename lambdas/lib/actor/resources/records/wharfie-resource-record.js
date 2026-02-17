@@ -1,10 +1,10 @@
 import BaseResource from '../base-resource.js';
 import Resource from '../../../../lib/graph/resource.js';
-import S3 from '../../../s3.js';
+import S3 from '../../../aws/s3.js';
 import {
   putResource,
   deleteResource,
-} from '../../../../lib/dynamo/operations.js';
+} from '../../../../lib/aws/dynamo/operations.js';
 import { ResourceNotFoundException } from '@aws-sdk/client-dynamodb';
 
 /**

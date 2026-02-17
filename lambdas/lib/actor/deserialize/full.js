@@ -18,7 +18,7 @@ const FULL_CLASS_MAP = Object.assign({}, AWSResources, RecordResources);
  */
 /**
  * @param {WharfieDeploymentLoadOptions} options - options.
- * @returns {Promise<WharfieDeployment | WharfieProject>} - Result.
+ * @returns {Promise<any>} - Result.
  */
 async function load({ deploymentName, resourceKey }) {
   if (!resourceKey) {

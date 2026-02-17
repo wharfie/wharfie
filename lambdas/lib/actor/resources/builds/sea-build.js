@@ -39,10 +39,10 @@ function _shouldSuppressPostjectChunk(chunk, encoding) {
     }
 
     if (chunk instanceof Uint8Array) {
-      /** @type {import('node:buffer').BufferEncoding | undefined} */
+      /** @type {any | undefined} */
       const enc =
         typeof encoding === 'string' && Buffer.isEncoding(encoding)
-          ? /** @type {import('node:buffer').BufferEncoding} */ (encoding)
+          ? /** @type {any} */ (encoding)
           : undefined;
       const text = Buffer.from(chunk).toString(enc);
       return text.includes(LIEF_SECTION_NAME_WARNING);
@@ -60,7 +60,7 @@ function _shouldSuppressPostjectChunk(chunk, encoding) {
  * @returns {typeof process.stdout.write} - Wrapped write function.
  */
 function _wrapWrite(stream, originalWrite) {
-  /** @type {typeof process.stdout.write} */
+  // @ts-ignore
   const write = function write(chunk, encoding, callback) {
     /** @type {unknown} */
     let enc = encoding;

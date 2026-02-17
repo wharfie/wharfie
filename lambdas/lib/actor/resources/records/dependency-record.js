@@ -3,7 +3,7 @@ import { ResourceNotFoundException } from '@aws-sdk/client-dynamodb';
 import {
   putDependency,
   deleteDependency,
-} from '../../../../lib/dynamo/dependency.js';
+} from '../../../../lib/aws/dynamo/dependency.js';
 
 /**
  * @typedef DependencyRecordProperties

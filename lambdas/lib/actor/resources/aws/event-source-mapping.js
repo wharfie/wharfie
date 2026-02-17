@@ -1,4 +1,4 @@
-import Lambda from '../../../lambda.js';
+import Lambda from '../../../aws/lambda.js';
 import BaseResource from '../base-resource.js';
 import {
   ResourceNotFoundException,

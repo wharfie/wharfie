@@ -1,4 +1,4 @@
-import IAM from '../../../iam.js';
+import IAM from '../../../aws/iam.js';
 import BaseResource from '../base-resource.js';
 import { NoSuchEntityException } from '@aws-sdk/client-iam';
 

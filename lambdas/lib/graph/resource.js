@@ -24,7 +24,7 @@ const Status = {
  * @property {string} [source_region] - aws region of the source data, not set for models
  * @property {string} athena_workgroup - name of the stack's athena workgroup
  * @property {import('../../typedefs.js').DaemonConfig} daemon_config - daemon_config.
- * @property {import('../actor/resources/wharfie-resource.js').WharfieResourceProperties & import('../actor/typedefs.js').SharedProperties} resource_properties - resource_properties.
+ * @property {any} resource_properties - resource_properties. TODO define this properly.
  * @property {import('../../typedefs.js').TableProperties} source_properties - source_properties.
  * @property {import('../../typedefs.js').TableProperties} destination_properties - destination_properties.
  * @property {number} [created_at] - created timestamp

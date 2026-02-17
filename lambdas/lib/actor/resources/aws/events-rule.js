@@ -1,4 +1,4 @@
-import CloudWatchEvents from '../../../cloudwatch-events.js';
+import CloudWatchEvents from '../../../aws/cloudwatch-events.js';
 import BaseResource from '../base-resource.js';
 import {
   ResourceNotFoundException,

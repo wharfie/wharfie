@@ -1,5 +1,5 @@
 import BaseResource from '../base-resource.js';
-import ApplicationAutoScaling from '../../../application-auto-scaling.js';
+import ApplicationAutoScaling from '../../../aws/application-auto-scaling.js';
 
 /**
  * @typedef AutoscalingTargetProperties

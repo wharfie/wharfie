@@ -1,5 +1,5 @@
 import BaseResource from '../base-resource.js';
-import BaseAWS from '../../../base.js';
+import BaseAWS from '../../../aws/base.js';
 
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import {

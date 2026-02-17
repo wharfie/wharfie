@@ -3,7 +3,7 @@ import { ResourceNotFoundException } from '@aws-sdk/client-dynamodb';
 import {
   putLocation,
   deleteLocation,
-} from '../../../../lib/dynamo/location.js';
+} from '../../../../lib/aws/dynamo/location.js';
 
 /**
  * @typedef LocationRecordProperties

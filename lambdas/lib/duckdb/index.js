@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { createId } from '../id.js';
-import QueryParser from '../athena/query-parser.js';
+import QueryParser from '../aws/athena/query-parser.js';
 import ReferencesMetastore from '../metastore/references.js';
 
 const require = createRequire(import.meta.url);

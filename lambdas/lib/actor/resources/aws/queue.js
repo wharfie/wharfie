@@ -1,4 +1,4 @@
-import SQS from '../../../sqs.js';
+import SQS from '../../../aws/sqs.js';
 import BaseResource from '../base-resource.js';
 import { QueueDoesNotExist } from '@aws-sdk/client-sqs';
 

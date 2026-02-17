@@ -1,4 +1,4 @@
-import DynamoDB from '../../../dynamodb.js';
+import DynamoDB from '../../../aws/dynamodb.js';
 import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
 import {
   ResourceNotFoundException,
