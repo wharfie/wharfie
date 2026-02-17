@@ -11,30 +11,174 @@
  */
 
 /**
- * @typedef {import("@aws-sdk/client-sqs").SendMessageRequest} SendMessageRequest
- * @typedef {import("@aws-sdk/client-sqs").SendMessageResult} SendMessageResult
- * @typedef {import("@aws-sdk/client-sqs").SendMessageBatchRequest} SendMessageBatchRequest
- * @typedef {import("@aws-sdk/client-sqs").DeleteMessageBatchRequest} DeleteMessageBatchRequest
- * @typedef {import("@aws-sdk/client-sqs").DeleteMessageRequest} DeleteMessageRequest
- * @typedef {import("@aws-sdk/client-sqs").ReceiveMessageRequest} ReceiveMessageRequest
- * @typedef {import("@aws-sdk/client-sqs").ReceiveMessageResult} ReceiveMessageResult
- * @typedef {import("@aws-sdk/client-sqs").ListQueuesCommandInput} ListQueuesCommandInput
- * @typedef {import("@aws-sdk/client-sqs").GetQueueUrlCommandInput} GetQueueUrlCommandInput
- * @typedef {import("@aws-sdk/client-sqs").GetQueueUrlCommandOutput} GetQueueUrlCommandOutput
- * @typedef {import("@aws-sdk/client-sqs").GetQueueAttributesCommandInput} GetQueueAttributesCommandInput
- * @typedef {import("@aws-sdk/client-sqs").GetQueueAttributesCommandOutput} GetQueueAttributesCommandOutput
- * @typedef {import("@aws-sdk/client-sqs").SetQueueAttributesCommandInput} SetQueueAttributesCommandInput
- * @typedef {import("@aws-sdk/client-sqs").SetQueueAttributesCommandOutput} SetQueueAttributesCommandOutput
- * @typedef {import("@aws-sdk/client-sqs").CreateQueueCommandInput} CreateQueueCommandInput
- * @typedef {import("@aws-sdk/client-sqs").CreateQueueCommandOutput} CreateQueueCommandOutput
- * @typedef {import("@aws-sdk/client-sqs").DeleteQueueCommandInput} DeleteQueueCommandInput
- * @typedef {import("@aws-sdk/client-sqs").DeleteQueueCommandOutput} DeleteQueueCommandOutput
- * @typedef {import("@aws-sdk/client-sqs").ListQueueTagsCommandInput} ListQueueTagsCommandInput
- * @typedef {import("@aws-sdk/client-sqs").ListQueueTagsCommandOutput} ListQueueTagsCommandOutput
- * @typedef {import("@aws-sdk/client-sqs").TagQueueCommandInput} TagQueueCommandInput
- * @typedef {import("@aws-sdk/client-sqs").TagQueueCommandOutput} TagQueueCommandOutput
- * @typedef {import("@aws-sdk/client-sqs").UntagQueueCommandInput} UntagQueueCommandInput
- * @typedef {import("@aws-sdk/client-sqs").UntagQueueCommandOutput} UntagQueueCommandOutput
+ * Provider-neutral queue typedefs.
+ *
+ * These types intentionally avoid importing any provider SDK (e.g. AWS) so the
+ * base queue interface can be shared across adapters.
+ *
+ * Shapes mirror the commonly-used subset of SQS Standard semantics (QueueUrl,
+ * MessageBody, DelaySeconds, etc.) while remaining structurally compatible with
+ * provider-specific request/response types.
+ */
+
+/**
+ * @typedef {Record<string, any>} MessageAttributes
+ */
+
+/**
+ * @typedef SendMessageRequest
+ * @property {string} QueueUrl - Queue URL.
+ * @property {string} MessageBody - Message body.
+ * @property {number} [DelaySeconds] - Delivery delay (seconds).
+ * @property {MessageAttributes} [MessageAttributes] - Message attributes.
+ */
+
+/**
+ * @typedef SendMessageResult
+ * @property {string} [MessageId] - Message identifier.
+ */
+
+/**
+ * @typedef SendMessageBatchRequestEntry
+ * @property {string} Id - Entry identifier.
+ * @property {string} MessageBody - Message body.
+ * @property {number} [DelaySeconds] - Delivery delay (seconds).
+ * @property {MessageAttributes} [MessageAttributes] - Message attributes.
+ */
+
+/**
+ * @typedef SendMessageBatchRequest
+ * @property {string} QueueUrl - Queue URL.
+ * @property {SendMessageBatchRequestEntry[]} Entries - Message batch entries.
+ */
+
+/**
+ * @typedef DeleteMessageBatchRequestEntry
+ * @property {string} Id - Entry identifier.
+ * @property {string} ReceiptHandle - Receipt handle.
+ */
+
+/**
+ * @typedef DeleteMessageBatchRequest
+ * @property {string} QueueUrl - Queue URL.
+ * @property {DeleteMessageBatchRequestEntry[]} Entries - Delete batch entries.
+ */
+
+/**
+ * @typedef DeleteMessageRequest
+ * @property {string} QueueUrl - Queue URL.
+ * @property {string} ReceiptHandle - Receipt handle.
+ */
+
+/**
+ * @typedef ReceiveMessageRequest
+ * @property {string} QueueUrl - Queue URL.
+ * @property {number} [MaxNumberOfMessages] - Max messages to return.
+ * @property {number} [WaitTimeSeconds] - Long-poll duration.
+ * @property {number} [VisibilityTimeout] - Visibility timeout (seconds).
+ * @property {any[]} [AttributeNames] - Requested system attribute names.
+ * @property {string[]} [MessageAttributeNames] - Requested message attribute names.
+ */
+
+/**
+ * @typedef QueueMessage
+ * @property {string} [MessageId] - Message identifier.
+ * @property {string} [ReceiptHandle] - Receipt handle.
+ * @property {string} [Body] - Message body.
+ * @property {Record<string, string>} [Attributes] - System attributes.
+ * @property {MessageAttributes} [MessageAttributes] - Message attributes.
+ */
+
+/**
+ * @typedef ReceiveMessageResult
+ * @property {QueueMessage[]} [Messages] - Returned messages.
+ */
+
+/**
+ * @typedef ListQueuesCommandInput
+ * @property {string} [QueueNamePrefix] - Queue URL/name prefix to filter by.
+ */
+
+/**
+ * @typedef GetQueueUrlCommandInput
+ * @property {string} QueueName - Queue name.
+ */
+
+/**
+ * @typedef GetQueueUrlCommandOutput
+ * @property {string} [QueueUrl] - Queue URL.
+ */
+
+/**
+ * @typedef GetQueueAttributesCommandInput
+ * @property {string} QueueUrl - Queue URL.
+ * @property {any[]} [AttributeNames] - Requested attribute names.
+ */
+
+/**
+ * @typedef GetQueueAttributesCommandOutput
+ * @property {Record<string, string>} [Attributes] - Queue attributes.
+ */
+
+/**
+ * @typedef SetQueueAttributesCommandInput
+ * @property {string} QueueUrl - Queue URL.
+ * @property {Record<string, string>} Attributes - Attributes to set.
+ */
+
+/**
+ * @typedef {{}} SetQueueAttributesCommandOutput
+ */
+
+/**
+ * @typedef CreateQueueCommandInput
+ * @property {string} QueueName - Queue name.
+ * @property {Record<string, string>} [Attributes] - Initial queue attributes.
+ * @property {Record<string, string>} [tags] - Initial queue tags.
+ */
+
+/**
+ * @typedef CreateQueueCommandOutput
+ * @property {string} [QueueUrl] - Queue URL.
+ */
+
+/**
+ * @typedef DeleteQueueCommandInput
+ * @property {string} QueueUrl - Queue URL.
+ */
+
+/**
+ * @typedef {{}} DeleteQueueCommandOutput
+ */
+
+/**
+ * @typedef ListQueueTagsCommandInput
+ * @property {string} QueueUrl - Queue URL.
+ */
+
+/**
+ * @typedef ListQueueTagsCommandOutput
+ * @property {Record<string, string>} [Tags] - Queue tags.
+ */
+
+/**
+ * @typedef TagQueueCommandInput
+ * @property {string} QueueUrl - Queue URL.
+ * @property {Record<string, string>} Tags - Tags to set.
+ */
+
+/**
+ * @typedef {{}} TagQueueCommandOutput
+ */
+
+/**
+ * @typedef UntagQueueCommandInput
+ * @property {string} QueueUrl - Queue URL.
+ * @property {string[]} TagKeys - Tag keys to remove.
+ */
+
+/**
+ * @typedef {{}} UntagQueueCommandOutput
  */
 
 import { createId } from '../id.js';
