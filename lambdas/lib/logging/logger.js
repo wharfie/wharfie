@@ -1,22 +1,22 @@
-const ConsoleLogTransport = require('./console-log-transport');
+import ConsoleLogTransport from './console-log-transport.js';
 
 /**
  * @typedef LoggerOptions
- * @property {string} [level] -
- * @property {(import('./console-log-transport')|import('./firehose-log-transport'))[]} [transports] -
- * @property {boolean} [jsonFormat] -
- * @property {Object} [base] -
+ * @property {string} [level] - level.
+ * @property {(import('./console-log-transport.js').default|import('./firehose-log-transport.js').default)[]} [transports] - transports.
+ * @property {boolean} [jsonFormat] - jsonFormat.
+ * @property {Object} [base] - base.
  */
 
 /**
  * @typedef LoggerChildOptions
- * @property {string} [level] -
- * @property {Object} [metadata] -
+ * @property {string} [level] - level.
+ * @property {Object} [metadata] - metadata.
  */
 
 class Logger {
   /**
-   * @param {LoggerOptions} options -
+   * @param {LoggerOptions} options - options.
    */
   constructor(options = {}) {
     this.level = options.level || 'info';
@@ -33,10 +33,10 @@ class Logger {
   }
 
   /**
-   * @param {string} level -
-   * @param {string | Object} message -
-   * @param {Object} [metadata] -
-   * @returns {void} -
+   * @param {string} level - level.
+   * @param {string | Object} message - message.
+   * @param {Object} [metadata] - metadata.
+   * @returns {void} - Result.
    */
   log(level, message, metadata = {}) {
     if (this.levels[level] < this.levels[this.level]) {
@@ -64,44 +64,44 @@ class Logger {
   }
 
   /**
-   * @param {string | Object} message -
-   * @param {Object} [metadata] -
-   * @returns {void} -
+   * @param {string | Object} message - message.
+   * @param {Object} [metadata] - metadata.
+   * @returns {void} - Result.
    */
   debug(message, metadata = {}) {
     this.log('debug', message, metadata);
   }
 
   /**
-   * @param {string | Object} message -
-   * @param {Object} [metadata] -
-   * @returns {void} -
+   * @param {string | Object} message - message.
+   * @param {Object} [metadata] - metadata.
+   * @returns {void} - Result.
    */
   info(message, metadata = {}) {
     this.log('info', message, metadata);
   }
 
   /**
-   * @param {string | Object} message -
-   * @param {Object} [metadata] -
-   * @returns {void} -
+   * @param {string | Object} message - message.
+   * @param {Object} [metadata] - metadata.
+   * @returns {void} - Result.
    */
   warn(message, metadata = {}) {
     this.log('warn', message, metadata);
   }
 
   /**
-   * @param {string | Object} message -
-   * @param {Object} [metadata] -
-   * @returns {void} -
+   * @param {string | Object} message - message.
+   * @param {Object} [metadata] - metadata.
+   * @returns {void} - Result.
    */
   error(message, metadata = {}) {
     this.log('error', message, metadata);
   }
 
   /**
-   * @param {LoggerChildOptions} options -
-   * @returns {Logger} -
+   * @param {LoggerChildOptions} options - options.
+   * @returns {Logger} - Result.
    */
   child(options = {}) {
     return new Logger({
@@ -123,10 +123,10 @@ class Logger {
           new Promise((resolve) => {
             transport.on('close', resolve);
             transport.end();
-          })
-      )
+          }),
+      ),
     );
   }
 }
 
-module.exports = Logger;
+export default Logger;

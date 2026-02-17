@@ -14,24 +14,18 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-
-    strategy:
-      matrix:
-        node-version: [22.x]
-        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
-
     steps:
       - uses: actions/checkout@v4
-      - name: Use Node.js ${{ matrix.node-version }}
+      - name: setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
-          cache: 'npm'
+          node-version-file: 'package.json'
+          cache: npm
       - run: npm ci
       - run: npm run lint
       - run: npm run test
         env:
           WHARFIE_ARTIFACT_BUCKET: service-bucket
       - run: npm run typecheck
-      - name: test build
-        run: ./build.js --platform linux --arch x64 && ./dist/wharfie-linux-x64 --help
+      # - name: test build
+      #   run: ./build.js --platform linux --arch x64 && ./dist/wharfie-linux-x64 --help

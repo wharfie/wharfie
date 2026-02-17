@@ -24,7 +24,7 @@ module.exports = function lqipModernLoader(content) {
         {
           context,
           content: fileBuffer,
-        }
+        },
       );
 
       // Let webpack know we want to emit the original file at `name`

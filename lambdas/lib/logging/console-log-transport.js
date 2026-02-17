@@ -1,13 +1,11 @@
-'use strict';
-
-const stream = require('stream');
+import { Writable } from 'stream';
 
 /**
  * @typedef ConsoleLogTransportOptions
- * @property {number} [flushInterval] -
+ * @property {number} [flushInterval] - flushInterval.
  */
 
-class ConsoleLogTransport extends stream.Writable {
+class ConsoleLogTransport extends Writable {
   /**
    * @param {ConsoleLogTransportOptions} [options] -a
    */
@@ -16,7 +14,7 @@ class ConsoleLogTransport extends stream.Writable {
   }
 
   /**
-   * @param {(error: Error | null | undefined) => void} callback -
+   * @param {(error: Error | null | undefined) => void} callback - callback.
    */
   async _final(callback) {
     try {
@@ -31,9 +29,9 @@ class ConsoleLogTransport extends stream.Writable {
   }
 
   /**
-   * @param {any} chunk -
-   * @param {string} _encoding -
-   * @param {(error: Error | null | undefined) => void} callback -
+   * @param {any} chunk - chunk.
+   * @param {string} _encoding - _encoding.
+   * @param {(error: Error | null | undefined) => void} callback - callback.
    */
   async _write(chunk, _encoding, callback) {
     try {
@@ -51,4 +49,4 @@ class ConsoleLogTransport extends stream.Writable {
   async flush() {}
 }
 
-module.exports = ConsoleLogTransport;
+export default ConsoleLogTransport;

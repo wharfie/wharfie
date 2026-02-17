@@ -1,28 +1,30 @@
-'use strict';
-const BaseResource = require('../base-resource');
-const Resource = require('../../../../lib/graph/resource');
-const S3 = require('../../../s3');
-const resource_db = require('../../../../lib/dynamo/operations');
-const { ResourceNotFoundException } = require('@aws-sdk/client-dynamodb');
+import BaseResource from '../base-resource.js';
+import Resource from '../../../../lib/graph/resource.js';
+import S3 from '../../../aws/s3.js';
+import {
+  putResource,
+  deleteResource,
+} from '../../../../lib/aws/dynamo/operations.js';
+import { ResourceNotFoundException } from '@aws-sdk/client-dynamodb';
 
 /**
  * @typedef WharfieResourceRecordProperties
- * @property {import('../../../../lib/graph/typedefs').ResourceRecord | function(): import('../../../../lib/graph/typedefs').ResourceRecord} data -
- * @property {string} table_name -
+ * @property {import('../../../../lib/graph/typedefs.js').ResourceRecord | function(): import('../../../../lib/graph/typedefs.js').ResourceRecord} data - data.
+ * @property {string} table_name - table_name.
  */
 
 /**
  * @typedef WharfieResourceRecordOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {WharfieResourceRecordProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {WharfieResourceRecordProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class WharfieResourceRecord extends BaseResource {
   /**
-   * @param {WharfieResourceRecordOptions} options -
+   * @param {WharfieResourceRecordOptions} options - options.
    */
   constructor({ name, parent, status, dependsOn = [], properties }) {
     super({
@@ -39,20 +41,20 @@ class WharfieResourceRecord extends BaseResource {
     const resource = Resource.fromRecord(this.get('data'));
     if (!resource.source_region && resource.source_properties.location) {
       const { bucket } = this.s3.parseS3Uri(
-        resource.source_properties.location
+        resource.source_properties.location,
       );
       resource.source_region = await this.s3.findBucketRegion({
         Bucket: bucket,
       });
     }
-    await resource_db.putResource(resource, this.get('table_name'));
+    await putResource(resource, this.get('table_name'));
   }
 
   async _destroy() {
     try {
-      await resource_db.deleteResource(
+      await deleteResource(
         Resource.fromRecord(this.get('data')),
-        this.get('table_name')
+        this.get('table_name'),
       );
     } catch (e) {
       if (!(e instanceof ResourceNotFoundException)) {
@@ -62,4 +64,4 @@ class WharfieResourceRecord extends BaseResource {
   }
 }
 
-module.exports = WharfieResourceRecord;
+export default WharfieResourceRecord;

@@ -1,42 +1,41 @@
-'use strict';
-const Glue = require('../../../glue');
-const BaseResource = require('../base-resource');
-const { EntityNotFoundException } = require('@aws-sdk/client-glue');
+import Glue from '../../../aws/glue.js';
+import BaseResource from '../base-resource.js';
+import { EntityNotFoundException } from '@aws-sdk/client-glue';
 
 /**
  * @typedef GlueTableProperties
- * @property {string} databaseName -
- * @property {string | function(): string} catalogId -
- * @property {string} description -
- * @property {string} tableType -
- * @property {any} parameters -
- * @property {import('../../typedefs').WharfieTableColumn[]} partitionKeys -
- * @property {import('../../typedefs').WharfieTableColumn[]} columns -
- * @property {string | function(): string} location -
- * @property {number} [numberOfBuckets] -
- * @property {boolean} [storedAsSubDirectories] -
- * @property {string} inputFormat -
- * @property {string} outputFormat -
- * @property {any} serdeInfo -
- * @property {boolean} [compressed] -
- * @property {string} [viewOriginalText] -
- * @property {string} [viewExpandedText] -
- * @property {Record<string, string>} [tags] -
- * @property {string | function(): string} [region] -
+ * @property {string} databaseName - databaseName.
+ * @property {string | function(): string} catalogId - catalogId.
+ * @property {string} description - description.
+ * @property {string} tableType - tableType.
+ * @property {any} parameters - parameters.
+ * @property {import('../../typedefs.js').WharfieTableColumn[]} partitionKeys - partitionKeys.
+ * @property {import('../../typedefs.js').WharfieTableColumn[]} columns - columns.
+ * @property {string | function(): string} location - location.
+ * @property {number} [numberOfBuckets] - numberOfBuckets.
+ * @property {boolean} [storedAsSubDirectories] - storedAsSubDirectories.
+ * @property {string} inputFormat - inputFormat.
+ * @property {string} outputFormat - outputFormat.
+ * @property {any} serdeInfo - serdeInfo.
+ * @property {boolean} [compressed] - compressed.
+ * @property {string} [viewOriginalText] - viewOriginalText.
+ * @property {string} [viewExpandedText] - viewExpandedText.
+ * @property {Record<string, string>} [tags] - tags.
+ * @property {string | function(): string} [region] - region.
  */
 
 /**
  * @typedef GlueTableOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {GlueTableProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {GlueTableProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class GlueTable extends BaseResource {
   /**
-   * @param {GlueTableOptions} options -
+   * @param {GlueTableOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     super({ name, parent, status, properties, dependsOn });
@@ -45,8 +44,8 @@ class GlueTable extends BaseResource {
       'arn',
       () =>
         `arn:aws:glue:${this.get('region')}:${this.get(
-          'catalogId'
-        )}:table/${this.get('databaseName')}/${this.name}`
+          'catalogId',
+        )}:table/${this.get('databaseName')}/${this.name}`,
     );
   }
 
@@ -58,10 +57,10 @@ class GlueTable extends BaseResource {
     const desiredTags = this.get('tags') || {};
 
     const tagsToAdd = Object.entries(desiredTags).filter(
-      ([key, value]) => currentTags[key] !== value
+      ([key, value]) => currentTags[key] !== value,
     );
     const tagsToRemove = Object.keys(currentTags).filter(
-      (key) => !desiredTags[key]
+      (key) => !desiredTags[key],
     );
 
     if (tagsToAdd.length > 0) {
@@ -84,14 +83,14 @@ class GlueTable extends BaseResource {
         Name: column.name,
         Type: column.type,
         Comment: column.comment,
-      })
+      }),
     );
     const partitionKeys = (this.get('partitionKeys') || []).map(
       (/** @type {{ name: any; type: any; comment: any; }} */ column) => ({
         Name: column.name,
         Type: column.type,
         Comment: column.comment,
-      })
+      }),
     );
     try {
       const { Table } = await this.glue.getTable({
@@ -187,4 +186,4 @@ class GlueTable extends BaseResource {
   }
 }
 
-module.exports = GlueTable;
+export default GlueTable;

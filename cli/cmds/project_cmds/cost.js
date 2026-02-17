@@ -1,4 +1,5 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const chalk = require('chalk');
@@ -27,7 +28,7 @@ const cost = async (path, environmentName) => {
   let output = '';
   output += `${chalk.white('Models:')}\n`;
   const models = cost.filter(
-    (c) => c.monthly_cost_estimate > 0 && c.type === 'model'
+    (c) => c.monthly_cost_estimate > 0 && c.type === 'model',
   );
   const modelTable = new Table({
     head: ['Name', 'Monthly Cost Estimate'],
@@ -37,7 +38,7 @@ const cost = async (path, environmentName) => {
     modelTable.push([
       model.name,
       chalk.green(
-        costEstimator.currencyFormatter.format(model.monthly_cost_estimate)
+        costEstimator.currencyFormatter.format(model.monthly_cost_estimate),
       ),
     ]);
   });
@@ -45,7 +46,7 @@ const cost = async (path, environmentName) => {
 
   output += `${chalk.white('Sources:')}\n`;
   const sources = cost.filter(
-    (c) => c.monthly_cost_estimate > 0 && c.type === 'source'
+    (c) => c.monthly_cost_estimate > 0 && c.type === 'source',
   );
   const sourceTable = new Table({
     head: ['Name', 'Monthly Cost Estimate'],
@@ -55,18 +56,18 @@ const cost = async (path, environmentName) => {
     sourceTable.push([
       model.name,
       chalk.green(
-        costEstimator.currencyFormatter.format(model.monthly_cost_estimate)
+        costEstimator.currencyFormatter.format(model.monthly_cost_estimate),
       ),
     ]);
   });
   output += `${sourceTable.toString()}\n`;
 
   output += `${chalk.white.bold(
-    'Total monthly project cost estimate:'
+    'Total monthly project cost estimate:',
   )} ${chalk.green.bold(
     costEstimator.currencyFormatter.format(
-      cost.reduce((acc, c) => acc + c.monthly_cost_estimate, 0)
-    )
+      cost.reduce((acc, c) => acc + c.monthly_cost_estimate, 0),
+    ),
   )}`;
   console.log(output);
 };
@@ -76,7 +77,7 @@ const costCommand = new Command('cost')
   .argument('[path]', 'The path of the Wharfie project root')
   .option(
     '-e, --environment <environment>',
-    'The Wharfie project environment to use'
+    'The Wharfie project environment to use',
   )
   .action(async (path, options) => {
     const { environment } = options;

@@ -1,30 +1,29 @@
-'use strict';
-const S3 = require('../../../s3');
-const BaseResource = require('../base-resource');
-const { createShortId } = require('../../../id');
+import S3 from '../../../aws/s3.js';
+import BaseResource from '../base-resource.js';
+import { createShortId } from '../../../id.js';
 
-const { NoSuchBucket } = require('@aws-sdk/client-s3');
+import { NoSuchBucket } from '@aws-sdk/client-s3';
 
 /**
  * @typedef BucketProperties
- * @property {string} [bucketName] -
- * @property {import('@aws-sdk/client-s3').BucketLifecycleConfiguration} [lifecycleConfiguration] -
- * @property {import('@aws-sdk/client-s3').NotificationConfiguration | function(): import('@aws-sdk/client-s3').NotificationConfiguration} [notificationConfiguration] -
- * @property {import('@aws-sdk/client-s3').Tag[]} [tags] -
+ * @property {string} [bucketName] - bucketName.
+ * @property {import('@aws-sdk/client-s3').BucketLifecycleConfiguration} [lifecycleConfiguration] - lifecycleConfiguration.
+ * @property {import('@aws-sdk/client-s3').NotificationConfiguration | function(): import('@aws-sdk/client-s3').NotificationConfiguration} [notificationConfiguration] - notificationConfiguration.
+ * @property {import('@aws-sdk/client-s3').Tag[]} [tags] - tags.
  */
 
 /**
  * @typedef BucketOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {BucketProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {BucketProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class Bucket extends BaseResource {
   /**
-   * @param {BucketOptions} options -
+   * @param {BucketOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     if (!properties.bucketName) {
@@ -32,7 +31,7 @@ class Bucket extends BaseResource {
         {
           bucketName: `${name.substring(0, 57)}-${createShortId()}`,
         },
-        properties
+        properties,
       );
       super({
         name,
@@ -170,4 +169,4 @@ class Bucket extends BaseResource {
   }
 }
 
-module.exports = Bucket;
+export default Bucket;

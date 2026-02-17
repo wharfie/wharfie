@@ -81,15 +81,16 @@ function getResourceOptions(environment, project) {
         columns: model.columns,
         partitionKeys: model.partitions,
         viewOriginalText: `/* Presto View: ${Buffer.from(templatedSQL).toString(
-          'base64'
+          'base64',
         )} */`,
         viewExpandedText: '/* Presto View */',
         userInput: model,
+        sideEffects: model.side_effects,
       },
     });
     modelsForValidation[model.name] = model.sql.replace(
       /\${(\w+)}/g,
-      (match, key) => SQLTemplateVariables[key] || ''
+      (match, key) => SQLTemplateVariables[key] || '',
     );
   }
   for (const source of project.sources) {
@@ -135,6 +136,7 @@ function getResourceOptions(environment, project) {
         serdeInfo: tableInput.StorageDescriptor.SerdeInfo,
         compressed: tableInput.StorageDescriptor.Compressed,
         userInput: source,
+        sideEffects: source.side_effects,
       },
     });
   }
@@ -142,7 +144,7 @@ function getResourceOptions(environment, project) {
   const errors = validateModelSql(modelsForValidation, project, environment);
   if (errors.length > 0) {
     throw new WharfieModelSQLError(
-      `${errors.map((error) => error.message).join('\n\n')}`
+      `${errors.map((error) => error.message).join('\n\n')}`,
     );
   }
   return resourceOptions;

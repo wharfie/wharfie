@@ -1,41 +1,40 @@
-'use strict';
-const DynamoDB = require('../../../dynamodb');
-const { DynamoDBDocument } = require('@aws-sdk/lib-dynamodb');
-const {
+import DynamoDB from '../../../aws/dynamodb.js';
+import { DynamoDBDocument } from '@aws-sdk/lib-dynamodb';
+import {
   ResourceNotFoundException,
   BillingMode,
-} = require('@aws-sdk/client-dynamodb');
+} from '@aws-sdk/client-dynamodb';
 
-const BaseResource = require('../base-resource');
+import BaseResource from '../base-resource.js';
 /**
  * @typedef TableProperties
- * @property {import("@aws-sdk/client-dynamodb").AttributeDefinition[]} attributeDefinitions -
- * @property {import("@aws-sdk/client-dynamodb").KeySchemaElement[]} keySchema -
- * @property {import("@aws-sdk/client-dynamodb").ProvisionedThroughput} [provisionedThroughput] -
- * @property {import("@aws-sdk/client-dynamodb").TimeToLiveSpecification} [timeToLiveSpecification] -
- * @property {import("@aws-sdk/client-dynamodb").BillingMode} [billingMode] -
- * @property {import("@aws-sdk/client-dynamodb").Tag[]} [tags] -
+ * @property {import("@aws-sdk/client-dynamodb").AttributeDefinition[]} attributeDefinitions - attributeDefinitions.
+ * @property {import("@aws-sdk/client-dynamodb").KeySchemaElement[]} keySchema - keySchema.
+ * @property {import("@aws-sdk/client-dynamodb").ProvisionedThroughput} [provisionedThroughput] - provisionedThroughput.
+ * @property {import("@aws-sdk/client-dynamodb").TimeToLiveSpecification} [timeToLiveSpecification] - timeToLiveSpecification.
+ * @property {import("@aws-sdk/client-dynamodb").BillingMode} [billingMode] - billingMode.
+ * @property {import("@aws-sdk/client-dynamodb").Tag[]} [tags] - tags.
  */
 
 /**
  * @typedef TableOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {TableProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {TableProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class Table extends BaseResource {
   /**
-   * @param {TableOptions} options -
+   * @param {TableOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     const propertiesWithDefaults = Object.assign(
       {
         billingMode: BillingMode.PROVISIONED,
       },
-      properties
+      properties,
     );
     super({
       name,
@@ -73,16 +72,16 @@ class Table extends BaseResource {
         !currentTags.some(
           (currentTag) =>
             currentTag.Key === desiredTag.Key &&
-            currentTag.Value === desiredTag.Value
-        )
+            currentTag.Value === desiredTag.Value,
+        ),
     );
     const tagsToRemove = currentTags.filter(
       (currentTag) =>
         !desiredTags.some(
           (/** @type {import("@aws-sdk/client-dynamodb").Tag} */ desiredTag) =>
             desiredTag.Key === currentTag.Key &&
-            desiredTag.Value === currentTag.Value
-        )
+            desiredTag.Value === currentTag.Value,
+        ),
     );
     if (tagsToAdd.length > 0) {
       await this.dynamo.tagResource({
@@ -167,7 +166,7 @@ class Table extends BaseResource {
   }
 
   /**
-   * @param {import("@aws-sdk/client-dynamodb").TableStatus} desiredStatus -
+   * @param {import("@aws-sdk/client-dynamodb").TableStatus} desiredStatus - desiredStatus.
    */
   async waitForTableStatus(desiredStatus) {
     let status = '';
@@ -203,8 +202,8 @@ class Table extends BaseResource {
   }
 
   /**
-   * @param {Omit<import("@aws-sdk/lib-dynamodb").PutCommandInput, 'TableName'>} params -
-   * @returns {Promise<import("@aws-sdk/lib-dynamodb").PutCommandOutput>} -
+   * @param {Omit<import("@aws-sdk/lib-dynamodb").PutCommandInput, 'TableName'>} params - params.
+   * @returns {Promise<import("@aws-sdk/lib-dynamodb").PutCommandOutput>} - Result.
    */
   async put(params) {
     return this.dynamoDocument.put({
@@ -216,4 +215,4 @@ class Table extends BaseResource {
 
 Table.BillingMode = BillingMode;
 
-module.exports = Table;
+export default Table;

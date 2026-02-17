@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-large-snapshots */
-'use strict';
+import { describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
 const { Firehose } = require('../../../lambdas/lib/actor/resources/aws/');
@@ -10,6 +12,7 @@ const { getMockDeploymentProperties } = require('../util');
 describe('firehose IaC', () => {
   it('basic', async () => {
     expect.assertions(4);
+
     const firehoseSDK = new FirehoseSDK({});
     const firehose = new Firehose({
       name: 'test-table',
@@ -36,6 +39,7 @@ describe('firehose IaC', () => {
     await firehose.reconcile();
 
     const serialized = firehose.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -110,14 +114,16 @@ describe('firehose IaC', () => {
         },
       }
     `);
+
     await firehose.destroy();
+
     expect(firehose.status).toBe('DESTROYED');
     await expect(
       firehoseSDK.describeDeliveryStream({
         DeliveryStreamName: firehose.name,
-      })
+      }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"DeliveryStream test-table does not exist"`
+      `"DeliveryStream test-table does not exist"`,
     );
   });
 });

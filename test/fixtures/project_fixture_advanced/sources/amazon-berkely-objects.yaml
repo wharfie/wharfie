@@ -1,0 +1,72 @@
+name: amazon_berkely_objects
+description: 'Amazon Berkeley Objects Product Metadata table https://amazon-berkeley-objects.s3.amazonaws.com/index.html'
+format: 'json'
+input_location:
+  storage: s3
+  path: s3://amazon-berkeley-objects/listings/metadata/
+service_level_agreement:
+  freshness: 60
+columns: 
+- name: brand
+  type: array<struct<language_tag:string,value:string>>
+- name: bullet_point
+  type: array<struct<language_tag:string,value:string>>
+- name: color
+  type: array<struct<language_tag:string,value:string>>
+- name: color_code
+  type: array<string>
+- name: country
+  type: string
+- name: domain_name
+  type: string
+- name: fabric_type
+  type: array<struct<language_tag:string,value:string>>
+- name: finish_type
+  type: array<struct<language_tag:string,value:string>>
+- name: item_dimensions
+  type: struct<height:struct<normalized_value:struct<unit:string,value:float>,value:float,unit:string>,length:struct<normalized_value:struct<unit:string,value:float>,value:float,unit:string>,width:struct<normalized_value:struct<unit:string,value:float>,value:float,unit:string>>
+- name: item_id
+  type: string
+- name: item_keywords
+  type: array<struct<language_tag:string,value:string>>
+- name: item_name
+  type: array<struct<language_tag:string,value:string>>
+- name: item_shape
+  type: array<struct<language_tag:string,value:string>>
+- name: item_weight
+  type: array<struct<normalized_value:struct<unit:string,value:float>,value:float,unit:string>>
+- name: main_image_id
+  type: string
+- name: marketplace
+  type: string
+- name: material
+  type: array<struct<language_tag:string,value:string>>
+- name: model_name
+  type: array<struct<language_tag:string,value:string>>
+- name: model_number
+  type: array<struct<language_tag:string,value:string>>
+- name: model_year
+  type: array<struct<language_tag:string,value:string>>
+- name: node
+  type: array<struct<node_id:bigint,path:string>>
+- name: other_image_id
+  type: array<string>
+- name: pattern
+  type: array<struct<language_tag:string,value:string>>
+- name: product_description
+  type: array<struct<language_tag:string,value:string>>
+- name: product_type
+  type: array<struct<value:string>>
+- name: spin_id
+  type: string
+- name: style
+  type: array<struct<language_tag:string,value:string>>
+- name: 3dmodel_id
+  type: string
+side_effects:
+- type: dagster_external_asset
+  trigger: onChange
+  config:
+    dagster_organization: testing
+    dagster_deployment: production
+    dagster_token: token

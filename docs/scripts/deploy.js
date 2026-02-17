@@ -2,23 +2,24 @@
 
 const fs = require('fs');
 const path = require('path');
-const bluebirdPromise = require('bluebird');
 const mime = require('mime-types');
 
 // Read version from package.json and use it as the S3 prefix.
 const { version } = require('../../package.json');
-const S3 = require('../../lambdas/lib/s3');
-const s3 = new S3();
 
 const bucket = 'docs.wharfie.dev';
 // Ensure prefix ends with a trailing slash.
 const prefix = '';
 // const prefix = version.endsWith('/') ? version : `${version}/`;
 
-// Create an S3 client; the region can come from your .env or default to 'us-east-1'
-// const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
-
 async function main() {
+  const [{ default: S3 }, { map }] = await Promise.all([
+    import('../../lambdas/lib/s3.js'),
+    import('../../lambdas/lib/promises.js'),
+  ]);
+
+  const s3 = new S3();
+
   console.log(`Deploying version ${version} to s3://${bucket}/${prefix}`);
 
   // 1. Delete any existing objects under the version prefix.
@@ -31,7 +32,7 @@ async function main() {
   // 2. Upload the build/ directory under the version prefix.
   console.log(`Uploading build/ to s3://${bucket}/${prefix}`);
   const buildDir = path.join(__dirname, '..', 'build');
-  await uploadDirectory(bucket, prefix, buildDir);
+  await uploadDirectory(s3, map, bucket, prefix, buildDir);
 }
 
 async function scanDirectory(localDir, baseDir = localDir) {
@@ -53,7 +54,7 @@ async function scanDirectory(localDir, baseDir = localDir) {
       const contentType = mime.lookup(fullPath) || 'application/octet-stream';
       const s3Key = path.posix.join(
         prefix,
-        relativePath.split(path.sep).join('/')
+        relativePath.split(path.sep).join('/'),
       );
       fileList.push({ fullPath, s3Key, contentType });
     }
@@ -63,7 +64,7 @@ async function scanDirectory(localDir, baseDir = localDir) {
 }
 
 // Upload files in batches to S3
-async function uploadBatches(bucket, prefix, files) {
+async function uploadBatches(s3, map, bucket, prefix, files) {
   const putObjectParams = await Promise.all(
     files.map(async ({ fullPath, s3Key, contentType }) => {
       const fileContent = await fs.promises.readFile(fullPath);
@@ -73,21 +74,22 @@ async function uploadBatches(bucket, prefix, files) {
         Body: fileContent,
         ContentType: contentType,
       };
-    })
+    }),
   );
 
-  await bluebirdPromise.map(
+  await map(
     putObjectParams,
     (params) => {
       return s3.putObject(params);
     },
-    { concurrency: 10 }
+    { concurrency: 10 },
   );
 }
+
 // Main function to scan and upload the directory
-async function uploadDirectory(bucket, prefix, localDir) {
+async function uploadDirectory(s3, map, bucket, prefix, localDir) {
   const files = await scanDirectory(localDir);
-  await uploadBatches(bucket, prefix, files);
+  await uploadBatches(s3, map, bucket, prefix, files);
 }
 
 main().catch((error) => {

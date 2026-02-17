@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-large-snapshots */
-'use strict';
+import { describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
 jest.mock('../../../lambdas/lib/id');
@@ -14,6 +16,7 @@ const { getMockDeploymentProperties } = require('../util');
 describe('bucket notification configuration IaC', () => {
   it('basic', async () => {
     expect.assertions(4);
+
     const s3 = new S3({});
     const bucket = new Bucket({
       name: 'test-bucket',
@@ -64,6 +67,7 @@ describe('bucket notification configuration IaC', () => {
     await bucketNotificationConfig.reconcile();
 
     const serialized = bucketNotificationConfig.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -131,10 +135,13 @@ describe('bucket notification configuration IaC', () => {
     `);
 
     await bucketNotificationConfig.destroy();
+
     expect(bucketNotificationConfig.status).toBe('DESTROYED');
+
     const del_res = await s3.getBucketNotificationConfiguration({
       Bucket: bucket.get('bucketName'),
     });
+
     expect(del_res.QueueConfigurations).toStrictEqual([]);
   });
 });

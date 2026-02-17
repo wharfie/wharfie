@@ -1,5 +1,6 @@
 /* eslint-disable jest/no-large-snapshots */
 'use strict';
+import { describe, expect, it, jest } from '@jest/globals';
 
 const path = require('path');
 const { deserializeRecords } = require('./util');
@@ -99,61 +100,71 @@ const RECORD_TEST_EVENT_ALL_TYPES_MULTIPLE_ROWS = {
 describe('tests for js UDF requests', () => {
   it('fixtured udf test', async () => {
     expect.assertions(1);
+
     process.env.WHARFIE_UDF_HANDLER = `${path.join(
       __dirname,
-      'request_test_udf_1.js'
+      'request_test_udf_1.js',
     )}.handler`;
     jest.resetModules();
     const { handler } = require('../../lambdas/udf_entrypoint');
     const recordresult = await handler(RECORD_TEST_EVENT);
     const output = await deserializeRecords(recordresult);
+
     expect(output).toMatchInlineSnapshot(
-      `"HELLO WORLD, input 2023-05-29T20:22:29.673Z     "`
+      `"HELLO WORLD, input 2023-05-29T20:22:29.673Z     "`,
     );
   });
 
   it('fixtured multiple row udf test', async () => {
     expect.assertions(1);
+
     process.env.WHARFIE_UDF_HANDLER = `${path.join(
       __dirname,
-      'request_test_udf_1.js'
+      'request_test_udf_1.js',
     )}.handler`;
     jest.resetModules();
     const { handler } = require('../../lambdas/udf_entrypoint');
     const recordresult = await handler(RECORD_TEST_EVENT_MULTI_ROW);
     const output = await deserializeRecords(recordresult);
+
     expect(output).toMatchInlineSnapshot(
-      `"HELLO WORLD, input 2023-06-23T21:06:29.533ZHELLO WORLD, input 2023-06-23T21:25:29.773ZHELLO WORLD, input 2023-06-29T06:42:17.033ZHELLO WORLD, input 2023-06-29T06:59:17.046ZHELLO WORLD, input 2023-06-29T06:02:17.054ZHELLO WORLD, input 2023-06-29T06:32:17.006ZHELLO WORLD, input 2023-06-29T06:22:17.199ZHELLO WORLD, input 2023-06-29T06:36:17.029ZHELLO WORLD, input 2023-06-29T06:06:16.949ZHELLO WORLD, input 2023-06-29T06:52:17.020ZHELLO WORLD, input 2023-06-29T06:04:16.967ZHELLO WORLD, input 2023-06-29T06:45:17.116ZHELLO WORLD, input 2023-06-29T06:48:17.002ZHELLO WORLD, input 2023-06-29T05:07:16.928ZHELLO WORLD, input 2023-06-29T05:26:16.999ZHELLO WORLD, input 2023-06-29T05:28:17.001Z"`
+      `"HELLO WORLD, input 2023-06-23T21:06:29.533ZHELLO WORLD, input 2023-06-23T21:25:29.773ZHELLO WORLD, input 2023-06-29T06:42:17.033ZHELLO WORLD, input 2023-06-29T06:59:17.046ZHELLO WORLD, input 2023-06-29T06:02:17.054ZHELLO WORLD, input 2023-06-29T06:32:17.006ZHELLO WORLD, input 2023-06-29T06:22:17.199ZHELLO WORLD, input 2023-06-29T06:36:17.029ZHELLO WORLD, input 2023-06-29T06:06:16.949ZHELLO WORLD, input 2023-06-29T06:52:17.020ZHELLO WORLD, input 2023-06-29T06:04:16.967ZHELLO WORLD, input 2023-06-29T06:45:17.116ZHELLO WORLD, input 2023-06-29T06:48:17.002ZHELLO WORLD, input 2023-06-29T05:07:16.928ZHELLO WORLD, input 2023-06-29T05:26:16.999ZHELLO WORLD, input 2023-06-29T05:28:17.001Z"`,
     );
   });
+
   it('fixtured all data types single row udf test', async () => {
     expect.assertions(1);
+
     process.env.WHARFIE_UDF_HANDLER = `${path.join(
       __dirname,
-      'request_test_udf_3.js'
+      'request_test_udf_3.js',
     )}.handler`;
     jest.resetModules();
     const { handler } = require('../../lambdas/udf_entrypoint');
     const recordresult = await handler(RECORD_TEST_EVENT_ALL_TYPES_SINGLE_ROW);
     const output = await deserializeRecords(recordresult);
+
     expect(output).toMatchInlineSnapshot(
-      `"timestamp: Mon Jul 03 2023 13:14:15 GMT+0000 (Coordinated Universal Time), date: Mon Jul 03 2023 00:00:00 GMT+0000 (Coordinated Universal Time), tinyint: 27, smallint: 22767, real: 223.4499969482422, double: 22345.6789, decimal: 22345.6789, bigint: 2223372036854775800, integer: 2147483647, varchar: Bthena SQL, varbinary: Hello world, boolean: false  "`
+      `"timestamp: Mon Jul 03 2023 13:14:15 GMT+0000 (Coordinated Universal Time), date: Mon Jul 03 2023 00:00:00 GMT+0000 (Coordinated Universal Time), tinyint: 27, smallint: 22767, real: 223.4499969482422, double: 22345.6789, decimal: 22345.6789, bigint: 2223372036854775800, integer: 2147483647, varchar: Bthena SQL, varbinary: Hello world, boolean: false  "`,
     );
   });
+
   it('fixtured all data types multiple rows udf test', async () => {
     expect.assertions(1);
+
     process.env.WHARFIE_UDF_HANDLER = `${path.join(
       __dirname,
-      'request_test_udf_3.js'
+      'request_test_udf_3.js',
     )}.handler`;
     jest.resetModules();
     const { handler } = require('../../lambdas/udf_entrypoint');
     const recordresult = await handler(
-      RECORD_TEST_EVENT_ALL_TYPES_MULTIPLE_ROWS
+      RECORD_TEST_EVENT_ALL_TYPES_MULTIPLE_ROWS,
     );
     const output = await deserializeRecords(recordresult);
+
     expect(output).toMatchInlineSnapshot(
-      `"timestamp: Tue Jul 04 2023 13:14:15 GMT+0000 (Coordinated Universal Time), date: Tue Jul 04 2023 00:00:00 GMT+0000 (Coordinated Universal Time), tinyint: 37, smallint: 3276, real: 323.45001220703125, double: 32345.6789, decimal: 32345.6789, bigint: 3223372036854776000, integer: 314748364, varchar: Cthena SQL, varbinary: Hello world, boolean: falsetimestamp: Wed Jul 05 2023 13:14:15 GMT+0000 (Coordinated Universal Time), date: Wed Jul 05 2023 00:00:00 GMT+0000 (Coordinated Universal Time), tinyint: 47, smallint: 4276, real: 423.45001220703125, double: 42345.6789, decimal: 42345.6789, bigint: 4223372036854776000, integer: 414748364, varchar: Dthena SQL, varbinary: Hello world, boolean: falsetimestamp: Sun Jul 02 2023 13:14:15 GMT+0000 (Coordinated Universal Time), date: Sun Jul 02 2023 00:00:00 GMT+0000 (Coordinated Universal Time), tinyint: 127, smallint: 32767, real: 123.44999694824219, double: 12345.6789, decimal: 12345.6789, bigint: 9223372036854776000, integer: 2147483647, varchar: Athena SQL, varbinary: Hello world, boolean: false      "`
+      `"timestamp: Tue Jul 04 2023 13:14:15 GMT+0000 (Coordinated Universal Time), date: Tue Jul 04 2023 00:00:00 GMT+0000 (Coordinated Universal Time), tinyint: 37, smallint: 3276, real: 323.45001220703125, double: 32345.6789, decimal: 32345.6789, bigint: 3223372036854776000, integer: 314748364, varchar: Cthena SQL, varbinary: Hello world, boolean: falsetimestamp: Wed Jul 05 2023 13:14:15 GMT+0000 (Coordinated Universal Time), date: Wed Jul 05 2023 00:00:00 GMT+0000 (Coordinated Universal Time), tinyint: 47, smallint: 4276, real: 423.45001220703125, double: 42345.6789, decimal: 42345.6789, bigint: 4223372036854776000, integer: 414748364, varchar: Dthena SQL, varbinary: Hello world, boolean: falsetimestamp: Sun Jul 02 2023 13:14:15 GMT+0000 (Coordinated Universal Time), date: Sun Jul 02 2023 00:00:00 GMT+0000 (Coordinated Universal Time), tinyint: 127, smallint: 32767, real: 123.44999694824219, double: 12345.6789, decimal: 12345.6789, bigint: 9223372036854776000, integer: 2147483647, varchar: Athena SQL, varbinary: Hello world, boolean: false      "`,
     );
   });
 });

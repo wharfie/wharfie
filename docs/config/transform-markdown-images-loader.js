@@ -105,7 +105,7 @@ module.exports = function transformMarkdownImages(source) {
                 (exportsObj.height / exportsObj.width) * 100;
               $parentP.attr(
                 'style',
-                `position: relative; width: 100%; padding-top: ${aspectRatioPercent}%;`
+                `position: relative; width: 100%; padding-top: ${aspectRatioPercent}%;`,
               );
             }
           }

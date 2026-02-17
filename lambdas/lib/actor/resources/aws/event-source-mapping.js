@@ -1,32 +1,31 @@
-'use strict';
-const Lambda = require('../../../lambda');
-const BaseResource = require('../base-resource');
-const {
+import Lambda from '../../../aws/lambda.js';
+import BaseResource from '../base-resource.js';
+import {
   ResourceNotFoundException,
   ResourceConflictException,
-} = require('@aws-sdk/client-lambda');
+} from '@aws-sdk/client-lambda';
 
 /**
  * @typedef EventSourceMappingProperties
- * @property {string} functionName -
- * @property {string | function(): string} eventSourceArn -
- * @property {number} batchSize -
- * @property {number} maximumBatchingWindowInSeconds -
- * @property {Record<string, string>} [tags] -
+ * @property {string} functionName - functionName.
+ * @property {string | function(): string} eventSourceArn - eventSourceArn.
+ * @property {number} batchSize - batchSize.
+ * @property {number} maximumBatchingWindowInSeconds - maximumBatchingWindowInSeconds.
+ * @property {Record<string, string>} [tags] - tags.
  */
 
 /**
  * @typedef EventSourceMappingOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {EventSourceMappingProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {EventSourceMappingProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class EventSourceMapping extends BaseResource {
   /**
-   * @param {EventSourceMappingOptions} options -
+   * @param {EventSourceMappingOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     super({ name, parent, status, properties, dependsOn });
@@ -42,14 +41,14 @@ class EventSourceMapping extends BaseResource {
     const tagsToAdd = Object.entries(this.get('tags') || {}).filter(
       ([key, value]) =>
         !Object.entries(currentTags).some(
-          ([tagKey, tagValue]) => tagKey === key && tagValue === value
-        )
+          ([tagKey, tagValue]) => tagKey === key && tagValue === value,
+        ),
     );
     const tagsToRemove = Object.entries(currentTags).filter(
       ([key, value]) =>
         !Object.entries(this.get('tags', {})).some(
-          ([tagKey, tagValue]) => tagKey === key && tagValue === value
-        )
+          ([tagKey, tagValue]) => tagKey === key && tagValue === value,
+        ),
     );
 
     if (tagsToAdd.length > 0) {
@@ -76,7 +75,7 @@ class EventSourceMapping extends BaseResource {
           BatchSize: this.get('batchSize'),
           Enabled: true,
           MaximumBatchingWindowInSeconds: this.get(
-            'maximumBatchingWindowInSeconds'
+            'maximumBatchingWindowInSeconds',
           ),
         });
         this.set('uuid', UUID);
@@ -84,7 +83,7 @@ class EventSourceMapping extends BaseResource {
           'arn',
           `arn:aws:lambda:${this.get('deployment').region}:${
             this.get('deployment').accountId
-          }:event-source-mapping:${UUID}`
+          }:event-source-mapping:${UUID}`,
         );
         await this.waitForEventSourceMappingStatus('Enabled');
       } catch (error) {
@@ -94,7 +93,7 @@ class EventSourceMapping extends BaseResource {
               FunctionName: this.get('functionName'),
             });
           const existingMapping = (EventSourceMappings || []).find(
-            (mapping) => mapping.EventSourceArn === this.get('eventSourceArn')
+            (mapping) => mapping.EventSourceArn === this.get('eventSourceArn'),
           );
           if (existingMapping && existingMapping.UUID) {
             await this.destroyMapping(existingMapping.UUID);
@@ -118,7 +117,7 @@ class EventSourceMapping extends BaseResource {
           BatchSize: this.get('batchSize'),
           Enabled: true,
           MaximumBatchingWindowInSeconds: this.get(
-            'maximumBatchingWindowInSeconds'
+            'maximumBatchingWindowInSeconds',
           ),
         });
       }
@@ -127,7 +126,7 @@ class EventSourceMapping extends BaseResource {
         'arn',
         `arn:aws:lambda:${this.get('deployment').region}:${
           this.get('deployment').accountId
-        }:event-source-mapping:${existingMapping.UUID}`
+        }:event-source-mapping:${existingMapping.UUID}`,
       );
       await this.waitForEventSourceMappingStatus('Enabled');
     }
@@ -140,7 +139,7 @@ class EventSourceMapping extends BaseResource {
   }
 
   /**
-   * @param {string} uuid -
+   * @param {string} uuid - uuid.
    */
   async destroyMapping(uuid) {
     try {
@@ -160,8 +159,8 @@ class EventSourceMapping extends BaseResource {
   }
 
   /**
-   * @param {string} status -
-   * @param {string} [uuid] -
+   * @param {string} status - status.
+   * @param {string} [uuid] - uuid.
    */
   async waitForEventSourceMappingStatus(status, uuid = this.get('uuid')) {
     let currentStatus = '';
@@ -177,13 +176,13 @@ class EventSourceMapping extends BaseResource {
           resolve,
           Math.floor(
             Math.random() *
-              Math.min(MAX_RETRY_TIMEOUT_SECONDS, 1 * Math.pow(2, attempts))
-          ) * 1000
-        )
+              Math.min(MAX_RETRY_TIMEOUT_SECONDS, 1 * Math.pow(2, attempts)),
+          ) * 1000,
+        ),
       );
       attempts++;
     } while (currentStatus !== status);
   }
 }
 
-module.exports = EventSourceMapping;
+export default EventSourceMapping;

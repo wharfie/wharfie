@@ -1,4 +1,5 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const {
@@ -7,11 +8,8 @@ const {
   displayInstruction,
   displayInfo,
 } = require('../../output/basic');
-const {
-  getRecords,
-  deleteOperation,
-  getAllResources,
-} = require('../../../lambdas/lib/dynamo/operations');
+const { getRecords, deleteOperation, getAllResources } =
+  require('../../../lambdas/lib/dynamo/operations').default;
 
 /**
  * Cancels operations for a given resource ID, operation ID, or operation type.
@@ -26,12 +24,12 @@ const cancel = async (resource_id, operation_id, operation_type) => {
   if (operation_type) {
     operationsToRemove = records.operations.filter(
       // @ts-ignore
-      (x) => x.operation_type === operation_type
+      (x) => x.operation_type === operation_type,
     );
   } else if (operation_id) {
     operationsToRemove = records.operations.filter(
       // @ts-ignore
-      (x) => x.operation_id === operation_id
+      (x) => x.operation_id === operation_id,
     );
   } else {
     operationsToRemove = records.operations;
@@ -42,7 +40,7 @@ const cancel = async (resource_id, operation_id, operation_type) => {
     const operationChunk = operationsToRemove.splice(0, 10);
     await Promise.all(
       // @ts-ignore
-      operationChunk.map((operation) => deleteOperation(operation))
+      operationChunk.map((operation) => deleteOperation(operation)),
     );
   }
   displaySuccess(`${operationsToRemoveCount} operations cancelled.`);
@@ -61,7 +59,7 @@ const cancelAll = async (operation_type) => {
       resourceChunk.map((resource) => {
         displayInfo(`Cancelling: ${resource.id}`);
         return cancel(resource.id, undefined, operation_type);
-      })
+      }),
     );
   }
 };

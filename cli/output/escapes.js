@@ -1,4 +1,5 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const ansiEscapes = module.exports;
 module.exports.default = ansiEscapes;
 

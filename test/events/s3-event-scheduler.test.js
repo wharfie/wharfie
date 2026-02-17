@@ -1,5 +1,15 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
@@ -66,6 +76,7 @@ describe('tests for s3 event scheduling', () => {
 
   it('ignore processing_failed/ events', async () => {
     expect.assertions(4);
+
     location_return = [
       {
         resource_id: '1',
@@ -95,6 +106,7 @@ describe('tests for s3 event scheduling', () => {
 
   it('ignore patition count mis-matches', async () => {
     expect.assertions(4);
+
     location_return = [
       {
         resource_id: '1',
@@ -149,8 +161,8 @@ describe('tests for s3 event scheduling', () => {
     expect(
       JSON.parse(
         AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       resource_id: '1',
       sort_key: 'a=10/b=20:1466424600000',
@@ -192,8 +204,8 @@ describe('tests for s3 event scheduling', () => {
     expect(
       JSON.parse(
         AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       resource_id: '1',
       sort_key: 'a=1/b=abc:1466424600000',
@@ -235,8 +247,8 @@ describe('tests for s3 event scheduling', () => {
     expect(
       JSON.parse(
         AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       resource_id: '1',
       sort_key: 'a=1/b=abc:1466424600000',
@@ -278,8 +290,8 @@ describe('tests for s3 event scheduling', () => {
     expect(
       JSON.parse(
         AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       resource_id: '1',
       sort_key: '2021/10:1466424480000',
@@ -296,6 +308,7 @@ describe('tests for s3 event scheduling', () => {
 
   it('run fixtured', async () => {
     expect.assertions(1);
+
     location_return = [
       {
         resource_id: '1',
@@ -362,8 +375,8 @@ describe('tests for s3 event scheduling', () => {
     expect(
       JSON.parse(
         AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       resource_id: '1',
       sort_key:
@@ -386,6 +399,7 @@ describe('tests for s3 event scheduling', () => {
 
   it('run fixtured eventbridge', async () => {
     expect.assertions(1);
+
     location_return = [
       {
         resource_id: '1',
@@ -448,8 +462,8 @@ describe('tests for s3 event scheduling', () => {
     expect(
       JSON.parse(
         AWS.SQSMock.commandCalls(AWS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       resource_id: '1',
       sort_key:

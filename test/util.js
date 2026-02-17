@@ -1,22 +1,22 @@
-const { S3 } = require('@aws-sdk/client-s3');
-const { STS } = require('@aws-sdk/client-sts');
-const { SQS } = require('@aws-sdk/client-sqs');
-const { SNS } = require('@aws-sdk/client-sns');
-const { Lambda } = require('@aws-sdk/client-lambda');
-const { IAM } = require('@aws-sdk/client-iam');
-const { Glue } = require('@aws-sdk/client-glue');
-const { Firehose } = require('@aws-sdk/client-firehose');
-const { DynamoDB } = require('@aws-sdk/client-dynamodb');
-const { CloudWatch } = require('@aws-sdk/client-cloudwatch');
-const { CloudWatchEvents } = require('@aws-sdk/client-cloudwatch-events');
-const { Athena } = require('@aws-sdk/client-athena');
+import { S3 } from '@aws-sdk/client-s3';
+import { STS } from '@aws-sdk/client-sts';
+import { SQS } from '@aws-sdk/client-sqs';
+import { SNS } from '@aws-sdk/client-sns';
+import { Lambda } from '@aws-sdk/client-lambda';
+import { IAM } from '@aws-sdk/client-iam';
+import { Glue } from '@aws-sdk/client-glue';
+import { Firehose } from '@aws-sdk/client-firehose';
+import { DynamoDB } from '@aws-sdk/client-dynamodb';
+import { CloudWatch } from '@aws-sdk/client-cloudwatch';
+import { CloudWatchEvents } from '@aws-sdk/client-cloudwatch-events';
+import { Athena } from '@aws-sdk/client-athena';
 
-const dependency_db = require('../lambdas/lib/dynamo/dependency');
-const location_db = require('../lambdas/lib/dynamo/location');
-const operation_db = require('../lambdas/lib/dynamo/operations');
-const scheduler_db = require('../lambdas/lib/dynamo/scheduler');
-const semaphore = require('../lambdas/lib/dynamo/semaphore');
-const state_db = require('../lambdas/lib/dynamo/state');
+import { __setMockState } from '../lambdas/lib/dynamo/dependency';
+import { __setMockState as ___setMockState } from '../lambdas/lib/dynamo/location';
+import { __setMockState as ____setMockState } from '../lambdas/lib/dynamo/operations';
+import { __setMockState as _____setMockState } from '../lambdas/lib/dynamo/scheduler';
+import { __setMockState as ______setMockState } from '../lambdas/lib/dynamo/semaphore';
+import stateStore from '../lambdas/lib/db/state/store.js';
 
 const s3 = new S3();
 const sts = new STS();
@@ -56,15 +56,12 @@ function resetAWSMocks() {
  *
  */
 function resetDBMocks() {
-  dependency_db.__setMockState();
-  location_db.__setMockState();
-  operation_db.__setMockState();
-  scheduler_db.__setMockState();
-  semaphore.__setMockState();
-  state_db.__setMockState();
+  __setMockState();
+  ___setMockState();
+  ____setMockState();
+  _____setMockState();
+  ______setMockState();
+  stateStore?.__setMockState?.();
 }
 
-module.exports = {
-  resetAWSMocks,
-  resetDBMocks,
-};
+export { resetAWSMocks, resetDBMocks };

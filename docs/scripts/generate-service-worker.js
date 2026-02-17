@@ -69,7 +69,7 @@ async function buildSW() {
     console.log(
       `Generated service-worker.js, which will precache ${count} files (${(
         size / 1024
-      ).toFixed(2)} KB)`
+      ).toFixed(2)} KB)`,
     );
   } catch (err) {
     console.error('❌ Workbox build failed:', err);

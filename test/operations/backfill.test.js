@@ -1,6 +1,15 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
-const bluebird = require('bluebird');
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = true;
 jest.requireMock('@aws-sdk/client-s3');
@@ -47,7 +56,6 @@ const CONTEXT = {
 
 describe('backfill tests', () => {
   beforeAll(async () => {
-    bluebird.Promise.config({ cancellation: true });
     s3.__setMockState({
       's3://test-bucket/raw/dt=2021-01-18/data.json': '',
       's3://test-bucket/raw/dt=2021-01-19/data.json': '',
@@ -82,6 +90,7 @@ describe('backfill tests', () => {
     });
     createLambdaQueues();
   });
+
   beforeEach(() => {
     setLambdaTriggers(CONTEXT);
   });
@@ -92,6 +101,7 @@ describe('backfill tests', () => {
 
   it('end to end', async () => {
     expect.assertions(4);
+
     await operations.putResource(
       new Resource({
         id: 'resource_id',
@@ -134,7 +144,7 @@ describe('backfill tests', () => {
           tableType: 'PHYSICAL',
           tags: {},
         },
-      })
+      }),
     );
 
     await daemon_lambda.handler(
@@ -154,7 +164,7 @@ describe('backfill tests', () => {
           },
         ],
       },
-      CONTEXT
+      CONTEXT,
     );
     let pollInterval;
     let completed_checks = 0;
@@ -180,11 +190,20 @@ describe('backfill tests', () => {
         }
       }, 100);
     });
-    const timeout = bluebird.Promise.delay(5000).then(() => {
-      console.error('Timeout waiting for operation to complete');
+    let cancelTimeout = () => {};
+    const timeout = new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        console.error('Timeout waiting for operation to complete');
+        resolve();
+      }, 5000);
+      cancelTimeout = () => {
+        clearTimeout(timeoutId);
+        resolve();
+      };
     });
     await Promise.race([emptyQueues, timeout]);
-    timeout.cancel();
+    cancelTimeout();
+
     // eslint-disable-next-line jest/no-large-snapshots
     expect(Object.keys(dynamo_resource.__getMockState()))
       .toMatchInlineSnapshot(`

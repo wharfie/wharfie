@@ -1,6 +1,16 @@
 /* eslint-disable jest/no-large-snapshots */
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Action, Operation } = require('../../../lambdas/lib/graph');
 
@@ -10,12 +20,14 @@ const { createId } = require('../../../lambdas/lib/id');
 jest.mock('../../../lambdas/lib/id');
 
 let idCount;
+
 describe('tests for graph', () => {
   beforeAll(() => {
     const mockedDate = new Date(1466424490000);
     jest.useFakeTimers('modern');
     jest.setSystemTime(mockedDate);
   });
+
   beforeEach(() => {
     idCount = 0;
     createId.mockImplementation(() => {
@@ -23,12 +35,15 @@ describe('tests for graph', () => {
       return `id-${idCount}`;
     });
   });
+
   afterAll(() => {
     createId.mockClear();
     jest.useRealTimers();
   });
+
   it('serialization', async () => {
     expect.assertions(2);
+
     const test_operation = new Operation({
       resource_id: 'resource_id',
       resource_version: 0,
@@ -99,6 +114,7 @@ describe('tests for graph', () => {
       ]
     `);
   });
+
   it('deserialization', async () => {
     expect.assertions(3);
 
@@ -124,6 +140,7 @@ describe('tests for graph', () => {
     });
 
     const serializedGraph = test_operation.toRecords();
+
     // eslint-disable-next-line jest/no-large-snapshots
     expect(serializedGraph).toMatchInlineSnapshot(`
       [
@@ -240,10 +257,11 @@ describe('tests for graph', () => {
             action_record: action,
             query_records: [],
           };
-        })
-      )
+        }),
+      ),
     ).toStrictEqual(test_operation);
   });
+
   it('toString', async () => {
     expect.assertions(1);
 
@@ -271,6 +289,7 @@ describe('tests for graph', () => {
       id: 'finish_action',
       dependsOn: [compaction_action, register_partition_action],
     });
+
     expect(test_operation.toString()).toMatchInlineSnapshot(`
       "START -> RUN_COMPACTION, REGISTER_PARTITION
       RUN_COMPACTION -> FINISH
@@ -278,8 +297,10 @@ describe('tests for graph', () => {
       "
     `);
   });
+
   it('getUpstreamActions', async () => {
     expect.assertions(3);
+
     const test_operation = new Operation({
       resource_id: 'resource_id',
       type: Operation.Type.BACKFILL,
@@ -304,8 +325,9 @@ describe('tests for graph', () => {
       id: 'finish_action',
       dependsOn: [compaction_action, register_partition_action],
     });
+
     expect(
-      test_operation.getUpstreamActions(start_action)
+      test_operation.getUpstreamActions(start_action),
     ).toMatchInlineSnapshot(`[]`);
     expect(test_operation.getUpstreamActions(finish_action))
       .toMatchInlineSnapshot(`
@@ -354,8 +376,10 @@ describe('tests for graph', () => {
       ]
     `);
   });
+
   it('getDownstreamActions', async () => {
     expect.assertions(3);
+
     const test_operation = new Operation({
       resource_id: 'resource_id',
       type: Operation.Type.BACKFILL,
@@ -380,6 +404,7 @@ describe('tests for graph', () => {
       id: 'finish_action',
       dependsOn: [compaction_action, register_partition_action],
     });
+
     expect(test_operation.getDownstreamActions(start_action))
       .toMatchInlineSnapshot(`
       [
@@ -427,11 +452,13 @@ describe('tests for graph', () => {
       ]
     `);
     expect(
-      test_operation.getDownstreamActions(finish_action)
+      test_operation.getDownstreamActions(finish_action),
     ).toMatchInlineSnapshot(`[]`);
   });
+
   it('getSequentialActionOrder', async () => {
     expect.assertions(1);
+
     const test_operation = new Operation({
       resource_id: 'resource_id',
       type: Operation.Type.BACKFILL,
@@ -456,6 +483,7 @@ describe('tests for graph', () => {
       id: 'finish_action',
       dependsOn: [compaction_action, register_partition_action],
     });
+
     expect(test_operation.getSequentialActionOrder()).toMatchInlineSnapshot(`
       [
         Action {

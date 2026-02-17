@@ -1,46 +1,44 @@
-'use strict';
-
-const Role = require('./role');
-const Table = require('./table');
-const AutoScalingPolicy = require('./autoscaling-policy');
-const AutoScalingTarget = require('./autoscaling-target');
-const ApplicationAutoScaling = require('../../../application-auto-scaling');
-const BaseResourceGroup = require('../base-resource-group');
+import Role from './role.js';
+import Table from './table.js';
+import AutoScalingPolicy from './autoscaling-policy.js';
+import AutoScalingTarget from './autoscaling-target.js';
+import ApplicationAutoScaling from '../../../aws/application-auto-scaling.js';
+import BaseResourceGroup from '../base-resource-group.js';
 
 /**
  * @typedef AutoscalingTableProperties
- * @property {string} tableName -
- * @property {import("@aws-sdk/client-dynamodb").AttributeDefinition[]} attributeDefinitions -
- * @property {import("@aws-sdk/client-dynamodb").KeySchemaElement[]} keySchema -
- * @property {import("@aws-sdk/client-dynamodb").ProvisionedThroughput} provisionedThroughput -
- * @property {import("@aws-sdk/client-dynamodb").TimeToLiveSpecification} [timeToLiveSpecification] -
- * @property {number} minWriteCapacity -
- * @property {number} maxWriteCapacity -
- * @property {number} minReadCapacity -
- * @property {number} maxReadCapacity -
+ * @property {string} tableName - tableName.
+ * @property {import("@aws-sdk/client-dynamodb").AttributeDefinition[]} attributeDefinitions - attributeDefinitions.
+ * @property {import("@aws-sdk/client-dynamodb").KeySchemaElement[]} keySchema - keySchema.
+ * @property {import("@aws-sdk/client-dynamodb").ProvisionedThroughput} provisionedThroughput - provisionedThroughput.
+ * @property {import("@aws-sdk/client-dynamodb").TimeToLiveSpecification} [timeToLiveSpecification] - timeToLiveSpecification.
+ * @property {number} minWriteCapacity - minWriteCapacity.
+ * @property {number} maxWriteCapacity - maxWriteCapacity.
+ * @property {number} minReadCapacity - minReadCapacity.
+ * @property {number} maxReadCapacity - maxReadCapacity.
  */
 
 /**
  * @typedef AutoscalingTableOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {AutoscalingTableProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
- * @property {Object<string, import('../base-resource') | BaseResourceGroup>} [resources] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {AutoscalingTableProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
+ * @property {Object<string, import('../base-resource.js').default | BaseResourceGroup>} [resources] - resources.
  */
 
 class AutoscalingTable extends BaseResourceGroup {
   /**
-   * @param {AutoscalingTableOptions} options -
+   * @param {AutoscalingTableOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn, resources }) {
     super({ name, parent, status, properties, dependsOn, resources });
   }
 
   /**
-   * @param {string} parent -
-   * @returns {(import('../base-resource') | BaseResourceGroup)[]} -
+   * @param {string} parent - parent.
+   * @returns {(import('../base-resource.js').default | BaseResourceGroup)[]} - Result.
    */
   _defineGroupResources(parent) {
     const table = new Table({
@@ -185,8 +183,8 @@ class AutoscalingTable extends BaseResourceGroup {
   }
 
   /**
-   * @param {Omit<import("@aws-sdk/lib-dynamodb").PutCommandInput, 'TableName'>} params -
-   * @returns {Promise<import("@aws-sdk/lib-dynamodb").PutCommandOutput>} -
+   * @param {Omit<import("@aws-sdk/lib-dynamodb").PutCommandInput, 'TableName'>} params - params.
+   * @returns {Promise<import("@aws-sdk/lib-dynamodb").PutCommandOutput>} - Result.
    */
   async put(params) {
     const table = this.getResource(this.name);
@@ -201,4 +199,4 @@ class AutoscalingTable extends BaseResourceGroup {
   }
 }
 
-module.exports = AutoscalingTable;
+export default AutoscalingTable;

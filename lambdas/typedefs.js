@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * @typedef AthenaUDFPingInputEvent
  * @property {AthenaUDFInputEventIdentity} identity -
@@ -69,7 +67,7 @@
  * @property {string} [operation_id] - Id of the operation being performed
  * @property {WharfieOperationTypeEnum} operation_type - Type of the operation being performed
  * @property {string} [action_id] - Id of the action being performed
- * @property {import('./lib/graph/action').WharfieActionTypeEnum} action_type - Type of the action being performed
+ * @property {import('./lib/graph/action.js').WharfieActionTypeEnum} action_type - Type of the action being performed
  * @property {string} resource_id - Id of the Wharfie resource
  * @property {number} [resource_version] - version of the Wharfie resource
  * @property {string} [query_id] - Id of the query being run
@@ -82,7 +80,7 @@
 
 /**
  * @typedef ActionProcessingOutput
- * @property {import('./lib/graph/action').WharfieActionStatusEnum} status -
+ * @property {import('./lib/graph/action.js').WharfieActionStatusEnum} status -
  * @property {any} [outputs] -
  * @property {boolean} [inflightQuery] -
  */
@@ -198,6 +196,7 @@
 
 /**
  * @typedef S3Location
+ * @property {string} uri - S3 URI
  * @property {string} bucket - S3 bucket name
  * @property {string} prefix - S3 prefix
  * @property {string} arn - S3 arn
@@ -218,6 +217,39 @@
  */
 
 /**
+ * @typedef Definition
+ * @property {string} sort_key -
+ * @property {string} queue_arn -
+ * @property {string} queue_url -
+ * @property {string} dlq_arn -
+ * @property {string} dlq_url -
+ * @property {string} lambda_arn -
+ * @property {string} code_hash -
+ */
+
+/**
+ * @typedef ActionDefinitionRecord
+ * @property {string} action_type -
+ * @property {string} queue_arn -
+ * @property {string} queue_url -
+ * @property {string} dlq_arn -
+ * @property {string} dlq_url -
+ * @property {string} lambda_arn -
+ * @property {string} code_hash -
+ */
+
+/**
+ * @typedef QueryDefinitionRecord
+ * @property {string} query_type -
+ * @property {string} queue_arn -
+ * @property {string} queue_url -
+ * @property {string} dlq_arn -
+ * @property {string} dlq_url -
+ * @property {string} lambda_arn -
+ * @property {string} code_hash -
+ */
+
+/**
  * @typedef CleanupEvent
  * @property {string} operation_id - Id of the operation being performed
  * @property {string} action_id -
@@ -227,4 +259,11 @@
  * @property {string} manifest_uri -
  */
 
-exports.unused = {};
+/**
+ * @typedef SideEffect
+ * @property {string} type -
+ * @property {('onChange')} trigger -
+ * @property {Object<string,any>} config -
+ */
+
+export default () => {};

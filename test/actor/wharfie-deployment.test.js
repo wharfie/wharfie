@@ -1,6 +1,8 @@
 /* eslint-disable jest/no-hooks */
 /* eslint-disable jest/no-large-snapshots */
-'use strict';
+import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
 jest.mock('crypto');
@@ -9,7 +11,7 @@ jest.mock('crypto');
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 jest.mock('../../lambdas/lib/env-paths');
 jest.mock('../../lambdas/lib/id');
-jest.mock('../../lambdas/lib/dynamo/state');
+jest.mock('../../lambdas/lib/db/state/store');
 jest.mock('../../lambdas/lib/dynamo/operations');
 jest.mock('../../lambdas/lib/dynamo/dependency');
 jest.mock('../../lambdas/lib/dynamo/location');
@@ -30,12 +32,15 @@ describe('deployment IaC', () => {
       digest: mockDigest,
     });
   });
+
   afterAll(() => {
     jest.restoreAllMocks();
   });
+
   it('basic', async () => {
     expect.assertions(9);
-    const state_db = require('../../lambdas/lib/dynamo/state');
+
+    const state_db = require('../../lambdas/lib/db/state/store');
 
     const events = [];
     Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
@@ -47,10 +52,13 @@ describe('deployment IaC', () => {
         createdAt: 123456789,
       },
     });
+
     expect(state_db.__getMockState()).toMatchInlineSnapshot(`{}`);
+
     events.push('RECONCILING');
     await deployment.reconcile();
     const reconcile_state = state_db.__getMockState();
+
     expect(reconcile_state).toMatchInlineSnapshot(`
       {
         "test-deployment": {
@@ -3456,6 +3464,7 @@ describe('deployment IaC', () => {
     `);
 
     const serialized = deployment.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -3507,6 +3516,7 @@ describe('deployment IaC', () => {
       resourceKey: 'test-deployment',
     });
     await deserialized.reconcile();
+
     expect(state_db.__getMockState()).toStrictEqual(reconcile_state);
     expect(deserialized.resolveProperties()).toMatchInlineSnapshot(`
       {
@@ -3537,8 +3547,10 @@ describe('deployment IaC', () => {
       }
     `);
     expect(deserialized.status).toBe('STABLE');
+
     events.push('DESTROYING');
     await deserialized.destroy();
+
     expect(deserialized.status).toBe('DESTROYED');
     expect(events).toHaveLength(374);
     expect(state_db.__getMockState()).toMatchInlineSnapshot(`

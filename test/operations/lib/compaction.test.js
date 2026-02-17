@@ -1,5 +1,14 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const AWSGlue = require('@aws-sdk/client-glue');
 const AWSAthena = require('@aws-sdk/client-athena');
 const Compaction = require('../../../lambdas/operations/actions/lib/compaction');
@@ -27,6 +36,7 @@ describe('compaction', () => {
   afterAll(() => {
     LOGGER.close();
   });
+
   it('getCompactionQueries', async () => {
     expect.assertions(1);
 
@@ -82,7 +92,7 @@ describe('compaction', () => {
         viewOriginalText: `/* Presto View: ${Buffer.from(
           JSON.stringify({
             originalSql: 'select * from test_db.test_table',
-          })
+          }),
         ).toString('base64')} */`,
       },
     };
@@ -232,7 +242,7 @@ describe('compaction', () => {
         viewOriginalText: `/* Presto View: ${Buffer.from(
           JSON.stringify({
             originalSql: `select *, concat(year, '-', month, '-', day) as creation_date from test_db.test_table`,
-          })
+          }),
         ).toString('base64')} */`,
       },
     };
@@ -337,6 +347,7 @@ describe('compaction', () => {
 
   it('getCalculatePartitionQueries for athena engine v1', async () => {
     expect.assertions(1);
+
     AWSAthena.AthenaMock.on(AWSAthena.GetWorkGroupCommand).resolves({
       WorkGroup: {
         Name: 'test',
@@ -419,6 +430,7 @@ describe('compaction', () => {
 
   it('getCalculatePartitionQueries for athena engine v2', async () => {
     expect.assertions(1);
+
     AWSAthena.AthenaMock.on(AWSAthena.GetWorkGroupCommand).resolves({
       WorkGroup: {
         Name: 'test',
@@ -484,6 +496,7 @@ describe('compaction', () => {
 
   it('getCalculatePartitionQueries for athena engine unknown', async () => {
     expect.assertions(1);
+
     AWSAthena.AthenaMock.on(AWSAthena.GetWorkGroupCommand).resolves({});
     AWSGlue.GlueMock.on(AWSGlue.GetTableCommand).resolves({
       Table: {
@@ -531,6 +544,7 @@ describe('compaction', () => {
 
   it('getCalculatePartitionQueries for View with non-partition key', async () => {
     expect.assertions(1);
+
     AWSAthena.AthenaMock.on(AWSAthena.GetWorkGroupCommand).resolves({
       WorkGroup: {
         Name: 'test',
@@ -575,7 +589,7 @@ describe('compaction', () => {
           viewOriginalText: `/* Presto View: ${Buffer.from(
             JSON.stringify({
               originalSql: 'select a, not_partition from test_db.test_table',
-            })
+            }),
           ).toString('base64')} */`,
         },
       },
@@ -598,6 +612,7 @@ describe('compaction', () => {
 
   it('getCalculatePartitionQueries for View with only partition keys and SLA of non-partition columns', async () => {
     expect.assertions(1);
+
     AWSAthena.AthenaMock.on(AWSAthena.GetWorkGroupCommand).resolves({
       WorkGroup: {
         Name: 'test',
@@ -642,7 +657,7 @@ describe('compaction', () => {
           viewOriginalText: `/* Presto View: ${Buffer.from(
             JSON.stringify({
               originalSql: 'select a, b from test_db.test_table',
-            })
+            }),
           ).toString('base64')} */`,
         },
       },
@@ -665,6 +680,7 @@ describe('compaction', () => {
 
   it('getCalculatePartitionQueries for View with only partition keys and SLA of partition keys', async () => {
     expect.assertions(1);
+
     AWSAthena.AthenaMock.on(AWSAthena.GetWorkGroupCommand).resolves({
       WorkGroup: {
         Name: 'test',
@@ -706,7 +722,7 @@ describe('compaction', () => {
           viewOriginalText: `/* Presto View: ${Buffer.from(
             JSON.stringify({
               originalSql: 'select a, b from test_db.test_table',
-            })
+            }),
           ).toString('base64')} */`,
         },
       },
@@ -732,6 +748,7 @@ describe('compaction', () => {
 
   it('getCalculatePartitionQueries for View with only partition keys and no SLA', async () => {
     expect.assertions(1);
+
     AWSAthena.AthenaMock.on(AWSAthena.GetWorkGroupCommand).resolves({
       WorkGroup: {
         Name: 'test',
@@ -776,7 +793,7 @@ describe('compaction', () => {
           viewOriginalText: `/* Presto View: ${Buffer.from(
             JSON.stringify({
               originalSql: 'select a, b from test_db.test_table',
-            })
+            }),
           ).toString('base64')} */`,
         },
       },
@@ -796,6 +813,7 @@ describe('compaction', () => {
 
   it('getCalculatePartitionQueries for Table with SLA of non-partition keys', async () => {
     expect.assertions(1);
+
     AWSAthena.AthenaMock.on(AWSAthena.GetWorkGroupCommand).resolves({
       WorkGroup: {
         Name: 'test',

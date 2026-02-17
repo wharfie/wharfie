@@ -85,7 +85,7 @@ function monitorDeploymentCreateReconcilables(root) {
       clearOnComplete: true,
       stopOnComplete: true,
     },
-    cliProgress.Presets.shades_grey
+    cliProgress.Presets.shades_grey,
   );
 
   Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {

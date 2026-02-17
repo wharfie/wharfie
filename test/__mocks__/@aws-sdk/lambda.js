@@ -1,6 +1,8 @@
-'use strict';
+import { jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { ResourceNotFoundException } = jest.requireActual(
-  '@aws-sdk/client-lambda'
+  '@aws-sdk/client-lambda',
 );
 
 const { createId } = require('../../../lambdas/lib/id');
@@ -11,7 +13,7 @@ class LambdaMock {
     lambdaState = {
       functions: {},
       mappings: {},
-    }
+    },
   ) {
     LambdaMock.__state = lambdaState;
   }
@@ -121,7 +123,7 @@ class LambdaMock {
       };
     } else {
       throw new Error(
-        `mocks don't support taggging this resource type ${resourceType}`
+        `mocks don't support taggging this resource type ${resourceType}`,
       );
     }
   }
@@ -138,8 +140,8 @@ class LambdaMock {
       }
       LambdaMock.__state.functions[resourceName].Tags = Object.fromEntries(
         Object.entries(
-          LambdaMock.__state.functions[resourceName].Tags || {}
-        ).filter(([key]) => !params.TagKeys.includes(key))
+          LambdaMock.__state.functions[resourceName].Tags || {},
+        ).filter(([key]) => !params.TagKeys.includes(key)),
       );
     } else if (resourceType === 'event-source-mapping') {
       if (!LambdaMock.__state.mappings[resourceName]) {
@@ -149,12 +151,12 @@ class LambdaMock {
       }
       LambdaMock.__state.mappings[resourceName].Tags = Object.fromEntries(
         Object.entries(
-          LambdaMock.__state.mappings[resourceName].Tags || {}
-        ).filter(([key]) => !params.TagKeys.includes(key))
+          LambdaMock.__state.mappings[resourceName].Tags || {},
+        ).filter(([key]) => !params.TagKeys.includes(key)),
       );
     } else {
       throw new Error(
-        `mocks don't support taggging this resource type ${resourceType}`
+        `mocks don't support taggging this resource type ${resourceType}`,
       );
     }
   }
@@ -177,7 +179,7 @@ class LambdaMock {
       };
     } else {
       throw new Error(
-        `mocks don't support taggging this resource type ${resourceType}`
+        `mocks don't support taggging this resource type ${resourceType}`,
       );
     }
   }
@@ -205,7 +207,7 @@ class LambdaMock {
   async listEventSourceMappings(params) {
     const functionName = params.FunctionName;
     const eventSourceMappings = Object.values(
-      LambdaMock.__state.mappings
+      LambdaMock.__state.mappings,
     ).filter((mapping) => mapping.FunctionName === functionName);
     return { EventSourceMappings: eventSourceMappings };
   }

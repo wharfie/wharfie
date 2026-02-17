@@ -1,25 +1,24 @@
-'use strict';
-const FirehoseSDK = require('../../../firehose');
-const BaseResource = require('../base-resource');
-const { ResourceNotFoundException } = require('@aws-sdk/client-firehose');
+import FirehoseSDK from '../../../aws/firehose.js';
+import BaseResource from '../base-resource.js';
+import { ResourceNotFoundException } from '@aws-sdk/client-firehose';
 /**
  * @typedef FirehoseProperties
- * @property {import('@aws-sdk/client-firehose').S3DestinationConfiguration | function(): import('@aws-sdk/client-firehose').S3DestinationConfiguration} s3DestinationConfiguration -
- * @property {import('@aws-sdk/client-firehose').Tag[]} [tags] -
+ * @property {import('@aws-sdk/client-firehose').S3DestinationConfiguration | function(): import('@aws-sdk/client-firehose').S3DestinationConfiguration} s3DestinationConfiguration - s3DestinationConfiguration.
+ * @property {import('@aws-sdk/client-firehose').Tag[]} [tags] - tags.
  */
 
 /**
  * @typedef FirehoseOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {FirehoseProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {FirehoseProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class Firehose extends BaseResource {
   /**
-   * @param {FirehoseOptions} options -
+   * @param {FirehoseOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     super({ name, parent, status, properties, dependsOn });
@@ -37,16 +36,16 @@ class Firehose extends BaseResource {
         !currentTags.some(
           (currentTag) =>
             currentTag.Key === expectedTag.Key &&
-            currentTag.Value === expectedTag.Value
-        )
+            currentTag.Value === expectedTag.Value,
+        ),
     );
     const tagsToRemove = currentTags.filter(
       (currentTag) =>
         !expectedTags.some(
           (/** @type {import('@aws-sdk/client-firehose').Tag} */ expectedTag) =>
             expectedTag.Key === currentTag.Key &&
-            expectedTag.Value === currentTag.Value
-        )
+            expectedTag.Value === currentTag.Value,
+        ),
     );
     if (tagsToAdd.length > 0) {
       await this.firehose.tagDeliveryStream({
@@ -101,7 +100,7 @@ class Firehose extends BaseResource {
   }
 
   /**
-   * @param {string} status -
+   * @param {string} status - status.
    */
   async waitForDeliveryStreamStatus(status) {
     let currentStatus = '';
@@ -116,4 +115,4 @@ class Firehose extends BaseResource {
   }
 }
 
-module.exports = Firehose;
+export default Firehose;

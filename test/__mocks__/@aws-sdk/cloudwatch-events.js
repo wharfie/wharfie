@@ -1,6 +1,8 @@
-'use strict';
+import { jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { ResourceNotFoundException, RuleState } = jest.requireActual(
-  '@aws-sdk/client-cloudwatch-events'
+  '@aws-sdk/client-cloudwatch-events',
 );
 
 class CloudWatchEventsMock {
@@ -69,7 +71,7 @@ class CloudWatchEventsMock {
     }
     CloudWatchEventsMock.__state.Rules[params.Rule].Targets =
       CloudWatchEventsMock.__state.Rules[params.Rule].Targets.filter(
-        (target) => !params.Ids.includes(target.Id)
+        (target) => !params.Ids.includes(target.Id),
       );
   }
 
@@ -145,7 +147,7 @@ class CloudWatchEventsMock {
   async untagResource(params) {
     CloudWatchEventsMock.__state.Tags[params.ResourceARN] =
       CloudWatchEventsMock.__state.Tags[params.ResourceARN].filter(
-        (tag) => !params.TagKeys.includes(tag.Key)
+        (tag) => !params.TagKeys.includes(tag.Key),
       );
   }
 }

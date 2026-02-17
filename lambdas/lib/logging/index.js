@@ -1,19 +1,17 @@
-'use strict';
+import Logger from './logger.js';
+import ConsoleLogTransport from './console-log-transport.js';
+import FirehoseLogTransport from './firehose-log-transport.js';
+import { hostname as _hostname } from 'os';
 
-const Logger = require('./logger');
-const ConsoleLogTransport = require('./console-log-transport');
-const FirehoseLogTransport = require('./firehose-log-transport');
-const os = require('os');
-
-const { version } = require('../../../package.json');
+import { WHARFIE_VERSION } from '../version.js';
 
 const ROOT_LOGGER = new Logger({
   level: process.env.LOGGING_LEVEL || 'info',
   jsonFormat: true,
   base: {
     pid: process.pid,
-    hostname: os.hostname,
-    wharfie_version: version,
+    hostname: _hostname,
+    wharfie_version: WHARFIE_VERSION,
   },
   transports: [
     ...(process.env.WHARFIE_LOGGING_FIREHOSE
@@ -43,9 +41,9 @@ const WHARFIE_DB_LOGGER = ROOT_LOGGER.child({
 });
 
 /**
- * @param {import('../../typedefs').WharfieEvent} event -
- * @param {import('aws-lambda').Context} context -
- * @returns {Logger} -
+ * @param {import('../../typedefs.js').WharfieEvent} event - event.
+ * @param {import('aws-lambda').Context} context - context.
+ * @returns {Logger} - Result.
  */
 function getEventLogger(event, context) {
   return ROOT_LOGGER.child({
@@ -63,21 +61,21 @@ function getEventLogger(event, context) {
 }
 
 /**
- * @returns {Logger} -
+ * @returns {Logger} - Result.
  */
 function getDaemonLogger() {
   return ROOT_LOGGER;
 }
 
 /**
- * @returns {Logger} -
+ * @returns {Logger} - Result.
  */
 function getAWSSDKLogger() {
   return AWS_SDK_LOGGER;
 }
 
 /**
- * @returns {Logger} -
+ * @returns {Logger} - Result.
  */
 function getWharfieDBLogger() {
   return WHARFIE_DB_LOGGER;
@@ -90,7 +88,7 @@ async function flush() {
   await ROOT_LOGGER.flush();
 }
 
-module.exports = {
+export {
   getEventLogger,
   getDaemonLogger,
   getAWSSDKLogger,

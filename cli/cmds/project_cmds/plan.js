@@ -1,4 +1,5 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const { loadProject } = require('../../project/load');
@@ -94,7 +95,7 @@ const plan = async (path, environmentName) => {
     changePatches += `\n\n ${chalk.bold(resourceName)} will be changed \n `;
     changePatches += printTerraformStyleDiff(
       diffs.updates[resourceName].delta,
-      diffs.updates[resourceName].old
+      diffs.updates[resourceName].old,
     );
   });
 
@@ -118,7 +119,7 @@ const planCommand = new Command('plan')
   .argument('[path]', 'The path of the Wharfie project root')
   .option(
     '-e, --environment <environment>',
-    'The Wharfie project environment to use'
+    'The Wharfie project environment to use',
   )
   .action(async (path, options) => {
     const { environment } = options;

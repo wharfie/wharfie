@@ -1,5 +1,15 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const AWSSQS = require('@aws-sdk/client-sqs');
 
@@ -51,6 +61,7 @@ describe('tests for s3 events processing', () => {
 
   it('run', async () => {
     expect.assertions(3);
+
     await router(
       {
         sort_key: 'a=1/b=abc:1',
@@ -64,19 +75,19 @@ describe('tests for s3 events processing', () => {
           partitionValues: ['a=1', 'b=abc'],
         },
       },
-      {}
+      {},
     );
 
     expect(scheduler_db.update).toHaveBeenCalledTimes(1);
     expect(AWSSQS.SQSMock).toHaveReceivedCommandTimes(
       AWSSQS.SendMessageCommand,
-      1
+      1,
     );
     expect(
       JSON.parse(
         AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       source: 'wharfie:scheduler',
       operation_started_at: '2016-06-20T12:08:10.000Z',
@@ -94,6 +105,7 @@ describe('tests for s3 events processing', () => {
 
   it('run for unexpected path', async () => {
     expect.assertions(3);
+
     resource_mock = {
       source_properties: {
         tableType: 'EXTERNAL_TABLE',
@@ -126,19 +138,19 @@ describe('tests for s3 events processing', () => {
           partitionValues: ['a=1', 'b=abc'],
         },
       },
-      {}
+      {},
     );
 
     expect(scheduler_db.update).toHaveBeenCalledTimes(1);
     expect(AWSSQS.SQSMock).toHaveReceivedCommandTimes(
       AWSSQS.SendMessageCommand,
-      1
+      1,
     );
     expect(
       JSON.parse(
         AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       source: 'wharfie:scheduler',
       operation_started_at: '2016-06-20T12:08:10.000Z',
@@ -157,6 +169,7 @@ describe('tests for s3 events processing', () => {
 
   it('run for no = signs', async () => {
     expect.assertions(3);
+
     resource_mock = {
       source_properties: {
         tableType: 'EXTERNAL_TABLE',
@@ -192,19 +205,19 @@ describe('tests for s3 events processing', () => {
           partitionValues: ['2021', '10', '25'],
         },
       },
-      {}
+      {},
     );
 
     expect(scheduler_db.update).toHaveBeenCalledTimes(1);
     expect(AWSSQS.SQSMock).toHaveReceivedCommandTimes(
       AWSSQS.SendMessageCommand,
-      1
+      1,
     );
     expect(
       JSON.parse(
         AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       source: 'wharfie:scheduler',
       operation_started_at: '2016-06-20T12:08:10.000Z',
@@ -222,6 +235,7 @@ describe('tests for s3 events processing', () => {
 
   it('run for view', async () => {
     expect.assertions(3);
+
     resource_mock = {
       source_properties: {
         tableType: 'VIRTUAL_VIEW',
@@ -253,19 +267,19 @@ describe('tests for s3 events processing', () => {
           partitionValues: ['a=1', 'b=abc'],
         },
       },
-      {}
+      {},
     );
 
     expect(scheduler_db.update).toHaveBeenCalledTimes(1);
     expect(AWSSQS.SQSMock).toHaveReceivedCommandTimes(
       AWSSQS.SendMessageCommand,
-      1
+      1,
     );
     expect(
       JSON.parse(
         AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       action_inputs: {
         Duration: null,

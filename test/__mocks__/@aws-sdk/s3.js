@@ -1,4 +1,6 @@
-'use strict';
+import { jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { createId } = require('../../../lambdas/lib/id');
 const { NoSuchBucket, NotFound, NoSuchKey } =
@@ -186,7 +188,7 @@ class S3Mock {
       throw new Error(
         `bucket is not empty: ${params.Bucket} (${
           Object.keys(S3Mock.__state[params.Bucket].objects).length
-        } objects)`
+        } objects)`,
       );
     }
     delete S3Mock.__state[params.Bucket];
@@ -204,7 +206,7 @@ class S3Mock {
   async getObject(params) {
     if (!S3Mock.__state[params.Bucket].objects[params.Key]) {
       const error = new NoSuchKey(
-        `object does not exist: ${params.Bucket}/${params.Key}`
+        `object does not exist: ${params.Bucket}/${params.Key}`,
       );
       throw error;
     }
@@ -250,7 +252,7 @@ class S3Mock {
     if (!S3Mock.__state[params.Bucket])
       throw new Error('bucket does not exist');
     const matchingKeys = Object.keys(
-      S3Mock.__state[params.Bucket].objects
+      S3Mock.__state[params.Bucket].objects,
     ).filter((key) => key.startsWith(params.Prefix));
 
     if (params.Delimiter) {
@@ -263,7 +265,7 @@ class S3Mock {
               return `${params.Prefix}${parts[0] ? '' : '/'}${
                 parts[0] || parts[1]
               }`;
-            })
+            }),
           ),
         ].map((prefix) => ({
           Prefix: prefix,

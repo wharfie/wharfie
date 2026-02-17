@@ -1,38 +1,36 @@
-'use strict';
-
-const BaseResource = require('../base-resource');
-const ApplicationAutoScaling = require('../../../application-auto-scaling');
+import BaseResource from '../base-resource.js';
+import ApplicationAutoScaling from '../../../aws/application-auto-scaling.js';
 
 /**
  * @typedef AutoscalingTargetProperties
- * @property {string} resourceId -
- * @property {string | function(): string} roleArn -
- * @property {import('@aws-sdk/client-application-auto-scaling').ScalableDimension} scalableDimension -
- * @property {number} minCapacity -
- * @property {number} maxCapacity -
- * @property {import('@aws-sdk/client-application-auto-scaling').ServiceNamespace} serviceNamespace -
- * @property {Record<string, string>} [tags] -
+ * @property {string} resourceId - resourceId.
+ * @property {string | function(): string} roleArn - roleArn.
+ * @property {import('@aws-sdk/client-application-auto-scaling').ScalableDimension} scalableDimension - scalableDimension.
+ * @property {number} minCapacity - minCapacity.
+ * @property {number} maxCapacity - maxCapacity.
+ * @property {import('@aws-sdk/client-application-auto-scaling').ServiceNamespace} serviceNamespace - serviceNamespace.
+ * @property {Record<string, string>} [tags] - tags.
  */
 
 /**
  * @typedef AutoscalingTargetOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {AutoscalingTargetProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {AutoscalingTargetProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class AutoscalingTarget extends BaseResource {
   /**
-   * @param {AutoscalingTargetOptions} options -
+   * @param {AutoscalingTargetOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     const propertiesWithDefaults = Object.assign(
       {
         tags: {},
       },
-      properties
+      properties,
     );
     super({
       name,
@@ -117,4 +115,4 @@ class AutoscalingTarget extends BaseResource {
   }
 }
 
-module.exports = AutoscalingTarget;
+export default AutoscalingTarget;

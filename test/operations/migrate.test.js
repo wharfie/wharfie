@@ -1,8 +1,17 @@
 /* eslint-disable jest/no-large-snapshots */
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 // process.env.LOGGING_LEVEL = 'debug';
-const bluebird = require('bluebird');
 
 process.env.AWS_MOCKS = true;
 const {
@@ -18,7 +27,7 @@ jest.mock('../../lambdas/lib/dynamo/scheduler');
 jest.mock('../../lambdas/lib/dynamo/location');
 jest.mock('../../lambdas/lib/dynamo/semaphore');
 jest.mock('../../lambdas/lib/dynamo/dependency');
-jest.mock('../../lambdas/lib/dynamo/state');
+jest.mock('../../lambdas/lib/db/state/aws');
 jest.mock('../../lambdas/lib/env-paths');
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
@@ -29,7 +38,7 @@ const { S3 } = require('@aws-sdk/client-s3');
 
 const resource_db = require('../../lambdas/lib/dynamo/operations');
 const semaphore = require('../../lambdas/lib/dynamo/semaphore');
-const state_db = require('../../lambdas/lib/dynamo/state');
+const state_db = require('../../lambdas/lib/db/state/aws');
 
 const WharfieResource = require('../../lambdas/lib/actor/resources/wharfie-resource');
 const Reconcilable = require('../../lambdas/lib/actor/resources/reconcilable');
@@ -42,9 +51,8 @@ const CONTEXT = {
 };
 
 describe('migrate tests', () => {
-  beforeAll(async () => {
-    bluebird.Promise.config({ cancellation: true });
-  });
+  beforeAll(async () => {});
+
   beforeEach(async () => {
     createLambdaQueues();
     s3.__setMockState({
@@ -76,6 +84,7 @@ describe('migrate tests', () => {
 
   it('no-partitions', async () => {
     expect.assertions(7);
+
     const events = [];
     Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
       events.push(`${event.status} - ${event.constructor}:${event.name}`);
@@ -187,11 +196,19 @@ describe('migrate tests', () => {
         }
       }, 100);
     });
-    const timeout = bluebird.Promise.delay(5000).then(() => {
-      console.error('Timeout waiting for operation to complete');
+    let cancelTimeout = () => {};
+    const timeout = new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        console.error('Timeout waiting for operation to complete');
+        resolve();
+      }, 5000);
+      cancelTimeout = () => {
+        clearTimeout(timeoutId);
+        resolve();
+      };
     });
     await Promise.race([emptyQueues, timeout]);
-    timeout.cancel();
+    cancelTimeout();
     await reconcilePromise;
 
     expect(events).toMatchInlineSnapshot(`
@@ -448,6 +465,7 @@ describe('migrate tests', () => {
 
   it('partitions', async () => {
     expect.assertions(7);
+
     const events = [];
     Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
       events.push(`${event.status} - ${event.constructor}:${event.name}`);
@@ -564,11 +582,19 @@ describe('migrate tests', () => {
         }
       }, 100);
     });
-    const timeout = bluebird.Promise.delay(5000).then(() => {
-      console.error('Timeout waiting for operation to complete');
+    let cancelTimeout = () => {};
+    const timeout = new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        console.error('Timeout waiting for operation to complete');
+        resolve();
+      }, 5000);
+      cancelTimeout = () => {
+        clearTimeout(timeoutId);
+        resolve();
+      };
     });
     await Promise.race([emptyQueues, timeout]);
-    timeout.cancel();
+    cancelTimeout();
     await reconcilePromise;
 
     expect(events).toMatchInlineSnapshot(`

@@ -1,27 +1,41 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.MONITOR_QUEUE_URL = 'monitor-queue';
 
 let Athena;
 let S3;
+
 describe('tests for Athena', () => {
   beforeAll(() => {
     jest.mock('../../../lambdas/lib/id');
     process.env.MONITOR_QUEUE_URL = 'monitor-queue';
   });
+
   beforeEach(() => {
     process.env.AWS_MOCKS = true;
     S3 = jest.requireMock('@aws-sdk/client-s3').S3;
     jest.requireMock('@aws-sdk/client-glue');
     Athena = require('../../../lambdas/lib/athena/');
   });
+
   afterAll(() => {
     process.env.MONITOR_QUEUE_URL = undefined;
   });
 
   it('getWorkgroup', async () => {
     expect.assertions(1);
+
     const athena = new Athena({ region: 'us-east-1' });
     athena.athena.__setMockState();
     athena.athena.createWorkGroup({
@@ -31,6 +45,7 @@ describe('tests for Athena', () => {
       WorkGroup: 'default',
     };
     const result = await athena.getWorkGroup(params);
+
     expect(result).toMatchInlineSnapshot(`
       {
         "WorkGroup": {
@@ -43,6 +58,7 @@ describe('tests for Athena', () => {
 
   it('startQueryExecution', async () => {
     expect.assertions(2);
+
     const athena = new Athena({ region: 'us-east-1' });
     athena.athena.__setMockState({
       workgroups: {
@@ -56,6 +72,7 @@ describe('tests for Athena', () => {
       QueryString: 'select * from foo.bar',
     };
     const result = await athena.startQueryExecution(params);
+
     expect(result).toMatchInlineSnapshot(`
       {
         "QueryExecutionId": "ckywjpmr70002zjvd0wyq5x48",
@@ -82,6 +99,7 @@ describe('tests for Athena', () => {
 
   it('getQueryExecution', async () => {
     expect.assertions(1);
+
     const athena = new Athena({ region: 'us-east-1' });
     athena.athena.__setMockState();
     athena.athena.createWorkGroup({
@@ -103,6 +121,7 @@ describe('tests for Athena', () => {
     const result = await athena.getQueryExecution({
       QueryExecutionId,
     });
+
     expect(result).toMatchInlineSnapshot(`
       {
         "QueryExecution": {
@@ -119,6 +138,7 @@ describe('tests for Athena', () => {
 
   it('batchGetQueryExecution', async () => {
     expect.assertions(1);
+
     const athena = new Athena({ region: 'us-east-1' });
     athena.athena.__setMockState();
     athena.athena.createWorkGroup({
@@ -140,6 +160,7 @@ describe('tests for Athena', () => {
     const result = await athena.batchGetQueryExecution({
       QueryExecutionIds: [foo, bar],
     });
+
     expect(result).toMatchInlineSnapshot(`
       {
         "QueryExecutions": [
@@ -170,6 +191,7 @@ describe('tests for Athena', () => {
 
   it('test query side effects', async () => {
     expect.assertions(2);
+
     const athena = new Athena({ region: 'us-east-1' });
     const s3 = new S3({ region: 'us-east-1' });
     const QueryString = `
@@ -191,6 +213,7 @@ describe('tests for Athena', () => {
     const result = await athena.getQueryExecution({
       QueryExecutionId,
     });
+
     expect(result).toMatchInlineSnapshot(`
       {
         "QueryExecution": {
@@ -208,6 +231,7 @@ describe('tests for Athena', () => {
       Bucket: 'foo',
       Key: 'bar',
     });
+
     expect(sideEffect).toMatchInlineSnapshot(`
       {
         "Body": "baz",
@@ -217,6 +241,7 @@ describe('tests for Athena', () => {
 
   it('test get results', async () => {
     expect.assertions(1);
+
     const athena = new Athena({ region: 'us-east-1' });
     athena.athena.__setMockState();
     athena.athena.createWorkGroup({
@@ -245,7 +270,7 @@ describe('tests for Athena', () => {
           Body: outputCSV,
         });
       },
-      outputCSV
+      outputCSV,
     );
     const params = {
       WorkGroup: 'default',
@@ -260,6 +285,7 @@ describe('tests for Athena', () => {
     for await (const result of resultIterator) {
       results.push(result);
     }
+
     expect(results).toMatchInlineSnapshot(`
       [
         {

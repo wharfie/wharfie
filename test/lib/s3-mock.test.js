@@ -1,18 +1,31 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 let S3;
+
 describe('tests for S3 Mock', () => {
   beforeEach(() => {
     process.env.AWS_MOCKS = true;
     jest.requireMock('@aws-sdk/client-s3');
     S3 = require('../../lambdas/lib/s3');
   });
+
   afterAll(() => {
     process.env.AWS_MOCKS = false;
   });
+
   it('putObject mock test', async () => {
     expect.assertions(1);
+
     const s3foo = new S3({ region: 'us-east-1' });
     const params = {
       Bucket: 'test_bucket',
@@ -22,11 +35,13 @@ describe('tests for S3 Mock', () => {
     await s3foo.putObject(params);
     const s3bar = new S3({ region: 'us-east-1' });
     const result = await s3bar.getObject(params);
+
     expect(result).toMatchInlineSnapshot(`"{"foo":"bar"}"`);
   });
 
   it('copyObjectsWithMultiPartFallback', async () => {
     expect.assertions(1);
+
     const s3 = new S3({ region: 'us-east-1' });
     s3.s3.__setMockState({
       's3://bucket/prefix_a/files': 'abc',
@@ -45,6 +60,7 @@ describe('tests for S3 Mock', () => {
         Key: 'prefix_c/files',
       },
     ]);
+
     expect(s3.s3.__getMockState()).toMatchInlineSnapshot(`
       {
         "bucket": {
@@ -68,6 +84,7 @@ describe('tests for S3 Mock', () => {
 
   it('findPartitions mock test', async () => {
     expect.assertions(1);
+
     const s3 = new S3({ region: 'us-east-1' });
     s3.s3.__setMockState({
       's3://bucket/prefix/dt=2021-01-20/hr=10/asdfasd.json': '',
@@ -121,6 +138,7 @@ describe('tests for S3 Mock', () => {
 
   it('expireObjects mock test', async () => {
     expect.assertions(1);
+
     const s3 = new S3({ region: 'us-east-1' });
     s3.s3.__setMockState({
       's3://bucket/prefix/dt=2021-01-20/hr=10/asdfasd.json': '',
@@ -162,6 +180,7 @@ describe('tests for S3 Mock', () => {
 
   it('createAppendableOrAppendToObject mock test', async () => {
     expect.assertions(1);
+
     const s3foo = new S3({ region: 'us-east-1' });
     s3foo.s3.__setMockState({
       's3://test_bucket/fake': '',
@@ -172,15 +191,16 @@ describe('tests for S3 Mock', () => {
     };
     await s3foo.createAppendableOrAppendToObject(
       params,
-      `${JSON.stringify({ foo: 'bar' })}\n`
+      `${JSON.stringify({ foo: 'bar' })}\n`,
     );
     await s3foo.createAppendableOrAppendToObject(
       params,
-      `${JSON.stringify({ biz: 'baz' })}\n`
+      `${JSON.stringify({ biz: 'baz' })}\n`,
     );
     const s3bar = new S3({ region: 'us-east-1' });
 
     const result = await s3bar.getObject(params);
+
     expect(result).toMatchInlineSnapshot(`
       "[object Object]{"foo":"bar"}
       {"biz":"baz"}
@@ -190,6 +210,7 @@ describe('tests for S3 Mock', () => {
 
   it('createAppendableOrAppendToObject mock test existing object', async () => {
     expect.assertions(1);
+
     const s3foo = new S3({ region: 'us-east-1' });
     s3foo.s3.__setMockState({
       's3://test_bucket/fake': '',
@@ -205,10 +226,11 @@ describe('tests for S3 Mock', () => {
     });
     await s3foo.createAppendableOrAppendToObject(
       params,
-      JSON.stringify({ biz: 'baz' })
+      JSON.stringify({ biz: 'baz' }),
     );
     const s3bar = new S3({ region: 'us-east-1' });
     const result = await s3bar.getObject(params);
+
     expect(result).toMatchInlineSnapshot(`"{"foo":"bar"}{"biz":"baz"}"`);
   });
 });

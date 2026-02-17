@@ -1,6 +1,4 @@
-'use strict';
-
-const EventEmitter = require('events');
+import EventEmitter from 'events';
 
 class ReconcilableEmitter extends EventEmitter {}
 
@@ -36,9 +34,9 @@ const Events = {
 
 /**
  * @typedef ReconcilableOptions
- * @property {string} name -
- * @property {StatusEnum} [status] -
- * @property {Reconcilable[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {StatusEnum} [status] - status.
+ * @property {Reconcilable[]} [dependsOn] - dependsOn.
  */
 
 class Reconcilable {
@@ -93,7 +91,7 @@ class Reconcilable {
   }
 
   /**
-   * @param {StatusEnum} status -
+   * @param {StatusEnum} status - status.
    */
   setStatus(status) {
     this.status = status;
@@ -106,10 +104,10 @@ class Reconcilable {
 
   /**
    * @typedef ReconcilableEvent
-   * @property {string} name -
-   * @property {string} constructor -
-   * @property {import('./reconcilable').Status} status -
-   * @returns {ReconcilableEvent} -
+   * @property {string} name - name.
+   * @property {string} constructor - constructor.
+   * @property {import('./reconcilable.js').default.Status} status - status.
+   * @returns {ReconcilableEvent} - Result.
    */
   asEvent() {
     return {
@@ -147,7 +145,7 @@ class Reconcilable {
         this.setStatus(Status.STABLE);
         break;
       } catch (error) {
-        // console.trace(error);
+        console.trace(error);
         Reconcilable.Emitter.emit(Events.WHARFIE_ERROR, {
           name: this.name,
           constructor: this.constructor.name,
@@ -162,10 +160,10 @@ class Reconcilable {
               Math.random() *
                 Math.min(
                   this._MAX_RETRY_TIMEOUT_SECONDS,
-                  1 * Math.pow(2, reconcile_attempts)
-                )
-            ) * 1000
-          )
+                  1 * Math.pow(2, reconcile_attempts),
+                ),
+            ) * 1000,
+          ),
         );
         reconcile_attempts++;
         last_error = error;
@@ -212,10 +210,10 @@ class Reconcilable {
               Math.random() *
                 Math.min(
                   this._MAX_RETRY_TIMEOUT_SECONDS,
-                  1 * Math.pow(2, destroy_attempts)
-                )
-            ) * 1000
-          )
+                  1 * Math.pow(2, destroy_attempts),
+                ),
+            ) * 1000,
+          ),
         );
         destroy_attempts++;
         last_error = error;
@@ -231,4 +229,4 @@ Reconcilable.Emitter = new ReconcilableEmitter();
 Reconcilable.Status = Status;
 Reconcilable.Events = Events;
 
-module.exports = Reconcilable;
+export default Reconcilable;

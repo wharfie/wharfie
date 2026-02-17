@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-large-snapshots */
-'use strict';
+import { describe, expect, it } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { validateProject } = require('../../cli/project/schema');
 
@@ -11,6 +13,9 @@ describe('validate project', () => {
       name: 'project_fixture',
       path: '/Users/Dev/Documents/workspace/wharfie/wharfie/test/fixtures/project_fixture',
       environments: [{ name: '__wharfie_default_environment__' }],
+      definitions: [],
+      taps: [],
+      sinks: [],
       models: [
         {
           sql: 'WITH unnested_table AS (\n  SELECT country, brand_element.value AS brands\n  FROM ${db}.amazon_berkely_objects,\n  UNNEST(brand) AS t(brand_element)\n)\nSELECT country, brands, COUNT(*) AS count\nFROM unnested_table\nGROUP BY country, brands\nORDER BY count DESC\n',
@@ -165,6 +170,7 @@ describe('validate project', () => {
 
     expect(validatedProject).toMatchInlineSnapshot(`
       {
+        "definitions": [],
         "environments": [
           {
             "name": "__wharfie_default_environment__",
@@ -231,6 +237,7 @@ describe('validate project', () => {
         ],
         "name": "project_fixture",
         "path": "/Users/Dev/Documents/workspace/wharfie/wharfie/test/fixtures/project_fixture",
+        "sinks": [],
         "sources": [
           {
             "columns": [
@@ -403,6 +410,7 @@ describe('validate project', () => {
             },
           },
         ],
+        "taps": [],
       }
     `);
   }, 10000);

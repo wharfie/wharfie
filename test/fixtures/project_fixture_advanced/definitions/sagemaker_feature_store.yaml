@@ -1,0 +1,23 @@
+name: sagemaker_feature_store
+description: sink to store 
+definition_type: sink
+runtime:
+  language: node
+  version: 22
+  architecture: arm64
+timeout: 900
+memory: 1024
+entrypoint: ./sagemaker_feature_store/index.handler
+environment_variables:
+  NODE_OPTIONS: '--enable-source-maps'
+  AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+configuration_definition:
+  feature_group_name: string
+  target_stores:
+    type: array
+    items: string
+  tlt_duration:
+    type: object
+    properties:
+      unit: string
+      value: number

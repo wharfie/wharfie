@@ -1,8 +1,19 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 let FirehoseLogTransport;
 let firehoseLogTransport;
+
 describe('mock tests for firehose log transport', () => {
   beforeAll(() => {
     process.env.AWS_MOCKS = true;
@@ -13,16 +24,19 @@ describe('mock tests for firehose log transport', () => {
       logDeliveryStreamName: 'test-stream',
     });
   });
+
   afterEach(async () => {
     await firehoseLogTransport.flush();
     firehoseLogTransport.firehose.__setMockState();
   });
+
   afterAll(() => {
     process.env.AWS_MOCKS = false;
   });
 
   it('log mock test basic', async () => {
     expect.assertions(3);
+
     await firehoseLogTransport.log('test1 ');
     await firehoseLogTransport.log('test2 ');
     await firehoseLogTransport.log('test3 ');
@@ -31,59 +45,64 @@ describe('mock tests for firehose log transport', () => {
     await firehoseLogTransport.log('test5 ');
     await firehoseLogTransport.log('test6 ');
     await firehoseLogTransport.close();
+
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toHaveLength(2);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'].records[0].Data.toString()
+        ['test-stream'].records[0].Data.toString(),
     ).toMatchInlineSnapshot(`"test1 test2 test3 test4 "`);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'].records[1].Data.toString()
+        ['test-stream'].records[1].Data.toString(),
     ).toMatchInlineSnapshot(`"test5 test6 "`);
   });
 
   it('log mock test binpacking', async () => {
     expect.assertions(2);
+
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE + 2).join('a')
+      new Array(FirehoseLogTransport._MAX_BIN_SIZE + 2).join('a'),
     );
     await firehoseLogTransport.log('test2 ');
     await firehoseLogTransport.log('test3 ');
     await firehoseLogTransport.log('test4 ');
     await firehoseLogTransport.close();
+
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toHaveLength(2);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'].records[1].Data.toString()
+        ['test-stream'].records[1].Data.toString(),
     ).toMatchInlineSnapshot(`"test2 test3 test4 "`);
   });
 
   it('log mock test autoFlush bytesize', async () => {
     expect.assertions(1);
+
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('a')
+      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('a'),
     );
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('b')
+      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('b'),
     );
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('c')
+      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('c'),
     );
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('d')
+      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('d'),
     );
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('e')
+      new Array(FirehoseLogTransport._MAX_BIN_SIZE).join('e'),
     );
+
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toHaveLength(4);
   });
 
@@ -93,13 +112,15 @@ describe('mock tests for firehose log transport', () => {
     for (let i = 0; i < FirehoseLogTransport._MAX_BINS; i++) {
       await firehoseLogTransport.log('hi');
     }
+
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toHaveLength(1);
   });
 
   it('shared output', async () => {
     expect.assertions(1);
+
     const firehoseLogTransportFoo = new FirehoseLogTransport({
       flushInterval: -1,
       logDeliveryStreamName: 'test-stream',
@@ -113,62 +134,68 @@ describe('mock tests for firehose log transport', () => {
     await firehoseLogTransport.flush();
 
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toStrictEqual(
-      firehoseLogTransportFoo.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransportFoo.firehose.__getMockState()['test-stream'].records,
     );
   });
 
   it('log truncation', async () => {
     expect.assertions(2);
+
     await firehoseLogTransport.log(
-      new Array(FirehoseLogTransport._MAX_BIN_SIZE + 1).join('a')
+      new Array(FirehoseLogTransport._MAX_BIN_SIZE + 1).join('a'),
     );
     await firehoseLogTransport.close();
+
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toHaveLength(1);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
         ['test-stream'].records[0].Data.toString()
-        .slice(0, 30)
+        .slice(0, 30),
     ).toMatchInlineSnapshot(`"TRUNCATEDaaaaaaaaaaaaaaaaaaaaa"`);
   });
 
   it('close after flush', async () => {
     expect.assertions(2);
+
     await firehoseLogTransport.log('test1 ');
     await firehoseLogTransport.log('test2 ');
     await firehoseLogTransport.log('test3 ');
     await firehoseLogTransport.log('test4 ');
     await firehoseLogTransport.flush();
     await firehoseLogTransport.close();
+
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toHaveLength(1);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'].records[0].Data.toString()
+        ['test-stream'].records[0].Data.toString(),
     ).toMatchInlineSnapshot(`"test1 test2 test3 test4 "`);
   });
 
   it('flush after close', async () => {
     expect.assertions(2);
+
     await firehoseLogTransport.log('test1 ');
     await firehoseLogTransport.log('test2 ');
     await firehoseLogTransport.log('test3 ');
     await firehoseLogTransport.log('test4 ');
     await firehoseLogTransport.close();
     await firehoseLogTransport.flush();
+
     expect(
-      firehoseLogTransport.firehose.__getMockState()['test-stream'].records
+      firehoseLogTransport.firehose.__getMockState()['test-stream'].records,
     ).toHaveLength(1);
     expect(
       firehoseLogTransport.firehose
         .__getMockState()
-        ['test-stream'].records[0].Data.toString()
+        ['test-stream'].records[0].Data.toString(),
     ).toMatchInlineSnapshot(`"test1 test2 test3 test4 "`);
   });
 });

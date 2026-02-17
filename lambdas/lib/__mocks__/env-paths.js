@@ -1,4 +1,5 @@
-// eslint-disable-next-line no-undef
+// eslint-disable-next-line n/no-unpublished-import
+import { jest } from '@jest/globals';
 const envPaths = jest.fn(() => ({
   data: 'mock',
   config: 'mock',
@@ -7,4 +8,4 @@ const envPaths = jest.fn(() => ({
   temp: 'mock',
 }));
 
-module.exports = envPaths;
+export default envPaths;

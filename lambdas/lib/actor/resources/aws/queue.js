@@ -1,30 +1,29 @@
-'use strict';
-const SQS = require('../../../sqs');
-const BaseResource = require('../base-resource');
-const { QueueDoesNotExist } = require('@aws-sdk/client-sqs');
+import SQS from '../../../aws/sqs.js';
+import BaseResource from '../base-resource.js';
+import { QueueDoesNotExist } from '@aws-sdk/client-sqs';
 
 /**
  * @typedef QueueProperties
- * @property {string} [visibilityTimeout] -
- * @property {string} [messageRetentionPeriod] -
- * @property {string} [delaySeconds] -
- * @property {string} [receiveMessageWaitTimeSeconds] -
- * @property {any | function(): Promise<any>} [policy] -
- * @property {Record<string, string>} [tags] -
+ * @property {string} [visibilityTimeout] - visibilityTimeout.
+ * @property {string} [messageRetentionPeriod] - messageRetentionPeriod.
+ * @property {string} [delaySeconds] - delaySeconds.
+ * @property {string} [receiveMessageWaitTimeSeconds] - receiveMessageWaitTimeSeconds.
+ * @property {any | function(): Promise<any>} [policy] - policy.
+ * @property {Record<string, string>} [tags] - tags.
  */
 
 /**
  * @typedef QueueOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {QueueProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {QueueProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class Queue extends BaseResource {
   /**
-   * @param {QueueOptions} options -
+   * @param {QueueOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     const propertiesWithDefaults = Object.assign(
@@ -34,7 +33,7 @@ class Queue extends BaseResource {
         delaySeconds: `0`,
         receiveMessageWaitTimeSeconds: `0`,
       },
-      properties
+      properties,
     );
     super({
       name,
@@ -53,10 +52,10 @@ class Queue extends BaseResource {
     const currentTags = Tags || {};
     const desiredTags = this.get('tags') || {};
     const tagsToAdd = Object.entries(desiredTags).filter(
-      ([key, value]) => currentTags[key] !== value
+      ([key, value]) => currentTags[key] !== value,
     );
     const tagsToRemove = Object.keys(currentTags).filter(
-      (key) => !(key in desiredTags)
+      (key) => !(key in desiredTags),
     );
     if (tagsToAdd.length > 0) {
       await this.sqs.tagQueue({
@@ -99,7 +98,7 @@ class Queue extends BaseResource {
             MessageRetentionPeriod: this.get('messageRetentionPeriod'),
             DelaySeconds: this.get('delaySeconds'),
             ReceiveMessageWaitTimeSeconds: this.get(
-              'receiveMessageWaitTimeSeconds'
+              'receiveMessageWaitTimeSeconds',
             ),
             ...(this.has('policy')
               ? { Policy: JSON.stringify(this.get('policy')) }
@@ -116,7 +115,7 @@ class Queue extends BaseResource {
             MessageRetentionPeriod: this.get('messageRetentionPeriod'),
             DelaySeconds: this.get('delaySeconds'),
             ReceiveMessageWaitTimeSeconds: this.get(
-              'receiveMessageWaitTimeSeconds'
+              'receiveMessageWaitTimeSeconds',
             ),
           },
           tags: this.get('tags') || {},
@@ -155,4 +154,4 @@ class Queue extends BaseResource {
   }
 }
 
-module.exports = Queue;
+export default Queue;

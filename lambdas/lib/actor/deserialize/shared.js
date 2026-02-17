@@ -1,28 +1,28 @@
 /**
- * @typedef {new (options: any) => import('../resources/base-resource')} ResourceConstructor
+ * @typedef {new (options: any) => import('../resources/base-resource.js').default} ResourceConstructor
  */
 
 /**
  * @typedef RawUnserializedResourceData
- * @property {string} name -
- * @property {string} class -
- * @property {string} dependsOn -
- * @property {Object<string, string>} resources -
- * @property {Object<string, any>} properties -
+ * @property {string} name - name.
+ * @property {string} class - class.
+ * @property {string} dependsOn - dependsOn.
+ * @property {Object<string, string>} resources - resources.
+ * @property {Object<string, any>} properties - properties.
  */
 
 /**
- * @param {import('../typedefs').SerializedResource} serialized -
- * @param {Object<string, import('../typedefs').SerializedResource>} serializedResourceMap -
- * @param {Object<string, import('../resources/base-resource')>} resourceMap -
- * @param {Object<string, ResourceConstructor>} classMap -
- * @returns {import('../resources/base-resource')} -
+ * @param {import('../typedefs.js').SerializedResource} serialized - serialized.
+ * @param {Object<string, import('../typedefs.js').SerializedResource>} serializedResourceMap - serializedResourceMap.
+ * @param {Object<string, import('../resources/base-resource.js').default>} resourceMap - resourceMap.
+ * @param {Object<string, ResourceConstructor>} classMap - classMap.
+ * @returns {import('../resources/base-resource.js').default} - Result.
  */
 function _deserialize(
   serialized,
   serializedResourceMap,
   resourceMap,
-  classMap
+  classMap,
 ) {
   if (
     !serialized ||
@@ -35,7 +35,7 @@ function _deserialize(
   if (!ClassDefinition || typeof ClassDefinition !== 'function') {
     throw new Error(`Unknown resource type: ${serialized.resourceType}`);
   }
-  /** @type {Object<string, import('../resources/base-resource')>} */
+  /** @type {Object<string, import('../resources/base-resource.js').default>} */
   const deserializedResources = {};
 
   (serialized?.resources || []).forEach((resourceName) => {
@@ -44,7 +44,7 @@ function _deserialize(
       serializedResourceMap[resourceName],
       serializedResourceMap,
       resourceMap,
-      classMap
+      classMap,
     );
     deserializedResources[deserdResource.name] = deserdResource;
     resourceMap[deserdResource.name] = deserdResource;
@@ -62,10 +62,10 @@ function _deserialize(
 }
 
 /**
- * @param {import('../typedefs').SerializedResource} serialized -
- * @param {Object<string, import('../typedefs').SerializedResource>} serializedResourceMap -
- * @param {Object<string, ResourceConstructor>} classMap -
- * @returns {import('../resources/base-resource')} -
+ * @param {import('../typedefs.js').SerializedResource} serialized - serialized.
+ * @param {Object<string, import('../typedefs.js').SerializedResource>} serializedResourceMap - serializedResourceMap.
+ * @param {Object<string, ResourceConstructor>} classMap - classMap.
+ * @returns {import('../resources/base-resource.js').default} - Result.
  */
 function deserialize(serialized, serializedResourceMap, classMap) {
   if (
@@ -75,13 +75,13 @@ function deserialize(serialized, serializedResourceMap, classMap) {
   ) {
     throw new Error('Invalid serialized resource');
   }
-  /** @type {Object<string, import('../resources/base-resource')>} */
+  /** @type {Object<string, import('../resources/base-resource.js').default>} */
   const resourceMap = {};
   const deserializedResource = _deserialize(
     serialized,
     serializedResourceMap,
     resourceMap,
-    classMap
+    classMap,
   );
   setDependsOn(deserializedResource, resourceMap);
   return deserializedResource;
@@ -89,8 +89,8 @@ function deserialize(serialized, serializedResourceMap, classMap) {
 
 /**
  *
- * @param {import('../resources/base-resource') | import('../resources/base-resource-group')} resource -
- * @param {Object<string, import('../resources/base-resource')>} resourceMap -
+ * @param {import('../resources/base-resource.js').default | import('../resources/base-resource-group.js').default} resource - resource.
+ * @param {Object<string, import('../resources/base-resource.js').default>} resourceMap - resourceMap.
  */
 function setDependsOn(resource, resourceMap) {
   // while deserializing, we don't have access to the resourceMap
@@ -112,6 +112,4 @@ function setDependsOn(resource, resourceMap) {
   }
 }
 
-module.exports = {
-  deserialize,
-};
+export { deserialize };

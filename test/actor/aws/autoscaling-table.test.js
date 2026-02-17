@@ -1,9 +1,11 @@
 /* eslint-disable jest/no-large-snapshots */
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
-jest.mock('../../../lambdas/lib/dynamo/state');
+jest.mock('../../../lambdas/lib/db/state/store');
 jest.mock('../../../lambdas/lib/id');
 const {
   AutoscalingTable,
@@ -16,7 +18,8 @@ const { getMockDeploymentProperties } = require('../util');
 describe('autoscaling table IaC', () => {
   it('basic', async () => {
     expect.assertions(8);
-    const state_db = require('../../../lambdas/lib/dynamo/state');
+
+    const state_db = require('../../../lambdas/lib/db/state/store');
     const events = [];
     Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
       events.push(`${event.status} - ${event.constructor}:${event.name}`);
@@ -53,6 +56,7 @@ describe('autoscaling table IaC', () => {
     events.push('RECONCILING');
     await autoscalingTable.reconcile();
     const reconciled_state = state_db.__getMockState();
+
     expect(reconciled_state).toMatchInlineSnapshot(`
       {
         "test-deployment": {
@@ -382,6 +386,7 @@ describe('autoscaling table IaC', () => {
     `);
 
     const serialized = autoscalingTable.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -444,12 +449,14 @@ describe('autoscaling table IaC', () => {
         "status": "STABLE",
       }
     `);
+
     events.push('LOADING');
     const deserialized = await load({
       deploymentName: 'test-deployment',
       resourceKey: 'test-table',
     });
     await deserialized.reconcile();
+
     expect(state_db.__getMockState()).toStrictEqual(reconciled_state);
     expect(deserialized.resolveProperties()).toMatchInlineSnapshot(`
       {
@@ -502,6 +509,7 @@ describe('autoscaling table IaC', () => {
 
     events.push('DESTROYING');
     await deserialized.destroy();
+
     expect(state_db.__getMockState()).toMatchInlineSnapshot(`
       {
         "test-deployment": {},

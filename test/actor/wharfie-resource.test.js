@@ -1,13 +1,15 @@
 /* eslint-disable jest/no-large-snapshots */
 /* eslint-disable jest/no-hooks */
-'use strict';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
 
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
 jest.mock('../../lambdas/lib/env-paths');
-jest.mock('../../lambdas/lib/dynamo/state');
+jest.mock('../../lambdas/lib/db/state/store');
 jest.mock('../../lambdas/lib/dynamo/operations');
 jest.mock('../../lambdas/lib/dynamo/dependency');
 jest.mock('../../lambdas/lib/dynamo/location');
@@ -15,7 +17,7 @@ const WharfieResource = require('../../lambdas/lib/actor/resources/wharfie-resou
 const Reconcilable = require('../../lambdas/lib/actor/resources/reconcilable');
 const { load } = require('../../lambdas/lib/actor/deserialize/full');
 const { resetAWSMocks } = require('../util');
-const state_db = require('../../lambdas/lib/dynamo/state');
+const state_db = require('../../lambdas/lib/db/state/store');
 
 const { S3 } = require('@aws-sdk/client-s3');
 const { SQS } = require('@aws-sdk/client-sqs');
@@ -31,8 +33,10 @@ describe('wharfie resource IaC', () => {
   afterEach(() => {
     resetAWSMocks();
   });
+
   it('basic', async () => {
     expect.assertions(7);
+
     // @ts-ignore
     s3.__setMockState({
       's3://amazon-berkeley-objects/empty.json': '',
@@ -128,6 +132,7 @@ describe('wharfie resource IaC', () => {
     });
     await wharfieResource.reconcile();
     const reconcile_state = state_db.__getMockState();
+
     expect(reconcile_state).toMatchInlineSnapshot(`
       {
         "test-deployment": {
@@ -626,6 +631,7 @@ describe('wharfie resource IaC', () => {
     `);
 
     expect(state_db.__getMockState()).toStrictEqual(reconcile_state);
+
     const deserialized = await load({
       deploymentName: 'test-deployment',
       resourceKey: 'test-resource',
@@ -634,13 +640,14 @@ describe('wharfie resource IaC', () => {
     expect(deserialized.status).toBe('STABLE');
     expect(state_db.__getMockState()).toStrictEqual(reconcile_state);
     expect(
-      sqs.__getMockState().queues[SCHEDULE_QUEUE_URL].queue[0].Body
+      sqs.__getMockState().queues[SCHEDULE_QUEUE_URL].queue[0].Body,
     ).toMatchInlineSnapshot(
-      `"{"resource_id":"test-wharfie-resource.amazon_berkely_objects","operation_type":"BACKFILL","type":"WHARFIE:OPERATION:SCHEDULE","version":"0.0.1","retries":0}"`
+      `"{"resource_id":"test-wharfie-resource.amazon_berkely_objects","operation_type":"BACKFILL","type":"WHARFIE:OPERATION:SCHEDULE","version":"0.0.1","retries":0}"`,
     );
     expect(sqs.__getMockState().queues[DAEMON_QUEUE_URL]).toBeUndefined();
 
     await deserialized.destroy();
+
     expect(deserialized.status).toBe('DESTROYED');
   }, 10000);
 });

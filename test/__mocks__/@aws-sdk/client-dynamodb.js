@@ -1,13 +1,13 @@
-'use strict';
-const AWS = jest.requireActual('@aws-sdk/client-dynamodb');
-const { mockClient } = require('aws-sdk-client-mock');
+import AWS from '@aws-sdk/client-dynamodb';
+import { mockClient } from 'aws-sdk-client-mock';
+import DynamoDBMock from './dynamodb.js';
 
 let DynamoDB, DynamoDBMock;
 if (process.env.AWS_MOCKS) {
-  DynamoDB = require('./dynamodb');
+  DynamoDB = DynamoDBMock;
 } else {
   DynamoDB = AWS.DynamoDB;
   DynamoDBMock = mockClient(AWS.DynamoDB);
 }
 
-module.exports = Object.assign({}, { ...AWS, DynamoDB, DynamoDBMock });
+export default { ...AWS, DynamoDB, DynamoDBMock };

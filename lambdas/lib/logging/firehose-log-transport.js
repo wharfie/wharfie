@@ -1,24 +1,22 @@
-'use strict';
+import { Writable } from 'stream';
 
-const stream = require('stream');
-
-const AWS = require('@aws-sdk/client-firehose');
-const { fromNodeProviderChain } = require('@aws-sdk/credential-providers');
+import { Firehose, PutRecordBatchCommand } from '@aws-sdk/client-firehose';
+import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
 /**
  * @typedef FirehoseLogTransportOptions
- * @property {string} [logDeliveryStreamName] -
- * @property {number} [flushInterval] -
+ * @property {string} [logDeliveryStreamName] - logDeliveryStreamName.
+ * @property {number} [flushInterval] - flushInterval.
  */
 
-class FirehoseLogTransport extends stream.Writable {
+class FirehoseLogTransport extends Writable {
   /**
    * @param {FirehoseLogTransportOptions} [options] -a
    */
   constructor(options = {}) {
     super();
     const credentials = fromNodeProviderChain();
-    this.firehose = new AWS.Firehose({
+    this.firehose = new Firehose({
       credentials,
       region: process.env.AWS_REGION,
       maxAttempts: 20,
@@ -42,23 +40,23 @@ class FirehoseLogTransport extends stream.Writable {
     if (this._FLUSH_INTERVAL > 0) {
       this._FLUSH_INTERVAL_ID = setInterval(
         this.flush.bind(this),
-        this._FLUSH_INTERVAL
+        this._FLUSH_INTERVAL,
       );
     }
   }
 
   /**
-   * @param {import("@aws-sdk/client-firehose").PutRecordBatchCommandInput} params -
-   * @returns {Promise<import("@aws-sdk/client-firehose").PutRecordBatchCommandOutput>} -
+   * @param {import("@aws-sdk/client-firehose").PutRecordBatchCommandInput} params - params.
+   * @returns {Promise<import("@aws-sdk/client-firehose").PutRecordBatchCommandOutput>} - Result.
    */
   async putRecordsBatch(params) {
-    const command = new AWS.PutRecordBatchCommand(params);
+    const command = new PutRecordBatchCommand(params);
     return await this.firehose.send(command);
   }
 
   /**
-   * @param {string} record -
-   * @returns {Promise<void>} -
+   * @param {string} record - record.
+   * @returns {Promise<void>} - Result.
    */
   async log(record) {
     if (record.length >= FirehoseLogTransport._MAX_BIN_SIZE) {
@@ -66,7 +64,7 @@ class FirehoseLogTransport extends stream.Writable {
         'TRUNCATED' +
         record.slice(
           0,
-          FirehoseLogTransport._MAX_BIN_SIZE - 'TRUNCATED'.length
+          FirehoseLogTransport._MAX_BIN_SIZE - 'TRUNCATED'.length,
         );
     }
     if (
@@ -83,7 +81,7 @@ class FirehoseLogTransport extends stream.Writable {
 
   /**
    * Naively bin packs records into bins minimizing unused _BIN_COST_INCREMENT
-   * @returns {string[]} -
+   * @returns {string[]} - Result.
    */
   naiveBinPackBufferRecords() {
     const bins = [];
@@ -111,7 +109,7 @@ class FirehoseLogTransport extends stream.Writable {
           r.remainder + current_remainder <=
             FirehoseLogTransport._BIN_COST_INCREMENT &&
           r.record_size + bin.length <= FirehoseLogTransport._MAX_BIN_SIZE &&
-          !packedRecords.has(r.bin_record_index)
+          !packedRecords.has(r.bin_record_index),
       );
       while (valid_bin_fill_records.length >= 0) {
         const remainder_fill = valid_bin_fill_records.shift();
@@ -125,7 +123,7 @@ class FirehoseLogTransport extends stream.Writable {
             r.remainder + current_remainder <=
               FirehoseLogTransport._BIN_COST_INCREMENT &&
             r.record_size + bin.length <= FirehoseLogTransport._MAX_BIN_SIZE &&
-            !packedRecords.has(r.bin_record_index)
+            !packedRecords.has(r.bin_record_index),
         );
       }
       bins.push(bin);
@@ -143,22 +141,22 @@ class FirehoseLogTransport extends stream.Writable {
             Records: this.naiveBinPackBufferRecords().map((record) => ({
               Data: Buffer.from(record),
             })),
-          }
+          },
         );
         if (FailedPutCount && FailedPutCount > 0) {
           reject(
             new Error(
               `Failed to send ${FailedPutCount} records to Firehose ${JSON.stringify(
-                RequestResponses
-              )}`
-            )
+                RequestResponses,
+              )}`,
+            ),
           );
         }
         this.buffer_records_size = 0;
         this.buffer_record_size_map = {};
         this.buffer_records = [];
         resolve(null);
-      })
+      }),
     );
   }
 
@@ -170,7 +168,7 @@ class FirehoseLogTransport extends stream.Writable {
   }
 
   /**
-   * @param {(error: Error | null | undefined) => void} callback -
+   * @param {(error: Error | null | undefined) => void} callback - callback.
    */
   async _final(callback) {
     try {
@@ -186,9 +184,9 @@ class FirehoseLogTransport extends stream.Writable {
   }
 
   /**
-   * @param {any} chunk -
-   * @param {string} _encoding -
-   * @param {(error: Error | null | undefined) => void} callback -
+   * @param {any} chunk - chunk.
+   * @param {string} _encoding - _encoding.
+   * @param {(error: Error | null | undefined) => void} callback - callback.
    */
   async _write(chunk, _encoding, callback) {
     try {
@@ -211,4 +209,4 @@ FirehoseLogTransport._MAX_BINS = 500;
 FirehoseLogTransport._MAX_BIN_SIZE = 1000 * 1024;
 FirehoseLogTransport._BIN_COST_INCREMENT = 5 * 1024;
 
-module.exports = FirehoseLogTransport;
+export default FirehoseLogTransport;

@@ -149,7 +149,7 @@ function buildIndex() {
     const file = path.join(
       __dirname,
       '../src/assets/markdown/',
-      `${docEntry.path}.md`
+      `${docEntry.path}.md`,
     );
     const content = fs.readFileSync(file, 'utf8');
 

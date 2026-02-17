@@ -1,6 +1,8 @@
 /* eslint-disable jest/no-hooks */
 /* eslint-disable jest/no-large-snapshots */
-'use strict';
+import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = true;
 jest.mock('crypto');
@@ -20,11 +22,14 @@ describe('lambda function IaC', () => {
       digest: mockDigest,
     });
   });
+
   afterAll(() => {
     jest.restoreAllMocks();
   });
+
   it('basic', async () => {
     expect.assertions(4);
+
     const lambda = new Lambda({});
     const lambdaFunction = new LambdaFunction({
       name: 'test-function',
@@ -61,6 +66,7 @@ describe('lambda function IaC', () => {
     await lambdaFunction.reconcile();
 
     const serialized = lambdaFunction.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -168,12 +174,14 @@ describe('lambda function IaC', () => {
         },
       }
     `);
+
     await lambdaFunction.destroy();
+
     expect(lambdaFunction.status).toBe('DESTROYED');
     await expect(
-      lambda.getFunction({ FunctionName: lambdaFunction.name })
+      lambda.getFunction({ FunctionName: lambdaFunction.name }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"Function not found: test-function"`
+      `"Function not found: test-function"`,
     );
   });
 });

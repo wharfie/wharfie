@@ -1,35 +1,34 @@
-'use strict';
-const CloudWatchEvents = require('../../../cloudwatch-events');
-const BaseResource = require('../base-resource');
-const {
+import CloudWatchEvents from '../../../aws/cloudwatch-events.js';
+import BaseResource from '../base-resource.js';
+import {
   ResourceNotFoundException,
   RuleState,
-} = require('@aws-sdk/client-cloudwatch-events');
-const { NoSuchBucket } = require('@aws-sdk/client-s3');
+} from '@aws-sdk/client-cloudwatch-events';
+import { NoSuchBucket } from '@aws-sdk/client-s3';
 
 /**
  * @typedef EventsRuleProperties
- * @property {string} description -
- * @property {string} [scheduleExpression] -
- * @property {string} [eventPattern] -
- * @property {string | function} [roleArn] -
- * @property {import('@aws-sdk/client-cloudwatch-events').RuleState} state -
- * @property {import('@aws-sdk/client-cloudwatch-events').Target[] | function(): import('@aws-sdk/client-cloudwatch-events').Target[]} targets -
- * @property {import('@aws-sdk/client-cloudwatch-events').Tag[]} [tags] -
+ * @property {string} description - description.
+ * @property {string} [scheduleExpression] - scheduleExpression.
+ * @property {string} [eventPattern] - eventPattern.
+ * @property {string | function} [roleArn] - roleArn.
+ * @property {import('@aws-sdk/client-cloudwatch-events').RuleState} state - state.
+ * @property {import('@aws-sdk/client-cloudwatch-events').Target[] | function(): import('@aws-sdk/client-cloudwatch-events').Target[]} targets - targets.
+ * @property {import('@aws-sdk/client-cloudwatch-events').Tag[]} [tags] - tags.
  */
 
 /**
  * @typedef EventsRuleOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {EventsRuleProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {EventsRuleProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class EventsRule extends BaseResource {
   /**
-   * @param {EventsRuleOptions} options -
+   * @param {EventsRuleOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     super({ name, parent, status, properties, dependsOn });
@@ -97,14 +96,14 @@ class EventsRule extends BaseResource {
     const desiredTags = this.get('tags') || [];
     const tagsToAdd = desiredTags.filter(
       (/** @type {import('@aws-sdk/client-cloudwatch-events').Tag} */ tag) =>
-        !Tags?.some((t) => t.Key === tag.Key)
+        !Tags?.some((t) => t.Key === tag.Key),
     );
     const tagsToRemove = (Tags || []).filter(
       (tag) =>
         !desiredTags.some(
           (/** @type {import('@aws-sdk/client-cloudwatch-events').Tag} */ t) =>
-            t.Key === tag.Key
-        )
+            t.Key === tag.Key,
+        ),
     );
 
     if (tagsToRemove?.length > 0)
@@ -192,7 +191,7 @@ class EventsRule extends BaseResource {
   }
 
   /**
-   * @param {string} status -
+   * @param {string} status - status.
    */
   async waitForEventsRuleStatus(status) {
     let currentStatus = '';
@@ -208,9 +207,9 @@ class EventsRule extends BaseResource {
           resolve,
           Math.floor(
             Math.random() *
-              Math.min(MAX_RETRY_TIMEOUT_SECONDS, 1 * Math.pow(2, attempts))
-          ) * 1000
-        )
+              Math.min(MAX_RETRY_TIMEOUT_SECONDS, 1 * Math.pow(2, attempts)),
+          ) * 1000,
+        ),
       );
       attempts++;
     } while (currentStatus !== status);
@@ -220,4 +219,4 @@ class EventsRule extends BaseResource {
 EventsRule.ENABLED = RuleState.ENABLED;
 EventsRule.DISABLED = RuleState.DISABLED;
 
-module.exports = EventsRule;
+export default EventsRule;

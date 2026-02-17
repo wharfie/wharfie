@@ -1,5 +1,15 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const AWSSQS = require('@aws-sdk/client-sqs');
 jest.mock('../../lambdas/lib/dynamo/scheduler');
@@ -91,8 +101,8 @@ describe('tests for s3 event scheduling', () => {
     expect(
       JSON.parse(
         AWSSQS.SQSMock.commandCalls(AWSSQS.SendMessageCommand)[0].args[0].input
-          .MessageBody
-      )
+          .MessageBody,
+      ),
     ).toStrictEqual({
       resource_id: '1',
       sort_key: 'unpartitioned:1466424600000',

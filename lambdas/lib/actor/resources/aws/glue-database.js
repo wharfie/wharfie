@@ -1,26 +1,25 @@
-'use strict';
-const Glue = require('../../../glue');
-const BaseResource = require('../base-resource');
-const { EntityNotFoundException } = require('@aws-sdk/client-glue');
+import Glue from '../../../aws/glue.js';
+import BaseResource from '../base-resource.js';
+import { EntityNotFoundException } from '@aws-sdk/client-glue';
 
 /**
  * @typedef GlueDatabaseProperties
- * @property {string} [databaseName] -
- * @property {Record<string, string>} [tags] -
+ * @property {string} [databaseName] - databaseName.
+ * @property {Record<string, string>} [tags] - tags.
  */
 
 /**
  * @typedef GlueDatabaseOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {GlueDatabaseProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {GlueDatabaseProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class GlueDatabase extends BaseResource {
   /**
-   * @param {GlueDatabaseOptions} options -
+   * @param {GlueDatabaseOptions} options - options.
    */
   constructor({ name, parent, status, dependsOn = [], properties }) {
     super({ name, parent, status, dependsOn, properties });
@@ -35,10 +34,10 @@ class GlueDatabase extends BaseResource {
     const desiredTags = this.get('tags') || {};
 
     const tagsToAdd = Object.entries(desiredTags).filter(
-      ([key, value]) => currentTags[key] !== value
+      ([key, value]) => currentTags[key] !== value,
     );
     const tagsToRemove = Object.keys(currentTags).filter(
-      (key) => !desiredTags[key]
+      (key) => !desiredTags[key],
     );
 
     if (tagsToAdd.length > 0) {
@@ -64,7 +63,7 @@ class GlueDatabase extends BaseResource {
         'arn',
         `arn:aws:glue:${this.get('deployment').region}:${
           this.get('deployment').accountId
-        }:database/${this.get('databaseName', this.name)}`
+        }:database/${this.get('databaseName', this.name)}`,
       );
     } catch (error) {
       if (error instanceof EntityNotFoundException) {
@@ -77,7 +76,7 @@ class GlueDatabase extends BaseResource {
           'arn',
           `arn:aws:glue:${this.get('deployment').region}:${
             this.get('deployment').accountId
-          }:database/${this.get('databaseName', this.name)}`
+          }:database/${this.get('databaseName', this.name)}`,
         );
       } else {
         throw error;
@@ -99,4 +98,4 @@ class GlueDatabase extends BaseResource {
   }
 }
 
-module.exports = GlueDatabase;
+export default GlueDatabase;

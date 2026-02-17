@@ -1,9 +1,6 @@
-// eslint-disable-next-line no-undef
+// eslint-disable-next-line n/no-unpublished-import
+import { jest } from '@jest/globals';
 const createId = jest.fn(() => 'ckywjpmr70002zjvd0wyq5x48');
-// eslint-disable-next-line no-undef
 const createShortId = jest.fn(() => '111111');
 
-module.exports = {
-  createId,
-  createShortId,
-};
+export { createId, createShortId };

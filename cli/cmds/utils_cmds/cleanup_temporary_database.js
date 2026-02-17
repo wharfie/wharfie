@@ -1,4 +1,5 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const cliProgress = require('cli-progress');
@@ -7,7 +8,7 @@ const {
   displayFailure,
   displayInfo,
 } = require('../../output/basic');
-const Glue = require('../../../lambdas/lib/glue');
+const Glue = require('../../../lambdas/lib/glue').default;
 
 const cleanupTemporaryDB = async () => {
   const DatabaseName = `${process.env.WHARFIE_DEPLOYMENT_NAME}_temporary_store`;
@@ -22,7 +23,7 @@ const cleanupTemporaryDB = async () => {
   const tablesToRemove = TableList.filter(
     (table) =>
       table.CreateTime &&
-      table.CreateTime.getTime() < new Date().getTime() - 1000 * 60 * 60 * 24
+      table.CreateTime.getTime() < new Date().getTime() - 1000 * 60 * 60 * 24,
   );
 
   if (tablesToRemove.length === 0) {
@@ -34,7 +35,7 @@ const cleanupTemporaryDB = async () => {
   displayInfo('Deleting stale tables...');
   const progressBar = new cliProgress.Bar(
     {},
-    cliProgress.Presets.shades_classic
+    cliProgress.Presets.shades_classic,
   );
   progressBar.start(tablesToRemove.length, 0);
 
@@ -51,7 +52,7 @@ const cleanupTemporaryDB = async () => {
         } catch (err) {
           console.log(`Ignoring delete failure: ${err}`);
         }
-      })
+      }),
     );
     progressBar.update(deleteCount);
   }

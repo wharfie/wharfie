@@ -1,4 +1,5 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const cloudfront = require('./cloudfront');
 const cloudtrail = require('./cloudtrail');
 const csv = require('./csv');

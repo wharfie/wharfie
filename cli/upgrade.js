@@ -19,7 +19,7 @@ function getLatestRelease() {
       .get(options, (res) => {
         if (res.statusCode !== 200) {
           return reject(
-            new Error(`GitHub API responded with status ${res.statusCode}`)
+            new Error(`GitHub API responded with status ${res.statusCode}`),
           );
         }
 
@@ -59,7 +59,7 @@ async function checkForNewRelease() {
       displayWarning(`A new version of Wharfie is available: ${latestVersion}`);
       displayWarning(`You are currently using version: ${currentVersion}`);
       displayWarning(
-        `Please update to the latest version to get the latest features and bug fixes.`
+        `Please update to the latest version to get the latest features and bug fixes.`,
       );
     }
   } catch (error) {}

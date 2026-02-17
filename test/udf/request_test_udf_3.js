@@ -1,4 +1,5 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const handler = async (
   timestamp,
   date,
@@ -11,7 +12,7 @@ const handler = async (
   integer,
   varchar,
   varbinary,
-  boolean
+  boolean,
 ) => {
   return `timestamp: ${timestamp}, date: ${date}, tinyint: ${tinyint}, smallint: ${smallint}, real: ${real}, double: ${double}, decimal: ${decimal}, bigint: ${bigint}, integer: ${integer}, varchar: ${varchar}, varbinary: ${varbinary}, boolean: ${boolean}`;
 };

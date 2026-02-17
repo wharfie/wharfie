@@ -1,6 +1,5 @@
-'use strict';
-
-const AWS = jest.createMockFromModule('@aws-sdk/lib-dynamodb');
+import { jest } from '@jest/globals';
+import AWS from '@aws-sdk/lib-dynamodb';
 
 const DynamoDBDocumentMock = {
   query: jest.fn().mockImplementation(),
@@ -41,4 +40,4 @@ AWS.clearAllMocks = () => {
 
 AWS.DynamoDBDocument = ModuleMock;
 
-module.exports = AWS;
+export default AWS;

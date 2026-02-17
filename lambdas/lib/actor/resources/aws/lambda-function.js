@@ -1,38 +1,37 @@
-'use strict';
-const Lambda = require('../../../lambda');
-const BaseResource = require('../base-resource');
-const { ResourceNotFoundException } = require('@aws-sdk/client-lambda');
+import Lambda from '../../../aws/lambda.js';
+import BaseResource from '../base-resource.js';
+import { ResourceNotFoundException } from '@aws-sdk/client-lambda';
 /**
  * @typedef LambdaProperties
- * @property {import('@aws-sdk/client-lambda').Runtime} runtime -
- * @property {string | function(): string} role -
- * @property {string} handler -
- * @property {any | function} code -
- * @property {any} description -
- * @property {number} [memorySize] -
- * @property {number} [timeout] -
- * @property {boolean} [publish] -
- * @property {string} [packageType] -
- * @property {import('@aws-sdk/client-lambda').Architecture[]} [architectures] -
- * @property {any} [ephemeralStorage] -
- * @property {any | function} [environment] -
- * @property {any | function} [deadLetterConfig] -
- * @property {Record<string, string>} [tags] -
- * @property {string | function(): string} codeHash -
+ * @property {import('@aws-sdk/client-lambda').Runtime} runtime - runtime.
+ * @property {string | function(): string} role - role.
+ * @property {string} handler - handler.
+ * @property {any | function} code - code.
+ * @property {any} description - description.
+ * @property {number} [memorySize] - memorySize.
+ * @property {number} [timeout] - timeout.
+ * @property {boolean} [publish] - publish.
+ * @property {string} [packageType] - packageType.
+ * @property {import('@aws-sdk/client-lambda').Architecture[]} [architectures] - architectures.
+ * @property {any} [ephemeralStorage] - ephemeralStorage.
+ * @property {any | function} [environment] - environment.
+ * @property {any | function} [deadLetterConfig] - deadLetterConfig.
+ * @property {Record<string, string>} [tags] - tags.
+ * @property {string | function(): string} codeHash - codeHash.
  */
 
 /**
  * @typedef LambdaOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {LambdaProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {LambdaProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class LambdaFunction extends BaseResource {
   /**
-   * @param {LambdaOptions} options -
+   * @param {LambdaOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     const propertiesWithDefaults = Object.assign(
@@ -52,7 +51,7 @@ class LambdaFunction extends BaseResource {
           },
         },
       },
-      properties
+      properties,
     );
     super({
       name,
@@ -65,9 +64,9 @@ class LambdaFunction extends BaseResource {
   }
 
   /**
-   * @param {Object<any,string>} a -
-   * @param {Object<any,string>} b -
-   * @returns {boolean} -
+   * @param {Object<any,string>} a - a.
+   * @param {Object<any,string>} b - b.
+   * @returns {boolean} - Result.
    */
   _diffEnvironment(a, b) {
     const mapA = new Map(Object.entries(a));
@@ -90,20 +89,20 @@ class LambdaFunction extends BaseResource {
       {
         CodeHash: this.get('codeHash'),
       },
-      this.get('tags', {})
+      this.get('tags', {}),
     );
 
     const tagsToAdd = Object.entries(desiredTags).filter(
       ([key, value]) =>
         !Object.entries(currentTags).some(
-          ([tagKey, tagValue]) => tagKey === key && tagValue === value
-        )
+          ([tagKey, tagValue]) => tagKey === key && tagValue === value,
+        ),
     );
     const tagsToRemove = Object.entries(currentTags).filter(
       ([key, value]) =>
         !Object.entries(desiredTags).some(
-          ([tagKey, tagValue]) => tagKey === key && tagValue === value
-        )
+          ([tagKey, tagValue]) => tagKey === key && tagValue === value,
+        ),
     );
 
     if (tagsToAdd.length > 0) {
@@ -137,7 +136,7 @@ class LambdaFunction extends BaseResource {
           Configuration?.EphemeralStorage?.Size ||
         this._diffEnvironment(
           this.get('environment').Variables || {},
-          Configuration?.Environment?.Variables || {}
+          Configuration?.Environment?.Variables || {},
         ) ||
         this.get('deadLetterConfig').TargetArn !==
           Configuration?.DeadLetterConfig?.TargetArn
@@ -209,4 +208,4 @@ class LambdaFunction extends BaseResource {
   }
 }
 
-module.exports = LambdaFunction;
+export default LambdaFunction;

@@ -1,9 +1,11 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const { displayFailure } = require('../../output/basic');
-const Athena = require('../../../lambdas/lib/athena');
-const { getAllResources } = require('../../../lambdas/lib/dynamo/operations');
+const Athena = require('../../../lambdas/lib/athena').default;
+const { getAllResources } =
+  require('../../../lambdas/lib/dynamo/operations').default;
 
 const view = async () => {
   const athena = new Athena({});
@@ -22,8 +24,8 @@ const view = async () => {
       const viewSql = JSON.parse(
         Buffer.from(
           viewOriginalText.substring(16, viewOriginalText.length - 3),
-          'base64'
-        ).toString()
+          'base64',
+        ).toString(),
       ).originalSql;
 
       const { sources } = athena.extractSources(viewSql);
@@ -51,8 +53,8 @@ const view = async () => {
         resources: wharfieResources,
       },
       null,
-      2
-    )
+      2,
+    ),
   );
 };
 

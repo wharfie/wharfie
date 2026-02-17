@@ -1,4 +1,6 @@
-'use strict';
+import { jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { NoSuchEntityException } = jest.requireActual('@aws-sdk/client-iam');
 const { parse } = require('../../../lambdas/lib/arn');
@@ -8,7 +10,7 @@ class IAMMock {
     iamState = {
       roles: {},
       policies: {},
-    }
+    },
   ) {
     IAMMock.__state = iamState;
   }
@@ -105,8 +107,8 @@ class IAMMock {
     const policyRoles = Object.values(IAMMock.__state.roles).filter(
       (role) =>
         role.AttachedPolicies.find(
-          (policy) => policy.PolicyName === policyName
-        ) !== undefined
+          (policy) => policy.PolicyName === policyName,
+        ) !== undefined,
     );
 
     return {
@@ -254,7 +256,7 @@ class IAMMock {
       IAMMock.__state.roles[params.RoleName].AttachedPolicies.filter(
         (policyArn) => {
           return policyArn !== params.PolicyArn;
-        }
+        },
       );
   }
 
@@ -265,7 +267,7 @@ class IAMMock {
       });
     return {
       PolicyNames: IAMMock.__state.roles[params.RoleName].Policies.map(
-        (policy) => policy.PolicyName
+        (policy) => policy.PolicyName,
       ),
     };
   }

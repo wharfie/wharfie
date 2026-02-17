@@ -1,42 +1,24 @@
-const AWSResources = require('../resources/aws');
-const RecordResources = require('../resources/records');
-const WharfieActors = require('../wharfie-actors');
-const WharfieDeploymentResources = require('../resources/wharfie-deployment-resources');
-const WharfieProject = require('../resources/wharfie-project');
-const WharfieResource = require('../resources/wharfie-resource');
-const WharfieDeployment = require('../wharfie-deployment');
-const WharfieActor = require('../wharfie-actor');
-const { getResources } = require('../../dynamo/state');
-const { deserialize } = require('./shared');
+import AWSResources from '../resources/aws/index.js';
+import RecordResources from '../resources/records/index.js';
+import { getResources } from '../../db/state/store.js';
+import { deserialize } from './shared.js';
 
 /**
- * @typedef {new (options: any) => import('../resources/base-resource')} ResourceConstructor
+ * @typedef {new (options: any) => import('../resources/base-resource.js').default} ResourceConstructor
  */
 /**
  * @type {Object<string, ResourceConstructor>}
  */
-const FULL_CLASS_MAP = Object.assign(
-  {},
-  AWSResources,
-  RecordResources,
-  WharfieActors,
-  {
-    WharfieDeploymentResources,
-    WharfieProject,
-    WharfieResource,
-    WharfieDeployment,
-    WharfieActor,
-  }
-);
+const FULL_CLASS_MAP = Object.assign({}, AWSResources, RecordResources);
 
 /**
  * @typedef WharfieDeploymentLoadOptions
- * @property {string} deploymentName -
- * @property {string} [resourceKey] -
+ * @property {string} deploymentName - deploymentName.
+ * @property {string} [resourceKey] - resourceKey.
  */
 /**
- * @param {WharfieDeploymentLoadOptions} options -
- * @returns {Promise<WharfieDeployment | WharfieProject>} -
+ * @param {WharfieDeploymentLoadOptions} options - options.
+ * @returns {Promise<any>} - Result.
  */
 async function load({ deploymentName, resourceKey }) {
   if (!resourceKey) {
@@ -47,6 +29,7 @@ async function load({ deploymentName, resourceKey }) {
     throw new Error('No resource found');
   }
 
+  // @ts-ignore
   const resourceMap = serializedResources.slice(1).reduce((acc, item) => {
     if (!item.name) {
       console.log(item);
@@ -60,6 +43,4 @@ async function load({ deploymentName, resourceKey }) {
   return deserialize(serializedResources[0], resourceMap, FULL_CLASS_MAP);
 }
 
-module.exports = {
-  load,
-};
+export { load };

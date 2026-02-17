@@ -1,4 +1,6 @@
-'use strict';
+import { jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const AWS = jest.requireActual('@aws-sdk/client-cloudwatch-events');
 const { mockClient } = require('aws-sdk-client-mock');
 
@@ -12,5 +14,5 @@ if (process.env.AWS_MOCKS) {
 
 module.exports = Object.assign(
   {},
-  { ...AWS, CloudWatchEvents, CloudWatchEventsMock }
+  { ...AWS, CloudWatchEvents, CloudWatchEventsMock },
 );

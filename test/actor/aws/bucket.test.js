@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-large-snapshots */
-'use strict';
+import { describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
 jest.mock('../../../lambdas/lib/id');
@@ -11,6 +13,7 @@ const { getMockDeploymentProperties } = require('../util');
 describe('bucket IaC', () => {
   it('basic', async () => {
     expect.assertions(4);
+
     const s3 = new S3({});
     const bucket = new Bucket({
       name: 'test-bucket',
@@ -47,6 +50,7 @@ describe('bucket IaC', () => {
     await bucket.reconcile();
 
     const serialized = bucket.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -112,13 +116,14 @@ describe('bucket IaC', () => {
     `);
 
     await bucket.destroy();
+
     expect(bucket.status).toBe('DESTROYED');
     await expect(
       s3.getBucketLocation({
         Bucket: bucket.get('bucketName'),
-      })
+      }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"The specified bucket does not exist: test-bucket-111111"`
+      `"The specified bucket does not exist: test-bucket-111111"`,
     );
   });
 });

@@ -1,4 +1,6 @@
-'use strict';
+import { jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { EntityNotFoundException } = jest.requireActual('@aws-sdk/client-glue');
 const { parse } = require('../../../lambdas/lib/arn');
@@ -95,7 +97,7 @@ class GlueMock {
   async getPartitions(params) {
     const partitions = Object.values(
       GlueMock.__state[params.DatabaseName]._tables[params.TableName]
-        ._partitions
+        ._partitions,
     );
     const _return = {
       Partitions: partitions,
@@ -103,7 +105,7 @@ class GlueMock {
     if (params.Segment) {
       const chunks = this.__chunkArray(
         partitions,
-        params.Segment.TotalSegments
+        params.Segment.TotalSegments,
       );
 
       _return.Partitions = chunks[params.Segment.SegmentNumber];
@@ -124,7 +126,7 @@ class GlueMock {
           ...params,
           PartitionInput: input,
         });
-      })
+      }),
     );
     return {
       Errors: [],
@@ -158,7 +160,7 @@ class GlueMock {
           ...params,
           PartitionValues: partition.Values,
         });
-      })
+      }),
     );
     return {
       Errors: [],
@@ -238,15 +240,15 @@ class GlueMock {
     if (type === 'database') {
       GlueMock.__state[databaseName].tags = Object.fromEntries(
         Object.entries(GlueMock.__state[databaseName].tags).filter(
-          ([key]) => !params.TagKeys.includes(key)
-        )
+          ([key]) => !params.TagKeys.includes(key),
+        ),
       );
     } else if (type === 'table') {
       GlueMock.__state[databaseName]._tables[tableName].tags =
         Object.fromEntries(
           Object.entries(
-            GlueMock.__state[databaseName]._tables[tableName].tags
-          ).filter(([key]) => !params.TagKeys.includes(key))
+            GlueMock.__state[databaseName]._tables[tableName].tags,
+          ).filter(([key]) => !params.TagKeys.includes(key)),
         );
     } else {
       throw new Error(`tagging not supported for ${type}`);
@@ -260,12 +262,12 @@ class GlueMock {
     if (type === 'database') {
       GlueMock.__state[databaseName].tags = Object.assign(
         GlueMock.__state[databaseName].tags,
-        params.TagsToAdd
+        params.TagsToAdd,
       );
     } else if (type === 'table') {
       GlueMock.__state[databaseName]._tables[tableName].tags = Object.assign(
         GlueMock.__state[databaseName]._tables[tableName].tags,
-        params.TagsToAdd
+        params.TagsToAdd,
       );
     } else {
       throw new Error(`tagging not supported for ${type}`);

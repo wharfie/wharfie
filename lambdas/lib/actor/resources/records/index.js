@@ -1,9 +1,9 @@
-const DependencyRecord = require('./dependency-record');
-const GenericRecord = require('./generic-record');
-const LocationRecord = require('./location-record');
-const WharfieResourceRecord = require('./wharfie-resource-record');
+import DependencyRecord from './dependency-record.js';
+import GenericRecord from './generic-record.js';
+import LocationRecord from './location-record.js';
+import WharfieResourceRecord from './wharfie-resource-record.js';
 
-module.exports = {
+export default {
   DependencyRecord,
   GenericRecord,
   LocationRecord,

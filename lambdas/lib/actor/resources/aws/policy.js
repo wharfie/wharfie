@@ -1,27 +1,26 @@
-'use strict';
-const IAM = require('../../../iam');
-const BaseResource = require('../base-resource');
-const { NoSuchEntityException } = require('@aws-sdk/client-iam');
+import IAM from '../../../aws/iam.js';
+import BaseResource from '../base-resource.js';
+import { NoSuchEntityException } from '@aws-sdk/client-iam';
 
 /**
  * @typedef PolicyProperties
- * @property {string} description -
- * @property {any |function(): any} document -
- * @property {import('@aws-sdk/client-iam').Tag[]} [tags] -
+ * @property {string} description - description.
+ * @property {any |function(): any} document - document.
+ * @property {import('@aws-sdk/client-iam').Tag[]} [tags] - tags.
  */
 
 /**
  * @typedef PolicyOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {PolicyProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {PolicyProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class Policy extends BaseResource {
   /**
-   * @param {PolicyOptions} options -
+   * @param {PolicyOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     super({ name, parent, status, properties, dependsOn });
@@ -29,7 +28,7 @@ class Policy extends BaseResource {
     this.set(
       'arn',
       () =>
-        `arn:aws:iam::${this.get('deployment').accountId}:policy/${this.name}`
+        `arn:aws:iam::${this.get('deployment').accountId}:policy/${this.name}`,
     );
   }
 
@@ -44,16 +43,16 @@ class Policy extends BaseResource {
         !exitingTags.some(
           (existingTag) =>
             existingTag.Key === desiredTag.Key &&
-            existingTag.Value === desiredTag.Value
-        )
+            existingTag.Value === desiredTag.Value,
+        ),
     );
     const tagsToRemove = exitingTags.filter(
       (existingTag) =>
         !desiredTags.some(
           (/** @type {import('@aws-sdk/client-iam').Tag} */ desiredTag) =>
             desiredTag.Key === existingTag.Key &&
-            desiredTag.Value === existingTag.Value
-        )
+            desiredTag.Value === existingTag.Value,
+        ),
     );
     if (tagsToAdd.length > 0) {
       await this.iam.tagPolicy({
@@ -112,4 +111,4 @@ class Policy extends BaseResource {
   }
 }
 
-module.exports = Policy;
+export default Policy;

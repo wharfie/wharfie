@@ -1,4 +1,5 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const fs = require('fs');
@@ -93,7 +94,7 @@ const dev = async (projectPath, environmentName) => {
       if (!(error instanceof Error)) throw error;
       if (
         !['No resource found', 'Resource was not stored'].includes(
-          error.message
+          error.message,
         )
       ) {
         displayFailure(error.message);
@@ -132,7 +133,7 @@ const dev = async (projectPath, environmentName) => {
         displayInfo(`File ${eventType}: ${path.join(projectPath, filename)}`);
         handleBatchChanges();
       }
-    }
+    },
   );
 
   watcher.on('error', (error) => {
@@ -156,7 +157,7 @@ const devCommand = new Command('dev')
   .argument('[path]', 'The path of the Wharfie project root')
   .option(
     '-e, --environment <environment>',
-    'The Wharfie project environment to use'
+    'The Wharfie project environment to use',
   )
   .action(async (path, options) => {
     const { environment } = options;

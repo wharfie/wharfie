@@ -1,29 +1,28 @@
-'use strict';
-const IAM = require('../../../iam');
-const BaseResource = require('../base-resource');
-const { NoSuchEntityException } = require('@aws-sdk/client-iam');
+import IAM from '../../../aws/iam.js';
+import BaseResource from '../base-resource.js';
+import { NoSuchEntityException } from '@aws-sdk/client-iam';
 /**
  * @typedef RoleProperties
- * @property {string} [roleName] -
- * @property {string} description -
- * @property {any | function } assumeRolePolicyDocument -
- * @property {string[] | (() => string[]) } [managedPolicyArns] -
- * @property {any} [rolePolicyDocument] -
- * @property {import('@aws-sdk/client-iam').Tag[]} [tags] -
+ * @property {string} [roleName] - roleName.
+ * @property {string} description - description.
+ * @property {any | function } assumeRolePolicyDocument - assumeRolePolicyDocument.
+ * @property {string[] | (() => string[]) } [managedPolicyArns] - managedPolicyArns.
+ * @property {any} [rolePolicyDocument] - rolePolicyDocument.
+ * @property {import('@aws-sdk/client-iam').Tag[]} [tags] - tags.
  */
 
 /**
  * @typedef RoleOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {RoleProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {RoleProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class Role extends BaseResource {
   /**
-   * @param {RoleOptions} options -
+   * @param {RoleOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn = [] }) {
     if (!properties.roleName) {
@@ -31,7 +30,7 @@ class Role extends BaseResource {
         {
           roleName: `${name.substring(0, 64)}`,
         },
-        properties
+        properties,
       );
       super({
         name,
@@ -57,16 +56,16 @@ class Role extends BaseResource {
         !currentTags.some(
           (/** @type {import('@aws-sdk/client-iam').Tag} */ currentTag) =>
             currentTag.Key === desiredTag.Key &&
-            currentTag.Value === desiredTag.Value
-        )
+            currentTag.Value === desiredTag.Value,
+        ),
     );
     const tagsToRemove = currentTags.filter(
       (/** @type {import('@aws-sdk/client-iam').Tag} */ currentTag) =>
         !desiredTags.some(
           (/** @type {import('@aws-sdk/client-iam').Tag} */ desiredTag) =>
             desiredTag.Key === currentTag.Key &&
-            desiredTag.Value === currentTag.Value
-        )
+            desiredTag.Value === currentTag.Value,
+        ),
     );
     if (tagsToAdd.length > 0) {
       await this.iam.tagRole({
@@ -79,7 +78,7 @@ class Role extends BaseResource {
         RoleName: this.get('roleName'),
         TagKeys: tagsToRemove.map(
           (/** @type {import('@aws-sdk/client-iam').Tag} */ tag) =>
-            tag.Key || ''
+            tag.Key || '',
         ),
       });
     }
@@ -97,7 +96,7 @@ class Role extends BaseResource {
           RoleName: this.get('roleName'),
           Description: this.get('description'),
           AssumeRolePolicyDocument: JSON.stringify(
-            this.get('assumeRolePolicyDocument')
+            this.get('assumeRolePolicyDocument'),
           ),
           Tags: this.get('tags') || [],
         });
@@ -120,8 +119,8 @@ class Role extends BaseResource {
             this.iam.attachRolePolicy({
               RoleName: this.get('roleName'),
               PolicyArn: managedPolicyArn,
-            })
-        )
+            }),
+        ),
       );
     }
     await this._reconcileTags();
@@ -166,4 +165,4 @@ class Role extends BaseResource {
   }
 }
 
-module.exports = Role;
+export default Role;

@@ -1,9 +1,10 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { getDatabaseName } = require('./names');
 
-const Athena = require('../../lambdas/lib/athena');
-const S3 = require('../../lambdas/lib/s3');
-const Glue = require('../../lambdas/lib/glue');
+const Athena = require('../../lambdas/lib/athena').default;
+const S3 = require('../../lambdas/lib/s3').default;
+const Glue = require('../../lambdas/lib/glue').default;
 const s3 = new S3();
 const athena = new Athena({});
 const glue = new Glue({});
@@ -66,7 +67,7 @@ class ProjectCostEstimator {
       return this.costs[`${this.projectDatabaseName}.${model.name}`];
     }
     const { sources: sqlReferences } = athena.extractSources(
-      this.applySQLTemplating(model.sql)
+      this.applySQLTemplating(model.sql),
     );
     const totalRefSize =
       (
@@ -90,7 +91,7 @@ class ProjectCostEstimator {
               if (!Table?.StorageDescriptor?.Location)
                 throw new Error('No location');
               const { bucket, prefix } = s3.parseS3Uri(
-                Table?.StorageDescriptor?.Location
+                Table?.StorageDescriptor?.Location,
               );
               const region = await s3.findBucketRegion({
                 Bucket: bucket,
@@ -100,16 +101,16 @@ class ProjectCostEstimator {
                   Bucket: bucket,
                   Prefix: prefix,
                 },
-                region
+                region,
               );
             } catch (error) {
               // @ts-ignore
               if (error.__type === 'EntityNotFoundException') {
                 const projectModel = this.project.models.find(
-                  (model) => model.name === sqlReference.TableName
+                  (model) => model.name === sqlReference.TableName,
                 );
                 const projectSource = this.project.sources.find(
-                  (model) => model.name === sqlReference.TableName
+                  (model) => model.name === sqlReference.TableName,
                 );
                 if (projectModel) {
                   return (await this.modelCost(projectModel)).size;
@@ -120,7 +121,7 @@ class ProjectCostEstimator {
                 throw error;
               }
             }
-          })
+          }),
         )
       ).reduce((acc, size) => (acc || 0) + (size || 0), 0) || 0;
 
@@ -156,7 +157,7 @@ class ProjectCostEstimator {
         Bucket: bucket,
         Prefix: prefix,
       },
-      region
+      region,
     );
     const monthly_cost_number =
       (((this.MONTHLY_HOURS / source.service_level_agreement.freshness) *

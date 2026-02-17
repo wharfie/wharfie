@@ -1,22 +1,22 @@
-const AthenaWorkGroup = require('./athena-workgroup');
-const AutoscalingPolicy = require('./autoscaling-policy');
-const AutoscalingTable = require('./autoscaling-table');
-const AutoscalingTarget = require('./autoscaling-target');
-const Bucket = require('./bucket');
-const EventSourceMapping = require('./event-source-mapping');
-const EventsRule = require('./events-rule');
-const Firehose = require('./firehose');
-const GlueDatabase = require('./glue-database');
-const GlueTable = require('./glue-table');
-const LambdaFunction = require('./lambda-function');
-const LambdaBuild = require('./lambda-build');
-const Policy = require('./policy');
-const Queue = require('./queue');
-const Role = require('./role');
-const Table = require('./table');
-const BucketNotificationConfiguration = require('./bucket-notification-configuration');
+import AthenaWorkGroup from './athena-workgroup.js';
+import AutoscalingPolicy from './autoscaling-policy.js';
+import AutoscalingTable from './autoscaling-table.js';
+import AutoscalingTarget from './autoscaling-target.js';
+import Bucket from './bucket.js';
+import EventSourceMapping from './event-source-mapping.js';
+import EventsRule from './events-rule.js';
+import Firehose from './firehose.js';
+import GlueDatabase from './glue-database.js';
+import GlueTable from './glue-table.js';
+import LambdaBuild from './lambda-build.js';
+import LambdaFunction from './lambda-function.js';
+import Policy from './policy.js';
+import Queue from './queue.js';
+import Role from './role.js';
+import Table from './table.js';
+import BucketNotificationConfiguration from './bucket-notification-configuration.js';
 
-module.exports = {
+export default {
   AthenaWorkGroup,
   AutoscalingPolicy,
   AutoscalingTable,

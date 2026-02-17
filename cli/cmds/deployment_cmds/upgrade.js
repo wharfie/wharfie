@@ -1,4 +1,5 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const { displayInfo, displaySuccess } = require('../../output/basic');
@@ -22,11 +23,11 @@ const upgrade = async () => {
     properties: {
       globalQueryConcurrency: existingDeployment.get(
         'globalQueryConcurrency',
-        10
+        10,
       ),
       resourceQueryConcurrency: existingDeployment.get(
         'resourceQueryConcurrency',
-        10
+        10,
       ),
       maxQueriesPerAction: existingDeployment.get('maxQueriesPerAction', 10000),
       loggingLevel: existingDeployment.get('loggingLevel', 'info'),

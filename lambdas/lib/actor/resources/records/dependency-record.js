@@ -1,26 +1,28 @@
-'use strict';
-const BaseResource = require('../base-resource');
-const { ResourceNotFoundException } = require('@aws-sdk/client-dynamodb');
-const dependency_db = require('../../../../lib/dynamo/dependency');
+import BaseResource from '../base-resource.js';
+import { ResourceNotFoundException } from '@aws-sdk/client-dynamodb';
+import {
+  putDependency,
+  deleteDependency,
+} from '../../../../lib/aws/dynamo/dependency.js';
 
 /**
  * @typedef DependencyRecordProperties
- * @property {import('../../../../typedefs').DependencyRecord | function(): import('../../../../typedefs').DependencyRecord} data -
- * @property {string} table_name -
+ * @property {import('../../../../typedefs.js').DependencyRecord | function(): import('../../../../typedefs.js').DependencyRecord} data - data.
+ * @property {string} table_name - table_name.
  */
 
 /**
  * @typedef DependencyRecordOptions
- * @property {string} name -
- * @property {string} [parent] -
- * @property {import('../reconcilable').Status} [status] -
- * @property {DependencyRecordProperties & import('../../typedefs').SharedProperties} properties -
- * @property {import('../reconcilable')[]} [dependsOn] -
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {DependencyRecordProperties & import('../../typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  */
 
 class DependencyRecord extends BaseResource {
   /**
-   * @param {DependencyRecordOptions} options -
+   * @param {DependencyRecordOptions} options - options.
    */
   constructor({ name, parent, status, dependsOn = [], properties }) {
     super({
@@ -33,18 +35,12 @@ class DependencyRecord extends BaseResource {
   }
 
   async _reconcile() {
-    await dependency_db.putDependency(
-      this.get('data', {}),
-      this.get('table_name')
-    );
+    await putDependency(this.get('data', {}), this.get('table_name'));
   }
 
   async _destroy() {
     try {
-      await dependency_db.deleteDependency(
-        this.get('data', {}),
-        this.get('table_name')
-      );
+      await deleteDependency(this.get('data', {}), this.get('table_name'));
     } catch (error) {
       if (!(error instanceof ResourceNotFoundException)) {
         throw error;
@@ -53,4 +49,4 @@ class DependencyRecord extends BaseResource {
   }
 }
 
-module.exports = DependencyRecord;
+export default DependencyRecord;

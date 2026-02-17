@@ -1,8 +1,17 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 // process.env.LOGGING_LEVEL = 'debug';
-const bluebird = require('bluebird');
 
 process.env.AWS_MOCKS = true;
 jest.requireMock('@aws-sdk/client-s3');
@@ -50,7 +59,6 @@ describe('s3 event tests', () => {
     s3.__setMockState({
       's3://test-bucket/raw/dt=2016-06-20/data.json': '',
     });
-    bluebird.Promise.config({ cancellation: true });
     await athena.createWorkGroup({
       Name: 'wharfie:StackName',
     });
@@ -86,6 +94,7 @@ describe('s3 event tests', () => {
     });
     createLambdaQueues();
   });
+
   beforeEach(() => {
     setLambdaTriggers(CONTEXT);
   });
@@ -139,7 +148,7 @@ describe('s3 event tests', () => {
           tableType: 'PHYSICAL',
           tags: {},
         },
-      })
+      }),
     );
 
     await daemon_lambda.handler(
@@ -163,7 +172,7 @@ describe('s3 event tests', () => {
           },
         ],
       },
-      CONTEXT
+      CONTEXT,
     );
     let pollInterval;
     let completed_checks = 0;
@@ -189,11 +198,20 @@ describe('s3 event tests', () => {
         }
       }, 100);
     });
-    const timeout = bluebird.Promise.delay(5000).then(() => {
-      console.error('Timeout waiting for operation to complete');
+    let cancelTimeout = () => {};
+    const timeout = new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        console.error('Timeout waiting for operation to complete');
+        resolve();
+      }, 5000);
+      cancelTimeout = () => {
+        clearTimeout(timeoutId);
+        resolve();
+      };
     });
     await Promise.race([emptyQueues, timeout]);
-    timeout.cancel();
+    cancelTimeout();
+
     // eslint-disable-next-line jest/no-large-snapshots
     expect(Object.keys(operations.__getMockState())).toMatchInlineSnapshot(`
       [

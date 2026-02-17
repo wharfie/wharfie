@@ -1,8 +1,18 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const AWS = require('@aws-sdk/client-firehose');
 let consoleLog;
 let logging;
+
 describe('tests for logging', () => {
   beforeEach(() => {
     require('aws-sdk-client-mock-jest');
@@ -13,6 +23,7 @@ describe('tests for logging', () => {
     process.env.LOGGING_LEVEL = 'debug';
     logging = require('../../../lambdas/lib/logging/');
   });
+
   afterEach(() => {
     AWS.FirehoseMock.reset();
     consoleLog.mockReset();
@@ -20,21 +31,27 @@ describe('tests for logging', () => {
 
   it('daemon logger', async () => {
     expect.assertions(3);
+
     const logger = logging.getDaemonLogger();
     logger.info('hello');
+
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      0
+      0,
     );
     expect(consoleLog).toHaveBeenCalledTimes(1);
+
     await logging.flush();
+
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      1
+      1,
     );
   });
+
   it('event logger', async () => {
     expect.assertions(3);
+
     const event = {
       resource_id: 'resource_id',
       operation_id: 'operation_id',
@@ -48,30 +65,38 @@ describe('tests for logging', () => {
     };
     const logger = logging.getEventLogger(event, context);
     logger.info('hello');
+
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      0
+      0,
     );
     expect(consoleLog).toHaveBeenCalledTimes(1);
+
     await logging.flush();
+
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      1
+      1,
     );
   });
+
   it('aws_sdk logger', async () => {
     expect.assertions(3);
+
     const logger = logging.getAWSSDKLogger();
     logger.info('hello');
+
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      0
+      0,
     );
     expect(consoleLog).toHaveBeenCalledTimes(1);
+
     await logging.flush();
+
     expect(AWS.FirehoseMock).toHaveReceivedCommandTimes(
       AWS.PutRecordBatchCommand,
-      1
+      1,
     );
   });
 });

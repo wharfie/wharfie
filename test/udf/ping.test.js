@@ -1,4 +1,6 @@
-'use strict';
+import { describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const path = require('path');
 
 const PING_TEST_EVENT = {
@@ -18,13 +20,15 @@ const PING_TEST_EVENT = {
 describe('tests for bootstrap lambda', () => {
   it('delete', async () => {
     expect.assertions(1);
+
     process.env.WHARFIE_UDF_HANDLER = `${path.join(
       __dirname,
-      'request_test_udf_1.js'
+      'request_test_udf_1.js',
     )}.handler`;
     jest.resetModules();
     const { handler } = require('../../lambdas/udf_entrypoint');
     const pingresult = await handler(PING_TEST_EVENT);
+
     expect(pingresult).toMatchInlineSnapshot(`
       {
         "@type": "PingResponse",

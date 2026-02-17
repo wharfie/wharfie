@@ -1,0 +1,8 @@
+name: fineweb_edu
+tap_type: hugging_face_dataset
+service_level_agreement:
+  freshness: 1440
+config:
+  dataset_name: HuggingFaceFW/fineweb-edu
+  path_to_dataset: data/CC-MAIN-2024-51/
+  hugging_face_token: token

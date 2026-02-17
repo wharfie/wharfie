@@ -1,5 +1,14 @@
 /* eslint-disable jest/no-hooks */
-'use strict';
+import {
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const SchedulerEntry = require('../lambdas/scheduler/scheduler-entry');
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../package.json', () => ({ version: '0.0.1' }));
@@ -75,6 +84,7 @@ describe('tests for events lambda', () => {
 
   it('test S3 event from SNS', async () => {
     expect.assertions(2);
+
     await lambda.handler(
       {
         Records: [
@@ -86,7 +96,7 @@ describe('tests for events lambda', () => {
           },
         ],
       },
-      {}
+      {},
     );
 
     expect(processor.run).toHaveBeenCalledTimes(1);
@@ -100,6 +110,7 @@ describe('tests for events lambda', () => {
 
   it('test S3 event from SQS', async () => {
     expect.assertions(2);
+
     await lambda.handler(
       {
         Records: [
@@ -108,7 +119,7 @@ describe('tests for events lambda', () => {
           },
         ],
       },
-      {}
+      {},
     );
 
     expect(processor.run).toHaveBeenCalledTimes(1);
@@ -122,6 +133,7 @@ describe('tests for events lambda', () => {
 
   it('test S3 event from eventbridge', async () => {
     expect.assertions(2);
+
     await lambda.handler(
       {
         Records: [
@@ -130,7 +142,7 @@ describe('tests for events lambda', () => {
           },
         ],
       },
-      {}
+      {},
     );
 
     expect(processor.run).toHaveBeenCalledTimes(1);
@@ -144,6 +156,7 @@ describe('tests for events lambda', () => {
 
   it('test processor event', async () => {
     expect.assertions(2);
+
     await lambda.handler(
       {
         Records: [
@@ -152,12 +165,12 @@ describe('tests for events lambda', () => {
               new SchedulerEntry({
                 resource_id: 'resource_id',
                 sort_key: 'sort_key',
-              }).toEvent()
+              }).toEvent(),
             ),
           },
         ],
       },
-      {}
+      {},
     );
 
     expect(scheduler.run).toHaveBeenCalledTimes(1);

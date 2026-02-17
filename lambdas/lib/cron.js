@@ -1,8 +1,6 @@
-'use strict';
-
 /**
- * @param {number} min -
- * @param {number} max -
+ * @param {number} min - min.
+ * @param {number} max - max.
  * @returns {number} - a random number between min and max
  */
 function between(min, max) {
@@ -10,8 +8,8 @@ function between(min, max) {
 }
 
 /**
- * @param {number} operationTime -
- * @param {number} schedule -
+ * @param {number} operationTime - operationTime.
+ * @param {number} schedule - schedule.
  * @returns {number} - offset in minutes of cron expression
  */
 function getScheduleOffset(operationTime, schedule) {
@@ -28,7 +26,7 @@ function getScheduleOffset(operationTime, schedule) {
 }
 
 /**
- * @param {number} minutes -
+ * @param {number} minutes - minutes.
  * @returns {string} - a randomized cron expression
  */
 function generateSchedule(minutes) {
@@ -41,21 +39,18 @@ function generateSchedule(minutes) {
       ? between(0, 24)
       : `1/${hours}`
     : days
-    ? between(0, 24)
-    : '*';
+      ? between(0, 24)
+      : '*';
   const minuteExpression = min
     ? days || hours
       ? between(0, 60)
       : `1/${min}`
     : days || hours
-    ? between(0, 60)
-    : '*';
+      ? between(0, 60)
+      : '*';
 
   const expression = `cron(${minuteExpression} ${hourExpression} ? * ${daysExpression} *)`;
   return expression;
 }
 
-module.exports = {
-  generateSchedule,
-  getScheduleOffset,
-};
+export { generateSchedule, getScheduleOffset };

@@ -1,11 +1,10 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const { displayFailure, displaySuccess } = require('../output/basic');
-const {
-  getRecords,
-  getAllResources,
-} = require('../../lambdas/lib/dynamo/operations');
+const { getRecords, getAllResources } =
+  require('../../lambdas/lib/dynamo/operations').default;
 
 /**
  * @param {string} [resource_id] -
@@ -17,7 +16,7 @@ const list = async (resource_id, operation_id) => {
     console.table(
       resources.map(({ id }) => ({
         resource_id: id,
-      }))
+      })),
     );
   } else if (!operation_id) {
     const records = await getRecords(resource_id);
@@ -27,9 +26,9 @@ const list = async (resource_id, operation_id) => {
         ...x,
         started_at: new Date(Number(x.started_at || 0) * 1000).toISOString(),
         last_updated_at: new Date(
-          Number(x.last_updated_at || 0) * 1000
+          Number(x.last_updated_at || 0) * 1000,
         ).toISOString(),
-      }))
+      })),
     );
   } else {
     const records = await getRecords(resource_id, operation_id);
@@ -52,14 +51,14 @@ const list = async (resource_id, operation_id) => {
         action_id: action.id,
         action_type: action.type,
         action_status: action.status,
-      }))
+      })),
     );
     console.table(
       records.queries.map((query) => ({
         query_id: query.id,
         query_status: query.status,
         query_execution_id: query.execution_id,
-      }))
+      })),
     );
   }
 };

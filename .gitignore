@@ -1,4 +1,6 @@
 coverage/
+mock/
+test-db/
 tmp/
 node_modules/
 *.pyc
@@ -13,8 +15,10 @@ build
 dist/
 .vscode
 node_binaries/
+esbuild_binaries/
 docs/build/
 docs/node_modules/
 docs/public/
 docs/.env
 docs/.env.local
+LLM_CONTEXT

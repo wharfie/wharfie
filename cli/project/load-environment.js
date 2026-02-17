@@ -10,7 +10,7 @@ function loadEnvironment(project, environmentName) {
     environmentName = WHARFIE_DEFAULT_ENVIRONMENT;
   }
   const activeEnvironment = project.environments.filter(
-    (env) => env.name === environmentName
+    (env) => env.name === environmentName,
   )[0];
   if (!activeEnvironment) {
     if (activeEnvironment === WHARFIE_DEFAULT_ENVIRONMENT) {

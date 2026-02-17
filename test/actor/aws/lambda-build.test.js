@@ -1,6 +1,8 @@
 /* eslint-disable jest/no-hooks */
 /* eslint-disable jest/no-large-snapshots */
-'use strict';
+import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = true;
 jest.mock('../../../lambdas/lib/id');
@@ -25,11 +27,14 @@ describe('lambda function IaC', () => {
       digest: mockDigest,
     });
   });
+
   afterAll(() => {
     jest.restoreAllMocks();
   });
+
   it('built in', async () => {
     expect.assertions(4);
+
     const s3 = new S3({});
     const bucket = new Bucket({
       name: 'test-bucket',
@@ -95,11 +100,15 @@ describe('lambda function IaC', () => {
         ],
       }
     `);
+
     await lambdaBuild.destroy();
+
     expect(lambdaBuild.status).toBe('DESTROYED');
+
     const del_res = await s3.listObjectsV2({
       Bucket: bucket.get('bucketName'),
     });
+
     expect(del_res).toMatchInlineSnapshot(`
       {
         "Bucket": "test-bucket-111111",
@@ -112,8 +121,10 @@ describe('lambda function IaC', () => {
       }
     `);
   });
+
   it('external', async () => {
     expect.assertions(4);
+
     const s3 = new S3({});
     const bucket = new Bucket({
       name: 'test-bucket',
@@ -128,7 +139,7 @@ describe('lambda function IaC', () => {
         deployment: getMockDeploymentProperties(),
         handler: path.resolve(
           __dirname,
-          '../../fixtures/lambda-build-test-handler.handler'
+          '../../fixtures/lambda-build-test-handler.handler',
         ),
         artifactBucket: bucket.get('bucketName'),
       },
@@ -184,11 +195,15 @@ describe('lambda function IaC', () => {
         ],
       }
     `);
+
     await lambdaBuild.destroy();
+
     expect(lambdaBuild.status).toBe('DESTROYED');
+
     const del_res = await s3.listObjectsV2({
       Bucket: bucket.get('bucketName'),
     });
+
     expect(del_res).toMatchInlineSnapshot(`
       {
         "Bucket": "test-bucket-111111",

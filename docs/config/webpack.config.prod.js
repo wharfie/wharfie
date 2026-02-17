@@ -131,7 +131,7 @@ module.exports = {
             // 2) Your custom loader that rewrites <img> tags
             loader: path.resolve(
               __dirname,
-              'transform-markdown-images-loader.js'
+              'transform-markdown-images-loader.js',
             ),
           },
           {
@@ -188,7 +188,7 @@ module.exports = {
     new webpack.DefinePlugin({
       'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV),
       'process.env.PUBLIC_URL': JSON.stringify(
-        process.env.PUBLIC_URL || 'https://docs.wharfie.dev'
+        process.env.PUBLIC_URL || 'https://docs.wharfie.dev',
       ),
     }),
 
@@ -245,7 +245,7 @@ module.exports = {
           name(module) {
             // Get the name by extracting the package name
             const packageName = module.context.match(
-              /[\\/]node_modules[\\/](.*?)([\\/]|$)/
+              /[\\/]node_modules[\\/](.*?)([\\/]|$)/,
             )[1];
             return `npm.${packageName.replace('@', '')}`;
           },

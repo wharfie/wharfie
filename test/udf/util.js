@@ -1,4 +1,5 @@
-'use strict';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const arrow = require('apache-arrow');
 
@@ -16,7 +17,7 @@ function serializeRecords(schema, records) {
       valueOffsets: [0, record.length],
       type: new arrow.Utf8(),
       data: record,
-    })
+    }),
   );
   const data = arrow.makeData({
     length: 1,
@@ -70,7 +71,7 @@ function deserializeRecords(result) {
   const outputRecords = recordsBatchReader.readAll();
   const output = String.fromCharCode.apply(
     null,
-    outputRecords[0].data.children[0].values
+    outputRecords[0].data.children[0].values,
   );
   return output;
 }

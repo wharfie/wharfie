@@ -1,5 +1,7 @@
 /* eslint-disable jest/no-large-snapshots */
-'use strict';
+import { describe, expect, it, jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = true;
 jest.mock('../../../lambdas/lib/id');
@@ -11,6 +13,7 @@ const { Role } = require('../../../lambdas/lib/actor/resources/aws/');
 describe('iam role IaC', () => {
   it('basic', async () => {
     expect.assertions(4);
+
     const iam = new IAM({});
     const role = new Role({
       name: 'test-role',
@@ -27,6 +30,7 @@ describe('iam role IaC', () => {
     await role.reconcile();
 
     const serialized = role.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -83,17 +87,20 @@ describe('iam role IaC', () => {
         },
       }
     `);
+
     await role.destroy();
+
     expect(role.status).toBe('DESTROYED');
     await expect(
-      iam.getRole({ RoleName: 'test-role' })
+      iam.getRole({ RoleName: 'test-role' }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"role test-role does not exist"`
+      `"role test-role does not exist"`,
     );
   });
 
   it('complex', async () => {
     expect.assertions(4);
+
     const iam = new IAM({});
     const role = new Role({
       name: 'test-role',
@@ -138,6 +145,7 @@ describe('iam role IaC', () => {
     await role.reconcile();
 
     const serialized = role.serialize();
+
     expect(serialized).toMatchInlineSnapshot(`
       {
         "dependsOn": [],
@@ -229,12 +237,14 @@ describe('iam role IaC', () => {
         },
       }
     `);
+
     await role.destroy();
+
     expect(role.status).toBe('DESTROYED');
     await expect(
-      iam.getRole({ RoleName: 'test-role' })
+      iam.getRole({ RoleName: 'test-role' }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(
-      `"role test-role does not exist"`
+      `"role test-role does not exist"`,
     );
   });
 });

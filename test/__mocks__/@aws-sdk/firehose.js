@@ -1,6 +1,8 @@
-'use strict';
+import { jest } from '@jest/globals';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 const { ResourceNotFoundException } = jest.requireActual(
-  '@aws-sdk/client-firehose'
+  '@aws-sdk/client-firehose',
 );
 
 class FirehoseMock {
@@ -71,7 +73,7 @@ class FirehoseMock {
       };
     }
     FirehoseMock.__state[params.DeliveryStreamName].records.push(
-      ...params.Records
+      ...params.Records,
     );
     return {};
   }
@@ -91,7 +93,7 @@ class FirehoseMock {
   async createDeliveryStream(params) {
     if (FirehoseMock.__state[params.DeliveryStreamName]) {
       throw new Error(
-        `DeliveryStream ${params.DeliveryStreamName} already exists`
+        `DeliveryStream ${params.DeliveryStreamName} already exists`,
       );
     }
     FirehoseMock.__state[params.DeliveryStreamName] = {
