@@ -7,6 +7,6 @@
  *
  * New code should import from `lambdas/lib/duckdb`.
  */
-import DuckDBQueryEngine from '../duckdb/index.js';
+import DuckDBQueryEngine from '../../duckdb/index.js';
 
 export default DuckDBQueryEngine;

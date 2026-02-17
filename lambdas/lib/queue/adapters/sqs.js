@@ -1,4 +1,4 @@
-import SQS from '../../sqs.js';
+import SQS from '../../aws/sqs.js';
 
 /**
  * AWS SQS adapter. This is a thin wrapper around the existing SQS helper class

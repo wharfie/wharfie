@@ -2,9 +2,9 @@ import { join } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
-import createDynamoDB from '../db/adapters/dynamodb.js';
-import createLMDB from '../db/adapters/lmdb.js';
-import createVanillaDB from '../db/adapters/vanilla.js';
+import createDynamoDB from '../../db/adapters/dynamodb.js';
+import createLMDB from '../../db/adapters/lmdb.js';
+import createVanillaDB from '../../db/adapters/vanilla.js';
 
 /** @type {import('../db/base.js').DBClient | undefined} */
 let _db;

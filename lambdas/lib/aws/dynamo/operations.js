@@ -1,4 +1,4 @@
-import { createOperationsTable } from '../db/tables/operations.js';
+import { createOperationsTable } from '../../db/tables/operations.js';
 import { getDB, resetDB } from './_shared.js';
 
 /** @type {Map<string, ReturnType<typeof createOperationsTable>>} */

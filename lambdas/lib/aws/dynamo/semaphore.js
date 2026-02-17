@@ -1,4 +1,4 @@
-import { createSemaphoreTable } from '../db/tables/semaphore.js';
+import { createSemaphoreTable } from '../../db/tables/semaphore.js';
 import { getDB, resetDB } from './_shared.js';
 
 /** @type {Map<string, ReturnType<typeof createSemaphoreTable>>} */

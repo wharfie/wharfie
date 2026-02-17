@@ -1,7 +1,7 @@
 import { ConfiguredRetryStrategy } from '@smithy/util-retry';
 import { stringify } from 'flatted';
 
-import { getAWSSDKLogger, getDaemonLogger } from './logging/index.js';
+import { getAWSSDKLogger, getDaemonLogger } from '../logging/index.js';
 const aws_sdk_log = getAWSSDKLogger();
 const daemon_log = getDaemonLogger();
 

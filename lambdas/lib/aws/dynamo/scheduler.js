@@ -1,4 +1,4 @@
-import { createSchedulerTable } from '../db/tables/scheduler.js';
+import { createSchedulerTable } from '../../db/tables/scheduler.js';
 import { getDB, resetDB } from './_shared.js';
 
 /** @type {Map<string, ReturnType<typeof createSchedulerTable>>} */

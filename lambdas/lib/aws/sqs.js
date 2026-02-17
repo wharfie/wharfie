@@ -18,7 +18,7 @@ import {
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
 import BaseAWS from './base.js';
-import { createId } from './id.js';
+import { createId } from '../id.js';
 
 class SQS {
   /**
@@ -101,7 +101,7 @@ class SQS {
   }
 
   /**
-   * @param {import('../typedefs.js').WharfieEvent | import('../typedefs.js').AthenaEvent} event - event.
+   * @param {import('../../typedefs.js').WharfieEvent | import('../../typedefs.js').AthenaEvent} event - event.
    * @param {string} queueUrl - queueUrl.
    * @param {number} [delay] - delay.
    */
@@ -115,7 +115,7 @@ class SQS {
   }
 
   /**
-   * @param {import('../typedefs.js').WharfieEvent[]} events - events.
+   * @param {import('../../typedefs.js').WharfieEvent[]} events - events.
    * @param {string} queueUrl - queueUrl.
    */
   async enqueueBatch(events, queueUrl) {
@@ -135,7 +135,7 @@ class SQS {
   }
 
   /**
-   * @param {import('../typedefs.js').WharfieEvent} event - event.
+   * @param {import('../../typedefs.js').WharfieEvent} event - event.
    * @param {string} queueUrl - queueUrl.
    */
   async reenqueue(event, queueUrl) {

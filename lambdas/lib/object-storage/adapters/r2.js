@@ -1,4 +1,4 @@
-import S3 from '../../s3.js';
+import S3 from '../../aws/s3.js';
 
 /**
  * @typedef CreateR2ObjectStorageOptions

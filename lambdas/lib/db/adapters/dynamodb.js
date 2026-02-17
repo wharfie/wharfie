@@ -6,7 +6,7 @@ import {
   ReturnValue,
 } from '@aws-sdk/client-dynamodb';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
-import BaseAWS from '../../base.js';
+import BaseAWS from '../../aws/base.js';
 import { CONDITION_TYPE } from '../base.js';
 import { assertTightQuery } from '../utils.js';
 

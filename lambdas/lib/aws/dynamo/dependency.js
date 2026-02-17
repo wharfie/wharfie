@@ -1,4 +1,4 @@
-import { createDependencyTable } from '../db/tables/dependency.js';
+import { createDependencyTable } from '../../db/tables/dependency.js';
 import { getDB, resetDB } from './_shared.js';
 
 /** @type {Map<string, ReturnType<typeof createDependencyTable>>} */

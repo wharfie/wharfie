@@ -1,4 +1,4 @@
-import { createLocationTable } from '../db/tables/location.js';
+import { createLocationTable } from '../../db/tables/location.js';
 import { getDB, resetDB } from './_shared.js';
 
 /** @type {Map<string, ReturnType<typeof createLocationTable>>} */

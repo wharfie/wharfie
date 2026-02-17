@@ -29,7 +29,7 @@ import { Readable } from 'stream';
 
 import BaseAWS from './base.js';
 
-import { map } from './promises.js';
+import { map } from '../promises.js';
 /**
  * @typedef {'aws'|'fixed'} RegionResolver
  */
@@ -627,7 +627,7 @@ class S3 {
    * @param {string} Bucket - S3 bucket to inspect for partitions
    * @param {string} Prefix - S3 prefix to use for partition inspection
    * @param {Array<{name: string}>} partitionKeys - Partition keys that will exist in s3 paths
-   * @param {import('../typedefs.js').PartitionValues} PartitionValues - accumulator for Partition values
+   * @param {import('../../typedefs.js').PartitionValues} PartitionValues - accumulator for Partition values
    * @param {Array<import('../typedefs.js').Partition>} partitions - accumulator for Partition objects
    * @returns {Promise<import('../typedefs.js').Partition[]>} - list of partitions that exists in the given s3 location
    */
