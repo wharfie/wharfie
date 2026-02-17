@@ -75,11 +75,21 @@ function looksClosable(v) {
   return !!v && typeof v === 'object' && typeof v.close === 'function';
 }
 
+let warnedAutoAdapter = false;
+
 /**
- * @returns {boolean} - Result.
+ * Log a provider-neutral warning for the deprecated 'auto' adapter.
+ * @returns {void} - Result.
  */
-function inAWS() {
-  return !!(process.env.AWS_REGION || process.env.AWS_EXECUTION_ENV);
+function warnAutoAdapterOnce() {
+  if (warnedAutoAdapter) return;
+  warnedAutoAdapter = true;
+  // One-line warning (once per process) to preserve compatibility while
+  // ensuring provider-neutral defaulting behavior.
+  // eslint-disable-next-line no-console
+  console.warn(
+    'actor/runtime: adapter "auto" is deprecated; defaulting to "vanilla" (set adapter explicitly)',
+  );
 }
 
 /**
@@ -87,10 +97,25 @@ function inAWS() {
  * @returns {string} - Result.
  */
 function defaultAdapter(kind) {
-  if (kind === 'db') return inAWS() ? 'dynamodb' : 'vanilla';
-  if (kind === 'queue') return inAWS() ? 'sqs' : 'vanilla';
-  if (kind === 'objectStorage') return inAWS() ? 's3' : 'vanilla';
+  // Provider-neutral default: never infer cloud adapters based on ambient env.
+  // Keep kind checks to make the default explicit.
+  if (kind === 'db') return 'vanilla';
+  if (kind === 'queue') return 'vanilla';
+  if (kind === 'objectStorage') return 'vanilla';
   return 'vanilla';
+}
+
+/**
+ * @param {string} adapter - adapter.
+ * @param {'db'|'queue'|'objectStorage'} kind - kind.
+ * @returns {string} - Result.
+ */
+function resolveAdapter(adapter, kind) {
+  if (adapter === 'auto') {
+    warnAutoAdapterOnce();
+    return defaultAdapter(kind);
+  }
+  return adapter;
 }
 
 /**
@@ -106,7 +131,7 @@ function normalizeSpec(spec, kind) {
   if (typeof spec === 'string') {
     const adapter = spec.toLowerCase().trim();
     return {
-      adapter: adapter === 'auto' ? defaultAdapter(kind) : adapter,
+      adapter: resolveAdapter(adapter, kind),
       options: {},
     };
   }
@@ -115,13 +140,26 @@ function normalizeSpec(spec, kind) {
   if (looksLikeSpecObject(spec)) {
     const adapter = spec.adapter.toLowerCase().trim();
     return {
-      adapter: adapter === 'auto' ? defaultAdapter(kind) : adapter,
+      adapter: resolveAdapter(adapter, kind),
       options: isPlainObject(spec.options) ? spec.options : {},
     };
   }
 
   // Anything else is treated as an already-instantiated client instance.
   return { instance: spec };
+}
+
+/**
+ * Internal helper for tests: resolves adapter names for a given spec.
+ * @param {any} spec - spec.
+ * @param {'db'|'queue'|'objectStorage'} kind - kind.
+ * @returns {string | undefined} - Adapter name or undefined.
+ */
+export function __resolveResourceAdapterName(spec, kind) {
+  const normalized = normalizeSpec(spec, kind);
+  if (!normalized) return undefined;
+  if ('instance' in normalized) return undefined;
+  return normalized.adapter;
 }
 
 /**
