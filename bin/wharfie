@@ -27,9 +27,19 @@ program.addCommand(require('../cli/cmds/list'));
 program.addCommand(require('../cli/cmds/utils'));
 program.addCommand(require('../cli/cmds/project'));
 program.addCommand(require('../cli/cmds/deployment'));
+program.addCommand(require('../cli/cmds/app'));
 
 program.hook('preAction', async () => {
   await paths.createWharfiePaths();
+
+  // Local-only v2 app commands should not require AWS credentials/config.
+  // Example:
+  //   wharfie app manifest
+  const argv = process.argv.slice(2);
+  if (argv[0] === 'app') {
+    return;
+  }
+
   if (fs.existsSync(process.env.CONFIG_FILE_PATH)) {
     try {
       config.setConfig(
@@ -76,3 +86,5 @@ if (!process.stdin.isTTY) {
 } else {
   program.parse(process.argv);
 }
+
+
