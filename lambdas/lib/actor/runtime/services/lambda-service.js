@@ -35,7 +35,8 @@ import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
  * - Optionally runs one or more queue poll loops that decode messages into invocations.
  *
  * Message format (Queue Message Body):
- * { "functionName": "my-function", "event": { ... }, "context": { ... } }
+ * v1: { "functionName": "my-function", "event": { ... }, "context": { ... } }
+ * v2: { "v": 2, "actor": "my-function", "event": { ... }, "context": { ... } }
  * @param {LambdaServiceOptions} options - options.
  * @returns {Promise<{ address: string, host: string, port: number, close: () => Promise<void> }>} - Result.
  */
@@ -123,7 +124,11 @@ export async function startLambdaService({
                 continue;
               }
 
-              const functionName = payload?.functionName;
+              // Compatibility: accept either legacy {functionName,...} or v2 envelope {actor,...}
+              const functionName =
+                typeof payload?.actor === 'string'
+                  ? payload.actor
+                  : payload?.functionName;
               if (!functionName || typeof functionName !== 'string') {
                 pollLog &&
                   pollLog('lambda poll: missing functionName', {
