@@ -24,6 +24,7 @@ program
 
 program.addCommand(require('../cli/cmds/config'));
 program.addCommand(require('../cli/cmds/list'));
+program.addCommand(require('../cli/cmds/ops'));
 program.addCommand(require('../cli/cmds/utils'));
 program.addCommand(require('../cli/cmds/project'));
 program.addCommand(require('../cli/cmds/deployment'));
@@ -32,11 +33,12 @@ program.addCommand(require('../cli/cmds/app'));
 program.hook('preAction', async () => {
   await paths.createWharfiePaths();
 
-  // Local-only v2 app commands should not require AWS credentials/config.
+  // Local-only v2 commands should not require AWS credentials/config.
   // Example:
   //   wharfie app manifest
+  //   wharfie ops list <resourceId>
   const argv = process.argv.slice(2);
-  if (argv[0] === 'app') {
+  if (argv[0] === 'app' || argv[0] === 'ops') {
     return;
   }
 
@@ -86,5 +88,7 @@ if (!process.stdin.isTTY) {
 } else {
   program.parse(process.argv);
 }
+
+
 
 

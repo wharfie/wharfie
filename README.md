@@ -53,3 +53,23 @@ wharfie project init
 ### Reference
 
 [docs.wharfie.dev](docs.wharfie.dev)
+
+### Operation DAG inspection/execution (v2)
+
+The `wharfie ops` command group exposes local, provider-neutral tooling for inspecting and executing persisted operation DAGs.
+
+```bash
+wharfie ops list <resourceId>
+wharfie ops list <resourceId> <operationId>
+wharfie ops cancel <resourceId> --operationId <operationId>
+wharfie ops run <resourceId> <operationId>
+```
+
+DB selection is explicit via env vars (default: `vanilla`):
+
+```bash
+export WHARFIE_DB_ADAPTER=vanilla   # or lmdb|dynamodb
+export WHARFIE_DB_PATH=/path/to/db
+```
+
+
