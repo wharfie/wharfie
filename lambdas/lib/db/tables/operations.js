@@ -15,6 +15,14 @@ const KEY_NAME = 'resource_id';
 const SORT_KEY_NAME = 'sort_key';
 
 /**
+ * Partition key used to maintain a provider-neutral index of all resources.
+ *
+ * The operations table is partitioned by `resource_id`, so listing *all* resources
+ * requires an additional index partition.
+ */
+const RESOURCES_INDEX_PARTITION_KEY = '__resources__';
+
+/**
  * @param {string} propertyName - propertyName.
  * @param {string} propertyValue - propertyValue.
  * @returns {import('../../db/base.js').KeyCondition} - Result.
@@ -105,6 +113,7 @@ const normalizeRecord = (record) => {
  * @typedef {Object} OperationsTableClient
  * @property {(resource: Resource) => Promise<void>} putResource - putResource.
  * @property {(resource_id: string) => Promise<Resource | null>} getResource - getResource.
+ * @property {() => Promise<Resource[]>} getAllResources - getAllResources.
  * @property {(resource: Resource) => Promise<void>} deleteResource - deleteResource.
  * @property {(operation: Operation) => Promise<void>} putOperation - putOperation.
  * @property {(resource_id: string, operation_id: string) => Promise<Operation | null>} getOperation - getOperation.
@@ -140,11 +149,24 @@ export function createOperationsTable({
    * @returns {Promise<void>} - Result.
    */
   async function putResource(resource) {
-    await dbClient.put({
+    const record = resource.toRecord();
+    await dbClient.batchWrite({
       tableName,
-      keyName: KEY_NAME,
-      sortKeyName: SORT_KEY_NAME,
-      record: resource.toRecord(),
+      putRequests: [
+        {
+          keyName: KEY_NAME,
+          sortKeyName: SORT_KEY_NAME,
+          record,
+        },
+        {
+          keyName: KEY_NAME,
+          sortKeyName: SORT_KEY_NAME,
+          record: {
+            ...record,
+            resource_id: RESOURCES_INDEX_PARTITION_KEY,
+          },
+        },
+      ],
     });
   }
 
@@ -177,6 +199,35 @@ export function createOperationsTable({
   }
 
   /**
+   * Provider-neutral resource listing backed by a dedicated index partition.
+   * @returns {Promise<Resource[]>} - Result.
+   */
+  async function getAllResources() {
+    try {
+      const items =
+        (await dbClient.query({
+          tableName,
+          consistentRead: true,
+          keyConditions: [pkEq(KEY_NAME, RESOURCES_INDEX_PARTITION_KEY)],
+        })) || [];
+
+      return items
+        .filter((item) => item?.data?.record_type === Resource.RecordType)
+        .map((item) =>
+          Resource.fromRecord(
+            /** @type {import('../../graph/typedefs.js').ResourceRecord} */ (
+              item
+            ),
+          ),
+        )
+        .sort((a, b) => a.id.localeCompare(b.id));
+    } catch (error) {
+      if (isResourceNotFound(error)) return [];
+      throw error;
+    }
+  }
+
+  /**
    * @param {Resource} resource - resource.
    * @returns {Promise<void>} - Result.
    */
@@ -192,19 +243,27 @@ export function createOperationsTable({
           ],
         })) || [];
 
-      if (!items.length) return;
-
-      for (const batch of chunk(items, 25)) {
-        await dbClient.batchWrite({
-          tableName,
-          deleteRequests: batch.map((item) => ({
-            keyName: KEY_NAME,
-            keyValue: item.resource_id,
-            sortKeyName: SORT_KEY_NAME,
-            sortKeyValue: item.sort_key,
-          })),
-        });
+      if (items.length) {
+        for (const batch of chunk(items, 25)) {
+          await dbClient.batchWrite({
+            tableName,
+            deleteRequests: batch.map((item) => ({
+              keyName: KEY_NAME,
+              keyValue: item.resource_id,
+              sortKeyName: SORT_KEY_NAME,
+              sortKeyValue: item.sort_key,
+            })),
+          });
+        }
       }
+
+      await dbClient.remove({
+        tableName,
+        keyName: KEY_NAME,
+        keyValue: RESOURCES_INDEX_PARTITION_KEY,
+        sortKeyName: SORT_KEY_NAME,
+        sortKeyValue: resource.id,
+      });
     } catch (error) {
       if (isResourceNotFound(error)) return;
       throw error;
@@ -632,6 +691,7 @@ export function createOperationsTable({
   return {
     putResource,
     getResource,
+    getAllResources,
     deleteResource,
     putOperation,
     getOperation,

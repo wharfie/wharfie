@@ -1,25 +1,62 @@
 import { createRequire } from 'node:module';
+import createOperationsStore from '../../lambdas/lib/graph/operations-store.js';
+
 const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const { displayFailure, displaySuccess } = require('../output/basic');
-const { getRecords, getAllResources } =
-  require('../../lambdas/lib/dynamo/operations').default;
+
+function resolveAdapterName() {
+  const adapter = process.env.WHARFIE_DB_ADAPTER?.trim().toLowerCase();
+  if (!adapter) return 'vanilla';
+
+  if (adapter === 'dynamodb') return 'dynamodb';
+  if (adapter === 'lmdb') return 'lmdb';
+  if (adapter === 'vanilla') return 'vanilla';
+
+  throw new Error(
+    `Invalid WHARFIE_DB_ADAPTER: ${process.env.WHARFIE_DB_ADAPTER}`,
+  );
+}
+
+async function createDBClient() {
+  const adapterName = resolveAdapterName();
+  const path = process.env.WHARFIE_DB_PATH;
+
+  if (adapterName === 'dynamodb') {
+    const { default: createDynamoDB } =
+      await import('../../lambdas/lib/db/adapters/dynamodb.js');
+    return createDynamoDB({
+      region: process.env.AWS_REGION,
+    });
+  }
+
+  if (adapterName === 'lmdb') {
+    const { default: createLMDB } =
+      await import('../../lambdas/lib/db/adapters/lmdb.js');
+    return createLMDB({ path });
+  }
+
+  const { default: createVanillaDB } =
+    await import('../../lambdas/lib/db/adapters/vanilla.js');
+  return createVanillaDB({ path });
+}
 
 /**
+ * @param {import('../../lambdas/lib/db/tables/operations.js').OperationsTableClient} store
  * @param {string} [resource_id] -
  * @param {string} [operation_id] -
  */
-const list = async (resource_id, operation_id) => {
+const list = async (store, resource_id, operation_id) => {
   if (!resource_id) {
-    const resources = await getAllResources();
+    const resources = await store.getAllResources();
     console.table(
       resources.map(({ id }) => ({
         resource_id: id,
       })),
     );
   } else if (!operation_id) {
-    const records = await getRecords(resource_id);
+    const records = await store.getRecords(resource_id);
     records.operations.sort((a, b) => b.started_at - a.started_at);
     console.table(
       records.operations.map(({ operation_config, resource_id, ...x }) => ({
@@ -31,7 +68,7 @@ const list = async (resource_id, operation_id) => {
       })),
     );
   } else {
-    const records = await getRecords(resource_id, operation_id);
+    const records = await store.getRecords(resource_id, operation_id);
     if (records.operations.length === 0) {
       displaySuccess(`No operation found`);
       return;
@@ -69,10 +106,19 @@ const listCommand = new Command('list')
   .argument('[resource_id]', 'The wharfie resource ID', null)
   .argument('[operation_id]', 'The wharfie operation ID', null)
   .action(async (resource_id, operation_id) => {
+    const db = await createDBClient();
+    const store = createOperationsStore({ db });
+
     try {
-      await list(resource_id, operation_id);
+      await list(store, resource_id, operation_id);
     } catch (err) {
       displayFailure(err);
+    } finally {
+      try {
+        await db.close();
+      } catch (err) {
+        // ignore
+      }
     }
   });
 

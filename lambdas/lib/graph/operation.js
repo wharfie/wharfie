@@ -294,46 +294,62 @@ class Operation {
    */
   getSequentialActionOrder() {
     const actions = this.getActions();
-    /**
-     * @type {Action[]}
-     */
+
+    /** @type {Map<string, Action>} */
+    const actionById = new Map();
+    /** @type {Map<string, number>} */
+    const inDegree = new Map();
+
+    for (const action of actions) {
+      actionById.set(action.id, action);
+      inDegree.set(action.id, this.incomingEdges.get(action.id)?.length || 0);
+    }
+
+    /** @type {string[]} */
+    const queue = [];
+    for (const action of actions) {
+      if ((inDegree.get(action.id) || 0) === 0) {
+        queue.push(action.id);
+      }
+    }
+
+    /** @type {Action[]} */
     const actionOrder = [];
     const visited = new Set();
-    /**
-     * @type {Action[]}
-     */
-    const queue = [];
 
-    /**
-     * @param {Action} action - action.
-     * @this {Operation}
-     */
-    function bfs(action) {
-      queue.push(action);
+    while (queue.length > 0) {
+      const currentActionId = queue.shift();
+      if (!currentActionId) {
+        throw new Error('Queue should not be empty');
+      }
+      if (visited.has(currentActionId)) {
+        continue;
+      }
+      visited.add(currentActionId);
 
-      while (queue.length > 0) {
-        const currentAction = queue.shift();
-        if (!currentAction) {
-          throw new Error('Queue should not be empty');
-        }
-        if (visited.has(currentAction.id)) {
+      const currentAction = actionById.get(currentActionId);
+      if (currentAction) {
+        actionOrder.push(currentAction);
+      }
+
+      const downstreamActionIds = this.getDownstreamActionIds(currentActionId);
+      for (const downstreamActionId of downstreamActionIds) {
+        if (!inDegree.has(downstreamActionId)) {
           continue;
         }
-        visited.add(currentAction.id);
-        actionOrder.push(currentAction);
-
-        const downstreamActions = this.getDownstreamActions(currentAction);
-        for (const dependency of downstreamActions) {
-          if (!visited.has(dependency.id)) {
-            queue.push(dependency);
-          }
+        const nextInDegree = (inDegree.get(downstreamActionId) || 0) - 1;
+        inDegree.set(downstreamActionId, nextInDegree);
+        if (nextInDegree === 0) {
+          queue.push(downstreamActionId);
         }
       }
     }
 
+    // If we couldn't resolve a full ordering (cycle or missing edges), append
+    // remaining actions in a stable order.
     for (const action of actions) {
       if (!visited.has(action.id)) {
-        bfs.call(this, action);
+        actionOrder.push(action);
       }
     }
 
