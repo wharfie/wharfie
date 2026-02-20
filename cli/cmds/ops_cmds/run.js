@@ -1,15 +1,12 @@
-import { createRequire } from 'node:module';
+import { Command } from 'commander';
+
 import createOperationsStore from '../../../lambdas/lib/graph/operations-store.js';
 import { runOperation } from '../../../lambdas/lib/graph/runner.js';
-
-const require = createRequire(import.meta.url);
-
-const { Command } = require('commander');
-const {
-  displaySuccess,
+import {
   displayFailure,
   displayInfo,
-} = require('../../output/basic');
+  displaySuccess,
+} from '../../output/basic.js';
 
 function resolveAdapterName() {
   const adapter = process.env.WHARFIE_DB_ADAPTER?.trim().toLowerCase();
@@ -95,4 +92,4 @@ const runCommand = new Command('run')
     }
   });
 
-module.exports = runCommand;
+export default runCommand;

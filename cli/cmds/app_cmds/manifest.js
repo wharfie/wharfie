@@ -1,9 +1,7 @@
-import { createRequire } from 'node:module';
-import { loadApp } from '../../app/load-app.js';
-const require = createRequire(import.meta.url);
+import { Command } from 'commander';
 
-const { Command } = require('commander');
-const { displayFailure } = require('../../output/basic');
+import { loadApp } from '../../app/load-app.js';
+import { displayFailure } from '../../output/basic.js';
 
 // Usage:
 //   wharfie app manifest                # pretty JSON (default)
@@ -41,4 +39,4 @@ const manifestCommand = new Command('manifest')
     }
   });
 
-module.exports = manifestCommand;
+export default manifestCommand;

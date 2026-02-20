@@ -1,15 +1,9 @@
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
+import { Command } from 'commander';
 
-const { Command } = require('commander');
+import manifestCommand from './app_cmds/manifest.js';
 
 const appCommand = new Command('app')
-  .description('Wharfie v2 app commands')
-  .action(() => {
-    // Display help if no subcommands are specified
-    appCommand.help();
-  });
+  .description('Local-only v2 app commands')
+  .addCommand(manifestCommand);
 
-appCommand.addCommand(require('./app_cmds/manifest'));
-
-module.exports = appCommand;
+export default appCommand;

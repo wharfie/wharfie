@@ -1,34 +1,13 @@
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
+import { Command } from 'commander';
 
-const { Command } = require('commander');
+import cancelCommand from './ops_cmds/cancel.js';
+import listCommand from './ops_cmds/list.js';
+import runCommand from './ops_cmds/run.js';
 
 const opsCommand = new Command('ops')
-  .description('Inspect and execute operation DAGs')
-  .action(() => {
-    // Display help if no subcommands are specified
-    opsCommand.help();
-  });
+  .description('Local-only v2 operations commands')
+  .addCommand(listCommand)
+  .addCommand(cancelCommand)
+  .addCommand(runCommand);
 
-opsCommand.addCommand(require('./ops_cmds/list'));
-opsCommand.addCommand(require('./ops_cmds/cancel'));
-opsCommand.addCommand(require('./ops_cmds/run'));
-
-opsCommand.addHelpText(
-  'after',
-  `
-
-Examples:
-  wharfie ops list <resourceId>
-  wharfie ops list <resourceId> <operationId>
-  wharfie ops cancel <resourceId> --operationId <operationId>
-  wharfie ops cancel <resourceId> --type LOAD
-  wharfie ops run <resourceId> <operationId>
-
-DB configuration (provider-neutral):
-  WHARFIE_DB_ADAPTER=vanilla|lmdb|dynamodb   (default: vanilla)
-  WHARFIE_DB_PATH=/path/to/db               (vanilla/lmdb)
-`,
-);
-
-module.exports = opsCommand;
+export default opsCommand;

@@ -1,14 +1,11 @@
-import { createRequire } from 'node:module';
+import { Command } from 'commander';
+
 import createOperationsStore from '../../../lambdas/lib/graph/operations-store.js';
-
-const require = createRequire(import.meta.url);
-
-const { Command } = require('commander');
-const {
-  displaySuccess,
+import {
   displayFailure,
   displayInstruction,
-} = require('../../output/basic');
+  displaySuccess,
+} from '../../output/basic.js';
 
 function resolveAdapterName() {
   const adapter = process.env.WHARFIE_DB_ADAPTER?.trim().toLowerCase();
@@ -114,4 +111,4 @@ const cancelCommand = new Command('cancel')
     }
   });
 
-module.exports = cancelCommand;
+export default cancelCommand;

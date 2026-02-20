@@ -1,216 +1,178 @@
-import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const require = createRequire(import.meta.url);
+import { Command } from 'commander';
 
-const { Command } = require('commander');
+import NodeBinary from '../../lambdas/lib/actor/resources/builds/node-binary.js';
+import SeaBuild from '../../lambdas/lib/actor/resources/builds/sea-build.js';
+import MacOSBinarySignature from '../../lambdas/lib/actor/resources/builds/macos-binary-signature.js';
 
-/**
- * Build a SEA (Single Executable Application) of the Wharfie CLI itself.
- *
- * Manual smoke (after building on your platform):
- *   ./dist/wharfie-<platform>-<arch> --help
- *   ./dist/wharfie-<platform>-<arch> app manifest --help
- *
- * Windows:
- *   .\dist\wharfie-win32-x64.exe --help
- *   .\dist\wharfie-win32-x64.exe app manifest --help
- *
- * Notes:
- * - This command is intentionally disabled under Jest/test runs to avoid network
- *   downloads (Node binaries) during unit tests.
- */
+import {
+  displayFailure,
+  displayInfo,
+  displaySuccess,
+} from '../output/basic.js';
 
 /**
- * @returns {boolean}
+ * build-self intentionally downloads Node.js distribution artifacts (via NodeBinary)
+ * and postjects a SEA blob into the target node binary.
+ *
+ * Jest runs must never trigger that network/download path.
  */
-function isTestEnv() {
-  return process.env.NODE_ENV === 'test' || Boolean(process.env.JEST_WORKER_ID);
+function assertNotUnderJest() {
+  if (process.env.JEST_WORKER_ID) {
+    throw new Error('wharfie build-self is disabled under jest');
+  }
 }
 
 /**
- * @param {string} value
- * @returns {'darwin'|'linux'|'win32'}
+ * @param {string} platform - platform
+ * @returns {'darwin'|'linux'|'win32'} - normalized platform
  */
-function normalizePlatform(value) {
-  const v = String(value || '')
-    .trim()
-    .toLowerCase();
-
-  if (v === 'darwin' || v === 'linux' || v === 'win32') return v;
-
-  // Friendly aliases (CLI ergonomics)
-  if (v === 'mac' || v === 'macos' || v === 'osx') return 'darwin';
-  if (v === 'windows' || v === 'win') return 'win32';
-
-  throw new Error(
-    `Unsupported platform: ${value}. Expected one of: darwin, linux, win32`,
-  );
+function normalizePlatform(platform) {
+  const p = String(platform).toLowerCase();
+  if (p === 'mac' || p === 'macos' || p === 'osx') return 'darwin';
+  if (p === 'windows' || p === 'win') return 'win32';
+  if (p === 'linux') return 'linux';
+  if (p === 'darwin' || p === 'win32') return /** @type {any} */ (p);
+  throw new Error(`Unsupported platform: ${platform}`);
 }
 
 /**
- * @param {string} value
- * @returns {'x64'|'arm64'}
+ * @param {string} arch - arch
+ * @returns {'arm64'|'x64'} - normalized arch
  */
-function normalizeArch(value) {
-  const v = String(value || '')
-    .trim()
-    .toLowerCase();
-
-  if (v === 'x64' || v === 'arm64') return v;
-
-  // Friendly aliases (CLI ergonomics)
-  if (v === 'amd64') return 'x64';
-  if (v === 'aarch64') return 'arm64';
-
-  throw new Error(`Unsupported arch: ${value}. Expected one of: x64, arm64`);
+function normalizeArch(arch) {
+  const a = String(arch).toLowerCase();
+  if (a === 'amd64') return 'x64';
+  if (a === 'arm64' || a === 'x64') return /** @type {any} */ (a);
+  throw new Error(`Unsupported arch: ${arch}`);
 }
 
 /**
- * @param {{ platform?: string, arch?: string }} options
- * @returns {Promise<void>}
+ * Find the repo root (directory containing package.json) without relying on import.meta.
+ * @param {string} startDir - startDir
+ * @returns {string} - repo root
  */
-async function buildSelf(options) {
-  if (isTestEnv()) {
-    console.error(
-      'wharfie build-self is disabled while running under tests (Jest).',
-    );
-    process.exitCode = 1;
-    return;
+function findRepoRoot(startDir) {
+  let dir = path.resolve(startDir);
+
+  while (true) {
+    const candidate = path.join(dir, 'package.json');
+    if (fs.existsSync(candidate)) return dir;
+
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
   }
 
-  const repoRoot = path.resolve(import.meta.dirname, '../..');
+  return path.resolve(startDir);
+}
 
-  const targetPlatform = normalizePlatform(
-    options.platform ?? process.platform,
-  );
-  const targetArch = normalizeArch(options.arch ?? process.arch);
-
-  if (targetPlatform === 'darwin' && process.platform !== 'darwin') {
-    throw new Error(
-      'Cannot build a darwin SEA from a non-darwin host. Run this on macOS.',
-    );
-  }
-
+/**
+ * Build a SEA single-executable for Wharfie CLI.
+ *
+ * Smoke test (manual):
+ *   1) node ./bin/wharfie build-self
+ *   2) ./dist/wharfie-$(node -p "process.platform")-$(node -p "process.arch") --help
+ *   3) ./dist/wharfie-$(node -p "process.platform")-$(node -p "process.arch") app manifest --help
+ */
+async function buildSelf({ platform, arch, nodeVersion }) {
+  const repoRoot = findRepoRoot(process.cwd());
   const distDir = path.join(repoRoot, 'dist');
   fs.mkdirSync(distDir, { recursive: true });
 
-  const outputBase = `wharfie-${targetPlatform}-${targetArch}`;
-  const outputPath = path.join(
-    distDir,
-    targetPlatform === 'win32' ? `${outputBase}.exe` : outputBase,
+  const normalizedPlatform = normalizePlatform(platform);
+  const normalizedArch = normalizeArch(arch);
+
+  const outName = `wharfie-${normalizedPlatform}-${normalizedArch}${
+    normalizedPlatform === 'win32' ? '.exe' : ''
+  }`;
+  const outPath = path.join(distDir, outName);
+
+  displayInfo(
+    `Building Wharfie SEA executable for ${normalizedPlatform}/${normalizedArch} (node ${nodeVersion})...`,
   );
 
-  console.log(
-    `Building Wharfie SEA executable for ${targetPlatform}/${targetArch} (node ${process.versions.node})...`,
-  );
-
-  const [{ default: NodeBinary }, { default: SeaBuild }] = await Promise.all([
-    import('../../lambdas/lib/actor/resources/builds/node-binary.js'),
-    import('../../lambdas/lib/actor/resources/builds/sea-build.js'),
-  ]);
-
-  const nodeMajor = process.versions.node.split('.')[0];
   const nodeBinary = new NodeBinary({
-    name: `wharfie-self-node-${targetPlatform}-${targetArch}-${process.versions.node}`,
+    name: `wharfie-self-node-${normalizedPlatform}-${normalizedArch}`,
     properties: {
-      version: nodeMajor,
-      exactVersion: `v${process.versions.node}`,
-      platform: targetPlatform,
-      architecture: targetArch,
+      version: nodeVersion,
+      platform: normalizedPlatform,
+      architecture: normalizedArch,
     },
   });
 
-  const entryCode = [
-    "import sourceMapSupport from 'source-map-support';",
-    'sourceMapSupport.install();',
-    "require('./bin/wharfie');",
-  ].join('\n');
-
+  // NOTE: We keep entryCode minimal and ESM-only to keep esbuild bundling predictable.
   const seaBuild = new SeaBuild({
-    name: outputBase,
-    dependsOn: [nodeBinary],
+    name: `wharfie-self-${normalizedPlatform}-${normalizedArch}`,
     properties: {
-      entryCode,
+      entryCode: () =>
+        `
+          import { main } from './cli/entry.js';
+
+          main(process.argv).catch((err) => {
+            // eslint-disable-next-line no-console
+            console.error(err);
+            process.exitCode = 1;
+          });
+        `,
       resolveDir: () => repoRoot,
       nodeBinaryPath: () => nodeBinary.get('binaryPath'),
       nodeVersion: () => nodeBinary.get('exactVersion').slice(1),
-      platform: targetPlatform,
-      architecture: targetArch,
+      platform: normalizedPlatform,
+      architecture: normalizedArch,
     },
   });
 
+  // NodeBinary must be reconciled first (SeaBuild waits on stable dependsOn but does not reconcile it).
   await nodeBinary.reconcile();
   await seaBuild.reconcile();
 
-  const builtBinaryPath = seaBuild.get('binaryPath');
-  if (!builtBinaryPath || typeof builtBinaryPath !== 'string') {
-    throw new Error('SeaBuild did not produce a binaryPath.');
+  fs.copyFileSync(seaBuild.get('binaryPath'), outPath);
+
+  if (normalizedPlatform !== 'win32') {
+    fs.chmodSync(outPath, 0o755);
   }
 
-  fs.copyFileSync(builtBinaryPath, outputPath);
-  if (targetPlatform !== 'win32') {
-    fs.chmodSync(outputPath, 0o755);
-  }
-
-  if (process.platform === 'darwin' && targetPlatform === 'darwin') {
-    const { default: MacOSBinarySignature } =
-      await import('../../lambdas/lib/actor/resources/builds/macos-binary-signature.js');
-
-    const signer = new MacOSBinarySignature({
-      name: `wharfie-self-sign-${targetPlatform}-${targetArch}-${process.versions.node}`,
+  if (normalizedPlatform === 'darwin' && process.platform === 'darwin') {
+    const signature = new MacOSBinarySignature({
+      name: `${outName}-signature`,
       properties: {
-        binaryPath: outputPath,
+        binaryPath: () => outPath,
       },
     });
-
-    // NOTE: spctl assessment rejects standalone executables (it is primarily meant for
-    // app bundles). The underlying codesign verification is what we care about here.
-    // We temporarily set CI=1 so MacOSBinarySignature skips spctl locally.
-    const prevCI = process.env.CI;
-    if (!process.env.CI) process.env.CI = '1';
-    try {
-      await signer.reconcile();
-    } finally {
-      if (prevCI === undefined) {
-        delete process.env.CI;
-      } else {
-        process.env.CI = prevCI;
-      }
-    }
+    await signature.reconcile();
   }
 
-  console.log(`Built: ${outputPath}`);
+  displaySuccess(`Built: ${outPath}`);
 }
 
-/**
- * @param {import('commander').Command} cmd
- * @returns {import('commander').Command}
- */
-function configureBuildCommand(cmd) {
-  return cmd
-    .description('Build a SEA single-executable of the Wharfie CLI itself')
-    .option('--platform <platform>', 'Target platform (darwin|linux|win32)')
-    .option('--arch <arch>', 'Target architecture (x64|arm64)')
-    .action(async (options) => {
-      try {
-        await buildSelf(options);
-      } catch (err) {
-        console.error(err);
-        process.exitCode = 1;
-      }
-    });
-}
-
-const buildSelfCommand = configureBuildCommand(new Command('build-self'));
-
-export const selfCommand = new Command('self')
-  .description('Self-referential Wharfie commands')
-  .action(() => {
-    selfCommand.help();
+const buildSelfCommand = new Command('build-self')
+  .description('Build Wharfie CLI as a single executable (SEA)')
+  .option(
+    '--platform <platform>',
+    'Target platform (darwin|linux|win32)',
+    process.platform,
+  )
+  .option('--arch <arch>', 'Target architecture (arm64|x64)', process.arch)
+  .option(
+    '--node-version <nodeVersion>',
+    'Node version prefix to embed (default: current node)',
+    process.versions.node,
+  )
+  .action(async (options) => {
+    try {
+      assertNotUnderJest();
+      await buildSelf({
+        platform: options.platform,
+        arch: options.arch,
+        nodeVersion: options.nodeVersion,
+      });
+    } catch (err) {
+      displayFailure(err);
+      process.exitCode = 1;
+    }
   });
-
-selfCommand.addCommand(configureBuildCommand(new Command('build')));
 
 export default buildSelfCommand;

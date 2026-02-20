@@ -1,7 +1,9 @@
-const semver = require('semver');
-const https = require('https');
-const { version } = require('../package.json');
-const { displayWarning } = require('./output/basic');
+import https from 'node:https';
+
+import semver from 'semver';
+
+import { WHARFIE_VERSION } from '../lambdas/lib/version.js';
+import { displayWarning } from './output/basic.js';
 
 /**
  *
@@ -42,14 +44,16 @@ function getLatestRelease() {
 /**
  *
  */
-async function checkForNewRelease() {
+export async function checkForNewRelease() {
   try {
-    const currentVersion = version;
+    const currentVersion = WHARFIE_VERSION;
     if (!currentVersion || !semver.valid(currentVersion)) {
       throw new Error('Invalid or missing version in process.env.version');
     }
     const latestRelease = await getLatestRelease();
-    const latestVersion = latestRelease.tag_name.replace(/^v/, ''); // Remove leading 'v' if present
+
+    // Remove leading 'v' if present
+    const latestVersion = latestRelease.tag_name.replace(/^v/, '');
 
     if (!semver.valid(latestVersion)) {
       throw new Error('Invalid semver format in GitHub release');
@@ -62,9 +66,11 @@ async function checkForNewRelease() {
         `Please update to the latest version to get the latest features and bug fixes.`,
       );
     }
-  } catch (error) {}
+  } catch (error) {
+    // ignore
+  }
 }
 
-module.exports = {
+export default {
   checkForNewRelease,
 };
