@@ -15,6 +15,7 @@ import listCommand from './cmds/list.js';
 import opsCommand from './cmds/ops.js';
 import appCommand from './cmds/app.js';
 import buildSelfCommand from './cmds/build_self.js';
+import initCommand from './cmds/init.js';
 
 /**
  * Build the Wharfie CLI commander program.
@@ -33,6 +34,7 @@ export function createProgram() {
   program.addCommand(opsCommand);
   program.addCommand(appCommand);
   program.addCommand(buildSelfCommand);
+  program.addCommand(initCommand);
 
   program.hook('preAction', async () => {
     await paths.createWharfiePaths();
@@ -50,6 +52,7 @@ export function createProgram() {
       args[0] === 'ops' ||
       args[0] === 'list' ||
       args[0] === 'build-self' ||
+      args[0] === 'init' ||
       (args[0] === 'self' && args[1] === 'build');
 
     if (isHelp || isLocalOnly) return;
