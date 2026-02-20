@@ -259,6 +259,8 @@ class SeaBuild extends BaseResource {
       ],
       define: {
         __WILLEM_BUILD_RECONCILE_TERMINATOR: '1', // injects this variable definition into the global scope
+        'import.meta.url': '__filename',
+        'import.meta.dirname': '__dirname',
       },
     });
 

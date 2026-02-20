@@ -77,7 +77,7 @@ const sortKeyToNumber = (sortKey) => {
 /**
  * @typedef {Object} schedulerClient
  * @property {(schedulerEvent: SchedulerEntry) => Promise<void>} schedule - schedule.
- * @property {(schedulerEvent: SchedulerEntry, status: import('../../../scheduler/scheduler-entry.js').SchedulerEntryStatusEnum) => Promise<void>} update - update.
+ * @property {(schedulerEvent: SchedulerEntry, status: any) => Promise<void>} update - update. TODO: make a real status enum
  * @property {(resource_id: string, partition: string, window: [number, number]) => Promise<SchedulerEntry[]>} query - query.
  * @property {(resource_id: string) => Promise<void>} delete_records - delete_records.
  */
@@ -127,7 +127,7 @@ export function createSchedulerTable({
 
   /**
    * @param {SchedulerEntry} schedulerEvent - schedulerEvent.
-   * @param {import('../../../scheduler/scheduler-entry.js').SchedulerEntryStatusEnum} status - status.
+   * @param {any} status - status. TODO: make a real status enum
    * @returns {Promise<void>} - Result.
    */
   async function update(schedulerEvent, status) {

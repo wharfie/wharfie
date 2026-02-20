@@ -24,7 +24,7 @@ async function getTable(tableName) {
 }
 
 /**
- * @param {import('../../typedefs.js').DependencyRecord} dependency - dependency.
+ * @param {import('../../../typedefs.js').DependencyRecord} dependency - dependency.
  * @param {string} [tableName] - tableName.
  * @returns {Promise<any>} - Result.
  */
@@ -33,7 +33,7 @@ export async function putDependency(dependency, tableName) {
 }
 
 /**
- * @param {import('../../typedefs.js').DependencyRecord | string} dependency - dependency.
+ * @param {import('../../../typedefs.js').DependencyRecord | string} dependency - dependency.
  * @param {string} [tableName] - tableName.
  * @returns {Promise<any>} - Result.
  */
@@ -41,12 +41,12 @@ export async function findDependencies(dependency, tableName) {
   const record =
     typeof dependency === 'string' ? { dependency } : dependency || {};
   return (await getTable(tableName)).findDependencies(
-    /** @type {import('../../typedefs.js').DependencyRecord} */ (record),
+    /** @type {import('../../../typedefs.js').DependencyRecord} */ (record),
   );
 }
 
 /**
- * @param {import('../../typedefs.js').DependencyRecord} dependency - dependency.
+ * @param {import('../../../typedefs.js').DependencyRecord} dependency - dependency.
  * @param {string} [tableName] - tableName.
  * @returns {Promise<any>} - Result.
  */

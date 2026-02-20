@@ -24,7 +24,7 @@ async function getTable(tableName) {
 }
 
 /**
- * @param {import('../../scheduler/scheduler-entry.js').default} schedulerEvent - schedulerEvent.
+ * @param {any} schedulerEvent - schedulerEvent.
  * @returns {Promise<any>} - Result.
  */
 export async function schedule(schedulerEvent) {
@@ -32,8 +32,8 @@ export async function schedule(schedulerEvent) {
 }
 
 /**
- * @param {import('../../scheduler/scheduler-entry.js').default} schedulerEvent - schedulerEvent.
- * @param {import('../../scheduler/scheduler-entry.js').SchedulerEntryStatusEnum} status - status.
+ * @param {any} schedulerEvent - schedulerEvent.
+ * @param {any} status - status.
  * @returns {Promise<any>} - Result.
  */
 export async function update(schedulerEvent, status) {

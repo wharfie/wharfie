@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-const STS = require('../lambdas/lib/sts').default;
+const STS = require('../lambdas/lib/aws/sts').default;
 const { defaultProvider } = require('@aws-sdk/credential-provider-node');
 
 const configuration = {
@@ -70,7 +70,7 @@ async function validateConfig() {
   check(configuration);
 }
 
-module.exports = {
+export default {
   /**
    * @param {CLIConfig} params -
    */

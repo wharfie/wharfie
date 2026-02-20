@@ -1,15 +1,11 @@
-import { createRequire } from 'node:module';
+import { Command } from 'commander';
+
 import createOperationsStore from '../../../lambdas/lib/graph/operations-store.js';
-
-const require = createRequire(import.meta.url);
-
-const { Command } = require('commander');
-const {
-  displaySuccess,
+import {
   displayFailure,
   displayInstruction,
-  displayInfo,
-} = require('../../output/basic');
+  displaySuccess,
+} from '../../output/basic.js';
 
 function resolveAdapterName() {
   const adapter = process.env.WHARFIE_DB_ADAPTER?.trim().toLowerCase();
@@ -77,43 +73,25 @@ const cancel = async (store, resource_id, operation_id, operation_type) => {
       operationChunk.map((operation) => store.deleteOperation(operation)),
     );
   }
+
   displaySuccess(`${operationsToRemoveCount} operations cancelled.`);
 };
 
-/**
- * Cancels all operations for all resources of a specific type.
- * @param {import('../../../lambdas/lib/db/tables/operations.js').OperationsTableClient} store
- * @param {string} operation_type - The type of operations to cancel.
- */
-const cancelAll = async (store, operation_type) => {
-  const resources = await store.getAllResources();
-  displayInfo(`Cancelling operations for ${resources.length} resources.`);
-  while (resources.length > 0) {
-    const resourceChunk = resources.splice(0, 10);
-    await Promise.all(
-      resourceChunk.map((resource) => {
-        displayInfo(`Cancelling: ${resource.id}`);
-        return cancel(store, resource.id, undefined, operation_type);
-      }),
-    );
-  }
-};
-
 const cancelCommand = new Command('cancel')
-  .description('Cancel running operations')
-  .argument('[resource_id]', 'Wharfie resource ID')
-  .argument('[operation_id]', 'Operation ID')
-  .option('-t, --type <type>', 'Operation type', /^(LOAD|BACKFILL|MIGRATE)$/i)
-  .option('-a, --all', 'DANGER! Cancels operations for all Wharfie resources')
-  .action(async (resource_id, operation_id, options) => {
-    const { type, all } = options;
+  .description('Cancel operations for a single resource')
+  .argument('<resource_id>', 'Wharfie resource ID')
+  .option('-o, --operationId <operationId>', 'Operation ID')
+  .option(
+    '-t, --type <type>',
+    'Operation type',
+    /^(LOAD|BACKFILL|MIGRATE|PIPELINE)$/i,
+  )
+  .action(async (resource_id, options) => {
+    const { type, operationId } = options;
+    const normalizedType = type ? String(type).toUpperCase() : undefined;
 
-    if (!resource_id && !all) {
-      displayInstruction("Param 'resource_id' Missing 🙁");
-      return;
-    }
-    if (type && operation_id) {
-      displayInstruction('Cannot accept both type and operation_id.');
+    if (normalizedType && operationId) {
+      displayInstruction('Cannot accept both type and operationId.');
       return;
     }
 
@@ -121,20 +99,16 @@ const cancelCommand = new Command('cancel')
     const store = createOperationsStore({ db });
 
     try {
-      if (all) {
-        await cancelAll(store, type);
-      } else {
-        await cancel(store, resource_id, operation_id, type);
-      }
+      await cancel(store, resource_id, operationId, normalizedType);
     } catch (err) {
       displayFailure(err);
     } finally {
       try {
         await db.close();
-      } catch (err) {
+      } catch {
         // ignore
       }
     }
   });
 
-module.exports = cancelCommand;
+export default cancelCommand;

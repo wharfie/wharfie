@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 
-import createOperationsStore from '../../lambdas/lib/graph/operations-store.js';
-import { displayFailure, displaySuccess } from '../output/basic.js';
+import createOperationsStore from '../../../lambdas/lib/graph/operations-store.js';
+import { displayFailure, displaySuccess } from '../../output/basic.js';
 
 function resolveAdapterName() {
   const adapter = process.env.WHARFIE_DB_ADAPTER?.trim().toLowerCase();
@@ -22,7 +22,7 @@ async function createDBClient() {
 
   if (adapterName === 'dynamodb') {
     const { default: createDynamoDB } =
-      await import('../../lambdas/lib/db/adapters/dynamodb.js');
+      await import('../../../lambdas/lib/db/adapters/dynamodb.js');
     return createDynamoDB({
       region: process.env.AWS_REGION,
     });
@@ -30,12 +30,12 @@ async function createDBClient() {
 
   if (adapterName === 'lmdb') {
     const { default: createLMDB } =
-      await import('../../lambdas/lib/db/adapters/lmdb.js');
+      await import('../../../lambdas/lib/db/adapters/lmdb.js');
     return createLMDB({ path });
   }
 
   const { default: createVanillaDB } =
-    await import('../../lambdas/lib/db/adapters/vanilla.js');
+    await import('../../../lambdas/lib/db/adapters/vanilla.js');
   return createVanillaDB({ path });
 }
 

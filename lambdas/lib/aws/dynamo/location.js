@@ -24,7 +24,7 @@ async function getTable(tableName) {
 }
 
 /**
- * @param {import('../../typedefs.js').LocationRecord} locationRecord - locationRecord.
+ * @param {import('../../../typedefs.js').LocationRecord} locationRecord - locationRecord.
  * @param {string} [tableName] - tableName.
  * @returns {Promise<any>} - Result.
  */
@@ -42,7 +42,7 @@ export async function findLocations(location, tableName) {
 }
 
 /**
- * @param {import('../../typedefs.js').LocationRecord} locationRecord - locationRecord.
+ * @param {import('../../../typedefs.js').LocationRecord} locationRecord - locationRecord.
  * @param {string} [tableName] - tableName.
  * @returns {Promise<any>} - Result.
  */

@@ -30,7 +30,8 @@
     "test:ci": "npm run lint && npm run typecheck && npm run test",
     "lint:js": "eslint . && prettier --check \"{*,**/*}.{js,json}\"",
     "lint": "npm run lint:js",
-    "lint:fix": "eslint --fix . && prettier --write \"{*,**/*}.{js,json}\""
+    "lint:fix": "eslint --fix . && prettier --write \"{*,**/*}.{js,json}\"",
+    "build:wharfie-v1": "node ./apps/wharfie-v1/wharfie.app.js"
   },
   "prettier": {
     "singleQuote": true,
@@ -47,7 +48,10 @@
       "<rootDir>/mock/builds/"
     ],
     "testMatch": [
-      "<rootDir>/test/actor/runtime/**/*.test.js"
+      "<rootDir>/test/cli/**/*.test.js",
+      "<rootDir>/test/runtime/**/*.test.js",
+      "<rootDir>/test/graph/**/*.test.js",
+      "<rootDir>/test/db/**/*.test.js"
     ]
   },
   "eslintConfig": {
