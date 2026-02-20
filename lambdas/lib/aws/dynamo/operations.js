@@ -24,7 +24,7 @@ async function getTable(tableName) {
 }
 
 /**
- * @param {import('../graph/resource.js').default} resource - resource.
+ * @param {import('../../graph/resource.js').default} resource - resource.
  * @param {string} [tableName] - tableName.
  * @returns {Promise<any>} - Result.
  */
@@ -42,7 +42,7 @@ export async function getResource(resource_id, tableName) {
 }
 
 /**
- * @param {import('../graph/resource.js').default} resource - resource.
+ * @param {import('../../graph/resource.js').default} resource - resource.
  * @param {string} [tableName] - tableName.
  * @returns {Promise<any>} - Result.
  */
@@ -51,7 +51,7 @@ export async function deleteResource(resource, tableName) {
 }
 
 /**
- * @param {import('../graph/operation.js').default} operation - operation.
+ * @param {import('../../graph/operation.js').default} operation - operation.
  * @returns {Promise<any>} - Result.
  */
 export async function putOperation(operation) {
@@ -68,7 +68,7 @@ export async function getOperation(resource_id, operation_id) {
 }
 
 /**
- * @param {import('../graph/operation.js').default} operation - operation.
+ * @param {import('../../graph/operation.js').default} operation - operation.
  * @returns {Promise<any>} - Result.
  */
 export async function deleteOperation(operation) {
@@ -84,7 +84,7 @@ export async function getOperations(resource_id) {
 }
 
 /**
- * @param {import('../graph/operation.js').default} operation - operation.
+ * @param {import('../../graph/operation.js').default} operation - operation.
  * @returns {Promise<any>} - Result.
  */
 export async function getActions(operation) {
@@ -110,7 +110,7 @@ export async function putAction(action) {
 }
 
 /**
- * @param {import('../graph/action.js').default} action - action.
+ * @param {import('../../graph/action.js').default} action - action.
  * @param {string} new_status - new_status.
  * @param {string} [overrideTableName] - overrideTableName.
  * @returns {Promise<any>} - Result.
@@ -170,8 +170,8 @@ export async function getQueries(resource_id, operation_id, action_id) {
 }
 
 /**
- * @param {import('../graph/operation.js').default} operation - operation.
- * @param {import('../graph/action.js').WharfieActionTypeEnum} action_type - action_type.
+ * @param {import('../../graph/operation.js').default} operation - operation.
+ * @param {import('../../graph/action.js').WharfieActionTypeEnum} action_type - action_type.
  * @returns {Promise<any>} - Result.
  */
 export async function checkActionPrerequisites(operation, action_type) {

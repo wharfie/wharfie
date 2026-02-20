@@ -6,7 +6,7 @@ import {
 } from '@aws-sdk/client-dynamodb';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 
-import BaseAWS from '../base.js';
+import BaseAWS from '../../aws/base.js';
 
 const credentials = fromNodeProviderChain();
 const docClient = DynamoDBDocument.from(

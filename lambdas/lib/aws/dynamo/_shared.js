@@ -6,9 +6,9 @@ import createDynamoDB from '../../db/adapters/dynamodb.js';
 import createLMDB from '../../db/adapters/lmdb.js';
 import createVanillaDB from '../../db/adapters/vanilla.js';
 
-/** @type {import('../db/base.js').DBClient | undefined} */
+/** @type {import('../../db/base.js').DBClient | undefined} */
 let _db;
-/** @type {Promise<import('../db/base.js').DBClient> | null} */
+/** @type {Promise<import('../../db/base.js').DBClient> | null} */
 let _initPromise = null;
 
 /**
@@ -42,7 +42,7 @@ function resolveAdapterName() {
 
 /**
  * @param {'dynamodb'|'lmdb'|'vanilla'} adapterName - adapterName.
- * @returns {Promise<import('../db/base.js').DBClient>} - Result.
+ * @returns {Promise<import('../../db/base.js').DBClient>} - Result.
  */
 async function createDB(adapterName) {
   if (adapterName === 'dynamodb') {
@@ -66,7 +66,7 @@ async function createDB(adapterName) {
 }
 
 /**
- * @returns {Promise<import('../db/base.js').DBClient>} - Result.
+ * @returns {Promise<import('../../db/base.js').DBClient>} - Result.
  */
 export async function getDB() {
   if (_db) return _db;
