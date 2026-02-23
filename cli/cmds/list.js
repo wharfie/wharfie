@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 
 import createOperationsStore from '../../lambdas/lib/graph/operations-store.js';
+import { resolveOperationsTableName } from '../../lambdas/lib/config/db.js';
 import { displayFailure, displaySuccess } from '../output/basic.js';
 
 function resolveAdapterName() {
@@ -44,7 +45,10 @@ const listCommand = new Command('list')
   .argument('<resource_id>', 'Wharfie resource ID')
   .action(async (resource_id) => {
     const db = await createDBClient();
-    const store = createOperationsStore({ db });
+    const store = createOperationsStore({
+      db,
+      tableName: resolveOperationsTableName(),
+    });
 
     try {
       const records = await store.getRecords(resource_id);

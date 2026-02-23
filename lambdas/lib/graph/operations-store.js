@@ -8,7 +8,7 @@ import { createOperationsTable } from '../db/tables/operations.js';
  * and returns the operations table API from `createOperationsTable`.
  * @param {{
  *   db: import('../db/base.js').DBClient,
- *   tableName?: string,
+ *   tableName: string,
  * }} params - params.
  * @returns {ReturnType<typeof createOperationsTable>} - Result.
  */
