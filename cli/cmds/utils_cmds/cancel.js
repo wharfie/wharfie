@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module';
 import createOperationsStore from '../../../lambdas/lib/graph/operations-store.js';
+import { resolveOperationsTableName } from '../../../lambdas/lib/config/db.js';
 
 const require = createRequire(import.meta.url);
 
@@ -118,7 +119,10 @@ const cancelCommand = new Command('cancel')
     }
 
     const db = await createDBClient();
-    const store = createOperationsStore({ db });
+    const store = createOperationsStore({
+      db,
+      tableName: resolveOperationsTableName(),
+    });
 
     try {
       if (all) {

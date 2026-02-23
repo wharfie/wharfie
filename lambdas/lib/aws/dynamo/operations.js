@@ -1,27 +1,7 @@
-import { createOperationsTable } from '../../db/tables/operations.js';
-import { getDB, resetDB } from './_shared.js';
-
-/** @type {Map<string, ReturnType<typeof createOperationsTable>>} */
-const _tables = new Map();
-
-/**
- * @param {string} [tableName] - tableName.
- * @returns {Promise<ReturnType<typeof createOperationsTable>>} - Result.
- */
-async function getTable(tableName) {
-  const key = tableName || '__default__';
-  const existing = _tables.get(key);
-  if (existing) return existing;
-
-  const db = await getDB();
-  const table = createOperationsTable({
-    db,
-    ...(tableName ? { tableName } : {}),
-  });
-
-  _tables.set(key, table);
-  return table;
-}
+import {
+  getOperationsStore,
+  __setMockState as __resetOperationsStoreState,
+} from '../../db/operations/store.js';
 
 /**
  * @param {import('../../graph/resource.js').default} resource - resource.
@@ -29,7 +9,7 @@ async function getTable(tableName) {
  * @returns {Promise<any>} - Result.
  */
 export async function putResource(resource, tableName) {
-  return (await getTable(tableName)).putResource(resource);
+  return (await getOperationsStore({ tableName })).putResource(resource);
 }
 
 /**
@@ -38,7 +18,7 @@ export async function putResource(resource, tableName) {
  * @returns {Promise<any>} - Result.
  */
 export async function getResource(resource_id, tableName) {
-  return (await getTable(tableName)).getResource(resource_id);
+  return (await getOperationsStore({ tableName })).getResource(resource_id);
 }
 
 /**
@@ -47,7 +27,7 @@ export async function getResource(resource_id, tableName) {
  * @returns {Promise<any>} - Result.
  */
 export async function deleteResource(resource, tableName) {
-  return (await getTable(tableName)).deleteResource(resource);
+  return (await getOperationsStore({ tableName })).deleteResource(resource);
 }
 
 /**
@@ -55,7 +35,7 @@ export async function deleteResource(resource, tableName) {
  * @returns {Promise<any>} - Result.
  */
 export async function putOperation(operation) {
-  return (await getTable()).putOperation(operation);
+  return (await getOperationsStore()).putOperation(operation);
 }
 
 /**
@@ -64,7 +44,7 @@ export async function putOperation(operation) {
  * @returns {Promise<any>} - Result.
  */
 export async function getOperation(resource_id, operation_id) {
-  return (await getTable()).getOperation(resource_id, operation_id);
+  return (await getOperationsStore()).getOperation(resource_id, operation_id);
 }
 
 /**
@@ -72,7 +52,7 @@ export async function getOperation(resource_id, operation_id) {
  * @returns {Promise<any>} - Result.
  */
 export async function deleteOperation(operation) {
-  return (await getTable()).deleteOperation(operation);
+  return (await getOperationsStore()).deleteOperation(operation);
 }
 
 /**
@@ -80,7 +60,7 @@ export async function deleteOperation(operation) {
  * @returns {Promise<any>} - Result.
  */
 export async function getOperations(resource_id) {
-  return (await getTable()).getOperations(resource_id);
+  return (await getOperationsStore()).getOperations(resource_id);
 }
 
 /**
@@ -88,7 +68,7 @@ export async function getOperations(resource_id) {
  * @returns {Promise<any>} - Result.
  */
 export async function getActions(operation) {
-  return (await getTable()).getActions(operation);
+  return (await getOperationsStore()).getActions(operation);
 }
 
 /**
@@ -98,7 +78,11 @@ export async function getActions(operation) {
  * @returns {Promise<any>} - Result.
  */
 export async function getAction(resource_id, operation_id, action_id) {
-  return (await getTable()).getAction(resource_id, operation_id, action_id);
+  return (await getOperationsStore()).getAction(
+    resource_id,
+    operation_id,
+    action_id,
+  );
 }
 
 /**
@@ -106,7 +90,7 @@ export async function getAction(resource_id, operation_id, action_id) {
  * @returns {Promise<any>} - Result.
  */
 export async function putAction(action) {
-  return (await getTable()).putAction(action);
+  return (await getOperationsStore()).putAction(action);
 }
 
 /**
@@ -120,7 +104,7 @@ export async function updateActionStatus(
   new_status,
   overrideTableName,
 ) {
-  return (await getTable()).updateActionStatus(
+  return (await getOperationsStore()).updateActionStatus(
     action,
     new_status,
     overrideTableName,
@@ -132,7 +116,7 @@ export async function updateActionStatus(
  * @returns {Promise<any>} - Result.
  */
 export async function putQuery(query) {
-  return (await getTable()).putQuery(query);
+  return (await getOperationsStore()).putQuery(query);
 }
 
 /**
@@ -140,7 +124,7 @@ export async function putQuery(query) {
  * @returns {Promise<any>} - Result.
  */
 export async function putQueries(queries) {
-  return (await getTable()).putQueries(queries);
+  return (await getOperationsStore()).putQueries(queries);
 }
 
 /**
@@ -151,7 +135,7 @@ export async function putQueries(queries) {
  * @returns {Promise<any>} - Result.
  */
 export async function getQuery(resource_id, operation_id, action_id, query_id) {
-  return (await getTable()).getQuery(
+  return (await getOperationsStore()).getQuery(
     resource_id,
     operation_id,
     action_id,
@@ -166,7 +150,11 @@ export async function getQuery(resource_id, operation_id, action_id, query_id) {
  * @returns {Promise<any>} - Result.
  */
 export async function getQueries(resource_id, operation_id, action_id) {
-  return (await getTable()).getQueries(resource_id, operation_id, action_id);
+  return (await getOperationsStore()).getQueries(
+    resource_id,
+    operation_id,
+    action_id,
+  );
 }
 
 /**
@@ -175,7 +163,10 @@ export async function getQueries(resource_id, operation_id, action_id) {
  * @returns {Promise<any>} - Result.
  */
 export async function checkActionPrerequisites(operation, action_type) {
-  return (await getTable()).checkActionPrerequisites(operation, action_type);
+  return (await getOperationsStore()).checkActionPrerequisites(
+    operation,
+    action_type,
+  );
 }
 
 /**
@@ -184,14 +175,13 @@ export async function checkActionPrerequisites(operation, action_type) {
  * @returns {Promise<any>} - Result.
  */
 export async function getRecords(resource_id, operation_id) {
-  return (await getTable()).getRecords(resource_id, operation_id);
+  return (await getOperationsStore()).getRecords(resource_id, operation_id);
 }
 
 /**
- *
+ * Test helper: clear cached stores and reset shared DB.
  * @returns {void} - Result.
  */
 export function __setMockState() {
-  _tables.clear();
-  resetDB();
+  __resetOperationsStoreState();
 }

@@ -9,8 +9,6 @@ import { CONDITION_TYPE, KEY_TYPE } from '../../db/base.js';
  * @typedef {import('../../db/base.js').DBClient} DBClient
  */
 
-const OPERATIONS_TABLE = process.env.OPERATIONS_TABLE || '';
-
 const KEY_NAME = 'resource_id';
 const SORT_KEY_NAME = 'sort_key';
 
@@ -133,14 +131,17 @@ const normalizeRecord = (record) => {
 
 /**
  * Factory: Operations table client.
- * @param {{ db?: DBClient, tableName?: string }} [params] -
+ * @param {{ db?: DBClient, tableName?: string }} [params] - params.
+ * @throws {Error} If db or tableName are missing.
  * @returns {OperationsTableClient} - Result.
  */
-export function createOperationsTable({
-  db,
-  tableName = OPERATIONS_TABLE,
-} = {}) {
+export function createOperationsTable({ db, tableName } = {}) {
   if (!db) throw new Error('createOperationsTable requires a db client');
+  if (!tableName || !String(tableName).trim()) {
+    throw new Error('createOperationsTable requires a tableName');
+  }
+  /** @type {string} */
+  const _tableName = String(tableName).trim();
   /** @type {DBClient} */
   const dbClient = db;
 
@@ -151,7 +152,7 @@ export function createOperationsTable({
   async function putResource(resource) {
     const record = resource.toRecord();
     await dbClient.batchWrite({
-      tableName,
+      tableName: _tableName,
       putRequests: [
         {
           keyName: KEY_NAME,
@@ -177,7 +178,7 @@ export function createOperationsTable({
   async function getResource(resource_id) {
     try {
       const item = await dbClient.get({
-        tableName,
+        tableName: _tableName,
         keyName: KEY_NAME,
         keyValue: resource_id,
         sortKeyName: SORT_KEY_NAME,
@@ -206,7 +207,7 @@ export function createOperationsTable({
     try {
       const items =
         (await dbClient.query({
-          tableName,
+          tableName: _tableName,
           consistentRead: true,
           keyConditions: [pkEq(KEY_NAME, RESOURCES_INDEX_PARTITION_KEY)],
         })) || [];
@@ -235,7 +236,7 @@ export function createOperationsTable({
     try {
       const items =
         (await dbClient.query({
-          tableName,
+          tableName: _tableName,
           consistentRead: true,
           keyConditions: [
             pkEq(KEY_NAME, resource.id),
@@ -246,7 +247,7 @@ export function createOperationsTable({
       if (items.length) {
         for (const batch of chunk(items, 25)) {
           await dbClient.batchWrite({
-            tableName,
+            tableName: _tableName,
             deleteRequests: batch.map((item) => ({
               keyName: KEY_NAME,
               keyValue: item.resource_id,
@@ -258,7 +259,7 @@ export function createOperationsTable({
       }
 
       await dbClient.remove({
-        tableName,
+        tableName: _tableName,
         keyName: KEY_NAME,
         keyValue: RESOURCES_INDEX_PARTITION_KEY,
         sortKeyName: SORT_KEY_NAME,
@@ -279,7 +280,7 @@ export function createOperationsTable({
 
     for (const batch of chunk(records, 25)) {
       await dbClient.batchWrite({
-        tableName,
+        tableName: _tableName,
         putRequests: batch.map((record) => ({
           keyName: KEY_NAME,
           sortKeyName: SORT_KEY_NAME,
@@ -296,7 +297,7 @@ export function createOperationsTable({
    */
   async function getOperation(resource_id, operation_id) {
     const item = await dbClient.get({
-      tableName,
+      tableName: _tableName,
       keyName: KEY_NAME,
       keyValue: resource_id,
       sortKeyName: SORT_KEY_NAME,
@@ -314,7 +315,7 @@ export function createOperationsTable({
   async function deleteOperation(operation) {
     const items =
       (await dbClient.query({
-        tableName,
+        tableName: _tableName,
         consistentRead: true,
         keyConditions: [
           pkEq(KEY_NAME, operation.resource_id),
@@ -326,7 +327,7 @@ export function createOperationsTable({
 
     for (const batch of chunk(items, 25)) {
       await dbClient.batchWrite({
-        tableName,
+        tableName: _tableName,
         deleteRequests: batch.map((item) => ({
           keyName: KEY_NAME,
           keyValue: item.resource_id,
@@ -344,7 +345,7 @@ export function createOperationsTable({
   async function getOperations(resource_id) {
     const items =
       (await dbClient.query({
-        tableName,
+        tableName: _tableName,
         consistentRead: true,
         keyConditions: [
           pkEq(KEY_NAME, resource_id),
@@ -365,7 +366,7 @@ export function createOperationsTable({
     const prefix = `${operation.resource_id}#${operation.id}#`;
     const items =
       (await dbClient.query({
-        tableName,
+        tableName: _tableName,
         consistentRead: true,
         keyConditions: [
           pkEq(KEY_NAME, operation.resource_id),
@@ -386,7 +387,7 @@ export function createOperationsTable({
    */
   async function getAction(resource_id, operation_id, action_id) {
     const item = await dbClient.get({
-      tableName,
+      tableName: _tableName,
       keyName: KEY_NAME,
       keyValue: resource_id,
       sortKeyName: SORT_KEY_NAME,
@@ -406,7 +407,7 @@ export function createOperationsTable({
 
     for (const batch of chunk(records, 25)) {
       await dbClient.batchWrite({
-        tableName,
+        tableName: _tableName,
         putRequests: batch.map((record) => ({
           keyName: KEY_NAME,
           sortKeyName: SORT_KEY_NAME,
@@ -426,7 +427,7 @@ export function createOperationsTable({
   async function updateActionStatus(
     action,
     new_status,
-    overrideTableName = tableName,
+    overrideTableName = _tableName,
   ) {
     const key = `${action.resource_id}#${action.operation_id}#${action.id}`;
 
@@ -482,7 +483,7 @@ export function createOperationsTable({
    */
   async function putQuery(query) {
     await dbClient.put({
-      tableName,
+      tableName: _tableName,
       keyName: KEY_NAME,
       sortKeyName: SORT_KEY_NAME,
       record: query.toRecord(),
@@ -498,7 +499,7 @@ export function createOperationsTable({
 
     for (const batch of chunk(records, 25)) {
       await dbClient.batchWrite({
-        tableName,
+        tableName: _tableName,
         putRequests: batch.map((record) => ({
           keyName: KEY_NAME,
           sortKeyName: SORT_KEY_NAME,
@@ -517,7 +518,7 @@ export function createOperationsTable({
    */
   async function getQuery(resource_id, operation_id, action_id, query_id) {
     const item = await dbClient.get({
-      tableName,
+      tableName: _tableName,
       keyName: KEY_NAME,
       keyValue: resource_id,
       sortKeyName: SORT_KEY_NAME,
@@ -539,7 +540,7 @@ export function createOperationsTable({
 
     const items =
       (await dbClient.query({
-        tableName,
+        tableName: _tableName,
         consistentRead: true,
         keyConditions: [
           pkEq(KEY_NAME, resource_id),
@@ -575,7 +576,7 @@ export function createOperationsTable({
 
       const items =
         (await dbClient.query({
-          tableName,
+          tableName: _tableName,
           consistentRead: true,
           keyConditions: [
             pkEq(KEY_NAME, operation.resource_id),
@@ -618,7 +619,7 @@ export function createOperationsTable({
 
     const items =
       (await dbClient.query({
-        tableName,
+        tableName: _tableName,
         consistentRead: true,
         keyConditions: [
           pkEq(KEY_NAME, resource_id),
