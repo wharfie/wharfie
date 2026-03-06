@@ -15,3 +15,23 @@ tasks:
       repository: https://github.com/wharfie/wharfie.git
       ref: ${{ init.commit-sha }}
       github-token: ${{ github.token }}
+
+  - key: node
+    call: nodejs/install 1.1.12
+    with:
+      node-version: 24.13.1
+
+  - key: npm-install
+    use: [system-packages, code, node]
+    run: npm install
+    filter:
+      - package.json
+      - package-lock.json
+
+  - key: lint
+    use: npm-install
+    run: npm run lint
+
+  - key: test
+    use: npm-install
+    run: npm run test
