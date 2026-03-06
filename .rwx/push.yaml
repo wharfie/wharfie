@@ -22,7 +22,7 @@ tasks:
       node-version: 24.13.1
 
   - key: npm-install
-    use: [system-packages, code, node]
+    use: [code, node]
     run: npm install
     filter:
       - package.json
