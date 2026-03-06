@@ -35,3 +35,7 @@ tasks:
   - key: test
     use: npm-install
     run: npm run test
+
+  - key: typecheck
+    use: npm-install
+    run: npm run typecheck
