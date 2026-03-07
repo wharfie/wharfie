@@ -5,6 +5,7 @@ import {
   RuleState,
 } from '@aws-sdk/client-cloudwatch-events';
 import { NoSuchBucket } from '@aws-sdk/client-s3';
+import { configsEqual } from './reconcile-compare.js';
 
 /**
  * @typedef EventsRuleProperties
@@ -44,7 +45,7 @@ class EventsRule extends BaseResource {
     /**
      * @type {import('@aws-sdk/client-cloudwatch-events').Target[]}
      */
-    const targetsToAdd = [];
+    const targetsToPut = [];
     /**
      * @type {import('@aws-sdk/client-cloudwatch-events').Target[]}
      */
@@ -55,8 +56,9 @@ class EventsRule extends BaseResource {
     const desiredTargets = this.get('targets');
 
     desiredTargets.forEach((target) => {
-      if (!Targets?.some((t) => t.Id === target.Id)) {
-        targetsToAdd.push(target);
+      const existingTarget = Targets?.find((t) => t.Id === target.Id);
+      if (!existingTarget || !configsEqual(existingTarget, target)) {
+        targetsToPut.push(target);
       }
     });
     Targets?.forEach((target) => {
@@ -73,10 +75,10 @@ class EventsRule extends BaseResource {
       .map((target) => target?.Id || '');
 
     await Promise.all([
-      targetsToAdd.length > 0
+      targetsToPut.length > 0
         ? this.cloudwatchEvents.putTargets({
             Rule: this.name,
-            Targets: targetsToAdd,
+            Targets: targetsToPut,
           })
         : Promise.resolve(),
       targetsIdsToRemove.length > 0
@@ -96,13 +98,13 @@ class EventsRule extends BaseResource {
     const desiredTags = this.get('tags') || [];
     const tagsToAdd = desiredTags.filter(
       (/** @type {import('@aws-sdk/client-cloudwatch-events').Tag} */ tag) =>
-        !Tags?.some((t) => t.Key === tag.Key),
+        !Tags?.some((t) => t.Key === tag.Key && t.Value === tag.Value),
     );
     const tagsToRemove = (Tags || []).filter(
       (tag) =>
         !desiredTags.some(
           (/** @type {import('@aws-sdk/client-cloudwatch-events').Tag} */ t) =>
-            t.Key === tag.Key,
+            t.Key === tag.Key && t.Value === tag.Value,
         ),
     );
 
@@ -119,36 +121,48 @@ class EventsRule extends BaseResource {
   }
 
   async _reconcile() {
+    const desiredRule = {
+      Description: this.get('description'),
+      ...(this.has('scheduleExpression')
+        ? { ScheduleExpression: this.get('scheduleExpression') }
+        : {}),
+      ...(this.has('eventPattern')
+        ? { EventPattern: this.get('eventPattern') }
+        : {}),
+      ...(this.has('roleArn') ? { RoleArn: this.get('roleArn') } : {}),
+      State: this.get('state'),
+    };
+
     try {
-      const { State, Arn } = await this.cloudwatchEvents.describeRule({
+      const existingRule = await this.cloudwatchEvents.describeRule({
         Name: this.name,
       });
-      if (this.get('state') !== State) {
-        if (this.get('state') === EventsRule.ENABLED) {
-          await this.cloudwatchEvents.enableRule({
-            Name: this.name,
-          });
-        } else if (this.get('state') === EventsRule.DISABLED) {
-          await this.cloudwatchEvents.disableRule({
-            Name: this.name,
-          });
-        }
+
+      if (
+        !configsEqual(
+          {
+            Description: existingRule.Description,
+            ScheduleExpression: existingRule.ScheduleExpression,
+            EventPattern: existingRule.EventPattern,
+            RoleArn: existingRule.RoleArn,
+            State: existingRule.State,
+          },
+          desiredRule,
+        )
+      ) {
+        const { RuleArn } = await this.cloudwatchEvents.putRule({
+          Name: this.name,
+          ...desiredRule,
+        });
+        this.set('arn', RuleArn || existingRule.Arn);
+      } else {
+        this.set('arn', existingRule.Arn);
       }
-      this.set('arn', Arn);
-      // TODO handle target updates
     } catch (error) {
       if (error instanceof ResourceNotFoundException) {
         const { RuleArn } = await this.cloudwatchEvents.putRule({
           Name: this.name,
-          Description: this.get('description'),
-          ...(this.has('scheduleExpression')
-            ? { ScheduleExpression: this.get('scheduleExpression') }
-            : {}),
-          ...(this.has('eventPattern')
-            ? { EventPattern: this.get('eventPattern') }
-            : {}),
-          ...(this.has('roleArn') ? { RoleArn: this.get('roleArn') } : {}),
-          State: this.get('state'),
+          ...desiredRule,
         });
         this.set('arn', RuleArn);
       } else {

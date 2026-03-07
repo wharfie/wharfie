@@ -60,7 +60,15 @@ class CloudWatchEventsMock {
         message: 'Rule not found',
       });
     }
-    CloudWatchEventsMock.__state.Rules[params.Rule].Targets = params.Targets;
+    const existingTargets =
+      CloudWatchEventsMock.__state.Rules[params.Rule].Targets || [];
+    const byId = new Map(existingTargets.map((target) => [target.Id, target]));
+    for (const target of params.Targets) {
+      byId.set(target.Id, target);
+    }
+    CloudWatchEventsMock.__state.Rules[params.Rule].Targets = [
+      ...byId.values(),
+    ];
   }
 
   async removeTargets(params) {
@@ -103,14 +111,15 @@ class CloudWatchEventsMock {
   }
 
   async putRule(params) {
-    if (CloudWatchEventsMock.__state.Rules[params.Name]) {
-      throw new Error('Rule already exists');
-    }
-    const RuleArn = `arn:aws:events:us-east-1:123456789012:rule/${params.Name}`;
+    const existingRule = CloudWatchEventsMock.__state.Rules[params.Name] || {};
+    const RuleArn =
+      existingRule.Arn ||
+      `arn:aws:events:us-east-1:123456789012:rule/${params.Name}`;
     CloudWatchEventsMock.__state.Rules[params.Name] = {
+      ...existingRule,
       ...params,
       Arn: RuleArn,
-      Targets: [],
+      Targets: existingRule.Targets || [],
     };
     return {
       RuleArn,
@@ -127,28 +136,27 @@ class CloudWatchEventsMock {
   }
 
   async listTagsForResource(params) {
-    if (!CloudWatchEventsMock.__state.Tags[params.ResourceARN]) {
-      return [];
-    }
-    return CloudWatchEventsMock.__state.Tags[params.ResourceARN];
+    return {
+      Tags: CloudWatchEventsMock.__state.Tags[params.ResourceARN] || [],
+    };
   }
 
   async tagResource(params) {
-    if (!CloudWatchEventsMock.__state.Tags[params.ResourceARN]) {
-      CloudWatchEventsMock.__state.Tags[params.ResourceARN] = [];
+    const existingTags =
+      CloudWatchEventsMock.__state.Tags[params.ResourceARN] || [];
+    const tagsByKey = new Map(existingTags.map((tag) => [tag.Key, tag]));
+    for (const tag of params.Tags) {
+      tagsByKey.set(tag.Key, tag);
     }
-
     CloudWatchEventsMock.__state.Tags[params.ResourceARN] = [
-      ...CloudWatchEventsMock.__state.Tags[params.ResourceARN],
-      ...params.Tags,
+      ...tagsByKey.values(),
     ];
   }
 
   async untagResource(params) {
-    CloudWatchEventsMock.__state.Tags[params.ResourceARN] =
-      CloudWatchEventsMock.__state.Tags[params.ResourceARN].filter(
-        (tag) => !params.TagKeys.includes(tag.Key),
-      );
+    CloudWatchEventsMock.__state.Tags[params.ResourceARN] = (
+      CloudWatchEventsMock.__state.Tags[params.ResourceARN] || []
+    ).filter((tag) => !params.TagKeys.includes(tag.Key));
   }
 }
 

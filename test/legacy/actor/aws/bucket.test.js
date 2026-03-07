@@ -126,4 +126,84 @@ describe('bucket IaC', () => {
       `"The specified bucket does not exist: test-bucket-111111"`,
     );
   });
+
+  it('updates lifecycle configuration when rule bodies drift but count stays the same', async () => {
+    const s3 = new S3({});
+    const bucket = new Bucket({
+      name: 'test-bucket-drift',
+      properties: {
+        deployment: getMockDeploymentProperties(),
+        lifecycleConfiguration: {
+          Rules: [
+            {
+              ID: 'log_files_expiration',
+              Expiration: {
+                Days: 1,
+              },
+              Status: 'Enabled',
+              Prefix: '/logs/raw/',
+            },
+            {
+              ID: 'abort_incomplete_multipart_uploads',
+              Prefix: '',
+              AbortIncompleteMultipartUpload: {
+                DaysAfterInitiation: 1,
+              },
+              Status: 'Enabled',
+            },
+          ],
+        },
+      },
+    });
+
+    await bucket.reconcile();
+
+    bucket.set('lifecycleConfiguration', {
+      Rules: [
+        {
+          ID: 'log_files_expiration',
+          Expiration: {
+            Days: 14,
+          },
+          Status: 'Enabled',
+          Prefix: '/logs/raw/',
+        },
+        {
+          ID: 'abort_incomplete_multipart_uploads',
+          Prefix: '',
+          AbortIncompleteMultipartUpload: {
+            DaysAfterInitiation: 7,
+          },
+          Status: 'Enabled',
+        },
+      ],
+    });
+
+    await bucket.reconcile();
+
+    await expect(
+      s3.getBucketLifecycleConfiguration({
+        Bucket: bucket.get('bucketName'),
+      }),
+    ).resolves.toEqual({
+      Rules: [
+        {
+          ID: 'log_files_expiration',
+          Expiration: {
+            Days: 14,
+          },
+          Status: 'Enabled',
+          Prefix: '/logs/raw/',
+        },
+        {
+          ID: 'abort_incomplete_multipart_uploads',
+          Prefix: '',
+          AbortIncompleteMultipartUpload: {
+            DaysAfterInitiation: 7,
+          },
+          Status: 'Enabled',
+        },
+      ],
+    });
+  });
 });
