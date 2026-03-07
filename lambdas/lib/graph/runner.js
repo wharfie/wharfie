@@ -35,7 +35,7 @@ import { Status as ActionStatus } from './action.js';
  * This runner is intentionally minimal: it does not attempt concurrency, retries,
  * or operation-level status transitions.
  * @param {RunOperationParams} params - params.
- * @returns {Promise<{ executedActionIds: string[]; finalStatusByActionId: Record<string, string> }>} - Result.
+ * @returns {Promise<{ status: 'COMPLETED' | 'FAILED' | 'BLOCKED'; executedActionIds: string[]; failedActionIds: string[]; blockedActionIds: string[]; finalStatusByActionId: Record<string, string> }>} - Result.
  */
 export async function runOperation({
   store,
@@ -55,6 +55,9 @@ export async function runOperation({
 
   /** @type {Record<string, string>} */
   const finalStatusByActionId = {};
+
+  /** @type {'COMPLETED' | 'FAILED' | 'BLOCKED'} */
+  let status = 'COMPLETED';
 
   /**
    * @param {import('./operation.js').default} operation - operation.
@@ -95,7 +98,6 @@ export async function runOperation({
 
     const pending = actions.filter((a) => a.status === ActionStatus.PENDING);
     if (!pending.length) {
-      for (const a of actions) finalStatusByActionId[a.id] = a.status;
       break;
     }
 
@@ -111,7 +113,7 @@ export async function runOperation({
     runnable.sort((a, b) => a.id.localeCompare(b.id));
 
     if (!runnable.length) {
-      for (const a of actions) finalStatusByActionId[a.id] = a.status;
+      status = 'BLOCKED';
       break;
     }
 
@@ -142,7 +144,33 @@ export async function runOperation({
     }
   }
 
-  return { executedActionIds, finalStatusByActionId };
+  const { actions: finalActions } = await store.getRecords(
+    resourceId,
+    operationId,
+  );
+  for (const action of finalActions) {
+    finalStatusByActionId[action.id] = action.status;
+  }
+
+  const failedActionIds = finalActions
+    .filter((action) => action.status === ActionStatus.FAILED)
+    .map((action) => action.id);
+  const blockedActionIds = finalActions
+    .filter((action) =>
+      [ActionStatus.PENDING, ActionStatus.RUNNING].includes(action.status),
+    )
+    .map((action) => action.id);
+
+  if (failedActionIds.length > 0) status = 'FAILED';
+  else if (blockedActionIds.length > 0) status = 'BLOCKED';
+
+  return {
+    status,
+    executedActionIds,
+    failedActionIds,
+    blockedActionIds,
+    finalStatusByActionId,
+  };
 }
 
 export default runOperation;
