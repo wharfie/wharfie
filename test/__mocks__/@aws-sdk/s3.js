@@ -45,7 +45,7 @@ class S3Mock {
         return await this.putBucketNotificationConfiguration(command.input);
       case 'GetBucketLifecycleConfigurationCommand':
         return await this.getBucketLifecycleConfiguration(command.input);
-      case 'PutBucketLifecycleConfigutationCommand':
+      case 'PutBucketLifecycleConfigurationCommand':
         return await this.putBucketLifecycleConfigutation(command.input);
       case 'GetBucketLocationCommand':
         return await this.getBucketLocation(command.input);

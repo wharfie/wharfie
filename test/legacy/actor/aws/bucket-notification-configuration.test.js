@@ -144,4 +144,67 @@ describe('bucket notification configuration IaC', () => {
 
     expect(del_res.QueueConfigurations).toStrictEqual([]);
   });
+
+  it('updates notification configuration when queue bodies drift but count stays the same', async () => {
+    const s3 = new S3({});
+    const bucket = new Bucket({
+      name: 'test-bucket-notification-drift',
+      properties: {
+        deployment: getMockDeploymentProperties(),
+      },
+    });
+    await bucket.reconcile();
+
+    const bucketNotificationConfig = new BucketNotificationConfiguration({
+      name: 'test-bucket-notification-config-drift',
+      properties: {
+        deployment: getMockDeploymentProperties(),
+        bucketName: bucket.get('bucketName'),
+        notificationConfiguration: {
+          QueueConfigurations: [
+            {
+              Events: ['s3:ObjectCreated:*'],
+              QueueArn: 'arn:aws:sqs:us-west-2:123456789012:MyQueue',
+            },
+            {
+              Events: ['s3:ObjectRemoved:*'],
+              QueueArn: 'arn:aws:sqs:us-west-2:123456789012:MyOtherQueue',
+            },
+          ],
+        },
+      },
+    });
+    await bucketNotificationConfig.reconcile();
+
+    bucketNotificationConfig.set('notificationConfiguration', {
+      QueueConfigurations: [
+        {
+          Events: ['s3:ObjectCreated:*'],
+          QueueArn: 'arn:aws:sqs:us-west-2:123456789012:MyUpdatedQueue',
+        },
+        {
+          Events: ['s3:ObjectRemoved:*'],
+          QueueArn: 'arn:aws:sqs:us-west-2:123456789012:MyOtherQueue',
+        },
+      ],
+    });
+    await bucketNotificationConfig.reconcile();
+
+    await expect(
+      s3.getBucketNotificationConfiguration({
+        Bucket: bucket.get('bucketName'),
+      }),
+    ).resolves.toEqual({
+      QueueConfigurations: [
+        {
+          Events: ['s3:ObjectCreated:*'],
+          QueueArn: 'arn:aws:sqs:us-west-2:123456789012:MyUpdatedQueue',
+        },
+        {
+          Events: ['s3:ObjectRemoved:*'],
+          QueueArn: 'arn:aws:sqs:us-west-2:123456789012:MyOtherQueue',
+        },
+      ],
+    });
+  });
 });

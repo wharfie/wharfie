@@ -133,4 +133,93 @@ describe('events rule IaC', () => {
       }),
     ).rejects.toThrowErrorMatchingInlineSnapshot(`"Rule not found"`);
   });
+
+  it('updates existing rule fields, targets, and tags when content drifts', async () => {
+    const cloudWatchEvents = new CloudWatchEvents({});
+    const eventsRule = new EventsRule({
+      name: 'test-rule-drift',
+      properties: {
+        deployment: getMockDeploymentProperties(),
+        tags: [
+          {
+            Key: 'test-key',
+            Value: 'test-value',
+          },
+        ],
+        description: 'practice rule',
+        state: EventsRule.ENABLED,
+        scheduleExpression: 'rate(1 minute)',
+        roleArn: 'arn:aws:iam::123456789012:role/test-role',
+        targets: [
+          {
+            Id: 'rule-target',
+            Arn: 'arn:aws:firehose:us-east-1:123456789012:deliverystream/test-table',
+            InputTransformer: {
+              InputPathsMap: {
+                time: '$.time',
+              },
+              InputTemplate:
+                '{"operation_started_at":<time>, "operation_type":"BACKFILL"}',
+            },
+          },
+        ],
+      },
+    });
+    await eventsRule.reconcile();
+
+    eventsRule.set('description', 'updated practice rule');
+    eventsRule.set('state', EventsRule.DISABLED);
+    eventsRule.set('targets', [
+      {
+        Id: 'rule-target',
+        Arn: 'arn:aws:firehose:us-east-1:123456789012:deliverystream/test-table',
+        InputTransformer: {
+          InputPathsMap: {
+            time: '$.time',
+          },
+          InputTemplate:
+            '{"operation_started_at":<time>, "operation_type":"LOAD"}',
+        },
+      },
+    ]);
+    eventsRule.set('tags', [
+      {
+        Key: 'test-key',
+        Value: 'updated-value',
+      },
+    ]);
+
+    await eventsRule.reconcile();
+
+    await expect(
+      cloudWatchEvents.describeRule({
+        Name: eventsRule.name,
+      }),
+    ).resolves.toMatchObject({
+      Description: 'updated practice rule',
+      State: 'DISABLED',
+      Targets: [
+        {
+          Id: 'rule-target',
+          InputTransformer: {
+            InputTemplate:
+              '{"operation_started_at":<time>, "operation_type":"LOAD"}',
+          },
+        },
+      ],
+    });
+
+    await expect(
+      cloudWatchEvents.listTagsForResource({
+        ResourceARN: eventsRule.get('arn'),
+      }),
+    ).resolves.toEqual({
+      Tags: [
+        {
+          Key: 'test-key',
+          Value: 'updated-value',
+        },
+      ],
+    });
+  });
 });

@@ -1,6 +1,7 @@
 import S3 from '../../../aws/s3.js';
 import BaseResource from '../base-resource.js';
 import { NoSuchBucket } from '@aws-sdk/client-s3';
+import { configsEqual } from './reconcile-compare.js';
 
 /**
  * @typedef BucketNotificationConfigurationProperties
@@ -28,18 +29,22 @@ class BucketNotificationConfiguration extends BaseResource {
 
   async _reconcile() {
     if (this.has('notificationConfiguration')) {
-      const { QueueConfigurations } =
+      const existingNotificationConfiguration =
         await this.s3.getBucketNotificationConfiguration({
           Bucket: this.get('bucketName'),
         });
+      const desiredNotificationConfiguration = this.get(
+        'notificationConfiguration',
+      );
       if (
-        QueueConfigurations?.length !==
-        this.get('notificationConfiguration').QueueConfigurations.length
+        !configsEqual(
+          existingNotificationConfiguration,
+          desiredNotificationConfiguration,
+        )
       ) {
-        // TODO actually check for equality
         await this.s3.putBucketNotificationConfiguration({
           Bucket: this.get('bucketName'),
-          NotificationConfiguration: this.get('notificationConfiguration'),
+          NotificationConfiguration: desiredNotificationConfiguration,
         });
       }
     }

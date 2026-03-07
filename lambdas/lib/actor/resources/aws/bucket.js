@@ -1,6 +1,7 @@
 import S3 from '../../../aws/s3.js';
 import BaseResource from '../base-resource.js';
 import { createShortId } from '../../../id.js';
+import { configsEqual } from './reconcile-compare.js';
 
 import { NoSuchBucket } from '@aws-sdk/client-s3';
 
@@ -90,14 +91,22 @@ class Bucket extends BaseResource {
     }
     if (this.has('lifecycleConfiguration')) {
       try {
-        const { Rules } = await this.s3.getBucketLifecycleConfigutation({
-          Bucket: this.get('bucketName'),
-        });
-        if (Rules?.length !== this.get('lifecycleConfiguration').Rules.length) {
-          // TODO actually check for equality
+        const existingLifecycleConfiguration =
+          await this.s3.getBucketLifecycleConfigutation({
+            Bucket: this.get('bucketName'),
+          });
+        const desiredLifecycleConfiguration = this.get(
+          'lifecycleConfiguration',
+        );
+        if (
+          !configsEqual(
+            existingLifecycleConfiguration,
+            desiredLifecycleConfiguration,
+          )
+        ) {
           await this.s3.putBucketLifecycleConfigutation({
             Bucket: this.get('bucketName'),
-            LifecycleConfiguration: this.get('lifecycleConfiguration'),
+            LifecycleConfiguration: desiredLifecycleConfiguration,
           });
         }
       } catch (error) {
@@ -113,18 +122,22 @@ class Bucket extends BaseResource {
       }
     }
     if (this.has('notificationConfiguration')) {
-      const { QueueConfigurations } =
+      const existingNotificationConfiguration =
         await this.s3.getBucketNotificationConfiguration({
           Bucket: this.get('bucketName'),
         });
+      const desiredNotificationConfiguration = this.get(
+        'notificationConfiguration',
+      );
       if (
-        QueueConfigurations?.length !==
-        this.get('notificationConfiguration').QueueConfigurations.length
+        !configsEqual(
+          existingNotificationConfiguration,
+          desiredNotificationConfiguration,
+        )
       ) {
-        // TODO actually check for equality
         await this.s3.putBucketNotificationConfiguration({
           Bucket: this.get('bucketName'),
-          NotificationConfiguration: this.get('notificationConfiguration'),
+          NotificationConfiguration: desiredNotificationConfiguration,
         });
       }
     }
