@@ -3,6 +3,9 @@ on:
     push:
       init:
         commit-sha: ${{ event.git.sha }}
+  cli:
+    init:
+      commit-sha: ${{ event.git.sha }}
 
 base:
   image: ubuntu:24.04
@@ -26,7 +29,7 @@ tasks:
 
   - key: npm-install
     use: [code, node]
-    run: npm install
+    run: npm ci
     filter:
       - package.json
       - package-lock.json
