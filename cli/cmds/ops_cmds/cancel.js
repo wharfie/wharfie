@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 
 import createOperationsStore from '../../../lambdas/lib/graph/operations-store.js';
+import { resolveOperationsTableName } from '../../../lambdas/lib/config/db.js';
 import {
   displayFailure,
   displayInstruction,
@@ -96,7 +97,10 @@ const cancelCommand = new Command('cancel')
     }
 
     const db = await createDBClient();
-    const store = createOperationsStore({ db });
+    const store = createOperationsStore({
+      db,
+      tableName: resolveOperationsTableName(),
+    });
 
     try {
       await cancel(store, resource_id, operationId, normalizedType);

@@ -1,0 +1,47 @@
+on:
+  github:
+    push:
+      init:
+        commit-sha: ${{ event.git.sha }}
+  cli:
+    init:
+      commit-sha: ${{ event.git.sha }}
+
+base:
+  image: ubuntu:24.04
+  config: rwx/base 1.0.0
+
+tasks:
+  - key: code
+    call: git/clone 2.0.3
+    with:
+      repository: https://github.com/wharfie/wharfie.git
+      ref: ${{ init.commit-sha }}
+      github-token: ${{ github.token }}
+
+  - key: node
+    call: nodejs/install 1.1.12
+    use: code
+    with:
+      node-version-file: .nvmrc
+    filter:
+      - .nvmrc
+
+  - key: npm-install
+    use: [code, node]
+    run: npm ci
+    filter:
+      - package.json
+      - package-lock.json
+
+  - key: lint
+    use: npm-install
+    run: npm run lint
+
+  - key: test
+    use: npm-install
+    run: npm run test
+
+  - key: typecheck
+    use: npm-install
+    run: npm run typecheck

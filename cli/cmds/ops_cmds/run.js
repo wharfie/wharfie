@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 
 import createOperationsStore from '../../../lambdas/lib/graph/operations-store.js';
+import { resolveOperationsTableName } from '../../../lambdas/lib/config/db.js';
 import { runOperation } from '../../../lambdas/lib/graph/runner.js';
 import {
   displayFailure,
@@ -52,7 +53,10 @@ const runCommand = new Command('run')
   .argument('<operation_id>', 'Operation ID')
   .action(async (resource_id, operation_id) => {
     const db = await createDBClient();
-    const store = createOperationsStore({ db });
+    const store = createOperationsStore({
+      db,
+      tableName: resolveOperationsTableName(),
+    });
 
     try {
       displayInfo(`Running operation: ${resource_id}#${operation_id}`);

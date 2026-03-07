@@ -24,8 +24,8 @@
   "main": "./client/",
   "scripts": {
     "typecheck": "tsc",
-    "test:js": "TZ=UTC node --experimental-vm-modules node_modules/jest/bin/jest.js --silent --coverage",
-    "test:update": "TZ=UTC node --experimental-vm-modules node_modules/jest/bin/jest.js --silent --updateSnapshot",
+    "test:js": "TZ=UTC node --experimental-vm-modules node_modules/jest/bin/jest.js --silent --coverage --maxWorkers=4",
+    "test:update": "TZ=UTC node --experimental-vm-modules node_modules/jest/bin/jest.js --silent --updateSnapshot --maxWorkers=4",
     "test": "npm run test:js",
     "test:ci": "npm run lint && npm run typecheck && npm run test",
     "lint:js": "eslint . && prettier --check \"{*,**/*}.{js,json}\"",

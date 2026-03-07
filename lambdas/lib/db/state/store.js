@@ -1,8 +1,8 @@
-import { join } from 'node:path';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-
 import { createStateTable } from '../tables/state.js';
+import {
+  createStateDBClient,
+  resolveStateAdapterName,
+} from '../../config/db.js';
 
 /**
  * Singleton state store used by the actor runtime.
@@ -27,73 +27,11 @@ let _store;
 let _initPromise = null;
 
 /**
- * @returns {'dynamodb'|'lmdb'|'vanilla'} - Result.
- */
-function resolveAdapterName() {
-  const explicit =
-    process.env.WHARFIE_STATE_ADAPTER || process.env.WHARFIE_DB_ADAPTER;
-
-  if (explicit) {
-    const normalized = String(explicit).toLowerCase().trim();
-    if (
-      normalized === 'dynamodb' ||
-      normalized === 'lmdb' ||
-      normalized === 'vanilla'
-    ) {
-      return normalized;
-    }
-    throw new Error(
-      `Unsupported WHARFIE_STATE_ADAPTER/WHARFIE_DB_ADAPTER: ${explicit}`,
-    );
-  }
-
-  // Provider-neutral default: never infer cloud adapters from ambient environment variables.
-  // Use WHARFIE_STATE_ADAPTER/WHARFIE_DB_ADAPTER for explicit selection.
-  return 'vanilla';
-}
-
-/**
  * Test helper: expose adapter resolution without initializing the store.
  * @returns {'dynamodb'|'lmdb'|'vanilla'} - Result.
  */
 export function __resolveAdapterName() {
-  return resolveAdapterName();
-}
-
-/**
- * @param {'dynamodb'|'lmdb'|'vanilla'} adapterName - adapterName.
- * @returns {Promise<import('../base.js').DBClient>} - Result.
- */
-async function createDB(adapterName) {
-  if (adapterName === 'dynamodb') {
-    const mod = await import('../adapters/dynamodb.js');
-    const createDynamoDB = mod.default;
-    return createDynamoDB({ region: process.env.AWS_REGION });
-  }
-
-  if (adapterName === 'lmdb') {
-    const mod = await import('../adapters/lmdb.js');
-    const createLMDB = mod.default;
-    return createLMDB({
-      // Optional; adapter defaults to OS-specific wharfie data dir.
-      path: process.env.WHARFIE_STATE_DB_PATH,
-    });
-  }
-
-  const mod = await import('../adapters/vanilla.js');
-  const createVanillaDB = mod.default;
-
-  // vanilla
-  if (process.env.NODE_ENV === 'test') {
-    // Isolate tests from developer machines by default.
-    const dir = mkdtempSync(join(tmpdir(), 'wharfie-state-'));
-    return createVanillaDB({ path: dir });
-  }
-
-  return createVanillaDB({
-    // Optional; adapter defaults to OS-specific wharfie data dir.
-    path: process.env.WHARFIE_STATE_DB_PATH,
-  });
+  return resolveStateAdapterName();
 }
 
 /**
@@ -104,8 +42,8 @@ async function ensureStore() {
   if (_initPromise) return _initPromise;
 
   _initPromise = (async () => {
-    const adapterName = resolveAdapterName();
-    _db = await createDB(adapterName);
+    const adapterName = resolveStateAdapterName();
+    _db = await createStateDBClient(adapterName);
     _store = createStateTable({ db: _db });
     return _store;
   })();

@@ -22,3 +22,6 @@ docs/public/
 docs/.env
 docs/.env.local
 LLM_CONTEXT
+LLM_CONTEXT/
+LLM_CONTEXT.tar.gz
+llm_artifacts/
