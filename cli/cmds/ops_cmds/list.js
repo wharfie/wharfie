@@ -2,6 +2,7 @@ import { Command } from 'commander';
 
 import createOperationsStore from '../../../lambdas/lib/graph/operations-store.js';
 import { resolveOperationsTableName } from '../../../lambdas/lib/config/db.js';
+import { formatOperationRows } from '../operation-rows.js';
 import { displayFailure, displaySuccess } from '../../output/basic.js';
 
 function resolveAdapterName() {
@@ -53,18 +54,9 @@ const listCommand = new Command('list')
     try {
       const records = await store.getRecords(resource_id);
       const operations = records.operations || [];
-      operations.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 
       displaySuccess(`${operations.length} operations found.`);
-      console.table(
-        operations.map((op) => ({
-          id: op.id,
-          type: op.type,
-          status: op.status,
-          createdAt: op.createdAt,
-          updatedAt: op.updatedAt,
-        })),
-      );
+      console.table(formatOperationRows(operations));
     } catch (err) {
       displayFailure(err);
       process.exitCode = 1;
