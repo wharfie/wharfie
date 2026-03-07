@@ -75,6 +75,21 @@ const runCommand = new Command('run')
         executeAction,
       });
 
+      if (result.status !== 'COMPLETED') {
+        const details = [];
+        if (result.failedActionIds.length > 0) {
+          details.push(`failed=${result.failedActionIds.join(',')}`);
+        }
+        if (result.blockedActionIds.length > 0) {
+          details.push(`blocked=${result.blockedActionIds.join(',')}`);
+        }
+        throw new Error(
+          `Operation ${resource_id}#${operation_id} finished with status ${result.status}${
+            details.length > 0 ? ` (${details.join(' ')})` : ''
+          }.`,
+        );
+      }
+
       displaySuccess(`Executed ${result.executedActionIds.length} actions.`);
       console.table(
         Object.entries(result.finalStatusByActionId).map(

@@ -102,4 +102,67 @@ describe('graph runner', () => {
       rmSync(tmp, { recursive: true, force: true });
     }
   });
+
+  test('returns FAILED when an upstream action fails and leaves downstream work blocked', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'wharfie-runner-'));
+    try {
+      const db = createVanillaDB({ path: tmp });
+      const tableName = 'operations-runner-test';
+      const store = createOperationsTable({ db, tableName });
+
+      const resourceId = 'r1';
+      const operation = new Operation({
+        id: 'op1',
+        resource_id: resourceId,
+        resource_version: 1,
+        type: Operation.Type.PIPELINE,
+      });
+
+      const actionA = operation.createAction({
+        id: 'a1',
+        type: Action.Type.START,
+      });
+      const actionB = operation.createAction({
+        id: 'b1',
+        type: Action.Type.FINISH,
+        dependsOn: [actionA],
+      });
+
+      await store.putOperation(operation);
+
+      const result = await runOperation({
+        store,
+        resourceId,
+        operationId: operation.id,
+        executeAction: async (action) => action.id !== actionA.id,
+      });
+
+      expect(result.status).toBe('FAILED');
+      expect(result.executedActionIds).toEqual([actionA.id]);
+      expect(result.failedActionIds).toEqual([actionA.id]);
+      expect(result.blockedActionIds).toEqual([actionB.id]);
+      expect(result.finalStatusByActionId).toEqual({
+        [actionA.id]: Action.Status.FAILED,
+        [actionB.id]: Action.Status.PENDING,
+      });
+
+      const afterA = await store.getAction(
+        resourceId,
+        operation.id,
+        actionA.id,
+      );
+      const afterB = await store.getAction(
+        resourceId,
+        operation.id,
+        actionB.id,
+      );
+      expect(afterA).not.toBeNull();
+      expect(afterB).not.toBeNull();
+      if (!afterA || !afterB) throw new Error('Expected actions to exist');
+      expect(afterA.status).toBe(Action.Status.FAILED);
+      expect(afterB.status).toBe(Action.Status.PENDING);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
