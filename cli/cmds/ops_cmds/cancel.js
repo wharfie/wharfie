@@ -106,6 +106,7 @@ const cancelCommand = new Command('cancel')
       await cancel(store, resource_id, operationId, normalizedType);
     } catch (err) {
       displayFailure(err);
+      process.exitCode = 1;
     } finally {
       try {
         await db.close();
