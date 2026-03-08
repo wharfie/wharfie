@@ -60,7 +60,6 @@ The `wharfie ops` command group exposes local, provider-neutral tooling for insp
 
 ```bash
 wharfie ops list <resourceId>
-wharfie ops list <resourceId> <operationId>
 wharfie ops cancel <resourceId> --operationId <operationId>
 wharfie ops run <resourceId> <operationId>
 ```
