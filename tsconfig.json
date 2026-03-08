@@ -20,8 +20,5 @@
     "test/**/*.js",
     "types/**/*.d.ts"
   ],
-  "exclude": [
-    "test/legacy/**",
-    "test/__mocks__/**"
-  ]
+  "exclude": ["test/legacy/**", "test/__mocks__/**"]
 }
