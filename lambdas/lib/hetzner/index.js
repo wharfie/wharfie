@@ -29,14 +29,13 @@ class HetznerError extends Error {
  * @returns {e is HetznerError} True if e looks like a HetznerError.
  */
 function isHetznerError(e) {
+  const candidate = /** @type {{ code?: unknown, status?: unknown }} */ (e);
   return (
     e instanceof HetznerError ||
     (typeof e === 'object' &&
       e !== null &&
-      // @ts-ignore - safe structural check under checkJs
-      typeof e.code === 'string' &&
-      // @ts-ignore
-      typeof e.status === 'number')
+      typeof candidate.code === 'string' &&
+      typeof candidate.status === 'number')
   );
 }
 

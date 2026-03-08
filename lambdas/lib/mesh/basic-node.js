@@ -1,4 +1,3 @@
-// // @ts-ignore
 // const Hyperswarm = require('hyperswarm');
 // const crypto = require('crypto');
 // const { EventEmitter } = require('events');

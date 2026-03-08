@@ -11,11 +11,11 @@ import { CloudWatch } from '@aws-sdk/client-cloudwatch';
 import { CloudWatchEvents } from '@aws-sdk/client-cloudwatch-events';
 import { Athena } from '@aws-sdk/client-athena';
 
-import { __setMockState } from '../lambdas/lib/dynamo/dependency';
-import { __setMockState as ___setMockState } from '../lambdas/lib/dynamo/location';
-import { __setMockState as ____setMockState } from '../lambdas/lib/dynamo/operations';
-import { __setMockState as _____setMockState } from '../lambdas/lib/dynamo/scheduler';
-import { __setMockState as ______setMockState } from '../lambdas/lib/dynamo/semaphore';
+import { __setMockState } from '../lambdas/lib/aws/dynamo/dependency.js';
+import { __setMockState as ___setMockState } from '../lambdas/lib/aws/dynamo/location.js';
+import { __setMockState as ____setMockState } from '../lambdas/lib/aws/dynamo/operations.js';
+import { __setMockState as _____setMockState } from '../lambdas/lib/aws/dynamo/scheduler.js';
+import { __setMockState as ______setMockState } from '../lambdas/lib/aws/dynamo/semaphore.js';
 import stateStore from '../lambdas/lib/db/state/store.js';
 
 const s3 = new S3();

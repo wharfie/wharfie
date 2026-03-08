@@ -96,11 +96,29 @@ function makeResource(id) {
       Role: 'arn:aws:iam::123456789012:role/test',
     },
     resource_properties: {},
-    // @ts-ignore
-    source_properties: { name: 'src' },
-    // @ts-ignore
-    destination_properties: { name: 'dst' },
+    source_properties: makeTableProperties('src'),
+    destination_properties: makeTableProperties('dst'),
   });
+}
+
+/**
+ * @param {string} name
+ * @returns {import('../../lambdas/typedefs.js').TableProperties}
+ */
+function makeTableProperties(name) {
+  return {
+    catalogId: '123456789012',
+    columns: [],
+    compressed: false,
+    databaseName: 'db',
+    name,
+    numberOfBuckets: 0,
+    parameters: {},
+    region: 'us-east-1',
+    storedAsSubDirectories: false,
+    tableType: 'EXTERNAL_TABLE',
+    tags: {},
+  };
 }
 
 /**

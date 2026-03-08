@@ -42,23 +42,24 @@ async function resolveInitInputs(options) {
 
   // If any inputs are missing, prompt.
   if (!projectName || includeExamples == null) {
-    /** @type {{ project_name: string, include_examples: boolean }} */
-    // @ts-ignore - inquirer has weak JS typings under ESM
-    const answers = await inquirer.prompt([
-      {
-        type: 'input',
-        name: 'project_name',
-        message: 'What is the name of your project?',
-        when: () => !projectName,
-      },
-      {
-        type: 'confirm',
-        name: 'include_examples',
-        message: 'Include examples in your project?',
-        default: true,
-        when: () => includeExamples == null,
-      },
-    ]);
+    const answers =
+      /** @type {{ project_name: string, include_examples: boolean }} */ (
+        await inquirer.prompt([
+          {
+            type: 'input',
+            name: 'project_name',
+            message: 'What is the name of your project?',
+            when: () => !projectName,
+          },
+          {
+            type: 'confirm',
+            name: 'include_examples',
+            message: 'Include examples in your project?',
+            default: true,
+            when: () => includeExamples == null,
+          },
+        ])
+      );
 
     if (!projectName) projectName = answers.project_name;
     if (includeExamples == null) includeExamples = answers.include_examples;

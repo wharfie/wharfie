@@ -46,9 +46,9 @@ async function validateConfig() {
   try {
     credentials = await credentialProvider();
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     throw new Error(
-      // @ts-ignore
-      `AWS credentials are not configured for terminal, please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html \nfailed with this error:\n${err.message}`,
+      `AWS credentials are not configured for terminal, please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html \nfailed with this error:\n${message}`,
     );
   }
   const keySet = credentials.accessKeyId && credentials.secretAccessKey;
