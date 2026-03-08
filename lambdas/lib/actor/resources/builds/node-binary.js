@@ -377,7 +377,7 @@ class NodeBinary extends BaseResource {
 }
 
 /**
- * @typedef {Object} NodeVersionDescription
+ * @typedef {object} NodeVersionDescription
  * @property {string} version - The version string.
  * @property {string} date - The release date.
  * @property {string[]} files - The files available for this version.

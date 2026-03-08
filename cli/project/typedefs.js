@@ -1,6 +1,3 @@
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-
 /**
  * @typedef Project
  * @property {string} name -
@@ -60,9 +57,9 @@ const require = createRequire(import.meta.url);
  * @property {string} input_format -
  * @property {string} output_format -
  * @property {SerdeInfo} serde_info -
- * @property {Boolean} compressed -
- * @property {Boolean} stored_as_sub_directories -
- * @property {Number} number_of_buckets -
+ * @property {boolean} compressed -
+ * @property {boolean} stored_as_sub_directories -
+ * @property {number} number_of_buckets -
  */
 
 /**
@@ -94,8 +91,8 @@ const require = createRequire(import.meta.url);
  * @property {string} description -
  * @property {DefinitionTypeEnum} definition_type -
  * @property {Runtime} runtime -
- * @property {Number} timeout -
- * @property {Number} memory -
+ * @property {number} timeout -
+ * @property {number} memory -
  * @property {string} entrypoint -
  * @property {Object<string,string | SecretsManagerReference>} environment_variables -
  * @property {Object<string,ConfigurationDefinition>} configuration_definition -

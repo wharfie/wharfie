@@ -44,7 +44,7 @@ const parentLocation = (/** @type {string} */ location) => {
 };
 
 /**
- * @typedef {Object} locationClient
+ * @typedef {object} locationClient
  * @property {(locationRecord: LocationRecord) => void} putLocation - putLocation.
  * @property {(location: string) => Promise<LocationRecord[]>} findLocations - findLocations.
  * @property {(locationRecord: LocationRecord) => void} deleteLocation - deleteLocation.

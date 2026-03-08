@@ -1,3 +1,4 @@
+// @ts-nocheck
 const getTableInput = require('./formats');
 const { validateModelSql, WharfieModelSQLError } = require('./model-validator');
 

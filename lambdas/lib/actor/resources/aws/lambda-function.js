@@ -6,7 +6,7 @@ import { ResourceNotFoundException } from '@aws-sdk/client-lambda';
  * @property {import('@aws-sdk/client-lambda').Runtime} runtime - runtime.
  * @property {string | function(): string} role - role.
  * @property {string} handler - handler.
- * @property {any | function} code - code.
+ * @property {any | Function} code - code.
  * @property {any} description - description.
  * @property {number} [memorySize] - memorySize.
  * @property {number} [timeout] - timeout.
@@ -14,8 +14,8 @@ import { ResourceNotFoundException } from '@aws-sdk/client-lambda';
  * @property {string} [packageType] - packageType.
  * @property {import('@aws-sdk/client-lambda').Architecture[]} [architectures] - architectures.
  * @property {any} [ephemeralStorage] - ephemeralStorage.
- * @property {any | function} [environment] - environment.
- * @property {any | function} [deadLetterConfig] - deadLetterConfig.
+ * @property {any | Function} [environment] - environment.
+ * @property {any | Function} [deadLetterConfig] - deadLetterConfig.
  * @property {Record<string, string>} [tags] - tags.
  * @property {string | function(): string} codeHash - codeHash.
  */

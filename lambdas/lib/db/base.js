@@ -195,7 +195,7 @@ async function close() {}
 
 /**
  * A DynamoDB wrapper client exposing the base DB methods.
- * @typedef {Object} DBClient
+ * @typedef {object} DBClient
  * @property {(params: QueryParams) => QueryReturn} query - query.
  * @property {(params: PutParams) => PutReturn} put - put.
  * @property {(params: UpdateParams) => UpdateReturn} update - update.

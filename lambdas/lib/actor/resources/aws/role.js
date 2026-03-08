@@ -5,7 +5,7 @@ import { NoSuchEntityException } from '@aws-sdk/client-iam';
  * @typedef RoleProperties
  * @property {string} [roleName] - roleName.
  * @property {string} description - description.
- * @property {any | function } assumeRolePolicyDocument - assumeRolePolicyDocument.
+ * @property {any | Function} assumeRolePolicyDocument - assumeRolePolicyDocument.
  * @property {string[] | (() => string[]) } [managedPolicyArns] - managedPolicyArns.
  * @property {any} [rolePolicyDocument] - rolePolicyDocument.
  * @property {import('@aws-sdk/client-iam').Tag[]} [tags] - tags.

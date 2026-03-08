@@ -1,19 +1,16 @@
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-
 /**
  * @typedef CustomFormatDefinitionParams
  * @property {string} TableName -
  * @property {string} Description -
  * @property {string} Location -
- * @property {import('./').Column[]} Columns -
- * @property {import('./').Column[]} PartitionKeys -=
- * @property {import('./').StorageDescriptor} CustomFormat -
+ * @property {import('./index.js').Column[]} Columns -
+ * @property {import('./index.js').Column[]} PartitionKeys -=
+ * @property {import('./index.js').StorageDescriptor} CustomFormat -
  */
 
 /**
  * @param {CustomFormatDefinitionParams} params -
- * @returns {import('./').FormatDefinition} -
+ * @returns {import('./index.js').FormatDefinition} -
  */
 module.exports = ({
   TableName,

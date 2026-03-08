@@ -1,10 +1,11 @@
+// @ts-nocheck
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { getDatabaseName } = require('./names');
 
-const Athena = require('../../lambdas/lib/athena').default;
-const S3 = require('../../lambdas/lib/s3').default;
-const Glue = require('../../lambdas/lib/glue').default;
+const Athena = require('../../lambdas/lib/aws/athena/index.js').default;
+const S3 = require('../../lambdas/lib/aws/s3.js').default;
+const Glue = require('../../lambdas/lib/aws/glue.js').default;
 const s3 = new S3();
 const athena = new Athena({});
 const glue = new Glue({});

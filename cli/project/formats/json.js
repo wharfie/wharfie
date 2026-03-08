@@ -1,8 +1,6 @@
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
 /**
- * @param {import('./').FormatDefinitionParams} params -
- * @returns {import('./').FormatDefinition} -
+ * @param {import('./index.js').FormatDefinitionParams} params -
+ * @returns {import('./index.js').FormatDefinition} -
  */
 module.exports = ({
   TableName,

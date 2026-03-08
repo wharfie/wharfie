@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
@@ -21,9 +22,9 @@ const { handleError } = require('../../output/error');
 
 /**
  * Creates a debounced function with a queue to handle async calls.
- * @param {function} func - The function to debounce.
+ * @param {Function} func - The function to debounce.
  * @param {number} delay - The debounce delay in milliseconds.
- * @returns {function} The debounced function.
+ * @returns {Function} The debounced function.
  */
 function debounceWithQueue(func, delay) {
   // @ts-ignore

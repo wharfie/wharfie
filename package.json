@@ -77,7 +77,6 @@
       "dist/",
       "tmp/",
       "docs/",
-      "cli/",
       "test/",
       "scratch/",
       "coverage/"
@@ -96,6 +95,28 @@
         "rules": {
           "jest/max-expects": 0,
           "jest/no-conditional-in-test": 0
+        }
+      },
+      {
+        "files": [
+          "cli/**/*.js"
+        ],
+        "globals": {
+          "module": "readonly",
+          "exports": "readonly",
+          "require": "readonly",
+          "__dirname": "readonly",
+          "__filename": "readonly"
+        },
+        "rules": {
+          "n/no-process-exit": "off",
+          "import/no-named-as-default": "off",
+          "import/no-named-as-default-member": "off",
+          "jsdoc/require-jsdoc": "off",
+          "jsdoc/require-param-description": "off",
+          "jsdoc/require-returns-description": "off",
+          "jsdoc/require-property-description": "off",
+          "jsdoc/tag-lines": "off"
         }
       }
     ],
@@ -134,7 +155,8 @@
         {
           "definedTypes": [
             "Iterable",
-            "AsyncIterable"
+            "AsyncIterable",
+            "NodeJS"
           ]
         }
       ]

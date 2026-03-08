@@ -9,14 +9,14 @@ import { Status as ActionStatus } from './action.js';
  *
  * NOTE: this intentionally matches the provider-neutral operations table client
  * (createOperationsTable / createOperationsStore).
- * @typedef {Object} OperationRunnerStore
+ * @typedef {object} OperationRunnerStore
  * @property {(resource_id: string, operation_id?: string) => Promise<{ operations: import('./operation.js').default[]; actions: ActionInstance[]; queries: import('./query.js').default[] }>} getRecords - Load operation/action/query records.
  * @property {(action: ActionInstance, new_status: string) => Promise<boolean>} updateActionStatus - Optimistically transition an action status.
  * @property {(operation: import('./operation.js').default, action_type: import('./action.js').WharfieActionTypeEnum) => Promise<boolean>} [checkActionPrerequisites] - Check whether prerequisites have completed.
  */
 
 /**
- * @typedef {Object} RunOperationParams
+ * @typedef {object} RunOperationParams
  * @property {OperationRunnerStore} store - Operations store/table client.
  * @property {string} resourceId - Resource id.
  * @property {string} operationId - Operation id.

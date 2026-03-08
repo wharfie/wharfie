@@ -6,7 +6,7 @@ import { Command } from 'commander';
 import paths from '../lambdas/lib/paths.js';
 import { WHARFIE_VERSION } from '../lambdas/lib/version.js';
 
-import * as config from './config.js';
+import config from './config.js';
 import { checkForNewRelease } from './upgrade.js';
 import { displayFailure } from './output/basic.js';
 
@@ -120,10 +120,11 @@ export async function main(argv = process.argv) {
 
   if (!process.stdin.isTTY) {
     process.env.stdin = '';
-    process.stdin.on('readable', function () {
-      const chunk = this.read();
+    process.stdin.on('readable', () => {
+      const chunk = process.stdin.read();
       if (chunk !== null) {
-        process.env.stdin += chunk;
+        process.env.stdin +=
+          typeof chunk === 'string' ? chunk : chunk.toString('utf8');
       }
     });
     await new Promise((resolve) => process.stdin.on('end', resolve));

@@ -60,7 +60,7 @@
  */
 
 /**
- * @typedef {Object} ObjectStorageClient
+ * @typedef {object} ObjectStorageClient
  * @property {(params: PutObjectCommandInput) => Promise<PutObjectCommandOutput>} putObject - putObject.
  * @property {(params: GetObjectCommandInput) => Promise<string>} getObject - getObject.
  * @property {(params: HeadObjectCommandInput) => Promise<HeadObjectCommandOutput>} headObject - headObject.

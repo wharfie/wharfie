@@ -25,7 +25,7 @@ const configCommand = new Command('config')
         type: 'input',
         name: 'region',
         message: 'wharfie AWS region:',
-        default: process.env.WHARFIE_REGION || (await sts.sts.config.region()),
+        default: process.env.WHARFIE_REGION || (await sts.getRegion()),
       },
       {
         type: 'input',

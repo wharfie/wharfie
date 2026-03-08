@@ -6,7 +6,7 @@
  */
 
 /**
- * @typedef {Object} S3Location
+ * @typedef {object} S3Location
  * @property {string} uri - uri.
  * @property {string} arn - arn.
  * @property {string} bucket - bucket.
@@ -14,7 +14,7 @@
  */
 
 /**
- * @typedef {Object} Partition
+ * @typedef {object} Partition
  * @property {Record<string, string | number>} partitionValues - partitionValues.
  * @property {string} location - location.
  */

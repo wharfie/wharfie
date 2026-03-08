@@ -5,7 +5,7 @@ import HetznerVPS from './vps.js';
 /**
  * Properties for {@link HetznerNode}.
  * These are supplied via the `properties` field of {@link HetznerNodeOptions}.
- * @typedef {Object} HetznerNodeProperties
+ * @typedef {object} HetznerNodeProperties
  * @property {string} hetznerToken - Hetzner Cloud API token used to authenticate with the Hetzner API.
  * @property {string} binaryLocalPath - Absolute path to the local binary that should be uploaded to the VPS.
  * @property {string} sshPublicKeyPath - Absolute path to the SSH pub key used to connect to the node.
@@ -17,7 +17,7 @@ import HetznerVPS from './vps.js';
 
 /**
  * Constructor options for {@link HetznerNode}.
- * @typedef {Object} HetznerNodeOptions
+ * @typedef {object} HetznerNodeOptions
  * @property {string} name - Logical name of the Hetzner-backed node resource.
  * @property {string} [parent] - Optional parent resource identifier in the resource graph.
  * @property {import('../reconcilable.js').default.Status} [status] - Optional initial reconciliation status for the node.

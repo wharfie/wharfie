@@ -5,13 +5,13 @@ import ConsoleLogTransport from './console-log-transport.js';
  * @property {string} [level] - level.
  * @property {(import('./console-log-transport.js').default|import('./firehose-log-transport.js').default)[]} [transports] - transports.
  * @property {boolean} [jsonFormat] - jsonFormat.
- * @property {Object} [base] - base.
+ * @property {object} [base] - base.
  */
 
 /**
  * @typedef LoggerChildOptions
  * @property {string} [level] - level.
- * @property {Object} [metadata] - metadata.
+ * @property {object} [metadata] - metadata.
  */
 
 class Logger {
@@ -34,8 +34,8 @@ class Logger {
 
   /**
    * @param {string} level - level.
-   * @param {string | Object} message - message.
-   * @param {Object} [metadata] - metadata.
+   * @param {string | object} message - message.
+   * @param {object} [metadata] - metadata.
    * @returns {void} - Result.
    */
   log(level, message, metadata = {}) {
@@ -64,8 +64,8 @@ class Logger {
   }
 
   /**
-   * @param {string | Object} message - message.
-   * @param {Object} [metadata] - metadata.
+   * @param {string | object} message - message.
+   * @param {object} [metadata] - metadata.
    * @returns {void} - Result.
    */
   debug(message, metadata = {}) {
@@ -73,8 +73,8 @@ class Logger {
   }
 
   /**
-   * @param {string | Object} message - message.
-   * @param {Object} [metadata] - metadata.
+   * @param {string | object} message - message.
+   * @param {object} [metadata] - metadata.
    * @returns {void} - Result.
    */
   info(message, metadata = {}) {
@@ -82,8 +82,8 @@ class Logger {
   }
 
   /**
-   * @param {string | Object} message - message.
-   * @param {Object} [metadata] - metadata.
+   * @param {string | object} message - message.
+   * @param {object} [metadata] - metadata.
    * @returns {void} - Result.
    */
   warn(message, metadata = {}) {
@@ -91,8 +91,8 @@ class Logger {
   }
 
   /**
-   * @param {string | Object} message - message.
-   * @param {Object} [metadata] - metadata.
+   * @param {string | object} message - message.
+   * @param {object} [metadata] - metadata.
    * @returns {void} - Result.
    */
   error(message, metadata = {}) {

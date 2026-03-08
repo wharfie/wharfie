@@ -908,8 +908,8 @@ class S3 {
   /**
    * @param {import("@aws-sdk/client-s3").ListObjectsV2CommandInput} params - params for ListObjectV2 request
    * @param {string} [region] - region.
-   * @param {Number} [byteSize] - accumulator for common prefixes
-   * @returns {Promise<Number>} - Result.
+   * @param {number} [byteSize] - accumulator for common prefixes
+   * @returns {Promise<number>} - Result.
    */
   async getPrefixByteSize(params, region, byteSize = 0) {
     const listCommand = new ListObjectsV2Command({

@@ -13,14 +13,14 @@ const duckdb = require('@duckdb/node-api');
 const { DuckDBInstance } = duckdb;
 
 /**
- * @typedef {Object} DuckDBQueryEngineOptions
+ * @typedef {object} DuckDBQueryEngineOptions
  * @property {string} [databasePath] - DuckDB database path. Use ':memory:' for ephemeral DB.
  * @property {boolean} [enableS3] - If true, LOADs (and if needed INSTALLs) DuckDB's httpfs extension and configures S3 settings.
  * @property {DuckDBS3Config} [s3] - S3 configuration (optional). If omitted and enableS3=true, reads from standard AWS env vars.
  */
 
 /**
- * @typedef {Object} DuckDBS3Config
+ * @typedef {object} DuckDBS3Config
  * @property {string} [region] - AWS region.
  * @property {string} [accessKeyId] - AWS access key id.
  * @property {string} [secretAccessKey] - AWS secret access key.
@@ -262,7 +262,7 @@ class DuckDBQueryEngine {
 
   /**
    * Create/overwrite a DuckDB view for a logical table backed by parquet files.
-   * @param {Object} params - Parameters.
+   * @param {object} params - Parameters.
    * @param {string} params.schema - DuckDB schema name (usually your logical database name).
    * @param {string} params.table - View name.
    * @param {string[]} params.files - List of parquet file URIs/paths.
@@ -298,7 +298,7 @@ class DuckDBQueryEngine {
 
   /**
    * Create/overwrite a DuckDB view backed by the current state of a references metastore.
-   * @param {Object} params - Parameters.
+   * @param {object} params - Parameters.
    * @param {string} params.schema - DuckDB schema name.
    * @param {string} params.table - View name.
    * @param {string} params.referencesUri - Root references location (directory containing `files` manifests).
@@ -323,7 +323,7 @@ class DuckDBQueryEngine {
 
   /**
    * Write the result of a SELECT to partitioned parquet output (DuckDB COPY).
-   * @param {Object} params - Parameters.
+   * @param {object} params - Parameters.
    * @param {string} params.selectSql - A SELECT statement (without the surrounding COPY()).
    * @param {string} params.outputUri - Destination directory (local path, file://..., or s3://...).
    * @param {string[]} [params.partitionBy] - Partition column names.

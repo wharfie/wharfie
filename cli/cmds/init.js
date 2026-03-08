@@ -1,8 +1,7 @@
 import { Command } from 'commander';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { promises as fsp } from 'node:fs';
-import fs from 'node:fs';
+import fs, { promises as fsp } from 'node:fs';
 import inquirer from 'inquirer';
 
 import {

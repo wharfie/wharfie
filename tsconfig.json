@@ -16,16 +16,12 @@
   },
   "include": [
     "lambdas/**/*.js",
-    "test/cli/**/*.js",
-    "test/runtime/**/*.js",
-    "test/graph/**/*.js",
-    "test/db/**/*.js",
-    "test/fixtures/actors/**/*.js"
+    "cli/**/*.js",
+    "test/**/*.js",
+    "types/**/*.d.ts"
   ],
   "exclude": [
-    "lambdas/udf_entrypoint.js",
-    "lambdas/lib/actor/resources/aws/**",
-    "lambdas/lib/actor/resources/records/**",
-    "test/legacy/**"
+    "test/legacy/**",
+    "test/__mocks__/**"
   ]
 }

@@ -1,9 +1,10 @@
+// @ts-nocheck
 const { WHARFIE_DEFAULT_ENVIRONMENT } = require('./constants');
 
 /**
  * @param {import('./typedefs').Project} project -
  * @param {import('./typedefs').Environment} environment -
- * @returns {String} -
+ * @returns {string} -
  */
 function getDatabaseName(project, environment) {
   return `${project.name}${

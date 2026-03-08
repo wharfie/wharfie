@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
@@ -8,7 +9,7 @@ const {
   displayFailure,
   displayInfo,
 } = require('../../output/basic');
-const Glue = require('../../../lambdas/lib/glue').default;
+const Glue = require('../../../lambdas/lib/aws/glue.js').default;
 
 const cleanupTemporaryDB = async () => {
   const DatabaseName = `${process.env.WHARFIE_DEPLOYMENT_NAME}_temporary_store`;

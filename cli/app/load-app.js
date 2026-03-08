@@ -83,11 +83,15 @@ function pickCapabilitySpecs(maybeSpecs) {
 
   /** @type {CapabilitySpecs} */
   const picked = {};
-  if ('db' in maybeSpecs) picked.db = /** @type {any} */ (maybeSpecs).db;
-  if ('queue' in maybeSpecs)
+  if ('db' in maybeSpecs) {
+    picked.db = /** @type {any} */ (maybeSpecs).db;
+  }
+  if ('queue' in maybeSpecs) {
     picked.queue = /** @type {any} */ (maybeSpecs).queue;
-  if ('objectStorage' in maybeSpecs)
+  }
+  if ('objectStorage' in maybeSpecs) {
     picked.objectStorage = /** @type {any} */ (maybeSpecs).objectStorage;
+  }
 
   if (!picked.db && !picked.queue && !picked.objectStorage) return undefined;
   return picked;

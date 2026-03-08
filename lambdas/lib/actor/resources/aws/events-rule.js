@@ -12,7 +12,7 @@ import { configsEqual } from './reconcile-compare.js';
  * @property {string} description - description.
  * @property {string} [scheduleExpression] - scheduleExpression.
  * @property {string} [eventPattern] - eventPattern.
- * @property {string | function} [roleArn] - roleArn.
+ * @property {string | Function} [roleArn] - roleArn.
  * @property {import('@aws-sdk/client-cloudwatch-events').RuleState} state - state.
  * @property {import('@aws-sdk/client-cloudwatch-events').Target[] | function(): import('@aws-sdk/client-cloudwatch-events').Target[]} targets - targets.
  * @property {import('@aws-sdk/client-cloudwatch-events').Tag[]} [tags] - tags.

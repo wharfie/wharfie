@@ -1,7 +1,7 @@
 /**
  * Rate-limit snapshot parsed from Hetzner response headers.
  * Describes the current hourly window quota and reset time.
- * @typedef {Object} HetznerRate
+ * @typedef {object} HetznerRate
  * @property {number|null} limit Total requests permitted in the current hourly window.
  * @property {number|null} remaining Remaining requests available in the current window.
  * @property {number|null} reset UNIX timestamp (seconds) when the window fully resets.
@@ -9,7 +9,7 @@
 
 /**
  * Low-level HTTP request options accepted by the internal _request() helper.
- * @typedef {Object} HetznerRequestOptions
+ * @typedef {object} HetznerRequestOptions
  * @property {'GET'|'POST'|'PATCH'|'PUT'|'DELETE'} [method='GET'] HTTP method to use.
  * @property {Record<string, unknown>} [query] Query parameters that will be serialized to the URL.
  * @property {unknown} [body] JSON-serializable request payload.
@@ -19,14 +19,14 @@
 /**
  * Constructor options for the HetznerCloud client.
  * Token is required at runtime even though it's optional for ergonomics.
- * @typedef {Object} HetznerClientOptions
+ * @typedef {object} HetznerClientOptions
  * @property {string} [token] Project-scoped API token used for Authorization.
  * @property {string} [baseUrl] Base URL for the API root (defaults to https://api.hetzner.cloud/v1).
  */
 
 /**
  * Single-page list query when retrieving Floating IPs.
- * @typedef {Object} ListFloatingIPsOptions
+ * @typedef {object} ListFloatingIPsOptions
  * @property {string} [name] Exact name to match.
  * @property {string} [label_selector] Label selector (e.g., "env=prod,!type").
  * @property {string|string[]} [sort] Sort key(s): "id", "created", "id:asc", etc.
@@ -36,7 +36,7 @@
 
 /**
  * Payload for creating a Floating IP (POST /floating_ips).
- * @typedef {Object} CreateFloatingIPPayload
+ * @typedef {object} CreateFloatingIPPayload
  * @property {'ipv4'|'ipv6'} type Address family to create.
  * @property {number|null} [server] Initial server ID to assign to (or null to keep unassigned).
  * @property {string} [home_location] Home location ID/name (omit if server provided).
@@ -47,7 +47,7 @@
 
 /**
  * Body for updating a Floating IP (PUT /floating_ips/{id}).
- * @typedef {Object} UpdateFloatingIPBody
+ * @typedef {object} UpdateFloatingIPBody
  * @property {string|null} [description] New description (nullable to clear).
  * @property {string} [name] New unique name.
  * @property {Record<string,string>} [labels] Full label map to replace existing labels.
@@ -55,7 +55,7 @@
 
 /**
  * Filter options when listing Floating IP actions globally.
- * @typedef {Object} ListFloatingIPActionsOptions
+ * @typedef {object} ListFloatingIPActionsOptions
  * @property {number[]} [id] Action IDs to include.
  * @property {('running'|'success'|'error')[]} [status] Status values to include.
  * @property {string|string[]} [sort] Sort keys (e.g., "id:desc").
@@ -65,7 +65,7 @@
 
 /**
  * Filter options when listing actions for a specific Floating IP.
- * @typedef {Object} ListFIPActionsForResourceOptions
+ * @typedef {object} ListFIPActionsForResourceOptions
  * @property {string|string[]} [sort] Sort keys.
  * @property {('running'|'success'|'error')[]} [status] Status values.
  * @property {number} [page=1] 1-based page index.
@@ -74,26 +74,26 @@
 
 /**
  * Body for assigning a Floating IP to a server.
- * @typedef {Object} AssignFloatingIPBody
+ * @typedef {object} AssignFloatingIPBody
  * @property {number|null} server Server ID to assign to (null to leave unassigned).
  */
 
 /**
  * Body for changing reverse-DNS (PTR) of a Floating IP.
- * @typedef {Object} ChangeDNSPtrBody
+ * @typedef {object} ChangeDNSPtrBody
  * @property {string} ip The specific IPv4/IPv6 address within the FIP to update.
  * @property {string} dns_ptr The hostname the PTR record should point to.
  */
 
 /**
  * Body for changing delete protection on a Floating IP.
- * @typedef {Object} ChangeFloatingIPProtectionBody
+ * @typedef {object} ChangeFloatingIPProtectionBody
  * @property {boolean} delete If true, prevents delete; false allows deletion.
  */
 
 /**
  * Single-page list query for SSH keys.
- * @typedef {Object} ListSSHKeysOptions
+ * @typedef {object} ListSSHKeysOptions
  * @property {string|string[]} [sort] Sort directives (e.g., "name:asc").
  * @property {string} [name] Exact name filter.
  * @property {string} [fingerprint] Exact fingerprint filter.
@@ -104,7 +104,7 @@
 
 /**
  * Payload for creating an SSH key (POST /ssh_keys).
- * @typedef {Object} CreateSSHKeyPayload
+ * @typedef {object} CreateSSHKeyPayload
  * @property {string} name Unique name for the key.
  * @property {string} public_key OpenSSH public key string.
  * @property {Record<string,string>} [labels] Optional labels.
@@ -112,14 +112,14 @@
 
 /**
  * Body for updating an SSH key (PUT /ssh_keys/{id}).
- * @typedef {Object} UpdateSSHKeyBody
+ * @typedef {object} UpdateSSHKeyBody
  * @property {string} [name] New unique name.
  * @property {Record<string,string>} [labels] Full label map to replace existing labels.
  */
 
 /**
  * Single-page list query for servers.
- * @typedef {Object} ListServersOptions
+ * @typedef {object} ListServersOptions
  * @property {number} [page=1] 1-based page index.
  * @property {number} [per_page=25] Page size (1..50).
  * @property {string} [label_selector] Label selector expression.
@@ -128,7 +128,7 @@
 
 /**
  * Iteration options for paginating all servers.
- * @typedef {Object} IterateServersOptions
+ * @typedef {object} IterateServersOptions
  * @property {number} [per_page=50] Page size used during pagination (max 50).
  * @property {string} [label_selector] Label selector expression.
  * @property {string|string[]} [sort] Sort directives.
@@ -137,7 +137,7 @@
 /**
  * Server creation payload (POST /servers).
  * Captures the full shape accepted by Hetzner for provisioning a server.
- * @typedef {Object} CreateServerPayload
+ * @typedef {object} CreateServerPayload
  * @property {string} name RFC1123-compliant unique hostname.
  * @property {string} server_type Server type (e.g., "cpx11").
  * @property {string} image Image ID or name (e.g., "ubuntu-22.04").
@@ -157,7 +157,7 @@
 
 /**
  * Query parameters for server metrics (GET /servers/{id}/metrics).
- * @typedef {Object} ServerMetricsParams
+ * @typedef {object} ServerMetricsParams
  * @property {string} type Metric types: "cpu", "disk", "network" or comma-joined (e.g., "cpu,network").
  * @property {string} start ISO-8601 start timestamp.
  * @property {string} end ISO-8601 end timestamp.
@@ -166,7 +166,7 @@
 
 /**
  * Global server actions list filters (GET /servers/actions).
- * @typedef {Object} ListServerActionsOptions
+ * @typedef {object} ListServerActionsOptions
  * @property {number[]} [id] Action IDs to include.
  * @property {('running'|'success'|'error')[]} [status] Status values to include.
  * @property {string|string[]} [sort] Sort directives.
@@ -176,7 +176,7 @@
 
 /**
  * Per-server actions list filters (GET /servers/{id}/actions).
- * @typedef {Object} ListServerActionsForResourceOptions
+ * @typedef {object} ListServerActionsForResourceOptions
  * @property {('running'|'success'|'error')[]} [status] Status values to include.
  * @property {string|string[]} [sort] Sort directives.
  * @property {number} [page=1] 1-based page index.
@@ -185,7 +185,7 @@
 
 /**
  * Wait options used by waitForServerRunning().
- * @typedef {Object} WaitServerOptions
+ * @typedef {object} WaitServerOptions
  * @property {number} [intervalMs=2000] Polling interval (ms).
  * @property {number} [timeoutMs=900000] Timeout (ms).
  * @property {boolean} [requireIPv4=true] If true, require primary public IPv4 to be present.
@@ -193,9 +193,9 @@
 
 /**
  * High-level options to create a server and install a systemd service on first boot.
- * @typedef {Object} CreateAndRunServiceOptions
+ * @typedef {object} CreateAndRunServiceOptions
  * @property {CreateServerPayload} server Complete server create payload.
- * @property {Object} exec Executable + service configuration.
+ * @property {object} exec Executable + service configuration.
  * @property {string} [exec.url] HTTPS URL to download the executable.
  * @property {string} [exec.inline_b64] Base64-encoded executable/script content.
  * @property {string} [exec.remote_path='/usr/local/bin/app'] Absolute path to place the executable.
@@ -219,9 +219,9 @@
 
 /**
  * High-level options to create a server and run an executable on first boot (cloud-init).
- * @typedef {Object} CreateAndRunOptions
+ * @typedef {object} CreateAndRunOptions
  * @property {CreateServerPayload} server Server create payload.
- * @property {Object} exec Executable configuration.
+ * @property {object} exec Executable configuration.
  * @property {string} [exec.url] HTTPS URL to download the executable.
  * @property {string} [exec.inline_b64] Base64-encoded executable/script content.
  * @property {string} [exec.remote_path='/root/app.bin'] Destination path on the VM.
@@ -235,7 +235,7 @@
 
 /**
  * Options for terminateServerFast() destructive helper.
- * @typedef {Object} TerminateServerFastOptions
+ * @typedef {object} TerminateServerFastOptions
  * @property {boolean} [wait=true] Wait for final delete action to finish.
  * @property {number} [intervalMs=2000] Poll interval (ms).
  * @property {number} [timeoutMs=900000] Timeout (ms).

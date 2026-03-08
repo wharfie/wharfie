@@ -27,7 +27,7 @@ function pkEq(propertyName, propertyValue) {
 
 /**
  * A DynamoDB wrapper client exposing the base DB methods.
- * @typedef {Object} dependencyClient
+ * @typedef {object} dependencyClient
  * @property {(dependency: DependencyRecord) => void} putDependency - putDependency.
  * @property {(dependency: DependencyRecord) => Promise<DependencyRecord[]>} findDependencies - findDependencies.
  * @property {(dependency: DependencyRecord) => void} deleteDependency - deleteDependency.

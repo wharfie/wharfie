@@ -63,6 +63,18 @@ class STS {
   }
 
   /**
+   * @returns {Promise<string | undefined>} - Configured AWS region.
+   */
+  async getRegion() {
+    const config =
+      /** @type {{ region?: () => Promise<string | undefined> }} */ (
+        this.sts.config
+      );
+    if (typeof config.region !== 'function') return undefined;
+    return await config.region();
+  }
+
+  /**
    * @returns {Promise<import("@aws-sdk/client-sts").GetCallerIdentityCommandOutput>} - STS getCallerIdentity output
    */
   async getCallerIdentity() {

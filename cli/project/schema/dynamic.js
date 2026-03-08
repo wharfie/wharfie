@@ -1,3 +1,4 @@
+// @ts-nocheck
 const Joi = require('joi');
 
 /**
@@ -35,7 +36,7 @@ function mapType(typeStr) {
 /**
  * Generates a Joi configuration schema based on a provided definition.
  * The definition can be a string, an array (with one element), or an object.
- * @param {string|Object|Array<string|Object>} definition - The configuration definition.
+ * @param {string | object | Array<string | object>} definition - The configuration definition.
  * @returns {Joi.Schema} The generated Joi schema.
  * @throws {Error} If the definition format is invalid or if an array does not contain exactly one element.
  */

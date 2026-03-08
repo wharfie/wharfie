@@ -75,7 +75,7 @@ const sortKeyToNumber = (sortKey) => {
 };
 
 /**
- * @typedef {Object} schedulerClient
+ * @typedef {object} schedulerClient
  * @property {(schedulerEvent: SchedulerEntry) => Promise<void>} schedule - schedule.
  * @property {(schedulerEvent: SchedulerEntry, status: any) => Promise<void>} update - update. TODO: make a real status enum
  * @property {(resource_id: string, partition: string, window: [number, number]) => Promise<SchedulerEntry[]>} query - query.

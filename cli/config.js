@@ -61,7 +61,7 @@ async function validateConfig() {
   }
 
   // // Check region configuration
-  const region = await sts.sts.config.region();
+  const region = await sts.getRegion();
   if (!region) {
     throw new Error(
       `AWS Region is not configured for terminal, please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html`,

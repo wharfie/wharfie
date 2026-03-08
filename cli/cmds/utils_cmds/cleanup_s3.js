@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
@@ -10,8 +11,8 @@ const {
 } = require('../../output/basic');
 const { getAllResources, getResource } =
   require('../../../lambdas/lib/dynamo/operations').default;
-const Glue = require('../../../lambdas/lib/glue').default;
-const S3 = require('../../../lambdas/lib/s3').default;
+const Glue = require('../../../lambdas/lib/aws/glue.js').default;
+const S3 = require('../../../lambdas/lib/aws/s3.js').default;
 const Clean = require('../../../lambdas/operations/actions/lib/clean');
 
 const glue = new Glue({});

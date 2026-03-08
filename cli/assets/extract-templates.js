@@ -8,7 +8,7 @@ export const TEMPLATES_ASSET_MANIFEST_KEY = `${TEMPLATES_ASSET_BASE}/manifest.js
 
 /**
  * @typedef SeaAssetProvider
- * @property {(name: string, encoding?: BufferEncoding) => any} getAsset
+ * @property {(name: string, encoding?: NodeJS.BufferEncoding) => any} getAsset
  * @property {() => boolean} isSea
  */
 

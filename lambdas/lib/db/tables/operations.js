@@ -108,7 +108,7 @@ const normalizeRecord = (record) => {
 
 /**
  * Operations table client.
- * @typedef {Object} OperationsTableClient
+ * @typedef {object} OperationsTableClient
  * @property {(resource: Resource) => Promise<void>} putResource - putResource.
  * @property {(resource_id: string) => Promise<Resource | null>} getResource - getResource.
  * @property {() => Promise<Resource[]>} getAllResources - getAllResources.

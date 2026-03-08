@@ -7,7 +7,7 @@ import BaseResourceGroup from './base-resource-group.js';
 
 /**
  * Node-specific properties used when configuring the resource.
- * @typedef {Object} NodeProperties
+ * @typedef {object} NodeProperties
  * @property {string} sshPrivateKeyPath - sshPrivateKeyPath.
  * @property {string} binaryLocalPath - binaryLocalPath.
  * @property {string} binaryRemotePath - binaryRemotePath.
@@ -15,7 +15,7 @@ import BaseResourceGroup from './base-resource-group.js';
  * @property {string} serviceUser - serviceUser.
  * @property {string} workingDirectory - workingDirectory.
  * @property {string} restartPolicy - restartPolicy.
- * @property {Number} serviceRestartSec - serviceRestartSec.
+ * @property {number} serviceRestartSec - serviceRestartSec.
  * @property {Object<string,string>} env - env.
  * @property {string} description - description.
  * @property {string[]} serviceArgs - serviceArgs.
@@ -23,7 +23,7 @@ import BaseResourceGroup from './base-resource-group.js';
 
 /**
  * Options used to construct a {@link Node} resource group.
- * @typedef {Object} NodeOptions
+ * @typedef {object} NodeOptions
  * @property {string} name - Logical name of the node resource.
  * @property {string} [parent] - Optional parent resource name to attach this node under.
  * @property {import('./reconcilable.js').default.Status} [status] - Optional initial reconciliation status.

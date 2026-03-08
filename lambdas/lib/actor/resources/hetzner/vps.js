@@ -4,7 +4,7 @@ import BaseResource from '../base-resource.js';
 /**
  * Minimal systemd service spec for first-boot install via cloud-init.
  * Mirrors the exec fields your Hetzner client already understands.
- * @typedef {Object} VPSServiceSpec
+ * @typedef {object} VPSServiceSpec
  * @property {string} [url] - HTTPS URL to download the executable (preferred for large artifacts).
  * @property {string} [inline_b64] - Base64-encoded executable/script (keep << 32 KiB).
  * @property {string} [remote_path='/usr/local/bin/app'] - Absolute path for the binary on the VM.

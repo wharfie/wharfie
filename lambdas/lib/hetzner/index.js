@@ -6,7 +6,7 @@
 class HetznerError extends Error {
   /**
    * Construct a HetznerError.
-   * @param {Object} params Object containing error fields parsed from the response.
+   * @param {object} params Object containing error fields parsed from the response.
    * @param {number} params.status HTTP status code returned by the API.
    * @param {string} params.code Hetzner machine-readable error code (e.g., "invalid_input").
    * @param {string} params.message Human-readable error message.

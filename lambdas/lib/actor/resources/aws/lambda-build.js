@@ -97,7 +97,7 @@ class LambdaBuild extends BaseResource {
 
   /**
    * Compresses files into a ZIP archive from provided file data.
-   * @param {Object[]} files - An array of objects representing files,
+   * @param {object[]} files - An array of objects representing files,
    *                           each with a `path` and `contents`.
    *                           Example: [{ path: 'folder1/file1.txt', contents: 'Hello World' }]
    * @returns {Promise<Buffer>} - A Promise resolving to a Buffer containing the ZIP archive.

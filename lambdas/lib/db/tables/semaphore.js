@@ -43,7 +43,7 @@ const toNumber = (value, fallback = 0) => {
 };
 
 /**
- * @typedef {Object} semaphoreClient
+ * @typedef {object} semaphoreClient
  * @property {(semaphore: string, threshold?: number) => Promise<boolean>} increase - increase.
  * @property {(semaphore: string) => Promise<void>} release - release.
  * @property {(semaphore: string) => Promise<void>} deleteSemaphore - deleteSemaphore.

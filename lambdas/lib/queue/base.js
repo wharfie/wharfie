@@ -190,7 +190,7 @@ import { createId } from '../id.js';
  */
 
 /**
- * @typedef {Object} QueueClient
+ * @typedef {object} QueueClient
  * @property {(params: SendMessageRequest) => Promise<SendMessageResult>} sendMessage - sendMessage.
  * @property {(params: SendMessageBatchRequest) => Promise<any>} sendMessageBatch - sendMessageBatch.
  * @property {(params: DeleteMessageBatchRequest) => Promise<any>} deleteMessageBatch - deleteMessageBatch.

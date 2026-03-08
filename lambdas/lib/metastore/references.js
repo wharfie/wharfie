@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { ListObjectsV2Command } from '@aws-sdk/client-s3';
 
 /**
- * @typedef {Object} ReferencesMetastoreOptions
+ * @typedef {object} ReferencesMetastoreOptions
  * @property {string} referencesUri - Root references directory (contains `files` manifests).
  * @property {string[]} [partitionKeys] - Partition keys (in order) for partitioned datasets.
  * @property {any} [s3] - Optional instance of `lambdas/lib/s3.js` for s3:// access.
@@ -231,7 +231,7 @@ class ReferencesMetastore {
    * This scans the snapshot directory for parquet files and rewrites the relevant manifests.
    * By default this is *incremental* (write-only): it updates manifests for partitions present
    * in the snapshot and does not delete any others.
-   * @param {Object} params - params.
+   * @param {object} params - params.
    * @param {string} params.dataSnapshotUri - Root of the snapshot (ex: .../data/<storage_id>/).
    * @param {boolean} [params.replaceAll] - If true, deletes any stale manifests not present in the snapshot.
    */
@@ -287,7 +287,7 @@ class ReferencesMetastore {
 
   /**
    * Updates a specific partition's manifest.
-   * @param {Object} params - params.
+   * @param {object} params - params.
    * @param {Record<string, string>} params.partitionValues - params.partitionValues.
    * @param {string[]} params.files - params.files.
    */
