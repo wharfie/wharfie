@@ -17,7 +17,7 @@ const { getMockDeploymentProperties } = require('../util');
 
 describe('event source mapping IaC', () => {
   beforeAll(async () => {
-    // @ts-ignore
+    // @
     createId.mockReturnValue('test-id');
   });
 

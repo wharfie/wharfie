@@ -272,7 +272,7 @@ class S3 {
       return result.Body.transformToString();
     } else {
       // workaround for mocks
-      // @ts-ignore
+      // @
       return result.Body;
     }
   }
@@ -451,8 +451,9 @@ class S3 {
           MultipartUpload: {
             Parts: results.map(
               /**
-               * @param {any} r
-               * @param {number} i
+               * @param {any} r - Multipart copy result.
+               * @param {number} i - Zero-based part index.
+               * @returns {{ ETag: any, PartNumber: number }} - Completed multipart part descriptor.
                */
               (r, i) => ({
                 ETag: r.CopyPartResult && r.CopyPartResult.ETag,
@@ -482,11 +483,9 @@ class S3 {
     try {
       await this.s3.send(new CopyObjectCommand(params));
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       if (
-        // @ts-ignore
-        !err.message ||
-        // @ts-ignore
-        !err.message.startsWith(
+        !message.startsWith(
           'The specified copy source is larger than the maximum allowable size for a copy source',
         )
       )
@@ -547,10 +546,16 @@ class S3 {
     if (!response.Contents) return;
     if (response.Contents.length === 0) return;
     const objectsToDelete = response.Contents.filter(
-      /** @param {{ Key?: string }} object */
-      (object) => object.Key,
+      /**
+       * @param {{ Key?: string }} object - S3 object candidate.
+       * @returns {boolean} - Whether the object has a key and can be deleted.
+       */
+      (object) => Boolean(object.Key),
     ).map(
-      /** @param {{ Key?: string }} object */
+      /**
+       * @param {{ Key?: string }} object - S3 object to serialize for DeleteObjects.
+       * @returns {{ Key: string }} - DeleteObjects payload entry.
+       */
       (object) => ({
         Key: object.Key || '',
       }),
@@ -581,13 +586,21 @@ class S3 {
       throw new Error(`No objects to delete with Params: ${params}`);
     if (response.Contents.length === 0) return;
     const objectsToDelete = response.Contents.filter(
-      /** @param {{ Key?: string, LastModified?: Date }} object */
+      /**
+       * @param {{ Key?: string, LastModified?: Date }} object - S3 object candidate.
+       * @returns {boolean} - Whether the object is expired and can be deleted.
+       */
       (object) =>
-        object.Key &&
-        object.LastModified &&
-        object.LastModified < expirationDate,
+        Boolean(
+          object.Key &&
+          object.LastModified &&
+          object.LastModified < expirationDate,
+        ),
     ).map(
-      /** @param {{ Key?: string }} object */
+      /**
+       * @param {{ Key?: string }} object - S3 object to serialize for DeleteObjects.
+       * @returns {{ Key: string }} - DeleteObjects payload entry.
+       */
       (object) => ({
         Key: object.Key || '',
       }),
@@ -624,8 +637,13 @@ class S3 {
       }),
     );
     (response.CommonPrefixes || []).forEach(
-      /** @param {{ Prefix?: string }} obj */
-      (obj) => obj.Prefix && prefixes.push(obj.Prefix),
+      /**
+       * @param {{ Prefix?: string }} obj - Common prefix entry returned by S3.
+       * @returns {void} - Appends the prefix to the accumulator when present.
+       */
+      (obj) => {
+        if (obj.Prefix) prefixes.push(obj.Prefix);
+      },
     );
 
     if (response.NextContinuationToken) {
@@ -736,8 +754,7 @@ class S3 {
         Key: params.Key,
       });
     } catch (err) {
-      // @ts-ignore
-      if (err.name === 'NotFound') {
+      if (err instanceof Error && err.name === 'NotFound') {
         existingObject = null;
       } else {
         throw err;
@@ -777,8 +794,7 @@ class S3 {
             Key: this._LEFT_PAD_OBJECT_NAME,
           });
         } catch (err) {
-          // @ts-ignore
-          if (err.name === 'NotFound') {
+          if (err instanceof Error && err.name === 'NotFound') {
             const offset = ' '.repeat(this._LEFT_PAD_SIZE);
             await this.putObject({
               Bucket: params.Bucket,
@@ -937,8 +953,13 @@ class S3 {
       : this.s3.send(listCommand));
 
     (response.Contents || []).forEach(
-      /** @param {{ Size?: number }} obj */
-      (obj) => (byteSize += obj.Size || 0),
+      /**
+       * @param {{ Size?: number }} obj - S3 object metadata.
+       * @returns {void} - Adds the object size to the accumulated byte count.
+       */
+      (obj) => {
+        byteSize += obj.Size || 0;
+      },
     );
 
     if (response.NextContinuationToken) {
@@ -972,8 +993,7 @@ class S3 {
     try {
       return await this.s3.send(command);
     } catch (err) {
-      // @ts-ignore
-      if (err.name === 'NoSuchTagSet') {
+      if (err instanceof Error && err.name === 'NoSuchTagSet') {
         return {
           TagSet: [],
           $metadata: {},

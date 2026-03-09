@@ -6,11 +6,7 @@ const { displayInfo, displaySuccess } = require('../../output/basic');
 const { handleError } = require('../../output/error');
 const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 function loadWharfieDeployment() {
-  return require(
-    ['..', '..', '..', 'lambdas', 'lib', 'actor', 'wharfie-deployment'].join(
-      '/',
-    ),
-  );
+  return require('../../../lambdas/lib/actor/wharfie-deployment');
 }
 const ansiEscapes = require('../../output/escapes');
 const monitorDeploymentCreateReconcilables = require('../../output/deployment/create');

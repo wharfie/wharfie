@@ -61,10 +61,9 @@ class AutoscalingTarget extends BaseResource {
       await this.autoscaling.tagResource({
         ResourceARN: this.get('arn'),
         Tags: tagsToAdd.reduce((acc, tag) => {
-          // @ts-ignore
           acc[tag.Key] = tag.Value;
           return acc;
-        }, {}),
+        }, /** @type {Record<string, string>} */ ({})),
       });
     }
     if (tagsToRemove.length > 0) {

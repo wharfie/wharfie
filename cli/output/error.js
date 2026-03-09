@@ -1,13 +1,14 @@
-const joi = require('joi');
-const { WharfieModelSQLError } = require('../project/model-validator');
+import joi from 'joi';
 
-const { displayFailure } = require('./basic');
+import { WharfieModelSQLError } from '../project/model-validator.js';
+import { displayFailure } from './basic.js';
+
 /**
  *
  * @param {Error | unknown} error -
  * @returns {boolean} -
  */
-function isValidationError(error) {
+export function isValidationError(error) {
   if (error instanceof joi.ValidationError) {
     return true;
   } else if (error instanceof WharfieModelSQLError) {
@@ -21,7 +22,7 @@ function isValidationError(error) {
  *
  * @param {import('joi').ValidationError | WharfieModelSQLError} error -
  */
-function displayValidationError(error) {
+export function displayValidationError(error) {
   if (!isValidationError(error)) {
     throw new Error('invalid error type');
   }
@@ -36,7 +37,7 @@ function displayValidationError(error) {
  *
  * @param {unknown} error -
  */
-function handleError(error) {
+export function handleError(error) {
   if (
     error instanceof joi.ValidationError ||
     error instanceof WharfieModelSQLError
@@ -47,5 +48,3 @@ function handleError(error) {
     else displayFailure(error);
   }
 }
-
-module.exports = { displayValidationError, isValidationError, handleError };

@@ -37,7 +37,7 @@ describe('wharfie resource IaC', () => {
   it('basic', async () => {
     expect.assertions(7);
 
-    // @ts-ignore
+    // @
     s3.__setMockState({
       's3://amazon-berkeley-objects/empty.json': '',
       's3://utility-079185815456-us-west-2/empty.json': '',

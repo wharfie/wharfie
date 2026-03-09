@@ -97,17 +97,30 @@ function setDependsOn(resource, resourceMap) {
   // so we need to set the dependsOn property after deserialization
   // the type hack is that in serialization dependsOn is switched to the resource name instead of instance, this is reversed here
   if (resource.dependsOn) {
-    // @ts-ignore
-    resource.dependsOn = resource.dependsOn.map((name) => resourceMap[name]);
+    const serializedDependsOn = /** @type {string[]} */ (
+      /** @type {unknown} */ (resource.dependsOn)
+    );
+    resource.dependsOn = serializedDependsOn
+      .map((name) => resourceMap[name])
+      .filter(
+        /**
+         * @param {import('../resources/base-resource.js').default | undefined} dependency - dependency.
+         * @returns {dependency is import('../resources/base-resource.js').default} - Result.
+         */
+        (dependency) => Boolean(dependency),
+      );
     // not all dependendents will be in the returned resourceMap, ie if we are selecting a subset of a resource within a large group
     // so we filter out the ones that are not in the map
-    resource.dependsOn = resource.dependsOn.filter((resource) => !!resource);
   }
-  // @ts-ignore
-  if (resource.resources) {
-    // @ts-ignore
-    Object.values(resource.resources).forEach((resource) => {
-      setDependsOn(resource, resourceMap);
+
+  const resourceGroup =
+    /** @type {import('../resources/base-resource-group.js').default | null} */ (
+      'resources' in resource ? resource : null
+    );
+
+  if (resourceGroup?.resources) {
+    Object.values(resourceGroup.resources).forEach((childResource) => {
+      setDependsOn(childResource, resourceMap);
     });
   }
 }

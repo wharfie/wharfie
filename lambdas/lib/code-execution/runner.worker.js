@@ -7,7 +7,7 @@ if (process.setSourceMapsEnabled) process.setSourceMapsEnabled(true);
 // Global guards – shared across any accidental re-evaluations of this script
 
 /**
- * @returns {{ handlerInstalled: boolean, bundleLoaded: boolean }}
+ * @returns {{ handlerInstalled: boolean, bundleLoaded: boolean }} - Shared worker initialization state.
  */
 function getWorkerInit() {
   if (!global.__wharfieWorkerInit) {

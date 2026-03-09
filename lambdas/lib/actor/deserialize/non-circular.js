@@ -59,19 +59,18 @@ async function load({ deploymentName, resourceKey }) {
   if (!resourceKey) {
     resourceKey = deploymentName;
   }
+  /** @type {import('../typedefs.js').SerializedResource[]} */
   const serializedResources = await getResources(deploymentName, resourceKey);
   if (!serializedResources || serializedResources.length === 0) {
     throw new Error('No resource found');
   }
-  // @ts-ignore
+
   const resourceMap = serializedResources.slice(1).reduce((acc, item) => {
-    // @ts-ignore
     acc[item.name] = item;
     return acc;
-  }, {});
-  // @ts-ignore
+  }, /** @type {Record<string, import('../typedefs.js').SerializedResource>} */ ({}));
+
   return deserialize(
-    // @ts-ignore
     serializedResources[0],
     resourceMap,
     NON_CIRCULAR_CLASS_MAP,

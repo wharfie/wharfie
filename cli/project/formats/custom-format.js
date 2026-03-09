@@ -12,7 +12,7 @@
  * @param {CustomFormatDefinitionParams} params -
  * @returns {import('./index.js').FormatDefinition} -
  */
-module.exports = ({
+export default ({
   TableName,
   Description,
   Location,

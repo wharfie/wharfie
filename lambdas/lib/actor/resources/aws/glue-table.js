@@ -178,7 +178,7 @@ class GlueTable extends BaseResource {
         Name: this.name,
       });
     } catch (error) {
-      // @ts-ignore
+      // @
       if (!(error instanceof EntityNotFoundException)) {
         throw error;
       }

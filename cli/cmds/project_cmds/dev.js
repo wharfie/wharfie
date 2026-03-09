@@ -8,25 +8,10 @@ const { loadProject } = require('../../project/load.js');
 const loadEnvironment = require('../../project/load-environment.js').default;
 const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 function loadWharfieProject() {
-  return require(
-    [
-      '..',
-      '..',
-      '..',
-      'lambdas',
-      'lib',
-      'actor',
-      'resources',
-      'wharfie-project',
-    ].join('/'),
-  );
+  return require('../../../lambdas/lib/actor/resources/wharfie-project');
 }
 function loadWharfieDeployment() {
-  return require(
-    ['..', '..', '..', 'lambdas', 'lib', 'actor', 'wharfie-deployment'].join(
-      '/',
-    ),
-  );
+  return require('../../../lambdas/lib/actor/wharfie-deployment');
 }
 const { getResourceOptions } = require('../../project/template-actor');
 const ansiEscapes = require('../../output/escapes');

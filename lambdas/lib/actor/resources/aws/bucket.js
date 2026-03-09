@@ -6,6 +6,19 @@ import { configsEqual } from './reconcile-compare.js';
 import { NoSuchBucket } from '@aws-sdk/client-s3';
 
 /**
+ * @param {import('@aws-sdk/client-s3').Tag[] | undefined} tags - tags.
+ * @returns {Record<string, string>} - Result.
+ */
+function toTagMap(tags) {
+  return (tags || []).reduce((acc, { Key, Value }) => {
+    if (typeof Key === 'string' && typeof Value === 'string') {
+      acc[Key] = Value;
+    }
+    return acc;
+  }, /** @type {Record<string, string>} */ ({}));
+}
+
+/**
  * @typedef BucketProperties
  * @property {string} [bucketName] - bucketName.
  * @property {import('@aws-sdk/client-s3').BucketLifecycleConfiguration} [lifecycleConfiguration] - lifecycleConfiguration.
@@ -52,19 +65,10 @@ class Bucket extends BaseResource {
     const { TagSet } = await this.s3.getBucketTagging({
       Bucket: this.get('bucketName'),
     });
+    /** @type {import('@aws-sdk/client-s3').Tag[]} */
     const tags = this.get('tags') || [];
-    const existingTags =
-      TagSet?.reduce((acc, { Key, Value }) => {
-        // @ts-ignore
-        acc[Key] = Value;
-        return acc;
-      }, {}) || {};
-    const newTags =
-      // @ts-ignore
-      tags.reduce((acc, { Key, Value }) => {
-        acc[Key] = Value;
-        return acc;
-      }, {}) || {};
+    const existingTags = toTagMap(TagSet);
+    const newTags = toTagMap(tags);
     if (JSON.stringify(existingTags) !== JSON.stringify(newTags)) {
       await this.s3.putBucketTagging({
         Bucket: this.get('bucketName'),
@@ -110,8 +114,10 @@ class Bucket extends BaseResource {
           });
         }
       } catch (error) {
-        // @ts-ignore
-        if (error.name === 'NoSuchLifecycleConfiguration') {
+        if (
+          error instanceof Error &&
+          error.name === 'NoSuchLifecycleConfiguration'
+        ) {
           await this.s3.putBucketLifecycleConfigutation({
             Bucket: this.get('bucketName'),
             LifecycleConfiguration: this.get('lifecycleConfiguration'),

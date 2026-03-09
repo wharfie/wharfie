@@ -5,11 +5,7 @@ const { Command } = require('commander');
 const inquirer = require('inquirer');
 const { displayInfo, displaySuccess } = require('../../output/basic');
 function loadWharfieDeployment() {
-  return require(
-    ['..', '..', '..', 'lambdas', 'lib', 'actor', 'wharfie-deployment'].join(
-      '/',
-    ),
-  );
+  return require('../../../lambdas/lib/actor/wharfie-deployment');
 }
 const { handleError } = require('../../output/error');
 const ansiEscapes = require('../../output/escapes');

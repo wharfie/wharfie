@@ -1,11 +1,11 @@
-const { WHARFIE_DEFAULT_ENVIRONMENT } = require('./constants');
+import { WHARFIE_DEFAULT_ENVIRONMENT } from './constants.js';
 
 /**
  * @param {import('./typedefs.js').Project} project -
  * @param {string} environmentName -
  * @returns {import('./typedefs.js').Environment} -
  */
-function loadEnvironment(project, environmentName) {
+export default function loadEnvironment(project, environmentName) {
   if (!environmentName) {
     environmentName = WHARFIE_DEFAULT_ENVIRONMENT;
   }
@@ -20,7 +20,3 @@ function loadEnvironment(project, environmentName) {
   }
   return activeEnvironment;
 }
-
-export default loadEnvironment;
-
-module.exports = loadEnvironment;

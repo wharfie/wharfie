@@ -94,8 +94,7 @@ class AutoscalingPolicy extends BaseResource {
         });
       }
     } catch (err) {
-      // @ts-ignore
-      if (err.name === 'ObjectNotFoundException') {
+      if (err instanceof Error && err.name === 'ObjectNotFoundException') {
         return;
       }
       throw err;

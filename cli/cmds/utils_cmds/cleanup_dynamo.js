@@ -18,7 +18,10 @@ const cleanupDynamo = async () => {
   const operations = await getAllOperations();
 
   const operationsToRemove = operations.filter(
-    /** @param {{ started_at: number }} x */
+    /**
+     * @param {{ started_at: number }} x - Operation record.
+     * @returns {boolean} - Whether the operation is older than one day.
+     */
     (x) => x.started_at * 1000 < Date.now() - 1000 * 60 * 60 * 24,
   );
 
@@ -40,7 +43,10 @@ const cleanupDynamo = async () => {
     const operationChunk = operationsToRemove.splice(0, 10);
     await Promise.all(
       operationChunk.map(
-        /** @param {any} operation */
+        /**
+         * @param {any} operation - Operation to delete.
+         * @returns {Promise<any>} - Deletion promise.
+         */
         (operation) => deleteOperation(operation),
       ),
     );

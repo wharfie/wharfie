@@ -58,17 +58,14 @@ export function createProgram() {
     if (isHelp || isLocalOnly) return;
 
     // Load config if present.
-    process.env.CONFIG_DIR = paths.config;
-    process.env.CONFIG_FILE_PATH = path.join(
-      process.env.CONFIG_DIR,
-      'wharfie.config',
-    );
+    const configDir = paths.config;
+    const configFilePath = path.join(configDir, 'wharfie.config');
+    process.env.CONFIG_DIR = configDir;
+    process.env.CONFIG_FILE_PATH = configFilePath;
 
-    if (fs.existsSync(process.env.CONFIG_FILE_PATH)) {
+    if (fs.existsSync(configFilePath)) {
       try {
-        config.setConfig(
-          JSON.parse(fs.readFileSync(process.env.CONFIG_FILE_PATH, 'utf8')),
-        );
+        config.setConfig(JSON.parse(fs.readFileSync(configFilePath, 'utf8')));
         config.setEnvironment();
       } catch (err) {
         // Allow `wharfie config` to run even if the config file is malformed so

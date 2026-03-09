@@ -15,11 +15,7 @@ const {
 const Glue = require('../../../lambdas/lib/aws/glue.js').default;
 const S3 = require('../../../lambdas/lib/aws/s3.js').default;
 function loadClean() {
-  return require(
-    ['..', '..', '..', 'lambdas', 'operations', 'actions', 'lib', 'clean'].join(
-      '/',
-    ),
-  );
+  return require('../../../lambdas/operations/actions/lib/clean');
 }
 
 const glue = new Glue({});
@@ -50,7 +46,10 @@ const cleanupS3 = async (resource_id) => {
 
   await Promise.all(
     resources.map(
-      /** @param {any} resource */
+      /**
+       * @param {any} resource - Resource to clean.
+       * @returns {Promise<any>} - Cleanup promise.
+       */
       (resource) => clean.cleanAll(resource),
     ),
   );

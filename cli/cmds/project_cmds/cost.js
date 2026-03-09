@@ -29,7 +29,10 @@ const cost = async (path, environmentName) => {
   let output = '';
   output += `${chalk.white('Models:')}\n`;
   const models = costBreakdown.filter(
-    /** @param {{ monthly_cost_estimate: number, type: string }} c */
+    /**
+     * @param {{ monthly_cost_estimate: number, type: string }} c - Cost item to inspect.
+     * @returns {boolean} - Whether the item is a billable model.
+     */
     (c) => c.monthly_cost_estimate > 0 && c.type === 'model',
   );
   const modelTable = new Table({
@@ -48,7 +51,10 @@ const cost = async (path, environmentName) => {
 
   output += `${chalk.white('Sources:')}\n`;
   const sources = costBreakdown.filter(
-    /** @param {{ monthly_cost_estimate: number, type: string }} c */
+    /**
+     * @param {{ monthly_cost_estimate: number, type: string }} c - Cost item to inspect.
+     * @returns {boolean} - Whether the item is a billable source.
+     */
     (c) => c.monthly_cost_estimate > 0 && c.type === 'source',
   );
   const sourceTable = new Table({
@@ -70,10 +76,10 @@ const cost = async (path, environmentName) => {
   )} ${chalk.green.bold(
     costEstimator.currencyFormatter.format(
       costBreakdown.reduce(
-        /** @param {number} acc */
         /**
-         * @param acc
-         * @param {{ monthly_cost_estimate: number }} c
+         * @param {number} acc - Running monthly total.
+         * @param {{ monthly_cost_estimate: number }} c - Cost item to accumulate.
+         * @returns {number} - Updated running monthly total.
          */
         (acc, c) => acc + c.monthly_cost_estimate,
         0,

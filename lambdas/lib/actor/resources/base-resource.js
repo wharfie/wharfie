@@ -43,11 +43,11 @@ class BaseResource extends Reconcilable {
     } else if (Secret.isSecret(value)) {
       return value.getSecretValue();
     } else if (value !== null && typeof value === 'object') {
-      return Object.keys(value).reduce((acc, key) => {
-        // @ts-ignore
-        acc[key] = this._resolveProperty(value[key]);
+      const objectValue = /** @type {Record<string, any>} */ (value);
+      return Object.keys(objectValue).reduce((acc, key) => {
+        acc[key] = this._resolveProperty(objectValue[key]);
         return acc;
-      }, {});
+      }, /** @type {Record<string, any>} */ ({}));
     }
     return value;
   }

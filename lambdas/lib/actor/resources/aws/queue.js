@@ -148,8 +148,7 @@ class Queue extends BaseResource {
         QueueUrl,
       });
     } catch (error) {
-      // @ts-ignore
-      if (error.name !== 'QueueDoesNotExist') throw error;
+      if (!(error instanceof QueueDoesNotExist)) throw error;
     }
   }
 }

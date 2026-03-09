@@ -4,11 +4,7 @@ const require = createRequire(import.meta.url);
 const { Command } = require('commander');
 const ansiEscapes = require('../../output/escapes');
 function loadWharfieDeployment() {
-  return require(
-    ['..', '..', '..', 'lambdas', 'lib', 'actor', 'wharfie-deployment'].join(
-      '/',
-    ),
-  );
+  return require('../../../lambdas/lib/actor/wharfie-deployment');
 }
 const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 const {

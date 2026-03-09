@@ -121,7 +121,7 @@ describe('wharfie project IaC', () => {
     expect.assertions(6);
 
     // setting up buckets for mock
-    // @ts-ignore
+    // @
     s3.__setMockState({
       's3://amazon-berkeley-objects/empty.json': '',
       's3://utility-079185815456-us-west-2/empty.json': '',
@@ -249,7 +249,7 @@ describe('wharfie project IaC', () => {
     expect.assertions(6);
 
     // setting up buckets for mock
-    // @ts-ignore
+    // @
     s3.__setMockState({
       's3://amazon-berkeley-objects/empty.json': '',
       's3://utility-079185815456-us-west-2/empty.json': '',

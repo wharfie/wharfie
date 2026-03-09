@@ -13,7 +13,15 @@ const view = async () => {
   const resources = await getAllResources();
 
   const wharfieResources = resources.map(
-    /** @param {{ destination_properties: any, source_properties: any, id: string }} resource */
+    /**
+     * @param {{ destination_properties: any, source_properties: any, id: string }} resource - Resource to describe.
+     * @returns {{
+     *   name: string,
+     *   dependsOn: string[],
+     *   description: any,
+     *   metadata: { wharfie_resource_id: string, location: any },
+     * }} - Serialized dependency description.
+     */
     (resource) => {
       const name = `${resource.destination_properties.databaseName}.${resource.destination_properties.name}`;
       /**

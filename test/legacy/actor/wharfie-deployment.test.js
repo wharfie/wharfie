@@ -26,7 +26,7 @@ describe('deployment IaC', () => {
   beforeAll(() => {
     const mockUpdate = jest.fn().mockReturnThis();
     const mockDigest = jest.fn().mockReturnValue('mockedHash');
-    // @ts-ignore
+    // @
     crypto.createHash.mockReturnValue({
       update: mockUpdate,
       digest: mockDigest,

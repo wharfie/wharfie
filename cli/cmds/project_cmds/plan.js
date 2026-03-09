@@ -7,25 +7,10 @@ const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 const loadEnvironment = require('../../project/load-environment.js').default;
 const { getResourceOptions } = require('../../project/template-actor');
 function loadWharfieProject() {
-  return require(
-    [
-      '..',
-      '..',
-      '..',
-      'lambdas',
-      'lib',
-      'actor',
-      'resources',
-      'wharfie-project',
-    ].join('/'),
-  );
+  return require('../../../lambdas/lib/actor/resources/wharfie-project');
 }
 function loadWharfieDeployment() {
-  return require(
-    ['..', '..', '..', 'lambdas', 'lib', 'actor', 'wharfie-deployment'].join(
-      '/',
-    ),
-  );
+  return require('../../../lambdas/lib/actor/wharfie-deployment');
 }
 const { displayInfo, displaySuccess } = require('../../output/basic');
 const ansiEscapes = require('../../output/escapes');
@@ -36,7 +21,7 @@ const jdf = require('jsondiffpatch');
 
 /**
  * Formats a JSON diff in a Terraform-style format.
- * @param {jdf.Delta} delta - The JSON diff delta.
+ * @param {import('jsondiffpatch').Delta} delta - The JSON diff delta.
  * @param {any} original - The original object.
  * @returns {string} The formatted diff.
  */

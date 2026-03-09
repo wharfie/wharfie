@@ -2,7 +2,7 @@
  * @param {import('./index.js').FormatDefinitionParams} params -
  * @returns {import('./index.js').FormatDefinition} -
  */
-module.exports = ({
+export default ({
   TableName,
   Description,
   Location,
@@ -26,8 +26,8 @@ module.exports = ({
       SerializationLibrary:
         'org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe',
       Parameters: {
-        'field.delim': '\t',
-        'serialization.format': '\t',
+        'field.delim': '	',
+        'serialization.format': '	',
       },
     },
     StoredAsSubDirectories: true,

@@ -1,13 +1,11 @@
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-const cloudfront = require('./cloudfront');
-const cloudtrail = require('./cloudtrail');
-const csv = require('./csv');
-const json = require('./json');
-const orc = require('./orc');
-const parquet = require('./parquet');
-const s3 = require('./s3');
-const customFormat = require('./custom-format');
+import cloudfront from './cloudfront.js';
+import cloudtrail from './cloudtrail.js';
+import csv from './csv.js';
+import customFormat from './custom-format.js';
+import json from './json.js';
+import orc from './orc.js';
+import parquet from './parquet.js';
+import s3 from './s3.js';
 
 /**
  * @typedef Column
@@ -60,7 +58,7 @@ const customFormat = require('./custom-format');
  * @param {FormatDefinitionParams} params -
  * @returns {FormatDefinition} -
  */
-function getTableInput(params) {
+export default function getTableInput(params) {
   if (params.CustomFormat && params.Format)
     throw new Error('Cannot specify both CustomFormat and Format');
   if (params.CustomFormat && params.Compression)
@@ -86,7 +84,3 @@ function getTableInput(params) {
       throw new Error(`No format of type ${params.Format}`);
   }
 }
-
-export default getTableInput;
-
-module.exports = getTableInput;

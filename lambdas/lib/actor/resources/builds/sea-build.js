@@ -61,7 +61,7 @@ function _shouldSuppressPostjectChunk(chunk, encoding) {
 function _wrapWrite(stream, originalWrite) {
   const write = function write(
     /** @type {string | Uint8Array} */ chunk,
-    /** @type {BufferEncoding | ((error?: Error | null) => void) | undefined} */ encoding,
+    /** @type {NodeJS.BufferEncoding | ((error?: Error | null) => void) | undefined} */ encoding,
     /** @type {((error?: Error | null) => void) | undefined} */ callback,
   ) {
     /** @type {unknown} */

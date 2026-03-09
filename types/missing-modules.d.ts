@@ -153,3 +153,70 @@ declare module 'node-sql-parser/build/athena' {
     parse(sql: string): { tableList?: string[] };
   }
 }
+
+declare module 'cli-table3' {
+  class Table {
+    constructor(options?: Record<string, any>);
+    push(...rows: any[]): number;
+    toString(): string;
+  }
+
+  export = Table;
+}
+
+declare module 'jsondiffpatch' {
+  export type Delta = any;
+
+  export function diff(left: any, right: any): Delta | undefined;
+
+  export const formatters: {
+    console: {
+      format(delta: Delta, left: any): string;
+    };
+  };
+
+  const jsondiffpatch: {
+    diff: typeof diff;
+    formatters: typeof formatters;
+  };
+
+  export default jsondiffpatch;
+}
+
+declare module 'lmdb' {
+  export interface LMDBStore {
+    get(key: any): any;
+    getRange(options: Record<string, any>): Iterable<{ key?: any; value: any }>;
+    putSync(key: any, value: any): any;
+    removeSync(key: any): any;
+    close?(): void | Promise<void>;
+  }
+
+  export interface LMDBEnvironment {
+    openDB(options: Record<string, any>): LMDBStore;
+    committed?: Promise<any>;
+    flushed?: Promise<any>;
+    close?(): void | Promise<void>;
+  }
+
+  export function open(options: Record<string, any>): LMDBEnvironment;
+}
+
+declare module 'env-paths' {
+  export interface EnvPaths {
+    data: string;
+    config: string;
+    cache: string;
+    log: string;
+    temp: string;
+  }
+
+  export interface EnvPathsOptions {
+    suffix?: string;
+  }
+
+  export default function envPaths(
+    name: string,
+    options?: EnvPathsOptions,
+  ): EnvPaths;
+}

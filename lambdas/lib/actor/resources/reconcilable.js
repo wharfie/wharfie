@@ -3,6 +3,17 @@ import EventEmitter from 'events';
 class ReconcilableEmitter extends EventEmitter {}
 
 /**
+ * @param {unknown} error - error.
+ * @returns {Error} - Result.
+ */
+function toError(error) {
+  if (error instanceof Error) {
+    return error;
+  }
+  return new Error(String(error));
+}
+
+/**
  * @typedef {('DESTROYED'|'DESTROYING'|'STABLE'|'RECONCILING'|'UNPROVISIONED')} StatusEnum
  */
 
@@ -151,8 +162,7 @@ class Reconcilable {
           constructor: this.constructor.name,
           error,
         });
-        // @ts-ignore
-        this._reconcileErrors.push(error);
+        this._reconcileErrors.push(toError(error));
         await new Promise((resolve) =>
           setTimeout(
             resolve,
@@ -201,8 +211,7 @@ class Reconcilable {
           constructor: this.constructor.name,
           error,
         });
-        // @ts-ignore
-        this._destroyErrors.push(error);
+        this._destroyErrors.push(toError(error));
         await new Promise((resolve) =>
           setTimeout(
             resolve,

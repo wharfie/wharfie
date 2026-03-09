@@ -5,18 +5,7 @@ const { Command } = require('commander');
 const { loadProject } = require('../../project/load.js');
 const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 function loadWharfieProject() {
-  return require(
-    [
-      '..',
-      '..',
-      '..',
-      'lambdas',
-      'lib',
-      'actor',
-      'resources',
-      'wharfie-project',
-    ].join('/'),
-  );
+  return require('../../../lambdas/lib/actor/resources/wharfie-project');
 }
 const loadEnvironment = require('../../project/load-environment.js').default;
 const { getResourceOptions } = require('../../project/template-actor');
@@ -25,11 +14,7 @@ const monitorProjectApplyReconcilables = require('../../output/project/apply');
 const ansiEscapes = require('../../output/escapes');
 const { handleError } = require('../../output/error');
 function loadWharfieDeployment() {
-  return require(
-    ['..', '..', '..', 'lambdas', 'lib', 'actor', 'wharfie-deployment'].join(
-      '/',
-    ),
-  );
+  return require('../../../lambdas/lib/actor/wharfie-deployment');
 }
 
 /**

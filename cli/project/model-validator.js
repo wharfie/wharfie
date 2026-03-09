@@ -1,13 +1,14 @@
-const { Parser } = require('node-sql-parser/build/athena');
-const chalk = require('chalk');
+// eslint-disable-next-line n/no-missing-import
+import { Parser } from 'node-sql-parser/build/athena';
+import chalk from 'chalk';
 
-const { WHARFIE_DEFAULT_ENVIRONMENT } = require('./constants');
-const Glue = require('../../lambdas/lib/aws/glue.js').default;
+import Glue from '../../lambdas/lib/aws/glue.js';
+import { WHARFIE_DEFAULT_ENVIRONMENT } from './constants.js';
 
 const glue = new Glue({});
 const parser = new Parser();
 
-class WharfieModelSQLError extends Error {}
+export class WharfieModelSQLError extends Error {}
 
 /**
  * @param {import('./typedefs.js').Project} project -
@@ -33,7 +34,7 @@ function getDatabaseName(project, environment) {
  * @param {import('./typedefs.js').Environment} environment -
  * @returns {ValidationError[]} -s
  */
-function validateModelSql(modelSqls, project, environment) {
+export function validateModelSql(modelSqls, project, environment) {
   /**
    * @type {ValidationError[]}
    */
@@ -97,7 +98,10 @@ function validateModelSql(modelSqls, project, environment) {
               (model) => model.name === TableName,
             );
             const projectSource = project.sources.find(
-              /** @param {import('./typedefs.js').Source} source */
+              /**
+               * @param {import('./typedefs.js').Source} source - Project source candidate.
+               * @returns {boolean} - Whether the source matches the referenced table.
+               */
               (source) => source.name === TableName,
             );
             if (!projectModel && !projectSource) {
@@ -120,8 +124,3 @@ function validateModelSql(modelSqls, project, environment) {
   });
   return errors;
 }
-
-module.exports = {
-  validateModelSql,
-  WharfieModelSQLError,
-};

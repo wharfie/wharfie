@@ -1,10 +1,9 @@
-import { createRequire } from 'node:module';
-const require = createRequire(import.meta.url);
-const { getDatabaseName } = require('./names');
+import { getDatabaseName } from './names.js';
 
-const Athena = require('../../lambdas/lib/aws/athena/index.js').default;
-const S3 = require('../../lambdas/lib/aws/s3.js').default;
-const Glue = require('../../lambdas/lib/aws/glue.js').default;
+import Athena from '../../lambdas/lib/aws/athena/index.js';
+import Glue from '../../lambdas/lib/aws/glue.js';
+import S3 from '../../lambdas/lib/aws/s3.js';
+
 const s3 = new S3();
 const athena = new Athena({});
 const glue = new Glue({});
@@ -16,7 +15,7 @@ const glue = new Glue({});
  * @property {string} type -
  * @property {number} monthly_cost_estimate -
  */
-class ProjectCostEstimator {
+export default class ProjectCostEstimator {
   /**
    * @typedef ProjectCostEstimatorOptions
    * @property {import('./typedefs.js').Project} project -
@@ -111,12 +110,18 @@ class ProjectCostEstimator {
                 error.__type === 'EntityNotFoundException'
               ) {
                 const projectModel = this.project.models.find(
-                  /** @param {import('./typedefs.js').Model} projectModel */
+                  /**
+                   * @param {import('./typedefs.js').Model} projectModel - Project model candidate.
+                   * @returns {boolean} - Whether the model matches the referenced table.
+                   */
                   (projectModel) =>
                     projectModel.name === sqlReference.TableName,
                 );
                 const projectSource = this.project.sources.find(
-                  /** @param {import('./typedefs.js').Source} projectSource */
+                  /**
+                   * @param {import('./typedefs.js').Source} projectSource - Project source candidate.
+                   * @returns {boolean} - Whether the source matches the referenced table.
+                   */
                   (projectSource) =>
                     projectSource.name === sqlReference.TableName,
                 );
@@ -191,7 +196,3 @@ class ProjectCostEstimator {
     return Object.values(this.costs);
   }
 }
-
-export default ProjectCostEstimator;
-
-module.exports = ProjectCostEstimator;

@@ -6,18 +6,7 @@ const inquirer = require('inquirer');
 const { loadProject } = require('../../project/load.js');
 const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 function loadWharfieProject() {
-  return require(
-    [
-      '..',
-      '..',
-      '..',
-      'lambdas',
-      'lib',
-      'actor',
-      'resources',
-      'wharfie-project',
-    ].join('/'),
-  );
+  return require('../../../lambdas/lib/actor/resources/wharfie-project');
 }
 const loadEnvironment = require('../../project/load-environment.js').default;
 const { getResourceOptions } = require('../../project/template-actor');

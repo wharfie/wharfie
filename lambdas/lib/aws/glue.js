@@ -45,8 +45,7 @@ class Glue {
     try {
       return await this.glue.send(new GetPartitionCommand(params));
     } catch (e) {
-      // @ts-ignore
-      if (e.name === 'EntityNotFoundException') {
+      if (e instanceof EntityNotFoundException) {
         return {};
       }
       throw e;
@@ -318,7 +317,10 @@ class Glue {
   async getPartitionsSegment(params, partitions, PartitionKeys) {
     let response = await this.glue.send(new GetPartitionsCommand(params));
     (response.Partitions || []).forEach(
-      /** @param {import('@aws-sdk/client-glue').Partition} partition */
+      /**
+       * @param {import('@aws-sdk/client-glue').Partition} partition - Partition returned by Glue.
+       * @returns {void} - Adds a normalized partition to the accumulator when complete.
+       */
       (partition) => {
         if (
           !partition.Values ||
@@ -329,9 +331,10 @@ class Glue {
         partitions.push({
           partitionValues: partition.Values.reduce(
             /**
-             * @param {Record<string, string>} acc
-             * @param {string} value
-             * @param {number} i
+             * @param {Record<string, string>} acc - Accumulated partition values keyed by partition name.
+             * @param {string} value - Partition value at the current index.
+             * @param {number} i - Partition key index.
+             * @returns {Record<string, string>} - Updated partition values map.
              */
             (acc, value, i) => ({
               [PartitionKeys[i]?.Name || 'undefined']: value,
@@ -348,7 +351,10 @@ class Glue {
       params.NextToken = response.NextToken;
       response = await this.glue.send(new GetPartitionsCommand(params));
       (response.Partitions || []).forEach(
-        /** @param {import('@aws-sdk/client-glue').Partition} partition */
+        /**
+         * @param {import('@aws-sdk/client-glue').Partition} partition - Partition returned by Glue.
+         * @returns {void} - Adds a normalized partition to the accumulator when complete.
+         */
         (partition) => {
           if (
             !partition.Values ||
@@ -359,9 +365,10 @@ class Glue {
           partitions.push({
             partitionValues: partition.Values.reduce(
               /**
-               * @param {Record<string, string>} acc
-               * @param {string} value
-               * @param {number} i
+               * @param {Record<string, string>} acc - Accumulated partition values keyed by partition name.
+               * @param {string} value - Partition value at the current index.
+               * @param {number} i - Partition key index.
+               * @returns {Record<string, string>} - Updated partition values map.
                */
               (acc, value, i) => ({
                 [PartitionKeys[i]?.Name || 'undefined']: value,

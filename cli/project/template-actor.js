@@ -1,5 +1,5 @@
-const getTableInput = require('./formats').default;
-const { validateModelSql, WharfieModelSQLError } = require('./model-validator');
+import getTableInput from './formats/index.js';
+import { WharfieModelSQLError, validateModelSql } from './model-validator.js';
 
 /**
  * @typedef UserDefinedWharfieResourceProperties
@@ -31,7 +31,7 @@ const { validateModelSql, WharfieModelSQLError } = require('./model-validator');
  * @param {import('./typedefs.js').Project} project -
  * @returns {UserDefinedWharfieResourceOptions[]} -
  */
-function getResourceOptions(environment, project) {
+export function getResourceOptions(environment, project) {
   /**
    * @type {Object<string,string>}
    */
@@ -50,7 +50,10 @@ function getResourceOptions(environment, project) {
       catalog: 'awsdatacatalog',
       columns: [
         ...model.columns.map(
-          /** @param {import('./typedefs.js').Column} column */
+          /**
+           * @param {import('./typedefs.js').Column} column - Model column definition.
+           * @returns {{ name: string, type: string }} - Athena-compatible column definition.
+           */
           (column) => ({
             name: column.name,
             type: column.type
@@ -67,7 +70,10 @@ function getResourceOptions(environment, project) {
           }),
         ),
         ...(model.partitions || []).map(
-          /** @param {import('./typedefs.js').Column} column */
+          /**
+           * @param {import('./typedefs.js').Column} column - Model partition column definition.
+           * @returns {{ name: string, type: string }} - Athena-compatible partition definition.
+           */
           (column) => ({
             name: column.name,
             type: column.type
@@ -97,8 +103,9 @@ function getResourceOptions(environment, project) {
     modelsForValidation[model.name] = model.sql.replace(
       /\${(\w+)}/g,
       /**
-       * @param {string} _match
-       * @param key
+       * @param {string} _match - Matched template variable.
+       * @param {string} key - Template variable name.
+       * @returns {string} - Resolved template value.
        */
       (_match, key) => SQLTemplateVariables[key] || '',
     );
@@ -159,7 +166,3 @@ function getResourceOptions(environment, project) {
   }
   return resourceOptions;
 }
-
-module.exports = {
-  getResourceOptions,
-};
