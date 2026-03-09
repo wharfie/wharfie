@@ -10,8 +10,8 @@ const parser = new Parser();
 class WharfieModelSQLError extends Error {}
 
 /**
- * @param {import('./typedefs').Project} project -
- * @param {import('./typedefs').Environment} environment -
+ * @param {import('./typedefs.js').Project} project -
+ * @param {import('./typedefs.js').Environment} environment -
  * @returns {string} -
  */
 function getDatabaseName(project, environment) {
@@ -29,8 +29,8 @@ function getDatabaseName(project, environment) {
 
 /**
  * @param {Object<string,string>} modelSqls -
- * @param {import('./typedefs').Project} project -
- * @param {import('./typedefs').Environment} environment -
+ * @param {import('./typedefs.js').Project} project -
+ * @param {import('./typedefs.js').Environment} environment -
  * @returns {ValidationError[]} -s
  */
 function validateModelSql(modelSqls, project, environment) {
@@ -41,9 +41,10 @@ function validateModelSql(modelSqls, project, environment) {
   const projectDatabaseName = getDatabaseName(project, environment);
   Object.keys(modelSqls).forEach(async (modelSqlKey) => {
     const modelSql = modelSqls[modelSqlKey];
+    /** @type {Array<{ DatabaseName: string | undefined, TableName: string | undefined }> | undefined} */
     let sqlReferences;
     try {
-      const { tableList } = parser.parse(modelSql);
+      const { tableList = [] } = parser.parse(modelSql);
       sqlReferences = tableList.map((tableref) => {
         const parts = tableref.split('::');
         return {
@@ -52,10 +53,21 @@ function validateModelSql(modelSqls, project, environment) {
         };
       });
     } catch (error) {
-      if (!error.location) errors.push(error);
-      const { start, end } = error.location;
+      const parserError =
+        /** @type {{ location?: { start: { line: number, column: number }, end: { line: number, column: number } }, message?: string }} */ (
+          error
+        );
+      if (!parserError.location) {
+        errors.push(
+          new WharfieModelSQLError(
+            error instanceof Error ? error.message : String(error),
+          ),
+        );
+        return;
+      }
+      const { start, end } = parserError.location;
       const queryLines = modelSql.split('\n');
-      const errorLine = queryLines[start.line - 1];
+      const errorLine = queryLines[start.line - 1] || '';
       const highlightedErrorLine =
         errorLine.substring(0, start.column - 1) +
         chalk.red(errorLine.substring(start.column - 1, end.column)) +
@@ -66,9 +78,10 @@ function validateModelSql(modelSqls, project, environment) {
             `Model::${modelSqlKey}`,
           )} is invalid SQL \n${chalk.bgGrey.bold.white(
             `Ln ${start.line}, Col ${start.column}`,
-          )}  ${chalk.bold(highlightedErrorLine)} - ${error.message}`,
+          )}  ${chalk.bold(highlightedErrorLine)} - ${parserError.message || 'Invalid SQL'}`,
         ),
       );
+      return;
     }
     await Promise.all(
       (sqlReferences || []).map(async (sqlReference) => {
@@ -84,9 +97,10 @@ function validateModelSql(modelSqls, project, environment) {
               (model) => model.name === TableName,
             );
             const projectSource = project.sources.find(
-              (model) => model.name === TableName,
+              /** @param {import('./typedefs.js').Source} source */
+              (source) => source.name === TableName,
             );
-            if (!projectModel || !projectSource) {
+            if (!projectModel && !projectSource) {
               errors.push(
                 new WharfieModelSQLError(
                   `model (${modelSqlKey}) references table that does not exist ${DatabaseName}.${TableName}`,
@@ -94,7 +108,11 @@ function validateModelSql(modelSqls, project, environment) {
               );
             }
           } else {
-            errors.push(error);
+            errors.push(
+              new WharfieModelSQLError(
+                error instanceof Error ? error.message : String(error),
+              ),
+            );
           }
         }
       }),

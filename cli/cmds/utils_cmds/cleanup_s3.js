@@ -8,21 +8,30 @@ const {
   displayInfo,
   displayInstruction,
 } = require('../../output/basic');
-const { getAllResources, getResource } =
-  require('../../../lambdas/lib/dynamo/operations').default;
+const {
+  getAllResources,
+  getResource,
+} = require('../../../lambdas/lib/aws/dynamo/operations.js');
 const Glue = require('../../../lambdas/lib/aws/glue.js').default;
 const S3 = require('../../../lambdas/lib/aws/s3.js').default;
-const Clean = require('../../../lambdas/operations/actions/lib/clean');
+function loadClean() {
+  return require(
+    ['..', '..', '..', 'lambdas', 'operations', 'actions', 'lib', 'clean'].join(
+      '/',
+    ),
+  );
+}
 
 const glue = new Glue({});
 const s3 = new S3();
-const clean = new Clean({ s3, glue });
 
 /**
  * Cleans up stale S3 data for a specific resource or all resources.
  * @param {string} [resource_id] - The ID of the resource to clean up.
  */
 const cleanupS3 = async (resource_id) => {
+  const Clean = loadClean();
+  const clean = new Clean({ s3, glue });
   let resources = [];
 
   if (resource_id) {
@@ -39,7 +48,12 @@ const cleanupS3 = async (resource_id) => {
 
   displayInfo(`Cleaning S3 for ${resources.length} resource(s)...`);
 
-  await Promise.all(resources.map((r) => clean.cleanAll(r)));
+  await Promise.all(
+    resources.map(
+      /** @param {any} resource */
+      (resource) => clean.cleanAll(resource),
+    ),
+  );
 
   displaySuccess('S3 cleanup successful');
 };

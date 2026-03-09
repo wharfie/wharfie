@@ -64,6 +64,25 @@ export async function getOperations(resource_id) {
 }
 
 /**
+ * @returns {Promise<any>} - Result.
+ */
+export async function getAllResources() {
+  return (await getOperationsStore()).getAllResources();
+}
+
+/**
+ * @returns {Promise<any>} - Result.
+ */
+export async function getAllOperations() {
+  /** @type {Array<{ id: string }>} */
+  const resources = await getAllResources();
+  const operations = await Promise.all(
+    resources.map((resource) => getOperations(resource.id)),
+  );
+  return operations.flat();
+}
+
+/**
  * @param {import('../../graph/operation.js').default} operation - operation.
  * @returns {Promise<any>} - Result.
  */
@@ -185,3 +204,26 @@ export async function getRecords(resource_id, operation_id) {
 export function __setMockState() {
   __resetOperationsStoreState();
 }
+
+export default {
+  putResource,
+  getResource,
+  getAllResources,
+  deleteResource,
+  putOperation,
+  getOperation,
+  getAllOperations,
+  deleteOperation,
+  getOperations,
+  getActions,
+  getAction,
+  putAction,
+  updateActionStatus,
+  putQuery,
+  putQueries,
+  getQuery,
+  getQueries,
+  checkActionPrerequisites,
+  getRecords,
+  __setMockState,
+};

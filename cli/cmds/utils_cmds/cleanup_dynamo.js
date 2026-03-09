@@ -8,15 +8,18 @@ const {
   displayFailure,
   displayInfo,
 } = require('../../output/basic');
-const { getAllOperations, deleteOperation } =
-  require('../../../lambdas/lib/dynamo/operations').default;
+const {
+  getAllOperations,
+  deleteOperation,
+} = require('../../../lambdas/lib/aws/dynamo/operations.js');
 
 const cleanupDynamo = async () => {
   displayInfo('Fetching operations...');
   const operations = await getAllOperations();
 
   const operationsToRemove = operations.filter(
-    (x) => x.started_at * 1000 < new Date().getTime() - 1000 * 60 * 60 * 24,
+    /** @param {{ started_at: number }} x */
+    (x) => x.started_at * 1000 < Date.now() - 1000 * 60 * 60 * 24,
   );
 
   const operationsToRemoveCount = operationsToRemove.length;
@@ -36,7 +39,10 @@ const cleanupDynamo = async () => {
   while (operationsToRemove.length > 0) {
     const operationChunk = operationsToRemove.splice(0, 10);
     await Promise.all(
-      operationChunk.map((operation) => deleteOperation(operation)),
+      operationChunk.map(
+        /** @param {any} operation */
+        (operation) => deleteOperation(operation),
+      ),
     );
     deletedOperations += operationChunk.length;
     progressBar.update(deletedOperations);

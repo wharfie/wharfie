@@ -3,10 +3,23 @@ const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const inquirer = require('inquirer');
-const { loadProject } = require('../../project/load');
+const { loadProject } = require('../../project/load.js');
 const { load } = require('../../../lambdas/lib/actor/deserialize/full');
-const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
-const loadEnvironment = require('../../project/load-environment');
+function loadWharfieProject() {
+  return require(
+    [
+      '..',
+      '..',
+      '..',
+      'lambdas',
+      'lib',
+      'actor',
+      'resources',
+      'wharfie-project',
+    ].join('/'),
+  );
+}
+const loadEnvironment = require('../../project/load-environment.js').default;
 const { getResourceOptions } = require('../../project/template-actor');
 const ansiEscapes = require('../../output/escapes');
 const {
@@ -24,6 +37,7 @@ const { handleError } = require('../../output/error');
  * @param {boolean} yes - Skip confirmation prompt and approve destruction.
  */
 const destroy = async (path, environmentName, yes) => {
+  const WharfieProject = loadWharfieProject();
   const project = await loadProject({ path });
 
   let projectResources;

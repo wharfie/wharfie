@@ -60,7 +60,7 @@ const customFormat = require('./custom-format');
  * @param {FormatDefinitionParams} params -
  * @returns {FormatDefinition} -
  */
-module.exports = (params) => {
+function getTableInput(params) {
   if (params.CustomFormat && params.Format)
     throw new Error('Cannot specify both CustomFormat and Format');
   if (params.CustomFormat && params.Compression)
@@ -85,4 +85,8 @@ module.exports = (params) => {
     default:
       throw new Error(`No format of type ${params.Format}`);
   }
-};
+}
+
+export default getTableInput;
+
+module.exports = getTableInput;

@@ -5,7 +5,13 @@ const { Command } = require('commander');
 const { displayInfo, displaySuccess } = require('../../output/basic');
 const { handleError } = require('../../output/error');
 const { load } = require('../../../lambdas/lib/actor/deserialize/full');
-const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
+function loadWharfieDeployment() {
+  return require(
+    ['..', '..', '..', 'lambdas', 'lib', 'actor', 'wharfie-deployment'].join(
+      '/',
+    ),
+  );
+}
 const ansiEscapes = require('../../output/escapes');
 const monitorDeploymentCreateReconcilables = require('../../output/deployment/create');
 
@@ -13,6 +19,7 @@ const monitorDeploymentCreateReconcilables = require('../../output/deployment/cr
  * Upgrades the Wharfie deployment.
  */
 const upgrade = async () => {
+  const WharfieDeployment = loadWharfieDeployment();
   displayInfo('Upgrading Wharfie deployment...');
   const existingDeployment = await load({
     deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME || '',

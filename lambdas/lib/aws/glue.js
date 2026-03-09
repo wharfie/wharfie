@@ -317,29 +317,9 @@ class Glue {
    */
   async getPartitionsSegment(params, partitions, PartitionKeys) {
     let response = await this.glue.send(new GetPartitionsCommand(params));
-    (response.Partitions || []).forEach((partition) => {
-      if (
-        !partition.Values ||
-        !partition.StorageDescriptor ||
-        !partition.StorageDescriptor.Location
-      )
-        return;
-      partitions.push({
-        partitionValues: partition.Values.reduce(
-          (acc, value, i) => ({
-            [PartitionKeys[i].Name || 'undefined']: value,
-            ...acc,
-          }),
-          {},
-        ),
-        location: partition.StorageDescriptor.Location,
-      });
-    });
-
-    while (response.NextToken) {
-      params.NextToken = response.NextToken;
-      response = await this.glue.send(new GetPartitionsCommand(params));
-      (response.Partitions || []).forEach((partition) => {
+    (response.Partitions || []).forEach(
+      /** @param {import('@aws-sdk/client-glue').Partition} partition */
+      (partition) => {
         if (
           !partition.Values ||
           !partition.StorageDescriptor ||
@@ -348,15 +328,51 @@ class Glue {
           return;
         partitions.push({
           partitionValues: partition.Values.reduce(
+            /**
+             * @param {Record<string, string>} acc
+             * @param {string} value
+             * @param {number} i
+             */
             (acc, value, i) => ({
-              [PartitionKeys[i].Name || 'undefined']: value,
+              [PartitionKeys[i]?.Name || 'undefined']: value,
               ...acc,
             }),
-            {},
+            /** @type {Record<string, string>} */ ({}),
           ),
           location: partition.StorageDescriptor.Location,
         });
-      });
+      },
+    );
+
+    while (response.NextToken) {
+      params.NextToken = response.NextToken;
+      response = await this.glue.send(new GetPartitionsCommand(params));
+      (response.Partitions || []).forEach(
+        /** @param {import('@aws-sdk/client-glue').Partition} partition */
+        (partition) => {
+          if (
+            !partition.Values ||
+            !partition.StorageDescriptor ||
+            !partition.StorageDescriptor.Location
+          )
+            return;
+          partitions.push({
+            partitionValues: partition.Values.reduce(
+              /**
+               * @param {Record<string, string>} acc
+               * @param {string} value
+               * @param {number} i
+               */
+              (acc, value, i) => ({
+                [PartitionKeys[i]?.Name || 'undefined']: value,
+                ...acc,
+              }),
+              /** @type {Record<string, string>} */ ({}),
+            ),
+            location: partition.StorageDescriptor.Location,
+          });
+        },
+      );
     }
   }
 

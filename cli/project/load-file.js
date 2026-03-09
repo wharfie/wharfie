@@ -8,7 +8,8 @@ const yaml = require('js-yaml');
  * @returns {Promise<any>} -
  */
 async function loadFile(dirent) {
-  const fileExtension = dirent.name.split('.').at(-1);
+  const fileParts = dirent.name.split('.');
+  const fileExtension = fileParts[fileParts.length - 1];
   switch (fileExtension) {
     case 'json':
       return JSON.parse(
@@ -26,5 +27,7 @@ async function loadFile(dirent) {
       );
   }
 }
+
+export default loadFile;
 
 module.exports = loadFile;

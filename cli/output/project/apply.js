@@ -1,12 +1,14 @@
 const chalk = require('chalk');
 const cliProgress = require('cli-progress');
 
-const Reconcilable = require('../../../lambdas/lib/actor/resources/reconcilable');
-const BaseResourceGroup = require('../../../lambdas/lib/actor/resources/base-resource-group');
+const Reconcilable =
+  require('../../../lambdas/lib/actor/resources/reconcilable').default;
+const BaseResourceGroup =
+  require('../../../lambdas/lib/actor/resources/base-resource-group').default;
 
 /**
  *
- * @param {Reconcilable.StatusEnum | undefined} status -
+ * @param {import('../../../lambdas/lib/actor/resources/reconcilable.js').StatusEnum | undefined} status -
  * @returns {number} -
  */
 function statusToProgressReconcile(status) {
@@ -27,17 +29,21 @@ function statusToProgressReconcile(status) {
 }
 /**
  *
- * @param {BaseResourceGroup} group -
+ * @param {import('../../../lambdas/lib/actor/resources/base-resource-group.js').default} group -
  * @param {Map<string,cliProgress.Bar>} barmap -
  * @param {cliProgress.MultiBar} multibar -
  * @param {cliProgress.Bar} [parentBar] -
  */
 function traverseResourceGroup(group, barmap, multibar, parentBar = undefined) {
   if (!barmap.has(group.name)) {
-    const bar = multibar.create(group.children, 0, {
-      name: group.name,
-      status: group.status,
-    });
+    const bar = multibar.create(
+      Object.keys(group.resources || {}).length || 1,
+      0,
+      {
+        name: group.name,
+        status: group.status,
+      },
+    );
     barmap.set(group.name, bar);
   }
   const bar = barmap.get(group.name);
@@ -70,7 +76,7 @@ function traverseResourceGroup(group, barmap, multibar, parentBar = undefined) {
 }
 
 /**
- * @param {BaseResourceGroup} root -
+ * @param {import('../../../lambdas/lib/actor/resources/base-resource-group.js').default} root -
  * @returns {cliProgress.MultiBar} -
  */
 function monitorProjectApplyReconcilables(root) {
@@ -87,7 +93,7 @@ function monitorProjectApplyReconcilables(root) {
     cliProgress.Presets.shades_grey,
   );
 
-  Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
+  Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, () => {
     traverseResourceGroup(root, barmap, multibar);
   });
   return multibar;

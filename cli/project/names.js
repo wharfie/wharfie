@@ -1,8 +1,8 @@
 const { WHARFIE_DEFAULT_ENVIRONMENT } = require('./constants');
 
 /**
- * @param {import('./typedefs').Project} project -
- * @param {import('./typedefs').Environment} environment -
+ * @param {import('./typedefs.js').Project} project -
+ * @param {import('./typedefs.js').Environment} environment -
  * @returns {string} -
  */
 function getDatabaseName(project, environment) {
@@ -12,6 +12,8 @@ function getDatabaseName(project, environment) {
       : `-${environment.name}`
   }`.replace(/-/g, '_');
 }
+
+export { getDatabaseName };
 
 module.exports = {
   getDatabaseName,

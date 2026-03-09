@@ -4,9 +4,9 @@ const require = createRequire(import.meta.url);
 const { Command } = require('commander');
 const chalk = require('chalk');
 const Table = require('cli-table3');
-const { loadProject } = require('../../project/load');
-const loadEnvironment = require('../../project/load-environment');
-const ProjectCostEstimator = require('../../project/cost');
+const { loadProject } = require('../../project/load.js');
+const loadEnvironment = require('../../project/load-environment.js').default;
+const ProjectCostEstimator = require('../../project/cost.js').default;
 const { displayInfo } = require('../../output/basic');
 const ansiEscapes = require('../../output/escapes');
 const { handleError } = require('../../output/error');
@@ -22,12 +22,14 @@ const cost = async (path, environmentName) => {
   const environment = loadEnvironment(project, environmentName);
   const costEstimator = new ProjectCostEstimator({ project, environment });
 
-  const cost = await costEstimator.calculateProjectCost();
+  /** @type {Array<{ name: string, type: string, monthly_cost_estimate: number }>} */
+  const costBreakdown = await costEstimator.calculateProjectCost();
   process.stdout.write(ansiEscapes.cursorUp(1) + ansiEscapes.eraseLine);
 
   let output = '';
   output += `${chalk.white('Models:')}\n`;
-  const models = cost.filter(
+  const models = costBreakdown.filter(
+    /** @param {{ monthly_cost_estimate: number, type: string }} c */
     (c) => c.monthly_cost_estimate > 0 && c.type === 'model',
   );
   const modelTable = new Table({
@@ -45,7 +47,8 @@ const cost = async (path, environmentName) => {
   output += `${modelTable.toString()}\n`;
 
   output += `${chalk.white('Sources:')}\n`;
-  const sources = cost.filter(
+  const sources = costBreakdown.filter(
+    /** @param {{ monthly_cost_estimate: number, type: string }} c */
     (c) => c.monthly_cost_estimate > 0 && c.type === 'source',
   );
   const sourceTable = new Table({
@@ -66,7 +69,15 @@ const cost = async (path, environmentName) => {
     'Total monthly project cost estimate:',
   )} ${chalk.green.bold(
     costEstimator.currencyFormatter.format(
-      cost.reduce((acc, c) => acc + c.monthly_cost_estimate, 0),
+      costBreakdown.reduce(
+        /** @param {number} acc */
+        /**
+         * @param acc
+         * @param {{ monthly_cost_estimate: number }} c
+         */
+        (acc, c) => acc + c.monthly_cost_estimate,
+        0,
+      ),
     ),
   )}`;
   console.log(output);

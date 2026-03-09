@@ -4,7 +4,7 @@ const require = createRequire(import.meta.url);
 const fs = require('fs/promises');
 const path = require('path');
 
-const loadFile = require('./load-file');
+const loadFile = require('./load-file.js').default;
 const { WHARFIE_DEFAULT_ENVIRONMENT } = require('./constants');
 const { validateProject } = require('./schema');
 
@@ -34,22 +34,26 @@ async function readDirectory(path, recursive = true) {
 
 /**
  *  @param {LoadProjectOptions} options -
- *  @returns {Promise<import('./typedefs').Model[]>} -
+ *  @returns {Promise<import('./typedefs.js').Model[]>} -
  */
 async function loadModels(options) {
-  /** @type {Object<string,import('./typedefs').Model | Object<string, any>>} */
+  /** @type {Record<string, import('./typedefs.js').Model & Record<string, any>>} */
   const models = {};
   const files = await readDirectory(path.join(options.path, 'models'));
   for (const file of files) {
     if (!file.isFile()) {
       continue;
     }
-    const fileExtension = file.name.split('.').at(-1);
+    const fileParts = file.name.split('.');
+    const fileExtension = fileParts[fileParts.length - 1];
     const fileData = await loadFile(file);
-    const modelName = file.name.split('.').at(0);
+    const modelName = fileParts[0];
     if (!modelName) throw new Error('Invalid model name');
     if (!models[modelName]) {
-      models[modelName] = {};
+      models[modelName] =
+        /** @type {import('./typedefs.js').Model & Record<string, any>} */ ({
+          name: modelName,
+        });
     }
     if (fileExtension === 'sql') {
       models[modelName].sql = fileData;
@@ -64,13 +68,14 @@ async function loadModels(options) {
 
 /**
  *  @param {LoadProjectOptions} options -
- *  @returns {Promise<import('./typedefs').Source[]>} -
+ *  @returns {Promise<import('./typedefs.js').Source[]>} -
  */
 async function loadSources(options) {
   const sources = [];
   const files = await readDirectory(path.join(options.path, 'sources'));
   for (const file of files) {
-    const fileExtension = file.name.split('.').at(-1);
+    const fileParts = file.name.split('.');
+    const fileExtension = fileParts[fileParts.length - 1];
     if (['json', 'yaml', 'yml'].includes(fileExtension || '')) {
       const fileData = await loadFile(file);
       sources.push(fileData);
@@ -81,7 +86,7 @@ async function loadSources(options) {
 
 /**
  *  @param {LoadProjectOptions} options -
- *  @returns {Promise<import('./typedefs').Environment[]>} -
+ *  @returns {Promise<import('./typedefs.js').Environment[]>} -
  */
 async function loadEnvironments(options) {
   const environments = [];
@@ -116,13 +121,14 @@ async function loadEnvironments(options) {
 
 /**
  *  @param {LoadProjectOptions} options -
- *  @returns {Promise<import('./typedefs').Definition[]>} -
+ *  @returns {Promise<import('./typedefs.js').Definition[]>} -
  */
 async function loadDefinitions(options) {
   const definitions = [];
   const files = await readDirectory(path.join(options.path, 'definitions'));
   for (const file of files) {
-    const fileExtension = file.name.split('.').at(-1);
+    const fileParts = file.name.split('.');
+    const fileExtension = fileParts[fileParts.length - 1];
     if (['json', 'yaml', 'yml'].includes(fileExtension || '')) {
       const fileData = await loadFile(file);
       // to avoid adding other code related config files to definitions (package.json, etc)
@@ -135,13 +141,14 @@ async function loadDefinitions(options) {
 
 /**
  *  @param {LoadProjectOptions} options -
- *  @returns {Promise<import('./typedefs').Sink[]>} -
+ *  @returns {Promise<import('./typedefs.js').Sink[]>} -
  */
 async function loadSinks(options) {
   const sinks = [];
   const files = await readDirectory(path.join(options.path, 'sinks'));
   for (const file of files) {
-    const fileExtension = file.name.split('.').at(-1);
+    const fileParts = file.name.split('.');
+    const fileExtension = fileParts[fileParts.length - 1];
     if (['json', 'yaml', 'yml'].includes(fileExtension || '')) {
       const fileData = await loadFile(file);
       sinks.push(fileData);
@@ -152,13 +159,14 @@ async function loadSinks(options) {
 
 /**
  *  @param {LoadProjectOptions} options -
- *  @returns {Promise<import('./typedefs').Tap[]>} -
+ *  @returns {Promise<import('./typedefs.js').Tap[]>} -
  */
 async function loadTaps(options) {
   const taps = [];
   const files = await readDirectory(path.join(options.path, 'taps'));
   for (const file of files) {
-    const fileExtension = file.name.split('.').at(-1);
+    const fileParts = file.name.split('.');
+    const fileExtension = fileParts[fileParts.length - 1];
     if (['json', 'yaml', 'yml'].includes(fileExtension || '')) {
       const fileData = await loadFile(file);
       taps.push(fileData);
@@ -169,10 +177,11 @@ async function loadTaps(options) {
 
 /**
  *  @param {LoadProjectOptions} options -
- *  @returns {Promise<import('./typedefs').Project>} -
+ *  @returns {Promise<import('./typedefs.js').Project>} -
  */
 async function loadProject(options) {
-  const project_folder_name = options.path.split('/').at(-1);
+  const pathParts = options.path.split('/');
+  const project_folder_name = pathParts[pathParts.length - 1];
   if (!project_folder_name) throw new Error('Invalid project path');
   const project = {
     name: project_folder_name.replace(/=+$/, '').toLowerCase(),
@@ -188,5 +197,7 @@ async function loadProject(options) {
   const validatedProject = validateProject(project);
   return validatedProject;
 }
+
+export { loadProject };
 
 module.exports = { loadProject };

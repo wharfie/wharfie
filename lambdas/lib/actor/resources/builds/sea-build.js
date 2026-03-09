@@ -59,7 +59,11 @@ function _shouldSuppressPostjectChunk(chunk, encoding) {
  * @returns {typeof process.stdout.write} - Wrapped write function.
  */
 function _wrapWrite(stream, originalWrite) {
-  const write = function write(chunk, encoding, callback) {
+  const write = function write(
+    /** @type {string | Uint8Array} */ chunk,
+    /** @type {BufferEncoding | ((error?: Error | null) => void) | undefined} */ encoding,
+    /** @type {((error?: Error | null) => void) | undefined} */ callback,
+  ) {
     /** @type {unknown} */
     let enc = encoding;
     /** @type {unknown} */
@@ -77,9 +81,21 @@ function _wrapWrite(stream, originalWrite) {
       return true;
     }
 
-    return originalWrite.call(stream, chunk, enc, cb);
+    const normalizedEncoding =
+      typeof enc === 'string' && Buffer.isEncoding(enc) ? enc : undefined;
+    const normalizedCallback =
+      typeof cb === 'function'
+        ? /** @type {(error?: Error | null) => void} */ (cb)
+        : undefined;
+
+    return originalWrite.call(
+      stream,
+      /** @type {any} */ (chunk),
+      normalizedEncoding,
+      normalizedCallback,
+    );
   };
-  return write;
+  return /** @type {typeof process.stdout.write} */ (write);
 }
 
 /**

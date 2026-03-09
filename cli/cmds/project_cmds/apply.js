@@ -2,16 +2,35 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
-const { loadProject } = require('../../project/load');
+const { loadProject } = require('../../project/load.js');
 const { load } = require('../../../lambdas/lib/actor/deserialize/full');
-const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
-const loadEnvironment = require('../../project/load-environment');
+function loadWharfieProject() {
+  return require(
+    [
+      '..',
+      '..',
+      '..',
+      'lambdas',
+      'lib',
+      'actor',
+      'resources',
+      'wharfie-project',
+    ].join('/'),
+  );
+}
+const loadEnvironment = require('../../project/load-environment.js').default;
 const { getResourceOptions } = require('../../project/template-actor');
 const { displayInfo, displaySuccess } = require('../../output/basic');
 const monitorProjectApplyReconcilables = require('../../output/project/apply');
 const ansiEscapes = require('../../output/escapes');
 const { handleError } = require('../../output/error');
-const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
+function loadWharfieDeployment() {
+  return require(
+    ['..', '..', '..', 'lambdas', 'lib', 'actor', 'wharfie-deployment'].join(
+      '/',
+    ),
+  );
+}
 
 /**
  * Applies changes to a Wharfie project.
@@ -19,6 +38,8 @@ const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment
  * @param {string} environmentName - The environment to use.
  */
 const apply = async (path, environmentName) => {
+  const WharfieProject = loadWharfieProject();
+  const WharfieDeployment = loadWharfieDeployment();
   const project = await loadProject({ path });
   displayInfo(`Applying changes to ${project.name}...`);
 

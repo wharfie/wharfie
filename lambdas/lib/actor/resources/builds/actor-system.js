@@ -85,7 +85,9 @@ class ActorSystem extends BuildResourceGroup {
     this._runtimeResourcesPromise = null;
     // normally _defineGroupResources is used but this is a workaround to make sure this.functions is set before defining things
     this.addResources(this.defineActorSystemResources(parent));
-    global[Symbol.for(`${this.getName()}`)] = this.run.bind(this);
+    const runtimeGlobal =
+      /** @type {typeof globalThis & Record<symbol, unknown>} */ (globalThis);
+    runtimeGlobal[Symbol.for(`${this.getName()}`)] = this.run.bind(this);
   }
 
   async initializeEnvironment() {

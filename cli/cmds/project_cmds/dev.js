@@ -4,11 +4,30 @@ const require = createRequire(import.meta.url);
 const { Command } = require('commander');
 const fs = require('fs');
 const path = require('path');
-const { loadProject } = require('../../project/load');
-const loadEnvironment = require('../../project/load-environment');
+const { loadProject } = require('../../project/load.js');
+const loadEnvironment = require('../../project/load-environment.js').default;
 const { load } = require('../../../lambdas/lib/actor/deserialize/full');
-const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
-const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
+function loadWharfieProject() {
+  return require(
+    [
+      '..',
+      '..',
+      '..',
+      'lambdas',
+      'lib',
+      'actor',
+      'resources',
+      'wharfie-project',
+    ].join('/'),
+  );
+}
+function loadWharfieDeployment() {
+  return require(
+    ['..', '..', '..', 'lambdas', 'lib', 'actor', 'wharfie-deployment'].join(
+      '/',
+    ),
+  );
+}
 const { getResourceOptions } = require('../../project/template-actor');
 const ansiEscapes = require('../../output/escapes');
 const {
@@ -26,11 +45,12 @@ const { handleError } = require('../../output/error');
  * @returns {Function} The debounced function.
  */
 function debounceWithQueue(func, delay) {
+  /** @type {NodeJS.Timeout | undefined} */
   let timeoutId;
   let inFlight = false;
   let queuedCall = false;
 
-  return async function (...args) {
+  return async function (/** @type {any[]} */ ...args) {
     if (inFlight) {
       queuedCall = true;
       return;
@@ -59,6 +79,8 @@ function debounceWithQueue(func, delay) {
  * @param {string} environmentName - The Wharfie project environment to use.
  */
 const dev = async (projectPath, environmentName) => {
+  const WharfieProject = loadWharfieProject();
+  const WharfieDeployment = loadWharfieDeployment();
   console.clear();
   displayInfo('Starting dev server...');
   const deployment = await load({

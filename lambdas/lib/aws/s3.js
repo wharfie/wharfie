@@ -113,6 +113,7 @@ function formatClientOptions(options) {
  * @returns {{clientConfig: import("@aws-sdk/client-s3").S3ClientConfig, providerMeta: ProviderMeta}} -
  */
 function buildProviderClientConfig(base, provider, providerOptions = {}) {
+  /** @type {import('@aws-sdk/client-s3').S3ClientConfig & ProviderOptions} */
   const cfg = { ...base };
 
   /** @type {ProviderMeta} */
@@ -221,6 +222,7 @@ class S3 {
     const regionKey = (this.s3?.config?.region || 'default').toString();
     this._allowRegionFanout = this._providerMeta.regionResolver === 'aws';
 
+    /** @type {Record<string, import('@aws-sdk/client-s3').S3>} */
     this.region_clients = {
       [regionKey]: this.s3,
     };
@@ -447,10 +449,16 @@ class S3 {
           Bucket,
           Key,
           MultipartUpload: {
-            Parts: results.map((r, i) => ({
-              ETag: r.CopyPartResult && r.CopyPartResult.ETag,
-              PartNumber: i + 1,
-            })),
+            Parts: results.map(
+              /**
+               * @param {any} r
+               * @param {number} i
+               */
+              (r, i) => ({
+                ETag: r.CopyPartResult && r.CopyPartResult.ETag,
+                PartNumber: i + 1,
+              }),
+            ),
           },
           UploadId,
         }),
@@ -539,10 +547,14 @@ class S3 {
     if (!response.Contents) return;
     if (response.Contents.length === 0) return;
     const objectsToDelete = response.Contents.filter(
+      /** @param {{ Key?: string }} object */
       (object) => object.Key,
-    ).map((object) => ({
-      Key: object.Key || '',
-    }));
+    ).map(
+      /** @param {{ Key?: string }} object */
+      (object) => ({
+        Key: object.Key || '',
+      }),
+    );
     if (objectsToDelete.length === 0) return;
     await this.deleteObjects({
       Bucket: params.Bucket,
@@ -569,13 +581,17 @@ class S3 {
       throw new Error(`No objects to delete with Params: ${params}`);
     if (response.Contents.length === 0) return;
     const objectsToDelete = response.Contents.filter(
+      /** @param {{ Key?: string, LastModified?: Date }} object */
       (object) =>
         object.Key &&
         object.LastModified &&
         object.LastModified < expirationDate,
-    ).map((object) => ({
-      Key: object.Key || '',
-    }));
+    ).map(
+      /** @param {{ Key?: string }} object */
+      (object) => ({
+        Key: object.Key || '',
+      }),
+    );
     if (objectsToDelete.length === 0) return;
     await this.deleteObjects({
       Bucket: params.Bucket,
@@ -608,6 +624,7 @@ class S3 {
       }),
     );
     (response.CommonPrefixes || []).forEach(
+      /** @param {{ Prefix?: string }} obj */
       (obj) => obj.Prefix && prefixes.push(obj.Prefix),
     );
 
@@ -919,7 +936,10 @@ class S3 {
       ? this._getRegionClient(region).send(listCommand)
       : this.s3.send(listCommand));
 
-    (response.Contents || []).forEach((obj) => (byteSize += obj.Size || 0));
+    (response.Contents || []).forEach(
+      /** @param {{ Size?: number }} obj */
+      (obj) => (byteSize += obj.Size || 0),
+    );
 
     if (response.NextContinuationToken) {
       await this.getPrefixByteSize(

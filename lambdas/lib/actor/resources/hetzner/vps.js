@@ -98,14 +98,14 @@ class HetznerVPS extends BaseResource {
 
     // If only service spec → generate cloud-config for systemd
     if (!raw && svc) {
-      // leverage the client’s generator; returns "#cloud-config" YAML
-      // (yes, it's a "private" helper; we control both sides)
-      return this.hz._buildCloudInitForSystemd(svc);
+      const serviceSpec = /** @type {VPSServiceSpec} */ (svc);
+      return this.hz.buildCloudInitForSystemd(serviceSpec);
     }
 
     // Both provided → merge (raw first, then systemd section)
-    const svcYaml = this.hz._buildCloudInitForSystemd(svc);
-    return this.hz._mergeUserData(String(raw), svcYaml);
+    const serviceSpec = /** @type {VPSServiceSpec} */ (svc);
+    const svcYaml = this.hz.buildCloudInitForSystemd(serviceSpec);
+    return this.hz.mergeUserData(String(raw), svcYaml);
   }
 
   /**

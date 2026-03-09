@@ -4,7 +4,13 @@ const require = createRequire(import.meta.url);
 const { Command } = require('commander');
 const inquirer = require('inquirer');
 const ansiEscapes = require('../../output/escapes');
-const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
+function loadWharfieDeployment() {
+  return require(
+    ['..', '..', '..', 'lambdas', 'lib', 'actor', 'wharfie-deployment'].join(
+      '/',
+    ),
+  );
+}
 const {
   displayFailure,
   displayInfo,
@@ -18,6 +24,7 @@ const monitorDeploymentDestroyReconcilables = require('../../output/deployment/d
  * @param {boolean} yes - Flag to skip confirmation prompt.
  */
 const destroy = async (yes) => {
+  const WharfieDeployment = loadWharfieDeployment();
   let deployment;
 
   try {

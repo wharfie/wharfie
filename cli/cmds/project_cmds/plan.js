@@ -2,12 +2,31 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
-const { loadProject } = require('../../project/load');
+const { loadProject } = require('../../project/load.js');
 const { load } = require('../../../lambdas/lib/actor/deserialize/full');
-const loadEnvironment = require('../../project/load-environment');
+const loadEnvironment = require('../../project/load-environment.js').default;
 const { getResourceOptions } = require('../../project/template-actor');
-const WharfieProject = require('../../../lambdas/lib/actor/resources/wharfie-project');
-const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
+function loadWharfieProject() {
+  return require(
+    [
+      '..',
+      '..',
+      '..',
+      'lambdas',
+      'lib',
+      'actor',
+      'resources',
+      'wharfie-project',
+    ].join('/'),
+  );
+}
+function loadWharfieDeployment() {
+  return require(
+    ['..', '..', '..', 'lambdas', 'lib', 'actor', 'wharfie-deployment'].join(
+      '/',
+    ),
+  );
+}
 const { displayInfo, displaySuccess } = require('../../output/basic');
 const ansiEscapes = require('../../output/escapes');
 const { handleError } = require('../../output/error');
@@ -31,6 +50,8 @@ function printTerraformStyleDiff(delta, original) {
  * @param {string} environmentName - The Wharfie project environment to use.
  */
 const plan = async (path, environmentName) => {
+  const WharfieProject = loadWharfieProject();
+  const WharfieDeployment = loadWharfieDeployment();
   const project = await loadProject({ path });
   displayInfo(`Planning changes to ${project.name}...`);
 

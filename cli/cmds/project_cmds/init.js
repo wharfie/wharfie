@@ -25,7 +25,7 @@ const init = async () => {
       type: 'input',
       name: 'project_name',
       message: 'What is the name of your project?',
-      validate: (input) => {
+      validate: (/** @type {string} */ input) => {
         const valid = re.test(input);
         if (!valid) {
           displayFailure(

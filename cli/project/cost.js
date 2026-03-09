@@ -19,8 +19,8 @@ const glue = new Glue({});
 class ProjectCostEstimator {
   /**
    * @typedef ProjectCostEstimatorOptions
-   * @property {import('./typedefs').Project} project -
-   * @property {import('./typedefs').Environment} environment -
+   * @property {import('./typedefs.js').Project} project -
+   * @property {import('./typedefs.js').Environment} environment -
    */
 
   /**
@@ -59,7 +59,7 @@ class ProjectCostEstimator {
   }
 
   /**
-   *  @param {import('./typedefs').Model} model -
+   *  @param {import('./typedefs.js').Model} model -
    *  @returns {Promise<CostEstimate>} -
    */
   async modelCost(model) {
@@ -104,12 +104,21 @@ class ProjectCostEstimator {
                 region,
               );
             } catch (error) {
-              if (error.__type === 'EntityNotFoundException') {
+              if (
+                error &&
+                typeof error === 'object' &&
+                '__type' in error &&
+                error.__type === 'EntityNotFoundException'
+              ) {
                 const projectModel = this.project.models.find(
-                  (model) => model.name === sqlReference.TableName,
+                  /** @param {import('./typedefs.js').Model} projectModel */
+                  (projectModel) =>
+                    projectModel.name === sqlReference.TableName,
                 );
                 const projectSource = this.project.sources.find(
-                  (model) => model.name === sqlReference.TableName,
+                  /** @param {import('./typedefs.js').Source} projectSource */
+                  (projectSource) =>
+                    projectSource.name === sqlReference.TableName,
                 );
                 if (projectModel) {
                   return (await this.modelCost(projectModel)).size;
@@ -140,7 +149,7 @@ class ProjectCostEstimator {
   }
 
   /**
-   *  @param {import('./typedefs').Source} source -
+   *  @param {import('./typedefs.js').Source} source -
    *  @returns {Promise<CostEstimate>} -
    */
   async sourceCost(source) {
@@ -182,5 +191,7 @@ class ProjectCostEstimator {
     return Object.values(this.costs);
   }
 }
+
+export default ProjectCostEstimator;
 
 module.exports = ProjectCostEstimator;

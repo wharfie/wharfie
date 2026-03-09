@@ -1,9 +1,9 @@
 const { WHARFIE_DEFAULT_ENVIRONMENT } = require('./constants');
 
 /**
- * @param {import('./typedefs').Project} project -
+ * @param {import('./typedefs.js').Project} project -
  * @param {string} environmentName -
- * @returns {import('./typedefs').Environment} -
+ * @returns {import('./typedefs.js').Environment} -
  */
 function loadEnvironment(project, environmentName) {
   if (!environmentName) {
@@ -13,12 +13,14 @@ function loadEnvironment(project, environmentName) {
     (env) => env.name === environmentName,
   )[0];
   if (!activeEnvironment) {
-    if (activeEnvironment === WHARFIE_DEFAULT_ENVIRONMENT) {
+    if (environmentName === WHARFIE_DEFAULT_ENVIRONMENT) {
       throw new Error(`environment file wharfie.yaml not found`);
     }
     throw new Error(`environment ${environmentName} not found`);
   }
   return activeEnvironment;
 }
+
+export default loadEnvironment;
 
 module.exports = loadEnvironment;

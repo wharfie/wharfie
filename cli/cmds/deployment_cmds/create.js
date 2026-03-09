@@ -3,7 +3,13 @@ const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
 const ansiEscapes = require('../../output/escapes');
-const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
+function loadWharfieDeployment() {
+  return require(
+    ['..', '..', '..', 'lambdas', 'lib', 'actor', 'wharfie-deployment'].join(
+      '/',
+    ),
+  );
+}
 const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 const {
   displayFailure,
@@ -17,6 +23,7 @@ const monitorDeploymentCreateReconcilables = require('../../output/deployment/cr
  * @returns {Promise<void>}
  */
 const create = async () => {
+  const WharfieDeployment = loadWharfieDeployment();
   displayInfo('Creating Wharfie deployment...');
   let deployment;
 

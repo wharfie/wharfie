@@ -1,5 +1,3 @@
-import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
-
 import { CONDITION_TYPE, KEY_TYPE } from '../../db/base.js';
 import SchedulerEntry from './scheduler-entry.js';
 
@@ -51,16 +49,9 @@ const nowSeconds = () => Math.floor(Date.now() / 1000);
  * @returns {Error} - Result.
  */
 const conditionalFailed = () => {
-  try {
-    return new ConditionalCheckFailedException({
-      message: 'ConditionalCheckFailedException',
-      $metadata: {},
-    });
-  } catch {
-    const err = new Error('ConditionalCheckFailedException');
-    err.name = 'ConditionalCheckFailedException';
-    return err;
-  }
+  const err = new Error('ConditionalCheckFailedException');
+  err.name = 'ConditionalCheckFailedException';
+  return err;
 };
 
 /**

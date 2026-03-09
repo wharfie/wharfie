@@ -4,7 +4,13 @@ const require = createRequire(import.meta.url);
 const { Command } = require('commander');
 const inquirer = require('inquirer');
 const { displayInfo, displaySuccess } = require('../../output/basic');
-const WharfieDeployment = require('../../../lambdas/lib/actor/wharfie-deployment');
+function loadWharfieDeployment() {
+  return require(
+    ['..', '..', '..', 'lambdas', 'lib', 'actor', 'wharfie-deployment'].join(
+      '/',
+    ),
+  );
+}
 const { handleError } = require('../../output/error');
 const ansiEscapes = require('../../output/escapes');
 const { load } = require('../../../lambdas/lib/actor/deserialize/full');
@@ -15,6 +21,7 @@ const monitorDeploymentCreateReconcilables = require('../../output/deployment/cr
  * @param {boolean} development - Flag indicating if development mode is enabled.
  */
 const config = async (development) => {
+  const WharfieDeployment = loadWharfieDeployment();
   const existingDeployment = await load({
     deploymentName: process.env.WHARFIE_DEPLOYMENT_NAME || '',
   });

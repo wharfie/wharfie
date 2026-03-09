@@ -189,7 +189,7 @@ function getResourceType(path) {
 }
 
 /**
- * @param {import('../typedefs').Project} project -
+ * @param {import('../typedefs.js').Project} project -
  * @param {(string | number)[]} path -
  * @returns {string} -
  */
@@ -197,7 +197,17 @@ function getResourceName(project, path) {
   if (path.length < 3) {
     return project.name;
   }
-  return project[path[0]][path[1]].name;
+  const [resourceType, resourceIndex] = path;
+  if (typeof resourceType !== 'string' || typeof resourceIndex !== 'number') {
+    return project.name;
+  }
+  const projectCollections =
+    /** @type {Record<string, Array<{ name: string }>>} */ (
+      /** @type {unknown} */ (project)
+    );
+  return (
+    projectCollections[resourceType]?.[resourceIndex]?.name || project.name
+  );
 }
 /**
  * @param {(string | number)[]} path -
@@ -214,8 +224,8 @@ function getErrorField(path) {
  * Validate dynamic configuration objects in sinks, taps, and side_effects.
  * This function builds a mapping of dynamic config schemas from the definitions
  * and uses them to validate the corresponding config field.
- * @param {import('../typedefs').Project} project -
- * @returns {import('../typedefs').Project} -
+ * @param {import('../typedefs.js').Project} project -
+ * @returns {import('../typedefs.js').Project} -
  */
 function validateDynamicConfigs(project) {
   // Assemble mapping of dynamic schemas from definitions
@@ -331,8 +341,8 @@ function validateDynamicConfigs(project) {
 
 /**
  *
- * @param {import('../typedefs').Project} project -
- * @returns {import('../typedefs').Project} -
+ * @param {import('../typedefs.js').Project} project -
+ * @returns {import('../typedefs.js').Project} -
  */
 function validateProject(project) {
   const { error, value } = projectSchema.validate(project, {

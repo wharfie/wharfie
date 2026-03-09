@@ -6,12 +6,22 @@ if (process.setSourceMapsEnabled) process.setSourceMapsEnabled(true);
 
 // Global guards – shared across any accidental re-evaluations of this script
 
-if (!global.__wharfieWorkerInit) {
-  global.__wharfieWorkerInit = {
-    handlerInstalled: false,
-    bundleLoaded: false,
-  };
+/**
+ * @returns {{ handlerInstalled: boolean, bundleLoaded: boolean }}
+ */
+function getWorkerInit() {
+  if (!global.__wharfieWorkerInit) {
+    global.__wharfieWorkerInit = {
+      handlerInstalled: false,
+      bundleLoaded: false,
+    };
+  }
+  return global.__wharfieWorkerInit;
 }
+
+const workerInit = getWorkerInit();
+const runtimeGlobal =
+  /** @type {typeof globalThis & Record<symbol, unknown>} */ (globalThis);
 
 /**
  * Pending RPC calls made by resource proxies.
@@ -161,7 +171,7 @@ async function drainOneTick() {
  */
 function runBundleOnce({ codeString, pkgFile, entryFile, tmpRoot, env }) {
   // Use codeString as the key – if it’s the same bundle, don’t re-run it
-  if (global.__wharfieWorkerInit.bundleLoaded) return;
+  if (workerInit.bundleLoaded) return;
 
   console.log('[worker] REQUIRING WORKER CODE ONCE');
 
@@ -201,15 +211,11 @@ function runBundleOnce({ codeString, pkgFile, entryFile, tmpRoot, env }) {
 
   bundleFn(sandboxRequire, entryFile, tmpRoot);
 
-  global.__wharfieWorkerInit.bundleLoaded = true;
+  workerInit.bundleLoaded = true;
 }
 
-if (
-  !isMainThread &&
-  !global.__wharfieWorkerInit.handlerInstalled &&
-  parentPort
-) {
-  global.__wharfieWorkerInit.handlerInstalled = true;
+if (!isMainThread && !workerInit.handlerInstalled && parentPort) {
+  workerInit.handlerInstalled = true;
   parentPort.on('message', async (msg) => {
     const { kind } = msg || {};
 
@@ -250,7 +256,7 @@ if (
       });
 
       const sym = Symbol.for(functionName);
-      const fn = global[sym];
+      const fn = runtimeGlobal[sym];
       if (typeof fn !== 'function') {
         throw new TypeError(
           `Global entrypoint ${functionName} is not a function`,
@@ -280,7 +286,7 @@ if (
         parentPort.postMessage({
           id,
           ok: false,
-          error: err && err.stack ? err.stack : String(err),
+          error: err instanceof Error ? err.stack || err.message : String(err),
         });
     }
   });

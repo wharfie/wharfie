@@ -231,7 +231,7 @@ async function handleRpcMessage(w, msg) {
       kind: 'rpc_response',
       id,
       ok: false,
-      error: err && err.stack ? err.stack : String(err),
+      error: err instanceof Error ? err.stack || err.message : String(err),
     });
   }
 }

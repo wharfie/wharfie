@@ -97,9 +97,7 @@ class LambdaBuild extends BaseResource {
 
   /**
    * Compresses files into a ZIP archive from provided file data.
-   * @param {object[]} files - An array of objects representing files,
-   *                           each with a `path` and `contents`.
-   *                           Example: [{ path: 'folder1/file1.txt', contents: 'Hello World' }]
+   * @param {Array<{ path: string, text: string }>} files - An array of objects representing files.
    * @returns {Promise<Buffer>} - A Promise resolving to a Buffer containing the ZIP archive.
    */
   async _zip(files) {
@@ -146,7 +144,9 @@ class LambdaBuild extends BaseResource {
       target: 'node22',
       write: false, // Prevent writing to disk
     });
-    return result.outputFiles[0].text;
+    const outputFile = result.outputFiles?.[0];
+    if (!outputFile) throw new Error('esbuild did not produce output files');
+    return outputFile.text;
   }
 
   async _destroy() {}

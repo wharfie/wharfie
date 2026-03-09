@@ -1,4 +1,4 @@
-const getTableInput = require('./formats');
+const getTableInput = require('./formats').default;
 const { validateModelSql, WharfieModelSQLError } = require('./model-validator');
 
 /**
@@ -6,8 +6,8 @@ const { validateModelSql, WharfieModelSQLError } = require('./model-validator');
  * @property {string} description -
  * @property {string} tableType -
  * @property {any} parameters -
- * @property {import('../../lambdas/lib/actor/typedefs').WharfieTableColumn[]} partitionKeys -
- * @property {import('../../lambdas/lib/actor/typedefs').WharfieTableColumn[]} columns -
+ * @property {import('../../lambdas/lib/actor/typedefs.js').WharfieTableColumn[]} partitionKeys -
+ * @property {import('../../lambdas/lib/actor/typedefs.js').WharfieTableColumn[]} columns -
  * @property {string} [inputFormat] -
  * @property {string} [outputFormat] -
  * @property {any} [serdeInfo] -
@@ -18,7 +18,7 @@ const { validateModelSql, WharfieModelSQLError } = require('./model-validator');
  * @property {boolean} [compressed] -
  * @property {string} [viewOriginalText] -
  * @property {string} [viewExpandedText] -
- * @property {import('./typedefs').Model | import('./typedefs').Source} userInput -
+ * @property {import('./typedefs.js').Model | import('./typedefs.js').Source} userInput -
  */
 /**
  * @typedef UserDefinedWharfieResourceOptions
@@ -27,8 +27,8 @@ const { validateModelSql, WharfieModelSQLError } = require('./model-validator');
  */
 
 /**
- * @param {import('./typedefs').Environment} environment -
- * @param {import('./typedefs').Project} project -
+ * @param {import('./typedefs.js').Environment} environment -
+ * @param {import('./typedefs.js').Project} project -
  * @returns {UserDefinedWharfieResourceOptions[]} -
  */
 function getResourceOptions(environment, project) {
@@ -49,26 +49,32 @@ function getResourceOptions(environment, project) {
       originalSql: model.sql,
       catalog: 'awsdatacatalog',
       columns: [
-        ...model.columns.map((column) => ({
-          name: column.name,
-          type: column.type
-            .replace(/:string/g, ':varchar')
-            .replace(/^string/g, 'varchar')
-            .replace(/:int/g, ':integer')
-            .replace(/^int/g, 'integer')
-            .replace(/:float/g, ':real')
-            .replace(/^float/g, 'real')
-            .replace(/struct/g, 'row')
-            .replace(/</g, '(')
-            .replace(/>/g, ')')
-            .replace(/:/g, ' '),
-        })),
-        ...(model.partitions || []).map((column) => ({
-          name: column.name,
-          type: column.type
-            .replace(/^string/g, 'varchar')
-            .replace(/^int/g, 'integer'),
-        })),
+        ...model.columns.map(
+          /** @param {import('./typedefs.js').Column} column */
+          (column) => ({
+            name: column.name,
+            type: column.type
+              .replace(/:string/g, ':varchar')
+              .replace(/^string/g, 'varchar')
+              .replace(/:int/g, ':integer')
+              .replace(/^int/g, 'integer')
+              .replace(/:float/g, ':real')
+              .replace(/^float/g, 'real')
+              .replace(/struct/g, 'row')
+              .replace(/</g, '(')
+              .replace(/>/g, ')')
+              .replace(/:/g, ' '),
+          }),
+        ),
+        ...(model.partitions || []).map(
+          /** @param {import('./typedefs.js').Column} column */
+          (column) => ({
+            name: column.name,
+            type: column.type
+              .replace(/^string/g, 'varchar')
+              .replace(/^int/g, 'integer'),
+          }),
+        ),
       ],
     }).replace(/\${(\w+)}/g, (match, key) => SQLTemplateVariables[key] || '');
 
@@ -90,7 +96,11 @@ function getResourceOptions(environment, project) {
     });
     modelsForValidation[model.name] = model.sql.replace(
       /\${(\w+)}/g,
-      (match, key) => SQLTemplateVariables[key] || '',
+      /**
+       * @param {string} _match
+       * @param key
+       */
+      (_match, key) => SQLTemplateVariables[key] || '',
     );
   }
   for (const source of project.sources) {
