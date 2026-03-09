@@ -11,7 +11,6 @@ import { randomUUID } from 'node:crypto';
 // esbuild inlines this file as text (configure: loader { '.worker.js': 'text' })
 // In normal Node/Jest execution, this import resolves to the module default export (a function),
 // NOT the source text. We fall back to reading the file from disk when needed.
-// @ts-ignore
 // eslint-disable-next-line import/default
 import workerSource from './runner.worker.js';
 
@@ -232,7 +231,6 @@ async function handleRpcMessage(w, msg) {
       kind: 'rpc_response',
       id,
       ok: false,
-      // @ts-ignore
       error: err && err.stack ? err.stack : String(err),
     });
   }
@@ -247,7 +245,6 @@ function ensureWorker(name) {
 
   const src = getWorkerSourceText();
 
-  // @ts-ignore
   const w = new Worker(src, {
     eval: true,
     stdout: true,

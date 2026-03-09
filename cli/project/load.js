@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
@@ -60,7 +59,6 @@ async function loadModels(options) {
       continue;
     }
   }
-  // @ts-ignore
   return Object.values(models);
 }
 

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { getDatabaseName } = require('./names');
@@ -105,7 +104,6 @@ class ProjectCostEstimator {
                 region,
               );
             } catch (error) {
-              // @ts-ignore
               if (error.__type === 'EntityNotFoundException') {
                 const projectModel = this.project.models.find(
                   (model) => model.name === sqlReference.TableName,

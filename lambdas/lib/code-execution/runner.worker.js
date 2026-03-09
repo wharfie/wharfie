@@ -6,9 +6,7 @@ if (process.setSourceMapsEnabled) process.setSourceMapsEnabled(true);
 
 // Global guards – shared across any accidental re-evaluations of this script
 
-// @ts-ignore
 if (!global.__wharfieWorkerInit) {
-  // @ts-ignore
   global.__wharfieWorkerInit = {
     handlerInstalled: false,
     bundleLoaded: false,
@@ -163,7 +161,6 @@ async function drainOneTick() {
  */
 function runBundleOnce({ codeString, pkgFile, entryFile, tmpRoot, env }) {
   // Use codeString as the key – if it’s the same bundle, don’t re-run it
-  // @ts-ignore
   if (global.__wharfieWorkerInit.bundleLoaded) return;
 
   console.log('[worker] REQUIRING WORKER CODE ONCE');
@@ -204,17 +201,14 @@ function runBundleOnce({ codeString, pkgFile, entryFile, tmpRoot, env }) {
 
   bundleFn(sandboxRequire, entryFile, tmpRoot);
 
-  // @ts-ignore
   global.__wharfieWorkerInit.bundleLoaded = true;
 }
 
 if (
   !isMainThread &&
-  // @ts-ignore
   !global.__wharfieWorkerInit.handlerInstalled &&
   parentPort
 ) {
-  // @ts-ignore
   global.__wharfieWorkerInit.handlerInstalled = true;
   parentPort.on('message', async (msg) => {
     const { kind } = msg || {};
@@ -256,7 +250,6 @@ if (
       });
 
       const sym = Symbol.for(functionName);
-      // @ts-ignore
       const fn = global[sym];
       if (typeof fn !== 'function') {
         throw new TypeError(
@@ -287,7 +280,6 @@ if (
         parentPort.postMessage({
           id,
           ok: false,
-          // @ts-ignore
           error: err && err.stack ? err.stack : String(err),
         });
     }

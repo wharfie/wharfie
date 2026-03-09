@@ -369,8 +369,7 @@ export default class SchedulerService {
     } catch (err) {
       const msg =
         err && typeof err === 'object' && 'stack' in err
-          ? // @ts-ignore
-            String(err.stack)
+          ? String(err.stack)
           : String(err);
       this.log &&
         this.log('scheduler-service: cron parse/eval failed', {
@@ -413,8 +412,7 @@ export default class SchedulerService {
         .catch((err) => {
           const msg =
             err && typeof err === 'object' && 'stack' in err
-              ? // @ts-ignore
-                String(err.stack)
+              ? String(err.stack)
               : String(err);
           this.log &&
             this.log('scheduler-service: invoke failed', {

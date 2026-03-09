@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  *
  * @param {import('./typedefs').Project} project -

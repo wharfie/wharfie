@@ -153,8 +153,7 @@ export async function startLambdaService({
               } catch (err) {
                 const msgStr =
                   err && typeof err === 'object' && 'stack' in err
-                    ? // @ts-ignore
-                      String(err.stack)
+                    ? String(err.stack)
                     : String(err);
 
                 pollLog &&
@@ -172,8 +171,7 @@ export async function startLambdaService({
           } catch (err) {
             const msgStr =
               err && typeof err === 'object' && 'stack' in err
-                ? // @ts-ignore
-                  String(err.stack)
+                ? String(err.stack)
                 : String(err);
             pollLog &&
               pollLog('lambda poll loop error', { queueUrl, error: msgStr });
@@ -226,8 +224,7 @@ export async function startLambdaService({
         } catch (err) {
           const msgStr =
             err && typeof err === 'object' && 'stack' in err
-              ? // @ts-ignore
-                String(err.stack)
+              ? String(err.stack)
               : String(err);
           callback(null, { ok: false, error: msgStr });
         }

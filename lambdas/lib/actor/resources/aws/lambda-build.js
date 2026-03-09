@@ -106,7 +106,6 @@ class LambdaBuild extends BaseResource {
     const zipInstance = new JSZip();
 
     // Loop over provided files
-    // @ts-ignore
     for (const { path, text } of files) {
       // Add file content to the ZIP instance using its path
       zipInstance.file(path, text);

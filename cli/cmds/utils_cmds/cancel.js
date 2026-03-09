@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createRequire } from 'node:module';
 import createOperationsStore from '../../../lambdas/lib/graph/operations-store.js';
 import { resolveOperationsTableName } from '../../../lambdas/lib/config/db.js';

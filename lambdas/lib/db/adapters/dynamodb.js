@@ -401,7 +401,6 @@ export default function createDynamoDB(
 
       if (batch.length > 0 && bytes + nextBytes > SAFE_BATCH_WRITE_BYTES) break;
 
-      // @ts-ignore
       batch.push(queue.shift());
       bytes += nextBytes;
     }

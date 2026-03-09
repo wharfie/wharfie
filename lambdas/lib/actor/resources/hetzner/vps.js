@@ -100,14 +100,11 @@ class HetznerVPS extends BaseResource {
     if (!raw && svc) {
       // leverage the client’s generator; returns "#cloud-config" YAML
       // (yes, it's a "private" helper; we control both sides)
-      // @ts-ignore
       return this.hz._buildCloudInitForSystemd(svc);
     }
 
     // Both provided → merge (raw first, then systemd section)
-    // @ts-ignore
     const svcYaml = this.hz._buildCloudInitForSystemd(svc);
-    // @ts-ignore
     return this.hz._mergeUserData(String(raw), svcYaml);
   }
 

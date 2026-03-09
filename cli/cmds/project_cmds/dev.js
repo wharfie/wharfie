@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
@@ -27,19 +26,16 @@ const { handleError } = require('../../output/error');
  * @returns {Function} The debounced function.
  */
 function debounceWithQueue(func, delay) {
-  // @ts-ignore
   let timeoutId;
   let inFlight = false;
   let queuedCall = false;
 
-  // @ts-ignore
   return async function (...args) {
     if (inFlight) {
       queuedCall = true;
       return;
     }
 
-    // @ts-ignore
     clearTimeout(timeoutId);
 
     timeoutId = setTimeout(async () => {

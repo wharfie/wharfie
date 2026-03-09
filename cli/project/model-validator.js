@@ -1,4 +1,3 @@
-// @ts-nocheck
 const { Parser } = require('node-sql-parser/build/athena');
 const chalk = require('chalk');
 
@@ -53,9 +52,7 @@ function validateModelSql(modelSqls, project, environment) {
         };
       });
     } catch (error) {
-      // @ts-ignore
       if (!error.location) errors.push(error);
-      // @ts-ignore
       const { start, end } = error.location;
       const queryLines = modelSql.split('\n');
       const errorLine = queryLines[start.line - 1];
@@ -69,7 +66,6 @@ function validateModelSql(modelSqls, project, environment) {
             `Model::${modelSqlKey}`,
           )} is invalid SQL \n${chalk.bgGrey.bold.white(
             `Ln ${start.line}, Col ${start.column}`,
-            // @ts-ignore
           )}  ${chalk.bold(highlightedErrorLine)} - ${error.message}`,
         ),
       );
@@ -98,7 +94,6 @@ function validateModelSql(modelSqls, project, environment) {
               );
             }
           } else {
-            // @ts-ignore
             errors.push(error);
           }
         }

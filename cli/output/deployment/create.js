@@ -1,4 +1,3 @@
-// @ts-nocheck
 const chalk = require('chalk');
 const cliProgress = require('cli-progress');
 
@@ -35,7 +34,6 @@ function statusToProgressReconcile(status) {
  */
 function traverseResourceGroup(group, barmap, multibar, parentBar = undefined) {
   if (!barmap.has(group.name)) {
-    // @ts-ignore
     const bar = multibar.create(group.children, 0, {
       name: group.name,
       status: group.status,

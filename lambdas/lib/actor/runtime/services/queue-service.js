@@ -87,8 +87,7 @@ export async function startQueueService({
         } catch (err) {
           const msg =
             err && typeof err === 'object' && 'stack' in err
-              ? // @ts-ignore
-                String(err.stack)
+              ? String(err.stack)
               : String(err);
           callback(null, { ok: false, error: msg });
         }

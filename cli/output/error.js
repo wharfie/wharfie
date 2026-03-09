@@ -1,4 +1,3 @@
-// @ts-nocheck
 const joi = require('joi');
 const { WharfieModelSQLError } = require('../project/model-validator');
 

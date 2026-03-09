@@ -21,10 +21,8 @@ class BuildResource extends BaseResourceGroup {
   async initializeEnvironment() {}
   async reconcile() {
     if (
-      // @ts-ignore
       typeof __WILLEM_BUILD_RECONCILE_TERMINATOR !== 'undefined' &&
       /* eslint-disable no-undef */
-      // @ts-ignore
       __WILLEM_BUILD_RECONCILE_TERMINATOR
       /* eslint-enable no-undef */
     ) {

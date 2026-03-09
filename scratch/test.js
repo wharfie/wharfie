@@ -30,7 +30,6 @@ const lock = require('../package-lock.json');
  * @returns {string} -
  */
 function getInstalledVersion(pkgName) {
-  // @ts-ignore
   const entry = lock.packages?.[`node_modules/${pkgName}`];
   if (!entry || !entry.version)
     throw new Error(`Could not find ${pkgName} in package-lock.json`);

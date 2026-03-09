@@ -1,4 +1,3 @@
-// @ts-nocheck
 const { WHARFIE_DEFAULT_ENVIRONMENT } = require('./constants');
 
 /**
