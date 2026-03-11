@@ -3,3 +3,4 @@ coverage/
 dist/
 tmp/
 build/
+.llm_context_verify/
