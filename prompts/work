@@ -105,6 +105,8 @@ B) Restore npm cache + install offline
     export npm_config_cache="/mnt/data/npm-cache-extracted/npm-cache"
     npm ci --offline --prefer-offline --no-audit --fund=false
 
+**IMPORTANT: Treat any interrupted, timed-out, or tool-killed tar extraction or ./assemble.offline.sh run as an invalid partial state. Do not diagnose missing node_modules/.bin launchers or broken dependencies until assembly completes successfully with exit code 0. If assembly is interrupted, delete repo/ and rerun from scratch before validating npm scripts.**
+
 C) Baseline validation (must be green BEFORE feature work)
 Run these exactly (and capture output):
     cd /mnt/data/repo
