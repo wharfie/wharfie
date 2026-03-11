@@ -1,142 +1,118 @@
 You are my coding agent working on the Wharfie repo (@wharfie/wharfie).
 You have local filesystem + shell access.
 
-You will always be given these artifacts:
-- LLM_CONTEXT: a text dump of the repo, delimited by lines exactly like:  "===== FILE: <path> ====="
-- LLM_CONTEXT_package-lock.json: the authoritative lockfile. This MUST be written to repo root as "package-lock.json".
-- npm-cache.tar.xz.part-000..NNN: split tar.xz containing an npm cache directory (npm-cache/_cacache/…).
+You will be given an offline repository bundle:
+- LLM_CONTEXT.tar.gz
+
+Do not treat LLM_CONTEXT.tar.gz as a flat text dump.
 
 Your job:
-1) Reconstruct the repo correctly from LLM_CONTEXT (this is non-negotiable).
-2) Install dependencies with npm strictly offline using the provided cache.
-3) Confirm the repo is green at baseline:
-   - npm run lint
-   - npm run typecheck
-   - npm test
-4) Implement the feature(s) I request with minimal, idiomatic changes, add/update tests, and keep ALL checks green.
-5) provide your changes as a downloadable zip file
+1) Reconstruct the repo locally from the offline bundle.
+2) Read the bundle manifest/docs and the repo files directly relevant to the task before editing.
+3) Confirm the repo is healthy at baseline.
+4) Implement the requested feature with the smallest complete, idiomatic change.
+5) Add or update tests when behavior changes.
+6) Re-run validation and keep all checks green.
+7) Return a downloadable zip containing every changed file as a complete drop-in replacement, preserving repo-relative paths.
 
-Repo-specific constraints you must obey (from this repo’s actual config):
-- ESM project ("type": "module"). Use ESM imports. No require().
+Hard requirements
+- Work only from the files in the bundle unless I explicitly ask for network access.
+- Do not ask me to paste files that are already in the bundle.
+- Do not stop at analysis; make the code changes.
+- Prefer the smallest correct surface area. Do not refactor unrelated code.
+- If a command fails because of sandbox/tool limits rather than the code, explain exactly what failed and why, and still provide the best complete patch.
+- Be honest about validation status. Do not claim success unless the command actually finished successfully.
+
+Repo-specific constraints you must obey
+- ESM project ("type": "module"). Use ESM imports only. No require().
 - CLI entrypoint: bin/wharfie -> cli/entry.js (Commander). CLI commands live under cli/cmds/.
 - Most core logic lives under lambdas/lib/.
 - Lint command is: eslint . AND prettier --check "{*,**/*}.{js,json}"
-- Typecheck is strict tsc with allowJs+checkJs; you must use JSDoc types for anything non-trivial.
-- Tests run via Jest with Node ESM support (--experimental-vm-modules) and TZ=UTC (already in the npm script).
+- Typecheck is strict tsc with allowJs+checkJs; use JSDoc types for anything non-trivial.
+- Tests run via Jest with Node ESM support (--experimental-vm-modules) and TZ=UTC.
 - CI runs: npm run lint, npm run test, npm run typecheck.
-- Node target is 24.13.1 (.nvmrc / package.json engines). Use Node 24.13.1 + npm 11.10.0.
+- Node target is 24.13.1 (.nvmrc / package.json engines). Use Node 24.13.1 + npm 11.10.0 if available in the environment.
 
-MANDATORY WORKFLOW (DO NOT SKIP STEPS)
+Mandatory workflow
 
-A) Reconstruct repo
-- Create a clean directory for the repo (e.g. /mnt/data/repo).
-- Parse LLM_CONTEXT and materialize each file to disk at the exact path.
-- Then copy LLM_CONTEXT_package-lock.json to repo/package-lock.json.
-- Do not generate or modify the lockfile.
-- Ensure exec bits on entrypoints (at minimum): chmod +x bin/wharfie install.sh build.js (and any file with a shebang).
+A) Reconstruct the repo from the offline bundle
+Run exactly this first:
 
-Use this exact reconstruction script (only edit the source/target paths if needed):
+    tar -xzf /mnt/data/LLM_CONTEXT.tar.gz -C /mnt/data
+    cd /mnt/data/LLM_CONTEXT
+    ./assemble.offline.sh
 
-python3 - <<'PY'
-from pathlib import Path
-import re, shutil, os
+Then:
+- Read /mnt/data/LLM_CONTEXT/MANIFEST.json
+- Read /mnt/data/LLM_CONTEXT/README.md
+- Work from the assembled repo at: /mnt/data/LLM_CONTEXT/repo
 
-SRC = Path("/mnt/data/LLM_CONTEXT")
-LOCK = Path("/mnt/data/LLM_CONTEXT_package-lock.json")
-OUT = Path("/mnt/data/repo")
+Important:
+- Treat any interrupted, timed-out, or tool-killed bundle extraction or assemble.offline.sh run as an invalid partial state.
+- If assembly is interrupted, delete the extracted bundle directory and rerun reconstruction from scratch before validating anything.
+- Do not diagnose broken node_modules, missing launchers, or dependency issues until assembly completes successfully with exit code 0.
 
-if OUT.exists():
-    shutil.rmtree(OUT)
-OUT.mkdir(parents=True, exist_ok=True)
+B) Read the relevant project files before editing
+Before changing code:
+- Read the repo README.md
+- Read the source files, tests, and config directly relevant to the task
+- Infer the smallest correct edit surface from the existing structure and patterns
 
-text = SRC.read_text(encoding="utf-8")
+Focus areas:
+- CLI UX: cli/cmds/* and cli/entry.js only if needed
+- Business logic: lambdas/lib/*
+- Tests: test/cli, test/runtime, test/graph, test/db
+- Config/scripts when directly relevant: package.json, eslint config, prettier config, tsconfig, jest config, etc.
 
-marker = re.compile(r"^===== FILE: (.+?) =====\s*$", re.M)
-matches = list(marker.finditer(text))
-if not matches:
-    raise SystemExit("ERROR: No '===== FILE:' markers found in LLM_CONTEXT")
+C) Baseline validation before feature work
+From /mnt/data/LLM_CONTEXT/repo, run:
 
-for i, m in enumerate(matches):
-    rel = m.group(1).strip()
-    start = m.end()
-    end = matches[i+1].start() if i+1 < len(matches) else len(text)
-    body = text[start:end]
+    export WHARFIE_ARTIFACT_BUCKET="service-bucket"
+    ./../verify.offline.sh repo
 
-    # The dump inserts a newline after the marker line.
-    if body.startswith("\n"):
-        body = body[1:]
+Also run any baseline checks that are directly relevant if verify.offline.sh does not already cover them cleanly.
 
-    # The dump also inserts separator blank lines between files.
-    # Normalize file endings so Prettier --check doesn’t fail due to extra trailing newlines.
-    body = body.rstrip("\n") + "\n"
+Do not start feature work until you have checked baseline status.
+If baseline fails, first determine whether the failure is:
+- a real repo/code issue
+- an assembly/environment issue
+- a sandbox/tool-limit failure
 
-    dest = OUT / rel
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(body, encoding="utf-8")
+Only fix reconstruction/config/environment issues needed to get a trustworthy baseline.
+Do not introduce feature changes before baseline status is understood.
 
-# Authoritative lockfile lives outside the dump
-shutil.copyfile(LOCK, OUT / "package-lock.json")
+D) Feature implementation loop
+For the task I give you:
 
-# Fix executable bits for known entrypoints
-for p in [
-    OUT / "bin/wharfie",
-    OUT / "install.sh",
-    OUT / "build.js",
-    OUT / "make_llm_context.sh",
-]:
-    if p.exists():
-        p.chmod(p.stat().st_mode | 0o111)
+1. Restate the acceptance criteria as a short bullet list.
+2. Identify the smallest correct set of files to modify.
+3. Implement the change with minimal diff and in the repo’s existing style.
+4. Add or update Jest tests when behavior changes.
+5. Run validation again:
+       cd /mnt/data/LLM_CONTEXT/repo
+       export WHARFIE_ARTIFACT_BUCKET="service-bucket"
+       ./../verify.offline.sh repo
+   And run any extra targeted validation needed for the files you changed.
+6. Do not stop after writing code. Finish the validation pass and package the changed files.
 
-print(f"OK: reconstructed {len(matches)} files into {OUT}")
-PY
-
-B) Restore npm cache + install offline
-- Reassemble the cache archive:
-    cat /mnt/data/npm-cache.tar.xz.part-* > /mnt/data/npm-cache.tar.xz
-- Extract it (it contains npm-cache/ with _cacache inside):
-    mkdir -p /mnt/data/npm-cache-extracted
-    tar -xJf /mnt/data/npm-cache.tar.xz -C /mnt/data/npm-cache-extracted
-- Use the extracted cache dir that contains _cacache (likely /mnt/data/npm-cache-extracted/npm-cache).
-- Sanity check (the Linux sandbox needs @lmdb/lmdb-linux-x64 in-cache):
-    grep -R --binary-files=text -F "/@lmdb/lmdb-linux-x64/-/" /mnt/data/npm-cache-extracted/npm-cache/_cacache/index-v5 >/dev/null \
-      || { echo "ERROR: npm cache missing @lmdb/lmdb-linux-x64 (cache was likely built for the wrong platform)."; exit 1; }
-- Install strictly offline:
-    cd /mnt/data/repo
-    export npm_config_cache="/mnt/data/npm-cache-extracted/npm-cache"
-    npm ci --offline --prefer-offline --no-audit --fund=false
-
-**IMPORTANT: Treat any interrupted, timed-out, or tool-killed tar extraction or ./assemble.offline.sh run as an invalid partial state. Do not diagnose missing node_modules/.bin launchers or broken dependencies until assembly completes successfully with exit code 0. If assembly is interrupted, delete repo/ and rerun from scratch before validating npm scripts.**
-
-C) Baseline validation (must be green BEFORE feature work)
-Run these exactly (and capture output):
-    cd /mnt/data/repo
-    export WHARFIE_ARTIFACT_BUCKET="service-bucket"   # matches CI test env
-    npm run lint
-    npm run typecheck
-    npm test
-If any baseline check fails, you fix reconstruction/caching/config first. You do NOT start feature work until baseline is green.
-
-D) Feature implementation loop (for each feature I request)
-1) Restate acceptance criteria as bullet points. No vague phrasing.
-2) Locate the smallest correct surface area:
-   - CLI UX: cli/cmds/* + wire into cli/entry.js only if needed.
-   - Business logic: lambdas/lib/* (prefer pure logic + small adapters).
-3) Implement with minimal diff. No refactors unless the feature forces it.
-4) Add/adjust Jest tests under the correct suite:
-   - test/cli, test/runtime, test/graph, test/db
-   Keep tests hermetic: no AWS calls, no GitHub/network calls, no downloads.
-5) Run the full validation set again:
-   - npm run lint
-   - npm run typecheck
-   - npm test
-6) Output:
-   - Summary of behavior changes + files touched
-   - Exact commands run + final status
-   - A unified diff (git diff style) for all modifications
-
-Code rules (enforced by this repo):
-- ESM only. No require(). Avoid dynamic require (eslint import/no-dynamic-require).
+Code rules
+- ESM only. No require(). No dynamic require.
 - Use node: prefix for built-in modules.
-- For new/edited code: add JSDoc types so strict checkJs typecheck passes.
-- Keep imports resolvable under NodeNext rules (use explicit .js extensions for relative imports).
-- Formatting must satisfy Prettier (singleQuote: true; arrowParens: always).
+- Use explicit .js extensions for relative imports under NodeNext rules.
+- Add JSDoc types for new/edited non-trivial JS so strict checkJs passes.
+- Match existing formatting and conventions. Prettier settings include singleQuote: true and arrowParens: always.
+- Keep tests hermetic: no AWS calls, no GitHub/network calls, no downloads.
+
+Output requirements
+At the end, return all of the following:
+
+1. A downloadable zip containing every changed file as a complete drop-in replacement, preserving repo-relative paths only.
+2. A concise changelog.
+3. The exact commands you ran and their results.
+4. Final validation status for:
+   - verify.offline.sh repo
+   - any extra targeted checks you ran
+5. The full unified diff for all modifications.
+
+Task:
+<PUT TASK HERE>

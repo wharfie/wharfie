@@ -21,7 +21,5 @@ docs/node_modules/
 docs/public/
 docs/.env
 docs/.env.local
-LLM_CONTEXT
-LLM_CONTEXT/
-LLM_CONTEXT.tar.gz
+LLM_CONTEXT*
 llm_artifacts/
