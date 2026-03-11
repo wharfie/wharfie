@@ -1,71 +1,24 @@
 import { Command } from 'commander';
 
-import createOperationsStore from '../../lambdas/lib/graph/operations-store.js';
-import { resolveOperationsTableName } from '../../lambdas/lib/config/db.js';
+import { withOperationsStore } from './operations-store.js';
 import { formatOperationRows } from './operation-rows.js';
 import { displayFailure, displaySuccess } from '../output/basic.js';
-
-function resolveAdapterName() {
-  const adapter = process.env.WHARFIE_DB_ADAPTER?.trim().toLowerCase();
-  if (!adapter) return 'vanilla';
-
-  if (adapter === 'dynamodb') return 'dynamodb';
-  if (adapter === 'lmdb') return 'lmdb';
-  if (adapter === 'vanilla') return 'vanilla';
-
-  throw new Error(
-    `Invalid WHARFIE_DB_ADAPTER: ${process.env.WHARFIE_DB_ADAPTER}`,
-  );
-}
-
-async function createDBClient() {
-  const adapterName = resolveAdapterName();
-  const path = process.env.WHARFIE_DB_PATH;
-
-  if (adapterName === 'dynamodb') {
-    const { default: createDynamoDB } =
-      await import('../../lambdas/lib/db/adapters/dynamodb.js');
-    return createDynamoDB({
-      region: process.env.AWS_REGION,
-    });
-  }
-
-  if (adapterName === 'lmdb') {
-    const { default: createLMDB } =
-      await import('../../lambdas/lib/db/adapters/lmdb.js');
-    return createLMDB({ path });
-  }
-
-  const { default: createVanillaDB } =
-    await import('../../lambdas/lib/db/adapters/vanilla.js');
-  return createVanillaDB({ path });
-}
 
 const listCommand = new Command('list')
   .description('List operations for a resource')
   .argument('<resource_id>', 'Wharfie resource ID')
   .action(async (resource_id) => {
-    const db = await createDBClient();
-    const store = createOperationsStore({
-      db,
-      tableName: resolveOperationsTableName(),
-    });
-
     try {
-      const records = await store.getRecords(resource_id);
-      const operations = records.operations || [];
+      await withOperationsStore(async (store) => {
+        const records = await store.getRecords(resource_id);
+        const operations = records.operations || [];
 
-      displaySuccess(`${operations.length} operations found.`);
-      console.table(formatOperationRows(operations));
+        displaySuccess(`${operations.length} operations found.`);
+        console.table(formatOperationRows(operations));
+      });
     } catch (err) {
       displayFailure(err);
       process.exitCode = 1;
-    } finally {
-      try {
-        await db.close();
-      } catch {
-        // ignore
-      }
     }
   });
 
