@@ -24,7 +24,7 @@ import {
  *
  * Jest runs must never trigger that network/download path.
  */
-function assertNotUnderJest() {
+export function assertNotUnderJest() {
   if (process.env.JEST_WORKER_ID) {
     throw new Error('wharfie build-self is disabled under jest');
   }
@@ -34,7 +34,7 @@ function assertNotUnderJest() {
  * @param {string} platform - platform
  * @returns {'darwin'|'linux'|'win32'} - normalized platform
  */
-function normalizePlatform(platform) {
+export function normalizePlatform(platform) {
   const p = String(platform).toLowerCase();
   if (p === 'mac' || p === 'macos' || p === 'osx') return 'darwin';
   if (p === 'windows' || p === 'win') return 'win32';
@@ -47,7 +47,7 @@ function normalizePlatform(platform) {
  * @param {string} arch - arch
  * @returns {'arm64'|'x64'} - normalized arch
  */
-function normalizeArch(arch) {
+export function normalizeArch(arch) {
   const a = String(arch).toLowerCase();
   if (a === 'amd64') return 'x64';
   if (a === 'arm64' || a === 'x64') return /** @type {any} */ (a);
@@ -59,7 +59,7 @@ function normalizeArch(arch) {
  * @param {string} startDir - startDir
  * @returns {string} - repo root
  */
-function findRepoRoot(startDir) {
+export function findRepoRoot(startDir) {
   let dir = path.resolve(startDir);
 
   while (true) {
@@ -88,7 +88,7 @@ function findRepoRoot(startDir) {
  * @param {string} rootDir
  * @returns {string[]} - Relative file paths with forward slashes.
  */
-function _collectTemplateFiles(rootDir) {
+export function _collectTemplateFiles(rootDir) {
   /** @type {string[]} */
   const out = [];
 
@@ -121,7 +121,7 @@ function _collectTemplateFiles(rootDir) {
  * @param {string} distDir
  * @returns {Record<string, string>}
  */
-function _buildTemplateAssets(repoRoot, distDir) {
+export function _buildTemplateAssets(repoRoot, distDir) {
   const templatesDir = path.join(
     repoRoot,
     'cli',
@@ -159,7 +159,7 @@ function _buildTemplateAssets(repoRoot, distDir) {
  * @param {{ platform: string, arch: string, nodeVersion: string }} options - Build options.
  * @returns {Promise<void>}
  */
-async function buildSelf({ platform, arch, nodeVersion }) {
+export async function buildSelf({ platform, arch, nodeVersion }) {
   const repoRoot = findRepoRoot(process.cwd());
   const distDir = path.join(repoRoot, 'dist');
   fs.mkdirSync(distDir, { recursive: true });

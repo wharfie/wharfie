@@ -27,5 +27,5 @@ jobs:
         env:
           WHARFIE_ARTIFACT_BUCKET: service-bucket
       - run: npm run typecheck
-      # - name: test build
-      #   run: ./build.js --platform linux --arch x64 && ./dist/wharfie-linux-x64 --help
+      - name: build-self smoke
+        run: TZ=UTC node ./test/run-jest.js --silent --runInBand test/cli/cmds/build-self-disabled.test.js
