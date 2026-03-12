@@ -130,5 +130,5 @@ export async function main(argv = process.argv) {
     await new Promise((resolve) => process.stdin.on('end', resolve));
   }
 
-  program.parse(argv);
+  await program.parseAsync(argv);
 }
