@@ -1,4 +1,6 @@
 import { createRequire } from 'node:module';
+import { diff, formatConsoleDelta } from '../../../lambdas/lib/json-diff.js';
+
 const require = createRequire(import.meta.url);
 
 const { Command } = require('commander');
@@ -13,16 +15,15 @@ const ansiEscapes = require('../../output/escapes');
 const { handleError } = require('../../output/error');
 const constants = require('../../project/constants');
 const chalk = require('chalk');
-const jdf = require('jsondiffpatch');
 
 /**
  * Formats a JSON diff in a Terraform-style format.
- * @param {jdf.Delta} delta - The JSON diff delta.
- * @param {any} original - The original object.
+ * @param {import('../../../lambdas/lib/json-diff.js').JsonDelta | undefined} delta - The JSON diff delta.
+ * @param {any} _original - The original object.
  * @returns {string} The formatted diff.
  */
-function printTerraformStyleDiff(delta, original) {
-  return jdf.formatters.console.format(delta, original);
+function printTerraformStyleDiff(delta, _original) {
+  return formatConsoleDelta(delta);
 }
 
 /**
@@ -87,8 +88,8 @@ const plan = async (path, environmentName) => {
 
   Object.values(diffs.additions).forEach((resource) => {
     changePatches += `\n\n ${chalk.bold(resource.name)} will be created \n `;
-    const diff = jdf.diff({}, resource);
-    if (diff) changePatches += printTerraformStyleDiff(diff, {});
+    const delta = diff({}, resource);
+    if (delta) changePatches += printTerraformStyleDiff(delta, {});
   });
 
   Object.keys(diffs.updates).forEach((resourceName) => {
@@ -101,8 +102,8 @@ const plan = async (path, environmentName) => {
 
   Object.values(diffs.removals).forEach((resource) => {
     changePatches += `\n\n ${chalk.bold(resource.name)} will be destroyed \n `;
-    const diff = jdf.diff(resource, {});
-    if (diff) changePatches += printTerraformStyleDiff(diff, resource);
+    const delta = diff(resource, {});
+    if (delta) changePatches += printTerraformStyleDiff(delta, resource);
   });
 
   console.log(changePatches);

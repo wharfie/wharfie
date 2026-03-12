@@ -3,7 +3,7 @@ import Reconcilable from './reconcilable.js';
 import stateStore from '../../db/state/store.js';
 import Secret from '../lib/secret.js';
 import { isEqual } from 'es-toolkit';
-import { diff } from 'jsondiffpatch';
+import { diff } from '../../json-diff.js';
 
 /**
  * @typedef BaseResourceOptions
@@ -143,7 +143,7 @@ class BaseResource extends Reconcilable {
    * @typedef PropertyDiff
    * @property {any} old - old.
    * @property {any} new - new.
-   * @property {import('jsondiffpatch').Delta | undefined} delta - delta.
+   * @property {import('../../json-diff.js').JsonDelta | undefined} delta - delta.
    */
 
   /**
