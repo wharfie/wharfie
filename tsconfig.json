@@ -27,6 +27,7 @@
     "lambdas/udf_entrypoint.js",
     "lambdas/lib/actor/resources/aws/**",
     "lambdas/lib/actor/resources/records/**",
-    "test/legacy/**"
+    "test/legacy/**",
+    "test/runtime/services/**"
   ]
 }
