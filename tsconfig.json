@@ -15,19 +15,11 @@
     "types": ["jest", "node"]
   },
   "include": [
+    "cli/**/*.js",
     "lambdas/**/*.js",
-    "test/cli/**/*.js",
-    "test/runtime/**/*.js",
-    "test/graph/**/*.js",
-    "test/db/**/*.js",
-    "test/fixtures/actors/**/*.js",
+    "scratch/**/*.js",
+    "test/**/*.js",
     "types/**/*.d.ts"
   ],
-  "exclude": [
-    "lambdas/udf_entrypoint.js",
-    "lambdas/lib/actor/resources/aws/**",
-    "lambdas/lib/actor/resources/records/**",
-    "test/legacy/**",
-    "test/runtime/services/**"
-  ]
+  "exclude": ["test/legacy/**"]
 }

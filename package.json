@@ -90,21 +90,7 @@
       "dist/",
       "tmp/",
       "docs/",
-      "scratch/",
-      "coverage/",
-      "test/",
-      "cli/cmds/deployment.js",
-      "cli/cmds/deployment_cmds/**",
-      "cli/cmds/project.js",
-      "cli/cmds/project_cmds/**",
-      "cli/cmds/utils.js",
-      "cli/cmds/utils_cmds/**",
-      "cli/project/**",
-      "cli/input.js",
-      "cli/output/deployment/**",
-      "cli/output/project/**",
-      "cli/output/error.js",
-      "cli/output/escapes.js"
+      "coverage/"
     ],
     "overrides": [
       {
@@ -115,11 +101,96 @@
           "jest"
         ],
         "extends": [
-          "plugin:jest/all"
+          "plugin:jest/recommended"
         ],
         "rules": {
           "jest/max-expects": 0,
-          "jest/no-conditional-in-test": 0
+          "jest/no-conditional-in-test": 0,
+          "jest/valid-mock-module-path": 0,
+          "jest/prefer-importing-jest-globals": 0,
+          "jest/prefer-expect-assertions": 0,
+          "jest/prefer-strict-equal": 0,
+          "jest/no-hooks": 0,
+          "jest/prefer-ending-with-an-expect": 0,
+          "jest/require-hook": 0,
+          "jest/padding-around-all": 0,
+          "jest/padding-around-expect-groups": 0,
+          "jest/require-to-throw-message": 0,
+          "jest/prefer-each": 0,
+          "jest/valid-title": 0,
+          "jest/expect-expect": 0,
+          "jest/consistent-test-it": 0,
+          "jest/require-top-level-describe": 0,
+          "jest/no-conditional-expect": 0,
+          "jest/no-standalone-expect": 0,
+          "jest/prefer-lowercase-title": 0,
+          "jest/prefer-called-with": 0
+        }
+      },
+      {
+        "files": [
+          "cli/input.js",
+          "cli/cmds/deployment.js",
+          "cli/cmds/deployment_cmds/**/*.js",
+          "cli/cmds/project.js",
+          "cli/cmds/project_cmds/**/*.js",
+          "cli/cmds/utils.js",
+          "cli/cmds/utils_cmds/**/*.js",
+          "cli/output/deployment/**/*.js",
+          "cli/output/project/**/*.js",
+          "cli/output/error.js",
+          "cli/output/escapes.js",
+          "cli/project/**/*.js"
+        ],
+        "env": {
+          "commonjs": true
+        },
+        "rules": {
+          "import/no-unresolved": "off",
+          "n/no-missing-import": "off",
+          "no-unused-vars": "off",
+          "n/no-process-exit": "off",
+          "n/no-missing-require": "off"
+        },
+        "globals": {
+          "module": "readonly",
+          "require": "readonly",
+          "exports": "readonly",
+          "__dirname": "readonly",
+          "__filename": "readonly"
+        }
+      },
+      {
+        "files": [
+          "test/__mocks__/**/*.js",
+          "test/fixtures/**/*.js",
+          "test/legacy/**/*.js",
+          "test/util.js"
+        ],
+        "env": {
+          "commonjs": true
+        },
+        "rules": {
+          "import/no-unresolved": "off",
+          "n/no-missing-import": "off",
+          "no-unused-vars": "off",
+          "n/no-process-exit": "off",
+          "n/no-missing-require": "off"
+        },
+        "globals": {
+          "module": "readonly",
+          "require": "readonly",
+          "exports": "readonly",
+          "__dirname": "readonly",
+          "__filename": "readonly"
+        }
+      },
+      {
+        "files": [
+          "test/run-jest.js"
+        ],
+        "rules": {
+          "n/no-process-exit": "off"
         }
       }
     ],

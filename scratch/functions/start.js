@@ -1,18 +1,49 @@
 import dep from '../lib/dep.js';
 // import sharp from 'sharp';
 import duckdb from '@duckdb/node-api';
-import lmdb from 'lmdb';
-// import usb from 'usb';
-// import sodium from 'sodium-native';
+import { open } from 'lmdb';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
 
 /**
- *
+ * @returns {any | null} - The optional usb package when available.
  */
-async function unawaitedAsync() {
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  console.log('test draining');
+function loadUsbPackage() {
+  try {
+    return require('usb');
+  } catch {
+    return null;
+  }
 }
 
+/**
+ * @returns {any | null} - The optional sodium-native package when available.
+ */
+function loadSodiumPackage() {
+  try {
+    return require('sodium-native');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {unknown} error - Unknown error value.
+ * @returns {string} - A printable error message.
+ */
+function getErrorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+const usb = loadUsbPackage();
+const sodium = loadSodiumPackage();
+
+/**
+ * @param {Record<string, any> | undefined} event - Scratch invocation payload.
+ * @param {unknown} context - Scratch invocation context.
+ * @returns {Promise<void>} - Completes after the smoke test finishes.
+ */
 const start = async (event, context) => {
   const depLabel = `INTERNAL DEPENDENCY LOADING TIMER`;
   console.time(depLabel);
@@ -40,7 +71,7 @@ const start = async (event, context) => {
     console.log('accumulator:', acc);
   }
   // --- LMDB (yours) ---
-  const ROOT_DB = lmdb.open({ path: 'test-db' });
+  const ROOT_DB = open({ path: 'test-db' });
   await ROOT_DB.put('greeting', { someText: 'Hello, World!' });
   console.log(ROOT_DB.get('greeting').someText);
 
@@ -59,21 +90,33 @@ const start = async (event, context) => {
 
   // // --- usb (libusb native binding) ---
   try {
+    if (!usb?.getDeviceList) {
+      throw new Error('usb module unavailable');
+    }
     const devices = usb.getDeviceList();
     console.log(
       'usb devices:',
-      devices.map((d) => {
+      devices.map((/** @type {any} */ d) => {
         const vd = d.deviceDescriptor;
         return `${vd.idVendor.toString(16)}:${vd.idProduct.toString(16)}`;
       }),
     );
-  } catch (e) {
-    console.warn('usb test skipped:', e && e.message);
+  } catch (error) {
+    console.warn('usb test skipped:', getErrorMessage(error));
   }
   try {
     const { DuckDBInstance } = duckdb;
 
-    const toSmallNumber = (v) => (typeof v === 'bigint' ? Number(v) : v); // safe for small smoke-test values
+    /**
+     * @param {unknown} v - DuckDB scalar value.
+     * @returns {number} - Normalized numeric value.
+     */
+    const toSmallNumber = (v) => {
+      if (v === null || v === undefined) return 0;
+      if (typeof v === 'bigint') return Number(v);
+      if (typeof v === 'number') return v;
+      return Number(v);
+    }; // safe for small smoke-test values
     console.log('DuckDB version:', duckdb.version());
 
     const instance = await DuckDBInstance.create(':memory:');
@@ -123,6 +166,17 @@ const start = async (event, context) => {
   // --- OPTIONAL: sodium-native tight loop (CPU in C, not JS) -----
   // comment out if you want *pure* JS only
   try {
+    if (
+      !sodium?.crypto_secretbox_KEYBYTES ||
+      !sodium?.crypto_secretbox_NONCEBYTES ||
+      !sodium?.crypto_secretbox_MACBYTES ||
+      typeof sodium.randombytes_buf !== 'function' ||
+      typeof sodium.crypto_secretbox_easy !== 'function' ||
+      typeof sodium.crypto_secretbox_open_easy !== 'function'
+    ) {
+      throw new Error('sodium-native module unavailable');
+    }
+
     const key = Buffer.alloc(sodium.crypto_secretbox_KEYBYTES);
     const nonce = Buffer.alloc(sodium.crypto_secretbox_NONCEBYTES);
     sodium.randombytes_buf(key);
@@ -141,12 +195,10 @@ const start = async (event, context) => {
       if (ok) okCount++;
     }
     console.log('sodium loops done, okCount:', okCount);
-  } catch (e) {
-    console.warn('sodium test skipped:', e && e.message);
+  } catch (error) {
+    console.warn('sodium test skipped:', getErrorMessage(error));
   }
 
-  // You had these commented; leaving your async tail-call intact.
-  // unawaitedAsync();
   console.timeEnd(label);
 };
 

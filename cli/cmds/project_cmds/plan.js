@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createRequire } from 'node:module';
 import { diff, formatConsoleDelta } from '../../../lambdas/lib/json-diff.js';
 

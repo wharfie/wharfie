@@ -8,7 +8,6 @@ const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { existsSync } = require('node:fs');
-const { createRequire } = require('node:module');
 
 const {
   installForTarget,

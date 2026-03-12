@@ -8,7 +8,6 @@ import {
   expect,
   it,
   jest,
-  test,
 } from '@jest/globals';
 
 import listCommand from '../../../cli/cmds/list.js';

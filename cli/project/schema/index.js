@@ -1,3 +1,4 @@
+// @ts-nocheck
 const joi = require('joi');
 const chalk = require('chalk');
 const { dynamicSchema, generateConfigSchema } = require('./dynamic');

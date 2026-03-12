@@ -1,3 +1,4 @@
+// @ts-nocheck
 const chalk = require('chalk');
 const cliProgress = require('cli-progress');
 

@@ -1,3 +1,4 @@
+// @ts-nocheck
 const Joi = require('joi');
 
 /**

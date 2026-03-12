@@ -1,5 +1,6 @@
+// @ts-nocheck
 import { jest } from '@jest/globals';
-import AWS from '@aws-sdk/lib-dynamodb';
+import * as AWSModule from '@aws-sdk/lib-dynamodb';
 
 const DynamoDBDocumentMock = {
   query: jest.fn().mockImplementation(),
@@ -23,6 +24,8 @@ const clients = {
 clients.get = (service) => {
   return clients[service];
 };
+
+const AWS = { ...AWSModule };
 
 AWS.spyOn = (service, method) => {
   if (service === 'DynamoDBDocument') {

@@ -14,7 +14,13 @@ describe('scheduler service (cron, UTC)', () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2026-02-18T00:00:30.000Z'));
 
-    const invoke = jest.fn(async () => {});
+    /** @type {(actor: string, payload: { cron: string, scheduledTime: string }) => Promise<void>} */
+    const invokeImpl = async (actor, payload) => {
+      if (typeof actor !== 'string' || payload === null) {
+        throw new TypeError('unexpected scheduler payload');
+      }
+    };
+    const invoke = jest.fn(invokeImpl);
     const svc = await startSchedulerService({
       role: 'leader',
       triggers: [{ actor: 'alpha', cron: '*/2 * * * *' }],
@@ -53,7 +59,13 @@ describe('scheduler service (cron, UTC)', () => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2026-02-18T00:00:30.000Z'));
 
-    const invoke = jest.fn(async () => {});
+    /** @type {(actor: string, payload: { cron: string, scheduledTime: string }) => Promise<void>} */
+    const invokeImpl = async (actor, payload) => {
+      if (typeof actor !== 'string' || payload === null) {
+        throw new TypeError('unexpected scheduler payload');
+      }
+    };
+    const invoke = jest.fn(invokeImpl);
     const svc = await startSchedulerService({
       role: 'leader',
       triggers: [{ actor: 'alpha', cron: '* * * * *' }],

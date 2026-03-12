@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { jest } from '@jest/globals';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);

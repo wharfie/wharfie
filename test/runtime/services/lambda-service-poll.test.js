@@ -280,7 +280,7 @@ async function waitFor(fn, options = {}) {
     const v = await fn();
     if (v) return v;
     // eslint-disable-next-line no-await-in-loop
-    await new Promise((r) => setTimeout(r, intervalMs));
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 
   throw new Error(`waitFor timed out after ${timeoutMs}ms`);

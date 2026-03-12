@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { describe, expect, it, jest, test } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,

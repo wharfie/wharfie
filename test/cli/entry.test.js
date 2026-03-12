@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { describe, expect, it, jest, test } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +14,7 @@ const binPath = fileURLToPath(new URL('../../bin/wharfie', import.meta.url));
 
 /**
  * @param {string[]} args - CLI args.
- * @param {NodeJS.ProcessEnv} [env] - Extra environment variables.
+ * @param {Record<string, string | undefined>} [env] - Extra environment variables.
  * @returns {import('node:child_process').SpawnSyncReturns<string>} - Spawn result.
  */
 function runCli(args, env = {}) {

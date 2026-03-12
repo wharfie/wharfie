@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { ResourceNotFoundException } from '@aws-sdk/client-dynamodb';
 import { parse } from '../../../lambdas/lib/arn.js';
 

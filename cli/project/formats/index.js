@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const cloudfront = require('./cloudfront');

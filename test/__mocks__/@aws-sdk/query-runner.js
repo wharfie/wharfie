@@ -1,3 +1,4 @@
+// @ts-nocheck
 /* eslint-disable new-cap */
 import { jest } from '@jest/globals';
 import { createRequire } from 'node:module';

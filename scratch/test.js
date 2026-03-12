@@ -1,3 +1,4 @@
+// @ts-nocheck
 import BaseResource from '../lambdas/lib/actor/resources/base-resource.js';
 import Function from '../lambdas/lib/actor/resources/builds/function.js';
 import ActorSystem from '../lambdas/lib/actor/resources/builds/actor-system.js';

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { S3 } from '@aws-sdk/client-s3';
 import { STS } from '@aws-sdk/client-sts';
 import { SQS } from '@aws-sdk/client-sqs';
