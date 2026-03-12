@@ -155,6 +155,10 @@ function _buildTemplateAssets(repoRoot, distDir) {
   return assets;
 }
 
+/**
+ * @param {{ platform: string, arch: string, nodeVersion: string }} options - Build options.
+ * @returns {Promise<void>}
+ */
 async function buildSelf({ platform, arch, nodeVersion }) {
   const repoRoot = findRepoRoot(process.cwd());
   const distDir = path.join(repoRoot, 'dist');
@@ -221,6 +225,10 @@ async function buildSelf({ platform, arch, nodeVersion }) {
       name: `${outName}-signature`,
       properties: {
         binaryPath: () => outPath,
+        macosCertBase64: () => process.env.WHARFIE_MACOS_CERT_BASE64 || '',
+        macosCertPassword: () => process.env.WHARFIE_MACOS_CERT_PASSWORD || '',
+        macosKeychainPassword: () =>
+          process.env.WHARFIE_MACOS_KEYCHAIN_PASSWORD || '',
       },
     });
     await signature.reconcile();
