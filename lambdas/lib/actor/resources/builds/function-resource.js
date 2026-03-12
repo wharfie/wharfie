@@ -83,7 +83,6 @@ class FunctionResource extends BuildResource {
    * @returns {Promise<string>} - Result.
    */
   async esbuild() {
-    console.log('HELLO');
     const entryCode = `
       import { ${
         this.get('entrypoint').export || 'default'
@@ -100,6 +99,7 @@ class FunctionResource extends BuildResource {
       write: false,
       bundle: true,
       platform: 'node',
+      format: 'cjs',
       minify: true,
       keepNames: false,
       sourcemap: 'inline',
@@ -116,6 +116,8 @@ class FunctionResource extends BuildResource {
         : FunctionResource.REQUIRED_UNUSED_EXTERNALS,
       define: {
         __WILLEM_BUILD_RECONCILE_TERMINATOR: '1', // injects this variable definition into the global scope
+        'import.meta.url': '__filename',
+        'import.meta.dirname': '__dirname',
       },
     });
 
