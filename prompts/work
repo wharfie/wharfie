@@ -2,9 +2,9 @@ You are my coding agent working on the Wharfie repo (@wharfie/wharfie).
 You have local filesystem + shell access.
 
 You will be given an offline repository bundle:
-- LLM_CONTEXT.tar.gz
+- LLM_CONTEXT-wharfie.tar.gz
 
-Do not treat LLM_CONTEXT.tar.gz as a flat text dump.
+Do not treat LLM_CONTEXT-wharfie.tar.gz as a flat text dump.
 
 Your job:
 1) Reconstruct the repo locally from the offline bundle.
@@ -38,14 +38,14 @@ Mandatory workflow
 A) Reconstruct the repo from the offline bundle
 Run exactly this first:
 
-    tar -xzf /mnt/data/LLM_CONTEXT.tar.gz -C /mnt/data
-    cd /mnt/data/LLM_CONTEXT
+    tar -xzf /mnt/data/LLM_CONTEXT-wharfie.tar.gz -C /mnt/data
+    cd /mnt/data/LLM_CONTEXT-wharfie
     ./assemble.offline.sh
 
 Then:
-- Read /mnt/data/LLM_CONTEXT/MANIFEST.json
-- Read /mnt/data/LLM_CONTEXT/README.md
-- Work from the assembled repo at: /mnt/data/LLM_CONTEXT/repo
+- Read /mnt/data/LLM_CONTEXT-wharfie/MANIFEST.json
+- Read /mnt/data/LLM_CONTEXT-wharfie/README.md
+- Work from the assembled repo at: /mnt/data/LLM_CONTEXT-wharfie/repo
 
 Important:
 - Treat any interrupted, timed-out, or tool-killed bundle extraction or assemble.offline.sh run as an invalid partial state.
@@ -65,7 +65,7 @@ Focus areas:
 - Config/scripts when directly relevant: package.json, eslint config, prettier config, tsconfig, jest config, etc.
 
 C) Baseline validation before feature work
-From /mnt/data/LLM_CONTEXT/repo, run:
+From /mnt/data/LLM_CONTEXT-wharfie/repo, run:
 
     export WHARFIE_ARTIFACT_BUCKET="service-bucket"
     ./../verify.offline.sh repo
@@ -89,7 +89,7 @@ For the task I give you:
 3. Implement the change with minimal diff and in the repo’s existing style.
 4. Add or update Jest tests when behavior changes.
 5. Run validation again:
-       cd /mnt/data/LLM_CONTEXT/repo
+       cd /mnt/data/LLM_CONTEXT-wharfie/repo
        export WHARFIE_ARTIFACT_BUCKET="service-bucket"
        ./../verify.offline.sh repo
    And run any extra targeted validation needed for the files you changed.
