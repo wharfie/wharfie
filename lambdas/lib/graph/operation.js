@@ -22,7 +22,9 @@ const Type = {
 };
 
 /**
- * @typedef {('COMPLETED'|
+ * @typedef {('BLOCKED'|
+ * 'COMPLETED'|
+ * 'FAILED'|
  * 'PENDING'|
  * 'RUNNING'
  * )} WharfieOperationStatusEnum
@@ -32,7 +34,9 @@ const Type = {
  * @type {Object<WharfieOperationStatusEnum,WharfieOperationStatusEnum>}
  */
 const Status = {
+  BLOCKED: 'BLOCKED',
   COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
   PENDING: 'PENDING',
   RUNNING: 'RUNNING',
 };

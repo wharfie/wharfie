@@ -3,7 +3,6 @@
  *
  * This is handy for showing how `ActorSystem.createContext()` merges the
  * system-owned resources with caller-provided overrides.
- *
  * @param {unknown} [_event] - Event payload.
  * @param {{ requestId?: string, resources?: Record<string, any> }} [context] - Invocation context.
  * @returns {{ requestId: string | null, resourceKeys: string[], dbPresent: boolean, queueAdapter: string | null, extraNote: string | null }} - Result.

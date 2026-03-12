@@ -2,7 +2,7 @@ import { describe, expect, it } from '@jest/globals';
 
 import QueryParser from '../../lambdas/lib/athena/query-parser.js';
 
-describe('QueryParser (postgresql dialect)', () => {
+describe('queryParser (postgresql dialect)', () => {
   it('extracts table sources (schema-qualified) and column lineage', () => {
     const qp = new QueryParser();
 

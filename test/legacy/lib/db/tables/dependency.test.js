@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  test,
+} from '@jest/globals';
 
 import { getAdapterMatrix } from '../../../helpers/db-adapters.js';
 import { createDependencyTable } from '../../../../lambdas/lib/db/tables/dependency.js';
@@ -21,7 +28,7 @@ describe('dependency table contract', () => {
         await cleanup();
       });
 
-      test('put/find/delete', async () => {
+      it('put/find/delete', async () => {
         const table = createDependencyTable({ db, tableName });
 
         await table.putDependency({ dependency: 'dep', resource_id: 'r1' });

@@ -90,10 +90,21 @@
       "dist/",
       "tmp/",
       "docs/",
-      "cli/",
-      "test/",
       "scratch/",
-      "coverage/"
+      "coverage/",
+      "test/",
+      "cli/cmds/deployment.js",
+      "cli/cmds/deployment_cmds/**",
+      "cli/cmds/project.js",
+      "cli/cmds/project_cmds/**",
+      "cli/cmds/utils.js",
+      "cli/cmds/utils_cmds/**",
+      "cli/project/**",
+      "cli/input.js",
+      "cli/output/deployment/**",
+      "cli/output/project/**",
+      "cli/output/error.js",
+      "cli/output/escapes.js"
     ],
     "overrides": [
       {

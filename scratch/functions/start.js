@@ -5,6 +5,9 @@ import lmdb from 'lmdb';
 // import usb from 'usb';
 // import sodium from 'sodium-native';
 
+/**
+ *
+ */
 async function unawaitedAsync() {
   await new Promise((resolve) => setTimeout(resolve, 100));
   console.log('test draining');

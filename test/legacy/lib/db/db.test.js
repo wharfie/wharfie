@@ -1,10 +1,11 @@
 import {
-  describe,
-  test,
-  expect,
-  beforeEach,
   afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
   jest,
+  test,
 } from '@jest/globals';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -49,14 +50,25 @@ const C = {
   }),
 };
 
+/**
+ *
+ */
 function makeTmpDir() {
   return mkdtempSync(join(tmpdir(), 'db-contract-'));
 }
 
+/**
+ *
+ * @param v
+ */
 function clone(v) {
   return JSON.parse(JSON.stringify(v));
 }
 
+/**
+ *
+ * @param keyObj
+ */
 function stableKeyString(keyObj) {
   const entries = Object.entries(keyObj).sort(([a], [b]) => a.localeCompare(b));
   return JSON.stringify(Object.fromEntries(entries));
@@ -67,6 +79,10 @@ function stableKeyString(keyObj) {
  * Supports:
  * - "#a = :v"
  * - "begins_with(#a, :v)"
+ * @param expr
+ * @param names
+ * @param values
+ * @param item
  */
 function evalConditionExpression(expr, names, values, item) {
   if (!expr) return true;
@@ -103,6 +119,10 @@ function evalConditionExpression(expr, names, values, item) {
 /**
  * Apply Dynamo-like UpdateExpression of the form:
  * "SET #a.#b = :v0, #c = :v1"
+ * @param updateExpr
+ * @param names
+ * @param values
+ * @param item
  */
 function applyUpdateExpression(updateExpr, names, values, item) {
   const m = updateExpr.match(/^SET\s+(.+)$/);
@@ -130,6 +150,9 @@ function applyUpdateExpression(updateExpr, names, values, item) {
   }
 }
 
+/**
+ *
+ */
 function createIdLike() {
   return Math.random().toString(16).slice(2) + Date.now().toString(16);
 }
@@ -144,6 +167,10 @@ function createFakeDocClient() {
   /** @type {Map<string, Map<string, any>>} */
   const tables = new Map();
 
+  /**
+   *
+   * @param tableName
+   */
   function tableMap(tableName) {
     if (!tables.has(tableName)) tables.set(tableName, new Map());
     return tables.get(tableName);
@@ -323,6 +350,7 @@ function createFakeDocClient() {
  * - PRIMARY required and must be EQUALS
  * - at most one SORT, may be EQUALS or BEGINS_WITH
  * - any number of filters (no keyType) allowed
+ * @param params
  */
 function assertTightQuery(params) {
   const typed = params.keyConditions.filter(
@@ -373,7 +401,7 @@ function runContract(adapter) {
       if (adapter.cleanup) await adapter.cleanup();
     });
 
-    test('put/get roundtrip (pk+sk)', async () => {
+    it('put/get roundtrip (pk+sk)', async () => {
       const tableName = 't1';
       const keyName = 'pk';
       const sortKeyName = 'sk';
@@ -393,7 +421,7 @@ function runContract(adapter) {
       expect(got).toEqual(record);
     });
 
-    test('immutability: put stores a clone (mutating input after put does not affect stored record)', async () => {
+    it('immutability: put stores a clone (mutating input after put does not affect stored record)', async () => {
       const tableName = 'immut-put';
       const keyName = 'pk';
       const sortKeyName = 'sk';
@@ -412,10 +440,11 @@ function runContract(adapter) {
         sortKeyName,
         sortKeyValue: '1',
       });
+
       expect(got).toEqual({ pk: 'A', sk: '1', foo: 'bar', nested: { x: 1 } });
     });
 
-    test('immutability: get returns a clone (mutating returned object does not affect stored record)', async () => {
+    it('immutability: get returns a clone (mutating returned object does not affect stored record)', async () => {
       const tableName = 'immut-get';
       const keyName = 'pk';
       const sortKeyName = 'sk';
@@ -434,6 +463,7 @@ function runContract(adapter) {
         sortKeyName,
         sortKeyValue: '1',
       });
+
       expect(got1).toEqual({ pk: 'A', sk: '1', foo: 'bar', nested: { x: 1 } });
 
       // mutate the returned value
@@ -447,10 +477,11 @@ function runContract(adapter) {
         sortKeyName,
         sortKeyValue: '1',
       });
+
       expect(got2).toEqual({ pk: 'A', sk: '1', foo: 'bar', nested: { x: 1 } });
     });
 
-    test('immutability: query returns clones (mutating results does not affect stored records)', async () => {
+    it('immutability: query returns clones (mutating results does not affect stored records)', async () => {
       const tableName = 'immut-query';
       const keyName = 'pk';
       const sortKeyName = 'sk';
@@ -503,6 +534,7 @@ function runContract(adapter) {
 
       // verify stored values unaffected
       const bySk = new Map(rows2.map((r) => [r.sk, r]));
+
       expect(bySk.get('1')).toEqual({
         pk: 'A',
         sk: '1',
@@ -517,13 +549,13 @@ function runContract(adapter) {
       });
     });
 
-    test('put throws when record is missing partition key attribute', async () => {
+    it('put throws when record is missing partition key attribute', async () => {
       await expect(
         db.put({ tableName: 't', keyName: 'pk', record: { sk: '1' } }),
       ).rejects.toThrow(/record\.pk/i);
     });
 
-    test('put throws when sortKeyName is provided but record is missing sort key attribute', async () => {
+    it('put throws when sortKeyName is provided but record is missing sort key attribute', async () => {
       await expect(
         db.put({
           tableName: 't',
@@ -534,7 +566,7 @@ function runContract(adapter) {
       ).rejects.toThrow(/record\.sk/i);
     });
 
-    test('get throws when sortKeyName and sortKeyValue are not provided together', async () => {
+    it('get throws when sortKeyName and sortKeyValue are not provided together', async () => {
       await expect(
         db.get({
           tableName: 't',
@@ -545,7 +577,7 @@ function runContract(adapter) {
       ).rejects.toThrow(/sortKeyName and sortKeyValue/i);
     });
 
-    test('remove is idempotent', async () => {
+    it('remove is idempotent', async () => {
       const tableName = 't';
       const keyName = 'pk';
       const sortKeyName = 'sk';
@@ -574,10 +606,11 @@ function runContract(adapter) {
         sortKeyName,
         sortKeyValue: '1',
       });
+
       expect(got).toBeUndefined();
     });
 
-    test('update applies explicit nested updates', async () => {
+    it('update applies explicit nested updates', async () => {
       const tableName = 't';
       const keyName = 'pk';
       const sortKeyName = 'sk';
@@ -602,10 +635,11 @@ function runContract(adapter) {
         sortKeyName,
         sortKeyValue: '1',
       });
+
       expect(got.nested.x).toBe(2);
     });
 
-    test('update derives updates from params.record (excluding key fields)', async () => {
+    it('update derives updates from params.record (excluding key fields)', async () => {
       const tableName = 't';
       const keyName = 'pk';
       const sortKeyName = 'sk';
@@ -633,10 +667,11 @@ function runContract(adapter) {
         sortKeyName,
         sortKeyValue: '1',
       });
+
       expect(got.foo).toBe('new');
     });
 
-    test('update with failing conditions throws ConditionalCheckFailedException and does not change the item', async () => {
+    it('update with failing conditions throws ConditionalCheckFailedException and does not change the item', async () => {
       const tableName = 't';
       const keyName = 'pk';
       const sortKeyName = 'sk';
@@ -677,10 +712,11 @@ function runContract(adapter) {
         sortKeyName,
         sortKeyValue: '1',
       });
+
       expect(after).toEqual(beforeClone);
     });
 
-    test('batchWrite supports puts and deletes', async () => {
+    it('batchWrite supports puts and deletes', async () => {
       const tableName = 't';
       await db.batchWrite({
         tableName,
@@ -700,27 +736,27 @@ function runContract(adapter) {
         ],
       });
 
-      expect(
-        await db.get({
+      await expect(
+        db.get({
           tableName,
           keyName: 'pk',
           keyValue: 'A',
           sortKeyName: 'sk',
           sortKeyValue: '1',
         }),
-      ).toEqual({ pk: 'A', sk: '1', v: 1 });
-      expect(
-        await db.get({
+      ).resolves.toEqual({ pk: 'A', sk: '1', v: 1 });
+      await expect(
+        db.get({
           tableName,
           keyName: 'pk',
           keyValue: 'A',
           sortKeyName: 'sk',
           sortKeyValue: '2',
         }),
-      ).toEqual({ pk: 'A', sk: '2', v: 2 });
-      expect(await db.get({ tableName, keyName: 'pk', keyValue: 'B' })).toEqual(
-        { pk: 'B', v: 3 },
-      );
+      ).resolves.toEqual({ pk: 'A', sk: '2', v: 2 });
+      await expect(
+        db.get({ tableName, keyName: 'pk', keyValue: 'B' }),
+      ).resolves.toEqual({ pk: 'B', v: 3 });
 
       await db.batchWrite({
         tableName,
@@ -735,18 +771,18 @@ function runContract(adapter) {
         putRequests: [],
       });
 
-      expect(
-        await db.get({
+      await expect(
+        db.get({
           tableName,
           keyName: 'pk',
           keyValue: 'A',
           sortKeyName: 'sk',
           sortKeyValue: '1',
         }),
-      ).toBeUndefined();
+      ).resolves.toBeUndefined();
     });
 
-    test('batchWrite putRequests validates key fields exist on record', async () => {
+    it('batchWrite putRequests validates key fields exist on record', async () => {
       await expect(
         db.batchWrite({
           tableName: 't',
@@ -758,7 +794,7 @@ function runContract(adapter) {
       ).rejects.toThrow(/record\.sk/i);
     });
 
-    test('query returns items (PRIMARY pk equals)', async () => {
+    it('query returns items (PRIMARY pk equals)', async () => {
       const tableName = 'tq';
       await db.put({
         tableName,
@@ -787,10 +823,11 @@ function runContract(adapter) {
       assertTightQuery(params);
 
       const rows = await db.query(params);
+
       expect(rows.map((r) => r.v).sort()).toEqual([1, 2]);
     });
 
-    test('query supports PRIMARY pk equals + SORT sk begins_with', async () => {
+    it('query supports PRIMARY pk equals + SORT sk begins_with', async () => {
       const tableName = 'tq2';
       await db.put({
         tableName,
@@ -819,10 +856,11 @@ function runContract(adapter) {
       assertTightQuery(params);
 
       const rows = await db.query(params);
+
       expect(rows.map((r) => r.v).sort()).toEqual([1, 2]);
     });
 
-    test('query supports non-key filters (no keyType): pk + filter equals', async () => {
+    it('query supports non-key filters (no keyType): pk + filter equals', async () => {
       const tableName = 'tq3';
       await db.put({
         tableName,
@@ -845,10 +883,11 @@ function runContract(adapter) {
       assertTightQuery(params);
 
       const rows = await db.query(params);
+
       expect(rows.map((r) => r.v)).toEqual([1]);
     });
 
-    test('query supports non-key filters: pk + sk begins_with + filter begins_with', async () => {
+    it('query supports non-key filters: pk + sk begins_with + filter begins_with', async () => {
       const tableName = 'tq4';
       await db.put({
         tableName,
@@ -881,29 +920,32 @@ function runContract(adapter) {
       assertTightQuery(params);
 
       const rows = await db.query(params);
+
       expect(rows.map((r) => r.v).sort()).toEqual([1, 3]);
     });
 
-    test('query rejects missing PRIMARY', async () => {
+    it('query rejects missing PRIMARY', async () => {
       const params = {
         tableName: 't',
         consistentRead: true,
         keyConditions: [C.eq('status', 'ok')], // filter-only, but contract requires PRIMARY
       };
+
       expect(() => assertTightQuery(params)).toThrow(/PRIMARY/i);
       await expect(db.query(params)).rejects.toThrow(/PRIMARY/i);
     });
 
-    test('query rejects SORT without PRIMARY', async () => {
+    it('query rejects SORT without PRIMARY', async () => {
       const params = {
         tableName: 't',
         consistentRead: true,
         keyConditions: [C.skBegins('sk', 'a')],
       };
+
       await expect(db.query(params)).rejects.toThrow(/PRIMARY/i);
     });
 
-    test('query rejects PRIMARY with BEGINS_WITH', async () => {
+    it('query rejects PRIMARY with BEGINS_WITH', async () => {
       const params = {
         tableName: 't',
         consistentRead: true,
@@ -916,15 +958,20 @@ function runContract(adapter) {
           },
         ],
       };
+
       await expect(db.query(params)).rejects.toThrow(/PRIMARY.*EQUALS/i);
     });
 
-    test('close does not throw', async () => {
+    it('close does not throw', async () => {
       await expect(db.close()).resolves.toBeUndefined();
     });
   });
 }
 
+/**
+ *
+ * @param tmpDataDir
+ */
 async function createLMDBDB(tmpDataDir) {
   jest.resetModules();
   await jest.unstable_mockModule(PATHS_IMPORT, () => ({
@@ -934,6 +981,10 @@ async function createLMDBDB(tmpDataDir) {
   return mod.default();
 }
 
+/**
+ *
+ * @param tmpDataDir
+ */
 async function createVanillaDB(tmpDataDir) {
   jest.resetModules();
   await jest.unstable_mockModule(PATHS_IMPORT, () => ({
@@ -943,6 +994,9 @@ async function createVanillaDB(tmpDataDir) {
   return mod.default();
 }
 
+/**
+ *
+ */
 async function createDynamoDBMocked() {
   jest.resetModules();
   await jest.unstable_mockModule('@aws-sdk/lib-dynamodb', () => ({
@@ -952,7 +1006,7 @@ async function createDynamoDBMocked() {
   return mod.default({ region: 'us-east-1' });
 }
 
-describe('DBClient contract suite', () => {
+describe('dBClient contract suite', () => {
   let tmpDataDir;
 
   beforeEach(() => {
@@ -963,11 +1017,11 @@ describe('DBClient contract suite', () => {
     rmSync(tmpDataDir, { recursive: true, force: true });
   });
 
-  test('smoke: vanilla persistence path is isolated', async () => {
+  it('smoke: vanilla persistence path is isolated', async () => {
     expect(existsSync(tmpDataDir)).toBe(true);
   });
 
-  test('load adapters', async () => {
+  it('load adapters', async () => {
     const vanilla = await createVanillaDB(tmpDataDir);
     await vanilla.close();
 

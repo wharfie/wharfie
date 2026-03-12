@@ -1,6 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
+import { describe, expect, it } from '@jest/globals';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -11,7 +12,7 @@ const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
 const examplesDir = path.join(repoRoot, 'scratch', 'examples');
 
-describe('Function + ActorSystem demos', () => {
+describe('function + ActorSystem demos', () => {
   it('runs the echo-event demo through the Function API', async () => {
     const fn = new Function({
       name: 'echo-event',

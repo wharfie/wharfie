@@ -1,8 +1,25 @@
-import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  test,
+} from '@jest/globals';
 
 import { getAdapterMatrix } from '../../../helpers/db-adapters.js';
 import { createStateTable } from '../../../../lambdas/lib/db/tables/state.js';
 
+/**
+ *
+ * @param root0
+ * @param root0.deploymentName
+ * @param root0.stateTable
+ * @param root0.version
+ * @param root0.name
+ * @param root0.parent
+ * @param root0.status
+ */
 function createTestResource({
   deploymentName,
   stateTable,
@@ -54,7 +71,7 @@ describe('state table contract', () => {
         await cleanup();
       });
 
-      test('can put/get a resource and its status', async () => {
+      it('can put/get a resource and its status', async () => {
         const deploymentName = `test-${adapter.name}-deployment`;
         const tableName = `${deploymentName}-state`;
 
@@ -71,13 +88,15 @@ describe('state table contract', () => {
         await state.putResource(resource);
 
         const serialized = await state.getResource(resource);
+
         expect(serialized).toEqual(resource.serialize());
 
         const status = await state.getResourceStatus(resource);
-        expect(status).toEqual('WAITING');
+
+        expect(status).toBe('WAITING');
       });
 
-      test('updates status via putResourceStatus (including serialized.status)', async () => {
+      it('updates status via putResourceStatus (including serialized.status)', async () => {
         const deploymentName = `test-${adapter.name}-deployment`;
         const tableName = `${deploymentName}-state`;
 
@@ -97,13 +116,15 @@ describe('state table contract', () => {
         await state.putResourceStatus(resource);
 
         const status = await state.getResourceStatus(resource);
-        expect(status).toEqual('PROCESSING');
+
+        expect(status).toBe('PROCESSING');
 
         const serialized = await state.getResource(resource);
-        expect(serialized.status).toEqual('PROCESSING');
+
+        expect(serialized.status).toBe('PROCESSING');
       });
 
-      test('upserts status records when putResourceStatus is called before putResource', async () => {
+      it('upserts status records when putResourceStatus is called before putResource', async () => {
         const deploymentName = `test-${adapter.name}-deployment`;
         const tableName = `${deploymentName}-state`;
 
@@ -120,13 +141,15 @@ describe('state table contract', () => {
         await state.putResourceStatus(resource);
 
         const status = await state.getResourceStatus(resource);
-        expect(status).toEqual('PROCESSING');
+
+        expect(status).toBe('PROCESSING');
 
         const serialized = await state.getResource(resource);
+
         expect(serialized).toEqual({ status: 'PROCESSING' });
       });
 
-      test('returns a subtree via getResources and requires the root record', async () => {
+      it('returns a subtree via getResources and requires the root record', async () => {
         const deploymentName = `test-${adapter.name}-deployment`;
         const tableName = `${deploymentName}-state`;
 
@@ -150,15 +173,17 @@ describe('state table contract', () => {
         // Only child => root missing => []
         await state.putResource(child);
         const missingRoot = await state.getResources(deploymentName, 'root');
+
         expect(missingRoot).toEqual([]);
 
         // Add root => subtree should appear
         await state.putResource(root);
         const subtree = await state.getResources(deploymentName, 'root');
+
         expect(subtree.map((r) => r.name)).toEqual(['root', 'child']);
       });
 
-      test('deletes resources', async () => {
+      it('deletes resources', async () => {
         const deploymentName = `test-${adapter.name}-deployment`;
         const tableName = `${deploymentName}-state`;
 
@@ -172,10 +197,12 @@ describe('state table contract', () => {
         });
 
         await state.putResource(resource);
-        expect(await state.getResource(resource)).toBeTruthy();
+
+        await expect(state.getResource(resource)).resolves.toBeTruthy();
 
         await state.deleteResource(resource);
-        expect(await state.getResource(resource)).toBeUndefined();
+
+        await expect(state.getResource(resource)).resolves.toBeUndefined();
       });
     });
   }

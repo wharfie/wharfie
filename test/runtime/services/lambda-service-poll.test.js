@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { jest } from '@jest/globals';
+import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
@@ -26,7 +26,7 @@ jest.unstable_mockModule('node:sea', () => ({
   },
 }));
 
-describe('Lambda service queue poll loop (gRPC)', () => {
+describe('lambda service queue poll loop (gRPC)', () => {
   beforeEach(() => {
     seaAssets.clear();
   });
@@ -261,7 +261,6 @@ describe('Lambda service queue poll loop (gRPC)', () => {
 
 /**
  * Poll helper: waits until the callback returns a truthy value.
- *
  * @template T
  * @param {() => Promise<T>} fn
  * @param {{ timeoutMs?: number, intervalMs?: number }} [options]

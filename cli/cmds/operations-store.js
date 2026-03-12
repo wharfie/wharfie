@@ -1,4 +1,4 @@
-import createOperationsStore from '../../lambdas/lib/graph/operations-store.js';
+import { createOperationsStore } from '../../lambdas/lib/graph/operations-store.js';
 import {
   createDBClient,
   resolveOperationsTableName,
@@ -12,10 +12,9 @@ import {
 /**
  * Create an operations store for the current CLI environment, run a handler, and
  * always close the underlying DB client.
- *
  * @template T
- * @param {(store: OperationsStore) => Promise<T>} handler - handler.
- * @returns {Promise<T>} - Result.
+ * @param {(store: OperationsStore) => Promise<T>} handler - Handler that will use the operations store.
+ * @returns {Promise<T>} - Handler result.
  */
 export async function withOperationsStore(handler) {
   /** @type {DBClient | undefined} */

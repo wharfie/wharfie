@@ -98,9 +98,9 @@ describe('tests for s3 event scheduling', () => {
     };
     await router({ Records: [s3Event] }, {});
 
-    expect(location_db.findLocations).toHaveBeenCalledTimes(0);
-    expect(scheduler_db.schedule).toHaveBeenCalledTimes(0);
-    expect(scheduler_db.query).toHaveBeenCalledTimes(0);
+    expect(location_db.findLocations).not.toHaveBeenCalled();
+    expect(scheduler_db.schedule).not.toHaveBeenCalled();
+    expect(scheduler_db.query).not.toHaveBeenCalled();
     expect(AWS.SQSMock).toHaveReceivedCommandTimes(AWS.SendMessageCommand, 0);
   });
 
@@ -129,8 +129,8 @@ describe('tests for s3 event scheduling', () => {
     await router({ Records: [s3Event] }, {});
 
     expect(location_db.findLocations).toHaveBeenCalledTimes(1);
-    expect(scheduler_db.schedule).toHaveBeenCalledTimes(0);
-    expect(scheduler_db.query).toHaveBeenCalledTimes(0);
+    expect(scheduler_db.schedule).not.toHaveBeenCalled();
+    expect(scheduler_db.query).not.toHaveBeenCalled();
     expect(AWS.SQSMock).toHaveReceivedCommandTimes(AWS.SendMessageCommand, 0);
   });
 

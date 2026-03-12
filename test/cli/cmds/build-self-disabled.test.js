@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { jest } from '@jest/globals';
+import { describe, expect, it, jest, test } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
@@ -67,7 +67,7 @@ function makeTmpRepo() {
 }
 
 describe('wharfie build-self', () => {
-  test('is disabled under jest to avoid network downloads', () => {
+  it('is disabled under jest to avoid network downloads', () => {
     const res = spawnSync(process.execPath, [binPath, 'build-self'], {
       encoding: 'utf8',
       env: {
@@ -80,7 +80,7 @@ describe('wharfie build-self', () => {
     expect(`${res.stdout}\n${res.stderr}`).toMatch(/disabled under jest/i);
   });
 
-  test('buildSelf creates a dist binary and template manifest with mocked builders', async () => {
+  it('buildSelf creates a dist binary and template manifest with mocked builders', async () => {
     const previousCwd = process.cwd();
     const tmpRepo = makeTmpRepo();
 

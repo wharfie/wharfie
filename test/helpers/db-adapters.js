@@ -207,18 +207,29 @@ export const createFakeDocClient = () => {
   };
 };
 
+/**
+ *
+ * @param tmpDataDir
+ */
 export async function createVanillaDB(tmpDataDir) {
   jest.resetModules();
   const { default: createVanilla } = await import(VANILLA_ADAPTER_IMPORT);
   return createVanilla({ path: tmpDataDir });
 }
 
+/**
+ *
+ * @param tmpDataDir
+ */
 export async function createLMDBDB(tmpDataDir) {
   jest.resetModules();
   const { default: createLMDB } = await import(LMDB_ADAPTER_IMPORT);
   return createLMDB({ path: tmpDataDir });
 }
 
+/**
+ *
+ */
 export async function createMockedDynamoDB() {
   jest.resetModules();
   const fakeDocClient = createFakeDocClient();
@@ -234,7 +245,6 @@ export async function createMockedDynamoDB() {
 
 /**
  * Adapter contract matrix.
- *
  * @returns {Array<{name: string, create: () => Promise<{db: DBClient, cleanup: () => Promise<void>}>}>}
  */
 export function getAdapterMatrix() {

@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { jest } from '@jest/globals';
+import { describe, expect, it, jest, test } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,8 +36,8 @@ function collectOutput(result) {
   return `${result.stdout ?? ''}${result.stderr ?? ''}`;
 }
 
-describe('CLI entrypoint', () => {
-  test('prints top-level help and only lists the supported command surface', () => {
+describe('cLI entrypoint', () => {
+  it('prints top-level help and only lists the supported command surface', () => {
     const result = runCli(['--help']);
     const output = collectOutput(result);
 
@@ -54,7 +54,7 @@ describe('CLI entrypoint', () => {
     expect(output).not.toMatch(/^\s+utils\b/m);
   });
 
-  test('prints help and exits non-zero when no command is provided', () => {
+  it('prints help and exits non-zero when no command is provided', () => {
     const result = runCli([]);
     const output = collectOutput(result);
 
@@ -62,7 +62,7 @@ describe('CLI entrypoint', () => {
     expect(output).toMatch(/Usage: wharfie/i);
   });
 
-  test('prints command help for config without crashing the ESM boot path', () => {
+  it('prints command help for config without crashing the ESM boot path', () => {
     const result = runCli(['config', '--help']);
     const output = collectOutput(result);
 
@@ -70,7 +70,7 @@ describe('CLI entrypoint', () => {
     expect(output).toMatch(/Set up Wharfie configuration/i);
   });
 
-  test('reports build-self as disabled under jest', () => {
+  it('reports build-self as disabled under jest', () => {
     const result = runCli(['build-self']);
     const output = collectOutput(result);
 
@@ -78,7 +78,7 @@ describe('CLI entrypoint', () => {
     expect(output).toMatch(/build-self is disabled under jest/i);
   });
 
-  test('registers the supported top-level commands', () => {
+  it('registers the supported top-level commands', () => {
     const program = createProgram();
 
     expect(program.commands.map((command) => command.name())).toEqual([
@@ -91,7 +91,7 @@ describe('CLI entrypoint', () => {
     ]);
   });
 
-  test('awaits async preAction work before parseAsync resolves', async () => {
+  it('awaits async preAction work before parseAsync resolves', async () => {
     /** @type {string[]} */
     const order = [];
 

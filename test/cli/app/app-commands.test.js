@@ -1,6 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
+import { describe, expect, it } from '@jest/globals';
 import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -109,6 +110,7 @@ describe('wharfie app commands', () => {
     expect(result.stderr).toBe('');
 
     const payload = JSON.parse(result.stdout);
+
     expect(payload.app).toEqual({ name: 'package-demo' });
     expect(payload.outputDir).toBe(outputDir);
     expect(payload.artifacts).toHaveLength(1);

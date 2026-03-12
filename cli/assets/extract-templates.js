@@ -8,27 +8,27 @@ export const TEMPLATES_ASSET_MANIFEST_KEY = `${TEMPLATES_ASSET_BASE}/manifest.js
 
 /**
  * @typedef SeaAssetProvider
- * @property {(name: string, encoding?: BufferEncoding) => any} getAsset
- * @property {() => boolean} isSea
+ * @property {(name: string, encoding?: string) => unknown} getAsset - Reads a SEA asset by key.
+ * @property {() => boolean} isSea - Reports whether the current runtime is a SEA binary.
  */
 
 /**
  * @typedef TemplatesManifest
- * @property {string} baseKey
- * @property {string[]} files
+ * @property {string} baseKey - Base SEA asset key prefix.
+ * @property {string[]} files - Relative template file paths.
  */
 
 /**
- * @param {unknown} v
- * @returns {v is Record<string, unknown>}
+ * @param {unknown} value - Candidate record value.
+ * @returns {value is Record<string, unknown>} - Whether the value is a plain object record.
  */
-function isRecord(v) {
-  return !!v && typeof v === 'object' && !Array.isArray(v);
+function isRecord(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**
- * @param {unknown} asset
- * @returns {Buffer}
+ * @param {unknown} asset - Raw SEA asset payload.
+ * @returns {Buffer} - Asset contents as a Buffer.
  */
 function assetToBuffer(asset) {
   if (Buffer.isBuffer(asset)) return asset;
@@ -50,8 +50,8 @@ function assetToBuffer(asset) {
 
 /**
  * Normalize template relative paths from manifest to a safe, POSIX-style path.
- * @param {string} rel
- * @returns {string}
+ * @param {string} rel - Raw relative path from the manifest.
+ * @returns {string} - Normalized relative path.
  */
 function normalizeRelativePath(rel) {
   const posixRel = rel.replace(/\\/g, '/');
@@ -71,7 +71,7 @@ function normalizeRelativePath(rel) {
 }
 
 /**
- * @returns {SeaAssetProvider}
+ * @returns {SeaAssetProvider} - The default SEA asset provider.
  */
 function defaultAssetProvider() {
   return {
@@ -81,9 +81,9 @@ function defaultAssetProvider() {
 }
 
 /**
- * @param {SeaAssetProvider} provider
- * @param {string} manifestKey
- * @returns {Promise<TemplatesManifest | null>}
+ * @param {SeaAssetProvider} provider - SEA asset provider.
+ * @param {string} manifestKey - Manifest asset key.
+ * @returns {Promise<TemplatesManifest | null>} - Parsed manifest when present.
  */
 async function tryReadManifest(provider, manifestKey) {
   try {
@@ -109,10 +109,10 @@ async function tryReadManifest(provider, manifestKey) {
 
 /**
  * @typedef ExtractTemplatesOptions
- * @property {string} destinationDir
+ * @property {string} destinationDir - Directory where templates should be written.
  * @property {string} [diskSourceDir] - Templates source directory on disk (non-SEA fallback).
- * @property {SeaAssetProvider} [assetProvider]
- * @property {string} [assetManifestKey]
+ * @property {SeaAssetProvider} [assetProvider] - Optional custom SEA asset provider.
+ * @property {string} [assetManifestKey] - Optional custom manifest key.
  */
 
 /**
@@ -120,9 +120,8 @@ async function tryReadManifest(provider, manifestKey) {
  *
  * - When running under SEA and the manifest asset exists, reads files from SEA assets.
  * - Otherwise, falls back to copying from disk.
- *
- * @param {ExtractTemplatesOptions} options
- * @returns {Promise<{ mode: 'sea' | 'fs', filesWritten: number }>}
+ * @param {ExtractTemplatesOptions} options - Extraction options.
+ * @returns {Promise<{ mode: 'sea' | 'fs', filesWritten: number }>} - Extraction result summary.
  */
 export async function extractTemplates(options) {
   const {

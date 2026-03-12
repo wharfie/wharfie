@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  test,
+} from '@jest/globals';
 
 import { getAdapterMatrix } from '../../../helpers/db-adapters.js';
 import { createLocationTable } from '../../../../lambdas/lib/db/tables/location.js';
@@ -18,7 +25,7 @@ describe('location table contract', () => {
         await cleanup();
       });
 
-      test('findLocations walks up prefixes', async () => {
+      it('findLocations walks up prefixes', async () => {
         const table = createLocationTable({ db, tableName });
 
         await table.putLocation({
@@ -27,6 +34,7 @@ describe('location table contract', () => {
         });
 
         const found = await table.findLocations('s3://bucket/prefix/file.json');
+
         expect(found).toEqual([
           {
             location: 's3://bucket/prefix/',
@@ -36,7 +44,7 @@ describe('location table contract', () => {
         ]);
       });
 
-      test('deleteLocation removes routing', async () => {
+      it('deleteLocation removes routing', async () => {
         const table = createLocationTable({ db, tableName });
 
         await table.putLocation({
@@ -50,13 +58,15 @@ describe('location table contract', () => {
         });
 
         const found = await table.findLocations('s3://bucket/prefix/file.json');
+
         expect(found).toEqual([]);
       });
 
-      test('terminal locations short-circuit', async () => {
+      it('terminal locations short-circuit', async () => {
         const table = createLocationTable({ db, tableName });
-        expect(await table.findLocations('')).toEqual([]);
-        expect(await table.findLocations('s3://')).toEqual([]);
+
+        await expect(table.findLocations('')).resolves.toEqual([]);
+        await expect(table.findLocations('s3://')).resolves.toEqual([]);
       });
     });
   }

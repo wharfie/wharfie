@@ -20,7 +20,7 @@ export const DEFAULT_RELEASE_CHECK_TIMEOUT_MS = 2000;
 
 /**
  * @typedef {object} ReleaseCheckOptions
- * @property {NodeJS.ProcessEnv} [env] - Environment variables.
+ * @property {Record<string, string | undefined>} [env] - Environment variables.
  * @property {string} [currentVersion] - Current Wharfie version.
  * @property {(message: string) => void} [warn] - Warning reporter.
  * @property {number} [timeoutMs] - Request timeout in milliseconds.
@@ -28,7 +28,7 @@ export const DEFAULT_RELEASE_CHECK_TIMEOUT_MS = 2000;
  */
 
 /**
- * @param {NodeJS.ProcessEnv} [env] - Environment variables.
+ * @param {Record<string, string | undefined>} [env] - Environment variables.
  * @returns {boolean} - Whether the update check is disabled.
  */
 export function isUpdateCheckDisabled(env = process.env) {

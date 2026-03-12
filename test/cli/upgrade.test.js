@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { jest } from '@jest/globals';
+import { describe, expect, it, jest, test } from '@jest/globals';
 import { EventEmitter } from 'node:events';
 
 import {
@@ -10,8 +10,8 @@ import {
   getLatestRelease,
 } from '../../cli/upgrade.js';
 
-describe('CLI release checks', () => {
-  test('skips the GitHub release check when disabled via env', async () => {
+describe('cLI release checks', () => {
+  it('skips the GitHub release check when disabled via env', async () => {
     /** @type {(options?: { timeoutMs?: number }) => Promise<{ tag_name: string }> } */
     const getLatestReleaseFn = jest.fn(async () => ({ tag_name: 'v9.9.9' }));
 
@@ -26,7 +26,7 @@ describe('CLI release checks', () => {
     expect(getLatestReleaseFn).not.toHaveBeenCalled();
   });
 
-  test('warns when a newer release is available', async () => {
+  it('warns when a newer release is available', async () => {
     const warn = jest.fn();
 
     const didWarn = await checkForNewRelease({
@@ -41,7 +41,7 @@ describe('CLI release checks', () => {
     expect(warn.mock.calls.flat().join('\n')).toMatch(/0\.0\.15/);
   });
 
-  test('returns false when the release check fails', async () => {
+  it('returns false when the release check fails', async () => {
     const warn = jest.fn();
 
     const didWarn = await checkForNewRelease({
@@ -57,7 +57,7 @@ describe('CLI release checks', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  test('applies a timeout to the GitHub request', async () => {
+  it('applies a timeout to the GitHub request', async () => {
     /** @type {typeof import('node:https').get} */
     const request = /** @type {any} */ (
       () => {
@@ -80,7 +80,7 @@ describe('CLI release checks', () => {
     );
   });
 
-  test('parses the latest release response body', async () => {
+  it('parses the latest release response body', async () => {
     /** @type {typeof import('node:https').get} */
     const request = /** @type {any} */ (
       (

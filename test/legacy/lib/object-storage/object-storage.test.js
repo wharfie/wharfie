@@ -1,4 +1,12 @@
-import { jest } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+  test,
+} from '@jest/globals';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,7 +30,6 @@ function makeTmpDir() {
 /**
  * Minimal, in-memory S3 implementation compatible with what `lambdas/lib/s3.js`
  * uses in this repository.
- *
  * @returns {any} -
  */
 function createFakeS3Module() {
@@ -622,15 +629,17 @@ function runContract(adapter) {
       if (adapter.cleanup) await adapter.cleanup();
     });
 
-    test('createBucket/listBuckets/deleteBucket roundtrip', async () => {
+    it('createBucket/listBuckets/deleteBucket roundtrip', async () => {
       const bucketC = 'wharfie-contract-c';
       await store.createBucket({ Bucket: bucketC });
 
       const listed = await store.listBuckets({});
       const names = (listed.Buckets || []).map((b) => b.Name).sort();
+
       expect(names).toEqual([bucketA, bucketB, bucketC].sort());
 
       await store.putObject({ Bucket: bucketC, Key: 'x', Body: '1' });
+
       await expect(store.deleteBucket({ Bucket: bucketC })).rejects.toThrow();
 
       await store.deleteObjects({
@@ -641,10 +650,11 @@ function runContract(adapter) {
 
       const listed2 = await store.listBuckets({});
       const names2 = (listed2.Buckets || []).map((b) => b.Name).sort();
+
       expect(names2).toEqual([bucketA, bucketB].sort());
     });
 
-    test('putObject/getObject/headObject roundtrip', async () => {
+    it('putObject/getObject/headObject roundtrip', async () => {
       await store.putObject({
         Bucket: bucketA,
         Key: 'path/file.txt',
@@ -659,6 +669,7 @@ function runContract(adapter) {
         Bucket: bucketA,
         Key: 'path/file.txt',
       });
+
       expect(head.ContentLength).toBe(5);
 
       await store.putObject({
@@ -671,13 +682,14 @@ function runContract(adapter) {
         Bucket: bucketA,
         Key: 'path/file.txt',
       });
+
       expect(head2.ContentLength).toBe(6);
       await expect(
         store.getObject({ Bucket: bucketA, Key: 'path/file.txt' }),
       ).resolves.toBe('hello2');
     });
 
-    test('deleteObjects is idempotent', async () => {
+    it('deleteObjects is idempotent', async () => {
       await store.putObject({ Bucket: bucketA, Key: 'a', Body: '1' });
       await store.putObject({ Bucket: bucketA, Key: 'b', Body: '2' });
 
@@ -694,7 +706,7 @@ function runContract(adapter) {
       ).rejects.toThrow();
     });
 
-    test('copyObjectWithMultiPartFallback copies objects', async () => {
+    it('copyObjectWithMultiPartFallback copies objects', async () => {
       await store.putObject({
         Bucket: bucketA,
         Key: 'src.txt',
@@ -732,7 +744,7 @@ function runContract(adapter) {
       ).resolves.toBe('copy-me');
     });
 
-    test('copyPath copies all objects under prefix', async () => {
+    it('copyPath copies all objects under prefix', async () => {
       await store.putObject({ Bucket: bucketA, Key: 'p/a.txt', Body: 'A' });
       await store.putObject({ Bucket: bucketA, Key: 'p/b.txt', Body: 'B' });
       await store.putObject({ Bucket: bucketA, Key: 'q/c.txt', Body: 'C' });
@@ -755,7 +767,7 @@ function runContract(adapter) {
       ).rejects.toThrow();
     });
 
-    test('deletePath removes all objects under prefix', async () => {
+    it('deletePath removes all objects under prefix', async () => {
       await store.putObject({ Bucket: bucketA, Key: 'del/a.txt', Body: 'A' });
       await store.putObject({ Bucket: bucketA, Key: 'del/b.txt', Body: 'B' });
       await store.putObject({ Bucket: bucketA, Key: 'keep/c.txt', Body: 'C' });
@@ -773,7 +785,7 @@ function runContract(adapter) {
       ).resolves.toBe('C');
     });
 
-    test('expireObjects deletes objects older than the provided date', async () => {
+    it('expireObjects deletes objects older than the provided date', async () => {
       await store.putObject({ Bucket: bucketA, Key: 'exp/a.txt', Body: 'A' });
       await store.putObject({ Bucket: bucketA, Key: 'exp/b.txt', Body: 'B' });
 
@@ -791,7 +803,7 @@ function runContract(adapter) {
       ).rejects.toThrow();
     });
 
-    test('getCommonPrefixes + findPartitions', async () => {
+    it('getCommonPrefixes + findPartitions', async () => {
       await store.putObject({
         Bucket: bucketA,
         Key: 'parts/dt=2021-01-20/hr=10/a.json',
@@ -841,7 +853,7 @@ function runContract(adapter) {
       ]);
     });
 
-    test('getPrefixByteSize sums sizes under prefix', async () => {
+    it('getPrefixByteSize sums sizes under prefix', async () => {
       await store.putObject({
         Bucket: bucketA,
         Key: 'size/a.txt',
@@ -866,8 +878,9 @@ function runContract(adapter) {
       expect(bytes).toBe(7);
     });
 
-    test('bucket tagging roundtrip', async () => {
+    it('bucket tagging roundtrip', async () => {
       const before = await store.getBucketTagging({ Bucket: bucketA });
+
       expect(before.TagSet || []).toEqual([]);
 
       await store.putBucketTagging({
@@ -876,15 +889,17 @@ function runContract(adapter) {
       });
 
       const afterPut = await store.getBucketTagging({ Bucket: bucketA });
+
       expect(afterPut.TagSet).toEqual([{ Key: 'env', Value: 'test' }]);
 
       await store.deleteBucketTagging({ Bucket: bucketA });
 
       const afterDelete = await store.getBucketTagging({ Bucket: bucketA });
+
       expect(afterDelete.TagSet || []).toEqual([]);
     });
 
-    test('bucket notification + lifecycle configuration roundtrip', async () => {
+    it('bucket notification + lifecycle configuration roundtrip', async () => {
       await store.putBucketNotificationConfiguration({
         Bucket: bucketA,
         NotificationConfiguration: {
@@ -925,6 +940,7 @@ function runContract(adapter) {
       const lc = await store.getBucketLifecycleConfigutation({
         Bucket: bucketA,
       });
+
       expect(lc.Rules).toEqual([
         {
           ID: 'expire',
@@ -935,7 +951,7 @@ function runContract(adapter) {
       ]);
     });
 
-    test('getBucketLocation + findBucketRegion', async () => {
+    it('getBucketLocation + findBucketRegion', async () => {
       const loc = await store.getBucketLocation({ Bucket: bucketA });
       const region = await store.findBucketRegion({ Bucket: bucketA });
 
@@ -947,8 +963,9 @@ function runContract(adapter) {
       );
     });
 
-    test('parseS3Uri', async () => {
+    it('parseS3Uri', async () => {
       const parsed = store.parseS3Uri(`s3://${bucketA}/a/b/c`);
+
       expect(parsed.bucket).toBe(bucketA);
       expect(parsed.prefix).toBe('a/b/c');
       expect(parsed.arn).toBe(`arn:aws:s3:::${bucketA}/a/b/c`);
@@ -956,7 +973,7 @@ function runContract(adapter) {
   });
 }
 
-describe('Object storage adapters', () => {
+describe('object storage adapters', () => {
   let tmpDataDir = '';
 
   beforeEach(() => {
@@ -967,13 +984,15 @@ describe('Object storage adapters', () => {
     rmSync(tmpDataDir, { recursive: true, force: true });
   });
 
-  test('mock adapter provides jest spies', async () => {
+  it('mock adapter provides jest spies', async () => {
     jest.resetModules();
     const mod = await import(MOCK_ADAPTER_IMPORT);
     const store = mod.default();
 
     expect(typeof store.putObject).toBe('function');
+
     await store.putObject({ Bucket: 'b', Key: 'k', Body: 'x' });
+
     expect(store.putObject).toHaveBeenCalledTimes(1);
   });
 

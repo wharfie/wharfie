@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { afterEach, describe, expect, jest, test } from '@jest/globals';
+import { afterEach, describe, expect, it, jest, test } from '@jest/globals';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -63,7 +63,7 @@ function runQueueContract(adapter) {
       }
     });
 
-    test('supports queue management and visibility semantics', async () => {
+    it('supports queue management and visibility semantics', async () => {
       tmpDir = makeTmpDir();
       queue = await adapter.create(tmpDir);
 
@@ -74,12 +74,15 @@ function runQueueContract(adapter) {
       });
 
       const queueUrl = created.QueueUrl;
+
       expect(queueUrl).toBe('jobs');
 
       const listed = await queue.listQueues({ QueueNamePrefix: 'jo' });
+
       expect(listed.QueueUrls).toEqual(['jobs']);
 
       const { QueueUrl } = await queue.getQueueUrl({ QueueName: 'jobs' });
+
       expect(QueueUrl).toBe('jobs');
 
       await queue.setQueueAttributes({
@@ -95,9 +98,11 @@ function runQueueContract(adapter) {
         QueueUrl: 'jobs',
         AttributeNames: ['All'],
       });
+
       expect(attributes.Attributes?.VisibilityTimeout).toBe('30');
 
       const tags = await queue.listQueueTags({ QueueUrl: 'jobs' });
+
       expect(tags.Tags).toEqual({ env: 'test' });
 
       await queue.sendMessage({
@@ -119,6 +124,7 @@ function runQueueContract(adapter) {
         MaxNumberOfMessages: 1,
         WaitTimeSeconds: 0,
       });
+
       expect(hidden.Messages).toEqual([]);
 
       const receiptHandle = first.Messages?.[0]?.ReceiptHandle;
@@ -136,10 +142,11 @@ function runQueueContract(adapter) {
         MaxNumberOfMessages: 1,
         WaitTimeSeconds: 0,
       });
+
       expect(afterDelete.Messages).toEqual([]);
     });
 
-    test('supports enqueueBatch helper semantics', async () => {
+    it('supports enqueueBatch helper semantics', async () => {
       tmpDir = makeTmpDir();
       queue = await adapter.create(tmpDir);
       await queue.createQueue({ QueueName: 'batch' });
@@ -183,7 +190,7 @@ describe('queue adapter wiring', () => {
     jest.restoreAllMocks();
   });
 
-  test('sqs adapter forwards client config without network access', async () => {
+  it('sqs adapter forwards client config without network access', async () => {
     jest.resetModules();
     jest.unstable_mockModule(AWS_SQS_IMPORT, () => ({
       default: class FakeSQS {

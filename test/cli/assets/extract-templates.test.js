@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { jest } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
@@ -63,11 +63,11 @@ describe('cli/assets/extract-templates', () => {
 
     await expect(
       fsp.readFile(path.join(tmp, 'models', 'example.sql'), 'utf8'),
-    ).resolves.toEqual('select 1 as one;\n');
+    ).resolves.toBe('select 1 as one;\n');
 
     await expect(
       fsp.readFile(path.join(tmp, 'sources', 'example.yaml'), 'utf8'),
-    ).resolves.toEqual('name: example\n');
+    ).resolves.toBe('name: example\n');
   });
 
   it('falls back to disk copy when SEA assets are unavailable', async () => {
@@ -102,6 +102,6 @@ describe('cli/assets/extract-templates', () => {
 
     await expect(
       fsp.readFile(path.join(dest, 'models', 'a.sql'), 'utf8'),
-    ).resolves.toEqual('select 42;\n');
+    ).resolves.toBe('select 42;\n');
   });
 });

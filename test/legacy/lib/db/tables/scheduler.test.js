@@ -3,6 +3,7 @@ import {
   beforeEach,
   describe,
   expect,
+  it,
   jest,
   test,
 } from '@jest/globals';
@@ -33,7 +34,7 @@ describe('scheduler table contract', () => {
         jest.useRealTimers();
       });
 
-      test('schedule sets ttl and prevents duplicates', async () => {
+      it('schedule sets ttl and prevents duplicates', async () => {
         const table = createSchedulerTable({ db, tableName });
         const entry = new SchedulerEntry({
           resource_id: 'r1',
@@ -42,6 +43,7 @@ describe('scheduler table contract', () => {
         });
 
         await table.schedule(entry);
+
         expect(entry.ttl).toBe(1578096000);
 
         await expect(table.schedule(entry)).rejects.toMatchObject({
@@ -49,7 +51,7 @@ describe('scheduler table contract', () => {
         });
       });
 
-      test('query returns events inside the window for a partition', async () => {
+      it('query returns events inside the window for a partition', async () => {
         const table = createSchedulerTable({ db, tableName });
         const resource_id = 'r1';
 
@@ -84,7 +86,7 @@ describe('scheduler table contract', () => {
         ]);
       });
 
-      test('update overwrites the record status and refreshes ttl', async () => {
+      it('update overwrites the record status and refreshes ttl', async () => {
         const table = createSchedulerTable({ db, tableName });
         const entry = new SchedulerEntry({
           resource_id: 'r1',
@@ -96,12 +98,13 @@ describe('scheduler table contract', () => {
         await table.update(entry, SchedulerEntry.Status.STARTED);
 
         const events = await table.query('r1', 'unpartitioned', [0, 20]);
+
         expect(events).toHaveLength(1);
         expect(events[0].status).toBe(SchedulerEntry.Status.STARTED);
         expect(events[0].ttl).toBe(1578096000);
       });
 
-      test('delete_records removes all records for a resource_id', async () => {
+      it('delete_records removes all records for a resource_id', async () => {
         const table = createSchedulerTable({ db, tableName });
         await table.schedule(
           new SchedulerEntry({
@@ -120,6 +123,7 @@ describe('scheduler table contract', () => {
 
         await table.delete_records('r1');
         const remaining = await table.query('r1', 'unpartitioned', [0, 10]);
+
         expect(remaining).toEqual([]);
       });
     });

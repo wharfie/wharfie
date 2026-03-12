@@ -7,14 +7,23 @@ const configuration = {
   deployment_name: process.env.WHARFIE_DEPLOYMENT_NAME,
   service_bucket: process.env.WHARFIE_SERVICE_BUCKET,
 };
+
 /**
  * @typedef CLIConfig
- * @property {string} [region] -
- * @property {string} [deployment_name] -
- * @property {string} [service_bucket] -
+ * @property {string} [region] - Wharfie AWS region.
+ * @property {string} [deployment_name] - Wharfie deployment name.
+ * @property {string} [service_bucket] - Wharfie service bucket.
  */
+
 /**
- * @param {CLIConfig} params -
+ * @typedef CLIConfigValidationDependencies
+ * @property {(() => Promise<{ accessKeyId?: string, secretAccessKey?: string, sessionToken?: string }>)} [credentialProvider] - AWS credential provider.
+ * @property {{ sts: { config: { region: () => Promise<string | undefined> } } }} [stsClient] - STS client wrapper.
+ */
+
+/**
+ * @param {CLIConfig} params - Config values to validate.
+ * @returns {void} - Ensures required Wharfie config is present.
  */
 const check = ({ region, deployment_name, service_bucket }) => {
   if (!region) {
@@ -24,12 +33,12 @@ const check = ({ region, deployment_name, service_bucket }) => {
   }
   if (!deployment_name) {
     throw new Error(
-      'wharfie service name not found. Please make sure you set up the cli config correctly (run `wharfie config`)',
+      'wharfie deployment name not found. Please make sure you set up the cli config correctly (run `wharfie config`)',
     );
   }
   if (!service_bucket) {
     throw new Error(
-      'wharfie service name not found. Please make sure you set up the cli config correctly (run `wharfie config`)',
+      'wharfie service bucket not found. Please make sure you set up the cli config correctly (run `wharfie config`)',
     );
   }
 };
@@ -44,8 +53,8 @@ function getErrorMessage(err) {
 }
 
 /**
- * @param {CLIConfig} params -
- * @returns {void}
+ * @param {CLIConfig} params - Config values.
+ * @returns {void} - Persists CLI config in memory.
  */
 export function setConfig({ deployment_name, region, service_bucket }) {
   check({ deployment_name, region, service_bucket });
@@ -55,7 +64,7 @@ export function setConfig({ deployment_name, region, service_bucket }) {
 }
 
 /**
- * @returns {void}
+ * @returns {void} - Clears the in-memory config.
  */
 export function clearConfig() {
   configuration.region = undefined;
@@ -64,7 +73,7 @@ export function clearConfig() {
 }
 
 /**
- * @returns {CLIConfig}
+ * @returns {CLIConfig} - The active CLI config.
  */
 export function getConfig() {
   check(configuration);
@@ -72,7 +81,7 @@ export function getConfig() {
 }
 
 /**
- * @returns {void}
+ * @returns {void} - Mirrors the active config into environment variables.
  */
 export function setEnvironment() {
   process.env.WHARFIE_REGION = configuration.region;
@@ -84,14 +93,16 @@ export function setEnvironment() {
 }
 
 /**
- * @returns {Promise<void>}
+ * @param {CLIConfigValidationDependencies} [dependencies] - Validation test hooks.
+ * @returns {Promise<void>} - Resolves when terminal AWS credentials, region, and Wharfie config are valid.
  */
-export async function validate() {
-  let credentials;
-  const sts = new STS();
+export async function validate(dependencies = {}) {
+  const { credentialProvider = defaultProvider(), stsClient = new STS() } =
+    dependencies;
 
-  // Check credentials
-  const credentialProvider = defaultProvider();
+  /** @type {{ accessKeyId?: string, secretAccessKey?: string, sessionToken?: string }} */
+  let credentials;
+
   try {
     credentials = await credentialProvider();
   } catch (err) {
@@ -102,16 +113,21 @@ export async function validate() {
   }
 
   const keySet = credentials.accessKeyId && credentials.secretAccessKey;
-  const sessionSet = credentials.sessionToken;
 
-  if (!keySet || !sessionSet) {
+  if (!keySet) {
     throw new Error(
       'AWS credentials are incomplete in terminal please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html',
     );
   }
 
-  // Check region configuration
-  const region = await sts.sts.config.region();
+  /** @type {string | undefined} */
+  let region;
+  try {
+    region = await stsClient.sts.config.region();
+  } catch {
+    region = undefined;
+  }
+
   if (!region) {
     throw new Error(
       'AWS Region is not configured for terminal, please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html',

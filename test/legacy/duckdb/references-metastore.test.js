@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import ReferencesMetastore from '../../lambdas/lib/metastore/references.js';
 
-describe('ReferencesMetastore', () => {
+describe('referencesMetastore', () => {
   /** @type {string} */
   let tmpDir;
 
@@ -25,12 +25,15 @@ describe('ReferencesMetastore', () => {
     await ms.writeFiles(manifestPath, ['/a.parquet', '/b.parquet']);
 
     const manifests = await ms.listManifestUris();
+
     expect(manifests).toEqual([manifestPath]);
 
     const files = await ms.readFiles(manifestPath);
+
     expect(files).toEqual(['/a.parquet', '/b.parquet']);
 
     const all = await ms.getAllReferencedFiles();
+
     expect(all.sort()).toEqual(['/a.parquet', '/b.parquet']);
   });
 
@@ -60,6 +63,7 @@ describe('ReferencesMetastore', () => {
     const parts = await ms.listPartitions();
 
     const vals = parts.map((p) => p.partitionValues);
+
     expect(vals).toEqual(
       expect.arrayContaining([
         { dt: '2026-01-01', country: 'US' },
@@ -68,6 +72,7 @@ describe('ReferencesMetastore', () => {
     );
 
     const allFiles = await ms.getAllReferencedFiles();
+
     expect(allFiles.sort()).toEqual(['/data/ca1.parquet', '/data/us1.parquet']);
   });
 
@@ -98,6 +103,7 @@ describe('ReferencesMetastore', () => {
     await ms.updateFromDataSnapshot({ dataSnapshotUri });
 
     const parts = await ms.listPartitions();
+
     expect(parts).toHaveLength(1);
     expect(parts[0].partitionValues).toEqual({
       dt: '2026-01-01',
@@ -111,6 +117,7 @@ describe('ReferencesMetastore', () => {
       'files',
     );
     const files = await ms.readFiles(manifestPath);
+
     expect(files).toEqual([
       path.join(
         dataSnapshotUri,
@@ -151,11 +158,13 @@ describe('ReferencesMetastore', () => {
     await ms.updateFromDataSnapshot({ dataSnapshotUri, replaceAll: true });
 
     const manifests = await ms.listManifestUris();
+
     expect(manifests).toEqual([
       path.join(referencesUri, 'dt=2026-01-01', 'files'),
     ]);
 
     const files = await ms.getAllReferencedFiles();
+
     expect(files).toEqual([
       path.join(dataSnapshotUri, 'dt=2026-01-01', 'new.parquet'),
     ]);
