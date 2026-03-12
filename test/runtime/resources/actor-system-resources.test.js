@@ -1,6 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
+import { describe, expect, it } from '@jest/globals';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
@@ -11,7 +12,7 @@ import ActorSystem from '../../../lambdas/lib/actor/resources/builds/actor-syste
 import { createActorSystemResources } from '../../../lambdas/lib/actor/runtime/resources.js';
 import sandboxWorker from '../../../lambdas/lib/code-execution/worker.js';
 
-describe('ActorSystem runtime resources', () => {
+describe('actorSystem runtime resources', () => {
   it('createActorSystemResources: vanilla adapters create usable clients', async () => {
     const tmp = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-actor-system-resources-'),
@@ -33,7 +34,7 @@ describe('ActorSystem runtime resources', () => {
     await close();
   });
 
-  it('ActorSystem.invoke injects resources into context.resources', async () => {
+  it('actorSystem.invoke injects resources into context.resources', async () => {
     const tmp = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-actor-system-invoke-'),
     );
@@ -73,6 +74,7 @@ describe('ActorSystem runtime resources', () => {
     // resources are cached on the ActorSystem instance
     const r1 = await system.getRuntimeResources();
     const r2 = await system.getRuntimeResources();
+
     expect(r1.db).toBe(r2.db);
     expect(r1.queue).toBe(r2.queue);
     expect(r1.objectStorage).toBe(r2.objectStorage);

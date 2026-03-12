@@ -4,7 +4,6 @@ import { buffer } from 'node:stream/consumers';
  * Hello world actor function.
  *
  * Demonstrates access to ActorSystem-provided resources via `context.resources`.
- *
  * @param {any} event
  * @param {{ resources?: any }} context
  * @returns {Promise<any>}

@@ -5,8 +5,9 @@ import {
   beforeEach,
   describe,
   expect,
-  test,
+  it,
   jest,
+  test,
 } from '@jest/globals';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,6 +18,9 @@ const LMDB_ADAPTER_IMPORT = '../../../lambdas/lib/queue/adapters/lmdb.js';
 const SQS_ADAPTER_IMPORT = '../../../lambdas/lib/queue/adapters/sqs.js';
 const PATHS_IMPORT = '../../../lambdas/lib/paths.js';
 
+/**
+ *
+ */
 function makeTmpDir() {
   return mkdtempSync(join(tmpdir(), 'wharfie-queue-'));
 }
@@ -59,6 +63,10 @@ function createFakeSQSModule() {
   /** @type {number} */
   let id = 0;
 
+  /**
+   *
+   * @param prefix
+   */
   function nextId(prefix = 'id') {
     id++;
     return `${prefix}-${id}`;
@@ -519,6 +527,9 @@ function createFakeSQSModule() {
   };
 }
 
+/**
+ *
+ */
 async function createSQSQueueMocked() {
   jest.resetModules();
 
@@ -534,6 +545,10 @@ async function createSQSQueueMocked() {
   return mod.default({ region: 'us-east-1' });
 }
 
+/**
+ *
+ * @param adapter
+ */
 function runContract(adapter) {
   describe(`${adapter.name} adapter contract`, () => {
     /** @type {any} */
@@ -574,12 +589,14 @@ function runContract(adapter) {
       if (adapter.cleanup) await adapter.cleanup();
     });
 
-    test('createQueue/getQueueUrl/listQueues/deleteQueue roundtrip', async () => {
+    it('createQueue/getQueueUrl/listQueues/deleteQueue roundtrip', async () => {
       const list = await queue.listQueues({});
+
       expect(list.QueueUrls).toContain(queueUrl);
       expect(list.QueueDetails[queueUrl]).toBeDefined();
 
       const url = await queue.getQueueUrl({ QueueName: 'contract-queue' });
+
       expect(url).toEqual({ QueueUrl: queueUrl });
 
       await queue.deleteQueue({ QueueUrl: queueUrl });
@@ -589,7 +606,7 @@ function runContract(adapter) {
       ).rejects.toThrow();
     });
 
-    test('sendMessage respects DelaySeconds', async () => {
+    it('sendMessage respects DelaySeconds', async () => {
       await queue.sendMessage({
         QueueUrl: queueUrl,
         MessageBody: 'delayed',
@@ -600,6 +617,7 @@ function runContract(adapter) {
         QueueUrl: queueUrl,
         MaxNumberOfMessages: 1,
       });
+
       expect(r0.Messages || []).toHaveLength(0);
 
       now = 4999;
@@ -607,6 +625,7 @@ function runContract(adapter) {
         QueueUrl: queueUrl,
         MaxNumberOfMessages: 1,
       });
+
       expect(r1.Messages || []).toHaveLength(0);
 
       now = 5000;
@@ -614,6 +633,7 @@ function runContract(adapter) {
         QueueUrl: queueUrl,
         MaxNumberOfMessages: 1,
       });
+
       expect(r2.Messages || []).toHaveLength(1);
       expect(r2.Messages[0].Body).toBe('delayed');
 
@@ -623,14 +643,16 @@ function runContract(adapter) {
       });
 
       const r3 = await queue.receiveMessage({ QueueUrl: queueUrl });
+
       expect(r3.Messages || []).toHaveLength(0);
     });
 
-    test('receiveMessage enforces visibility timeout + receipt handle rotation', async () => {
+    it('receiveMessage enforces visibility timeout + receipt handle rotation', async () => {
       const { MessageId } = await queue.sendMessage({
         QueueUrl: queueUrl,
         MessageBody: 'v',
       });
+
       expect(typeof MessageId).toBe('string');
 
       const first = await queue.receiveMessage({
@@ -640,6 +662,7 @@ function runContract(adapter) {
       });
 
       expect(first.Messages || []).toHaveLength(1);
+
       const m1 = first.Messages[0];
 
       const second = await queue.receiveMessage({
@@ -657,7 +680,9 @@ function runContract(adapter) {
         MaxNumberOfMessages: 1,
         VisibilityTimeout: 10,
       });
+
       expect(third.Messages || []).toHaveLength(1);
+
       const m2 = third.Messages[0];
 
       expect(m2.MessageId).toBe(m1.MessageId);
@@ -681,10 +706,11 @@ function runContract(adapter) {
         QueueUrl: queueUrl,
         MaxNumberOfMessages: 1,
       });
+
       expect(after.Messages || []).toHaveLength(0);
     });
 
-    test('sendMessageBatch + deleteMessageBatch roundtrip', async () => {
+    it('sendMessageBatch + deleteMessageBatch roundtrip', async () => {
       await queue.sendMessageBatch({
         QueueUrl: queueUrl,
         Entries: [
@@ -705,7 +731,9 @@ function runContract(adapter) {
       });
 
       expect(res.Messages || []).toHaveLength(7);
+
       const bodies = (res.Messages || []).map((m) => m.Body).sort();
+
       expect(bodies).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'g']);
 
       await queue.deleteMessageBatch({
@@ -724,13 +752,14 @@ function runContract(adapter) {
       expect(after.Messages || []).toHaveLength(0);
     });
 
-    test('tagQueue/listQueueTags/untagQueue', async () => {
+    it('tagQueue/listQueueTags/untagQueue', async () => {
       await queue.tagQueue({
         QueueUrl: queueUrl,
         Tags: { a: '1', b: '2' },
       });
 
       const t1 = await queue.listQueueTags({ QueueUrl: queueUrl });
+
       expect(t1.Tags).toEqual({ a: '1', b: '2' });
 
       await queue.untagQueue({
@@ -739,10 +768,11 @@ function runContract(adapter) {
       });
 
       const t2 = await queue.listQueueTags({ QueueUrl: queueUrl });
+
       expect(t2.Tags).toEqual({ b: '2' });
     });
 
-    test('setQueueAttributes/getQueueAttributes', async () => {
+    it('setQueueAttributes/getQueueAttributes', async () => {
       await queue.setQueueAttributes({
         QueueUrl: queueUrl,
         Attributes: { VisibilityTimeout: '5', DelaySeconds: '2' },
@@ -759,7 +789,7 @@ function runContract(adapter) {
       });
     });
 
-    test('enqueue/enqueueBatch/reenqueue helpers', async () => {
+    it('enqueue/enqueueBatch/reenqueue helpers', async () => {
       await queue.enqueue({ t: 'one' }, queueUrl, 0);
 
       const r1 = await queue.receiveMessage({
@@ -770,6 +800,7 @@ function runContract(adapter) {
 
       expect(r1.Messages || []).toHaveLength(1);
       expect(JSON.parse(r1.Messages[0].Body)).toEqual({ t: 'one' });
+
       await queue.deleteMessage({
         QueueUrl: queueUrl,
         ReceiptHandle: r1.Messages[0].ReceiptHandle,
@@ -784,9 +815,11 @@ function runContract(adapter) {
       });
 
       expect(r2.Messages || []).toHaveLength(2);
+
       const payloads = (r2.Messages || [])
         .map((m) => JSON.parse(m.Body))
         .sort((a, b) => a.t.localeCompare(b.t));
+
       expect(payloads).toEqual([{ t: 'three' }, { t: 'two' }]);
 
       await queue.deleteMessageBatch({
@@ -804,10 +837,12 @@ function runContract(adapter) {
         QueueUrl: queueUrl,
         MaxNumberOfMessages: 1,
       });
+
       expect(r3.Messages || []).toHaveLength(0);
 
       now = 59999;
       const r4 = await queue.receiveMessage({ QueueUrl: queueUrl });
+
       expect(r4.Messages || []).toHaveLength(0);
 
       now = 60000;
@@ -816,6 +851,7 @@ function runContract(adapter) {
         MaxNumberOfMessages: 1,
         VisibilityTimeout: 30,
       });
+
       expect(r5.Messages || []).toHaveLength(1);
       expect(JSON.parse(r5.Messages[0].Body)).toEqual({ t: 'later' });
 
@@ -825,13 +861,13 @@ function runContract(adapter) {
       });
     });
 
-    test('close does not throw', async () => {
+    it('close does not throw', async () => {
       await expect(queue.close()).resolves.toBeUndefined();
     });
   });
 }
 
-describe('QueueClient contract suite', () => {
+describe('queueClient contract suite', () => {
   let tmpDataDir;
 
   beforeEach(() => {
@@ -842,11 +878,11 @@ describe('QueueClient contract suite', () => {
     rmSync(tmpDataDir, { recursive: true, force: true });
   });
 
-  test('smoke: tmp data dir exists', async () => {
+  it('smoke: tmp data dir exists', async () => {
     expect(existsSync(tmpDataDir)).toBe(true);
   });
 
-  test('load adapters', async () => {
+  it('load adapters', async () => {
     const vanilla = await createVanillaQueue(tmpDataDir);
     await vanilla.close();
 

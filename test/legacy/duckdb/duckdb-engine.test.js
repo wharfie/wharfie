@@ -6,7 +6,7 @@ import path from 'node:path';
 import DuckDBQueryEngine from '../../lambdas/lib/duckdb/index.js';
 import ReferencesMetastore from '../../lambdas/lib/metastore/references.js';
 
-describe('DuckDBQueryEngine + ReferencesMetastore integration', () => {
+describe('duckDBQueryEngine + ReferencesMetastore integration', () => {
   /** @type {string} */
   let tmpDir;
 

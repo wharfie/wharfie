@@ -2,9 +2,9 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { __resolveResourceAdapterName } from '../../../lambdas/lib/actor/runtime/resources.js';
-import { jest } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 
-describe('ActorSystem runtime resource adapter selection', () => {
+describe('actorSystem runtime resource adapter selection', () => {
   it('chooses vanilla for adapter=auto even when AWS_REGION is set', () => {
     withEnv(
       {
@@ -41,7 +41,6 @@ describe('ActorSystem runtime resource adapter selection', () => {
 
 /**
  * Temporarily applies env var overrides for the duration of the callback.
- *
  * @template T
  * @param {Record<string, string | undefined>} overrides - overrides.
  * @param {() => T} fn - fn.

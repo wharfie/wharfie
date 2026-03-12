@@ -1,7 +1,9 @@
 import { Status as ActionStatus } from './action.js';
+import { Status as OperationStatus } from './operation.js';
 
 /**
  * @typedef {import('./action.js').default} ActionInstance
+ * @typedef {import('./operation.js').default} OperationInstance
  */
 
 /**
@@ -10,9 +12,10 @@ import { Status as ActionStatus } from './action.js';
  * NOTE: this intentionally matches the provider-neutral operations table client
  * (createOperationsTable / createOperationsStore).
  * @typedef {Object} OperationRunnerStore
- * @property {(resource_id: string, operation_id?: string) => Promise<{ operations: import('./operation.js').default[]; actions: ActionInstance[]; queries: import('./query.js').default[] }>} getRecords - Load operation/action/query records.
+ * @property {(resource_id: string, operation_id?: string) => Promise<{ operations: OperationInstance[]; actions: ActionInstance[]; queries: import('./query.js').default[] }>} getRecords - Load operation/action/query records.
  * @property {(action: ActionInstance, new_status: string) => Promise<boolean>} updateActionStatus - Optimistically transition an action status.
- * @property {(operation: import('./operation.js').default, action_type: import('./action.js').WharfieActionTypeEnum) => Promise<boolean>} [checkActionPrerequisites] - Check whether prerequisites have completed.
+ * @property {(operation: OperationInstance, new_status: import('./operation.js').WharfieOperationStatusEnum) => Promise<boolean>} [updateOperationStatus] - Optimistically transition an operation status.
+ * @property {(operation: OperationInstance, action_type: import('./action.js').WharfieActionTypeEnum) => Promise<boolean>} [checkActionPrerequisites] - Check whether prerequisites have completed.
  */
 
 /**
@@ -30,10 +33,8 @@ import { Status as ActionStatus } from './action.js';
  * - Load operation/action records
  * - Find PENDING actions whose prerequisites are satisfied
  * - Optimistically transition to RUNNING, execute, then transition to COMPLETED/FAILED
+ * - Persist operation-level RUNNING / COMPLETED / FAILED / BLOCKED transitions
  * - Repeat until no runnable actions remain
- *
- * This runner is intentionally minimal: it does not attempt concurrency, retries,
- * or operation-level status transitions.
  * @param {RunOperationParams} params - params.
  * @returns {Promise<{ status: 'COMPLETED' | 'FAILED' | 'BLOCKED'; executedActionIds: string[]; failedActionIds: string[]; blockedActionIds: string[]; finalStatusByActionId: Record<string, string> }>} - Result.
  */
@@ -60,7 +61,25 @@ export async function runOperation({
   let status = 'COMPLETED';
 
   /**
-   * @param {import('./operation.js').default} operation - operation.
+   * @param {OperationInstance} operation - operation.
+   * @param {import('./operation.js').WharfieOperationStatusEnum} nextStatus - nextStatus.
+   * @returns {Promise<void>} - Result.
+   */
+  const persistOperationStatus = async (operation, nextStatus) => {
+    if (operation.status === nextStatus) return;
+
+    if (typeof store.updateOperationStatus === 'function') {
+      // Best-effort optimistic update. The stored operation record is the source
+      // of truth; the in-memory object is only used to issue the transition.
+      await store.updateOperationStatus(operation, nextStatus);
+    }
+
+    operation.status = nextStatus;
+    operation.last_updated_at = Date.now();
+  };
+
+  /**
+   * @param {OperationInstance} operation - operation.
    * @param {ActionInstance} action - action.
    * @returns {Promise<boolean>} - Result.
    */
@@ -69,18 +88,28 @@ export async function runOperation({
       return store.checkActionPrerequisites(operation, action.type);
     }
 
-    // Fallback: in-memory prerequisite check.
     const upstreamIds = operation.getUpstreamActionIds(action.id) || [];
     if (!upstreamIds.length) return true;
 
     const { actions } = await store.getRecords(resourceId, operationId);
-    const byId = new Map(actions.map((a) => [a.id, a]));
+    const byId = new Map(actions.map((candidate) => [candidate.id, candidate]));
     for (const upstreamId of upstreamIds) {
       const upstream = byId.get(upstreamId);
       if (!upstream || upstream.status !== ActionStatus.COMPLETED) return false;
     }
     return true;
   };
+
+  const initialRecords = await store.getRecords(resourceId, operationId);
+  const initialOperation = initialRecords.operations.find(
+    (operation) => operation.id === operationId,
+  );
+
+  if (!initialOperation) {
+    throw new Error(`Operation not found: ${resourceId}#${operationId}`);
+  }
+
+  await persistOperationStatus(initialOperation, OperationStatus.RUNNING);
 
   // Run until no runnable PENDING actions remain.
   // Each loop reloads from the store to ensure DB-backed status is respected.
@@ -90,13 +119,17 @@ export async function runOperation({
       resourceId,
       operationId,
     );
-    const operation = operations.find((o) => o.id === operationId);
+    const operation = operations.find(
+      (candidate) => candidate.id === operationId,
+    );
 
     if (!operation) {
       throw new Error(`Operation not found: ${resourceId}#${operationId}`);
     }
 
-    const pending = actions.filter((a) => a.status === ActionStatus.PENDING);
+    const pending = actions.filter(
+      (action) => action.status === ActionStatus.PENDING,
+    );
     if (!pending.length) {
       break;
     }
@@ -105,12 +138,12 @@ export async function runOperation({
     const runnable = [];
     for (const action of pending) {
       // eslint-disable-next-line no-await-in-loop
-      if (await prerequisitesSatisfied(operation, action))
+      if (await prerequisitesSatisfied(operation, action)) {
         runnable.push(action);
+      }
     }
 
-    // Deterministic execution order for any concurrently runnable actions.
-    runnable.sort((a, b) => a.id.localeCompare(b.id));
+    runnable.sort((left, right) => left.id.localeCompare(right.id));
 
     if (!runnable.length) {
       status = 'BLOCKED';
@@ -118,7 +151,6 @@ export async function runOperation({
     }
 
     for (const action of runnable) {
-      // Optimistically claim the action.
       // eslint-disable-next-line no-await-in-loop
       const claimed = await store.updateActionStatus(
         action,
@@ -144,10 +176,16 @@ export async function runOperation({
     }
   }
 
-  const { actions: finalActions } = await store.getRecords(
-    resourceId,
-    operationId,
+  const finalRecords = await store.getRecords(resourceId, operationId);
+  const finalOperation = finalRecords.operations.find(
+    (operation) => operation.id === operationId,
   );
+
+  if (!finalOperation) {
+    throw new Error(`Operation not found: ${resourceId}#${operationId}`);
+  }
+
+  const finalActions = finalRecords.actions;
   for (const action of finalActions) {
     finalStatusByActionId[action.id] = action.status;
   }
@@ -163,6 +201,14 @@ export async function runOperation({
 
   if (failedActionIds.length > 0) status = 'FAILED';
   else if (blockedActionIds.length > 0) status = 'BLOCKED';
+
+  const terminalOperationStatus =
+    status === 'FAILED'
+      ? OperationStatus.FAILED
+      : status === 'BLOCKED'
+        ? OperationStatus.BLOCKED
+        : OperationStatus.COMPLETED;
+  await persistOperationStatus(finalOperation, terminalOperationStatus);
 
   return {
     status,

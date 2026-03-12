@@ -12,6 +12,9 @@ const {
   displayInfo,
 } = require('../../output/basic');
 
+/**
+ *
+ */
 function resolveAdapterName() {
   const adapter = process.env.WHARFIE_DB_ADAPTER?.trim().toLowerCase();
   if (!adapter) return 'vanilla';
@@ -25,6 +28,9 @@ function resolveAdapterName() {
   );
 }
 
+/**
+ *
+ */
 async function createDBClient() {
   const adapterName = resolveAdapterName();
   const path = process.env.WHARFIE_DB_PATH;

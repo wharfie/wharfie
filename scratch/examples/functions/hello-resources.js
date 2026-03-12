@@ -2,7 +2,6 @@ import { buffer } from 'node:stream/consumers';
 
 /**
  * Resource-backed Function API demo.
- *
  * @param {{ who?: string }} [event] - Event payload.
  * @param {{ resources?: any }} [context] - Invocation context.
  * @returns {Promise<{ who: string, dbRecord: any, queueBody: string | undefined, objectBody: string }>} - Result.

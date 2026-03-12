@@ -18,8 +18,8 @@
   "homepage": "https://github.com/wharfie/wharfie#readme",
   "engineStrict": true,
   "engines": {
-    "node": "24.13.1",
-    "npm": "11.10.0"
+    "node": "24.14.0",
+    "npm": "11.11.1"
   },
   "main": "./cli/entry.js",
   "files": [
@@ -90,10 +90,21 @@
       "dist/",
       "tmp/",
       "docs/",
-      "cli/",
-      "test/",
       "scratch/",
-      "coverage/"
+      "coverage/",
+      "test/",
+      "cli/cmds/deployment.js",
+      "cli/cmds/deployment_cmds/**",
+      "cli/cmds/project.js",
+      "cli/cmds/project_cmds/**",
+      "cli/cmds/utils.js",
+      "cli/cmds/utils_cmds/**",
+      "cli/project/**",
+      "cli/input.js",
+      "cli/output/deployment/**",
+      "cli/output/project/**",
+      "cli/output/error.js",
+      "cli/output/escapes.js"
     ],
     "overrides": [
       {

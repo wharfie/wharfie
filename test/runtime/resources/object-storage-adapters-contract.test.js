@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { afterEach, describe, expect, jest, test } from '@jest/globals';
+import { afterEach, describe, expect, it, jest, test } from '@jest/globals';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -51,7 +51,7 @@ describe('vanilla object storage adapter contract', () => {
     }
   });
 
-  test('supports createBucket/listBuckets/putObject/getObject/headObject/deleteObjects', async () => {
+  it('supports createBucket/listBuckets/putObject/getObject/headObject/deleteObjects', async () => {
     tmpDir = makeTmpDir();
     storage = await createVanillaObjectStorage(tmpDir);
 
@@ -65,6 +65,7 @@ describe('vanilla object storage adapter contract', () => {
     });
 
     const buckets = await storage.listBuckets({});
+
     expect((buckets.Buckets || []).map((bucket) => bucket.Name)).toEqual([
       'alpha',
       'bravo',
@@ -85,15 +86,18 @@ describe('vanilla object storage adapter contract', () => {
       Bucket: 'alpha',
       Key: 'folder/hello.txt',
     });
+
     expect(head.ContentLength).toBe(Buffer.byteLength('hello world'));
 
     const body = await storage.getObject({
       Bucket: 'alpha',
       Key: 'folder/hello.txt',
     });
+
     expect(body).toBe('hello world');
 
     const parsed = storage.parseS3Uri('s3://alpha/folder/hello.txt');
+
     expect(parsed).toEqual({
       uri: 's3://alpha/folder/hello.txt',
       arn: 'arn:aws:s3:::alpha/folder/hello.txt',
@@ -115,12 +119,12 @@ describe('vanilla object storage adapter contract', () => {
       }),
     ).rejects.toThrow(/NoSuchKey/i);
 
-    expect(
-      await storage.getObject({
+    await expect(
+      storage.getObject({
         Bucket: 'alpha',
         Key: 'folder/other.txt',
       }),
-    ).toBe('goodbye');
+    ).resolves.toBe('goodbye');
   });
 });
 
@@ -130,7 +134,7 @@ describe('cloud object storage adapter wiring', () => {
     jest.restoreAllMocks();
   });
 
-  test('s3 adapter forwards provider and region config without network access', async () => {
+  it('s3 adapter forwards provider and region config without network access', async () => {
     jest.resetModules();
     jest.unstable_mockModule(AWS_S3_IMPORT, () => ({
       default: class FakeS3 {
@@ -159,7 +163,7 @@ describe('cloud object storage adapter wiring', () => {
     await store.close();
   });
 
-  test('r2 adapter forwards provider-specific config without network access', async () => {
+  it('r2 adapter forwards provider-specific config without network access', async () => {
     jest.resetModules();
     jest.unstable_mockModule(AWS_S3_IMPORT, () => ({
       default: class FakeS3 {
@@ -202,7 +206,7 @@ describe('cloud object storage adapter wiring', () => {
     await store.close();
   });
 
-  test('b2 adapter forwards provider-specific config without network access', async () => {
+  it('b2 adapter forwards provider-specific config without network access', async () => {
     jest.resetModules();
     jest.unstable_mockModule(AWS_S3_IMPORT, () => ({
       default: class FakeS3 {

@@ -1,6 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
+import { describe, expect, it } from '@jest/globals';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
@@ -11,7 +12,7 @@ import { startQueueService } from '../../../lambdas/lib/actor/runtime/services/q
 import { createGrpcRpcClient } from '../../../lambdas/lib/actor/runtime/services/rpc-grpc.js';
 import sandboxWorker from '../../../lambdas/lib/code-execution/worker.js';
 
-describe('ActorSystem resources over service RPC (gRPC)', () => {
+describe('actorSystem resources over service RPC (gRPC)', () => {
   it('worker sandbox: resources can be remote gRPC RPC clients', async () => {
     const tmp = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-actor-system-remote-grpc-'),
@@ -103,6 +104,7 @@ describe('ActorSystem resources over service RPC (gRPC)', () => {
       });
 
       const body = q?.Messages?.[0]?.Body;
+
       expect(body).toBe(JSON.stringify({ hello: 'world' }));
 
       if (!objectStorage) {

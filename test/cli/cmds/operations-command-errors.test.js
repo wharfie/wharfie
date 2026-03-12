@@ -1,7 +1,15 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { jest } from '@jest/globals';
+import {
+  afterAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+  test,
+} from '@jest/globals';
 
 import listCommand from '../../../cli/cmds/list.js';
 import opsListCommand from '../../../cli/cmds/ops_cmds/list.js';
@@ -86,14 +94,14 @@ describe.each([
       }),
   ],
 ])('%s', (_label, invoke) => {
-  test('reports invalid WHARFIE_DB_ADAPTER as a CLI failure', async () => {
+  it('reports invalid WHARFIE_DB_ADAPTER as a CLI failure', async () => {
     process.env.OPERATIONS_TABLE = 'operations-test';
     process.env.WHARFIE_DB_ADAPTER = 'not-a-real-adapter';
 
     await expectCliFailure(invoke, /WHARFIE_DB_ADAPTER/i);
   });
 
-  test('reports a missing OPERATIONS_TABLE as a CLI failure', async () => {
+  it('reports a missing OPERATIONS_TABLE as a CLI failure', async () => {
     await expectCliFailure(invoke, /OPERATIONS_TABLE/i);
   });
 });

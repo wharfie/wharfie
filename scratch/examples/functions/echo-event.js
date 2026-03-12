@@ -1,6 +1,5 @@
 /**
  * Smallest possible Function API demo.
- *
  * @param {{ who?: string, message?: string }} [event] - Event payload.
  * @param {{ requestId?: string }} [context] - Invocation context.
  * @returns {{ ok: true, who: string, message: string, requestId: string | null }} - Normalized result.

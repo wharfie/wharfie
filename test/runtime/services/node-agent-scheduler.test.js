@@ -1,11 +1,11 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { jest } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 import NodeAgent from '../../../lambdas/lib/actor/runtime/services/node-agent.js';
 
-describe('NodeAgent scheduler wiring', () => {
+describe('nodeAgent scheduler wiring', () => {
   afterEach(() => {
     jest.useRealTimers();
   });
@@ -44,7 +44,7 @@ describe('NodeAgent scheduler wiring', () => {
     try {
       await agent.start();
 
-      expect(invoke).toHaveBeenCalledTimes(0);
+      expect(invoke).not.toHaveBeenCalled();
 
       // Next match after 00:00:30Z for "* * * * *" is 00:01:00Z.
       await jest.advanceTimersByTimeAsync(30_000);
@@ -92,7 +92,8 @@ describe('NodeAgent scheduler wiring', () => {
       await agent.start();
 
       await jest.advanceTimersByTimeAsync(5 * 60_000);
-      expect(invoke).toHaveBeenCalledTimes(0);
+
+      expect(invoke).not.toHaveBeenCalled();
     } finally {
       const stopPromise = agent.stop('SIGTERM');
       await jest.advanceTimersByTimeAsync(2000);

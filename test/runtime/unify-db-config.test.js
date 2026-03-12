@@ -1,6 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
+import { afterEach, describe, expect, it, test } from '@jest/globals';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,7 +20,7 @@ import {
 } from '../../lambdas/lib/db/operations/store.js';
 import { __resolveAdapterName as __resolveStateStoreAdapter } from '../../lambdas/lib/db/state/store.js';
 
-describe('Unified DB config', () => {
+describe('unified DB config', () => {
   afterEach(async () => {
     // Ensure we never leak a shared singleton between tests.
     try {
@@ -29,7 +30,7 @@ describe('Unified DB config', () => {
     }
   });
 
-  test('state adapter selection never infers DynamoDB from AWS env vars', async () => {
+  it('state adapter selection never infers DynamoDB from AWS env vars', async () => {
     await withEnv(
       {
         AWS_REGION: 'us-east-1',
@@ -44,7 +45,7 @@ describe('Unified DB config', () => {
     );
   });
 
-  test('operations table factory requires an explicit tableName', async () => {
+  it('operations table factory requires an explicit tableName', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'wharfie-ops-table-'));
     const db = createVanillaDB({ path: dir });
     try {
@@ -55,7 +56,7 @@ describe('Unified DB config', () => {
     }
   });
 
-  test('operations store resolves table name at call time and isolates tables', async () => {
+  it('operations store resolves table name at call time and isolates tables', async () => {
     await withEnv({ OPERATIONS_TABLE: 'ops-a' }, async () => {
       expect(resolveOperationsTableName()).toBe('ops-a');
 
@@ -64,6 +65,7 @@ describe('Unified DB config', () => {
       await storeA.putResource(r1);
 
       const foundA = await storeA.getResource('r1');
+
       expect(foundA?.id).toBe('r1');
 
       // Flip env var AFTER the module is already imported.
@@ -72,13 +74,15 @@ describe('Unified DB config', () => {
 
         const storeB = await getOperationsStore();
         const foundB = await storeB.getResource('r1');
-        expect(foundB).toBe(null);
+
+        expect(foundB).toBeNull();
 
         const r2 = makeResource('r2');
         await storeB.putResource(r2);
 
         const foundA2 = await storeA.getResource('r2');
-        expect(foundA2).toBe(null);
+
+        expect(foundA2).toBeNull();
       });
     });
   });
@@ -105,7 +109,6 @@ function makeResource(id) {
 
 /**
  * Temporarily applies env var overrides for the duration of the callback.
- *
  * @template T
  * @param {Record<string, string | undefined>} overrides - overrides.
  * @param {() => T | Promise<T>} fn - fn.

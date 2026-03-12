@@ -1,9 +1,10 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
+import { describe, expect, it } from '@jest/globals';
 import { __resolveAdapterName } from '../../../lambdas/lib/db/state/store.js';
 
-describe('Actor runtime state store adapter selection', () => {
+describe('actor runtime state store adapter selection', () => {
   it('defaults to vanilla even when AWS_REGION is set (no explicit adapter)', () => {
     withEnv(
       {
@@ -37,7 +38,6 @@ describe('Actor runtime state store adapter selection', () => {
 
 /**
  * Temporarily applies env var overrides for the duration of the callback.
- *
  * @template T
  * @param {Record<string, string | undefined>} overrides - overrides.
  * @param {() => T} fn - fn.

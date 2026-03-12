@@ -1,6 +1,14 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  test,
+} from '@jest/globals';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -150,7 +158,7 @@ async function cancelAll(store, operation_type) {
   return cancelled;
 }
 
-describe('OperationsStore list/cancel behavior (vanilla DB)', () => {
+describe('operationsStore list/cancel behavior (vanilla DB)', () => {
   /** @type {DBClient} */
   let db;
   /** @type {OperationsStore} */
@@ -173,7 +181,7 @@ describe('OperationsStore list/cancel behavior (vanilla DB)', () => {
     }
   });
 
-  test('lists resources, operations, and operation details using OperationsStore', async () => {
+  it('lists resources, operations, and operation details using OperationsStore', async () => {
     const resource = new Resource({
       id: 'r1',
       region: 'us-east-1',
@@ -228,10 +236,13 @@ describe('OperationsStore list/cancel behavior (vanilla DB)', () => {
     await store.putOperation(op2);
 
     // List resources (like: `wharfie list`)
-    expect(await listResourcesRows(store)).toEqual([{ resource_id: 'r1' }]);
+    await expect(listResourcesRows(store)).resolves.toEqual([
+      { resource_id: 'r1' },
+    ]);
 
     // List operations (like: `wharfie list r1`)
     const operationRows = await listOperationsRows(store, 'r1');
+
     expect(operationRows).toHaveLength(2);
     // Sorted by started_at desc
     expect(operationRows[0].id).toEqual(op2.id);
@@ -242,14 +253,15 @@ describe('OperationsStore list/cancel behavior (vanilla DB)', () => {
 
     // List operation details (like: `wharfie list r1 <op1.id>`)
     const details = await listOperationDetails(store, 'r1', op1.id);
-    expect(details.found).toEqual(true);
+
+    expect(details.found).toBe(true);
     expect(details.actions.map((x) => x.action_type)).toEqual([
       Action.Type.START,
       Action.Type.FINISH,
     ]);
   });
 
-  test('cancels operations by id/type and supports cancelAll via resource index', async () => {
+  it('cancels operations by id/type and supports cancelAll via resource index', async () => {
     const r1 = new Resource({
       id: 'r1',
       region: 'us-east-1',
@@ -329,19 +341,19 @@ describe('OperationsStore list/cancel behavior (vanilla DB)', () => {
     await store.putOperation(r2Load);
 
     // Cancel a single operation by id
-    expect(await cancel(store, 'r1', r1Backfill.id)).toEqual(1);
+    await expect(cancel(store, 'r1', r1Backfill.id)).resolves.toBe(1);
     expect((await store.getRecords('r1')).operations.map((x) => x.id)).toEqual([
       r1Load.id,
     ]);
 
     // Cancel remaining operations by type
-    expect(await cancel(store, 'r1', undefined, Operation.Type.LOAD)).toEqual(
-      1,
-    );
+    await expect(
+      cancel(store, 'r1', undefined, Operation.Type.LOAD),
+    ).resolves.toBe(1);
     expect((await store.getRecords('r1')).operations).toHaveLength(0);
 
     // Cancel all LOAD operations across all resources (r2)
-    expect(await cancelAll(store, Operation.Type.LOAD)).toEqual(1);
+    await expect(cancelAll(store, Operation.Type.LOAD)).resolves.toBe(1);
     expect((await store.getRecords('r2')).operations).toHaveLength(0);
   });
 });

@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { afterEach, describe, expect, jest, test } from '@jest/globals';
+import { afterEach, describe, expect, it, jest, test } from '@jest/globals';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -106,7 +106,7 @@ function runLocalDBContract(adapter) {
       }
     });
 
-    test('supports put/get/update/query/remove and batchWrite semantics', async () => {
+    it('supports put/get/update/query/remove and batchWrite semantics', async () => {
       tmpDir = makeTmpDir();
       db = await adapter.create(tmpDir);
 
@@ -262,25 +262,25 @@ function runLocalDBContract(adapter) {
         ],
       });
 
-      expect(
-        await db.get({
+      await expect(
+        db.get({
           tableName: 'items',
           keyName: 'pk',
           keyValue: 'acct#2',
           sortKeyName: 'sk',
           sortKeyValue: 'item#1',
         }),
-      ).toEqual({ pk: 'acct#2', sk: 'item#1', status: 'queued' });
+      ).resolves.toEqual({ pk: 'acct#2', sk: 'item#1', status: 'queued' });
 
-      expect(
-        await db.get({
+      await expect(
+        db.get({
           tableName: 'items',
           keyName: 'pk',
           keyValue: 'acct#1',
           sortKeyName: 'sk',
           sortKeyValue: 'item#2',
         }),
-      ).toBeUndefined();
+      ).resolves.toBeUndefined();
 
       await db.remove({
         tableName: 'items',
@@ -290,15 +290,15 @@ function runLocalDBContract(adapter) {
         sortKeyValue: 'item#1',
       });
 
-      expect(
-        await db.get({
+      await expect(
+        db.get({
           tableName: 'items',
           keyName: 'pk',
           keyValue: 'acct#1',
           sortKeyName: 'sk',
           sortKeyValue: 'item#1',
         }),
-      ).toBeUndefined();
+      ).resolves.toBeUndefined();
     });
   });
 }
@@ -319,7 +319,7 @@ describe('db adapter wiring', () => {
     jest.restoreAllMocks();
   });
 
-  test('createActorSystemResources wires the dynamodb adapter without AWS calls', async () => {
+  it('createActorSystemResources wires the dynamodb adapter without AWS calls', async () => {
     const close = jest.fn(async () => {});
     const factory = jest.fn((options = {}) => ({
       query: jest.fn(async () => []),

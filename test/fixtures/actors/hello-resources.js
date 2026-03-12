@@ -2,7 +2,6 @@ import { buffer } from 'node:stream/consumers';
 
 /**
  * Actor used by unit tests to validate ActorSystem resource injection.
- *
  * @param {any} event
  * @param {{ resources?: any }} context
  * @returns {Promise<any>}

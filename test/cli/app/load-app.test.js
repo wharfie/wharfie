@@ -1,6 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
+import { describe, expect, it } from '@jest/globals';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
@@ -8,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { loadApp } from '../../../cli/app/load-app.js';
 
-describe('Wharfie app loader', () => {
+describe('wharfie app loader', () => {
   it('loads a plain object export and compiles manifest.app.name', async () => {
     const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wharfie-app-'));
 
@@ -24,6 +25,7 @@ describe('Wharfie app loader', () => {
     );
 
     const { manifest } = await loadApp({ dir });
+
     expect(manifest.app.name).toBe('plain-object-app');
   });
 
@@ -60,6 +62,7 @@ describe('Wharfie app loader', () => {
     );
 
     const { manifest } = await loadApp({ dir });
+
     expect(manifest.app.name).toBe('actor-system-app');
     expect(manifest.capabilities?.db).toBeDefined();
   });

@@ -1,11 +1,11 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { jest } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 import { startSchedulerService } from '../../../lambdas/lib/actor/runtime/services/scheduler-service.js';
 
-describe('Scheduler service (cron, UTC)', () => {
+describe('scheduler service (cron, UTC)', () => {
   afterEach(() => {
     jest.useRealTimers();
   });
@@ -22,13 +22,15 @@ describe('Scheduler service (cron, UTC)', () => {
     });
 
     try {
-      expect(invoke).toHaveBeenCalledTimes(0);
+      expect(invoke).not.toHaveBeenCalled();
 
       // Next match after 00:00:30Z for */2 minutes is 00:02:00Z.
       await jest.advanceTimersByTimeAsync(89_000);
-      expect(invoke).toHaveBeenCalledTimes(0);
+
+      expect(invoke).not.toHaveBeenCalled();
 
       await jest.advanceTimersByTimeAsync(1_000);
+
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith('alpha', {
         cron: '*/2 * * * *',
@@ -36,6 +38,7 @@ describe('Scheduler service (cron, UTC)', () => {
       });
 
       await jest.advanceTimersByTimeAsync(120_000);
+
       expect(invoke).toHaveBeenCalledTimes(2);
       expect(invoke).toHaveBeenNthCalledWith(2, 'alpha', {
         cron: '*/2 * * * *',
@@ -59,6 +62,7 @@ describe('Scheduler service (cron, UTC)', () => {
 
     // First fire at 00:01:00Z
     await jest.advanceTimersByTimeAsync(30_000);
+
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith('alpha', {
       cron: '* * * * *',
@@ -70,17 +74,22 @@ describe('Scheduler service (cron, UTC)', () => {
 
     // Jump forward 5 minutes while stopped: 00:06:00Z.
     await jest.advanceTimersByTimeAsync(300_000);
+
     expect(invoke).toHaveBeenCalledTimes(1);
 
     // Restart: should NOT backfill 00:02..00:06.
     svc.start();
     await Promise.resolve();
+
     expect(invoke).toHaveBeenCalledTimes(1);
 
     // Next fire should be 00:07:00Z.
     await jest.advanceTimersByTimeAsync(59_000);
+
     expect(invoke).toHaveBeenCalledTimes(1);
+
     await jest.advanceTimersByTimeAsync(1_000);
+
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke).toHaveBeenNthCalledWith(2, 'alpha', {
       cron: '* * * * *',

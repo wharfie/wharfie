@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { jest } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 const ORIGINAL_ARGV = process.argv;
 const ORIGINAL_EXIT_CODE = process.exitCode;

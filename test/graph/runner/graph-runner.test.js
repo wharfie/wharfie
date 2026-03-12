@@ -13,7 +13,7 @@ import Operation from '../../../lambdas/lib/graph/operation.js';
 import { runOperation } from '../../../lambdas/lib/graph/runner.js';
 
 describe('graph runner', () => {
-  test('executes a persisted action DAG in prerequisite order', async () => {
+  test('executes a persisted action DAG in prerequisite order and persists COMPLETED', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'wharfie-runner-'));
     try {
       const db = createVanillaDB({ path: tmp });
@@ -26,6 +26,8 @@ describe('graph runner', () => {
         resource_id: resourceId,
         resource_version: 1,
         type: Operation.Type.PIPELINE,
+        started_at: 1,
+        last_updated_at: 1,
       });
 
       const actionA = operation.createAction({
@@ -65,8 +67,9 @@ describe('graph runner', () => {
             actionA.id,
           );
           expect(upstream).not.toBeNull();
-          if (!upstream)
+          if (!upstream) {
             throw new Error('Expected prerequisite action to exist');
+          }
           expect(upstream.status).toBe(Action.Status.COMPLETED);
         }
 
@@ -93,17 +96,26 @@ describe('graph runner', () => {
         operation.id,
         actionB.id,
       );
+      const storedOperation = await store.getOperation(
+        resourceId,
+        operation.id,
+      );
       expect(afterA).not.toBeNull();
       expect(afterB).not.toBeNull();
-      if (!afterA || !afterB) throw new Error('Expected actions to exist');
+      expect(storedOperation).not.toBeNull();
+      if (!afterA || !afterB || !storedOperation) {
+        throw new Error('Expected actions and operation to exist');
+      }
       expect(afterA.status).toBe(Action.Status.COMPLETED);
       expect(afterB.status).toBe(Action.Status.COMPLETED);
+      expect(storedOperation.status).toBe(Operation.Status.COMPLETED);
+      expect(storedOperation.last_updated_at).toBeGreaterThan(1);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  test('returns FAILED when an upstream action fails and leaves downstream work blocked', async () => {
+  test('returns FAILED when an upstream action fails and persists FAILED', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'wharfie-runner-'));
     try {
       const db = createVanillaDB({ path: tmp });
@@ -116,6 +128,8 @@ describe('graph runner', () => {
         resource_id: resourceId,
         resource_version: 1,
         type: Operation.Type.PIPELINE,
+        started_at: 1,
+        last_updated_at: 1,
       });
 
       const actionA = operation.createAction({
@@ -156,11 +170,83 @@ describe('graph runner', () => {
         operation.id,
         actionB.id,
       );
+      const storedOperation = await store.getOperation(
+        resourceId,
+        operation.id,
+      );
       expect(afterA).not.toBeNull();
       expect(afterB).not.toBeNull();
-      if (!afterA || !afterB) throw new Error('Expected actions to exist');
+      expect(storedOperation).not.toBeNull();
+      if (!afterA || !afterB || !storedOperation) {
+        throw new Error('Expected actions and operation to exist');
+      }
       expect(afterA.status).toBe(Action.Status.FAILED);
       expect(afterB.status).toBe(Action.Status.PENDING);
+      expect(storedOperation.status).toBe(Operation.Status.FAILED);
+      expect(storedOperation.last_updated_at).toBeGreaterThan(1);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('returns BLOCKED when pending work cannot make progress and persists BLOCKED', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'wharfie-runner-'));
+    try {
+      const db = createVanillaDB({ path: tmp });
+      const tableName = 'operations-runner-test';
+      const store = createOperationsTable({ db, tableName });
+
+      const resourceId = 'r1';
+      const operation = new Operation({
+        id: 'op1',
+        resource_id: resourceId,
+        resource_version: 1,
+        type: Operation.Type.PIPELINE,
+        started_at: 1,
+        last_updated_at: 1,
+      });
+
+      const actionA = new Action({
+        id: 'a1',
+        resource_id: resourceId,
+        operation_id: operation.id,
+        type: Action.Type.START,
+        status: Action.Status.RUNNING,
+      });
+      const actionB = new Action({
+        id: 'b1',
+        resource_id: resourceId,
+        operation_id: operation.id,
+        type: Action.Type.FINISH,
+        status: Action.Status.PENDING,
+      });
+      operation.addAction({ action: actionA, dependsOn: [] });
+      operation.addAction({ action: actionB, dependsOn: [actionA] });
+
+      await store.putOperation(operation);
+
+      const result = await runOperation({
+        store,
+        resourceId,
+        operationId: operation.id,
+        executeAction: async () => true,
+      });
+
+      expect(result.status).toBe('BLOCKED');
+      expect(result.executedActionIds).toEqual([]);
+      expect(result.failedActionIds).toEqual([]);
+      expect([...result.blockedActionIds].sort()).toEqual(
+        [actionA.id, actionB.id].sort(),
+      );
+
+      const storedOperation = await store.getOperation(
+        resourceId,
+        operation.id,
+      );
+      expect(storedOperation).not.toBeNull();
+      if (!storedOperation) throw new Error('Expected operation to exist');
+      expect(storedOperation.status).toBe(Operation.Status.BLOCKED);
+      expect(storedOperation.last_updated_at).toBeGreaterThan(1);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

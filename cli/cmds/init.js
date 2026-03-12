@@ -1,8 +1,7 @@
 import { Command } from 'commander';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { promises as fsp } from 'node:fs';
-import fs from 'node:fs';
+import { existsSync, promises as fsp } from 'node:fs';
 import inquirer from 'inquirer';
 
 import {
@@ -12,13 +11,31 @@ import {
 } from '../output/basic.js';
 import { extractTemplates } from '../assets/extract-templates.js';
 
+// eslint-disable-next-line import/no-named-as-default-member
+const prompt = inquirer.prompt.bind(inquirer);
 const PROJECT_NAME_RE = /^[a-zA-Z0-9_ ]*$/;
 
 /**
- * @param {string} raw
- * @returns {string}
+ * @typedef InitProjectOptions
+ * @property {string} [projectName] - Project name supplied by the user.
+ * @property {boolean} [includeExamples] - Whether example models/sources should be included.
  */
-function normalizeProjectName(raw) {
+
+/**
+ * @typedef InitProjectDependencies
+ * @property {string} [cwd] - Working directory used to create the project.
+ * @property {(questions: import('inquirer').QuestionCollection) => Promise<{ project_name: string, include_examples: boolean }>} [promptFn] - Prompt implementation.
+ * @property {typeof extractTemplates} [extractTemplatesFn] - Template extractor.
+ * @property {{ mkdir: typeof fsp.mkdir, writeFile: typeof fsp.writeFile, rm: typeof fsp.rm }} [fsModule] - fs promises helpers.
+ * @property {(message: unknown) => void} [infoReporter] - Informational reporter.
+ * @property {(message: unknown) => void} [successReporter] - Success reporter.
+ */
+
+/**
+ * @param {string} raw - Raw project name input.
+ * @returns {string} - Normalized project directory name.
+ */
+export function normalizeProjectName(raw) {
   const trimmed = raw.trim();
   if (!trimmed) throw new Error('Project name is required');
 
@@ -32,20 +49,22 @@ function normalizeProjectName(raw) {
 }
 
 /**
- * @param {{ projectName?: string | undefined, includeExamples?: boolean | undefined }} options
- * @returns {Promise<{ projectName: string, includeExamples: boolean }>}
+ * @param {InitProjectOptions} options - Requested init options.
+ * @param {Pick<InitProjectDependencies, 'promptFn'>} [dependencies] - Prompt test hooks.
+ * @returns {Promise<{ projectName: string, includeExamples: boolean }>} - Resolved init inputs.
  */
-async function resolveInitInputs(options) {
+export async function resolveInitInputs(options, dependencies = {}) {
+  const { promptFn = prompt } = dependencies;
+
   /** @type {string | undefined} */
   let projectName = options.projectName;
   /** @type {boolean | undefined} */
   let includeExamples = options.includeExamples;
 
-  // If any inputs are missing, prompt.
   if (!projectName || includeExamples == null) {
     /** @type {{ project_name: string, include_examples: boolean }} */
-    // @ts-ignore - inquirer has weak JS typings under ESM
-    const answers = await inquirer.prompt([
+    // @ts-ignore - inquirer has weak JS typings under ESM.
+    const answers = await promptFn([
       {
         type: 'input',
         name: 'project_name',
@@ -76,46 +95,68 @@ async function resolveInitInputs(options) {
  *
  * NOTE: When running from a SEA binary, templates are embedded as SEA assets
  * and extracted at runtime.
- *
- * @param {{ projectName?: string | undefined, includeExamples?: boolean | undefined }} options
- * @returns {Promise<void>}
+ * @param {InitProjectOptions} options - Requested init options.
+ * @param {InitProjectDependencies} [dependencies] - Test hooks.
+ * @returns {Promise<void>} - Resolves when the project has been created.
  */
-async function initProject(options) {
-  const { projectName, includeExamples } = await resolveInitInputs(options);
+export async function initProject(options, dependencies = {}) {
+  const {
+    cwd = process.cwd(),
+    promptFn = prompt,
+    extractTemplatesFn = extractTemplates,
+    fsModule = fsp,
+    infoReporter = displayInfo,
+    successReporter = displaySuccess,
+  } = dependencies;
+  const { projectName, includeExamples } = await resolveInitInputs(options, {
+    promptFn,
+  });
 
-  const projectDir = path.join(process.cwd(), projectName);
+  const projectDir = path.join(cwd, projectName);
 
-  if (fs.existsSync(projectDir)) {
+  if (existsSync(projectDir)) {
     throw new Error(
       `Directory already exists with name ${projectName}, please pick a different project name.`,
     );
   }
 
-  displayInfo(`Initializing project ${projectName}...`);
-  await fsp.mkdir(projectDir, { recursive: false });
+  infoReporter(`Initializing project ${projectName}...`);
 
-  await Promise.all([
-    fsp.writeFile(path.join(projectDir, 'wharfie.yaml'), ''),
-    fsp.mkdir(path.join(projectDir, 'sources')),
-    fsp.mkdir(path.join(projectDir, 'models')),
-  ]);
+  let createdProjectDir = false;
+  try {
+    await fsModule.mkdir(projectDir, { recursive: false });
+    createdProjectDir = true;
 
-  if (includeExamples) {
-    const __dirname = path.dirname(fileURLToPath(import.meta.url));
-    const diskTemplatesDir = path.resolve(
-      __dirname,
-      '..',
-      'project',
-      'project_structure_examples',
-    );
+    await fsModule.writeFile(path.join(projectDir, 'wharfie.yaml'), '');
+    await fsModule.mkdir(path.join(projectDir, 'sources'));
+    await fsModule.mkdir(path.join(projectDir, 'models'));
 
-    await extractTemplates({
-      destinationDir: projectDir,
-      diskSourceDir: diskTemplatesDir,
-    });
+    if (includeExamples) {
+      const __dirname = path.dirname(fileURLToPath(import.meta.url));
+      const diskTemplatesDir = path.resolve(
+        __dirname,
+        '..',
+        'project',
+        'project_structure_examples',
+      );
+
+      await extractTemplatesFn({
+        destinationDir: projectDir,
+        diskSourceDir: diskTemplatesDir,
+      });
+    }
+  } catch (err) {
+    if (createdProjectDir) {
+      try {
+        await fsModule.rm(projectDir, { recursive: true, force: true });
+      } catch {
+        // Best-effort rollback only. Preserve the original error below.
+      }
+    }
+    throw err;
   }
 
-  displaySuccess(
+  successReporter(
     `Project ${projectName} initialized successfully!\n\n` +
       `Run 'cd ${projectName}' and then explore your models/sources.`,
   );

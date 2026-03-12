@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  test,
+} from '@jest/globals';
 
 import { getAdapterMatrix } from '../../../helpers/db-adapters.js';
 import { createOperationsTable } from '../../../../lambdas/lib/db/tables/operations.js';
@@ -23,7 +30,7 @@ describe('operations table contract', () => {
         await cleanup();
       });
 
-      test('resource + operation graph lifecycle', async () => {
+      it('resource + operation graph lifecycle', async () => {
         const table = createOperationsTable({ db, tableName });
 
         const resource = new Resource({
@@ -38,6 +45,7 @@ describe('operations table contract', () => {
 
         await table.putResource(resource);
         const got = await table.getResource(resource.id);
+
         expect(got.id).toBe(resource.id);
 
         const operation = new Operation({
@@ -66,10 +74,12 @@ describe('operations table contract', () => {
         await table.putOperation(operation);
 
         const ops = await table.getOperations(resource.id);
+
         expect(ops).toHaveLength(1);
         expect(ops[0].id).toBe(operation.id);
 
         const records = await table.getRecords(resource.id);
+
         expect(records.operations).toHaveLength(1);
         expect(records.actions).toHaveLength(1);
         expect(records.queries).toHaveLength(1);
@@ -77,33 +87,36 @@ describe('operations table contract', () => {
         expect(records.actions[0].id).toBe(action.id);
         expect(records.queries[0].id).toBe(query.id);
 
-        expect(
-          await table.updateActionStatus(action, Action.Status.RUNNING),
-        ).toBe(true);
+        await expect(
+          table.updateActionStatus(action, Action.Status.RUNNING),
+        ).resolves.toBe(true);
 
         const updated = await table.getAction(
           resource.id,
           operation.id,
           action.id,
         );
+
         expect(updated.status).toBe(Action.Status.RUNNING);
 
         // stale local action object should fail optimistic transition
-        expect(
-          await table.updateActionStatus(action, Action.Status.COMPLETED),
-        ).toBe(false);
+        await expect(
+          table.updateActionStatus(action, Action.Status.COMPLETED),
+        ).resolves.toBe(false);
 
         await table.deleteOperation(operation);
 
         const afterDelete = await table.getRecords(resource.id);
+
         expect(afterDelete.operations).toEqual([]);
         expect(afterDelete.actions).toEqual([]);
         expect(afterDelete.queries).toEqual([]);
 
-        expect(await table.getResource(resource.id)).not.toBeNull();
+        await expect(table.getResource(resource.id)).resolves.not.toBeNull();
 
         await table.deleteResource(resource);
-        expect(await table.getResource(resource.id)).toBeNull();
+
+        await expect(table.getResource(resource.id)).resolves.toBeNull();
       });
     });
   }

@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  test,
+} from '@jest/globals';
 
 import { getAdapterMatrix } from '../../../helpers/db-adapters.js';
 import { createSemaphoreTable } from '../../../../lambdas/lib/db/tables/semaphore.js';
@@ -18,12 +25,12 @@ describe('semaphore table contract', () => {
         await cleanup();
       });
 
-      test('increase respects threshold', async () => {
+      it('increase respects threshold', async () => {
         const table = createSemaphoreTable({ db, tableName });
 
-        expect(await table.increase('s1', 2)).toBe(true);
-        expect(await table.increase('s1', 2)).toBe(true);
-        expect(await table.increase('s1', 2)).toBe(false);
+        await expect(table.increase('s1', 2)).resolves.toBe(true);
+        await expect(table.increase('s1', 2)).resolves.toBe(true);
+        await expect(table.increase('s1', 2)).resolves.toBe(false);
 
         const record = await db.get({
           tableName,
@@ -35,7 +42,7 @@ describe('semaphore table contract', () => {
         expect(record.value).toBe(2);
       });
 
-      test('release decrements and never goes below 0', async () => {
+      it('release decrements and never goes below 0', async () => {
         const table = createSemaphoreTable({ db, tableName });
 
         await table.increase('s1', 3);
@@ -52,7 +59,7 @@ describe('semaphore table contract', () => {
         expect(record.value).toBe(0);
       });
 
-      test('limit overrides threshold', async () => {
+      it('limit overrides threshold', async () => {
         await db.put({
           tableName,
           keyName: 'semaphore',
@@ -60,11 +67,12 @@ describe('semaphore table contract', () => {
         });
 
         const table = createSemaphoreTable({ db, tableName });
-        expect(await table.increase('limited', 10)).toBe(true);
-        expect(await table.increase('limited', 10)).toBe(false);
+
+        await expect(table.increase('limited', 10)).resolves.toBe(true);
+        await expect(table.increase('limited', 10)).resolves.toBe(false);
       });
 
-      test('deleteSemaphore releases global wharfie permits', async () => {
+      it('deleteSemaphore releases global wharfie permits', async () => {
         await db.put({
           tableName,
           keyName: 'semaphore',
