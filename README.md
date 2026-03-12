@@ -46,9 +46,12 @@ iex (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wharfie/wharfie/m
 
 ```bash
 wharfie config
-wharfie deployment create
-wharfie project init
+wharfie init my_project
+wharfie app manifest ./apps/wharfie-v1
 ```
+
+The current ESM CLI ships these top-level commands: `config`, `init`, `app`, `ops`, `list`, and `build-self`.
+Legacy `deployment`, `project`, and `utils` command groups are migration leftovers in the repo and are not part of the shipped CLI surface.
 
 ### Reference
 

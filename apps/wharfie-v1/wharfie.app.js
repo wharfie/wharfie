@@ -292,5 +292,5 @@ if (isExecutedDirectly()) {
       }
     });
 
-  cmd.parse(process.argv);
+  await cmd.parseAsync(process.argv);
 }

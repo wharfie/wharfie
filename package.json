@@ -21,7 +21,20 @@
     "node": "24.13.1",
     "npm": "11.10.0"
   },
-  "main": "./client/",
+  "main": "./cli/entry.js",
+  "files": [
+    "README.md",
+    "bin/",
+    "apps/wharfie-v1/wharfie.app.js",
+    "cli/",
+    "lambdas/",
+    "!cli/cmds/deployment.js",
+    "!cli/cmds/deployment_cmds/**",
+    "!cli/cmds/project.js",
+    "!cli/cmds/project_cmds/**",
+    "!cli/cmds/utils.js",
+    "!cli/cmds/utils_cmds/**"
+  ],
   "scripts": {
     "typecheck": "tsc",
     "test:js": "TZ=UTC node ./test/run-jest.js --silent --coverage",

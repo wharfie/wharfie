@@ -20,7 +20,8 @@
     "test/runtime/**/*.js",
     "test/graph/**/*.js",
     "test/db/**/*.js",
-    "test/fixtures/actors/**/*.js"
+    "test/fixtures/actors/**/*.js",
+    "types/**/*.d.ts"
   ],
   "exclude": [
     "lambdas/udf_entrypoint.js",

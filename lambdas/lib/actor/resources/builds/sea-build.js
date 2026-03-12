@@ -4,7 +4,6 @@ import { promises, existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { build as _build } from '../../../esbuild.js';
 import paths from '../../../paths.js';
 import { runCmd, execFile } from '../../../cmd.js';
-// @ts-ignore
 import { inject } from 'postject';
 import BaseResource from '../base-resource.js';
 
@@ -55,12 +54,16 @@ function _shouldSuppressPostjectChunk(chunk, encoding) {
 }
 
 /**
+ * @typedef {(chunk: string | Uint8Array, encoding?: string | (() => void), callback?: (() => void)) => boolean} StreamWriteFn
+ */
+
+/**
  * @param {import('node:stream').Writable} stream - Stream to wrap.
  * @param {typeof process.stdout.write} originalWrite - Original write function.
  * @returns {typeof process.stdout.write} - Wrapped write function.
  */
 function _wrapWrite(stream, originalWrite) {
-  // @ts-ignore
+  /** @type {StreamWriteFn} */
   const write = function write(chunk, encoding, callback) {
     /** @type {unknown} */
     let enc = encoding;
@@ -79,8 +82,13 @@ function _wrapWrite(stream, originalWrite) {
       return true;
     }
 
-    // @ts-ignore - stream.write accepts several overloads
-    return originalWrite.call(stream, chunk, enc, cb);
+    const writer = /** @type {StreamWriteFn} */ (originalWrite);
+    return writer.call(
+      stream,
+      /** @type {string | Uint8Array} */ (chunk),
+      /** @type {string | (() => void) | undefined} */ (enc),
+      /** @type {(() => void) | undefined} */ (cb),
+    );
   };
   return write;
 }

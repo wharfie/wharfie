@@ -6,6 +6,13 @@ import { Command } from 'commander';
 import paths from '../lambdas/lib/paths.js';
 import { WHARFIE_VERSION } from '../lambdas/lib/version.js';
 
+import {
+  setConfig,
+  setEnvironment,
+  validate,
+  default as configModule,
+} from './config.js';
+import { checkForNewRelease } from './upgrade.js';
 import { displayFailure } from './output/basic.js';
 
 import configCommand from './cmds/config.js';
@@ -16,10 +23,32 @@ import buildSelfCommand from './cmds/build_self.js';
 import initCommand from './cmds/init.js';
 
 /**
+ * @typedef {object} CreateProgramOptions
+ * @property {string[]} [argv] - argv to parse.
+ * @property {{ existsSync: typeof fs.existsSync, readFileSync: typeof fs.readFileSync }} [fsModule] - fs helpers.
+ * @property {{ join: typeof path.join }} [pathModule] - path helpers.
+ * @property {{ config: string, createWharfiePaths: () => Promise<void> }} [pathsModule] - Wharfie path helpers.
+ * @property {{ setConfig: typeof setConfig, setEnvironment: typeof setEnvironment, validate: typeof validate }} [configHelpers] - Config helpers.
+ * @property {typeof checkForNewRelease} [releaseChecker] - Release check function.
+ * @property {(error: unknown) => void} [failureReporter] - Failure reporter.
+ */
+
+/**
  * Build the Wharfie CLI commander program.
+ * @param {CreateProgramOptions} [options] - Test hooks.
  * @returns {import('commander').Command}
  */
-export function createProgram() {
+export function createProgram(options = {}) {
+  const {
+    argv = process.argv,
+    fsModule = fs,
+    pathModule = path,
+    pathsModule = paths,
+    configHelpers = configModule,
+    releaseChecker = checkForNewRelease,
+    failureReporter = displayFailure,
+  } = options;
+
   const program = new Command();
 
   program
@@ -35,16 +64,10 @@ export function createProgram() {
   program.addCommand(initCommand);
 
   program.hook('preAction', async () => {
-    await paths.createWharfiePaths();
+    await pathsModule.createWharfiePaths();
 
-    // Local-only commands should not require AWS credentials/config or network calls.
-    // Example:
-    //   wharfie app manifest
-    //   wharfie ops list <resourceId>
-    //   wharfie build-self
-    const args = process.argv.slice(2);
+    const args = argv.slice(2);
     const isHelp = args.includes('--help') || args.includes('-h');
-
     const isLocalOnly =
       args[0] === 'app' ||
       args[0] === 'ops' ||
@@ -53,29 +76,27 @@ export function createProgram() {
       args[0] === 'init' ||
       (args[0] === 'self' && args[1] === 'build');
 
-    if (isHelp || isLocalOnly) return;
-
-    // Load config if present.
-    process.env.CONFIG_DIR = paths.config;
-    process.env.CONFIG_FILE_PATH = path.join(
+    process.env.CONFIG_DIR = pathsModule.config;
+    process.env.CONFIG_FILE_PATH = pathModule.join(
       process.env.CONFIG_DIR,
       'wharfie.config',
     );
 
-    const config = (await import('./config.js')).default;
-    const { checkForNewRelease } = await import('./upgrade.js');
+    if (isHelp || isLocalOnly) return;
 
-    if (fs.existsSync(process.env.CONFIG_FILE_PATH)) {
+    if (fsModule.existsSync(process.env.CONFIG_FILE_PATH)) {
       try {
-        config.setConfig(
-          JSON.parse(fs.readFileSync(process.env.CONFIG_FILE_PATH, 'utf8')),
+        configHelpers.setConfig(
+          JSON.parse(
+            fsModule.readFileSync(process.env.CONFIG_FILE_PATH, 'utf8'),
+          ),
         );
-        config.setEnvironment();
-      } catch (err) {
+        configHelpers.setEnvironment();
+      } catch (_err) {
         // Allow `wharfie config` to run even if the config file is malformed so
         // users can repair it.
         if (args[0] !== 'config') {
-          displayFailure(
+          failureReporter(
             'Failed to load config. Run "wharfie config" to resolve.',
           );
           // eslint-disable-next-line no-process-exit
@@ -85,14 +106,14 @@ export function createProgram() {
     }
 
     try {
-      await config.validate();
+      await configHelpers.validate();
     } catch (err) {
-      displayFailure(err);
+      failureReporter(err);
       // eslint-disable-next-line no-process-exit
       process.exit(1);
     }
 
-    await checkForNewRelease();
+    await releaseChecker();
   });
 
   return program;
@@ -110,9 +131,8 @@ export async function main(argv = process.argv) {
   process.env.LOGGING_FORMAT = 'cli';
   process.env.LOGGING_LEVEL = 'warn';
 
-  const program = createProgram();
+  const program = createProgram({ argv });
 
-  // Show help if no command is provided
   if (!argv.slice(2).length) {
     program.outputHelp();
     process.exitCode = 1;
@@ -121,8 +141,8 @@ export async function main(argv = process.argv) {
 
   if (!process.stdin.isTTY) {
     process.env.stdin = '';
-    process.stdin.on('readable', function () {
-      const chunk = this.read();
+    process.stdin.on('readable', () => {
+      const chunk = process.stdin.read();
       if (chunk !== null) {
         process.env.stdin += chunk;
       }
@@ -130,5 +150,5 @@ export async function main(argv = process.argv) {
     await new Promise((resolve) => process.stdin.on('end', resolve));
   }
 
-  program.parse(argv);
+  await program.parseAsync(argv);
 }
