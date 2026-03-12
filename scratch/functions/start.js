@@ -2,31 +2,31 @@ import dep from '../lib/dep.js';
 // import sharp from 'sharp';
 import duckdb from '@duckdb/node-api';
 import { open } from 'lmdb';
-import { createRequire } from 'node:module';
+// import { createRequire } from 'node:module';
 
-const require = createRequire(import.meta.url);
+// const require = createRequire(import.meta.url);
 
-/**
- * @returns {any | null} - The optional usb package when available.
- */
-function loadUsbPackage() {
-  try {
-    return require('usb');
-  } catch {
-    return null;
-  }
-}
+// /**
+//  * @returns {any | null} - The optional usb package when available.
+//  */
+// function loadUsbPackage() {
+//   try {
+//     return require('usb');
+//   } catch {
+//     return null;
+//   }
+// }
 
-/**
- * @returns {any | null} - The optional sodium-native package when available.
- */
-function loadSodiumPackage() {
-  try {
-    return require('sodium-native');
-  } catch {
-    return null;
-  }
-}
+// /**
+//  * @returns {any | null} - The optional sodium-native package when available.
+//  */
+// function loadSodiumPackage() {
+//   try {
+//     return require('sodium-native');
+//   } catch {
+//     return null;
+//   }
+// }
 
 /**
  * @param {unknown} error - Unknown error value.
@@ -36,8 +36,8 @@ function getErrorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-const usb = loadUsbPackage();
-const sodium = loadSodiumPackage();
+const usb = null; // loadUsbPackage();
+const sodium = null; // loadSodiumPackage();
 
 /**
  * @param {Record<string, any> | undefined} event - Scratch invocation payload.
@@ -89,21 +89,21 @@ const start = async (event, context) => {
   //   console.log('sharp png size', redDotPng.length);
 
   // // --- usb (libusb native binding) ---
-  try {
-    if (!usb?.getDeviceList) {
-      throw new Error('usb module unavailable');
-    }
-    const devices = usb.getDeviceList();
-    console.log(
-      'usb devices:',
-      devices.map((/** @type {any} */ d) => {
-        const vd = d.deviceDescriptor;
-        return `${vd.idVendor.toString(16)}:${vd.idProduct.toString(16)}`;
-      }),
-    );
-  } catch (error) {
-    console.warn('usb test skipped:', getErrorMessage(error));
-  }
+  // try {
+  //   if (!usb?.getDeviceList) {
+  //     throw new Error('usb module unavailable');
+  //   }
+  //   const devices = usb.getDeviceList();
+  //   console.log(
+  //     'usb devices:',
+  //     devices.map((/** @type {any} */ d) => {
+  //       const vd = d.deviceDescriptor;
+  //       return `${vd.idVendor.toString(16)}:${vd.idProduct.toString(16)}`;
+  //     }),
+  //   );
+  // } catch (error) {
+  //   console.warn('usb test skipped:', getErrorMessage(error));
+  // }
   try {
     const { DuckDBInstance } = duckdb;
 
@@ -165,39 +165,39 @@ const start = async (event, context) => {
 
   // --- OPTIONAL: sodium-native tight loop (CPU in C, not JS) -----
   // comment out if you want *pure* JS only
-  try {
-    if (
-      !sodium?.crypto_secretbox_KEYBYTES ||
-      !sodium?.crypto_secretbox_NONCEBYTES ||
-      !sodium?.crypto_secretbox_MACBYTES ||
-      typeof sodium.randombytes_buf !== 'function' ||
-      typeof sodium.crypto_secretbox_easy !== 'function' ||
-      typeof sodium.crypto_secretbox_open_easy !== 'function'
-    ) {
-      throw new Error('sodium-native module unavailable');
-    }
+  // try {
+  //   if (
+  //     !sodium?.crypto_secretbox_KEYBYTES ||
+  //     !sodium?.crypto_secretbox_NONCEBYTES ||
+  //     !sodium?.crypto_secretbox_MACBYTES ||
+  //     typeof sodium.randombytes_buf !== 'function' ||
+  //     typeof sodium.crypto_secretbox_easy !== 'function' ||
+  //     typeof sodium.crypto_secretbox_open_easy !== 'function'
+  //   ) {
+  //     throw new Error('sodium-native module unavailable');
+  //   }
 
-    const key = Buffer.alloc(sodium.crypto_secretbox_KEYBYTES);
-    const nonce = Buffer.alloc(sodium.crypto_secretbox_NONCEBYTES);
-    sodium.randombytes_buf(key);
-    sodium.randombytes_buf(nonce);
+  //   const key = Buffer.alloc(sodium.crypto_secretbox_KEYBYTES);
+  //   const nonce = Buffer.alloc(sodium.crypto_secretbox_NONCEBYTES);
+  //   sodium.randombytes_buf(key);
+  //   sodium.randombytes_buf(nonce);
 
-    const msg = Buffer.from('hello');
-    const boxed = Buffer.alloc(msg.length + sodium.crypto_secretbox_MACBYTES);
-    const opened = Buffer.alloc(msg.length);
+  //   const msg = Buffer.from('hello');
+  //   const boxed = Buffer.alloc(msg.length + sodium.crypto_secretbox_MACBYTES);
+  //   const opened = Buffer.alloc(msg.length);
 
-    const N = (event && event.sodiumLoops) || 500_000;
-    let okCount = 0;
+  //   const N = (event && event.sodiumLoops) || 500_000;
+  //   let okCount = 0;
 
-    for (let i = 0; i < N; i++) {
-      sodium.crypto_secretbox_easy(boxed, msg, nonce, key);
-      const ok = sodium.crypto_secretbox_open_easy(opened, boxed, nonce, key);
-      if (ok) okCount++;
-    }
-    console.log('sodium loops done, okCount:', okCount);
-  } catch (error) {
-    console.warn('sodium test skipped:', getErrorMessage(error));
-  }
+  //   for (let i = 0; i < N; i++) {
+  //     sodium.crypto_secretbox_easy(boxed, msg, nonce, key);
+  //     const ok = sodium.crypto_secretbox_open_easy(opened, boxed, nonce, key);
+  //     if (ok) okCount++;
+  //   }
+  //   console.log('sodium loops done, okCount:', okCount);
+  // } catch (error) {
+  //   console.warn('sodium test skipped:', getErrorMessage(error));
+  // }
 
   console.timeEnd(label);
 };
