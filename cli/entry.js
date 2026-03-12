@@ -6,8 +6,6 @@ import { Command } from 'commander';
 import paths from '../lambdas/lib/paths.js';
 import { WHARFIE_VERSION } from '../lambdas/lib/version.js';
 
-import * as config from './config.js';
-import { checkForNewRelease } from './upgrade.js';
 import { displayFailure } from './output/basic.js';
 
 import configCommand from './cmds/config.js';
@@ -63,6 +61,9 @@ export function createProgram() {
       process.env.CONFIG_DIR,
       'wharfie.config',
     );
+
+    const config = (await import('./config.js')).default;
+    const { checkForNewRelease } = await import('./upgrade.js');
 
     if (fs.existsSync(process.env.CONFIG_FILE_PATH)) {
       try {
