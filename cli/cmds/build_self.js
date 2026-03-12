@@ -85,7 +85,7 @@ export function findRepoRoot(startDir) {
 
 /**
  * Recursively list files under a directory, returning POSIX-style relative paths.
- * @param {string} rootDir
+ * @param {string} rootDir -
  * @returns {string[]} - Relative file paths with forward slashes.
  */
 export function _collectTemplateFiles(rootDir) {
@@ -93,8 +93,8 @@ export function _collectTemplateFiles(rootDir) {
   const out = [];
 
   /**
-   * @param {string} absDir
-   * @param {string} relDir
+   * @param {string} absDir -
+   * @param {string} relDir -
    */
   function walk(absDir, relDir) {
     const entries = fs.readdirSync(absDir, { withFileTypes: true });
@@ -117,9 +117,9 @@ export function _collectTemplateFiles(rootDir) {
 
 /**
  * Build a SEA asset map for the init templates (plus a manifest).
- * @param {string} repoRoot
- * @param {string} distDir
- * @returns {Record<string, string>}
+ * @param {string} repoRoot -
+ * @param {string} distDir -
+ * @returns {Record<string, string>} -
  */
 export function _buildTemplateAssets(repoRoot, distDir) {
   const templatesDir = path.join(
