@@ -1,4 +1,7 @@
-import BaseResource from '../lambdas/lib/actor/resources/base-resource.js';
+// @ts-nocheck
+import { EventEmitter } from 'node:events';
+import path from 'node:path';
+
 import Function from '../lambdas/lib/actor/resources/builds/function.js';
 import ActorSystem from '../lambdas/lib/actor/resources/builds/actor-system.js';
 import Reconcilable from '../lambdas/lib/actor/resources/reconcilable.js';
@@ -10,12 +13,8 @@ import {
   getResources,
   deleteResource,
 } from '../lambdas/lib/db/state/store.js';
-import { createRequire } from 'node:module';
-import path from 'node:path';
 
-const require = createRequire(import.meta.url);
-
-BaseResource.stateDB = {
+const stateDB = {
   putResource,
   putResourceStatus,
   getResource,
@@ -23,27 +22,17 @@ BaseResource.stateDB = {
   getResources,
   deleteResource,
 };
-const lock = require('../package-lock.json');
 
-/**
- * @param {string} pkgName -
- * @returns {string} -
- */
-function getInstalledVersion(pkgName) {
-  // @ts-ignore
-  const entry = lock.packages?.[`node_modules/${pkgName}`];
-  if (!entry || !entry.version)
-    throw new Error(`Could not find ${pkgName} in package-lock.json`);
-  return entry.version;
-}
+const emitter = new EventEmitter();
+
 /**
  *
  */
 async function main() {
-  Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
+  emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
     // console.log(event)
   });
-  Reconcilable.Emitter.on(Reconcilable.Events.WHARFIE_ERROR, (event) => {
+  emitter.on(Reconcilable.Events.WHARFIE_ERROR, (event) => {
     // console.error(event)
   });
   const __dirname = import.meta.dirname;
@@ -55,15 +44,12 @@ async function main() {
     },
     properties: {
       external: [
-        // --- existing ---
-        { name: 'lmdb', version: getInstalledVersion('lmdb') },
-        { name: 'sharp', version: '0.34.4' },
-        { name: 'sodium-native', version: '5.0.9' },
-        {
-          name: '@duckdb/node-api',
-          version: getInstalledVersion('@duckdb/node-api'),
-        },
-        { name: 'usb', version: '2.13.0' },
+        // Wharfie now resolves installed versions automatically for bare package names.
+        'lmdb',
+        'sharp@0.34.4',
+        'sodium-native@5.0.9',
+        '@duckdb/node-api',
+        'usb@2.13.0',
       ],
       resources: {
         db: {
@@ -85,6 +71,8 @@ async function main() {
   const main = new ActorSystem({
     name: 'main',
     functions: [start],
+    stateDB,
+    emitter,
     properties: {
       targets: [
         {

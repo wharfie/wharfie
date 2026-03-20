@@ -8,14 +8,34 @@ import BaseResourceGroup from '../base-resource-group.js';
  * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  * @property {import('../../typedefs.js').SharedProperties} properties - properties.
  * @property {Object<string, import('../base-resource.js').default | BaseResourceGroup>} [resources] - resources.
+ * @property {any} [stateDB] - Scoped state store.
+ * @property {import('node:events').EventEmitter} [emitter] - Scoped telemetry emitter.
  */
 
 class BuildResource extends BaseResourceGroup {
   /**
    * @param {BuildResourceOptions} options - options.
    */
-  constructor({ name, parent, status, dependsOn, properties, resources }) {
-    super({ name, parent, status, dependsOn, properties, resources });
+  constructor({
+    name,
+    parent,
+    status,
+    dependsOn,
+    properties,
+    resources,
+    stateDB,
+    emitter,
+  }) {
+    super({
+      name,
+      parent,
+      status,
+      dependsOn,
+      properties,
+      resources,
+      stateDB,
+      emitter,
+    });
   }
 
   async initializeEnvironment() {}
@@ -30,7 +50,7 @@ class BuildResource extends BaseResourceGroup {
     ) {
       return;
     }
-    super.reconcile();
+    return await super.reconcile();
   }
 }
 

@@ -4,6 +4,7 @@ import stateStore from '../../db/state/store.js';
 import Secret from '../lib/secret.js';
 import { isEqual } from 'es-toolkit';
 import { diff } from '../../json-diff.js';
+import { getCurrentResourceScope } from './resource-scope.js';
 
 /**
  * @typedef BaseResourceOptions
@@ -12,16 +13,44 @@ import { diff } from '../../json-diff.js';
  * @property {Reconcilable.Status} [status] - status.
  * @property {Reconcilable[]} [dependsOn] - dependsOn.
  * @property {Object<string, any> & import('../typedefs.js').SharedProperties} properties - properties.
+ * @property {StateStore} [stateDB] - Scoped state store.
+ * @property {import('node:events').EventEmitter} [emitter] - Scoped telemetry emitter.
  */
 class BaseResource extends Reconcilable {
   /**
    * @param {BaseResourceOptions} options - BaseResource Class Options
    */
-  constructor({ name, parent = '', status, dependsOn = [], properties }) {
-    super({ name, status, dependsOn });
+  constructor({
+    name,
+    parent = '',
+    status,
+    dependsOn = [],
+    properties,
+    stateDB,
+    emitter,
+  }) {
+    super({ name, status, dependsOn, emitter });
+    const resourceScope = getCurrentResourceScope();
     this.parent = parent;
     this.resourceType = this.constructor.name;
     this.properties = properties || {};
+    this.stateDB = stateDB ?? resourceScope?.stateDB ?? BaseResource.stateDB;
+  }
+
+  /**
+   * @returns {StateStore} - Result.
+   */
+  getStateDB() {
+    return this.stateDB || BaseResource.stateDB;
+  }
+
+  /**
+   * @param {StateStore | undefined} stateDB - stateDB.
+   * @returns {this} - Result.
+   */
+  setStateDB(stateDB) {
+    this.stateDB = stateDB ?? BaseResource.stateDB;
+    return this;
   }
 
   /**
@@ -212,25 +241,25 @@ class BaseResource extends Reconcilable {
   }
 
   async save() {
-    await BaseResource.stateDB.putResource(this);
+    await this.getStateDB().putResource(this);
   }
 
   /**
    * @returns {Promise<Reconcilable.Status?>} - Result.
    */
   async getStatus() {
-    return await BaseResource.stateDB.getResourceStatus(this);
+    return await this.getStateDB().getResourceStatus(this);
   }
 
   async saveStatus() {
-    await BaseResource.stateDB.putResourceStatus(this);
+    await this.getStateDB().putResourceStatus(this);
   }
 
   /**
    * @returns {Promise<import('../typedefs.js').SerializedBaseResource?>} - Result.
    */
   async fetchStoredData() {
-    return await BaseResource.stateDB.getResource(this);
+    return await this.getStateDB().getResource(this);
   }
 
   /**
@@ -243,7 +272,7 @@ class BaseResource extends Reconcilable {
   }
 
   async delete() {
-    await BaseResource.stateDB.deleteResource(this);
+    await this.getStateDB().deleteResource(this);
   }
 }
 /**

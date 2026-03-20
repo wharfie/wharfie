@@ -1,5 +1,6 @@
 import BaseResource from './base-resource.js';
 import Reconcilable from './reconcilable.js';
+import { withResourceScope } from './resource-scope.js';
 
 /**
  * @typedef BaseResourceGroupOptions
@@ -9,18 +10,49 @@ import Reconcilable from './reconcilable.js';
  * @property {Reconcilable[]} [dependsOn] - dependsOn.
  * @property {Object<string, any> & import('../typedefs.js').SharedProperties} properties - properties.
  * @property {Object<string, BaseResource | BaseResourceGroup>} [resources] - resources.
+ * @property {any} [stateDB] - Scoped state store.
+ * @property {import('node:events').EventEmitter} [emitter] - Scoped telemetry emitter.
  */
 class BaseResourceGroup extends BaseResource {
   /**
    * @param {BaseResourceGroupOptions} options - BaseResourceGroup Class Options
    */
-  constructor({ name, parent, status, dependsOn = [], properties, resources }) {
-    super({ name, parent, status, dependsOn, properties });
+  constructor({
+    name,
+    parent,
+    status,
+    dependsOn = [],
+    properties,
+    resources,
+    stateDB,
+    emitter,
+  }) {
+    super({
+      name,
+      parent,
+      status,
+      dependsOn,
+      properties,
+      stateDB,
+      emitter,
+    });
     this.resources = resources;
 
     if (!this.resources) {
       this.resources = {};
-      this.addResources(this._defineGroupResources(this.getName()));
+      this.addResources(
+        withResourceScope(
+          {
+            stateDB: this.getStateDB(),
+            emitter: this.getEmitter(),
+          },
+          () => this._defineGroupResources(this.getName()),
+        ),
+      );
+    } else {
+      Object.values(this.resources).forEach((resource) => {
+        this._inheritResourceScope(resource);
+      });
     }
   }
 
@@ -34,11 +66,79 @@ class BaseResourceGroup extends BaseResource {
 
   /**
    * @param {BaseResource | BaseResourceGroup} resource - resource.
+   * @returns {void} - Result.
+   */
+  _inheritResourceScope(resource) {
+    if (typeof resource.setStateDB === 'function') {
+      resource.setStateDB(this.getStateDB());
+    }
+
+    const previousEmitter =
+      typeof resource.getEmitter === 'function' ? resource.getEmitter() : null;
+    if (typeof resource.setEmitter === 'function') {
+      resource.setEmitter(this.getEmitter());
+    }
+
+    if (
+      previousEmitter &&
+      previousEmitter !== this.getEmitter() &&
+      typeof resource.dispatchStatusEvent === 'function'
+    ) {
+      resource.dispatchStatusEvent();
+    }
+  }
+
+  /**
+   * @param {any} stateDB - stateDB.
+   * @returns {this} - Result.
+   */
+  setStateDB(stateDB) {
+    super.setStateDB(stateDB);
+    this.getResources().forEach((resource) => {
+      if (typeof resource.setStateDB === 'function') {
+        resource.setStateDB(this.getStateDB());
+      }
+    });
+    return this;
+  }
+
+  /**
+   * @param {import('node:events').EventEmitter | undefined} emitter - emitter.
+   * @returns {this} - Result.
+   */
+  setEmitter(emitter) {
+    const previousEmitter = this.getEmitter();
+    super.setEmitter(emitter);
+    this.getResources().forEach((resource) => {
+      const childPreviousEmitter =
+        typeof resource.getEmitter === 'function'
+          ? resource.getEmitter()
+          : null;
+      if (typeof resource.setEmitter === 'function') {
+        resource.setEmitter(this.getEmitter());
+      }
+      if (
+        childPreviousEmitter &&
+        childPreviousEmitter !== this.getEmitter() &&
+        typeof resource.dispatchStatusEvent === 'function'
+      ) {
+        resource.dispatchStatusEvent();
+      }
+    });
+    if (previousEmitter !== this.getEmitter()) {
+      this.dispatchStatusEvent();
+    }
+    return this;
+  }
+
+  /**
+   * @param {BaseResource | BaseResourceGroup} resource - resource.
    */
   addResource(resource) {
     if (this.resources[resource.name]) {
       throw new Error(`Resource with name ${resource.name} already exists`);
     }
+    this._inheritResourceScope(resource);
     this.resources[resource.name] = resource;
   }
 

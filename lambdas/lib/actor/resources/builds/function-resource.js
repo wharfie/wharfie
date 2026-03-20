@@ -5,6 +5,7 @@ import BuildResource from './build-resource.js';
 import paths from '../../../paths.js';
 import { build } from '../../../esbuild.js';
 import { installForTarget } from './lib/install-deps.js';
+import { normalizeExternalDependencies } from './lib/resolve-externals.js';
 
 import { dirname, join } from 'node:path';
 import { promises, existsSync, writeFileSync } from 'node:fs';
@@ -15,6 +16,12 @@ import { buffer as streamToBuffer } from 'node:stream/consumers';
  * @typedef ExternalDependencyDescription
  * @property {string} name - name.
  * @property {string} version - version.
+ */
+
+/**
+ * @typedef ExternalDependencyInput
+ * @property {string} name - name.
+ * @property {string} [version] - version.
  */
 
 /**
@@ -42,8 +49,9 @@ import { buffer as streamToBuffer } from 'node:stream/consumers';
  * @property {string} functionName - functionName.
  * @property {FunctionEntrypoint} entrypoint - entrypoint.
  * @property {BuildTarget | function(): BuildTarget} buildTarget - buildTarget.
- * @property {ExternalDependencyDescription[]} [external] - external.
+ * @property {(string | ExternalDependencyInput)[]} [external] - external.
  * @property {Object<string,string>} [environmentVariables] - environmentVariables.
+ * @property {Record<string, any>} [resources] - Function-scoped runtime resource specs.
  * @property {Object<string,string> | function(): Object<string,string>} [assets] - assets.
  */
 
@@ -66,6 +74,15 @@ class FunctionResource extends BuildResource {
       FunctionResource.DefaultProperties,
       properties,
     );
+    const normalizedExternal = normalizeExternalDependencies(
+      propertiesWithDefaults.external,
+      propertiesWithDefaults.entrypoint?.path,
+    );
+    if (normalizedExternal) {
+      propertiesWithDefaults.external = normalizedExternal;
+    } else {
+      delete propertiesWithDefaults.external;
+    }
     super({
       name,
       parent,
@@ -83,7 +100,6 @@ class FunctionResource extends BuildResource {
    * @returns {Promise<string>} - Result.
    */
   async esbuild() {
-    console.log('HELLO');
     const entryCode = `
       import { ${
         this.get('entrypoint').export || 'default'
@@ -100,6 +116,7 @@ class FunctionResource extends BuildResource {
       write: false,
       bundle: true,
       platform: 'node',
+      format: 'cjs',
       minify: true,
       keepNames: false,
       sourcemap: 'inline',
@@ -116,6 +133,8 @@ class FunctionResource extends BuildResource {
         : FunctionResource.REQUIRED_UNUSED_EXTERNALS,
       define: {
         __WILLEM_BUILD_RECONCILE_TERMINATOR: '1', // injects this variable definition into the global scope
+        'import.meta.url': '__filename',
+        'import.meta.dirname': '__dirname',
       },
     });
 
@@ -172,6 +191,7 @@ class FunctionResource extends BuildResource {
     const assetDescription = JSON.stringify({
       codeBundle,
       externalsTar,
+      resourceSpecs: this.get('resources', {}),
     });
     const singleExecutableAssetPath = join(
       FunctionResource.TEMP_ASSET_PATH,
@@ -191,6 +211,7 @@ class FunctionResource extends BuildResource {
 
 FunctionResource.DefaultProperties = {
   environmentVariables: {},
+  resources: {},
   assets: {},
 };
 FunctionResource.BUILD_DIR = join(paths.temp, 'builds');

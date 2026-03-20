@@ -6,6 +6,7 @@ import SeaBuild from './sea-build.js';
 import MacOSBinarySignature from './macos-binary-signature.js';
 import cli from './actor-system-cli/index.js';
 import { createActorSystemResources } from '../../runtime/resources.js';
+import { withResourceScope } from '../resource-scope.js';
 
 import path from 'node:path';
 
@@ -52,6 +53,8 @@ import path from 'node:path';
  * @property {WharfieActorSystemProperties & import('../../typedefs.js').SharedProperties} properties - properties.
  * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  * @property {Object<string, import('../base-resource.js').default | import('../base-resource-group.js').default>} [resources] - resources.
+ * @property {any} [stateDB] - Scoped state store.
+ * @property {import('node:events').EventEmitter} [emitter] - Scoped telemetry emitter.
  */
 
 class ActorSystem extends BuildResourceGroup {
@@ -66,6 +69,8 @@ class ActorSystem extends BuildResourceGroup {
     resources,
     dependsOn,
     functions = [],
+    stateDB,
+    emitter,
   }) {
     const propertiesWithDefaults = Object.assign(
       {},
@@ -79,12 +84,22 @@ class ActorSystem extends BuildResourceGroup {
       properties: propertiesWithDefaults,
       resources,
       dependsOn: [...(dependsOn ?? [])],
+      stateDB,
+      emitter,
     });
     this.functions = functions;
     /** @type {Promise<{ resources: any, close: () => Promise<void> }> | null} */
     this._runtimeResourcesPromise = null;
     // normally _defineGroupResources is used but this is a workaround to make sure this.functions is set before defining things
-    this.addResources(this.defineActorSystemResources(parent));
+    this.addResources(
+      withResourceScope(
+        {
+          stateDB: this.getStateDB(),
+          emitter: this.getEmitter(),
+        },
+        () => this.defineActorSystemResources(parent),
+      ),
+    );
     // @ts-ignore
     global[Symbol.for(`${this.getName()}`)] = this.run.bind(this);
   }
@@ -159,8 +174,10 @@ class ActorSystem extends BuildResourceGroup {
         `Unknown function '${functionName}'. Available: ${available || '(none)'}`,
       );
     }
-    const ctx = await this.createContext(context);
-    return await fn.fn(event, ctx);
+    const systemResources = await this.getRuntimeResources();
+    return await fn.fn(event, context, {
+      baseResources: systemResources,
+    });
   }
 
   /**
@@ -168,10 +185,19 @@ class ActorSystem extends BuildResourceGroup {
    * @returns {Promise<void>} - Result.
    */
   async closeRuntimeResources() {
-    if (!this._runtimeResourcesPromise) return;
-    const { close } = await this._ensureRuntimeResources();
-    await close();
-    this._runtimeResourcesPromise = null;
+    if (this._runtimeResourcesPromise) {
+      const { close } = await this._ensureRuntimeResources();
+      await close();
+      this._runtimeResourcesPromise = null;
+    }
+
+    await Promise.all(
+      this.functions.map((fn) =>
+        typeof fn.closeRuntimeResources === 'function'
+          ? fn.closeRuntimeResources()
+          : Promise.resolve(),
+      ),
+    );
   }
 
   /**
