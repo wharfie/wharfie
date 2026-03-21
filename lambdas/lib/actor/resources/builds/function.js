@@ -1,8 +1,10 @@
 import { getAsset } from 'node:sea';
-import worker from '../../../code-execution/worker.js';
+import path from 'node:path';
 import { brotliDecompressSync } from 'node:zlib';
 
-import path from 'node:path';
+import worker from '../../../code-execution/worker.js';
+import { createActorSystemResources } from '../../runtime/resources.js';
+import { normalizeExternalDependencies } from './lib/resolve-externals.js';
 
 /**
  * @typedef ExternalDependencyDescription
@@ -11,9 +13,16 @@ import path from 'node:path';
  */
 
 /**
+ * @typedef ExternalDependencyInput
+ * @property {string} name - name.
+ * @property {string} [version] - version.
+ */
+
+/**
  * @typedef FunctionProperties
- * @property {ExternalDependencyDescription[]} [external] - external.
+ * @property {(string | ExternalDependencyInput)[]} [external] - external.
  * @property {Object<string,string>} [environmentVariables] - environmentVariables.
+ * @property {Record<string, any>} [resources] - Function-scoped runtime resources or specs.
  */
 
 /**
@@ -35,11 +44,24 @@ import path from 'node:path';
  */
 
 /**
+ * @typedef FunctionInvokeOptions
+ * @property {Record<string, any>} [baseResources] - Base resources to merge beneath function-scoped resources.
+ */
+
+/**
  * @param {any} v - v.
  * @returns {boolean} - Result.
  */
 function isObject(v) {
   return !!v && typeof v === 'object';
+}
+
+/**
+ * @param {Record<string, any> | null | undefined} resources - resources.
+ * @returns {boolean} - Result.
+ */
+function hasAnyResources(resources) {
+  return !!resources && Object.keys(resources).length > 0;
 }
 
 /**
@@ -92,12 +114,96 @@ class Function {
     if (!name) {
       throw new Error('Function expects a name as an argument');
     }
-    const { external, environmentVariables } = properties;
+    const { external, environmentVariables, resources } = properties;
+    const normalizedExternal = normalizeExternalDependencies(
+      external,
+      entrypoint?.path,
+    );
     this.name = name;
     this.entrypoint = entrypoint;
     this.properties = {
-      external,
-      environmentVariables,
+      ...(normalizedExternal ? { external: normalizedExternal } : {}),
+      ...(environmentVariables ? { environmentVariables } : {}),
+      ...(resources ? { resources } : {}),
+    };
+    /** @type {Promise<{ resources: Record<string, any>, close: () => Promise<void> }> | null} */
+    this._runtimeResourcesPromise = null;
+  }
+
+  /**
+   * Lazily create and cache runtime resources from `properties.resources`.
+   * @returns {Promise<{ resources: Record<string, any>, close: () => Promise<void> }>} - Result.
+   */
+  async _ensureRuntimeResources() {
+    if (this._runtimeResourcesPromise) return this._runtimeResourcesPromise;
+
+    const specs = isObject(this.properties?.resources)
+      ? this.properties.resources
+      : {};
+
+    if (!hasAnyResources(specs)) {
+      this._runtimeResourcesPromise = Promise.resolve({
+        resources: {},
+        close: async () => {},
+      });
+      return this._runtimeResourcesPromise;
+    }
+
+    this._runtimeResourcesPromise = createActorSystemResources(specs);
+    return this._runtimeResourcesPromise;
+  }
+
+  /**
+   * Get the instantiated runtime resources for this Function.
+   * @returns {Promise<Record<string, any>>} - Result.
+   */
+  async getRuntimeResources() {
+    const { resources } = await this._ensureRuntimeResources();
+    return resources;
+  }
+
+  /**
+   * Close all cached runtime resources (best-effort).
+   * @returns {Promise<void>} - Result.
+   */
+  async closeRuntimeResources() {
+    if (!this._runtimeResourcesPromise) return;
+    const { close } = await this._ensureRuntimeResources();
+    await close();
+    this._runtimeResourcesPromise = null;
+  }
+
+  /**
+   * Build a context object for function invocation.
+   *
+   * Precedence is: base resources < function resources < caller-provided resources.
+   * @param {any} [context] - context.
+   * @param {Record<string, any>} [baseResources] - baseResources.
+   * @returns {Promise<any>} - Result.
+   */
+  async createContext(context = {}, baseResources = {}) {
+    const functionResources = await this.getRuntimeResources();
+    const overrideResources = isObject(context?.resources)
+      ? context.resources
+      : {};
+    const mergedResources = {
+      ...(baseResources || {}),
+      ...(functionResources || {}),
+      ...(overrideResources || {}),
+    };
+
+    const shouldAttachResources =
+      hasAnyResources(mergedResources) ||
+      (isObject(context) &&
+        Object.prototype.hasOwnProperty.call(context, 'resources'));
+
+    if (!shouldAttachResources) {
+      return context;
+    }
+
+    return {
+      ...context,
+      resources: mergedResources,
     };
   }
 
@@ -107,6 +213,9 @@ class Function {
    * If `options.resources` (or `context.resources.{db,queue,objectStorage}`) contains
    * in-process resource client instances, they are exposed to the worker via an RPC
    * bridge, and the worker sees them as `context.resources.*` proxies.
+   *
+   * Bundled functions can also embed `resourceSpecs`; Wharfie will instantiate those
+   * resources per invocation and merge them between host resources and caller overrides.
    * @param {string} name - name.
    * @param {any} event - event.
    * @param {any} context - context.
@@ -127,33 +236,49 @@ class Function {
         ? Buffer.from(externalsTarB64, 'base64')
         : null;
 
-    let rpcResources = options?.resources || null;
-    let safeContext = context;
+    const split = splitContextForWorker(context);
+    const safeContext = split.safeContext;
+    const contextRpcResources = split.rpcResources || {};
 
-    if (rpcResources && Object.keys(rpcResources).length > 0) {
-      // Ensure we don't try to structured-clone the client instances inside context.
-      if (isObject(safeContext) && isObject(safeContext.resources)) {
-        const safeRes = { ...safeContext.resources };
-        for (const k of Object.keys(rpcResources)) delete safeRes[k];
-        safeContext = { ...safeContext, resources: safeRes };
+    /** @type {{ resources: Record<string, any>, close: () => Promise<void> } | null} */
+    let scopedResources = null;
+    const bundledResourceSpecs = isObject(assetDescription.resourceSpecs)
+      ? assetDescription.resourceSpecs
+      : null;
+
+    try {
+      if (bundledResourceSpecs && hasAnyResources(bundledResourceSpecs)) {
+        scopedResources =
+          await createActorSystemResources(bundledResourceSpecs);
       }
-    } else {
-      const split = splitContextForWorker(context);
-      safeContext = split.safeContext;
-      rpcResources = split.rpcResources;
+
+      const rpcResources = {
+        ...((options?.resources && isObject(options.resources)
+          ? options.resources
+          : {}) || {}),
+        ...(scopedResources?.resources || {} || {}),
+        ...(contextRpcResources || {}),
+      };
+
+      console.time('WORKER time');
+      await worker.runInSandbox(
+        name,
+        functionCodeString,
+        [event, safeContext],
+        {
+          ...(externalsTar && externalsTar.length > 0 ? { externalsTar } : {}),
+          rpc: hasAnyResources(rpcResources)
+            ? { resources: rpcResources, contextIndex: 1 }
+            : undefined,
+        },
+      );
+      console.timeEnd('WORKER time');
+    } finally {
+      if (scopedResources) {
+        await scopedResources.close();
+      }
+      await worker._destroyWorker();
     }
-
-    console.time('WORKER time');
-    await worker.runInSandbox(name, functionCodeString, [event, safeContext], {
-      ...(externalsTar && externalsTar.length > 0 ? { externalsTar } : {}),
-      rpc:
-        rpcResources && Object.keys(rpcResources).length > 0
-          ? { resources: rpcResources, contextIndex: 1 }
-          : undefined,
-    });
-    console.timeEnd('WORKER time');
-
-    await worker._destroyWorker();
   }
 
   /**
@@ -162,12 +287,17 @@ class Function {
    * This is primarily used by the (single-process) ActorSystem runtime.
    * @param {any} [event] - event.
    * @param {any} [context] - context.
+   * @param {FunctionInvokeOptions} [options] - options.
    * @returns {Promise<any>} - Result.
    */
-  async fn(event = {}, context = {}) {
+  async fn(event = {}, context = {}, options = {}) {
     const entryPath = path.isAbsolute(this.entrypoint.path)
       ? this.entrypoint.path
       : path.resolve(this.entrypoint.path);
+    const invocationContext = await this.createContext(
+      context,
+      options.baseResources || {},
+    );
 
     // CJS: require() exists. ESM: use dynamic import().
     const handler =
@@ -190,7 +320,7 @@ class Function {
     }
 
     // Support both sync and async handlers.
-    const result = candidate(event, context);
+    const result = candidate(event, invocationContext);
     if (result && typeof result.then === 'function') {
       return await result;
     }

@@ -1,4 +1,6 @@
-import EventEmitter from 'events';
+import EventEmitter from 'node:events';
+
+import { getCurrentResourceScope } from './resource-scope.js';
 
 class ReconcilableEmitter extends EventEmitter {}
 
@@ -37,13 +39,19 @@ const Events = {
  * @property {string} name - name.
  * @property {StatusEnum} [status] - status.
  * @property {Reconcilable[]} [dependsOn] - dependsOn.
+ * @property {import('node:events').EventEmitter} [emitter] - Scoped telemetry emitter.
  */
 
 class Reconcilable {
   /**
    * @param {ReconcilableOptions} options - Reconcilable Class Options
    */
-  constructor({ name, status = Status.UNPROVISIONED, dependsOn = [] }) {
+  constructor({
+    name,
+    status = Status.UNPROVISIONED,
+    dependsOn = [],
+    emitter,
+  }) {
     if (!name) {
       throw new Error(`${this.constructor.name} requires a name`);
     }
@@ -51,6 +59,8 @@ class Reconcilable {
     this.dependsOn = dependsOn;
     this._MAX_RETRIES = 10;
     this._MAX_RETRY_TIMEOUT_SECONDS = 10;
+    const resourceScope = getCurrentResourceScope();
+    this.emitter = emitter ?? resourceScope?.emitter ?? Reconcilable.Emitter;
     /**
      * @type {Error[]}
      */
@@ -91,6 +101,22 @@ class Reconcilable {
   }
 
   /**
+   * @returns {import('node:events').EventEmitter} - Result.
+   */
+  getEmitter() {
+    return this.emitter || Reconcilable.Emitter;
+  }
+
+  /**
+   * @param {import('node:events').EventEmitter | undefined} emitter - emitter.
+   * @returns {this} - Result.
+   */
+  setEmitter(emitter) {
+    this.emitter = emitter ?? Reconcilable.Emitter;
+    return this;
+  }
+
+  /**
    * @param {StatusEnum} status - status.
    */
   setStatus(status) {
@@ -99,7 +125,7 @@ class Reconcilable {
   }
 
   dispatchStatusEvent() {
-    Reconcilable.Emitter.emit(Events.WHARFIE_STATUS, this.asEvent());
+    this.getEmitter().emit(Events.WHARFIE_STATUS, this.asEvent());
   }
 
   /**
@@ -146,7 +172,7 @@ class Reconcilable {
         break;
       } catch (error) {
         console.trace(error);
-        Reconcilable.Emitter.emit(Events.WHARFIE_ERROR, {
+        this.getEmitter().emit(Events.WHARFIE_ERROR, {
           name: this.name,
           constructor: this.constructor.name,
           error,
@@ -171,7 +197,7 @@ class Reconcilable {
     }
 
     if (!this.isStable()) throw last_error;
-    this._post_reconcile();
+    await this._post_reconcile();
   }
 
   async _destroy() {
@@ -196,7 +222,7 @@ class Reconcilable {
         break;
       } catch (error) {
         // console.trace(error);
-        Reconcilable.Emitter.emit(Events.WHARFIE_ERROR, {
+        this.getEmitter().emit(Events.WHARFIE_ERROR, {
           name: this.name,
           constructor: this.constructor.name,
           error,
