@@ -22,7 +22,9 @@ const Type = {
 };
 
 /**
- * @typedef {('COMPLETED'|
+ * @typedef {('BLOCKED'|
+ * 'COMPLETED'|
+ * 'FAILED'|
  * 'PENDING'|
  * 'RUNNING'
  * )} WharfieOperationStatusEnum
@@ -32,7 +34,9 @@ const Type = {
  * @type {Object<WharfieOperationStatusEnum,WharfieOperationStatusEnum>}
  */
 const Status = {
+  BLOCKED: 'BLOCKED',
   COMPLETED: 'COMPLETED',
+  FAILED: 'FAILED',
   PENDING: 'PENDING',
   RUNNING: 'RUNNING',
 };
@@ -101,6 +105,18 @@ class Operation {
    * @property {import('./action.js').WharfieActionTypeEnum} type - type.
    * @property {Action[]} [dependsOn] - dependsOn.
    * @property {string} [id] - id.
+   * @property {import('./action.js').WharfieActionStatusEnum} [status] - status.
+   * @property {import('./query.js').default[]} [queries] - queries.
+   * @property {number} [started_at] - started_at.
+   * @property {number} [last_updated_at] - last_updated_at.
+   * @property {string} [wharfie_version] - wharfie_version.
+   * @property {string} [function_name] - function_name.
+   * @property {any} [inputs] - inputs.
+   * @property {Record<string, any>} [placement] - placement.
+   * @property {Record<string, any>} [retry] - retry.
+   * @property {any} [error] - error.
+   * @property {number} [attempt_count] - attempt_count.
+   * @property {any} [outputs] - outputs.
    */
 
   /**
@@ -108,10 +124,38 @@ class Operation {
    * @param {CreateActionOptions} options - options.
    * @returns {Action} - Result.
    */
-  createAction({ type, dependsOn = [], id }) {
+  createAction({
+    type,
+    dependsOn = [],
+    id,
+    status,
+    queries,
+    started_at,
+    last_updated_at,
+    wharfie_version,
+    function_name,
+    inputs,
+    placement,
+    retry,
+    error,
+    attempt_count,
+    outputs,
+  }) {
     const action = new Action({
       type,
       id,
+      status,
+      queries,
+      started_at,
+      last_updated_at,
+      wharfie_version,
+      function_name,
+      inputs,
+      placement,
+      retry,
+      error,
+      attempt_count,
+      outputs,
       resource_id: this.resource_id,
       operation_id: this.id,
     });

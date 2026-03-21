@@ -95,12 +95,15 @@ const chunk = (arr, size) => {
 };
 
 /**
- * The adapter stores action.status redundantly at the top-level for some backends.
+ * The adapter stores selected status fields redundantly at the top-level for some backends.
  * @param {Record<string, any>} record - record.
  * @returns {Record<string, any>} - Result.
  */
 const normalizeRecord = (record) => {
-  if (record?.data?.record_type === Action.RecordType) {
+  if (
+    record?.data?.record_type === Action.RecordType ||
+    record?.data?.record_type === Operation.RecordType
+  ) {
     return { ...record, status: record.data.status };
   }
   return record;
@@ -121,11 +124,12 @@ const normalizeRecord = (record) => {
  * @property {(resource_id: string, operation_id: string, action_id: string) => Promise<Action | null>} getAction - getAction.
  * @property {(action: { toRecords: () => Record<string, any>[] }) => Promise<void>} putAction -
  * @property {(action: Action, new_status: string, overrideTableName?: string) => Promise<boolean>} updateActionStatus - updateActionStatus.
+ * @property {(operation: Operation, new_status: import('../../graph/operation.js').WharfieOperationStatusEnum, overrideTableName?: string) => Promise<boolean>} updateOperationStatus - updateOperationStatus.
  * @property {(query: { toRecord: () => any }) => Promise<void>} putQuery -
  * @property {(queries: Array<{ toRecord: () => any }>) => Promise<void>} putQueries -
  * @property {(resource_id: string, operation_id: string, action_id: string, query_id: string) => Promise<Query | null>} getQuery - getQuery.
  * @property {(resource_id: string, operation_id: string, action_id: string) => Promise<Query[]>} getQueries - getQueries.
- * @property {(operation: Operation, action_type: import('../../graph/action.js').WharfieActionTypeEnum) => Promise<boolean>} checkActionPrerequisites - checkActionPrerequisites.
+ * @property {(operation: Operation, action_identifier: string) => Promise<boolean>} checkActionPrerequisites - checkActionPrerequisites.
  * @property {(resource_id: string, operation_id?: string) => Promise<{ operations: Operation[]; actions: Action[]; queries: Query[] }>} getRecords -
  */
 
@@ -309,6 +313,75 @@ export function createOperationsTable({ db, tableName } = {}) {
   }
 
   /**
+   * Optimistic status transition for an operation record.
+   * @param {Operation} operation - operation.
+   * @param {import('../../graph/operation.js').WharfieOperationStatusEnum} new_status - new_status.
+   * @param {string} [overrideTableName] - overrideTableName.
+   * @returns {Promise<boolean>} - Result.
+   */
+  async function updateOperationStatus(
+    operation,
+    new_status,
+    overrideTableName = _tableName,
+  ) {
+    const key = `${operation.resource_id}#${operation.id}`;
+
+    const current = await dbClient.get({
+      tableName: overrideTableName,
+      keyName: KEY_NAME,
+      keyValue: operation.resource_id,
+      sortKeyName: SORT_KEY_NAME,
+      sortKeyValue: key,
+      consistentRead: true,
+    });
+
+    if (!current) return false;
+
+    const storedStatus = current.status ?? current?.data?.status;
+    if (storedStatus !== operation.status) return false;
+
+    const nextUpdatedAt = Date.now();
+
+    try {
+      await dbClient.update({
+        tableName: overrideTableName,
+        keyName: KEY_NAME,
+        keyValue: operation.resource_id,
+        sortKeyName: SORT_KEY_NAME,
+        sortKeyValue: key,
+        updates: [
+          { property: ['data', 'status'], propertyValue: new_status },
+          {
+            property: ['data', 'last_updated_at'],
+            propertyValue: nextUpdatedAt,
+          },
+          { property: ['status'], propertyValue: new_status },
+        ],
+        conditions:
+          current.status !== undefined ? [eq('status', storedStatus)] : [],
+      });
+    } catch (error) {
+      if (isConditionalCheckFailed(error)) return false;
+      throw error;
+    }
+
+    const after = await dbClient.get({
+      tableName: overrideTableName,
+      keyName: KEY_NAME,
+      keyValue: operation.resource_id,
+      sortKeyName: SORT_KEY_NAME,
+      sortKeyValue: key,
+      consistentRead: true,
+    });
+
+    const afterStatus = after?.status ?? after?.data?.status;
+    return (
+      afterStatus === new_status &&
+      after?.data?.last_updated_at === nextUpdatedAt
+    );
+  }
+
+  /**
    * @param {Operation} operation - operation.
    * @returns {Promise<void>} - Result.
    */
@@ -445,6 +518,8 @@ export function createOperationsTable({ db, tableName } = {}) {
     const storedStatus = current.status ?? current?.data?.status;
     if (storedStatus !== action.status) return false;
 
+    const nextUpdatedAt = Date.now();
+
     try {
       await dbClient.update({
         tableName: overrideTableName,
@@ -454,6 +529,10 @@ export function createOperationsTable({ db, tableName } = {}) {
         sortKeyValue: key,
         updates: [
           { property: ['data', 'status'], propertyValue: new_status },
+          {
+            property: ['data', 'last_updated_at'],
+            propertyValue: nextUpdatedAt,
+          },
           { property: ['status'], propertyValue: new_status },
         ],
         conditions:
@@ -474,7 +553,10 @@ export function createOperationsTable({ db, tableName } = {}) {
     });
 
     const afterStatus = after?.status ?? after?.data?.status;
-    return afterStatus === new_status;
+    return (
+      afterStatus === new_status &&
+      after?.data?.last_updated_at === nextUpdatedAt
+    );
   }
 
   /**
@@ -552,20 +634,27 @@ export function createOperationsTable({ db, tableName } = {}) {
   }
 
   /**
-   * Check whether prerequisite actions for a given action type have completed.
+   * Check whether prerequisite actions for a given action have completed.
    *
-   * The operation graph stores edges keyed by action *ids*; most call-sites refer
-   * to actions by their *type*.
+   * The operation graph stores edges keyed by action ids. Older call-sites may
+   * still pass an action type, so this helper accepts either an id or a type and
+   * prefers exact id matches when available.
    * @param {Operation} operation - operation.
-   * @param {import('../../graph/action.js').WharfieActionTypeEnum} action_type - action_type.
+   * @param {string} action_identifier - action identifier.
    * @returns {Promise<boolean>} - Result.
    */
-  async function checkActionPrerequisites(operation, action_type) {
-    let actionId;
-    try {
-      actionId = operation.getActionIdByType(action_type);
-    } catch {
-      return false;
+  async function checkActionPrerequisites(operation, action_identifier) {
+    let actionId = action_identifier;
+    if (!operation.actions.has(actionId)) {
+      try {
+        actionId = operation.getActionIdByType(
+          /** @type {import('../../graph/action.js').WharfieActionTypeEnum} */ (
+            action_identifier
+          ),
+        );
+      } catch {
+        return false;
+      }
     }
 
     const prerequisites = operation.getUpstreamActionIds(actionId) || [];
@@ -702,6 +791,7 @@ export function createOperationsTable({ db, tableName } = {}) {
     getAction,
     putAction,
     updateActionStatus,
+    updateOperationStatus,
     putQuery,
     putQueries,
     getQuery,

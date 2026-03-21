@@ -107,7 +107,7 @@ Output requirements
 At the end, return all of the following:
 
 1. A downloadable zip containing every changed file as a complete drop-in replacement, preserving repo-relative paths only.
-2. A concise changelog.
+2. A concise changelog. including a copy-able git commit message.
 3. The exact commands you ran and their results.
 4. Final validation status for:
    - verify.offline.sh repo
