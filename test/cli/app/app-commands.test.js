@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { existsSync, readFileSync, promises as fsp } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -24,6 +24,26 @@ const packageDemoDir = path.join(
   'apps',
   'package-demo',
 );
+const currentTarget = {
+  nodeVersion: process.versions.node,
+  platform: process.platform,
+  architecture: process.arch,
+};
+const alternateTarget = {
+  nodeVersion: process.versions.node,
+  platform: process.platform,
+  architecture: process.arch === 'x64' ? 'arm64' : 'x64',
+};
+
+/**
+ * @param {{ nodeVersion: string, platform: string, architecture: string, libc?: string }} target - target.
+ * @returns {string} - Result.
+ */
+function getTargetSelector(target) {
+  return `node${target.nodeVersion}-${target.platform}-${target.architecture}${
+    target.libc ? `-${target.libc}` : ''
+  }`;
+}
 
 /**
  * @param {string[]} args - args.
@@ -89,143 +109,129 @@ describe('wharfie app commands', () => {
     });
   });
 
-  it('prints a compiled manifest through the CLI with function definitions', async () => {
-    const dir = await fsp.mkdtemp(
-      path.join(os.tmpdir(), 'wharfie-manifest-command-test-'),
+  it('packages every app target when no target filter is provided', () => {
+    const outputDir = path.join(
+      os.tmpdir(),
+      'wharfie-package-command-test',
+      'all-targets',
+      String(process.pid),
     );
-    const helloResourcesPath = fileURLToPath(
-      new URL('../../fixtures/actors/hello-resources.js', import.meta.url),
-    );
-
-    await fsp.writeFile(
-      path.join(dir, 'package.json'),
-      JSON.stringify({ type: 'module' }),
-    );
-    await fsp.writeFile(
-      path.join(dir, 'wharfie.app.js'),
-      `
-        export default {
-          name: 'cli-manifest-app',
-          properties: {
-            targets: [
-              {
-                nodeVersion: '24',
-                platform: 'linux',
-                architecture: 'x64',
-              },
-            ],
-            resources: {
-              db: {
-                adapter: 'vanilla',
-                options: { path: '.wharfie' },
-              },
-            },
-          },
-          functions: [
-            {
-              name: 'hello-resources',
-              entrypoint: {
-                path: ${JSON.stringify(helloResourcesPath)},
-                export: 'helloResources',
-              },
-              properties: {
-                external: ['lmdb'],
-                environmentVariables: {
-                  MODE: 'cli',
-                },
-                resources: {
-                  queue: {
-                    adapter: 'vanilla',
-                    options: { path: '.queue' },
-                  },
-                },
-              },
-            },
-          ],
-        };
-      `,
+    const traceFile = path.join(
+      os.tmpdir(),
+      'wharfie-package-command-test',
+      'traces',
+      `all-targets-${process.pid}.json`,
     );
 
-    const result = runCli(['app', 'manifest', dir, '--no-pretty']);
+    const result = runCli(
+      [
+        'app',
+        'package',
+        packageDemoDir,
+        '--output-dir',
+        outputDir,
+        '--no-pretty',
+      ],
+      {
+        env: {
+          ...process.env,
+          WHARFIE_PACKAGE_DEMO_TRACE_FILE: traceFile,
+        },
+      },
+    );
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe('');
 
+    /** @type {{ app: { name: string }, outputDir: string, targets: { nodeVersion: string, platform: string, architecture: string, libc?: string }[], artifacts: { fileName: string, path: string, target: { nodeVersion: string, platform: string, architecture: string, libc?: string } }[] }} */
     const payload = JSON.parse(result.stdout);
-    expect(payload).toEqual({
-      app: { name: 'cli-manifest-app' },
-      targets: [
-        {
-          nodeVersion: '24',
-          platform: 'linux',
-          architecture: 'x64',
-        },
-      ],
-      capabilities: {
-        db: {
-          adapter: 'vanilla',
-          options: { path: '.wharfie' },
-        },
-      },
-      resources: {
-        db: {
-          adapter: 'vanilla',
-          options: { path: '.wharfie' },
-        },
-      },
-      functions: [
-        {
-          name: 'hello-resources',
-          entrypoint: {
-            path: helloResourcesPath,
-            export: 'helloResources',
-          },
-          external: [{ name: 'lmdb', version: expect.any(String) }],
-          environmentVariables: {
-            MODE: 'cli',
-          },
-          resources: {
-            queue: {
-              adapter: 'vanilla',
-              options: { path: '.queue' },
-            },
-          },
-        },
+    expect(payload.app).toEqual({ name: 'package-demo' });
+    expect(payload.outputDir).toBe(outputDir);
+    expect(payload.targets).toHaveLength(2);
+    expect(payload.artifacts).toHaveLength(2);
+    expect(payload.targets).toEqual([currentTarget, alternateTarget]);
+    expect(payload.artifacts.map((artifact) => artifact.target)).toEqual([
+      alternateTarget,
+      currentTarget,
+    ]);
+    payload.artifacts.forEach((artifact) => {
+      expect(existsSync(artifact.path)).toBe(true);
+      expect(readFileSync(artifact.path, 'utf8')).toContain('node');
+    });
+    expect(readdirSync(outputDir).sort()).toEqual(
+      payload.artifacts.map((artifact) => artifact.fileName).sort(),
+    );
+    expect(JSON.parse(readFileSync(traceFile, 'utf8'))).toEqual({
+      builtTargets: [
+        getTargetSelector(currentTarget),
+        getTargetSelector(alternateTarget),
       ],
     });
   });
 
-  it('packages an app through the CLI and copies artifacts into the output directory', () => {
+  it('packages only the selected target when --target is provided', () => {
     const outputDir = path.join(
       os.tmpdir(),
       'wharfie-package-command-test',
+      'selected-target',
       String(process.pid),
     );
+    const traceFile = path.join(
+      os.tmpdir(),
+      'wharfie-package-command-test',
+      'traces',
+      `selected-target-${process.pid}.json`,
+    );
+    const targetSelector = getTargetSelector(currentTarget);
 
-    const result = runCli([
-      'app',
-      'package',
-      packageDemoDir,
-      '--output-dir',
-      outputDir,
-      '--no-pretty',
-    ]);
+    const result = runCli(
+      [
+        'app',
+        'package',
+        packageDemoDir,
+        '--output-dir',
+        outputDir,
+        '--target',
+        targetSelector,
+        '--no-pretty',
+      ],
+      {
+        env: {
+          ...process.env,
+          WHARFIE_PACKAGE_DEMO_TRACE_FILE: traceFile,
+        },
+      },
+    );
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe('');
 
+    /** @type {{ targets: { nodeVersion: string, platform: string, architecture: string, libc?: string }[], artifacts: { fileName: string, path: string, target: { nodeVersion: string, platform: string, architecture: string, libc?: string } }[] }} */
     const payload = JSON.parse(result.stdout);
-    expect(payload.app).toEqual({ name: 'package-demo' });
-    expect(payload.outputDir).toBe(outputDir);
+    expect(payload.targets).toEqual([currentTarget]);
     expect(payload.artifacts).toHaveLength(1);
-    expect(payload.artifacts[0].target).toMatchObject({
-      nodeVersion: process.versions.node,
-      platform: process.platform,
-      architecture: process.arch,
+    expect(payload.artifacts[0].target).toEqual(currentTarget);
+    expect(readdirSync(outputDir)).toEqual([payload.artifacts[0].fileName]);
+    expect(JSON.parse(readFileSync(traceFile, 'utf8'))).toEqual({
+      builtTargets: [targetSelector],
     });
-    expect(existsSync(payload.artifacts[0].path)).toBe(true);
-    expect(readFileSync(payload.artifacts[0].path, 'utf8')).toContain(
-      'package-demo',
-    );
+  });
+
+  it('fails with a helpful error when a requested target does not exist', () => {
+    const result = runCli([
+      'app',
+      'package',
+      packageDemoDir,
+      '--target',
+      'node99.99.99-linux-x64',
+      '--no-pretty',
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('Unknown app build target');
+    expect(result.stderr).toContain('node99.99.99-linux-x64');
+    expect(result.stderr).toContain(getTargetSelector(currentTarget));
+    expect(result.stderr).toContain(getTargetSelector(alternateTarget));
   });
 });

@@ -36,6 +36,13 @@ import { loadApp } from './load-app.js';
  */
 
 /**
+ * @typedef PackageLocalAppOptions
+ * @property {string} dir - App directory.
+ * @property {string} [outputDir] - outputDir.
+ * @property {string[]} [targets] - Build target selectors.
+ */
+
+/**
  * @param {unknown} value - value.
  * @returns {value is Record<string, any>} - Result.
  */
@@ -139,6 +146,69 @@ function getSeaBuildResources(actorSystem) {
 }
 
 /**
+ * @param {string[] | undefined} targetSelectors - targetSelectors.
+ * @returns {string[]} - Result.
+ */
+function normalizeTargetSelectors(targetSelectors) {
+  if (!Array.isArray(targetSelectors)) {
+    return [];
+  }
+
+  return [
+    ...new Set(
+      targetSelectors
+        .map((selector) => String(selector).trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+/**
+ * @param {any[] | undefined} targets - targets.
+ * @returns {string[]} - Result.
+ */
+function getBuildTargetSelectors(targets) {
+  if (!Array.isArray(targets)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      targets.map((target) => ActorSystem.getBuildTargetSelector(target)),
+    ),
+  );
+}
+
+/**
+ * @param {string[]} requestedTargetSelectors - requestedTargetSelectors.
+ * @param {string[]} availableTargetSelectors - availableTargetSelectors.
+ * @returns {void}
+ */
+function assertKnownTargetSelectors(
+  requestedTargetSelectors,
+  availableTargetSelectors,
+) {
+  const missingTargetSelectors = requestedTargetSelectors.filter(
+    (targetSelector) => !availableTargetSelectors.includes(targetSelector),
+  );
+  if (missingTargetSelectors.length === 0) {
+    return;
+  }
+
+  throw new Error(
+    `${
+      missingTargetSelectors.length === 1
+        ? 'Unknown app build target'
+        : 'Unknown app build targets'
+    }: ${missingTargetSelectors.join(', ')}. Available targets: ${
+      availableTargetSelectors.length > 0
+        ? availableTargetSelectors.join(', ')
+        : '(none)'
+    }`,
+  );
+}
+
+/**
  * @param {RunLocalAppOptions} options - options.
  * @returns {Promise<{ manifest: any, result: any }>} - Result.
  */
@@ -165,11 +235,36 @@ export async function runLocalApp(options) {
 }
 
 /**
- * @param {{ dir: string, outputDir?: string }} options - options.
+ * @param {PackageLocalAppOptions} options - options.
  * @returns {Promise<PackageLocalAppResult>} - Result.
  */
 export async function packageLocalApp(options) {
-  const { appExport, manifest } = await loadApp({ dir: options.dir });
+  const requestedTargetSelectors = normalizeTargetSelectors(options.targets);
+
+  let loadedApp = await loadApp({
+    dir: options.dir,
+    cacheBust: requestedTargetSelectors.length > 0,
+  });
+
+  if (requestedTargetSelectors.length > 0) {
+    const availableTargetSelectors = getBuildTargetSelectors(
+      loadedApp.manifest.targets,
+    );
+    assertKnownTargetSelectors(
+      requestedTargetSelectors,
+      availableTargetSelectors,
+    );
+    loadedApp = await ActorSystem.withRequestedBuildTargetSelectors(
+      requestedTargetSelectors,
+      async () =>
+        await loadApp({
+          dir: options.dir,
+          cacheBust: true,
+        }),
+    );
+  }
+
+  const { appExport, manifest } = loadedApp;
   const actorSystem = assertPackageableApp(appExport, manifest);
 
   if (typeof actorSystem.initializeEnvironment === 'function') {

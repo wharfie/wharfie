@@ -45,6 +45,81 @@ import path from 'node:path';
  */
 
 /**
+ * @typedef ResolvedBuildTarget
+ * @property {string} nodeVersion - nodeVersion.
+ * @property {TargetPlatform} platform - platform.
+ * @property {TargetArch} architecture - architecture.
+ * @property {TargetLibc} [libc] - libc.
+ */
+
+/**
+ * @param {BuildTarget | ResolvedBuildTarget | null | undefined} target - target.
+ * @returns {ResolvedBuildTarget | null} - Result.
+ */
+function resolveBuildTarget(target) {
+  if (!target || typeof target !== 'object') return null;
+
+  const nodeVersionValue =
+    typeof target.nodeVersion === 'function'
+      ? target.nodeVersion()
+      : target.nodeVersion;
+  const platformValue =
+    typeof target.platform === 'function' ? target.platform() : target.platform;
+  const architectureValue =
+    typeof target.architecture === 'function'
+      ? target.architecture()
+      : target.architecture;
+  const libcValue =
+    typeof target.libc === 'function' ? target.libc() : target.libc;
+
+  if (!nodeVersionValue || !platformValue || !architectureValue) {
+    return null;
+  }
+
+  /** @type {ResolvedBuildTarget} */
+  const resolved = {
+    nodeVersion: String(nodeVersionValue),
+    platform: /** @type {TargetPlatform} */ (String(platformValue)),
+    architecture: /** @type {TargetArch} */ (String(architectureValue)),
+  };
+
+  if (libcValue) {
+    resolved.libc = /** @type {TargetLibc} */ (String(libcValue));
+  }
+
+  return resolved;
+}
+
+/**
+ * @param {BuildTarget[] | function(): BuildTarget[] | undefined} targets - targets.
+ * @returns {ResolvedBuildTarget[]} - Result.
+ */
+function resolveConfiguredTargets(targets) {
+  const resolvedTargets = typeof targets === 'function' ? targets() : targets;
+  if (!Array.isArray(resolvedTargets)) {
+    return [];
+  }
+
+  return resolvedTargets.reduce((acc, target) => {
+    const resolved = resolveBuildTarget(target);
+    if (resolved) {
+      acc.push(resolved);
+    }
+    return acc;
+  }, /** @type {ResolvedBuildTarget[]} */ ([]));
+}
+
+/**
+ * @param {ResolvedBuildTarget} target - target.
+ * @returns {string} - Result.
+ */
+function buildTargetSelector(target) {
+  return `node${target.nodeVersion}-${target.platform}-${target.architecture}${
+    target.libc ? `-${target.libc}` : ''
+  }`;
+}
+
+/**
  * @typedef WharfieActorSystemOptions
  * @property {string} name - name.
  * @property {import('./function.js').default[]} [functions] - functions.
@@ -77,6 +152,14 @@ class ActorSystem extends BuildResourceGroup {
       ActorSystem.DefaultProperties,
       properties,
     );
+    const requestedTargetSelectors =
+      ActorSystem.getRequestedBuildTargetSelectors();
+    if (requestedTargetSelectors) {
+      propertiesWithDefaults.targets = ActorSystem.filterBuildTargets(
+        propertiesWithDefaults.targets,
+        requestedTargetSelectors,
+      );
+    }
     super({
       name,
       parent,
@@ -325,6 +408,88 @@ class ActorSystem extends BuildResourceGroup {
     return this.getResource(`${this.name}-build`).get('binaryPath');
   }
 
+  /**
+   * @param {BuildTarget[] | function(): BuildTarget[] | undefined} targets - targets.
+   * @returns {ResolvedBuildTarget[]} - Result.
+   */
+  static resolveBuildTargets(targets) {
+    return resolveConfiguredTargets(targets);
+  }
+
+  /**
+   * @param {BuildTarget | ResolvedBuildTarget} target - target.
+   * @returns {string} - Result.
+   */
+  static getBuildTargetSelector(target) {
+    const resolvedTarget = resolveBuildTarget(target);
+    if (!resolvedTarget) {
+      throw new Error(
+        'Build target must include nodeVersion, platform, and architecture.',
+      );
+    }
+    return buildTargetSelector(resolvedTarget);
+  }
+
+  /**
+   * @param {BuildTarget[] | function(): BuildTarget[] | undefined} targets - targets.
+   * @param {string[] | null | undefined} [requestedTargetSelectors] - requestedTargetSelectors.
+   * @returns {ResolvedBuildTarget[]} - Result.
+   */
+  static filterBuildTargets(
+    targets,
+    requestedTargetSelectors = ActorSystem.getRequestedBuildTargetSelectors(),
+  ) {
+    const resolvedTargets = resolveConfiguredTargets(targets);
+    if (
+      !Array.isArray(requestedTargetSelectors) ||
+      requestedTargetSelectors.length === 0
+    ) {
+      return resolvedTargets;
+    }
+
+    const requested = new Set(
+      requestedTargetSelectors
+        .map((selector) => String(selector).trim())
+        .filter(Boolean),
+    );
+    return resolvedTargets.filter((target) =>
+      requested.has(buildTargetSelector(target)),
+    );
+  }
+
+  /**
+   * @returns {string[] | null} - Result.
+   */
+  static getRequestedBuildTargetSelectors() {
+    return ActorSystem.RequestedBuildTargetSelectors;
+  }
+
+  /**
+   * @template T
+   * @param {string[] | null | undefined} requestedTargetSelectors - requestedTargetSelectors.
+   * @param {() => Promise<T>} fn - fn.
+   * @returns {Promise<T>} - Result.
+   */
+  static async withRequestedBuildTargetSelectors(requestedTargetSelectors, fn) {
+    const previousSelectors = ActorSystem.RequestedBuildTargetSelectors;
+    ActorSystem.RequestedBuildTargetSelectors =
+      Array.isArray(requestedTargetSelectors) &&
+      requestedTargetSelectors.length > 0
+        ? [
+            ...new Set(
+              requestedTargetSelectors
+                .map((selector) => String(selector).trim())
+                .filter(Boolean),
+            ),
+          ]
+        : null;
+    try {
+      return await fn();
+    } finally {
+      ActorSystem.RequestedBuildTargetSelectors = previousSelectors;
+    }
+  }
+
   async run() {
     await cli();
     //   if (process.argv.length <= 2) {
@@ -357,5 +522,7 @@ ActorSystem.DefaultProperties = {
   functions: [],
   resources: {},
 };
+/** @type {string[] | null} */
+ActorSystem.RequestedBuildTargetSelectors = null;
 
 export default ActorSystem;
