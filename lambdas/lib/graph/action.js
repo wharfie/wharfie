@@ -14,6 +14,7 @@ import { WHARFIE_VERSION } from '../version.js';
  * 'SWAP_RESOURCE'|
  * 'REGISTER_PARTITION'|
  * 'RUN_SINGLE_COMPACTION'|
+ * 'INVOKE_FUNCTION'|
  * 'FINISH'|
  * 'SIDE_EFFECT__CLOUDWATCH'|
  * 'SIDE_EFFECT__DAGSTER'|
@@ -38,6 +39,7 @@ const Type = {
   RESPOND_TO_CLOUDFORMATION: 'RESPOND_TO_CLOUDFORMATION',
   REGISTER_PARTITION: 'REGISTER_PARTITION',
   RUN_SINGLE_COMPACTION: 'RUN_SINGLE_COMPACTION',
+  INVOKE_FUNCTION: 'INVOKE_FUNCTION',
   FINISH: 'FINISH',
   SIDE_EFFECT__CLOUDWATCH: 'SIDE_EFFECT__CLOUDWATCH',
   SIDE_EFFECT__DAGSTER: 'SIDE_EFFECT__DAGSTER',
@@ -71,9 +73,15 @@ const Status = {
  * @property {WharfieActionTypeEnum} type - type.
  * @property {WharfieActionStatusEnum} [status] - status.
  * @property {import('./query.js').default[]} [queries] - queries.
- * @property {number} [started_at] - start timestamp
- * @property {number} [last_updated_at] - update_at_timestamp
+ * @property {number} [started_at] - start timestamp.
+ * @property {number} [last_updated_at] - update_at_timestamp.
  * @property {string} [wharfie_version] - wharfie_version.
+ * @property {string} [function_name] - Function name used by INVOKE_FUNCTION actions.
+ * @property {any} [inputs] - Invocation inputs for generic workflow actions.
+ * @property {Record<string, any>} [placement] - Placement hints for the action executor.
+ * @property {Record<string, any>} [retry] - Retry metadata for the action executor.
+ * @property {any} [error] - Last persisted execution error.
+ * @property {number} [attempt_count] - Number of execution attempts recorded for this action.
  * @property {any} [outputs] - outputs.
  */
 
@@ -91,7 +99,13 @@ class Action {
     started_at = Date.now(),
     last_updated_at = started_at,
     wharfie_version = WHARFIE_VERSION,
-    outputs = {},
+    function_name,
+    inputs,
+    placement,
+    retry,
+    error,
+    attempt_count = 0,
+    outputs,
   }) {
     this.id = id;
     this.resource_id = resource_id;
@@ -102,6 +116,12 @@ class Action {
     this.started_at = started_at;
     this.last_updated_at = last_updated_at;
     this.wharfie_version = wharfie_version;
+    this.function_name = function_name;
+    this.inputs = inputs;
+    this.placement = placement;
+    this.retry = retry;
+    this.error = error;
+    this.attempt_count = attempt_count;
     this.outputs = outputs;
   }
 
@@ -129,6 +149,12 @@ class Action {
         started_at: this.started_at,
         last_updated_at: this.last_updated_at,
         wharfie_version: this.wharfie_version,
+        function_name: this.function_name,
+        inputs: this.inputs,
+        placement: this.placement,
+        retry: this.retry,
+        error: this.error,
+        attempt_count: this.attempt_count,
         record_type: Action.RecordType,
         outputs: this.outputs,
       },
@@ -154,6 +180,12 @@ class Action {
       started_at: action_record.data.started_at,
       last_updated_at: action_record.data.last_updated_at,
       wharfie_version: action_record.data.wharfie_version,
+      function_name: action_record.data.function_name,
+      inputs: action_record.data.inputs,
+      placement: action_record.data.placement,
+      retry: action_record.data.retry,
+      error: action_record.data.error,
+      attempt_count: action_record.data.attempt_count,
       outputs: action_record.data.outputs,
     });
     for (const query_record of query_records) {
@@ -176,6 +208,12 @@ class Action {
       started_at: action_record.data.started_at,
       last_updated_at: action_record.data.last_updated_at,
       wharfie_version: action_record.data.wharfie_version,
+      function_name: action_record.data.function_name,
+      inputs: action_record.data.inputs,
+      placement: action_record.data.placement,
+      retry: action_record.data.retry,
+      error: action_record.data.error,
+      attempt_count: action_record.data.attempt_count,
       outputs: action_record.data.outputs,
     });
   }

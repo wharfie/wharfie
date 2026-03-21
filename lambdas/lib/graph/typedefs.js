@@ -52,6 +52,13 @@
  * @property {string} id - Id of the action
  * @property {import('./action.js').WharfieActionTypeEnum} type - type of action
  * @property {import('./action.js').WharfieActionStatusEnum} status - status of the action
+ * @property {string} [function_name] - Function name used by generic invocation actions
+ * @property {any} [inputs] - Invocation inputs stored with the action
+ * @property {Record<string, any>} [placement] - Placement hints stored with the action
+ * @property {Record<string, any>} [retry] - Retry metadata stored with the action
+ * @property {any} [error] - Persisted execution error metadata
+ * @property {number} [attempt_count] - Number of execution attempts recorded for the action
+ * @property {any} [outputs] - Persisted execution outputs
  * @property {number} started_at - started_at
  * @property {number} last_updated_at - update_at_timestamp
  * @property {string} wharfie_version - version of wharfie
