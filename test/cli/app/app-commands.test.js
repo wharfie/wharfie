@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -86,6 +86,112 @@ describe('wharfie app commands', () => {
       },
       queueBody: JSON.stringify({ hello: 'stdin-user' }),
       objectBody: 'hello stdin-user',
+    });
+  });
+
+  it('prints a compiled manifest through the CLI with function definitions', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-manifest-command-test-'),
+    );
+    const helloResourcesPath = fileURLToPath(
+      new URL('../../fixtures/actors/hello-resources.js', import.meta.url),
+    );
+
+    await fsp.writeFile(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ type: 'module' }),
+    );
+    await fsp.writeFile(
+      path.join(dir, 'wharfie.app.js'),
+      `
+        export default {
+          name: 'cli-manifest-app',
+          properties: {
+            targets: [
+              {
+                nodeVersion: '24',
+                platform: 'linux',
+                architecture: 'x64',
+              },
+            ],
+            resources: {
+              db: {
+                adapter: 'vanilla',
+                options: { path: '.wharfie' },
+              },
+            },
+          },
+          functions: [
+            {
+              name: 'hello-resources',
+              entrypoint: {
+                path: ${JSON.stringify(helloResourcesPath)},
+                export: 'helloResources',
+              },
+              properties: {
+                external: ['lmdb'],
+                environmentVariables: {
+                  MODE: 'cli',
+                },
+                resources: {
+                  queue: {
+                    adapter: 'vanilla',
+                    options: { path: '.queue' },
+                  },
+                },
+              },
+            },
+          ],
+        };
+      `,
+    );
+
+    const result = runCli(['app', 'manifest', dir, '--no-pretty']);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+
+    const payload = JSON.parse(result.stdout);
+    expect(payload).toEqual({
+      app: { name: 'cli-manifest-app' },
+      targets: [
+        {
+          nodeVersion: '24',
+          platform: 'linux',
+          architecture: 'x64',
+        },
+      ],
+      capabilities: {
+        db: {
+          adapter: 'vanilla',
+          options: { path: '.wharfie' },
+        },
+      },
+      resources: {
+        db: {
+          adapter: 'vanilla',
+          options: { path: '.wharfie' },
+        },
+      },
+      functions: [
+        {
+          name: 'hello-resources',
+          entrypoint: {
+            path: helloResourcesPath,
+            export: 'helloResources',
+          },
+          external: [{ name: 'lmdb', version: expect.any(String) }],
+          environmentVariables: {
+            MODE: 'cli',
+          },
+          resources: {
+            queue: {
+              adapter: 'vanilla',
+              options: { path: '.queue' },
+            },
+          },
+        },
+      ],
     });
   });
 
