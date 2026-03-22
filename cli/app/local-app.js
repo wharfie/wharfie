@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import ActorSystem from '../../lambdas/lib/actor/resources/builds/actor-system.js';
 import SeaBuild from '../../lambdas/lib/actor/resources/builds/sea-build.js';
+import { withResourceScope } from '../../lambdas/lib/actor/resources/resource-scope.js';
 
 import { loadApp } from './load-app.js';
 
@@ -21,25 +22,33 @@ import { loadApp } from './load-app.js';
  */
 
 /**
+ * @typedef PackageArtifactTarget
+ * @property {string} nodeVersion - nodeVersion.
+ * @property {string} platform - platform.
+ * @property {string} architecture - architecture.
+ * @property {string} [libc] - libc.
+ */
+
+/**
  * @typedef PackageArtifactSummary
  * @property {string} fileName - fileName.
  * @property {string} path - path.
- * @property {{ nodeVersion: string, platform: string, architecture: string, libc?: string }} target - target.
+ * @property {PackageArtifactTarget} target - target.
+ */
+
+/**
+ * @typedef PackageLocalAppOptions
+ * @property {string} dir - dir.
+ * @property {string} [outputDir] - outputDir.
+ * @property {string[]} [targetFilters] - targetFilters.
  */
 
 /**
  * @typedef PackageLocalAppResult
  * @property {{ name: string }} app - App metadata.
- * @property {any[]} [targets] - targets.
+ * @property {PackageArtifactTarget[]} [targets] - targets.
  * @property {string} outputDir - outputDir.
  * @property {PackageArtifactSummary[]} artifacts - artifacts.
- */
-
-/**
- * @typedef PackageLocalAppOptions
- * @property {string} dir - App directory.
- * @property {string} [outputDir] - outputDir.
- * @property {string[]} [targets] - Build target selectors.
  */
 
 /**
@@ -94,7 +103,7 @@ function assertRunnableApp(appExport) {
 
 /**
  * @param {any} appExport - appExport.
- * @param {{ app: { name: string }, targets?: any[] }} manifest - manifest.
+ * @param {{ app: { name: string }, targets?: PackageArtifactTarget[] }} manifest - manifest.
  * @returns {ActorSystem} - Result.
  */
 function assertPackageableApp(appExport, manifest) {
@@ -146,65 +155,111 @@ function getSeaBuildResources(actorSystem) {
 }
 
 /**
- * @param {string[] | undefined} targetSelectors - targetSelectors.
+ * @param {PackageArtifactTarget} target - target.
+ * @returns {string} - Result.
+ */
+function getTargetKey(target) {
+  return [
+    String(target.nodeVersion),
+    String(target.platform),
+    String(target.architecture),
+    typeof target.libc === 'string' ? target.libc : '',
+  ].join('|');
+}
+
+/**
+ * @param {PackageArtifactTarget} target - target.
  * @returns {string[]} - Result.
  */
-function normalizeTargetSelectors(targetSelectors) {
-  if (!Array.isArray(targetSelectors)) {
-    return [];
-  }
+function getTargetAliases(target) {
+  const libcSuffix = typeof target.libc === 'string' ? `-${target.libc}` : '';
+  const libcPath = typeof target.libc === 'string' ? `/${target.libc}` : '';
 
   return [
-    ...new Set(
-      targetSelectors
-        .map((selector) => String(selector).trim())
-        .filter(Boolean),
-    ),
+    `${target.platform}-${target.architecture}`,
+    `${target.nodeVersion}-${target.platform}-${target.architecture}`,
+    `${target.platform}-${target.architecture}${libcSuffix}`,
+    `${target.nodeVersion}-${target.platform}-${target.architecture}${libcSuffix}`,
+    `node${target.nodeVersion}-${target.platform}-${target.architecture}${libcSuffix}`,
+    `${target.platform}/${target.architecture}${libcPath}`,
+    `${target.nodeVersion}/${target.platform}/${target.architecture}${libcPath}`,
   ];
 }
 
 /**
- * @param {any[] | undefined} targets - targets.
- * @returns {string[]} - Result.
+ * @param {PackageArtifactTarget[]} targets - targets.
+ * @param {string[] | undefined} targetFilters - targetFilters.
+ * @returns {PackageArtifactTarget[]} - Result.
  */
-function getBuildTargetSelectors(targets) {
-  if (!Array.isArray(targets)) {
-    return [];
+function selectTargets(targets, targetFilters) {
+  if (!Array.isArray(targetFilters) || targetFilters.length === 0) {
+    return targets;
   }
 
-  return Array.from(
-    new Set(
-      targets.map((target) => ActorSystem.getBuildTargetSelector(target)),
-    ),
-  );
+  /** @type {PackageArtifactTarget[]} */
+  const selected = [];
+  const seen = new Set();
+
+  for (const rawFilter of targetFilters) {
+    const filter = String(rawFilter).trim();
+    if (!filter) continue;
+
+    const matches = targets.filter((target) =>
+      getTargetAliases(target).includes(filter),
+    );
+
+    if (matches.length === 0) {
+      throw new Error(
+        `Unknown target '${filter}'. Available targets: ${targets
+          .map((target) => getTargetAliases(target)[1])
+          .join(', ')}`,
+      );
+    }
+
+    if (matches.length > 1) {
+      throw new Error(
+        `Target '${filter}' is ambiguous. Use one of: ${matches
+          .map((target) => getTargetAliases(target)[1])
+          .join(', ')}`,
+      );
+    }
+
+    const match = matches[0];
+    const key = getTargetKey(match);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    selected.push(match);
+  }
+
+  return selected;
 }
 
 /**
- * @param {string[]} requestedTargetSelectors - requestedTargetSelectors.
- * @param {string[]} availableTargetSelectors - availableTargetSelectors.
+ * @param {ActorSystem} actorSystem - actorSystem.
+ * @param {PackageArtifactTarget[]} selectedTargets - selectedTargets.
  * @returns {void}
  */
-function assertKnownTargetSelectors(
-  requestedTargetSelectors,
-  availableTargetSelectors,
-) {
-  const missingTargetSelectors = requestedTargetSelectors.filter(
-    (targetSelector) => !availableTargetSelectors.includes(targetSelector),
-  );
-  if (missingTargetSelectors.length === 0) {
+function applyTargetSelection(actorSystem, selectedTargets) {
+  actorSystem.set('targets', selectedTargets);
+
+  const usesDefaultReconcile =
+    actorSystem.reconcile === ActorSystem.prototype.reconcile;
+  const usesDefaultGetResources =
+    actorSystem.getResources === ActorSystem.prototype.getResources;
+
+  if (!usesDefaultReconcile || !usesDefaultGetResources) {
     return;
   }
 
-  throw new Error(
-    `${
-      missingTargetSelectors.length === 1
-        ? 'Unknown app build target'
-        : 'Unknown app build targets'
-    }: ${missingTargetSelectors.join(', ')}. Available targets: ${
-      availableTargetSelectors.length > 0
-        ? availableTargetSelectors.join(', ')
-        : '(none)'
-    }`,
+  actorSystem.resources = {};
+  actorSystem.addResources(
+    withResourceScope(
+      {
+        stateDB: actorSystem.getStateDB(),
+        emitter: actorSystem.getEmitter(),
+      },
+      () => actorSystem.defineActorSystemResources(actorSystem.parent),
+    ),
   );
 }
 
@@ -239,33 +294,18 @@ export async function runLocalApp(options) {
  * @returns {Promise<PackageLocalAppResult>} - Result.
  */
 export async function packageLocalApp(options) {
-  const requestedTargetSelectors = normalizeTargetSelectors(options.targets);
-
-  let loadedApp = await loadApp({
-    dir: options.dir,
-    cacheBust: requestedTargetSelectors.length > 0,
-  });
-
-  if (requestedTargetSelectors.length > 0) {
-    const availableTargetSelectors = getBuildTargetSelectors(
-      loadedApp.manifest.targets,
-    );
-    assertKnownTargetSelectors(
-      requestedTargetSelectors,
-      availableTargetSelectors,
-    );
-    loadedApp = await ActorSystem.withRequestedBuildTargetSelectors(
-      requestedTargetSelectors,
-      async () =>
-        await loadApp({
-          dir: options.dir,
-          cacheBust: true,
-        }),
-    );
-  }
-
-  const { appExport, manifest } = loadedApp;
+  const { appExport, manifest } = await loadApp({ dir: options.dir });
   const actorSystem = assertPackageableApp(appExport, manifest);
+
+  const selectedTargets = selectTargets(
+    manifest.targets || [],
+    options.targetFilters,
+  );
+  if (selectedTargets.length === 0) {
+    throw new Error('No targets matched the requested package filter.');
+  }
+  applyTargetSelection(actorSystem, selectedTargets);
+  manifest.targets = selectedTargets;
 
   if (typeof actorSystem.initializeEnvironment === 'function') {
     await actorSystem.initializeEnvironment();
@@ -301,7 +341,7 @@ export async function packageLocalApp(options) {
       await fsp.chmod(artifactPath, 0o755);
     }
 
-    /** @type {PackageArtifactSummary['target']} */
+    /** @type {PackageArtifactTarget} */
     const target = {
       nodeVersion: String(build.get('nodeVersion')),
       platform: String(build.get('platform')),
@@ -317,8 +357,6 @@ export async function packageLocalApp(options) {
       target,
     });
   }
-
-  artifacts.sort((left, right) => left.fileName.localeCompare(right.fileName));
 
   return {
     app: manifest.app,

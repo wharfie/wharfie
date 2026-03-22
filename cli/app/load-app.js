@@ -3,30 +3,32 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import ActorSystem from '../../lambdas/lib/actor/resources/builds/actor-system.js';
+import WharfieFunction from '../../lambdas/lib/actor/resources/builds/function.js';
+import { normalizeExternalDependencies } from '../../lambdas/lib/actor/resources/builds/lib/resolve-externals.js';
 
 /**
- * Wharfie v2 app loader + minimal manifest compiler.
+ * Wharfie v2 app loader + manifest compiler.
  *
- * Wharfie v2 apps are code-defined (no YAML). The CLI needs a small, strict
- * contract so it can:
+ * Wharfie v2 apps are code-defined (no YAML). The CLI needs a strict contract so
+ * it can:
  *  - locate the app entrypoint (`wharfie.app.js`)
  *  - load it (ESM)
  *  - derive a normalized JSON manifest that can be embedded into a build artifact
  *
- * Supported export shapes (MVP):
+ * Supported export shapes:
  *
  * 1) Plain object export
  *
  *    ```js
- *    // wharfie.app.js
  *    export default {
  *      name: 'my-app',
- *      targets: [{ nodeVersion: '24', platform: 'linux', architecture: 'x64' }],
- *      // either "capabilities" (v2 term) or "resources" (existing ActorSystem term)
- *      capabilities: {
- *        db: { adapter: 'vanilla', options: { path: '.wharfie' } },
- *        queue: { adapter: 'vanilla', options: { path: '.wharfie' } },
+ *      properties: {
+ *        targets: [{ nodeVersion: '24', platform: 'linux', architecture: 'x64' }],
+ *        resources: {
+ *          db: { adapter: 'vanilla', options: { path: '.wharfie' } },
+ *        },
  *      },
+ *      functions: [new Function(...)],
  *    };
  *    ```
  *
@@ -37,7 +39,7 @@ import ActorSystem from '../../lambdas/lib/actor/resources/builds/actor-system.j
  *    export default new ActorSystem({ name: 'my-app', properties: { resources: { ... } } });
  *    ```
  *
- * For ActorSystem exports we only *inspect* properties (no reconcile).
+ * For ActorSystem exports we only inspect properties and function definitions.
  */
 
 /**
@@ -52,55 +54,291 @@ import ActorSystem from '../../lambdas/lib/actor/resources/builds/actor-system.j
  */
 
 /**
+ * @typedef ManifestFunctionEntrypoint
+ * @property {string} path - path.
+ * @property {string} [export] - export.
+ */
+
+/**
+ * @typedef ManifestFunctionDefinition
+ * @property {string} name - name.
+ * @property {ManifestFunctionEntrypoint} entrypoint - entrypoint.
+ * @property {{ name: string, version: string }[]} [external] - external.
+ * @property {Record<string, string>} [environmentVariables] - environmentVariables.
+ * @property {CapabilitySpecs} [resources] - Function-scoped resources.
+ */
+
+/**
  * @typedef WharfieAppManifest
  * @property {{ name: string }} app - App metadata.
- * @property {any[]} [targets] - Build targets, if provided.
+ * @property {Array<{ nodeVersion: string, platform: string, architecture: string, libc?: string }>} [targets] - Build targets, if provided.
  * @property {CapabilitySpecs} [capabilities] - Runtime capability specs (db/queue/objectStorage), if discoverable.
  * @property {CapabilitySpecs} [resources] - Alias for `capabilities` (kept for compatibility with existing ActorSystem terminology).
+ * @property {ManifestFunctionDefinition[]} [functions] - Function definitions, if discoverable.
  */
 
 /**
  * @typedef LoadAppOptions
  * @property {string} [dir] - Directory to search for `wharfie.app.js` (default: cwd).
- * @property {boolean} [cacheBust] - Bypass the ESM module cache for a fresh app evaluation.
  */
 
 /**
- * @param {any} v - v.
- * @returns {v is PlainObject} - Result.
+ * @param {any} value - value.
+ * @returns {value is PlainObject} - Result.
  */
-function isPlainObject(v) {
-  if (!v || typeof v !== 'object') return false;
-  const proto = Object.getPrototypeOf(v);
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
 }
 
 /**
- * @param {any} maybeSpecs - maybeSpecs.
+ * @param {unknown} value - value.
+ * @returns {unknown} - Result.
+ */
+function jsonSafeClone(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => jsonSafeClone(item))
+      .filter((item) => item !== undefined);
+  }
+
+  if (value === null) return null;
+
+  if (isPlainObject(value)) {
+    /** @type {Record<string, unknown>} */
+    const cloned = {};
+
+    for (const [key, child] of Object.entries(value)) {
+      if (typeof child === 'function' || child === undefined) continue;
+      const normalized = jsonSafeClone(child);
+      if (normalized !== undefined) {
+        cloned[key] = normalized;
+      }
+    }
+
+    return cloned;
+  }
+
+  if (
+    typeof value === 'function' ||
+    typeof value === 'symbol' ||
+    typeof value === 'undefined'
+  ) {
+    return undefined;
+  }
+
+  return value;
+}
+
+/**
+ * @param {unknown} spec - spec.
+ * @returns {any} - Result.
+ */
+function serializeCapabilitySpec(spec) {
+  if (typeof spec === 'string') return spec;
+  if (!isPlainObject(spec)) return undefined;
+
+  const cloned = jsonSafeClone(spec);
+  if (!isPlainObject(cloned) || Object.keys(cloned).length === 0) {
+    return undefined;
+  }
+
+  return cloned;
+}
+
+/**
+ * @param {unknown} maybeSpecs - maybeSpecs.
  * @returns {CapabilitySpecs | undefined} - Result.
  */
 function pickCapabilitySpecs(maybeSpecs) {
-  if (!maybeSpecs || typeof maybeSpecs !== 'object') return undefined;
+  if (!isPlainObject(maybeSpecs)) return undefined;
 
   /** @type {CapabilitySpecs} */
   const picked = {};
-  if ('db' in maybeSpecs) picked.db = /** @type {any} */ (maybeSpecs).db;
-  if ('queue' in maybeSpecs)
-    picked.queue = /** @type {any} */ (maybeSpecs).queue;
-  if ('objectStorage' in maybeSpecs)
-    picked.objectStorage = /** @type {any} */ (maybeSpecs).objectStorage;
+
+  for (const key of ['db', 'queue', 'objectStorage']) {
+    if (!(key in maybeSpecs)) continue;
+    const serialized = serializeCapabilitySpec(
+      /** @type {PlainObject} */ (maybeSpecs)[key],
+    );
+    if (serialized !== undefined) {
+      // @ts-ignore - keyof narrowing is cumbersome in JSDoc mode.
+      picked[key] = serialized;
+    }
+  }
 
   if (!picked.db && !picked.queue && !picked.objectStorage) return undefined;
   return picked;
 }
 
 /**
- * Compile a minimal manifest from a supported `wharfie.app.js` export.
+ * @param {unknown} targets - targets.
+ * @returns {WharfieAppManifest['targets']} - Result.
+ */
+function normalizeTargets(targets) {
+  if (!Array.isArray(targets) || targets.length === 0) return undefined;
+
+  const normalized = targets.reduce(
+    (/** @type {NonNullable<WharfieAppManifest['targets']>} */ acc, target) => {
+      if (!isPlainObject(target)) return acc;
+      const nodeVersion = target.nodeVersion;
+      const platform = target.platform;
+      const architecture = target.architecture;
+      if (
+        typeof nodeVersion !== 'string' ||
+        typeof platform !== 'string' ||
+        typeof architecture !== 'string'
+      ) {
+        return acc;
+      }
+
+      acc.push({
+        nodeVersion,
+        platform,
+        architecture,
+        ...(typeof target.libc === 'string' ? { libc: target.libc } : {}),
+      });
+      return acc;
+    },
+    [],
+  );
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+/**
+ * @param {unknown[]} candidates - candidates.
+ * @returns {unknown[] | undefined} - Result.
+ */
+function firstArrayCandidate(candidates) {
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * @param {unknown[]} candidates - candidates.
+ * @returns {CapabilitySpecs | undefined} - Result.
+ */
+function firstCapabilityCandidate(candidates) {
+  for (const candidate of candidates) {
+    const normalized = pickCapabilitySpecs(candidate);
+    if (normalized) return normalized;
+  }
+
+  return undefined;
+}
+
+/**
+ * @param {any} func - func.
+ * @param {string} appDir - appDir.
+ * @returns {ManifestFunctionDefinition | undefined} - Result.
+ */
+function serializeFunctionDefinition(func, appDir) {
+  if (!func || typeof func !== 'object') return undefined;
+
+  const name = typeof func.name === 'string' ? func.name : '';
+  if (!name) return undefined;
+
+  const properties = isPlainObject(func.properties) ? func.properties : {};
+  const entrypoint = isPlainObject(func.entrypoint)
+    ? func.entrypoint
+    : isPlainObject(properties.entrypoint)
+      ? properties.entrypoint
+      : null;
+
+  if (!entrypoint || typeof entrypoint.path !== 'string') {
+    return undefined;
+  }
+
+  const entrypointPath = path.isAbsolute(entrypoint.path)
+    ? entrypoint.path
+    : path.resolve(appDir, entrypoint.path);
+
+  const externalInput =
+    properties.external ?? (Array.isArray(func.external) ? func.external : []);
+  const external = normalizeExternalDependencies(externalInput, entrypointPath);
+
+  const environmentVariables = jsonSafeClone(
+    properties.environmentVariables ?? func.environmentVariables,
+  );
+  const resources = pickCapabilitySpecs(properties.resources ?? func.resources);
+
+  /** @type {ManifestFunctionDefinition} */
+  const normalized = {
+    name,
+    entrypoint: {
+      path: entrypointPath,
+      ...(typeof entrypoint.export === 'string'
+        ? { export: entrypoint.export }
+        : {}),
+    },
+  };
+
+  if (Array.isArray(external) && external.length > 0) {
+    normalized.external = external;
+  }
+
+  if (
+    isPlainObject(environmentVariables) &&
+    Object.keys(environmentVariables).length > 0
+  ) {
+    normalized.environmentVariables = /** @type {Record<string, string>} */ (
+      environmentVariables
+    );
+  }
+
+  if (resources) {
+    normalized.resources = resources;
+  }
+
+  return normalized;
+}
+
+/**
+ * @param {unknown} functions - functions.
+ * @param {string} appDir - appDir.
+ * @returns {ManifestFunctionDefinition[] | undefined} - Result.
+ */
+function normalizeFunctions(functions, appDir) {
+  if (!Array.isArray(functions) || functions.length === 0) return undefined;
+
+  const normalized = functions.reduce(
+    (/** @type {ManifestFunctionDefinition[]} */ acc, func) => {
+      if (
+        !(func instanceof WharfieFunction) &&
+        (!func || typeof func !== 'object')
+      ) {
+        return acc;
+      }
+
+      const serialized = serializeFunctionDefinition(func, appDir);
+      if (serialized) {
+        acc.push(serialized);
+      }
+      return acc;
+    },
+    [],
+  );
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+/**
+ * Compile a manifest from a supported `wharfie.app.js` export.
  * @param {any} appExport - appExport.
+ * @param {{ appDir: string }} options - options.
  * @returns {WharfieAppManifest} - Result.
  */
-function compileManifest(appExport) {
-  // --- Shape 1: ActorSystem instance (existing repo example) ---
+function compileManifest(appExport, options) {
+  const { appDir } = options;
+
+  // --- Shape 1: ActorSystem instance ---
   if (appExport instanceof ActorSystem) {
     const name = appExport.name;
     if (!name) {
@@ -110,17 +348,24 @@ function compileManifest(appExport) {
     /** @type {WharfieAppManifest} */
     const manifest = { app: { name } };
 
-    if (typeof appExport.has === 'function' && appExport.has('targets')) {
-      const targets = appExport.get('targets');
-      if (Array.isArray(targets)) {
-        manifest.targets = targets;
-      }
+    const targets = normalizeTargets(appExport.get('targets', []));
+    if (targets) {
+      manifest.targets = targets;
     }
 
-    const resources = pickCapabilitySpecs(appExport.get('resources', {}));
+    const resources = firstCapabilityCandidate([
+      appExport.get('resources', {}),
+      appExport.properties?.resources,
+      appExport.properties?.capabilities,
+    ]);
     if (resources) {
       manifest.capabilities = resources;
       manifest.resources = resources;
+    }
+
+    const functions = normalizeFunctions(appExport.functions, appDir);
+    if (functions) {
+      manifest.functions = functions;
     }
 
     return manifest;
@@ -143,30 +388,47 @@ function compileManifest(appExport) {
     /** @type {WharfieAppManifest} */
     const manifest = { app: { name } };
 
-    const targets = Array.isArray(appExport.targets)
-      ? appExport.targets
-      : undefined;
-    if (targets) manifest.targets = targets;
+    const targets = normalizeTargets(
+      firstArrayCandidate([
+        appExport.targets,
+        appExport.properties?.targets,
+        appExport.app?.targets,
+        appExport.app?.properties?.targets,
+      ]),
+    );
+    if (targets) {
+      manifest.targets = targets;
+    }
 
-    // Prefer explicit v2 "capabilities", but accept existing "resources" terminology too.
-    const candidates = [
+    const resources = firstCapabilityCandidate([
       appExport.capabilities,
       appExport.capabilities?.resources,
       appExport.resources,
+      appExport.properties?.capabilities,
+      appExport.properties?.capabilities?.resources,
+      appExport.properties?.resources,
       appExport.app?.capabilities,
       appExport.app?.capabilities?.resources,
       appExport.app?.resources,
-    ];
-
-    let discovered;
-    for (const candidate of candidates) {
-      discovered = pickCapabilitySpecs(candidate);
-      if (discovered) break;
+      appExport.app?.properties?.capabilities,
+      appExport.app?.properties?.resources,
+    ]);
+    if (resources) {
+      manifest.capabilities = resources;
+      manifest.resources = resources;
     }
 
-    if (discovered) {
-      manifest.capabilities = discovered;
-      manifest.resources = discovered;
+    const functions = normalizeFunctions(
+      firstArrayCandidate([
+        appExport.functions,
+        appExport.properties?.functions,
+        appExport.app?.functions,
+        appExport.app?.properties?.functions,
+      ]),
+      appDir,
+    );
+    if (functions) {
+      manifest.functions = functions;
     }
 
     return manifest;
@@ -178,7 +440,7 @@ function compileManifest(appExport) {
 }
 
 /**
- * Load `wharfie.app.js` from disk and compile a minimal manifest.
+ * Load `wharfie.app.js` from disk and compile a manifest.
  * @param {LoadAppOptions} [options] - options.
  * @returns {Promise<{ appExport: any, manifest: WharfieAppManifest }>} - Result.
  */
@@ -188,23 +450,12 @@ export async function loadApp(options = {}) {
 
   try {
     await fsp.access(appPath);
-  } catch (err) {
+  } catch (_err) {
     throw new Error(`Could not find wharfie.app.js in: ${dir}`);
   }
 
-  // NOTE: This uses an ESM dynamic import. Node will resolve the module format
-  // based on the nearest package.json "type". Wharfie apps should be authored
-  // as ESM ("type": "module") in v2.
-  const appUrl = pathToFileURL(appPath);
-  if (options.cacheBust) {
-    appUrl.searchParams.set(
-      'cacheBust',
-      `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
-  }
-  const mod = await import(appUrl.href);
+  const mod = await import(pathToFileURL(appPath).href);
 
-  // MVP: only `default` is required, but tolerate a named export for ergonomics.
   const appExport = mod?.default ?? mod?.app ?? mod?.actorSystem;
   if (!appExport) {
     throw new Error(
@@ -212,7 +463,7 @@ export async function loadApp(options = {}) {
     );
   }
 
-  const manifest = compileManifest(appExport);
+  const manifest = compileManifest(appExport, { appDir: dir });
   return { appExport, manifest };
 }
 
