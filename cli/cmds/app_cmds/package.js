@@ -5,11 +5,11 @@ import { displayFailure } from '../../output/basic.js';
 
 /**
  * @param {string} value - value.
- * @param {string[]} values - values.
+ * @param {string[]} previous - previous.
  * @returns {string[]} - Result.
  */
-function collectOptionValue(value, values) {
-  return [...values, value];
+function collectTargetFilter(value, previous) {
+  return [...previous, value];
 }
 
 /**
@@ -20,7 +20,7 @@ async function packageApp(dir, options) {
   const result = await packageLocalApp({
     dir,
     outputDir: options.outputDir,
-    targetFilters: options.target,
+    targetFilters: Array.isArray(options.target) ? options.target : [],
   });
 
   process.stdout.write(`${stringifyJson(result, options)}\n`);
@@ -34,9 +34,9 @@ const packageCommand = new Command('package')
     'Directory to copy packaged artifacts into (default: <app dir>/dist)',
   )
   .option(
-    '--target <target>',
-    'Only package matching targets (repeatable). Accepts aliases like <platform>-<architecture> or <nodeVersion>-<platform>-<architecture>.',
-    collectOptionValue,
+    '-t, --target <target>',
+    'Package only the selected build target (repeatable)',
+    collectTargetFilter,
     [],
   )
   .option('--json', 'Output JSON (default)')

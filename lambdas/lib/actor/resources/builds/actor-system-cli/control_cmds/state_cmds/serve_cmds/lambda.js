@@ -4,7 +4,7 @@ import { createActorSystemResources } from '../../../../../../runtime/resources.
 import { createGrpcRpcClient } from '../../../../../../runtime/services/rpc-grpc.js';
 import { startLambdaService } from '../../../../../../runtime/services/lambda-service.js';
 
-import { loadResourcesSpec } from '../util/resources.js';
+import { loadRuntimeBootstrap } from '../util/resources.js';
 
 /**
  * @typedef {'SIGINT'|'SIGTERM'} Signal
@@ -17,10 +17,15 @@ const lambdaCmd = new Command('lambda')
     'JSON file containing ActorSystem resources spec',
   )
   .option('--resources <json>', 'Inline JSON ActorSystem resources spec')
+  .option(
+    '--manifest-file <path>',
+    'JSON file containing the packaged app manifest',
+  )
+  .option('--manifest <json>', 'Inline JSON packaged app manifest')
   .option('--host <host>', 'Bind host', '0.0.0.0')
   .option('--port <port>', 'Bind port', (v) => Number(v), 8787)
-  .requiredOption('--db-address <host:port>', 'DB service gRPC address')
-  .requiredOption('--queue-address <host:port>', 'Queue service gRPC address')
+  .option('--db-address <host:port>', 'DB service gRPC address')
+  .option('--queue-address <host:port>', 'Queue service gRPC address')
   .option(
     '--poll-queue-url <queueUrl>',
     'Queue URL to poll for lambda invocations (repeatable)',
@@ -54,19 +59,46 @@ const lambdaCmd = new Command('lambda')
     30,
   )
   .action(async (opts) => {
-    const resourcesSpec = loadResourcesSpec(opts);
+    const bootstrap = await loadRuntimeBootstrap(opts);
+    const resourcesSpec = bootstrap.resourcesSpec;
 
-    const dbAddress = String(opts.dbAddress);
-    const queueAddress = String(opts.queueAddress);
+    const dbAddress =
+      typeof opts.dbAddress === 'string' && opts.dbAddress.trim()
+        ? String(opts.dbAddress)
+        : undefined;
+    const queueAddress =
+      typeof opts.queueAddress === 'string' && opts.queueAddress.trim()
+        ? String(opts.queueAddress)
+        : undefined;
 
-    const db = createGrpcRpcClient({
-      address: dbAddress,
-      log: (msg, extra) => console.error('[db-client]', msg, extra ?? ''),
-    });
-    const queue = createGrpcRpcClient({
-      address: queueAddress,
-      log: (msg, extra) => console.error('[queue-client]', msg, extra ?? ''),
-    });
+    if (bootstrap.servicePlan.db && !dbAddress) {
+      throw new Error(
+        'Lambda service requires --db-address when the app manifest declares a db capability.',
+      );
+    }
+
+    if (
+      (bootstrap.servicePlan.queue || bootstrap.pollQueueUrls.length > 0) &&
+      !queueAddress
+    ) {
+      throw new Error(
+        'Lambda service requires --queue-address when the app manifest declares a queue capability or queue polling is enabled.',
+      );
+    }
+
+    const db = dbAddress
+      ? createGrpcRpcClient({
+          address: dbAddress,
+          log: (msg, extra) => console.error('[db-client]', msg, extra ?? ''),
+        })
+      : undefined;
+    const queue = queueAddress
+      ? createGrpcRpcClient({
+          address: queueAddress,
+          log: (msg, extra) =>
+            console.error('[queue-client]', msg, extra ?? ''),
+        })
+      : undefined;
 
     const objectStorageSpec = resourcesSpec?.objectStorage;
     const { resources: local, close: closeLocal } = objectStorageSpec
@@ -74,10 +106,7 @@ const lambdaCmd = new Command('lambda')
       : await createActorSystemResources({});
 
     const objectStorage = local.objectStorage;
-
-    const pollQueueUrls = Array.isArray(opts.pollQueueUrl)
-      ? /** @type {string[]} */ (opts.pollQueueUrl)
-      : [];
+    const pollQueueUrls = bootstrap.pollQueueUrls;
 
     const svc = await startLambdaService({
       host: String(opts.host),
@@ -95,7 +124,7 @@ const lambdaCmd = new Command('lambda')
         });
       },
       poll:
-        pollQueueUrls && pollQueueUrls.length > 0
+        queue && pollQueueUrls.length > 0
           ? {
               queue,
               queueUrls: pollQueueUrls,
@@ -126,10 +155,10 @@ const lambdaCmd = new Command('lambda')
       await svc.close();
       await closeLocal();
       try {
-        db.__wharfie_closeTransport && db.__wharfie_closeTransport();
+        db?.__wharfie_closeTransport && db.__wharfie_closeTransport();
       } catch {}
       try {
-        queue.__wharfie_closeTransport && queue.__wharfie_closeTransport();
+        queue?.__wharfie_closeTransport && queue.__wharfie_closeTransport();
       } catch {}
       clearInterval(keepAlive);
     };

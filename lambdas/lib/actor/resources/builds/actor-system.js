@@ -7,6 +7,7 @@ import MacOSBinarySignature from './macos-binary-signature.js';
 import cli from './actor-system-cli/index.js';
 import { createActorSystemResources } from '../../runtime/resources.js';
 import { withResourceScope } from '../resource-scope.js';
+import { createResourceScope } from '../runtime-config.js';
 
 import path from 'node:path';
 
@@ -42,6 +43,7 @@ import path from 'node:path';
  * @property {BuildTarget[] | function(): BuildTarget[]} targets - targets.
  * @property {ActorSystemResourcesSpec} [resources] - resources.
  * @property {import('./function.js').default[]} [functions] - functions.
+ * @property {any[]} [workflows] - Serializable workflow definitions.
  */
 
 /**
@@ -53,7 +55,15 @@ import path from 'node:path';
  */
 
 /**
- * @param {BuildTarget | ResolvedBuildTarget | null | undefined} target - target.
+ * @typedef BuildTargetSelectorInput
+ * @property {string} nodeVersion - nodeVersion.
+ * @property {string} platform - platform.
+ * @property {string} architecture - architecture.
+ * @property {string} [libc] - libc.
+ */
+
+/**
+ * @param {BuildTarget | ResolvedBuildTarget | BuildTargetSelectorInput | null | undefined} target - target.
  * @returns {ResolvedBuildTarget | null} - Result.
  */
 function resolveBuildTarget(target) {
@@ -128,8 +138,9 @@ function buildTargetSelector(target) {
  * @property {WharfieActorSystemProperties & import('../../typedefs.js').SharedProperties} properties - properties.
  * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  * @property {Object<string, import('../base-resource.js').default | import('../base-resource-group.js').default>} [resources] - resources.
- * @property {any} [stateDB] - Scoped state store.
- * @property {import('node:events').EventEmitter} [emitter] - Scoped telemetry emitter.
+ * @property {any} [stateDB] - Compatibility alias for the scoped state store.
+ * @property {import('node:events').EventEmitter} [emitter] - Compatibility alias for the scoped telemetry emitter.
+ * @property {import('../runtime-config.js').WharfieRuntimeConfig} [runtime] - Structured runtime configuration.
  */
 
 class ActorSystem extends BuildResourceGroup {
@@ -146,6 +157,7 @@ class ActorSystem extends BuildResourceGroup {
     functions = [],
     stateDB,
     emitter,
+    runtime,
   }) {
     const propertiesWithDefaults = Object.assign(
       {},
@@ -169,18 +181,15 @@ class ActorSystem extends BuildResourceGroup {
       dependsOn: [...(dependsOn ?? [])],
       stateDB,
       emitter,
+      runtime,
     });
     this.functions = functions;
     /** @type {Promise<{ resources: any, close: () => Promise<void> }> | null} */
     this._runtimeResourcesPromise = null;
     // normally _defineGroupResources is used but this is a workaround to make sure this.functions is set before defining things
     this.addResources(
-      withResourceScope(
-        {
-          stateDB: this.getStateDB(),
-          emitter: this.getEmitter(),
-        },
-        () => this.defineActorSystemResources(parent),
+      withResourceScope(createResourceScope(this.getRuntimeConfig()), () =>
+        this.defineActorSystemResources(parent),
       ),
     );
     // @ts-ignore
@@ -417,7 +426,7 @@ class ActorSystem extends BuildResourceGroup {
   }
 
   /**
-   * @param {BuildTarget | ResolvedBuildTarget} target - target.
+   * @param {BuildTarget | ResolvedBuildTarget | BuildTargetSelectorInput} target - target.
    * @returns {string} - Result.
    */
   static getBuildTargetSelector(target) {

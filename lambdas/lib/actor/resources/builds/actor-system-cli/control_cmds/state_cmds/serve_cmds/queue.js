@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { loadResourcesSpec } from '../util/resources.js';
+import { loadRuntimeBootstrap } from '../util/resources.js';
 import { startQueueService } from '../../../../../../runtime/services/queue-service.js';
 
 /**
@@ -13,14 +13,19 @@ const queueCmd = new Command('queue')
     'JSON file containing ActorSystem resources spec',
   )
   .option('--resources <json>', 'Inline JSON ActorSystem resources spec')
+  .option(
+    '--manifest-file <path>',
+    'JSON file containing the packaged app manifest',
+  )
+  .option('--manifest <json>', 'Inline JSON packaged app manifest')
   .option('--host <host>', 'Bind host', '127.0.0.1')
   .option('--port <port>', 'Bind port', (v) => Number(v), 8789)
   .action(async (opts) => {
-    const spec = loadResourcesSpec(opts);
-    const queueSpec = spec?.queue;
+    const bootstrap = await loadRuntimeBootstrap(opts);
+    const queueSpec = bootstrap.resourcesSpec?.queue;
     if (!queueSpec) {
       throw new Error(
-        'Queue service requires resources.queue in the provided spec',
+        'Queue service requires a queue capability in the provided resources spec or packaged app manifest.',
       );
     }
 

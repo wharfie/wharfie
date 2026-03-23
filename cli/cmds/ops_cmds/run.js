@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { loadApp } from '../../app/load-app.js';
 import { withOperationsStore } from '../operations-store.js';
 import Action from '../../../lambdas/lib/graph/action.js';
+import Operation from '../../../lambdas/lib/graph/operation.js';
 import { runOperation } from '../../../lambdas/lib/graph/runner.js';
 import {
   displayFailure,
@@ -54,29 +55,159 @@ function formatActionRows(operation, fallbackStatuses) {
   }));
 }
 
+/**
+ * @param {any} manifest - manifest.
+ * @param {string} workflowName - workflowName.
+ * @returns {any | undefined} - Result.
+ */
+function findWorkflowDefinition(manifest, workflowName) {
+  const trimmedName = String(workflowName || '').trim();
+  if (!trimmedName) return undefined;
+
+  /** @type {any[]} */
+  const workflows = Array.isArray(manifest?.workflows)
+    ? manifest.workflows
+    : [];
+  return workflows.find(
+    (/** @type {any} */ workflow) =>
+      workflow?.name && String(workflow.name) === trimmedName,
+  );
+}
+
+/**
+ * @param {{ workflow: any, resourceId: string, operationId?: string | undefined }} options - options.
+ * @returns {import('../../../lambdas/lib/graph/operation.js').default} - Result.
+ */
+function createOperationFromWorkflow({ workflow, resourceId, operationId }) {
+  const operation = new Operation({
+    resource_id: resourceId,
+    resource_version: 1,
+    ...(typeof operationId === 'string' && operationId.trim()
+      ? { id: operationId.trim() }
+      : {}),
+    type:
+      typeof workflow?.type === 'string' && workflow.type.trim()
+        ? workflow.type.trim().toUpperCase()
+        : Operation.Type.PIPELINE,
+    operation_config: {
+      workflow_name: workflow?.name,
+      source: 'app-manifest',
+    },
+  });
+
+  const actions = Array.isArray(workflow?.actions) ? workflow.actions : [];
+  for (const action of actions) {
+    operation.createAction({
+      id: action.id,
+      type: action.type,
+      function_name: action.functionName,
+      inputs: action.inputs,
+      placement: action.placement,
+      retry: action.retry,
+    });
+  }
+
+  for (const action of actions) {
+    const dependencies = Array.isArray(action?.dependsOn)
+      ? action.dependsOn
+      : [];
+    for (const dependencyId of dependencies) {
+      if (typeof dependencyId !== 'string' || !dependencyId.trim()) {
+        continue;
+      }
+      operation._addDependency(dependencyId.trim(), action.id);
+    }
+  }
+
+  return operation;
+}
+
 const runCommand = new Command('run')
-  .description('Execute an operation DAG locally against wharfie.app.js')
+  .description(
+    'Execute a persisted operation or an app-defined workflow locally',
+  )
   .argument('<resource_id>', 'Wharfie resource ID')
-  .argument('<operation_id>', 'Operation ID')
+  .argument(
+    '[operation_id]',
+    'Operation ID (or operation ID override when --workflow is used)',
+  )
   .option('--dir <dir>', 'Directory containing wharfie.app.js', process.cwd())
+  .option(
+    '--workflow <workflowName>',
+    'Workflow name declared in wharfie.app.js',
+  )
   .action(async (resource_id, operation_id, options) => {
-    /** @type {any | undefined} */
-    let appExport;
+    /** @type {{ appExport: any, manifest: any } | undefined} */
+    let loadedApp;
 
     try {
       await withOperationsStore(async (store) => {
-        displayInfo(`Running operation: ${resource_id}#${operation_id}`);
+        const workflowName =
+          typeof options.workflow === 'string' ? options.workflow.trim() : '';
+        const appDir = options.dir || process.cwd();
+
+        if (!workflowName && !operation_id) {
+          throw new Error(
+            'ops run requires <operation_id> unless --workflow <workflowName> is provided.',
+          );
+        }
 
         /**
-         * @returns {Promise<any>} - Result.
+         * @returns {Promise<{ appExport: any, manifest: any }>} - Result.
          */
-        const ensureRunnableApp = async () => {
-          if (appExport) return appExport;
-          const loaded = await loadApp({ dir: options.dir || process.cwd() });
-          assertRunnableApp(loaded.appExport);
-          appExport = loaded.appExport;
-          return appExport;
+        const ensureLoadedApp = async () => {
+          if (loadedApp) {
+            return loadedApp;
+          }
+          loadedApp = await loadApp({ dir: appDir });
+          assertRunnableApp(loadedApp.appExport);
+          return loadedApp;
         };
+
+        let resolvedOperationId = operation_id;
+
+        if (workflowName) {
+          const loaded = await ensureLoadedApp();
+          const workflow = findWorkflowDefinition(
+            loaded.manifest,
+            workflowName,
+          );
+
+          if (!workflow) {
+            /** @type {string[]} */
+            const availableWorkflows = Array.isArray(loaded.manifest?.workflows)
+              ? loaded.manifest.workflows
+                  .map((/** @type {any} */ candidate) => candidate?.name)
+                  .filter(
+                    (/** @type {unknown} */ candidate) =>
+                      typeof candidate === 'string',
+                  )
+              : [];
+            throw new Error(
+              `Workflow '${workflowName}' was not found in ${appDir}. Available workflows: ${
+                availableWorkflows.length > 0
+                  ? availableWorkflows.join(', ')
+                  : '(none)'
+              }`,
+            );
+          }
+
+          const workflowOperation = createOperationFromWorkflow({
+            workflow,
+            resourceId: resource_id,
+            operationId: operation_id,
+          });
+          resolvedOperationId = workflowOperation.id;
+          await store.putOperation(workflowOperation);
+
+          displayInfo(
+            `Running workflow: ${resource_id}#${resolvedOperationId} (${workflow.name})`,
+          );
+        } else {
+          displayInfo(
+            `Running operation: ${resource_id}#${resolvedOperationId}`,
+          );
+        }
 
         /**
          * @param {import('../../../lambdas/lib/graph/action.js').default} action - action.
@@ -110,7 +241,8 @@ const runCommand = new Command('run')
             );
           }
 
-          const app = await ensureRunnableApp();
+          const { appExport } = await ensureLoadedApp();
+          const app = appExport;
           const attemptCount = Number(action.attempt_count || 0) + 1;
           displayInfo(
             `- ${action.id} (${action.type}:${action.function_name} attempt=${attemptCount})`,
@@ -137,16 +269,23 @@ const runCommand = new Command('run')
           };
         };
 
+        if (!resolvedOperationId) {
+          throw new Error('Operation ID is required to run a persisted DAG.');
+        }
+
         const result = await runOperation({
           store,
           resourceId: resource_id,
-          operationId: operation_id,
+          operationId: resolvedOperationId,
           executeAction,
         });
 
-        const finalRecords = await store.getRecords(resource_id, operation_id);
+        const finalRecords = await store.getRecords(
+          resource_id,
+          resolvedOperationId,
+        );
         const finalOperation = finalRecords.operations.find(
-          (operation) => operation.id === operation_id,
+          (operation) => operation.id === resolvedOperationId,
         );
 
         console.table(
@@ -162,7 +301,7 @@ const runCommand = new Command('run')
             details.push(`blocked=${result.blockedActionIds.join(',')}`);
           }
           throw new Error(
-            `Operation ${resource_id}#${operation_id} finished with status ${result.status}${
+            `Operation ${resource_id}#${resolvedOperationId} finished with status ${result.status}${
               details.length > 0 ? ` (${details.join(' ')})` : ''
             }.`,
           );
@@ -174,8 +313,8 @@ const runCommand = new Command('run')
       displayFailure(err);
       process.exitCode = 1;
     } finally {
-      if (typeof appExport?.closeRuntimeResources === 'function') {
-        await appExport.closeRuntimeResources();
+      if (typeof loadedApp?.appExport?.closeRuntimeResources === 'function') {
+        await loadedApp.appExport.closeRuntimeResources();
       }
     }
   });

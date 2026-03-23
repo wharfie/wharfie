@@ -19,7 +19,18 @@ describe('NodeAgent scheduler wiring', () => {
     const agent = new NodeAgent({
       nodeId: 'test-node',
       role: 'leader',
-      resourcesSpec: {
+      resourcesSpec: {},
+      manifest: {
+        app: { name: 'scheduler-demo' },
+        functions: [
+          {
+            name: 'alpha',
+            entrypoint: {
+              path: '/artifact/functions/alpha.js',
+              export: 'alpha',
+            },
+          },
+        ],
         scheduler: {
           triggers: [{ actor: 'alpha', cron: '* * * * *' }],
         },
@@ -59,6 +70,46 @@ describe('NodeAgent scheduler wiring', () => {
       await jest.advanceTimersByTimeAsync(2000);
       await stopPromise;
     }
+  });
+
+  it('requires remote state addresses for worker nodes when the packaged manifest declares them', async () => {
+    const agent = new NodeAgent({
+      nodeId: 'test-node',
+      role: 'worker',
+      resourcesSpec: {},
+      manifest: {
+        app: { name: 'worker-demo' },
+        resources: {
+          db: { adapter: 'vanilla' },
+          queue: { adapter: 'vanilla' },
+        },
+        functions: [
+          {
+            name: 'alpha',
+            entrypoint: {
+              path: '/artifact/functions/alpha.js',
+              export: 'alpha',
+            },
+          },
+        ],
+      },
+      cmd: process.execPath,
+      prefixArgs: [],
+      lambdaHost: '127.0.0.1',
+      lambdaPort: 8787,
+      dbHost: '127.0.0.1',
+      dbPort: 8788,
+      queueHost: '127.0.0.1',
+      queuePort: 8789,
+      controlHost: '127.0.0.1',
+      controlPort: 0,
+      dbAddressOverride: null,
+      queueAddressOverride: null,
+      pollQueueUrls: [],
+      spawnServices: false,
+    });
+
+    await expect(agent.start()).rejects.toThrow(/requires --db-address/);
   });
 
   it('is a no-op when no cron triggers are configured', async () => {

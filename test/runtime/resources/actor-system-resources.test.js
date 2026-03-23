@@ -80,6 +80,56 @@ describe('ActorSystem runtime resources', () => {
     await system.closeRuntimeResources();
   });
 
+  it('accepts runtime.stateStore and telemetry callbacks while preserving emitter-compatible events', async () => {
+    const actorPath = fileURLToPath(
+      new URL('../../fixtures/actors/hello-resources.js', import.meta.url),
+    );
+    const store = {
+      putResource: async () => {},
+      putResourceStatus: async () => {},
+      getResource: async () => undefined,
+      getResourceStatus: async () => undefined,
+      getResources: async () => [],
+      deleteResource: async () => {},
+    };
+    /** @type {string[]} */
+    const events = [];
+
+    const hello = new Function({
+      name: 'hello-resources',
+      entrypoint: { path: actorPath, export: 'helloResources' },
+      properties: {},
+    });
+
+    const system = new ActorSystem({
+      name: 'runtime-config-system',
+      functions: [hello],
+      runtime: {
+        stateStore: store,
+        telemetry: {
+          emit(/** @type {string} */ eventName, /** @type {any} */ event) {
+            if (eventName === 'WHARFIE_STATUS') {
+              events.push(`${event.constructor}:${event.name}:${event.status}`);
+            }
+          },
+        },
+      },
+      properties: {
+        targets: [],
+        resources: {},
+      },
+    });
+
+    expect(system.getStateDB()).toBe(store);
+    expect(system.getRuntimeConfig().stateStore).toBe(store);
+
+    await system.reconcile();
+
+    expect(events).toEqual(
+      expect.arrayContaining(['ActorSystem:runtime-config-system:STABLE']),
+    );
+  });
+
   it('worker sandbox: context.resources proxies use an RPC bridge to host resources', async () => {
     const tmp = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-actor-system-worker-rpc-'),

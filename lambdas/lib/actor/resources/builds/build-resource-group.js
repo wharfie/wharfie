@@ -10,6 +10,7 @@ import BaseResourceGroup from '../base-resource-group.js';
  * @property {Object<string, import('../base-resource.js').default | BaseResourceGroup>} [resources] - resources.
  * @property {any} [stateDB] - Scoped state store.
  * @property {import('node:events').EventEmitter} [emitter] - Scoped telemetry emitter.
+ * @property {import('../runtime-config.js').WharfieRuntimeConfig} [runtime] - Structured runtime configuration.
  */
 
 class BuildResource extends BaseResourceGroup {
@@ -25,6 +26,7 @@ class BuildResource extends BaseResourceGroup {
     resources,
     stateDB,
     emitter,
+    runtime,
   }) {
     super({
       name,
@@ -35,6 +37,7 @@ class BuildResource extends BaseResourceGroup {
       resources,
       stateDB,
       emitter,
+      runtime,
     });
   }
 

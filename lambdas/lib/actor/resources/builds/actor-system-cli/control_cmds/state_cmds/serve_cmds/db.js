@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { loadResourcesSpec } from '../util/resources.js';
+import { loadRuntimeBootstrap } from '../util/resources.js';
 import { startDbService } from '../../../../../../runtime/services/db-service.js';
 
 /**
@@ -13,13 +13,20 @@ const dbCmd = new Command('db')
     'JSON file containing ActorSystem resources spec',
   )
   .option('--resources <json>', 'Inline JSON ActorSystem resources spec')
+  .option(
+    '--manifest-file <path>',
+    'JSON file containing the packaged app manifest',
+  )
+  .option('--manifest <json>', 'Inline JSON packaged app manifest')
   .option('--host <host>', 'Bind host', '127.0.0.1')
   .option('--port <port>', 'Bind port', (v) => Number(v), 8788)
   .action(async (opts) => {
-    const spec = loadResourcesSpec(opts);
-    const dbSpec = spec?.db;
+    const bootstrap = await loadRuntimeBootstrap(opts);
+    const dbSpec = bootstrap.resourcesSpec?.db;
     if (!dbSpec) {
-      throw new Error('DB service requires resources.db in the provided spec');
+      throw new Error(
+        'DB service requires a db capability in the provided resources spec or packaged app manifest.',
+      );
     }
 
     const svc = await startDbService({

@@ -6,6 +6,7 @@
 
 - Back to docs index: [`docs/README.md`](../README.md)
 - Repo example to align with: [`scratch/test.js`](../../scratch/test.js)
+- Current prioritized follow-up work: [`wharfie-v2-next-work-items.md`](./wharfie-v2-next-work-items.md)
 - Existing workflow graph code: [`lambdas/lib/graph/index.js`](../../lambdas/lib/graph/index.js)
 
 ---

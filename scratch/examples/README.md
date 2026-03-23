@@ -52,6 +52,23 @@ A supported parity fixture for the older `scratch/test.js` workflow.
 Use this when you want a realistic inspection/load/invoke example. Keep using
 `hello-world` and `context-override` when you want the smallest possible demo.
 
+Packaged SEA artifacts now embed the compiled app manifest. Once you package an
+app, inspect that embedded manifest from the artifact itself with:
+
+```bash
+./dist/<artifact-name> ctl manifest
+```
+
+Packaged artifacts can also manage Linux/systemd releases without the source
+tree. The first-class artifact-side flow is:
+
+```bash
+./dist/<artifact-name> infra deploy --dry-run --json
+./dist/<artifact-name> infra status --json
+./dist/<artifact-name> infra logs --dry-run --json
+./dist/<artifact-name> infra rollback --dry-run --json
+```
+
 ## CLI usage
 
 From the repo root:
@@ -87,4 +104,11 @@ external metadata so it mirrors `scratch/test.js` more closely.
 ## Optional test coverage
 
 `test/cli/app/examples.test.js` exercises the demos through the existing
-`Function`, `ActorSystem`, and `loadApp()` APIs.
+`Function`, `ActorSystem`, and `loadApp()` APIs. The heavier host-native
+externals smoke test is opt-in so default CI stays fast and hermetic:
+
+```bash
+WHARFIE_RUN_NATIVE_EXTERNALS=1 TZ=UTC \
+  node ./test/run-jest.js --runInBand \
+  test/cli/app/kitchen-sink-native-externals.test.js
+```

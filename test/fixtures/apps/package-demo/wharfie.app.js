@@ -4,6 +4,7 @@ import { promises as fsp } from 'node:fs';
 
 import ActorSystem from '../../../../lambdas/lib/actor/resources/builds/actor-system.js';
 import SeaBuild from '../../../../lambdas/lib/actor/resources/builds/sea-build.js';
+import { APP_MANIFEST_ASSET_NAME } from '../../../../lambdas/lib/actor/resources/builds/lib/app-manifest-asset.js';
 
 const currentTarget = {
   nodeVersion: process.versions.node,
@@ -59,6 +60,9 @@ app.reconcile = async () => {
 
   /** @type {string[]} */
   const builtTargets = [];
+  /** @type {Record<string, { appName: string | null, targetSelectors: string[] }>} */
+  const embeddedManifestByTarget = {};
+
   for (const target of app.get('targets')) {
     const selector = getTargetSelector(target);
     const build = buildsByTarget.get(selector);
@@ -75,12 +79,34 @@ echo ${selector}
     );
     build._setUNSAFE('binaryPath', fakeBinaryPath);
     builtTargets.push(selector);
+
+    const assets = build.get('assets', {});
+    const manifestAssetPath = assets[APP_MANIFEST_ASSET_NAME];
+    if (typeof manifestAssetPath === 'string' && manifestAssetPath) {
+      const embeddedManifest = JSON.parse(
+        await fsp.readFile(manifestAssetPath, 'utf8'),
+      );
+      embeddedManifestByTarget[selector] = {
+        appName:
+          typeof embeddedManifest?.app?.name === 'string'
+            ? embeddedManifest.app.name
+            : null,
+        targetSelectors: Array.isArray(embeddedManifest?.targets)
+          ? embeddedManifest.targets.map((candidate) =>
+              getTargetSelector(candidate),
+            )
+          : [],
+      };
+    }
   }
 
   const traceFile = process.env.WHARFIE_PACKAGE_DEMO_TRACE_FILE;
   if (traceFile) {
     await fsp.mkdir(path.dirname(traceFile), { recursive: true });
-    await fsp.writeFile(traceFile, JSON.stringify({ builtTargets }, null, 2));
+    await fsp.writeFile(
+      traceFile,
+      JSON.stringify({ builtTargets, embeddedManifestByTarget }, null, 2),
+    );
   }
 };
 

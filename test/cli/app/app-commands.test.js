@@ -2,11 +2,13 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+const require = createRequire(import.meta.url);
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
 const binPath = path.join(repoRoot, 'bin', 'wharfie');
@@ -24,6 +26,13 @@ const packageDemoDir = path.join(
   'apps',
   'package-demo',
 );
+const kitchenSinkDir = path.join(
+  repoRoot,
+  'scratch',
+  'examples',
+  'actor-systems',
+  'kitchen-sink',
+);
 const currentTarget = {
   nodeVersion: process.versions.node,
   platform: process.platform,
@@ -34,6 +43,35 @@ const alternateTarget = {
   platform: process.platform,
   architecture: process.arch === 'x64' ? 'arm64' : 'x64',
 };
+
+/**
+ * @param {string} packageName - packageName.
+ * @returns {string} - Result.
+ */
+function readInstalledVersion(packageName) {
+  const entryPath = require.resolve(packageName);
+  let currentDir = path.dirname(entryPath);
+
+  while (true) {
+    const packageJsonPath = path.join(currentDir, 'package.json');
+    try {
+      const manifest = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+      if (manifest?.name === packageName && manifest?.version) {
+        return manifest.version;
+      }
+    } catch {
+      // keep walking upward
+    }
+
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      break;
+    }
+    currentDir = parentDir;
+  }
+
+  throw new Error(`Could not resolve installed version for ${packageName}`);
+}
 
 /**
  * @param {{ nodeVersion: string, platform: string, architecture: string, libc?: string }} target - target.
@@ -109,7 +147,49 @@ describe('wharfie app commands', () => {
     });
   });
 
-  it('packages every app target when no target filter is provided', () => {
+  it('prints the compiled manifest for the kitchen-sink fixture', () => {
+    const result = runCli(['app', 'manifest', kitchenSinkDir, '--no-pretty']);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+
+    const payload = JSON.parse(result.stdout);
+    expect(payload.app).toEqual({ name: 'kitchen-sink-demo' });
+    expect(payload.functions).toEqual([
+      expect.objectContaining({
+        name: 'start',
+        entrypoint: expect.objectContaining({
+          export: 'start',
+          path: expect.stringContaining(
+            path.join('scratch', 'functions', 'start.js'),
+          ),
+        }),
+        resources: expect.objectContaining({
+          db: expect.objectContaining({ adapter: 'vanilla' }),
+          queue: expect.objectContaining({ adapter: 'vanilla' }),
+          objectStorage: expect.objectContaining({ adapter: 'vanilla' }),
+        }),
+        external: expect.arrayContaining([
+          {
+            name: 'lmdb',
+            version: readInstalledVersion('lmdb'),
+          },
+          {
+            name: '@duckdb/node-api',
+            version: readInstalledVersion('@duckdb/node-api'),
+          },
+          { name: 'sharp', version: '0.34.1' },
+          {
+            name: 'sodium-native',
+            version: readInstalledVersion('sodium-native'),
+          },
+          { name: 'usb', version: '2.13.0' },
+        ]),
+      }),
+    ]);
+  });
+
+  it('packages every app target when no target filter is provided and embeds a target-specific manifest asset', () => {
     const outputDir = path.join(
       os.tmpdir(),
       'wharfie-package-command-test',
@@ -147,27 +227,37 @@ describe('wharfie app commands', () => {
     const payload = JSON.parse(result.stdout);
     expect(payload.app).toEqual({ name: 'package-demo' });
     expect(payload.outputDir).toBe(outputDir);
-    expect(payload.targets).toHaveLength(2);
+    expect(payload.targets).toEqual([currentTarget, alternateTarget]);
     expect(payload.artifacts).toHaveLength(2);
-    // TODO: fix failure due to indeterminant ordering
-    // expect(payload.targets).toEqual([currentTarget, alternateTarget]);
-    // expect(payload.artifacts.map((artifact) => artifact.target)).toEqual([
-    //   alternateTarget,
-    //   currentTarget,
-    // ]);
-    // payload.artifacts.forEach((artifact) => {
-    //   expect(existsSync(artifact.path)).toBe(true);
-    //   expect(readFileSync(artifact.path, 'utf8')).toContain('node');
-    // });
-    // expect(readdirSync(outputDir).sort()).toEqual(
-    //   payload.artifacts.map((artifact) => artifact.fileName).sort(),
-    // );
-    // expect(JSON.parse(readFileSync(traceFile, 'utf8'))).toEqual({
-    //   builtTargets: [
-    //     getTargetSelector(currentTarget),
-    //     getTargetSelector(alternateTarget),
-    //   ],
-    // });
+    expect(payload.artifacts.map((artifact) => artifact.target)).toEqual([
+      currentTarget,
+      alternateTarget,
+    ]);
+    payload.artifacts.forEach((artifact) => {
+      expect(existsSync(artifact.path)).toBe(true);
+      expect(readFileSync(artifact.path, 'utf8')).toContain(
+        `echo ${getTargetSelector(artifact.target)}`,
+      );
+    });
+    expect(readdirSync(outputDir).sort()).toEqual(
+      payload.artifacts.map((artifact) => artifact.fileName).sort(),
+    );
+    expect(JSON.parse(readFileSync(traceFile, 'utf8'))).toEqual({
+      builtTargets: [
+        getTargetSelector(currentTarget),
+        getTargetSelector(alternateTarget),
+      ],
+      embeddedManifestByTarget: {
+        [getTargetSelector(currentTarget)]: {
+          appName: 'package-demo',
+          targetSelectors: [getTargetSelector(currentTarget)],
+        },
+        [getTargetSelector(alternateTarget)]: {
+          appName: 'package-demo',
+          targetSelectors: [getTargetSelector(alternateTarget)],
+        },
+      },
+    });
   });
 
   it('packages only the selected target when --target is provided', () => {
@@ -215,7 +305,76 @@ describe('wharfie app commands', () => {
     expect(readdirSync(outputDir)).toEqual([payload.artifacts[0].fileName]);
     expect(JSON.parse(readFileSync(traceFile, 'utf8'))).toEqual({
       builtTargets: [targetSelector],
+      embeddedManifestByTarget: {
+        [targetSelector]: {
+          appName: 'package-demo',
+          targetSelectors: [targetSelector],
+        },
+      },
     });
+  });
+
+  it('accepts short target aliases for --target', () => {
+    const outputDir = path.join(
+      os.tmpdir(),
+      'wharfie-package-command-test',
+      'short-target',
+      String(process.pid),
+    );
+    const shortAlias = `${currentTarget.platform}-${currentTarget.architecture}`;
+
+    const result = runCli([
+      'app',
+      'package',
+      packageDemoDir,
+      '--output-dir',
+      outputDir,
+      '--target',
+      shortAlias,
+      '--no-pretty',
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+
+    /** @type {{ targets: { nodeVersion: string, platform: string, architecture: string, libc?: string }[], artifacts: { target: { nodeVersion: string, platform: string, architecture: string, libc?: string } }[] }} */
+    const payload = JSON.parse(result.stdout);
+    expect(payload.targets).toEqual([currentTarget]);
+    expect(payload.artifacts).toHaveLength(1);
+    expect(payload.artifacts[0].target).toEqual(currentTarget);
+  });
+
+  it('preserves repeated --target order in the packaged output', () => {
+    const outputDir = path.join(
+      os.tmpdir(),
+      'wharfie-package-command-test',
+      'ordered-targets',
+      String(process.pid),
+    );
+
+    const result = runCli([
+      'app',
+      'package',
+      packageDemoDir,
+      '--output-dir',
+      outputDir,
+      '--target',
+      getTargetSelector(alternateTarget),
+      '--target',
+      getTargetSelector(currentTarget),
+      '--no-pretty',
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+
+    /** @type {{ targets: { nodeVersion: string, platform: string, architecture: string, libc?: string }[], artifacts: { target: { nodeVersion: string, platform: string, architecture: string, libc?: string } }[] }} */
+    const payload = JSON.parse(result.stdout);
+    expect(payload.targets).toEqual([alternateTarget, currentTarget]);
+    expect(payload.artifacts.map((artifact) => artifact.target)).toEqual([
+      alternateTarget,
+      currentTarget,
+    ]);
   });
 
   it('fails with a helpful error when a requested target does not exist', () => {
@@ -232,8 +391,7 @@ describe('wharfie app commands', () => {
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('Unknown target');
     expect(result.stderr).toContain('node99.99.99-linux-x64');
-    // TODO: these aren't passing due to the string being built different
-    // expect(result.stderr).toContain(getTargetSelector(currentTarget));
-    // expect(result.stderr).toContain(getTargetSelector(alternateTarget));
+    expect(result.stderr).toContain(getTargetSelector(currentTarget));
+    expect(result.stderr).toContain(getTargetSelector(alternateTarget));
   });
 });

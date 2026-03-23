@@ -1,7 +1,4 @@
-import { randomUUID } from 'node:crypto';
-import os from 'node:os';
-import path from 'node:path';
-import { buffer } from 'node:stream/consumers';
+import { promises as fsp } from 'node:fs';
 
 import duckdb from '@duckdb/node-api';
 import lmdb from 'lmdb';
@@ -9,199 +6,213 @@ import lmdb from 'lmdb';
 import dep from '../lib/dep.js';
 
 /**
- * @param {unknown} value - value.
- * @param {number} fallback - fallback.
- * @returns {number} - Result.
- */
-function toPositiveInteger(value, fallback) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric < 1) {
-    return fallback;
-  }
-  return Math.trunc(numeric);
-}
-
-/**
- * @param {string} value - value.
+ * @param {unknown} error - error.
  * @returns {string} - Result.
  */
-function sanitizeName(value) {
-  return value.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
+function formatError(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**
- * @param {string | { Body?: unknown } | undefined} objectResult - objectResult.
- * @returns {Promise<string>} - Result.
+ * @param {string} packageName - packageName.
+ * @returns {Promise<{ status: 'ok', module: any } | { status: 'skipped', reason: string }>} - Result.
  */
-async function readObjectBody(objectResult) {
-  if (typeof objectResult === 'string') {
-    return objectResult;
-  }
-  if (objectResult?.Body) {
-    return (await buffer(objectResult.Body)).toString('utf8');
-  }
-  return '';
-}
-
-/**
- * @param {unknown} value - value.
- * @returns {number} - Result.
- */
-function toSmallNumber(value) {
-  return typeof value === 'bigint' ? Number(value) : Number(value);
-}
-
-/**
- * Supported kitchen-sink function entrypoint.
- *
- * This intentionally exercises:
- * - injected Wharfie runtime resources
- * - an internal local dependency
- * - installed native dependencies already present in the repo test/dev tree
- *
- * The enclosing Function metadata also declares additional heavyweight native
- * externals (`sharp`, `sodium-native`, `usb`) so packaging coverage can target
- * them without forcing every local/test invocation to load optional modules.
- *
- * @param {{ who?: string, iterations?: number, runId?: string }} [event] - Event payload.
- * @param {{ resources?: any }} [context] - Invocation context.
- * @returns {Promise<{
- *   ok: boolean,
- *   who: string,
- *   runId: string,
- *   resourceKinds: string[],
- *   resources: {
- *     dbRecord: { id: string, who: string, message: string, runId: string },
- *     queueBody: string | undefined,
- *     objectBody: string,
- *   },
- *   native: {
- *     lmdbRecord: { who: string, message: string, runId: string },
- *     duckdb: { version: string | null, rangeSum: number },
- *   },
- *   benchmark: {
- *     iterations: number,
- *     accumulator: number,
- *   },
- * }>} - Result.
- */
-export async function start(event = {}, context = {}) {
-  const who = event.who || 'kitchen-sink';
-  const runId = event.runId || randomUUID();
-  const iterations = toPositiveInteger(event.iterations, 1000);
-  const message = `hello ${who}`;
-  const { db, queue, objectStorage } = context.resources || {};
-
-  if (!db || !queue || !objectStorage) {
-    throw new Error('expected context.resources.{db, queue, objectStorage}');
-  }
-
-  dep();
-
-  let accumulator = 0;
-  for (let i = 0; i < iterations; i++) {
-    const x = i * 0.000001;
-    accumulator += Math.sin(x) * Math.cos(x * 1.7) + Math.log1p(x + 1);
-  }
-
-  const tableName = 'kitchen_sink_runs';
-  const dbRecordId = `greeting-${runId}`;
-  await db.put({
-    tableName,
-    keyName: 'id',
-    record: { id: dbRecordId, who, message, runId },
-  });
-  const dbRecord = await db.get({
-    tableName,
-    keyName: 'id',
-    keyValue: dbRecordId,
-  });
-
-  const queueName = `kitchen-sink-${sanitizeName(runId)}`;
-  const queueMessage = JSON.stringify({ hello: who, runId });
-  await queue.createQueue({ QueueName: queueName });
-  await queue.sendMessage({
-    QueueUrl: queueName,
-    MessageBody: queueMessage,
-  });
-  const received = await queue.receiveMessage({
-    QueueUrl: queueName,
-    MaxNumberOfMessages: 1,
-    WaitTimeSeconds: 0,
-    VisibilityTimeout: 1,
-  });
-
-  const bucketName = `kitchen-sink-${sanitizeName(runId)}`;
-  const objectKey = 'hello.txt';
-  await objectStorage.createBucket({ Bucket: bucketName });
-  await objectStorage.putObject({
-    Bucket: bucketName,
-    Key: objectKey,
-    Body: Buffer.from(message),
-  });
-  const objectResult = await objectStorage.getObject({
-    Bucket: bucketName,
-    Key: objectKey,
-  });
-  const objectBody = await readObjectBody(objectResult);
-
-  const nativeDbPath = path.join(
-    os.tmpdir(),
-    'wharfie-examples',
-    'kitchen-sink-native',
-    sanitizeName(runId),
-  );
-  const nativeDb = lmdb.open({ path: nativeDbPath });
-  /** @type {{ who: string, message: string, runId: string }} */
-  let lmdbRecord;
+async function loadOptionalModule(packageName) {
   try {
-    await nativeDb.put('greeting', { who, message, runId });
-    lmdbRecord = nativeDb.get('greeting');
+    return {
+      status: 'ok',
+      module: await import(packageName),
+    };
+  } catch (error) {
+    return {
+      status: 'skipped',
+      reason: formatError(error),
+    };
+  }
+}
+
+/**
+ * @param {string} lmdbPath - lmdbPath.
+ * @returns {Promise<{ ok: true, value: string, path: string }>} - Result.
+ */
+async function smokeLmdb(lmdbPath) {
+  await fsp.mkdir(lmdbPath, { recursive: true });
+  const db = lmdb.open({ path: lmdbPath });
+
+  try {
+    await db.put('greeting', { someText: 'Hello, World!' });
+    return {
+      ok: true,
+      value: db.get('greeting').someText,
+      path: lmdbPath,
+    };
   } finally {
-    if (typeof nativeDb.close === 'function') {
-      nativeDb.close();
+    const closeResult = db.close?.();
+    if (closeResult && typeof closeResult.then === 'function') {
+      await closeResult;
     }
   }
+}
 
-  const duckdbVersion =
-    typeof duckdb.version === 'function' ? duckdb.version() : null;
+/**
+ * @returns {Promise<{ ok: true, version: string, count: number, sum: number }>} - Result.
+ */
+async function smokeDuckDb() {
   const { DuckDBInstance } = duckdb;
-  const duckdbInstance = await DuckDBInstance.create(':memory:');
-  const duckdbConnection = await duckdbInstance.connect();
-  /** @type {number} */
-  let rangeSum;
+  const instance = await DuckDBInstance.create(':memory:');
+  const conn = await instance.connect();
+
   try {
-    const [row] = (
-      await duckdbConnection.runAndReadAll(
-        'from range(5) select cast(sum(range) as int) as sum',
+    await conn.run('create table t(i int, s varchar)');
+    await conn.run("insert into t values (1,'a'),(2,'b'),(3,'c')");
+
+    const [countRow] = (
+      await conn.runAndReadAll('select cast(count(*) as int) as cnt from t')
+    ).getRowObjects();
+    const [sumRow] = (
+      await conn.runAndReadAll(
+        'from range(5) select cast(sum(range) as int) as total',
       )
     ).getRowObjects();
-    rangeSum = toSmallNumber(row.sum);
+
+    return {
+      ok: true,
+      version: duckdb.version(),
+      count: countRow.cnt,
+      sum: sumRow.total,
+    };
   } finally {
-    duckdbConnection.closeSync();
-    duckdbInstance.closeSync();
+    conn.closeSync();
+    instance.closeSync();
+  }
+}
+
+/**
+ * @returns {Promise<{ status: 'ok', bytes: number } | { status: 'skipped', reason: string }>} - Result.
+ */
+async function smokeSharp() {
+  const sharpModule = await loadOptionalModule('sharp');
+  if (sharpModule.status === 'skipped') {
+    return sharpModule;
   }
 
-  return {
-    ok: true,
-    who,
-    runId,
-    resourceKinds: Object.keys(context.resources || {}).sort(),
-    resources: {
-      dbRecord,
-      queueBody: received?.Messages?.[0]?.Body,
-      objectBody,
-    },
-    native: {
-      lmdbRecord,
-      duckdb: {
-        version: duckdbVersion,
-        rangeSum,
+  try {
+    const sharp = sharpModule.module.default ?? sharpModule.module;
+    const buffer = await sharp({
+      create: {
+        width: 4,
+        height: 4,
+        channels: 3,
+        background: { r: 255, g: 0, b: 0 },
       },
-    },
-    benchmark: {
-      iterations,
-      accumulator,
-    },
-  };
+    })
+      .png()
+      .toBuffer();
+
+    return {
+      status: 'ok',
+      bytes: buffer.length,
+    };
+  } catch (error) {
+    return {
+      status: 'skipped',
+      reason: formatError(error),
+    };
+  }
 }
+
+/**
+ * @returns {Promise<{ status: 'ok', opened: string } | { status: 'skipped', reason: string }>} - Result.
+ */
+async function smokeSodiumNative() {
+  const sodiumModule = await loadOptionalModule('sodium-native');
+  if (sodiumModule.status === 'skipped') {
+    return sodiumModule;
+  }
+
+  try {
+    const sodium = sodiumModule.module.default ?? sodiumModule.module;
+    const key = Buffer.alloc(sodium.crypto_secretbox_KEYBYTES);
+    const nonce = Buffer.alloc(sodium.crypto_secretbox_NONCEBYTES);
+    const message = Buffer.from('hello');
+    const boxed = Buffer.alloc(
+      message.length + sodium.crypto_secretbox_MACBYTES,
+    );
+    const opened = Buffer.alloc(message.length);
+
+    sodium.randombytes_buf(key);
+    sodium.randombytes_buf(nonce);
+    sodium.crypto_secretbox_easy(boxed, message, nonce, key);
+    const ok = sodium.crypto_secretbox_open_easy(opened, boxed, nonce, key);
+    if (!ok) {
+      throw new Error('crypto_secretbox_open_easy returned false');
+    }
+
+    return {
+      status: 'ok',
+      opened: opened.toString('utf8'),
+    };
+  } catch (error) {
+    return {
+      status: 'skipped',
+      reason: formatError(error),
+    };
+  }
+}
+
+/**
+ * @returns {Promise<{ status: 'ok', deviceCount: number } | { status: 'skipped', reason: string }>} - Result.
+ */
+async function smokeUsb() {
+  const usbModule = await loadOptionalModule('usb');
+  if (usbModule.status === 'skipped') {
+    return usbModule;
+  }
+
+  try {
+    const usbApi =
+      usbModule.module.usb ?? usbModule.module.default ?? usbModule.module;
+    if (typeof usbApi.getDeviceList !== 'function') {
+      throw new Error('usb.getDeviceList is unavailable');
+    }
+
+    return {
+      status: 'ok',
+      deviceCount: usbApi.getDeviceList().length,
+    };
+  } catch (error) {
+    return {
+      status: 'skipped',
+      reason: formatError(error),
+    };
+  }
+}
+
+/**
+ * @param {{ lmdbPath?: string } | undefined} event - event.
+ * @param {{ requestId?: string | null } | undefined} context - context.
+ * @returns {Promise<{
+ *   dependency: string,
+ *   requestId: string | null,
+ *   lmdb: { ok: true, value: string, path: string },
+ *   duckdb: { ok: true, version: string, count: number, sum: number },
+ *   sharp: { status: 'ok', bytes: number } | { status: 'skipped', reason: string },
+ *   sodiumNative: { status: 'ok', opened: string } | { status: 'skipped', reason: string },
+ *   usb: { status: 'ok', deviceCount: number } | { status: 'skipped', reason: string },
+ * }>} - Result.
+ */
+const start = async (event, context) => {
+  const lmdbPath = event?.lmdbPath ?? 'test-db';
+
+  return {
+    dependency: dep(),
+    requestId: context?.requestId ?? null,
+    lmdb: await smokeLmdb(lmdbPath),
+    duckdb: await smokeDuckDb(),
+    sharp: await smokeSharp(),
+    sodiumNative: await smokeSodiumNative(),
+    usb: await smokeUsb(),
+  };
+};
+
+export { start };

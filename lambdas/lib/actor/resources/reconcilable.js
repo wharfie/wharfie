@@ -1,6 +1,7 @@
 import EventEmitter from 'node:events';
 
 import { getCurrentResourceScope } from './resource-scope.js';
+import { normalizeRuntimeConfig } from './runtime-config.js';
 
 class ReconcilableEmitter extends EventEmitter {}
 
@@ -39,7 +40,8 @@ const Events = {
  * @property {string} name - name.
  * @property {StatusEnum} [status] - status.
  * @property {Reconcilable[]} [dependsOn] - dependsOn.
- * @property {import('node:events').EventEmitter} [emitter] - Scoped telemetry emitter.
+ * @property {import('node:events').EventEmitter} [emitter] - Compatibility alias for the scoped telemetry emitter.
+ * @property {import('./runtime-config.js').WharfieRuntimeConfig} [runtime] - Structured runtime configuration.
  */
 
 class Reconcilable {
@@ -51,6 +53,7 @@ class Reconcilable {
     status = Status.UNPROVISIONED,
     dependsOn = [],
     emitter,
+    runtime,
   }) {
     if (!name) {
       throw new Error(`${this.constructor.name} requires a name`);
@@ -60,7 +63,13 @@ class Reconcilable {
     this._MAX_RETRIES = 10;
     this._MAX_RETRY_TIMEOUT_SECONDS = 10;
     const resourceScope = getCurrentResourceScope();
-    this.emitter = emitter ?? resourceScope?.emitter ?? Reconcilable.Emitter;
+    this.runtime = normalizeRuntimeConfig({
+      runtime,
+      emitter,
+      scope: resourceScope,
+      defaultEmitter: Reconcilable.Emitter,
+    });
+    this.emitter = this.runtime.telemetry;
     /**
      * @type {Error[]}
      */
@@ -108,11 +117,24 @@ class Reconcilable {
   }
 
   /**
+   * @returns {{ telemetry: import('node:events').EventEmitter }} - Result.
+   */
+  getRuntimeConfig() {
+    return {
+      telemetry: this.getEmitter(),
+    };
+  }
+
+  /**
    * @param {import('node:events').EventEmitter | undefined} emitter - emitter.
    * @returns {this} - Result.
    */
   setEmitter(emitter) {
     this.emitter = emitter ?? Reconcilable.Emitter;
+    this.runtime = {
+      ...(this.runtime || {}),
+      telemetry: this.emitter,
+    };
     return this;
   }
 
