@@ -1,7 +1,10 @@
 /**
  * @typedef ResourceScope
- * @property {any} [stateDB] - Scoped state store.
- * @property {import('node:events').EventEmitter} [emitter] - Scoped telemetry emitter.
+ * @property {any} [stateStore] - Scoped runtime state store.
+ * @property {any} [stateDB] - Compatibility alias for the scoped state store.
+ * @property {import('node:events').EventEmitter} [telemetry] - Scoped telemetry emitter.
+ * @property {import('node:events').EventEmitter} [emitter] - Compatibility alias for the scoped telemetry emitter.
+ * @property {import('./runtime-config.js').WharfieRuntimeConfig} [runtime] - Structured runtime configuration.
  */
 
 /** @type {ResourceScope[]} */
@@ -10,8 +13,8 @@ const scopeStack = [];
 /**
  * Run a synchronous callback with a temporary resource scope.
  *
- * Child resources created inside the callback inherit the scoped `stateDB`
- * and `emitter` unless they are configured explicitly.
+ * Child resources created inside the callback inherit the scoped runtime
+ * configuration unless they are configured explicitly.
  * @template T
  * @param {ResourceScope} scope - scope.
  * @param {() => T} fn - fn.

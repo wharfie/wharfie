@@ -1,3 +1,1 @@
-export default () => {
-  console.log('dependency');
-};
+export default () => 'dependency';

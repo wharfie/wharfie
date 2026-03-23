@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { randomUUID } from 'node:crypto';
 
 import NodeAgent from '../../../../../runtime/services/node-agent.js';
-import { loadResourcesSpec } from './util/resources.js';
+import { loadRuntimeBootstrap } from './util/resources.js';
 import { getSelfSpawnCommand } from './util/spawn-self.js';
 
 /**
@@ -18,6 +18,11 @@ const startCmd = new Command('start')
     'JSON file containing ActorSystem resources spec',
   )
   .option('--resources <json>', 'Inline JSON ActorSystem resources spec')
+  .option(
+    '--manifest-file <path>',
+    'JSON file containing the packaged app manifest',
+  )
+  .option('--manifest <json>', 'Inline JSON packaged app manifest')
   .option('--role <role>', 'all | leader | worker', 'all')
   .option('--lambda-host <host>', 'Lambda service bind host', '0.0.0.0')
   .option('--lambda-port <port>', 'Lambda service port', (v) => Number(v), 8787)
@@ -63,14 +68,14 @@ const startCmd = new Command('start')
       );
     }
 
-    const resourcesSpec = loadResourcesSpec(opts);
-
+    const bootstrap = await loadRuntimeBootstrap(opts);
     const { cmd, prefixArgs } = getSelfSpawnCommand();
 
     const agent = new NodeAgent({
       nodeId,
       role,
-      resourcesSpec,
+      manifest: bootstrap.manifest,
+      resourcesSpec: bootstrap.resourcesSpec,
       cmd,
       prefixArgs,
       lambdaHost: String(opts.lambdaHost),
@@ -85,9 +90,7 @@ const startCmd = new Command('start')
       queueAddressOverride: opts.queueAddress
         ? String(opts.queueAddress)
         : null,
-      pollQueueUrls: Array.isArray(opts.pollQueueUrl)
-        ? /** @type {string[]} */ (opts.pollQueueUrl)
-        : [],
+      pollQueueUrls: bootstrap.pollQueueUrls,
     });
 
     await agent.start();

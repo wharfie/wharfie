@@ -1,150 +1,286 @@
-import dep from '../lib/dep.js';
-// import sharp from 'sharp';
+import { promises as fsp } from 'node:fs';
+
 import duckdb from '@duckdb/node-api';
 import lmdb from 'lmdb';
-// import usb from 'usb';
-// import sodium from 'sodium-native';
 
-async function unawaitedAsync() {
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  console.log('test draining');
+import dep from '../lib/dep.js';
+
+/**
+ * @param {unknown} error - error.
+ * @returns {string} - Result.
+ */
+function formatError(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
-const start = async (event, context) => {
-  const depLabel = `INTERNAL DEPENDENCY LOADING TIMER`;
-  console.time(depLabel);
-  console.timeEnd(depLabel);
-
-  const label = `INTERNAL SMOKE TEST RUN TIMER`;
-  console.time(label);
-  console.log('params', [event, context]);
-  dep();
-
-  const ITER = (event && event.iterations) || 5000000;
-  const ARRAY_SIZE = (event && event.arraySize) || 50000;
-
-  console.log('CPU benchmark config:', { ITER, ARRAY_SIZE });
-
-  // --- PURE JS CPU LOAD #1: numeric loop -------------------------
-  {
-    let acc = 0;
-    for (let i = 0; i < ITER; i++) {
-      // some reasonably expensive math
-      const x = i * 0.000001;
-      acc += Math.sin(x) * Math.cos(x * 1.7) + Math.log1p(x + 1);
-    }
-    // prevent V8 from dead-code eliminating the loop
-    console.log('accumulator:', acc);
-  }
-  // --- LMDB (yours) ---
-  const ROOT_DB = lmdb.open({ path: 'test-db' });
-  await ROOT_DB.put('greeting', { someText: 'Hello, World!' });
-  console.log(ROOT_DB.get('greeting').someText);
-
-  // --- sharp (yours) ---
-  //   const redDotPng = await sharp({
-  //     create: {
-  //       width: 64,
-  //       height: 64,
-  //       channels: 3,
-  //       background: { r: 255, g: 0, b: 0 },
-  //     },
-  //   })
-  //     .png()
-  //     .toBuffer();
-  //   console.log('sharp png size', redDotPng.length);
-
-  // // --- usb (libusb native binding) ---
+/**
+ * @param {string} packageName - packageName.
+ * @returns {Promise<{ status: 'ok', module: any } | { status: 'skipped', reason: string }>} - Result.
+ */
+async function loadOptionalModule(packageName) {
   try {
-    const devices = usb.getDeviceList();
-    console.log(
-      'usb devices:',
-      devices.map((d) => {
-        const vd = d.deviceDescriptor;
-        return `${vd.idVendor.toString(16)}:${vd.idProduct.toString(16)}`;
-      }),
-    );
-  } catch (e) {
-    console.warn('usb test skipped:', e && e.message);
+    return {
+      status: 'ok',
+      module: await import(packageName),
+    };
+  } catch (error) {
+    return {
+      status: 'skipped',
+      reason: formatError(error),
+    };
   }
+}
+
+/**
+ * @param {string} lmdbPath - lmdbPath.
+ * @param {{ who: string, message: string, runId: string }} record - record.
+ * @returns {Promise<{ ok: true, value: string, path: string, record: { who: string, message: string, runId: string } }>} - Result.
+ */
+async function smokeLmdb(lmdbPath, record) {
+  await fsp.mkdir(lmdbPath, { recursive: true });
+  const db = lmdb.open({ path: lmdbPath });
+
   try {
-    const { DuckDBInstance } = duckdb;
-
-    const toSmallNumber = (v) => (typeof v === 'bigint' ? Number(v) : v); // safe for small smoke-test values
-    console.log('DuckDB version:', duckdb.version());
-
-    const instance = await DuckDBInstance.create(':memory:');
-    const conn = await instance.connect();
-
-    // 1) trivial query sanity
-    {
-      const [row] = (
-        await conn.runAndReadAll(
-          "select 1 as one, 2+2 as two, 'ok'::varchar as status",
-        )
-      ).getRowObjects();
-      if (row.one !== 1 || row.two !== 4 || row.status !== 'ok') {
-        throw new Error('basic SELECT sanity check failed');
-      }
+    await db.put('greeting', { someText: 'Hello, World!' });
+    await db.put('native-record', record);
+    return {
+      ok: true,
+      value: db.get('greeting').someText,
+      path: lmdbPath,
+      record: db.get('native-record'),
+    };
+  } finally {
+    const closeResult = db.close?.();
+    if (closeResult && typeof closeResult.then === 'function') {
+      await closeResult;
     }
+  }
+}
 
-    // 2) DDL/DML + COUNT(*)
-    {
-      await conn.run('create table t(i int, s varchar)');
-      await conn.run("insert into t values (1,'a'),(2,'b'),(3,'c')");
-      const [row] = (
-        await conn.runAndReadAll('select count(*) as cnt from t')
-      ).getRowObjects();
-      const cnt = toSmallNumber(row.cnt); // handles 3n vs 3
-      if (cnt !== 3) throw new Error('table row count mismatch');
-    }
+/**
+ * @returns {Promise<{ ok: true, version: string, count: number, sum: number }>} - Result.
+ */
+async function smokeDuckDb() {
+  const { DuckDBInstance } = duckdb;
+  const instance = await DuckDBInstance.create(':memory:');
+  const conn = await instance.connect();
 
-    // 3) range() + SUM(...)
-    {
-      // Option A: cast in SQL so JS sees a number
-      const [row] = (
-        await conn.runAndReadAll(
-          'from range(5) select cast(sum(range) as int) as s',
-        )
-      ).getRowObjects();
-      if (row.s !== 10) throw new Error('range(5) sum mismatch');
-    }
+  try {
+    await conn.run('create table t(i int, s varchar)');
+    await conn.run("insert into t values (1,'a'),(2,'b'),(3,'c')");
 
+    const [countRow] = (
+      await conn.runAndReadAll('select cast(count(*) as int) as cnt from t')
+    ).getRowObjects();
+    const [sumRow] = (
+      await conn.runAndReadAll(
+        'from range(5) select cast(sum(range) as int) as total',
+      )
+    ).getRowObjects();
+
+    return {
+      ok: true,
+      version: duckdb.version(),
+      count: countRow.cnt,
+      sum: sumRow.total,
+    };
+  } finally {
     conn.closeSync();
     instance.closeSync();
-    console.log('✅ DuckDB smoke test passed');
-  } catch (err) {
-    console.error('❌ DuckDB smoke test failed:', err);
+  }
+}
+
+/**
+ * @returns {Promise<{ status: 'ok', bytes: number } | { status: 'skipped', reason: string }>} - Result.
+ */
+async function smokeSharp() {
+  const sharpModule = await loadOptionalModule('sharp');
+  if (sharpModule.status === 'skipped') {
+    return sharpModule;
   }
 
-  // --- OPTIONAL: sodium-native tight loop (CPU in C, not JS) -----
-  // comment out if you want *pure* JS only
   try {
+    const sharp = sharpModule.module.default ?? sharpModule.module;
+    const buffer = await sharp({
+      create: {
+        width: 4,
+        height: 4,
+        channels: 3,
+        background: { r: 255, g: 0, b: 0 },
+      },
+    })
+      .png()
+      .toBuffer();
+
+    return {
+      status: 'ok',
+      bytes: buffer.length,
+    };
+  } catch (error) {
+    return {
+      status: 'skipped',
+      reason: formatError(error),
+    };
+  }
+}
+
+/**
+ * @returns {Promise<{ status: 'ok', opened: string } | { status: 'skipped', reason: string }>} - Result.
+ */
+async function smokeSodiumNative() {
+  const sodiumModule = await loadOptionalModule('sodium-native');
+  if (sodiumModule.status === 'skipped') {
+    return sodiumModule;
+  }
+
+  try {
+    const sodium = sodiumModule.module.default ?? sodiumModule.module;
     const key = Buffer.alloc(sodium.crypto_secretbox_KEYBYTES);
     const nonce = Buffer.alloc(sodium.crypto_secretbox_NONCEBYTES);
+    const message = Buffer.from('hello');
+    const boxed = Buffer.alloc(
+      message.length + sodium.crypto_secretbox_MACBYTES,
+    );
+    const opened = Buffer.alloc(message.length);
+
     sodium.randombytes_buf(key);
     sodium.randombytes_buf(nonce);
-
-    const msg = Buffer.from('hello');
-    const boxed = Buffer.alloc(msg.length + sodium.crypto_secretbox_MACBYTES);
-    const opened = Buffer.alloc(msg.length);
-
-    const N = (event && event.sodiumLoops) || 500_000;
-    let okCount = 0;
-
-    for (let i = 0; i < N; i++) {
-      sodium.crypto_secretbox_easy(boxed, msg, nonce, key);
-      const ok = sodium.crypto_secretbox_open_easy(opened, boxed, nonce, key);
-      if (ok) okCount++;
+    sodium.crypto_secretbox_easy(boxed, message, nonce, key);
+    const ok = sodium.crypto_secretbox_open_easy(opened, boxed, nonce, key);
+    if (!ok) {
+      throw new Error('crypto_secretbox_open_easy returned false');
     }
-    console.log('sodium loops done, okCount:', okCount);
-  } catch (e) {
-    console.warn('sodium test skipped:', e && e.message);
+
+    return {
+      status: 'ok',
+      opened: opened.toString('utf8'),
+    };
+  } catch (error) {
+    return {
+      status: 'skipped',
+      reason: formatError(error),
+    };
+  }
+}
+
+/**
+ * @returns {Promise<{ status: 'ok', deviceCount: number } | { status: 'skipped', reason: string }>} - Result.
+ */
+async function smokeUsb() {
+  const usbModule = await loadOptionalModule('usb');
+  if (usbModule.status === 'skipped') {
+    return usbModule;
   }
 
-  // You had these commented; leaving your async tail-call intact.
-  // unawaitedAsync();
-  console.timeEnd(label);
+  try {
+    const usbApi =
+      usbModule.module.usb ?? usbModule.module.default ?? usbModule.module;
+    if (typeof usbApi.getDeviceList !== 'function') {
+      throw new Error('usb.getDeviceList is unavailable');
+    }
+
+    return {
+      status: 'ok',
+      deviceCount: usbApi.getDeviceList().length,
+    };
+  } catch (error) {
+    return {
+      status: 'skipped',
+      reason: formatError(error),
+    };
+  }
+}
+
+/**
+ * @param {string} packageName - packageName.
+ * @param {{ status: 'ok', [key: string]: any } | { status: 'skipped', reason: string }} probe - probe.
+ * @returns {{ packageName: string, status: 'OK', [key: string]: any } | { packageName: string, status: 'SKIPPED', reason: string }} - Result.
+ */
+function toNativeOptionalProbe(packageName, probe) {
+  if (probe.status === 'ok') {
+    return {
+      ...probe,
+      packageName,
+      status: 'OK',
+    };
+  }
+
+  return {
+    packageName,
+    status: 'SKIPPED',
+    reason: probe.reason,
+  };
+}
+
+/**
+ * @param {{ lmdbPath?: string, who?: string } | undefined} event - event.
+ * @param {{ requestId?: string | null } | undefined} context - context.
+ * @returns {Promise<{
+ *   ok: true,
+ *   dependency: string,
+ *   requestId: string | null,
+ *   runId: string,
+ *   who: string,
+ *   lmdb: { ok: true, value: string, path: string, record: { who: string, message: string, runId: string } },
+ *   duckdb: { ok: true, version: string, count: number, sum: number },
+ *   sharp: { status: 'ok', bytes: number } | { status: 'skipped', reason: string },
+ *   sodiumNative: { status: 'ok', opened: string } | { status: 'skipped', reason: string },
+ *   usb: { status: 'ok', deviceCount: number } | { status: 'skipped', reason: string },
+ *   native: {
+ *     lmdbRecord: { who: string, message: string, runId: string },
+ *     duckdb: { version: string, rowCount: number, rangeSum: number },
+ *     optional: {
+ *       sharp: { packageName: string, status: 'OK', bytes: number } | { packageName: string, status: 'SKIPPED', reason: string },
+ *       sodiumNative: { packageName: string, status: 'OK', opened: string } | { packageName: string, status: 'SKIPPED', reason: string },
+ *       usb: { packageName: string, status: 'OK', deviceCount: number } | { packageName: string, status: 'SKIPPED', reason: string },
+ *     },
+ *   },
+ * }>} - Result.
+ */
+const start = async (event, context) => {
+  const lmdbPath = event?.lmdbPath ?? 'test-db';
+  const who =
+    typeof event?.who === 'string' && event.who.trim()
+      ? event.who.trim()
+      : 'world';
+  const runId = context?.requestId ?? `run-${process.pid}`;
+  const nativeRecord = {
+    who,
+    message: `hello ${who}`,
+    runId,
+  };
+
+  const lmdb = await smokeLmdb(lmdbPath, nativeRecord);
+  const duckdb = await smokeDuckDb();
+  const sharp = await smokeSharp();
+  const sodiumNative = await smokeSodiumNative();
+  const usb = await smokeUsb();
+
+  return {
+    ok: true,
+    dependency: dep(),
+    requestId: context?.requestId ?? null,
+    runId,
+    who,
+    lmdb,
+    duckdb,
+    sharp,
+    sodiumNative,
+    usb,
+    native: {
+      lmdbRecord: lmdb.record,
+      duckdb: {
+        version: duckdb.version,
+        rowCount: duckdb.count,
+        rangeSum: duckdb.sum,
+      },
+      optional: {
+        sharp: toNativeOptionalProbe('sharp', sharp),
+        sodiumNative: toNativeOptionalProbe('sodium-native', sodiumNative),
+        usb: toNativeOptionalProbe('usb', usb),
+      },
+    },
+  };
 };
 
 export { start };

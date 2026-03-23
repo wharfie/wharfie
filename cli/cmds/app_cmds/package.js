@@ -4,13 +4,23 @@ import { packageLocalApp, stringifyJson } from '../../app/local-app.js';
 import { displayFailure } from '../../output/basic.js';
 
 /**
+ * @param {string} value - value.
+ * @param {string[]} previous - previous.
+ * @returns {string[]} - Result.
+ */
+function collectTargetFilter(value, previous) {
+  return [...previous, value];
+}
+
+/**
  * @param {string} dir - dir.
- * @param {{ outputDir?: string, pretty?: boolean }} options - options.
+ * @param {{ outputDir?: string, pretty?: boolean, target?: string[] }} options - options.
  */
 async function packageApp(dir, options) {
   const result = await packageLocalApp({
     dir,
     outputDir: options.outputDir,
+    targetFilters: Array.isArray(options.target) ? options.target : [],
   });
 
   process.stdout.write(`${stringifyJson(result, options)}\n`);
@@ -22,6 +32,12 @@ const packageCommand = new Command('package')
   .option(
     '--output-dir <dir>',
     'Directory to copy packaged artifacts into (default: <app dir>/dist)',
+  )
+  .option(
+    '-t, --target <target>',
+    'Package only the selected build target (repeatable)',
+    collectTargetFilter,
+    [],
   )
   .option('--json', 'Output JSON (default)')
   .option('--no-pretty', 'Disable pretty JSON output')

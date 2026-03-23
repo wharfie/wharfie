@@ -9,6 +9,7 @@ import BaseResource from '../base-resource.js';
  * @property {import('../../typedefs.js').SharedProperties} properties - properties.
  * @property {any} [stateDB] - Scoped state store.
  * @property {import('node:events').EventEmitter} [emitter] - Scoped telemetry emitter.
+ * @property {import('../runtime-config.js').WharfieRuntimeConfig} [runtime] - Structured runtime configuration.
  */
 
 class BuildResource extends BaseResource {
@@ -23,6 +24,7 @@ class BuildResource extends BaseResource {
     properties,
     stateDB,
     emitter,
+    runtime,
   }) {
     super({
       name,
@@ -32,6 +34,7 @@ class BuildResource extends BaseResource {
       properties,
       stateDB,
       emitter,
+      runtime,
     });
   }
 

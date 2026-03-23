@@ -1,6 +1,8 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
+import { promises as fsp } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -29,6 +31,46 @@ describe('Function + ActorSystem demos', () => {
       message: 'demo',
       requestId: 'req-123',
     });
+  });
+
+  it('runs the scratch native smoke function with required externals', async () => {
+    const lmdbPath = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-scratch-start-'),
+    );
+    const fn = new Function({
+      name: 'start',
+      entrypoint: {
+        path: path.join(repoRoot, 'scratch', 'functions', 'start.js'),
+        export: 'start',
+      },
+    });
+
+    try {
+      const result = await fn.fn(
+        { lmdbPath },
+        { requestId: 'scratch-smoke-request' },
+      );
+
+      expect(result).toMatchObject({
+        dependency: 'dependency',
+        requestId: 'scratch-smoke-request',
+        lmdb: {
+          ok: true,
+          value: 'Hello, World!',
+          path: lmdbPath,
+        },
+        duckdb: {
+          ok: true,
+          count: 3,
+          sum: 10,
+        },
+      });
+      expect(['ok', 'skipped']).toContain(result.sharp.status);
+      expect(['ok', 'skipped']).toContain(result.sodiumNative.status);
+      expect(['ok', 'skipped']).toContain(result.usb.status);
+    } finally {
+      await fsp.rm(lmdbPath, { recursive: true, force: true });
+    }
   });
 
   it('loads the hello-world ActorSystem demo and invokes its functions', async () => {

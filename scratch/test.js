@@ -1,10 +1,16 @@
 // @ts-nocheck
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import Function from '../lambdas/lib/actor/resources/builds/function.js';
 import ActorSystem from '../lambdas/lib/actor/resources/builds/actor-system.js';
 import Reconcilable from '../lambdas/lib/actor/resources/reconcilable.js';
+
+import {
+  kitchenSinkDefaultTargets,
+  kitchenSinkExternalDependencies,
+} from './examples/actor-systems/kitchen-sink/config.js';
 import {
   putResource,
   putResourceStatus,
@@ -24,112 +30,72 @@ const stateDB = {
 };
 
 const emitter = new EventEmitter();
+const runtime = {
+  stateStore: stateDB,
+  telemetry: emitter,
+};
+const scratchDir = path.dirname(fileURLToPath(import.meta.url));
+const runtimePath = path.resolve(scratchDir, '.hello-world');
 
 /**
- *
+ * Scratch spike for the kitchen-sink ActorSystem path.
  */
 async function main() {
-  emitter.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
-    // console.log(event)
-  });
-  emitter.on(Reconcilable.Events.WHARFIE_ERROR, (event) => {
-    // console.error(event)
-  });
-  const __dirname = import.meta.dirname;
+  emitter.on(Reconcilable.Events.WHARFIE_STATUS, () => {});
+  emitter.on(Reconcilable.Events.WHARFIE_ERROR, () => {});
+
   const start = new Function({
     name: 'start',
     entrypoint: {
-      path: path.resolve(__dirname, 'functions', 'start.js'),
+      path: path.resolve(scratchDir, 'functions', 'start.js'),
       export: 'start',
     },
     properties: {
-      external: [
-        // Wharfie now resolves installed versions automatically for bare package names.
-        'lmdb',
-        'sharp@0.34.4',
-        'sodium-native@5.0.9',
-        '@duckdb/node-api',
-        'usb@2.13.0',
-      ],
+      external: [...kitchenSinkExternalDependencies],
       resources: {
         db: {
           adapter: 'vanilla',
-          options: { path: path.resolve(import.meta.dirname, '.hello-world') },
+          options: { path: runtimePath },
         },
         queue: {
           adapter: 'vanilla',
-          options: { path: path.resolve(import.meta.dirname, '.hello-world') },
+          options: { path: runtimePath },
         },
         objectStorage: {
           adapter: 'vanilla',
-          options: { path: path.resolve(import.meta.dirname, '.hello-world') },
+          options: { path: runtimePath },
         },
       },
     },
   });
 
-  const main = new ActorSystem({
+  const system = new ActorSystem({
     name: 'main',
     functions: [start],
-    stateDB,
-    emitter,
+    runtime,
     properties: {
-      targets: [
-        {
-          nodeVersion: '24',
-          platform: 'darwin',
-          architecture: 'arm64',
-        },
-        // {
-        //   nodeVersion: '23',
-        //   platform: 'darwin',
-        //   architecture: 'arm64',
-        // },
-        {
-          nodeVersion: '24',
-          platform: 'linux',
-          architecture: 'x64',
-          // libc: 'glibc',
-        },
-        // {
-        //   nodeVersion: '22',
-        //   platform: 'darwin',
-        //   architecture: 'x64',
-        // },
-        // {
-        //   nodeVersion: '24',
-        //   platform: 'win32',
-        //   architecture: 'x64',
-        // },
-        // {
-        //   nodeVersion: '22',
-        //   platform: 'win32',
-        //   architecture: 'x86',
-        // },
-      ],
+      targets: kitchenSinkDefaultTargets.map((target) => ({ ...target })),
       resources: {
         db: {
           adapter: 'vanilla',
-          options: { path: path.resolve(import.meta.dirname, '.hello-world') },
+          options: { path: runtimePath },
         },
         queue: {
           adapter: 'vanilla',
-          options: { path: path.resolve(import.meta.dirname, '.hello-world') },
+          options: { path: runtimePath },
         },
         objectStorage: {
           adapter: 'vanilla',
-          options: { path: path.resolve(import.meta.dirname, '.hello-world') },
+          options: { path: runtimePath },
         },
       },
     },
   });
 
-  await main.reconcile();
-  // let t = 0;
-  // while (t < 10) {
-  //   await start.fn()
-  //   t += 1
-  // }
+  await system.reconcile();
 }
 
-main();
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

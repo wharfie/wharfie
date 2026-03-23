@@ -7,6 +7,7 @@ import { Client, credentials } from '@grpc/grpc-js';
 
 import { grpcUnary, LambdaServiceDefinition } from './rpc-grpc.js';
 import { startSchedulerService } from './scheduler-service.js';
+import { extractCronTriggers } from '../../resources/builds/actor-system-cli/lib/runtime-bootstrap.js';
 
 /**
  * Node Agent
@@ -37,6 +38,7 @@ import { startSchedulerService } from './scheduler-service.js';
  * @property {string} nodeId - nodeId.
  * @property {'all'|'leader'|'worker'} role - role.
  * @property {any} resourcesSpec - resourcesSpec.
+ * @property {any} [manifest] - Embedded or provided app manifest.
  * @property {string} cmd - cmd.
  * @property {string[]} prefixArgs - prefixArgs.
  * @property {string} lambdaHost - lambdaHost.
@@ -130,52 +132,50 @@ function normalizeLocalClientHost(host) {
 }
 
 /**
- * Extract cron triggers from a manifest/config-like object.
- *
- * Supported shapes (MVP):
- * - { scheduler: { triggers: [{ actor, cron }] } }
- * - { cronTriggers: [{ actor, cron }] }
- * - { cron: [{ actor, cron }] }
- * @param {any} spec - spec.
- * @returns {{ actor: string, cron: string }[]} - Result.
+ * @param {any} resourcesSpec - resourcesSpec.
+ * @param {any} manifest - manifest.
+ * @returns {{ db: boolean, queue: boolean, lambda: boolean, scheduler: boolean }} - Result.
  */
-function extractCronTriggers(spec) {
-  if (!spec || typeof spec !== 'object') return [];
+function createServicePlan(resourcesSpec, manifest) {
+  const manifestResources =
+    manifest && typeof manifest === 'object'
+      ? manifest.resources && typeof manifest.resources === 'object'
+        ? manifest.resources
+        : manifest.capabilities && typeof manifest.capabilities === 'object'
+          ? manifest.capabilities
+          : {}
+      : {};
+  const resourceConfig = {
+    ...(manifestResources && typeof manifestResources === 'object'
+      ? manifestResources
+      : {}),
+    ...(resourcesSpec && typeof resourcesSpec === 'object'
+      ? resourcesSpec
+      : {}),
+  };
+  const functions = Array.isArray(manifest?.functions)
+    ? manifest.functions
+    : [];
+  const schedulerTriggers = extractCronTriggers(manifest || resourceConfig);
 
-  const s = /** @type {any} */ (spec);
+  return {
+    db: resourceConfig.db !== undefined,
+    queue: resourceConfig.queue !== undefined,
+    lambda: manifest ? functions.length > 0 : true,
+    scheduler: schedulerTriggers.length > 0,
+  };
+}
 
-  const candidates = [
-    s?.scheduler?.triggers,
-    s?.scheduler?.cronTriggers,
-    s?.cronTriggers,
-    s?.cron,
-  ];
-
-  for (const c of candidates) {
-    if (!Array.isArray(c)) continue;
-
-    /** @type {{ actor: string, cron: string }[]} */
-    const triggers = [];
-    for (const t of c) {
-      if (!t || typeof t !== 'object') continue;
-      const actor =
-        typeof (/** @type {any} */ (t).actor) === 'string'
-          ? /** @type {any} */ (t).actor
-          : typeof (/** @type {any} */ (t).functionName) === 'string'
-            ? /** @type {any} */ (t).functionName
-            : null;
-      const cron =
-        typeof (/** @type {any} */ (t).cron) === 'string'
-          ? /** @type {any} */ (t).cron
-          : null;
-      if (!actor || !cron) continue;
-      triggers.push({ actor: String(actor), cron: String(cron) });
-    }
-
-    return triggers;
+/**
+ * @param {any} manifest - manifest.
+ * @returns {Record<string, string>} - Result.
+ */
+function createChildManifestEnv(manifest) {
+  if (!manifest || typeof manifest !== 'object') {
+    return {};
   }
 
-  return [];
+  return { WHARFIE_APP_MANIFEST: JSON.stringify(manifest) };
 }
 
 export default class NodeAgent {
@@ -214,10 +214,12 @@ export default class NodeAgent {
   async start() {
     const o = this.options;
     const spawnServices = o.spawnServices !== false;
+    const servicePlan = createServicePlan(o.resourcesSpec, o.manifest);
+    const childEnv = createChildManifestEnv(o.manifest);
 
     // Spawn db/queue unless worker-only or remote override provided.
     if (spawnServices && o.role !== 'worker') {
-      if (!this.dbAddress) {
+      if (servicePlan.db && !this.dbAddress) {
         this.children.push(
           spawnService(
             'db',
@@ -232,16 +234,14 @@ export default class NodeAgent {
               String(o.dbHost),
               '--port',
               String(o.dbPort),
-              '--resources',
-              JSON.stringify(o.resourcesSpec),
             ],
-            {},
+            childEnv,
           ),
         );
         this.dbAddress = `${o.dbHost}:${o.dbPort}`;
       }
 
-      if (!this.queueAddress) {
+      if (servicePlan.queue && !this.queueAddress) {
         this.children.push(
           spawnService(
             'queue',
@@ -256,10 +256,8 @@ export default class NodeAgent {
               String(o.queueHost),
               '--port',
               String(o.queuePort),
-              '--resources',
-              JSON.stringify(o.resourcesSpec),
             ],
-            {},
+            childEnv,
           ),
         );
         this.queueAddress = `${o.queueHost}:${o.queuePort}`;
@@ -267,15 +265,20 @@ export default class NodeAgent {
     }
 
     if (o.role === 'worker') {
-      if (!this.dbAddress || !this.queueAddress) {
+      if (servicePlan.db && !this.dbAddress) {
         throw new Error(
-          "node-agent role 'worker' requires --db-address and --queue-address (or discovery)",
+          "node-agent role 'worker' requires --db-address when the app manifest declares a db capability.",
+        );
+      }
+
+      if (servicePlan.queue && !this.queueAddress) {
+        throw new Error(
+          "node-agent role 'worker' requires --queue-address when the app manifest declares a queue capability.",
         );
       }
     }
 
-    // Spawn lambda service (always, unless explicitly disabled).
-    if (spawnServices) {
+    if (spawnServices && servicePlan.lambda) {
       const lambdaArgs = [
         ...o.prefixArgs,
         'ctl',
@@ -286,25 +289,23 @@ export default class NodeAgent {
         String(o.lambdaHost),
         '--port',
         String(o.lambdaPort),
-        '--db-address',
-        String(this.dbAddress),
-        '--queue-address',
-        String(this.queueAddress),
-        '--resources',
-        JSON.stringify(o.resourcesSpec),
       ];
+
+      if (this.dbAddress) {
+        lambdaArgs.push('--db-address', String(this.dbAddress));
+      }
+      if (this.queueAddress) {
+        lambdaArgs.push('--queue-address', String(this.queueAddress));
+      }
 
       for (const qUrl of o.pollQueueUrls || []) {
         lambdaArgs.push('--poll-queue-url', qUrl);
       }
 
-      this.children.push(spawnService('lambda', o.cmd, lambdaArgs, {}));
+      this.children.push(spawnService('lambda', o.cmd, lambdaArgs, childEnv));
     }
 
-    // Start scheduler-service (leader-only) when cron triggers are configured.
     await this._maybeStartScheduler();
-
-    // Start control plane health endpoint in this process.
     await this._startControlPlane();
   }
 
@@ -313,7 +314,7 @@ export default class NodeAgent {
 
     if (!hasLeaderRole(o.role)) return;
 
-    const triggers = extractCronTriggers(o.resourcesSpec);
+    const triggers = extractCronTriggers(o.manifest || o.resourcesSpec);
     if (!triggers.length) return;
 
     const invoke =

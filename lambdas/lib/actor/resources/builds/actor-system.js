@@ -7,6 +7,7 @@ import MacOSBinarySignature from './macos-binary-signature.js';
 import cli from './actor-system-cli/index.js';
 import { createActorSystemResources } from '../../runtime/resources.js';
 import { withResourceScope } from '../resource-scope.js';
+import { createResourceScope } from '../runtime-config.js';
 
 import path from 'node:path';
 
@@ -42,7 +43,91 @@ import path from 'node:path';
  * @property {BuildTarget[] | function(): BuildTarget[]} targets - targets.
  * @property {ActorSystemResourcesSpec} [resources] - resources.
  * @property {import('./function.js').default[]} [functions] - functions.
+ * @property {any[]} [workflows] - Serializable workflow definitions.
  */
+
+/**
+ * @typedef ResolvedBuildTarget
+ * @property {string} nodeVersion - nodeVersion.
+ * @property {TargetPlatform} platform - platform.
+ * @property {TargetArch} architecture - architecture.
+ * @property {TargetLibc} [libc] - libc.
+ */
+
+/**
+ * @typedef BuildTargetSelectorInput
+ * @property {string} nodeVersion - nodeVersion.
+ * @property {string} platform - platform.
+ * @property {string} architecture - architecture.
+ * @property {string} [libc] - libc.
+ */
+
+/**
+ * @param {BuildTarget | ResolvedBuildTarget | BuildTargetSelectorInput | null | undefined} target - target.
+ * @returns {ResolvedBuildTarget | null} - Result.
+ */
+function resolveBuildTarget(target) {
+  if (!target || typeof target !== 'object') return null;
+
+  const nodeVersionValue =
+    typeof target.nodeVersion === 'function'
+      ? target.nodeVersion()
+      : target.nodeVersion;
+  const platformValue =
+    typeof target.platform === 'function' ? target.platform() : target.platform;
+  const architectureValue =
+    typeof target.architecture === 'function'
+      ? target.architecture()
+      : target.architecture;
+  const libcValue =
+    typeof target.libc === 'function' ? target.libc() : target.libc;
+
+  if (!nodeVersionValue || !platformValue || !architectureValue) {
+    return null;
+  }
+
+  /** @type {ResolvedBuildTarget} */
+  const resolved = {
+    nodeVersion: String(nodeVersionValue),
+    platform: /** @type {TargetPlatform} */ (String(platformValue)),
+    architecture: /** @type {TargetArch} */ (String(architectureValue)),
+  };
+
+  if (libcValue) {
+    resolved.libc = /** @type {TargetLibc} */ (String(libcValue));
+  }
+
+  return resolved;
+}
+
+/**
+ * @param {BuildTarget[] | function(): BuildTarget[] | undefined} targets - targets.
+ * @returns {ResolvedBuildTarget[]} - Result.
+ */
+function resolveConfiguredTargets(targets) {
+  const resolvedTargets = typeof targets === 'function' ? targets() : targets;
+  if (!Array.isArray(resolvedTargets)) {
+    return [];
+  }
+
+  return resolvedTargets.reduce((acc, target) => {
+    const resolved = resolveBuildTarget(target);
+    if (resolved) {
+      acc.push(resolved);
+    }
+    return acc;
+  }, /** @type {ResolvedBuildTarget[]} */ ([]));
+}
+
+/**
+ * @param {ResolvedBuildTarget} target - target.
+ * @returns {string} - Result.
+ */
+function buildTargetSelector(target) {
+  return `node${target.nodeVersion}-${target.platform}-${target.architecture}${
+    target.libc ? `-${target.libc}` : ''
+  }`;
+}
 
 /**
  * @typedef WharfieActorSystemOptions
@@ -53,8 +138,9 @@ import path from 'node:path';
  * @property {WharfieActorSystemProperties & import('../../typedefs.js').SharedProperties} properties - properties.
  * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
  * @property {Object<string, import('../base-resource.js').default | import('../base-resource-group.js').default>} [resources] - resources.
- * @property {any} [stateDB] - Scoped state store.
- * @property {import('node:events').EventEmitter} [emitter] - Scoped telemetry emitter.
+ * @property {any} [stateDB] - Compatibility alias for the scoped state store.
+ * @property {import('node:events').EventEmitter} [emitter] - Compatibility alias for the scoped telemetry emitter.
+ * @property {import('../runtime-config.js').WharfieRuntimeConfig} [runtime] - Structured runtime configuration.
  */
 
 class ActorSystem extends BuildResourceGroup {
@@ -71,12 +157,21 @@ class ActorSystem extends BuildResourceGroup {
     functions = [],
     stateDB,
     emitter,
+    runtime,
   }) {
     const propertiesWithDefaults = Object.assign(
       {},
       ActorSystem.DefaultProperties,
       properties,
     );
+    const requestedTargetSelectors =
+      ActorSystem.getRequestedBuildTargetSelectors();
+    if (requestedTargetSelectors) {
+      propertiesWithDefaults.targets = ActorSystem.filterBuildTargets(
+        propertiesWithDefaults.targets,
+        requestedTargetSelectors,
+      );
+    }
     super({
       name,
       parent,
@@ -86,18 +181,15 @@ class ActorSystem extends BuildResourceGroup {
       dependsOn: [...(dependsOn ?? [])],
       stateDB,
       emitter,
+      runtime,
     });
     this.functions = functions;
     /** @type {Promise<{ resources: any, close: () => Promise<void> }> | null} */
     this._runtimeResourcesPromise = null;
     // normally _defineGroupResources is used but this is a workaround to make sure this.functions is set before defining things
     this.addResources(
-      withResourceScope(
-        {
-          stateDB: this.getStateDB(),
-          emitter: this.getEmitter(),
-        },
-        () => this.defineActorSystemResources(parent),
+      withResourceScope(createResourceScope(this.getRuntimeConfig()), () =>
+        this.defineActorSystemResources(parent),
       ),
     );
     // @ts-ignore
@@ -325,6 +417,88 @@ class ActorSystem extends BuildResourceGroup {
     return this.getResource(`${this.name}-build`).get('binaryPath');
   }
 
+  /**
+   * @param {BuildTarget[] | function(): BuildTarget[] | undefined} targets - targets.
+   * @returns {ResolvedBuildTarget[]} - Result.
+   */
+  static resolveBuildTargets(targets) {
+    return resolveConfiguredTargets(targets);
+  }
+
+  /**
+   * @param {BuildTarget | ResolvedBuildTarget | BuildTargetSelectorInput} target - target.
+   * @returns {string} - Result.
+   */
+  static getBuildTargetSelector(target) {
+    const resolvedTarget = resolveBuildTarget(target);
+    if (!resolvedTarget) {
+      throw new Error(
+        'Build target must include nodeVersion, platform, and architecture.',
+      );
+    }
+    return buildTargetSelector(resolvedTarget);
+  }
+
+  /**
+   * @param {BuildTarget[] | function(): BuildTarget[] | undefined} targets - targets.
+   * @param {string[] | null | undefined} [requestedTargetSelectors] - requestedTargetSelectors.
+   * @returns {ResolvedBuildTarget[]} - Result.
+   */
+  static filterBuildTargets(
+    targets,
+    requestedTargetSelectors = ActorSystem.getRequestedBuildTargetSelectors(),
+  ) {
+    const resolvedTargets = resolveConfiguredTargets(targets);
+    if (
+      !Array.isArray(requestedTargetSelectors) ||
+      requestedTargetSelectors.length === 0
+    ) {
+      return resolvedTargets;
+    }
+
+    const requested = new Set(
+      requestedTargetSelectors
+        .map((selector) => String(selector).trim())
+        .filter(Boolean),
+    );
+    return resolvedTargets.filter((target) =>
+      requested.has(buildTargetSelector(target)),
+    );
+  }
+
+  /**
+   * @returns {string[] | null} - Result.
+   */
+  static getRequestedBuildTargetSelectors() {
+    return ActorSystem.RequestedBuildTargetSelectors;
+  }
+
+  /**
+   * @template T
+   * @param {string[] | null | undefined} requestedTargetSelectors - requestedTargetSelectors.
+   * @param {() => Promise<T>} fn - fn.
+   * @returns {Promise<T>} - Result.
+   */
+  static async withRequestedBuildTargetSelectors(requestedTargetSelectors, fn) {
+    const previousSelectors = ActorSystem.RequestedBuildTargetSelectors;
+    ActorSystem.RequestedBuildTargetSelectors =
+      Array.isArray(requestedTargetSelectors) &&
+      requestedTargetSelectors.length > 0
+        ? [
+            ...new Set(
+              requestedTargetSelectors
+                .map((selector) => String(selector).trim())
+                .filter(Boolean),
+            ),
+          ]
+        : null;
+    try {
+      return await fn();
+    } finally {
+      ActorSystem.RequestedBuildTargetSelectors = previousSelectors;
+    }
+  }
+
   async run() {
     await cli();
     //   if (process.argv.length <= 2) {
@@ -357,5 +531,7 @@ ActorSystem.DefaultProperties = {
   functions: [],
   resources: {},
 };
+/** @type {string[] | null} */
+ActorSystem.RequestedBuildTargetSelectors = null;
 
 export default ActorSystem;

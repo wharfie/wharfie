@@ -5,6 +5,7 @@ import Secret from '../lib/secret.js';
 import { isEqual } from 'es-toolkit';
 import { diff } from '../../json-diff.js';
 import { getCurrentResourceScope } from './resource-scope.js';
+import { normalizeRuntimeConfig } from './runtime-config.js';
 
 /**
  * @typedef BaseResourceOptions
@@ -13,8 +14,9 @@ import { getCurrentResourceScope } from './resource-scope.js';
  * @property {Reconcilable.Status} [status] - status.
  * @property {Reconcilable[]} [dependsOn] - dependsOn.
  * @property {Object<string, any> & import('../typedefs.js').SharedProperties} properties - properties.
- * @property {StateStore} [stateDB] - Scoped state store.
- * @property {import('node:events').EventEmitter} [emitter] - Scoped telemetry emitter.
+ * @property {StateStore} [stateDB] - Compatibility alias for the scoped state store.
+ * @property {import('node:events').EventEmitter} [emitter] - Compatibility alias for the scoped telemetry emitter.
+ * @property {import('./runtime-config.js').WharfieRuntimeConfig} [runtime] - Structured runtime configuration.
  */
 class BaseResource extends Reconcilable {
   /**
@@ -28,13 +30,22 @@ class BaseResource extends Reconcilable {
     properties,
     stateDB,
     emitter,
+    runtime,
   }) {
-    super({ name, status, dependsOn, emitter });
+    super({ name, status, dependsOn, emitter, runtime });
     const resourceScope = getCurrentResourceScope();
+    const runtimeConfig = normalizeRuntimeConfig({
+      runtime,
+      stateDB,
+      emitter: this.getEmitter(),
+      scope: resourceScope,
+      defaultEmitter: this.getEmitter(),
+    });
     this.parent = parent;
     this.resourceType = this.constructor.name;
     this.properties = properties || {};
-    this.stateDB = stateDB ?? resourceScope?.stateDB ?? BaseResource.stateDB;
+    this.runtime = runtimeConfig;
+    this.stateDB = runtimeConfig.stateStore ?? BaseResource.stateDB;
   }
 
   /**
@@ -45,11 +56,33 @@ class BaseResource extends Reconcilable {
   }
 
   /**
+   * @returns {StateStore} - Result.
+   */
+  getStateStore() {
+    return this.getStateDB();
+  }
+
+  /**
+   * @returns {{ stateStore: StateStore, telemetry: import('node:events').EventEmitter }} - Result.
+   */
+  getRuntimeConfig() {
+    return {
+      stateStore: this.getStateDB(),
+      telemetry: this.getEmitter(),
+    };
+  }
+
+  /**
    * @param {StateStore | undefined} stateDB - stateDB.
    * @returns {this} - Result.
    */
   setStateDB(stateDB) {
     this.stateDB = stateDB ?? BaseResource.stateDB;
+    this.runtime = {
+      ...(this.runtime || {}),
+      stateStore: this.stateDB,
+      telemetry: this.getEmitter(),
+    };
     return this;
   }
 

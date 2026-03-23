@@ -1,6 +1,7 @@
 import BaseResource from './base-resource.js';
 import Reconcilable from './reconcilable.js';
 import { withResourceScope } from './resource-scope.js';
+import { createResourceScope } from './runtime-config.js';
 
 /**
  * @typedef BaseResourceGroupOptions
@@ -12,6 +13,7 @@ import { withResourceScope } from './resource-scope.js';
  * @property {Object<string, BaseResource | BaseResourceGroup>} [resources] - resources.
  * @property {any} [stateDB] - Scoped state store.
  * @property {import('node:events').EventEmitter} [emitter] - Scoped telemetry emitter.
+ * @property {import('./runtime-config.js').WharfieRuntimeConfig} [runtime] - Structured runtime configuration.
  */
 class BaseResourceGroup extends BaseResource {
   /**
@@ -26,6 +28,7 @@ class BaseResourceGroup extends BaseResource {
     resources,
     stateDB,
     emitter,
+    runtime,
   }) {
     super({
       name,
@@ -35,18 +38,15 @@ class BaseResourceGroup extends BaseResource {
       properties,
       stateDB,
       emitter,
+      runtime,
     });
     this.resources = resources;
 
     if (!this.resources) {
       this.resources = {};
       this.addResources(
-        withResourceScope(
-          {
-            stateDB: this.getStateDB(),
-            emitter: this.getEmitter(),
-          },
-          () => this._defineGroupResources(this.getName()),
+        withResourceScope(createResourceScope(this.getRuntimeConfig()), () =>
+          this._defineGroupResources(this.getName()),
         ),
       );
     } else {

@@ -68,16 +68,12 @@ describe('resource scope isolation', () => {
   it('isolates state stores and telemetry emitters per resource tree', async () => {
     const storeA = createStateStore();
     const storeB = createStateStore();
-    const emitterA = new EventEmitter();
     const emitterB = new EventEmitter();
     /** @type {string[]} */
     const eventsA = [];
     /** @type {string[]} */
     const eventsB = [];
 
-    emitterA.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
-      eventsA.push(`${event.constructor}:${event.name}:${event.status}`);
-    });
     emitterB.on(Reconcilable.Events.WHARFIE_STATUS, (event) => {
       eventsB.push(`${event.constructor}:${event.name}:${event.status}`);
     });
@@ -85,8 +81,18 @@ describe('resource scope isolation', () => {
     const groupA = new TestGroup({
       name: 'group-a',
       properties: {},
-      stateDB: storeA,
-      emitter: emitterA,
+      runtime: {
+        stateStore: storeA,
+        telemetry: {
+          emit(/** @type {string} */ eventName, /** @type {any} */ event) {
+            if (eventName === Reconcilable.Events.WHARFIE_STATUS) {
+              eventsA.push(
+                `${event.constructor}:${event.name}:${event.status}`,
+              );
+            }
+          },
+        },
+      },
     });
     const groupB = new TestGroup({
       name: 'group-b',
@@ -103,8 +109,7 @@ describe('resource scope isolation', () => {
     expect(groupB.getStateDB()).toBe(storeB);
     expect(childB.getStateDB()).toBe(storeB);
 
-    expect(groupA.getEmitter()).toBe(emitterA);
-    expect(childA.getEmitter()).toBe(emitterA);
+    expect(groupA.getEmitter()).toBe(childA.getEmitter());
     expect(groupB.getEmitter()).toBe(emitterB);
     expect(childB.getEmitter()).toBe(emitterB);
 
