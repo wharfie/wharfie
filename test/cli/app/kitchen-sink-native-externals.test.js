@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadApp } from '../../../cli/app/load-app.js';
+import { kitchenSinkExternalDependencies } from '../../../scratch/examples/actor-systems/kitchen-sink/config.js';
 
 const require = createRequire(import.meta.url);
 const maybeIt = process.env.WHARFIE_RUN_NATIVE_EXTERNALS === '1' ? it : it.skip;
@@ -50,6 +51,40 @@ function readInstalledVersion(packageName) {
   throw new Error(`Could not resolve installed version for ${packageName}`);
 }
 
+/**
+ * @param {readonly (string | { name: string, version?: string })[]} externals - externals.
+ * @returns {{ name: string, version: string }[]} - Result.
+ */
+function normalizeExpectedExternals(externals) {
+  return externals.map((external) => {
+    if (typeof external === 'string') {
+      const trimmed = external.trim();
+      const versionSeparator = trimmed.lastIndexOf('@');
+      if (versionSeparator > 0) {
+        const name = trimmed.slice(0, versionSeparator).trim();
+        const version = trimmed.slice(versionSeparator + 1).trim();
+        if (name && version) {
+          return { name, version };
+        }
+      }
+
+      return {
+        name: trimmed,
+        version: readInstalledVersion(trimmed),
+      };
+    }
+
+    if (!external?.name) {
+      throw new TypeError('External dependency objects require a name');
+    }
+
+    return {
+      name: external.name,
+      version: external.version || readInstalledVersion(external.name),
+    };
+  });
+}
+
 describe('kitchen-sink native externals integration', () => {
   maybeIt(
     'invokes the kitchen-sink fixture with host-native externals enabled',
@@ -66,19 +101,9 @@ describe('kitchen-sink native externals integration', () => {
             path: expect.any(String),
             export: 'start',
           }),
-          external: expect.arrayContaining([
-            { name: 'lmdb', version: readInstalledVersion('lmdb') },
-            {
-              name: '@duckdb/node-api',
-              version: readInstalledVersion('@duckdb/node-api'),
-            },
-            { name: 'sharp', version: '0.34.1' },
-            {
-              name: 'sodium-native',
-              version: readInstalledVersion('sodium-native'),
-            },
-            { name: 'usb', version: '2.13.0' },
-          ]),
+          external: expect.arrayContaining(
+            normalizeExpectedExternals(kitchenSinkExternalDependencies),
+          ),
           resources: expect.objectContaining({
             db: expect.any(Object),
             queue: expect.any(Object),

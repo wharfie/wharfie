@@ -251,6 +251,40 @@ describe('artifact infrastructure commands', () => {
     ).resolves.toBe(fixture.previousPlan.releaseId);
   });
 
+  it('allows mocked infrastructure rollback on non-linux hosts when shell execution is injected', async () => {
+    const fixture = await createReleaseFixture();
+    const rollbackShell = {
+      run: jest.fn(async () => ({
+        code: 0,
+        stdout: '',
+        stderr: '',
+      })),
+    };
+
+    const rollback = await rollbackArtifact(
+      {
+        manifest: JSON.stringify(manifest),
+        releaseRoot: fixture.releaseRoot,
+      },
+      {
+        shell: rollbackShell,
+        platform: 'darwin',
+      },
+    );
+
+    expect(rollback).toMatchObject({
+      app: 'artifact-infra-demo',
+      fromReleaseId: fixture.currentPlan.releaseId,
+      toReleaseId: fixture.previousPlan.releaseId,
+      dryRun: false,
+    });
+    expect(rollbackShell.run.mock.calls[0]).toEqual([
+      'systemctl',
+      ['restart', fixture.previousPlan.unitName],
+      { captureOutput: true },
+    ]);
+  });
+
   it('parses deploy command flags and emits json in dry-run mode', async () => {
     /** @type {string[]} */
     const writes = [];

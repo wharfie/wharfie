@@ -6,6 +6,11 @@ import { fileURLToPath } from 'node:url';
 import Function from '../lambdas/lib/actor/resources/builds/function.js';
 import ActorSystem from '../lambdas/lib/actor/resources/builds/actor-system.js';
 import Reconcilable from '../lambdas/lib/actor/resources/reconcilable.js';
+
+import {
+  kitchenSinkDefaultTargets,
+  kitchenSinkExternalDependencies,
+} from './examples/actor-systems/kitchen-sink/config.js';
 import {
   putResource,
   putResourceStatus,
@@ -25,6 +30,10 @@ const stateDB = {
 };
 
 const emitter = new EventEmitter();
+const runtime = {
+  stateStore: stateDB,
+  telemetry: emitter,
+};
 const scratchDir = path.dirname(fileURLToPath(import.meta.url));
 const runtimePath = path.resolve(scratchDir, '.hello-world');
 
@@ -42,7 +51,7 @@ async function main() {
       export: 'start',
     },
     properties: {
-      external: ['lmdb', 'sharp', 'sodium-native', '@duckdb/node-api', 'usb'],
+      external: [...kitchenSinkExternalDependencies],
       resources: {
         db: {
           adapter: 'vanilla',
@@ -63,21 +72,9 @@ async function main() {
   const system = new ActorSystem({
     name: 'main',
     functions: [start],
-    stateDB,
-    emitter,
+    runtime,
     properties: {
-      targets: [
-        {
-          nodeVersion: '24',
-          platform: 'darwin',
-          architecture: 'arm64',
-        },
-        {
-          nodeVersion: '24',
-          platform: 'linux',
-          architecture: 'x64',
-        },
-      ],
+      targets: kitchenSinkDefaultTargets.map((target) => ({ ...target })),
       resources: {
         db: {
           adapter: 'vanilla',

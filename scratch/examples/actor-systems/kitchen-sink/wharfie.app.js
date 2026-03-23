@@ -5,21 +5,14 @@ import { fileURLToPath } from 'node:url';
 import ActorSystem from '../../../../lambdas/lib/actor/resources/builds/actor-system.js';
 import Function from '../../../../lambdas/lib/actor/resources/builds/function.js';
 
+import {
+  kitchenSinkDefaultTargets,
+  kitchenSinkExternalDependencies,
+} from './config.js';
+
 const appDir = path.dirname(fileURLToPath(import.meta.url));
 const scratchDir = path.resolve(appDir, '../../..');
 const startEntrypointPath = path.join(scratchDir, 'functions', 'start.js');
-const defaultTargets = [
-  {
-    nodeVersion: '24',
-    platform: 'darwin',
-    architecture: 'arm64',
-  },
-  {
-    nodeVersion: '24',
-    platform: 'linux',
-    architecture: 'x64',
-  },
-];
 
 /**
  * @typedef KitchenSinkBuildTarget
@@ -33,6 +26,7 @@ const defaultTargets = [
  * @typedef CreateKitchenSinkAppOptions
  * @property {any} [stateDB] - Optional scoped state store override.
  * @property {import('node:events').EventEmitter} [emitter] - Optional scoped telemetry emitter.
+ * @property {import('../../../../lambdas/lib/actor/resources/runtime-config.js').WharfieRuntimeConfig} [runtime] - Optional structured runtime config.
  * @property {string} [runtimeBasePath] - Base path for vanilla runtime resources.
  * @property {KitchenSinkBuildTarget[]} [targets] - Optional build targets override.
  */
@@ -75,13 +69,7 @@ export function createKitchenSinkApp(options = {}) {
       export: 'start',
     },
     properties: {
-      external: [
-        'lmdb',
-        'sharp@0.34.4',
-        'sodium-native@5.0.9',
-        '@duckdb/node-api',
-        'usb@2.13.0',
-      ],
+      external: [...kitchenSinkExternalDependencies],
       resources: createVanillaResources(functionRuntimePath),
     },
   });
@@ -89,13 +77,14 @@ export function createKitchenSinkApp(options = {}) {
   return new ActorSystem({
     name: 'kitchen-sink-demo',
     functions: [startFunction],
+    runtime: options.runtime,
     stateDB: options.stateDB,
     emitter: options.emitter,
     properties: {
       targets:
         Array.isArray(options.targets) && options.targets.length > 0
           ? options.targets.map((target) => ({ ...target }))
-          : defaultTargets.map((target) => ({ ...target })),
+          : kitchenSinkDefaultTargets.map((target) => ({ ...target })),
       resources: createVanillaResources(systemRuntimePath),
     },
   });

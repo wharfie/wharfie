@@ -48,11 +48,14 @@ function appendRepeatableOption(value, previous) {
 
 /**
  * @param {any} opts - opts.
- * @param {{ shell?: import('./shared.js').ShellLike, fsOps?: typeof import('node:fs/promises'), io?: import('./shared.js').CommandIO, assetProvider?: import('../../lib/app-manifest-asset.js').EmbeddedManifestAssetProvider }} [deps] - deps.
+ * @param {{ shell?: import('./shared.js').ShellLike, fsOps?: typeof import('node:fs/promises'), io?: import('./shared.js').CommandIO, assetProvider?: import('../../lib/app-manifest-asset.js').EmbeddedManifestAssetProvider, platform?: string }} [deps] - deps.
  * @returns {Promise<Record<string, any>>} - Result.
  */
 export async function deployArtifact(opts, deps = {}) {
-  if (process.platform !== 'linux' && opts.dryRun !== true) {
+  const platform =
+    typeof deps.platform === 'string' ? deps.platform : process.platform;
+  const hasInjectedShell = !!deps.shell && typeof deps.shell.run === 'function';
+  if (platform !== 'linux' && opts.dryRun !== true && !hasInjectedShell) {
     throw new Error('Artifact deploy currently supports Linux/systemd only.');
   }
 
@@ -102,7 +105,7 @@ export async function deployArtifact(opts, deps = {}) {
 }
 
 /**
- * @param {{ shell?: import('./shared.js').ShellLike, fsOps?: typeof import('node:fs/promises'), io?: import('./shared.js').CommandIO, assetProvider?: import('../../lib/app-manifest-asset.js').EmbeddedManifestAssetProvider }} [deps] - deps.
+ * @param {{ shell?: import('./shared.js').ShellLike, fsOps?: typeof import('node:fs/promises'), io?: import('./shared.js').CommandIO, assetProvider?: import('../../lib/app-manifest-asset.js').EmbeddedManifestAssetProvider, platform?: string }} [deps] - deps.
  * @returns {Command} - Result.
  */
 export function createDeployCommand(deps = {}) {

@@ -14,11 +14,14 @@ import { createCommandIO, resolveShell, writeCommandResult } from './shared.js';
 
 /**
  * @param {any} opts - opts.
- * @param {{ shell?: import('./shared.js').ShellLike, fsOps?: typeof import('node:fs/promises'), assetProvider?: import('../../lib/app-manifest-asset.js').EmbeddedManifestAssetProvider }} [deps] - deps.
+ * @param {{ shell?: import('./shared.js').ShellLike, fsOps?: typeof import('node:fs/promises'), assetProvider?: import('../../lib/app-manifest-asset.js').EmbeddedManifestAssetProvider, platform?: string }} [deps] - deps.
  * @returns {Promise<Record<string, any>>} - Result.
  */
 export async function rollbackArtifact(opts, deps = {}) {
-  if (process.platform !== 'linux' && opts.dryRun !== true) {
+  const platform =
+    typeof deps.platform === 'string' ? deps.platform : process.platform;
+  const hasInjectedShell = !!deps.shell && typeof deps.shell.run === 'function';
+  if (platform !== 'linux' && opts.dryRun !== true && !hasInjectedShell) {
     throw new Error('Artifact rollback currently supports Linux/systemd only.');
   }
 

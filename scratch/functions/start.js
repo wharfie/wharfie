@@ -33,18 +33,21 @@ async function loadOptionalModule(packageName) {
 
 /**
  * @param {string} lmdbPath - lmdbPath.
- * @returns {Promise<{ ok: true, value: string, path: string }>} - Result.
+ * @param {{ who: string, message: string, runId: string }} record - record.
+ * @returns {Promise<{ ok: true, value: string, path: string, record: { who: string, message: string, runId: string } }>} - Result.
  */
-async function smokeLmdb(lmdbPath) {
+async function smokeLmdb(lmdbPath, record) {
   await fsp.mkdir(lmdbPath, { recursive: true });
   const db = lmdb.open({ path: lmdbPath });
 
   try {
     await db.put('greeting', { someText: 'Hello, World!' });
+    await db.put('native-record', record);
     return {
       ok: true,
       value: db.get('greeting').someText,
       path: lmdbPath,
+      record: db.get('native-record'),
     };
   } finally {
     const closeResult = db.close?.();
@@ -189,29 +192,94 @@ async function smokeUsb() {
 }
 
 /**
- * @param {{ lmdbPath?: string } | undefined} event - event.
+ * @param {string} packageName - packageName.
+ * @param {{ status: 'ok', [key: string]: any } | { status: 'skipped', reason: string }} probe - probe.
+ * @returns {{ packageName: string, status: 'OK', [key: string]: any } | { packageName: string, status: 'SKIPPED', reason: string }} - Result.
+ */
+function toNativeOptionalProbe(packageName, probe) {
+  if (probe.status === 'ok') {
+    return {
+      ...probe,
+      packageName,
+      status: 'OK',
+    };
+  }
+
+  return {
+    packageName,
+    status: 'SKIPPED',
+    reason: probe.reason,
+  };
+}
+
+/**
+ * @param {{ lmdbPath?: string, who?: string } | undefined} event - event.
  * @param {{ requestId?: string | null } | undefined} context - context.
  * @returns {Promise<{
+ *   ok: true,
  *   dependency: string,
  *   requestId: string | null,
- *   lmdb: { ok: true, value: string, path: string },
+ *   runId: string,
+ *   who: string,
+ *   lmdb: { ok: true, value: string, path: string, record: { who: string, message: string, runId: string } },
  *   duckdb: { ok: true, version: string, count: number, sum: number },
  *   sharp: { status: 'ok', bytes: number } | { status: 'skipped', reason: string },
  *   sodiumNative: { status: 'ok', opened: string } | { status: 'skipped', reason: string },
  *   usb: { status: 'ok', deviceCount: number } | { status: 'skipped', reason: string },
+ *   native: {
+ *     lmdbRecord: { who: string, message: string, runId: string },
+ *     duckdb: { version: string, rowCount: number, rangeSum: number },
+ *     optional: {
+ *       sharp: { packageName: string, status: 'OK', bytes: number } | { packageName: string, status: 'SKIPPED', reason: string },
+ *       sodiumNative: { packageName: string, status: 'OK', opened: string } | { packageName: string, status: 'SKIPPED', reason: string },
+ *       usb: { packageName: string, status: 'OK', deviceCount: number } | { packageName: string, status: 'SKIPPED', reason: string },
+ *     },
+ *   },
  * }>} - Result.
  */
 const start = async (event, context) => {
   const lmdbPath = event?.lmdbPath ?? 'test-db';
+  const who =
+    typeof event?.who === 'string' && event.who.trim()
+      ? event.who.trim()
+      : 'world';
+  const runId = context?.requestId ?? `run-${process.pid}`;
+  const nativeRecord = {
+    who,
+    message: `hello ${who}`,
+    runId,
+  };
+
+  const lmdb = await smokeLmdb(lmdbPath, nativeRecord);
+  const duckdb = await smokeDuckDb();
+  const sharp = await smokeSharp();
+  const sodiumNative = await smokeSodiumNative();
+  const usb = await smokeUsb();
 
   return {
+    ok: true,
     dependency: dep(),
     requestId: context?.requestId ?? null,
-    lmdb: await smokeLmdb(lmdbPath),
-    duckdb: await smokeDuckDb(),
-    sharp: await smokeSharp(),
-    sodiumNative: await smokeSodiumNative(),
-    usb: await smokeUsb(),
+    runId,
+    who,
+    lmdb,
+    duckdb,
+    sharp,
+    sodiumNative,
+    usb,
+    native: {
+      lmdbRecord: lmdb.record,
+      duckdb: {
+        version: duckdb.version,
+        rowCount: duckdb.count,
+        rangeSum: duckdb.sum,
+      },
+      optional: {
+        sharp: toNativeOptionalProbe('sharp', sharp),
+        sodiumNative: toNativeOptionalProbe('sodium-native', sodiumNative),
+        usb: toNativeOptionalProbe('usb', usb),
+      },
+    },
   };
 };
 
