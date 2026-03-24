@@ -18,28 +18,26 @@ iex (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wharfie/wharfie/m
 wharfie config
 ```
 
-## Create Deployment
+## Initialize a Project
 
 ```bash
-wharfie deployment create
+wharfie init my_project
 ```
 
-## Initalize Project
+`wharfie init` creates a local project scaffold with `wharfie.yaml`, `sources/`, and `models/`. Add `--no-examples` if you want an empty scaffold.
+
+## Inspect an App Manifest
+
+Once you have a `wharfie.app.js`, you can inspect the compiled manifest locally:
 
 ```bash
-wharfie project init
+wharfie app manifest ./path/to/wharfie.app.js
 ```
 
-## Plan and Apply Project Change
-
-after cd'ing into the new project directory created by init
+## Run a Local App Function
 
 ```bash
-wharfie project plan
+wharfie app run <function_name> --dir ./path/to/app --event '{"who":"cli-user"}'
 ```
 
-will show you what changes will be made when you run apply
-
-```bash
-wharfie project apply
-```
+The shipped top-level CLI surface today is `config`, `init`, `app`, `ops`, `list`, and `build-self`.

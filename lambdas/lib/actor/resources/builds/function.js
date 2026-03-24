@@ -1,4 +1,4 @@
-import { getAsset } from 'node:sea';
+import { getAsset } from '../../../node-sea.js';
 import path from 'node:path';
 import { brotliDecompressSync } from 'node:zlib';
 

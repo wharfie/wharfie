@@ -39,8 +39,9 @@ iex (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wharfie/wharfie/m
 
 ```bash
 wharfie config
-wharfie deployment create
-wharfie project init
+wharfie init my_project
 ```
+
+The current CLI ships these top-level commands: `config`, `init`, `app`, `ops`, `list`, and `build-self`.
 
 For more follow the [QuickStart Guide](/quickstart)

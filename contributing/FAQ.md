@@ -17,10 +17,9 @@ Wharfie is a general purpose utility for doing ETL in AWS
 
 ## Why should I be interested in using Wharfie?
 
-1. Wharfie ensures that your ETL does what you expect before you spend time or money on processing. (run `wharfie project dev`)
-2. Wharfie accurately tells you what your ETL will cost before you run anything (run `wharfie project cost`)
-3. Wharfie is "serverless", you won’t have to own or maintain any processing and orchestration infrastructure and have an oncall rotation to ensure uptime.
-4. Wharfie allows you to evolve your schemas and data models without having to worry about complex migrations or breaking tables.
+1. The shipped CLI gives you fast local entry points for onboarding and inspection through `wharfie config`, `wharfie init`, `wharfie app`, `wharfie ops`, `wharfie list`, and `wharfie build-self`.
+2. Wharfie is "serverless", you won’t have to own or maintain any processing and orchestration infrastructure and have an oncall rotation to ensure uptime.
+3. Wharfie allows you to evolve your schemas and data models without having to worry about complex migrations or breaking tables.
 
 ## How does it work?
 
@@ -74,7 +73,7 @@ Docs: https://docs.aws.amazon.com/athena/latest/ug/supported-serdes.html
 
 ## How much does it cost?
 
-ETL costs are significantly impacted by **Service Level Agreement** configuration, but can run as low as 5\$ per TB. Costs can increase substantially depending on the freshness SLA and partitioning scheme of the dataset, rewriting the entire table on a frequent schedule can become expensive. Using `wharfie project cost` will give you a breakdown of the costs for your project and can be run before you deploy your project to get a sense of the costs.
+ETL costs are significantly impacted by **Service Level Agreement** configuration, but can run as low as 5\$ per TB. Costs can increase substantially depending on the freshness SLA and partitioning scheme of the dataset, rewriting the entire table on a frequent schedule can become expensive.
 
 ## How do schema updates work?
 

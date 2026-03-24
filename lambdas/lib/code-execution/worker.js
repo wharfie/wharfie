@@ -248,11 +248,17 @@ function ensureWorker(name) {
   const src = getWorkerSourceText();
 
   // @ts-ignore
-  const w = new Worker(src, {
-    eval: true,
+  const workerUrl = new URL(
+    `data:text/javascript;base64,${Buffer.from(src, 'utf8').toString('base64')}`,
+  );
+
+  const workerOptions = /** @type {any} */ ({
+    type: 'module',
     stdout: true,
     stderr: true,
   });
+
+  const w = new Worker(workerUrl, workerOptions);
 
   // forward stdio once
   w.stdout.setEncoding('utf8');

@@ -1,6 +1,9 @@
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
-import { getAsset as nodeGetAsset, isSea as nodeIsSea } from 'node:sea';
+import {
+  getAsset as nodeGetAsset,
+  isSea as nodeIsSea,
+} from '../../lambdas/lib/node-sea.js';
 
 export const TEMPLATES_ASSET_BASE =
   '<WHARFIE_BUILT_IN>/templates/project_structure_examples';
