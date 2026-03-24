@@ -246,19 +246,15 @@ function ensureWorker(name) {
   if (worker) return worker;
 
   const src = getWorkerSourceText();
-
-  // @ts-ignore
   const workerUrl = new URL(
     `data:text/javascript;base64,${Buffer.from(src, 'utf8').toString('base64')}`,
   );
 
-  const workerOptions = /** @type {any} */ ({
-    type: 'module',
+  // @ts-ignore
+  const w = new Worker(workerUrl, {
     stdout: true,
     stderr: true,
   });
-
-  const w = new Worker(workerUrl, workerOptions);
 
   // forward stdio once
   w.stdout.setEncoding('utf8');

@@ -1,5 +1,5 @@
 import { parentPort, isMainThread } from 'node:worker_threads';
-import { createRequire } from 'module';
+import { createRequire } from 'node:module';
 import { Readable } from 'node:stream';
 
 if (process.setSourceMapsEnabled) process.setSourceMapsEnabled(true);
@@ -198,11 +198,11 @@ function runBundleOnce({ codeString, pkgFile, entryFile, tmpRoot, env }) {
     // 'exports',
     '__filename',
     '__dirname',
-    // 'process',
+    'process',
     `"use strict";\n${codeString}\n`,
   );
 
-  bundleFn(sandboxRequire, entryFile, tmpRoot);
+  bundleFn(sandboxRequire, entryFile, tmpRoot, sandboxProcess);
 
   // @ts-ignore
   global.__wharfieWorkerInit.bundleLoaded = true;
