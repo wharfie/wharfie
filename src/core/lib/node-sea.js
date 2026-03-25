@@ -3,18 +3,38 @@
  */
 
 /**
- * Resolve `node:sea` lazily so the repo can still be linted and tested on Node
- * runtimes older than the SEA builtin, while preserving native behavior on
- * supported Node releases.
- * @type {NodeSeaModule | null}
+ * Resolve `node:sea` lazily without top-level await so the module can still be
+ * bundled into CommonJS SEA artifacts. Older Node.js releases that lack either
+ * `process.getBuiltinModule()` or the `node:sea` builtin fall back to `null`.
+ *
+ * `undefined` means the module has not been resolved yet.
+ * @type {NodeSeaModule | null | undefined}
  */
-let nodeSeaModule = null;
+let nodeSeaModule;
 
-try {
-  // eslint-disable-next-line import/no-unresolved
-  nodeSeaModule = await import('node:sea');
-} catch {
-  nodeSeaModule = null;
+/**
+ * @returns {NodeSeaModule | null} - Result.
+ */
+function resolveNodeSeaModule() {
+  if (nodeSeaModule !== undefined) {
+    return nodeSeaModule;
+  }
+
+  if (typeof process.getBuiltinModule !== 'function') {
+    nodeSeaModule = null;
+    return nodeSeaModule;
+  }
+
+  try {
+    nodeSeaModule =
+      /** @type {NodeSeaModule | undefined} */ (
+        process.getBuiltinModule('node:sea')
+      ) || null;
+  } catch {
+    nodeSeaModule = null;
+  }
+
+  return nodeSeaModule;
 }
 
 /**
@@ -23,21 +43,25 @@ try {
  * @returns {any} - Asset contents.
  */
 export function getAsset(name, encoding) {
-  if (typeof nodeSeaModule?.getAsset !== 'function') {
+  const resolvedNodeSeaModule = resolveNodeSeaModule();
+
+  if (typeof resolvedNodeSeaModule?.getAsset !== 'function') {
     throw new Error('node:sea is unavailable in this Node.js runtime');
   }
 
   return typeof encoding === 'string'
-    ? nodeSeaModule.getAsset(name, encoding)
-    : nodeSeaModule.getAsset(name);
+    ? resolvedNodeSeaModule.getAsset(name, encoding)
+    : resolvedNodeSeaModule.getAsset(name);
 }
 
 /**
  * @returns {boolean} - Whether the current runtime is a SEA binary.
  */
 export function isSea() {
-  return typeof nodeSeaModule?.isSea === 'function'
-    ? nodeSeaModule.isSea()
+  const resolvedNodeSeaModule = resolveNodeSeaModule();
+
+  return typeof resolvedNodeSeaModule?.isSea === 'function'
+    ? resolvedNodeSeaModule.isSea()
     : false;
 }
 
