@@ -3,6 +3,8 @@
 
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 
+const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
+
 const embeddedManifest = {
   app: { name: 'embedded-demo' },
   targets: [
@@ -29,7 +31,7 @@ describe('embedded app manifest asset helpers', () => {
   });
 
   it('reads the embedded manifest from SEA assets', async () => {
-    jest.unstable_mockModule('node:sea', () => ({
+    jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
       isSea: () => true,
       getAsset: async (/** @type {string} */ name) => {
         expect(name).toBe('<WHARFIE_APP>/manifest.json');
@@ -64,7 +66,7 @@ describe('embedded app manifest asset helpers', () => {
   });
 
   it('prints the embedded manifest through ctl manifest', async () => {
-    jest.unstable_mockModule('node:sea', () => ({
+    jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
       isSea: () => true,
       getAsset: async () =>
         Buffer.from(JSON.stringify(embeddedManifest), 'utf8'),

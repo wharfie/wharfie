@@ -6,8 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 
+const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
+
 // Ensure tests never rely on a real SEA environment.
-jest.unstable_mockModule('node:sea', () => ({
+jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
   isSea: () => false,
   getAsset: (/** @type {string} */ name) => {
     throw new Error(`Unexpected getAsset(${name})`);

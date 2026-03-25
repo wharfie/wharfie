@@ -10,10 +10,12 @@ import { brotliCompressSync } from 'node:zlib';
 import { createActorSystemResources } from '../../../src/core/runtime/resources.js';
 import sandboxWorker from '../../../src/core/lib/code-execution/worker.js';
 
+const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
+
 /** @type {Map<string, any>} */
 const seaAssets = new Map();
 
-jest.unstable_mockModule('node:sea', () => ({
+jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
   getAsset: async (/** @type {string} */ name) => {
     const assetDescription = seaAssets.get(name);
     if (!assetDescription) {

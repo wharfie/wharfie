@@ -13,9 +13,11 @@ import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
+
 const seaAssets = new Map();
 
-jest.unstable_mockModule('node:sea', () => ({
+jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
   getAsset: async (/** @type {string} */ name) => {
     const assetDescription = seaAssets.get(name);
     if (!assetDescription) {

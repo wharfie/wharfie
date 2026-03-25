@@ -12,11 +12,13 @@ import { startQueueService } from '../../../src/core/runtime/services/queue-serv
 import { startLambdaService } from '../../../src/core/runtime/services/lambda-service.js';
 import { createGrpcRpcClient } from '../../../src/core/runtime/services/rpc-grpc.js';
 
+const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
+
 /** @type {Map<string, any>} */
 const seaAssets = new Map();
 
 // Mock SEA asset lookup to serve our in-memory bundles.
-jest.unstable_mockModule('node:sea', () => ({
+jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
   getAsset: async (/** @type {string} */ name) => {
     const assetDescription = seaAssets.get(name);
     if (!assetDescription) {

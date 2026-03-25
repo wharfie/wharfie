@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 const NODE_AGENT_IMPORT = '../../../src/core/runtime/services/node-agent.js';
 const SCHEDULER_SERVICE_IMPORT =
   '../../../src/core/runtime/services/scheduler-service.js';
+const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
 
 let nextPid = 1000;
 
@@ -88,7 +89,7 @@ async function loadNodeAgent(options = {}) {
       })),
   );
 
-  await jest.unstable_mockModule('node:sea', () => ({
+  await jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
     getAsset: async () => {
       throw new Error('node:sea getAsset was not expected in this test');
     },
