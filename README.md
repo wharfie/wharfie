@@ -74,4 +74,9 @@ export WHARFIE_DB_ADAPTER=vanilla   # or lmdb|dynamodb
 export WHARFIE_DB_PATH=/path/to/db
 ```
 
+### Repository layout
 
+- `src/cli/` contains the shipped CLI entrypoint and commands.
+- `src/core/` contains runtime code, with `actors/`, `resources/`, and `runtime/` split out from the shared `lib/` subsystems.
+- `apps/` contains buildable reference apps and dogfood manifests.
+- `llm/` contains local design docs and prompt templates.

@@ -14,9 +14,9 @@ import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const INIT_COMMAND_IMPORT = '../../../cli/cmds/init.js';
-const OUTPUT_IMPORT = '../../../cli/output/basic.js';
-const EXTRACT_TEMPLATES_IMPORT = '../../../cli/assets/extract-templates.js';
+const INIT_COMMAND_IMPORT = '../../../src/cli/cmds/init.js';
+const OUTPUT_IMPORT = '../../../src/cli/output/basic.js';
+const EXTRACT_TEMPLATES_IMPORT = '../../../src/cli/assets/extract-templates.js';
 const ORIGINAL_CWD = process.cwd();
 const ORIGINAL_EXIT_CODE = process.exitCode;
 
@@ -132,7 +132,7 @@ describe('wharfie init command', () => {
       expect.objectContaining({
         destinationDir: expect.stringContaining(projectDir),
         diskSourceDir: expect.stringContaining(
-          path.join('cli', 'project', 'project_structure_examples'),
+          path.join('src', 'cli', 'project', 'project_structure_examples'),
         ),
       }),
     );

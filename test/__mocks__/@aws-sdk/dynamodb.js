@@ -1,5 +1,5 @@
 import { ResourceNotFoundException } from '@aws-sdk/client-dynamodb';
-import { parse } from '../../../lambdas/lib/arn.js';
+import { parse } from '../../../src/core/lib/arn.js';
 
 class DynamoDBMock {
   __setMockState(dynamodbState = {}) {

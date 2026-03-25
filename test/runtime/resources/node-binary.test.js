@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { c } from 'tar';
 
-import NodeBinary from '../../../lambdas/lib/actor/resources/builds/node-binary.js';
+import NodeBinary from '../../../src/core/resources/builds/node-binary.js';
 
 describe('NodeBinary', () => {
   afterEach(() => {

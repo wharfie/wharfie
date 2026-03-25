@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url);
 process.env.AWS_MOCKS = true;
 const { IAM } = jest.requireMock('@aws-sdk/client-iam');
 
-const { Policy } = require('../../../lambdas/lib/actor/resources/aws/');
+const { Policy } = require('../../../lambdas/lib/actor/resources/aws');
 
 describe('iam policy IaC', () => {
   it('basic', async () => {

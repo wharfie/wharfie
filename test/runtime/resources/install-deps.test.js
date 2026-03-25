@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const INSTALL_DEPS_IMPORT =
-  '../../../lambdas/lib/actor/resources/builds/lib/install-deps.js';
+  '../../../src/core/resources/builds/lib/install-deps.js';
 
 /**
  * @param {string} spec - spec.

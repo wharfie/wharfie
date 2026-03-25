@@ -5,8 +5,8 @@ const { ResourceNotFoundException } = jest.requireActual(
   '@aws-sdk/client-lambda',
 );
 
-const { createId } = require('../../../lambdas/lib/id');
-const { parse } = require('../../../lambdas/lib/arn');
+const { createId } = require('../../../src/core/lib/id');
+const { parse } = require('../../../src/core/lib/arn');
 
 class LambdaMock {
   __setMockState(

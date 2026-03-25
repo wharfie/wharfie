@@ -1,0 +1,326 @@
+import Reconcilable from './reconcilable.js';
+
+import stateStore from '../lib/db/state/store.js';
+import Secret from '../actors/lib/secret.js';
+import { isEqual } from 'es-toolkit';
+import { diff } from '../lib/json-diff.js';
+import { getCurrentResourceScope } from './resource-scope.js';
+import { normalizeRuntimeConfig } from './runtime-config.js';
+
+/**
+ * @typedef BaseResourceOptions
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {Reconcilable.Status} [status] - status.
+ * @property {Reconcilable[]} [dependsOn] - dependsOn.
+ * @property {Object<string, any> & import('../actors/typedefs.js').SharedProperties} properties - properties.
+ * @property {StateStore} [stateDB] - Compatibility alias for the scoped state store.
+ * @property {import('node:events').EventEmitter} [emitter] - Compatibility alias for the scoped telemetry emitter.
+ * @property {import('./runtime-config.js').WharfieRuntimeConfig} [runtime] - Structured runtime configuration.
+ */
+class BaseResource extends Reconcilable {
+  /**
+   * @param {BaseResourceOptions} options - BaseResource Class Options
+   */
+  constructor({
+    name,
+    parent = '',
+    status,
+    dependsOn = [],
+    properties,
+    stateDB,
+    emitter,
+    runtime,
+  }) {
+    super({ name, status, dependsOn, emitter, runtime });
+    const resourceScope = getCurrentResourceScope();
+    const runtimeConfig = normalizeRuntimeConfig({
+      runtime,
+      stateDB,
+      emitter: this.getEmitter(),
+      scope: resourceScope,
+      defaultEmitter: this.getEmitter(),
+    });
+    this.parent = parent;
+    this.resourceType = this.constructor.name;
+    this.properties = properties || {};
+    this.runtime = runtimeConfig;
+    this.stateDB = runtimeConfig.stateStore ?? BaseResource.stateDB;
+  }
+
+  /**
+   * @returns {StateStore} - Result.
+   */
+  getStateDB() {
+    return this.stateDB || BaseResource.stateDB;
+  }
+
+  /**
+   * @returns {StateStore} - Result.
+   */
+  getStateStore() {
+    return this.getStateDB();
+  }
+
+  /**
+   * @returns {{ stateStore: StateStore, telemetry: import('node:events').EventEmitter }} - Result.
+   */
+  getRuntimeConfig() {
+    return {
+      stateStore: this.getStateDB(),
+      telemetry: this.getEmitter(),
+    };
+  }
+
+  /**
+   * @param {StateStore | undefined} stateDB - stateDB.
+   * @returns {this} - Result.
+   */
+  setStateDB(stateDB) {
+    this.stateDB = stateDB ?? BaseResource.stateDB;
+    this.runtime = {
+      ...(this.runtime || {}),
+      stateStore: this.stateDB,
+      telemetry: this.getEmitter(),
+    };
+    return this;
+  }
+
+  /**
+   * @returns {string} - Result.
+   */
+  getName() {
+    return this.parent ? `${this.parent}#${this.name}` : this.name;
+  }
+
+  /**
+   * @param {any} value - value.
+   * @returns {any} - Result.
+   */
+  _resolveProperty(value) {
+    if (typeof value === 'function') {
+      return value();
+    } else if (Array.isArray(value)) {
+      return value.map((item) => this._resolveProperty(item));
+    } else if (Secret.isSecret(value)) {
+      return value.getSecretValue();
+    } else if (value !== null && typeof value === 'object') {
+      return Object.keys(value).reduce((acc, key) => {
+        // @ts-ignore
+        acc[key] = this._resolveProperty(value[key]);
+        return acc;
+      }, {});
+    }
+    return value;
+  }
+
+  /**
+   * @param {string} key - key.
+   * @param {any} [defaultReturn] - defaultReturn.
+   * @returns {any} - Result.
+   */
+  get(key, defaultReturn) {
+    if (!(key in this.properties) && defaultReturn) {
+      return defaultReturn;
+    }
+    const value = this.properties[key];
+
+    return this._resolveProperty(value);
+  }
+
+  /**
+   * @param {any} properties - properties.
+   */
+  setProperties(properties) {
+    if (this.checkPropertyEquality(properties)) return;
+    this.properties = properties;
+    Object.entries(properties).forEach(([key, value]) => {
+      this.set(key, value);
+    });
+  }
+
+  /**
+   * @param {string} key - key.
+   * @param {any} value - value.
+   */
+  set(key, value) {
+    if (this.get(key) === this._resolveProperty(value)) {
+      return;
+    }
+    this.properties[key] = value;
+    if (this.status !== Reconcilable.Status.DRIFTED) {
+      this.setStatus(Reconcilable.Status.DRIFTED);
+    }
+  }
+
+  /**
+   * sets a property without marking the resource as drifted, should only be used internally by the reconcile method
+   * @param {string} key - key.
+   * @param {any} value - value.
+   */
+  _setUNSAFE(key, value) {
+    if (this.get(key) === this._resolveProperty(value)) {
+      return;
+    }
+    this.properties[key] = value;
+  }
+
+  /**
+   * @param {string} key - key.
+   * @returns {boolean} - Result.
+   */
+  has(key) {
+    return key in this.properties;
+  }
+
+  /**
+   * @param {string} key - key.
+   * @param {any} newValue - newValue.
+   * @returns {boolean} - Result.
+   */
+  assert(key, newValue) {
+    const oldValue = this.get(key);
+    const resolvedNewValue = this._resolveProperty(newValue);
+    return isEqual(oldValue, resolvedNewValue);
+  }
+
+  /**
+   * @param {any} other - other.
+   * @returns {boolean} - Result.
+   */
+  checkPropertyEquality(other = {}) {
+    const allKeys = new Set([
+      ...Object.keys(other),
+      ...Object.keys(this.properties),
+    ]);
+    for (const key of allKeys) {
+      if (!this.assert(key, other[key])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * @typedef PropertyDiff
+   * @property {any} old - old.
+   * @property {any} new - new.
+   * @property {import('../lib/json-diff.js').JsonDelta | undefined} delta - delta.
+   */
+
+  /**
+   * @param {string} key - key.
+   * @param {any} otherValue - otherValue.
+   * @returns {PropertyDiff} - Result.
+   */
+  diffProperty(key, otherValue) {
+    const currentPropertyValue = this.get(key);
+    const resolvedOtherProperty = this._resolveProperty(otherValue);
+    return {
+      old: currentPropertyValue,
+      new: resolvedOtherProperty,
+      delta: diff(currentPropertyValue, resolvedOtherProperty),
+    };
+  }
+
+  /**
+   * @returns {Object<string,any>} - Result.
+   */
+  resolveProperties() {
+    /** @type {Object<string,any>} */
+    const resolvedProperties = {};
+
+    for (const key in this.properties) {
+      resolvedProperties[key] = this.get(key);
+    }
+
+    return resolvedProperties;
+  }
+
+  /**
+   * @returns {import('../actors/typedefs.js').SerializedBaseResource} - Result.
+   */
+  serialize() {
+    return {
+      name: this.name,
+      parent: this.parent,
+      status: this.status,
+      dependsOn: this.dependsOn.map((dep) => dep.name),
+      properties: this.resolveProperties(),
+      resourceType: this.resourceType,
+    };
+  }
+
+  async _pre_reconcile() {
+    if (this.get('_INTERNAL_STATE_RESOURCE')) {
+      return;
+    }
+    await this.saveStatus();
+  }
+
+  async _post_reconcile() {
+    await this.save();
+  }
+
+  async _pre_destroy() {
+    await this.saveStatus();
+  }
+
+  async _post_destroy() {
+    if (this.get('_INTERNAL_STATE_RESOURCE')) {
+      return;
+    }
+    await this.delete();
+  }
+
+  async save() {
+    await this.getStateDB().putResource(this);
+  }
+
+  /**
+   * @returns {Promise<Reconcilable.Status?>} - Result.
+   */
+  async getStatus() {
+    return await this.getStateDB().getResourceStatus(this);
+  }
+
+  async saveStatus() {
+    await this.getStateDB().putResourceStatus(this);
+  }
+
+  /**
+   * @returns {Promise<import('../actors/typedefs.js').SerializedBaseResource?>} - Result.
+   */
+  async fetchStoredData() {
+    return await this.getStateDB().getResource(this);
+  }
+
+  /**
+   * @param {import('../actors/typedefs.js').SerializedBaseResource} [storedResource] - storedResource.
+   * @returns {Promise<boolean>} - Result.
+   */
+  async needsUpdate(storedResource) {
+    const _storedResource = storedResource || (await this.fetchStoredData());
+    return !this.checkPropertyEquality(_storedResource?.properties);
+  }
+
+  async delete() {
+    await this.getStateDB().deleteResource(this);
+  }
+}
+/**
+ * @typedef StateStore
+ * @property {function(BaseResource): Promise<void>} putResource - putResource.
+ * @property {function(BaseResource): Promise<void>} putResourceStatus - putResourceStatus.
+ * @property {function(BaseResource): Promise<import("../actors/typedefs.js").SerializedBaseResource?>} getResource - getResource.
+ * @property {function(BaseResource): Promise<Reconcilable.Status?>} getResourceStatus - getResourceStatus.
+ * @property {function(string, string): Promise<import("../actors/typedefs.js").SerializedBaseResource[]>} getResources - getResources.
+ * @property {function(BaseResource): Promise<void>} deleteResource - deleteResource.
+ */
+
+/**
+ * @type {StateStore}
+ */
+BaseResource.stateDB = stateStore;
+
+export default BaseResource;

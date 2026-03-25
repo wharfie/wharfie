@@ -8,8 +8,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import Function from '../../../lambdas/lib/actor/resources/builds/function.js';
-import FunctionResource from '../../../lambdas/lib/actor/resources/builds/function-resource.js';
+import Function from '../../../src/core/resources/builds/function.js';
+import FunctionResource from '../../../src/core/resources/builds/function-resource.js';
 
 const require = createRequire(import.meta.url);
 

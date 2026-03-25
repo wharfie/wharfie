@@ -8,7 +8,7 @@ import {
   UPDATE_CHECK_DISABLE_ENV_VAR,
   checkForNewRelease,
   getLatestRelease,
-} from '../../cli/upgrade.js';
+} from '../../src/cli/upgrade.js';
 
 describe('CLI release checks', () => {
   test('skips the GitHub release check when disabled via env', async () => {

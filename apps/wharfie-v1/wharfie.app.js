@@ -4,20 +4,20 @@ import { fileURLToPath } from 'node:url';
 
 import { Command } from 'commander';
 
-import NodeBinary from '../../lambdas/lib/actor/resources/builds/node-binary.js';
-import SeaBuild from '../../lambdas/lib/actor/resources/builds/sea-build.js';
-import MacOSBinarySignature from '../../lambdas/lib/actor/resources/builds/macos-binary-signature.js';
+import NodeBinary from '../../src/core/resources/builds/node-binary.js';
+import SeaBuild from '../../src/core/resources/builds/sea-build.js';
+import MacOSBinarySignature from '../../src/core/resources/builds/macos-binary-signature.js';
 
 import {
   TEMPLATES_ASSET_BASE,
   TEMPLATES_ASSET_MANIFEST_KEY,
-} from '../../cli/assets/extract-templates.js';
+} from '../../src/cli/assets/extract-templates.js';
 
 import {
   displayFailure,
   displayInfo,
   displaySuccess,
-} from '../../cli/output/basic.js';
+} from '../../src/cli/output/basic.js';
 
 /**
  * Wharfie v1 CLI (today's `bin/wharfie`) built as a v2-style SEA artifact via SeaBuild.
@@ -212,7 +212,7 @@ async function buildWharfieV1(options) {
     properties: {
       entryCode: () =>
         `
-          import { main } from './cli/entry.js';
+          import { main } from './src/cli/entry.js';
 
           main(process.argv).catch((err) => {
             // eslint-disable-next-line no-console

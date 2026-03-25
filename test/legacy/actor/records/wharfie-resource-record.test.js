@@ -12,7 +12,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
-const { Resource } = require('../../../lambdas/lib/graph/');
+const { Resource } = require('../../../lambdas/lib/graph');
 
 const AWS = require('@aws-sdk/lib-dynamodb');
 let query, _delete, put, update;

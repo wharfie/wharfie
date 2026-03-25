@@ -5,19 +5,19 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import createVanillaDB from '../..//lambdas/lib/db/adapters/vanilla.js';
-import { createOperationsTable } from '../..//lambdas/lib/db/tables/operations.js';
-import Resource from '../..//lambdas/lib/graph/resource.js';
+import createVanillaDB from '../../src/core/lib/db/adapters/vanilla.js';
+import { createOperationsTable } from '../../src/core/lib/db/tables/operations.js';
+import Resource from '../../src/core/lib/graph/resource.js';
 import {
   closeDB,
   resolveOperationsTableName,
   resolveStateAdapterName,
-} from '../../lambdas/lib/config/db.js';
+} from '../../src/core/lib/config/db.js';
 import {
   __setMockState as __resetOperationsStore,
   getOperationsStore,
-} from '../../lambdas/lib/db/operations/store.js';
-import { __resolveAdapterName as __resolveStateStoreAdapter } from '../../lambdas/lib/db/state/store.js';
+} from '../../src/core/lib/db/operations/store.js';
+import { __resolveAdapterName as __resolveStateStoreAdapter } from '../../src/core/lib/db/state/store.js';
 
 describe('Unified DB config', () => {
   afterEach(async () => {

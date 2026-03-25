@@ -5,12 +5,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import createVanillaDB from '../../../lambdas/lib/db/adapters/vanilla.js';
-import { createOperationsTable } from '../../../lambdas/lib/db/tables/operations.js';
+import createVanillaDB from '../../../src/core/lib/db/adapters/vanilla.js';
+import { createOperationsTable } from '../../../src/core/lib/db/tables/operations.js';
 
-import Action from '../../../lambdas/lib/graph/action.js';
-import Operation from '../../../lambdas/lib/graph/operation.js';
-import { runOperation } from '../../../lambdas/lib/graph/runner.js';
+import Action from '../../../src/core/lib/graph/action.js';
+import Operation from '../../../src/core/lib/graph/operation.js';
+import { runOperation } from '../../../src/core/lib/graph/runner.js';
 
 describe('graph runner', () => {
   test('executes a persisted action DAG in prerequisite order and persists COMPLETED', async () => {

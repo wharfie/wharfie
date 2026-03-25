@@ -27,12 +27,11 @@ jest.unstable_mockModule('node:sea', () => ({
 }));
 
 const INSTALL_DEPS_IMPORT =
-  '../../../lambdas/lib/actor/resources/builds/lib/install-deps.js';
+  '../../../src/core/resources/builds/lib/install-deps.js';
 const FUNCTION_RESOURCE_IMPORT =
-  '../../../lambdas/lib/actor/resources/builds/function-resource.js';
-const FUNCTION_IMPORT =
-  '../../../lambdas/lib/actor/resources/builds/function.js';
-const WORKER_IMPORT = '../../../lambdas/lib/code-execution/worker.js';
+  '../../../src/core/resources/builds/function-resource.js';
+const FUNCTION_IMPORT = '../../../src/core/resources/builds/function.js';
+const WORKER_IMPORT = '../../../src/core/lib/code-execution/worker.js';
 
 describe('FunctionResource bundled externals', () => {
   beforeEach(() => {

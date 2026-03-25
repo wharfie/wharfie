@@ -21,7 +21,7 @@ describe('tests for logging', () => {
     process.env.WHARFIE_LOGGING_FIREHOSE = 'test_firehose';
     process.env.WHARFIE_LOGGING_FLUSH_INTERVAL = -1;
     process.env.LOGGING_LEVEL = 'debug';
-    logging = require('../../../lambdas/lib/logging/');
+    logging = require('../../../lambdas/lib/logging');
   });
 
   afterEach(() => {

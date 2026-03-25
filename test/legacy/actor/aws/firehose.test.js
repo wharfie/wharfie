@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
-const { Firehose } = require('../../../lambdas/lib/actor/resources/aws/');
+const { Firehose } = require('../../../lambdas/lib/actor/resources/aws');
 const { Firehose: FirehoseSDK } = jest.requireMock('@aws-sdk/client-firehose');
 
 const { getMockDeploymentProperties } = require('../util');

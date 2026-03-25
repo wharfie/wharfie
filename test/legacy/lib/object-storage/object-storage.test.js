@@ -20,7 +20,7 @@ function makeTmpDir() {
 }
 
 /**
- * Minimal, in-memory S3 implementation compatible with what `lambdas/lib/s3.js`
+ * Minimal, in-memory S3 implementation compatible with what `src/core/lib/s3.js`
  * uses in this repository.
  *
  * @returns {any} -

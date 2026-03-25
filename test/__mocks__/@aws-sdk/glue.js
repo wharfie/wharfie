@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
 const { EntityNotFoundException } = jest.requireActual('@aws-sdk/client-glue');
-const { parse } = require('../../../lambdas/lib/arn');
+const { parse } = require('../../../src/core/lib/arn');
 
 class GlueMock {
   __setMockState(state = {}) {

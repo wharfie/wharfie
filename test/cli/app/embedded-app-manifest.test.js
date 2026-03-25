@@ -38,7 +38,7 @@ describe('embedded app manifest asset helpers', () => {
     }));
 
     const mod =
-      await import('../../../lambdas/lib/actor/resources/builds/lib/app-manifest-asset.js');
+      await import('../../../src/core/resources/builds/lib/app-manifest-asset.js');
 
     await expect(mod.readEmbeddedAppManifest()).resolves.toEqual(
       embeddedManifest,
@@ -49,7 +49,7 @@ describe('embedded app manifest asset helpers', () => {
     /** @type {string[]} */
     const writes = [];
     const mod =
-      await import('../../../lambdas/lib/actor/resources/builds/actor-system-cli/control_cmds/manifest.js');
+      await import('../../../src/core/resources/builds/actor-system-cli/control_cmds/manifest.js');
 
     await mod.printEmbeddedManifest(
       { pretty: false, manifest: JSON.stringify(embeddedManifest) },
@@ -73,7 +73,7 @@ describe('embedded app manifest asset helpers', () => {
     /** @type {string[]} */
     const writes = [];
     const mod =
-      await import('../../../lambdas/lib/actor/resources/builds/actor-system-cli/control_cmds/manifest.js');
+      await import('../../../src/core/resources/builds/actor-system-cli/control_cmds/manifest.js');
 
     await mod.printEmbeddedManifest(
       { pretty: false },

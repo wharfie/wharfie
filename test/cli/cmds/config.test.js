@@ -14,9 +14,9 @@ import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const CONFIG_COMMAND_IMPORT = '../../../cli/cmds/config.js';
-const OUTPUT_IMPORT = '../../../cli/output/basic.js';
-const STS_IMPORT = '../../../lambdas/lib/aws/sts.js';
+const CONFIG_COMMAND_IMPORT = '../../../src/cli/cmds/config.js';
+const OUTPUT_IMPORT = '../../../src/cli/output/basic.js';
+const STS_IMPORT = '../../../src/core/lib/aws/sts.js';
 const ORIGINAL_ENV = { ...process.env };
 const ORIGINAL_EXIT_CODE = process.exitCode;
 

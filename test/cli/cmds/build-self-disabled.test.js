@@ -17,24 +17,32 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const binPath = fileURLToPath(new URL('../../../bin/wharfie', import.meta.url));
-const BUILD_SELF_IMPORT = '../../../cli/cmds/build_self.js';
-const NODE_BINARY_IMPORT =
-  '../../../lambdas/lib/actor/resources/builds/node-binary.js';
-const SEA_BUILD_IMPORT =
-  '../../../lambdas/lib/actor/resources/builds/sea-build.js';
+const BUILD_SELF_IMPORT = '../../../src/cli/cmds/build_self.js';
+const NODE_BINARY_IMPORT = '../../../src/core/resources/builds/node-binary.js';
+const SEA_BUILD_IMPORT = '../../../src/core/resources/builds/sea-build.js';
 const MACOS_SIGNATURE_IMPORT =
-  '../../../lambdas/lib/actor/resources/builds/macos-binary-signature.js';
+  '../../../src/core/resources/builds/macos-binary-signature.js';
 
 /**
  * @returns {string} - Result.
  */
 function makeTmpRepo() {
   const root = mkdtempSync(path.join(tmpdir(), 'wharfie-build-self-'));
-  mkdirSync(path.join(root, 'cli', 'project', 'project_structure_examples'), {
-    recursive: true,
-  });
   mkdirSync(
-    path.join(root, 'cli', 'project', 'project_structure_examples', 'nested'),
+    path.join(root, 'src', 'cli', 'project', 'project_structure_examples'),
+    {
+      recursive: true,
+    },
+  );
+  mkdirSync(
+    path.join(
+      root,
+      'src',
+      'cli',
+      'project',
+      'project_structure_examples',
+      'nested',
+    ),
     {
       recursive: true,
     },
@@ -46,13 +54,21 @@ function makeTmpRepo() {
     'utf8',
   );
   writeFileSync(
-    path.join(root, 'cli', 'project', 'project_structure_examples', 'base.txt'),
+    path.join(
+      root,
+      'src',
+      'cli',
+      'project',
+      'project_structure_examples',
+      'base.txt',
+    ),
     'base template',
     'utf8',
   );
   writeFileSync(
     path.join(
       root,
+      'src',
       'cli',
       'project',
       'project_structure_examples',
@@ -197,7 +213,7 @@ describe('wharfie build-self', () => {
       expect(signatureReconcile).not.toHaveBeenCalled();
       expect(mod.normalizeArch('amd64')).toBe('x64');
       expect(mod.normalizePlatform('linux')).toBe('linux');
-      expect(mod.findRepoRoot(path.join(tmpRepo, 'cli'))).toBe(tmpRepo);
+      expect(mod.findRepoRoot(path.join(tmpRepo, 'src', 'cli'))).toBe(tmpRepo);
     } finally {
       process.chdir(previousCwd);
       rmSync(tmpRepo, { recursive: true, force: true });

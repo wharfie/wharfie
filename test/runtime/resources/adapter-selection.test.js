@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { __resolveResourceAdapterName } from '../../../lambdas/lib/actor/runtime/resources.js';
+import { __resolveResourceAdapterName } from '../../../src/core/runtime/resources.js';
 import { jest } from '@jest/globals';
 
 describe('ActorSystem runtime resource adapter selection', () => {

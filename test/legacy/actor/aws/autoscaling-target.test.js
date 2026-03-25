@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url);
 process.env.AWS_MOCKS = '1';
 const {
   AutoscalingTarget,
-} = require('../../../lambdas/lib/actor/resources/aws/');
+} = require('../../../lambdas/lib/actor/resources/aws');
 const ApplicationAutoScaling = jest.requireMock(
   '@aws-sdk/client-application-auto-scaling',
 );

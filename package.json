@@ -21,19 +21,18 @@
     "node": "24.13.1",
     "npm": "11.10.0"
   },
-  "main": "./cli/entry.js",
+  "main": "./src/cli/entry.js",
   "files": [
     "README.md",
     "bin/",
     "apps/wharfie-v1/wharfie.app.js",
-    "cli/",
-    "lambdas/",
-    "!cli/cmds/deployment.js",
-    "!cli/cmds/deployment_cmds/**",
-    "!cli/cmds/project.js",
-    "!cli/cmds/project_cmds/**",
-    "!cli/cmds/utils.js",
-    "!cli/cmds/utils_cmds/**"
+    "src/",
+    "!src/cli/cmds/deployment.js",
+    "!src/cli/cmds/deployment_cmds/**",
+    "!src/cli/cmds/project.js",
+    "!src/cli/cmds/project_cmds/**",
+    "!src/cli/cmds/utils.js",
+    "!src/cli/cmds/utils_cmds/**"
   ],
   "scripts": {
     "typecheck": "tsc",
@@ -52,9 +51,9 @@
   },
   "jest": {
     "collectCoverageFrom": [
-      "lambdas/lib/actor/runtime/**/*.js",
-      "lambdas/lib/actor/resources/builds/**/*.js",
-      "lambdas/lib/code-execution/**/*.js"
+      "src/core/runtime/**/*.js",
+      "src/core/resources/builds/**/*.js",
+      "src/core/lib/code-execution/**/*.js"
     ],
     "testEnvironment": "node",
     "modulePathIgnorePatterns": [
@@ -90,7 +89,7 @@
       "dist/",
       "tmp/",
       "docs/",
-      "cli/",
+      "src/cli/",
       "test/",
       "scratch/",
       "coverage/"

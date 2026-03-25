@@ -17,9 +17,7 @@ const { Athena } = jest.requireMock('@aws-sdk/client-athena');
 const AWS = require('@aws-sdk/lib-dynamodb');
 let query, _delete, put, update;
 
-const {
-  AthenaWorkGroup,
-} = require('../../../lambdas/lib/actor/resources/aws/');
+const { AthenaWorkGroup } = require('../../../lambdas/lib/actor/resources/aws');
 const { load } = require('../../../lambdas/lib/actor/deserialize/full');
 const { getMockDeploymentProperties } = require('../util');
 const Reconcilable = require('../../../lambdas/lib/actor/resources/reconcilable');

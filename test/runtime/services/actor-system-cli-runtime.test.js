@@ -4,33 +4,28 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 const PROCESS_RUNNER_IMPORT =
-  '../../../lambdas/lib/actor/resources/builds/actor-system-cli/lib/process-runner.js';
+  '../../../src/core/resources/builds/actor-system-cli/lib/process-runner.js';
 const START_IMPORT =
-  '../../../lambdas/lib/actor/resources/builds/actor-system-cli/start.js';
+  '../../../src/core/resources/builds/actor-system-cli/start.js';
 const DB_CMD_IMPORT =
-  '../../../lambdas/lib/actor/resources/builds/actor-system-cli/serve_cmds/db.js';
+  '../../../src/core/resources/builds/actor-system-cli/serve_cmds/db.js';
 const QUEUE_CMD_IMPORT =
-  '../../../lambdas/lib/actor/resources/builds/actor-system-cli/serve_cmds/queue.js';
+  '../../../src/core/resources/builds/actor-system-cli/serve_cmds/queue.js';
 const LAMBDA_CMD_IMPORT =
-  '../../../lambdas/lib/actor/resources/builds/actor-system-cli/serve_cmds/lambda.js';
-const NODE_AGENT_IMPORT =
-  '../../../lambdas/lib/actor/runtime/services/node-agent.js';
+  '../../../src/core/resources/builds/actor-system-cli/serve_cmds/lambda.js';
+const NODE_AGENT_IMPORT = '../../../src/core/runtime/services/node-agent.js';
 const RESOURCE_UTIL_IMPORT =
-  '../../../lambdas/lib/actor/resources/builds/actor-system-cli/control_cmds/state_cmds/util/resources.js';
+  '../../../src/core/resources/builds/actor-system-cli/control_cmds/state_cmds/util/resources.js';
 const SPAWN_SELF_IMPORT =
-  '../../../lambdas/lib/actor/resources/builds/actor-system-cli/control_cmds/state_cmds/util/spawn-self.js';
-const DB_SERVICE_IMPORT =
-  '../../../lambdas/lib/actor/runtime/services/db-service.js';
+  '../../../src/core/resources/builds/actor-system-cli/control_cmds/state_cmds/util/spawn-self.js';
+const DB_SERVICE_IMPORT = '../../../src/core/runtime/services/db-service.js';
 const QUEUE_SERVICE_IMPORT =
-  '../../../lambdas/lib/actor/runtime/services/queue-service.js';
-const FUNCTION_IMPORT =
-  '../../../lambdas/lib/actor/resources/builds/function.js';
-const RUNTIME_RESOURCES_IMPORT =
-  '../../../lambdas/lib/actor/runtime/resources.js';
-const RPC_GRPC_IMPORT =
-  '../../../lambdas/lib/actor/runtime/services/rpc-grpc.js';
+  '../../../src/core/runtime/services/queue-service.js';
+const FUNCTION_IMPORT = '../../../src/core/resources/builds/function.js';
+const RUNTIME_RESOURCES_IMPORT = '../../../src/core/runtime/resources.js';
+const RPC_GRPC_IMPORT = '../../../src/core/runtime/services/rpc-grpc.js';
 const LAMBDA_SERVICE_IMPORT =
-  '../../../lambdas/lib/actor/runtime/services/lambda-service.js';
+  '../../../src/core/runtime/services/lambda-service.js';
 
 /**
  * @returns {Promise<void>} - Result.

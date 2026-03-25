@@ -4,9 +4,9 @@
 import { describe, expect, it } from '@jest/globals';
 import EventEmitter from 'node:events';
 
-import BaseResource from '../../../lambdas/lib/actor/resources/base-resource.js';
-import BaseResourceGroup from '../../../lambdas/lib/actor/resources/base-resource-group.js';
-import Reconcilable from '../../../lambdas/lib/actor/resources/reconcilable.js';
+import BaseResource from '../../../src/core/resources/base-resource.js';
+import BaseResourceGroup from '../../../src/core/resources/base-resource-group.js';
+import Reconcilable from '../../../src/core/resources/reconcilable.js';
 
 class TestLeaf extends BaseResource {
   async _reconcile() {

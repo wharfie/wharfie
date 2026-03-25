@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, it } from '@jest/globals';
 
-import { loadRuntimeBootstrap } from '../../../lambdas/lib/actor/resources/builds/actor-system-cli/lib/runtime-bootstrap.js';
+import { loadRuntimeBootstrap } from '../../../src/core/resources/builds/actor-system-cli/lib/runtime-bootstrap.js';
 
 const ORIGINAL_ENV = process.env;
 

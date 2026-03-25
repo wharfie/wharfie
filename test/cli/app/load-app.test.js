@@ -6,23 +6,20 @@ import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { loadApp } from '../../../cli/app/load-app.js';
+import { loadApp } from '../../../src/cli/app/load-app.js';
 
 const helloResourcesPath = fileURLToPath(
   new URL('../../fixtures/actors/hello-resources.js', import.meta.url),
 );
 const actorSystemPath = fileURLToPath(
   new URL(
-    '../../../lambdas/lib/actor/resources/builds/actor-system.js',
+    '../../../src/core/resources/builds/actor-system.js',
     import.meta.url,
   ),
 );
 const actorSystemUrl = pathToFileURL(actorSystemPath).href;
 const functionPath = fileURLToPath(
-  new URL(
-    '../../../lambdas/lib/actor/resources/builds/function.js',
-    import.meta.url,
-  ),
+  new URL('../../../src/core/resources/builds/function.js', import.meta.url),
 );
 const functionUrl = pathToFileURL(functionPath).href;
 

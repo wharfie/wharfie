@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
 const { NoSuchEntityException } = jest.requireActual('@aws-sdk/client-iam');
-const { parse } = require('../../../lambdas/lib/arn');
+const { parse } = require('../../../src/core/lib/arn');
 
 class IAMMock {
   __setMockState(

@@ -6,10 +6,9 @@ import { EventEmitter } from 'node:events';
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
-const NODE_AGENT_IMPORT =
-  '../../../lambdas/lib/actor/runtime/services/node-agent.js';
+const NODE_AGENT_IMPORT = '../../../src/core/runtime/services/node-agent.js';
 const SCHEDULER_SERVICE_IMPORT =
-  '../../../lambdas/lib/actor/runtime/services/scheduler-service.js';
+  '../../../src/core/runtime/services/scheduler-service.js';
 
 let nextPid = 1000;
 

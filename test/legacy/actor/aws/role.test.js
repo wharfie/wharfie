@@ -8,7 +8,7 @@ jest.mock('../../../lambdas/lib/id');
 const { IAM } = jest.requireMock('@aws-sdk/client-iam');
 
 const { getMockDeploymentProperties } = require('../util');
-const { Role } = require('../../../lambdas/lib/actor/resources/aws/');
+const { Role } = require('../../../lambdas/lib/actor/resources/aws');
 
 describe('iam role IaC', () => {
   it('basic', async () => {

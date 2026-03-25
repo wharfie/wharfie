@@ -14,9 +14,9 @@ jest.unstable_mockModule('node:sea', () => ({
   },
 }));
 
-describe('cli/assets/extract-templates', () => {
+describe('src/cli/assets/extract-templates', () => {
   it('extracts template files from a provided in-memory SEA asset provider', async () => {
-    const mod = await import('../../../cli/assets/extract-templates.js');
+    const mod = await import('../../../src/cli/assets/extract-templates.js');
 
     const tmp = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-extract-templates-sea-'),
@@ -71,7 +71,7 @@ describe('cli/assets/extract-templates', () => {
   });
 
   it('falls back to disk copy when SEA assets are unavailable', async () => {
-    const mod = await import('../../../cli/assets/extract-templates.js');
+    const mod = await import('../../../src/cli/assets/extract-templates.js');
 
     const src = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-extract-templates-fs-src-'),

@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
-import sandboxWorker from '../../../lambdas/lib/code-execution/worker.js';
+import sandboxWorker from '../../../src/core/lib/code-execution/worker.js';
 
 /**
  * @param {string} prefix - prefix.

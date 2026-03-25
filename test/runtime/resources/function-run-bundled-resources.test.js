@@ -7,8 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { brotliCompressSync } from 'node:zlib';
 
-import { createActorSystemResources } from '../../../lambdas/lib/actor/runtime/resources.js';
-import sandboxWorker from '../../../lambdas/lib/code-execution/worker.js';
+import { createActorSystemResources } from '../../../src/core/runtime/resources.js';
+import sandboxWorker from '../../../src/core/lib/code-execution/worker.js';
 
 /** @type {Map<string, any>} */
 const seaAssets = new Map();
@@ -58,7 +58,7 @@ describe('Function.run bundled resource specs', () => {
     });
 
     const { default: Function } =
-      await import('../../../lambdas/lib/actor/resources/builds/function.js');
+      await import('../../../src/core/resources/builds/function.js');
 
     try {
       await Function.run(fnName, { who: 'bundled' }, { requestId: 'req-1' });

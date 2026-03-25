@@ -5,17 +5,17 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import createVanillaDB from '../../../lambdas/lib/db/adapters/vanilla.js';
-import createOperationsStore from '../../../lambdas/lib/graph/operations-store.js';
+import createVanillaDB from '../../../src/core/lib/db/adapters/vanilla.js';
+import createOperationsStore from '../../../src/core/lib/graph/operations-store.js';
 import {
   Action,
   Operation,
   Resource,
-} from '../../../lambdas/lib/graph/index.js';
+} from '../../../src/core/lib/graph/index.js';
 
-/** @typedef {import('../../../lambdas/lib/db/base.js').DBClient} DBClient */
-/** @typedef {import('../../../lambdas/lib/db/tables/operations.js').OperationsTableClient} OperationsStore */
-/** @typedef {import('../../../lambdas/typedefs.js').TableProperties} TableProperties */
+/** @typedef {import('../../../src/core/lib/db/base.js').DBClient} DBClient */
+/** @typedef {import('../../../src/core/lib/db/tables/operations.js').OperationsTableClient} OperationsStore */
+/** @typedef {import('../../../src/core/typedefs.js').TableProperties} TableProperties */
 
 /**
  * @param {number} epochSeconds - epochSeconds.

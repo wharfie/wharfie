@@ -7,14 +7,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const VANILLA_OBJECT_STORAGE_IMPORT =
-  '../../../lambdas/lib/object-storage/adapters/vanilla.js';
+  '../../../src/core/lib/object-storage/adapters/vanilla.js';
 const S3_OBJECT_STORAGE_IMPORT =
-  '../../../lambdas/lib/object-storage/adapters/s3.js';
+  '../../../src/core/lib/object-storage/adapters/s3.js';
 const R2_OBJECT_STORAGE_IMPORT =
-  '../../../lambdas/lib/object-storage/adapters/r2.js';
+  '../../../src/core/lib/object-storage/adapters/r2.js';
 const B2_OBJECT_STORAGE_IMPORT =
-  '../../../lambdas/lib/object-storage/adapters/b2.js';
-const AWS_S3_IMPORT = '../../../lambdas/lib/aws/s3.js';
+  '../../../src/core/lib/object-storage/adapters/b2.js';
+const AWS_S3_IMPORT = '../../../src/core/lib/aws/s3.js';
 
 /**
  * @returns {string} - Result.
@@ -25,7 +25,7 @@ function makeTmpDir() {
 
 /**
  * @param {string} tmpDir - tmpDir.
- * @returns {Promise<import('../../../lambdas/lib/object-storage/base.js').ObjectStorageClient & { close?: () => Promise<void> }>} - Result.
+ * @returns {Promise<import('../../../src/core/lib/object-storage/base.js').ObjectStorageClient & { close?: () => Promise<void> }>} - Result.
  */
 async function createVanillaObjectStorage(tmpDir) {
   jest.resetModules();
@@ -36,7 +36,7 @@ async function createVanillaObjectStorage(tmpDir) {
 describe('vanilla object storage adapter contract', () => {
   /** @type {string} */
   let tmpDir = '';
-  /** @type {(import('../../../lambdas/lib/object-storage/base.js').ObjectStorageClient & { close?: () => Promise<void> }) | undefined} */
+  /** @type {(import('../../../src/core/lib/object-storage/base.js').ObjectStorageClient & { close?: () => Promise<void> }) | undefined} */
   let storage;
 
   afterEach(async () => {

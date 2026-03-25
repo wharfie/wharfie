@@ -2,7 +2,7 @@ import { jest } from '@jest/globals';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
-const { createId } = require('../../../lambdas/lib/id');
+const { createId } = require('../../../src/core/lib/id');
 const { NoSuchBucket, NotFound, NoSuchKey } =
   jest.requireActual('@aws-sdk/client-s3');
 

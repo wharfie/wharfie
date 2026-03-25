@@ -6,10 +6,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const VANILLA_DB_IMPORT = '../../../lambdas/lib/db/adapters/vanilla.js';
-const LMDB_DB_IMPORT = '../../../lambdas/lib/db/adapters/lmdb.js';
-const DYNAMO_DB_IMPORT = '../../../lambdas/lib/db/adapters/dynamodb.js';
-const RESOURCES_IMPORT = '../../../lambdas/lib/actor/runtime/resources.js';
+const VANILLA_DB_IMPORT = '../../../src/core/lib/db/adapters/vanilla.js';
+const LMDB_DB_IMPORT = '../../../src/core/lib/db/adapters/lmdb.js';
+const DYNAMO_DB_IMPORT = '../../../src/core/lib/db/adapters/dynamodb.js';
+const RESOURCES_IMPORT = '../../../src/core/runtime/resources.js';
 
 /**
  * @returns {string} - Result.
@@ -22,7 +22,7 @@ function makeTmpDir() {
  * @param {'PRIMARY'|'SORT'} keyType - keyType.
  * @param {string} propertyName - propertyName.
  * @param {string} propertyValue - propertyValue.
- * @returns {import('../../../lambdas/lib/db/base.js').KeyCondition} - Result.
+ * @returns {import('../../../src/core/lib/db/base.js').KeyCondition} - Result.
  */
 function keyEquals(keyType, propertyName, propertyValue) {
   return {
@@ -37,7 +37,7 @@ function keyEquals(keyType, propertyName, propertyValue) {
  * @param {'PRIMARY'|'SORT'} keyType - keyType.
  * @param {string} propertyName - propertyName.
  * @param {string} propertyValue - propertyValue.
- * @returns {import('../../../lambdas/lib/db/base.js').KeyCondition} - Result.
+ * @returns {import('../../../src/core/lib/db/base.js').KeyCondition} - Result.
  */
 function beginsWith(keyType, propertyName, propertyValue) {
   return {
@@ -51,7 +51,7 @@ function beginsWith(keyType, propertyName, propertyValue) {
 /**
  * @param {string} propertyName - propertyName.
  * @param {string} propertyValue - propertyValue.
- * @returns {import('../../../lambdas/lib/db/base.js').KeyCondition} - Result.
+ * @returns {import('../../../src/core/lib/db/base.js').KeyCondition} - Result.
  */
 function fieldEquals(propertyName, propertyValue) {
   return {
@@ -63,7 +63,7 @@ function fieldEquals(propertyName, propertyValue) {
 
 /**
  * @param {string} tmpDir - tmpDir.
- * @returns {Promise<import('../../../lambdas/lib/db/base.js').DBClient>} - Result.
+ * @returns {Promise<import('../../../src/core/lib/db/base.js').DBClient>} - Result.
  */
 async function createVanillaDB(tmpDir) {
   jest.resetModules();
@@ -73,7 +73,7 @@ async function createVanillaDB(tmpDir) {
 
 /**
  * @param {string} tmpDir - tmpDir.
- * @returns {Promise<import('../../../lambdas/lib/db/base.js').DBClient>} - Result.
+ * @returns {Promise<import('../../../src/core/lib/db/base.js').DBClient>} - Result.
  */
 async function createLMDBDB(tmpDir) {
   jest.resetModules();
@@ -84,14 +84,14 @@ async function createLMDBDB(tmpDir) {
 /**
  * @param {{
  *   name: string,
- *   create: (tmpDir: string) => Promise<import('../../../lambdas/lib/db/base.js').DBClient>
+ *   create: (tmpDir: string) => Promise<import('../../../src/core/lib/db/base.js').DBClient>
  * }} adapter - adapter.
  */
 function runLocalDBContract(adapter) {
   describe(`${adapter.name} db adapter contract`, () => {
     /** @type {string} */
     let tmpDir = '';
-    /** @type {import('../../../lambdas/lib/db/base.js').DBClient | undefined} */
+    /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
     let db;
 
     afterEach(async () => {

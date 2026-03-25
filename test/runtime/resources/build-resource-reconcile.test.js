@@ -3,9 +3,9 @@
 
 import { describe, expect, it } from '@jest/globals';
 
-import BuildResource from '../../../lambdas/lib/actor/resources/builds/build-resource.js';
-import BuildResourceGroup from '../../../lambdas/lib/actor/resources/builds/build-resource-group.js';
-import Reconcilable from '../../../lambdas/lib/actor/resources/reconcilable.js';
+import BuildResource from '../../../src/core/resources/builds/build-resource.js';
+import BuildResourceGroup from '../../../src/core/resources/builds/build-resource-group.js';
+import Reconcilable from '../../../src/core/resources/reconcilable.js';
 
 class DelayedBuildResource extends BuildResource {
   constructor() {

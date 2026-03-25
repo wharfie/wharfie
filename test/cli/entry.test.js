@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import { Command } from 'commander';
 
-import { createProgram } from '../../cli/entry.js';
+import { createProgram } from '../../src/cli/entry.js';
 
 const binPath = fileURLToPath(new URL('../../bin/wharfie', import.meta.url));
 

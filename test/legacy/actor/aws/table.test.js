@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = true;
-const { Table } = require('../../../lambdas/lib/actor/resources/aws/');
+const { Table } = require('../../../lambdas/lib/actor/resources/aws');
 const { DynamoDB } = jest.requireMock('@aws-sdk/client-dynamodb');
 const { getMockDeploymentProperties } = require('../util');
 

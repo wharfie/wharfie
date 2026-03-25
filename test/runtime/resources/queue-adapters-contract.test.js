@@ -6,10 +6,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const VANILLA_QUEUE_IMPORT = '../../../lambdas/lib/queue/adapters/vanilla.js';
-const LMDB_QUEUE_IMPORT = '../../../lambdas/lib/queue/adapters/lmdb.js';
-const AWS_SQS_IMPORT = '../../../lambdas/lib/aws/sqs.js';
-const SQS_QUEUE_IMPORT = '../../../lambdas/lib/queue/adapters/sqs.js';
+const VANILLA_QUEUE_IMPORT = '../../../src/core/lib/queue/adapters/vanilla.js';
+const LMDB_QUEUE_IMPORT = '../../../src/core/lib/queue/adapters/lmdb.js';
+const AWS_SQS_IMPORT = '../../../src/core/lib/aws/sqs.js';
+const SQS_QUEUE_IMPORT = '../../../src/core/lib/queue/adapters/sqs.js';
 
 /**
  * @returns {string} - Result.
@@ -20,7 +20,7 @@ function makeTmpDir() {
 
 /**
  * @param {string} tmpDir - tmpDir.
- * @returns {Promise<import('../../../lambdas/lib/queue/base.js').QueueClient>} - Result.
+ * @returns {Promise<import('../../../src/core/lib/queue/base.js').QueueClient>} - Result.
  */
 async function createVanillaQueue(tmpDir) {
   jest.resetModules();
@@ -30,7 +30,7 @@ async function createVanillaQueue(tmpDir) {
 
 /**
  * @param {string} tmpDir - tmpDir.
- * @returns {Promise<import('../../../lambdas/lib/queue/base.js').QueueClient>} - Result.
+ * @returns {Promise<import('../../../src/core/lib/queue/base.js').QueueClient>} - Result.
  */
 async function createLMDBQueue(tmpDir) {
   jest.resetModules();
@@ -41,14 +41,14 @@ async function createLMDBQueue(tmpDir) {
 /**
  * @param {{
  *   name: string,
- *   create: (tmpDir: string) => Promise<import('../../../lambdas/lib/queue/base.js').QueueClient>
+ *   create: (tmpDir: string) => Promise<import('../../../src/core/lib/queue/base.js').QueueClient>
  * }} adapter - adapter.
  */
 function runQueueContract(adapter) {
   describe(`${adapter.name} queue adapter contract`, () => {
     /** @type {string} */
     let tmpDir = '';
-    /** @type {import('../../../lambdas/lib/queue/base.js').QueueClient | undefined} */
+    /** @type {import('../../../src/core/lib/queue/base.js').QueueClient | undefined} */
     let queue;
 
     afterEach(async () => {
