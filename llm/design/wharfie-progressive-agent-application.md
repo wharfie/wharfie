@@ -1,7 +1,7 @@
 # Wharfie progressive agent application
 
 **Status:** draft design note  
-**Last updated:** 2026-03-25  
+**Last updated:** 2026-03-26  
 **Audience:** maintainers refining Wharfie’s app model and packaging contract
 
 - Related design doc: [`wharfie-v2.md`](./wharfie-v2.md)
@@ -11,12 +11,15 @@
 - Current `ActorSystem` primitive: [`src/core/resources/builds/actor-system.js`](../../src/core/resources/builds/actor-system.js)
 - Current packaged artifact CLI: [`src/core/resources/builds/actor-system-cli/index.js`](../../src/core/resources/builds/actor-system-cli/index.js)
 - Current custom CLI proof case: [`apps/wharfie-v1/wharfie.app.js`](../../apps/wharfie-v1/wharfie.app.js)
+- Current graph + operations persistence: [`src/core/lib/graph/index.js`](../../src/core/lib/graph/index.js) and [`src/core/lib/db/tables/operations.js`](../../src/core/lib/db/tables/operations.js)
+- Current scheduler service: [`src/core/runtime/services/scheduler-service.js`](../../src/core/runtime/services/scheduler-service.js)
+- Current node supervisor: [`src/core/runtime/services/node-agent.js`](../../src/core/runtime/services/node-agent.js)
 
 ---
 
 ## One sentence
 
-**A Wharfie app should fundamentally be one executable artifact per target that can progress from local tool → resident single-node service → trusted mesh node → trustless mesh node, without forcing the developer to adopt a Wharfie-owned end-user CLI surface.**
+**A Wharfie app should fundamentally be one executable artifact per target that starts as a short-lived agentic CLI, grows into a stateful scheduled or event-triggered agent application, and only later expands into trusted or trustless mesh participation — without forcing the developer to adopt a Wharfie-owned end-user CLI surface.**
 
 ---
 
@@ -192,6 +195,33 @@ A developer should **not** need any of the following just to package a CLI:
 
 ---
 
+## The atomic unit should be an agent run
+
+For the next product cut, Wharfie should optimize for the lifecycle of a single **agent run**, not a resident node.
+
+A run is the smallest end-to-end unit of useful agent work:
+
+1. fetch or derive context
+2. build the prompt or model request
+3. submit inference
+4. optionally block for the response
+5. render, persist, or forward the result
+6. exit with a normal process status
+
+That flow is still just a normal executable. It fits the developer-owned CLI story on day one, and it maps cleanly onto the repo’s existing `Operation`/`Action` persistence model once Wharfie starts operationalizing the same flow.
+
+This framing also gives Wharfie a much cleaner progression story:
+
+- a **run** is one unit of agent work
+- a **schedule** creates runs automatically
+- an **event trigger** creates runs from external stimuli
+- a **service** keeps the executable warm so it can launch runs continuously
+- a **mesh** is only a later placement and coordination strategy for runs
+
+That is the priority correction this design note needed: **mesh is not the first proof point**. The first proof point is that Wharfie can help developers build and operationalize useful one-shot agent runs.
+
+---
+
 ## The right progression model
 
 The product concept here is not “app framework with optional deployment.”
@@ -202,13 +232,15 @@ The better model is:
 
 A **progressive agent application** is a single executable artifact per target whose operational envelope expands in stages.
 
-### Stage 0 — local executable
+### Stage 0 — short-lived agentic CLI
 
 The binary:
 
 - runs locally
 - owns its own CLI UX
-- reads stdin/stdout/stderr normally
+- fetches or builds context
+- submits inference
+- can block and wait for a response
 - exits normally
 
 Wharfie provides only:
@@ -217,28 +249,47 @@ Wharfie provides only:
 - artifact metadata
 - target builds
 - optional local dev helpers
+- a tiny executable app contract
 
-### Stage 1 — resident single trusted node
+### Stage 1 — operationalized single-node agent
 
 The same binary can also:
 
-- stay running
-- own local state
-- schedule work
-- expose an internal control channel
-- self-supervise and restart internal services
+- persist run history and local state
+- collect, catalog, archive, and re-use context data
+- schedule recurring runs
+- supervise lightweight background collection jobs
+- expose inspectable run records
 
 Wharfie adds:
 
-- local resources
-- scheduler
-- background services
 - state store
-- deployment helpers
+- operations/run persistence
+- scheduler
+- context catalog primitives
+- deployment helpers for a resident single-node process
 
-### Stage 2 — trusted multi-node mesh
+### Stage 2 — event-triggered / agent-triggered application
 
 The same binary can also:
+
+- respond to queues, webhooks, file changes, or other event sources
+- accept work from other agents or orchestrators
+- apply idempotency and dedup rules to incoming runs
+- preserve provenance for who or what triggered a run
+- keep the developer’s public CLI separate from Wharfie’s operational plumbing
+
+Wharfie adds:
+
+- trigger normalization
+- ingress/auth hooks
+- run envelopes and provenance metadata
+- concurrency / dedup controls
+- internal control-plane plumbing
+
+### Stage 3 — trusted multi-node mesh
+
+Only after stages 0-2 are solid should the same binary also:
 
 - discover peers
 - advertise capabilities
@@ -246,7 +297,7 @@ The same binary can also:
 - recover from node loss
 - replicate or redistribute selected state
 
-Wharfie adds:
+Wharfie then adds:
 
 - membership
 - health
@@ -255,9 +306,9 @@ Wharfie adds:
 - work handoff
 - upgrade/version skew rules
 
-### Stage 3 — trustless mesh
+### Stage 4 — trustless mesh
 
-The same binary can also:
+Only after trusted mesh is proven should the same binary also:
 
 - operate across partially trusted or untrusted peers
 - validate peer identity
@@ -265,7 +316,7 @@ The same binary can also:
 - protect against abuse and replay
 - tolerate hostile network conditions
 
-Wharfie adds:
+Wharfie then adds:
 
 - identity
 - trust bootstrap
@@ -273,7 +324,7 @@ Wharfie adds:
 - signed protocols
 - reputation/quarantine or similar safety mechanics
 
-The key idea is that **these are modes of the same artifact**, not separate app types.
+The key idea is that **these are modes of the same artifact**, but the delivery order matters: short-lived runs first, operationalization second, evented flows third, mesh later.
 
 ---
 
@@ -293,16 +344,33 @@ That means the important interface is not:
 
 It is:
 
-- “what lifecycle modes can this executable participate in?”
+- “what process lifecycle can this executable participate in?”
+- “what kinds of triggers can create new runs?”
 
-### Good modes
+### Two axes matter more than one mode list
+
+#### Process lifecycle
 
 - `exec` — run once and exit
 - `service` — stay resident on one trusted node
 - `mesh` — join a trusted mesh
 - `mesh-trustless` — join a trustless mesh
 
-These do **not** need to be end-user commands. They can be runtime launch modes selected by:
+#### Run activation
+
+- `manual` — user or script starts a run directly
+- `schedule` — cron or interval creates runs automatically
+- `event` — external events create runs
+- `agent` — another agent or orchestrator creates runs
+
+For the next roadmap cut, Wharfie should prioritize these combinations in order:
+
+1. `exec + manual`
+2. `exec/service + schedule`
+3. `service + event/agent`
+4. `mesh + schedule/event/agent`
+
+These do **not** need to be end-user commands. They can be runtime launch modes or trigger sources selected by:
 
 - config
 - environment variables
@@ -310,7 +378,7 @@ These do **not** need to be end-user commands. They can be runtime launch modes 
 - internal bootstrap flags
 - an external Wharfie management tool
 
-That keeps the developer’s CLI intact.
+That keeps the developer’s CLI intact while giving Wharfie a real operational model behind the scenes.
 
 ---
 
@@ -549,7 +617,7 @@ Those terms are still useful internally, but they are not the cleanest starting 
 
 ## Concrete product recommendation
 
-Wharfie should define its app model in three layers.
+Wharfie should define its app model in four layers.
 
 ### Layer 1 — executable
 
@@ -563,19 +631,34 @@ Needs only:
 
 This is the baby step for a normal Node CLI.
 
-### Layer 2 — agent runtime
+### Layer 2 — agent run
+
+Optional but near-term application semantics for the same executable.
+
+Adds:
+
+- context acquisition or derivation
+- prompt/request construction
+- inference submission
+- blocking or streaming response handling
+- a normalized run record shape
+
+This is the actual first wedge for agentic application development.
+
+### Layer 3 — operational agent runtime
 
 Optional runtime behaviors for the same executable.
 
 Adds:
 
-- service mode
 - local state
+- context cataloging and archival
+- run persistence
 - scheduling
-- self-supervision
-- deployment/runtime bootstrap
+- event/agent triggers
+- self-supervision and deployment/runtime bootstrap
 
-### Layer 3 — distributed agent
+### Layer 4 — distributed agent
 
 Optional networked behaviors for the same executable.
 
@@ -596,7 +679,7 @@ Built on top, not beneath:
 - persistent services/resources
 - deploy/status/logs/rollback tooling
 
-That stack feels aligned with the repo’s deeper direction while keeping the first-user experience much simpler.
+That stack feels aligned with the repo’s deeper direction while keeping the first-user experience much simpler and much more obviously useful for agentic application development.
 
 ---
 
@@ -624,11 +707,17 @@ And if the question is:
 
 Then the answer is:
 
-**Wharfie as a framework for progressive agent applications: single executables that start as local tools and can grow into self-healing networked applications.**
+**Wharfie as a framework for progressive agent applications: single executables that start as useful agent runs, then become persistent scheduled or event-triggered agent systems, and only later become self-healing networked applications.**
 
 ---
 
-## Suggested next implementation steps
+## Prioritized future work
+
+### Milestone 1 — short-lived agentic executable
+
+Ship a plain CLI packaging story that supports one-shot runs first.
+
+Wharfie work:
 
 1. **Add a lower-level executable app shape**
    - support `executable.entrypoint` in `wharfie.app.js`
@@ -638,20 +727,93 @@ Then the answer is:
    - let `wharfie build` target a normal Node CLI entrypoint directly
    - infer from `package.json.bin` when possible
 
-3. **Treat `ActorSystem` as optional**
+3. **Define a minimal agent run contract**
+   - treat “context → prompt/request → inference → output” as a first-class design pattern
+   - keep model/provider specifics outside the root app primitive
+
+4. **Preserve the developer’s CLI surface**
+   - do not inject Wharfie-owned public commands into every artifact by default
+
+Explicit non-goals for this milestone:
+
+- background daemons
+- scheduling
+- event ingress
+- mesh participation
+
+### Milestone 2 — operationalized runs
+
+Take the same executable and make repeated runs inspectable, durable, and schedulable.
+
+Wharfie work:
+
+1. **Persist run records using the existing operations/graph substrate**
+   - map agent runs onto `Operation`/`Action` records where it helps
+   - capture trigger metadata, status, outputs, and references to archived context
+
+2. **Add context cataloging and archival primitives**
+   - support active collection jobs
+   - store snapshots/artifacts that later runs can reference
+   - make retention and rehydration explicit
+
+3. **Operationalize scheduling**
+   - use the existing scheduler service as the first trigger engine
+   - schedule runs, not bespoke long-lived handlers
+
+4. **Treat `ActorSystem` as optional**
    - keep it for function catalogs, workflows, and runtime composition
    - stop treating it as the root packaging contract
 
-4. **Separate user CLI from Wharfie control plumbing**
-   - do not inject Wharfie-owned public commands into every artifact by default
+Explicit non-goals for this milestone:
 
-5. **Define runtime mode selection explicitly**
-   - local exec
-   - single-node service
-   - trusted mesh
-   - trustless mesh
+- peer discovery
+- distributed placement
+- trustless protocols
 
-6. **Defer trustless mesh until trusted mesh is solid**
-   - make the maturity ladder explicit in the product and codebase
+### Milestone 3 — event-triggered and agent-triggered runs
 
-That path preserves the current repo’s strengths while moving the public model closer to the executable-first, viral, progressive direction this discussion surfaced.
+Support agents invoking agents and event-driven execution without changing the artifact identity.
+
+Wharfie work:
+
+1. **Define trigger ingress contracts**
+   - queue, webhook, file, or other event sources should all create normalized runs
+
+2. **Define agent-to-agent invocation envelopes**
+   - preserve provenance, auth hooks, and structured payloads
+
+3. **Add idempotency and concurrency controls**
+   - dedup runs
+   - limit fan-out
+   - guard against replay or overlapping execution
+
+4. **Use resident service mode only as needed**
+   - keep service residency in service of evented runs
+   - do not let “daemon mode” become the whole product story
+
+### Milestone 4 — trusted mesh
+
+Only after the first three milestones are solid should Wharfie invest in distributed placement for runs.
+
+Wharfie work:
+
+- membership
+- health
+- routing
+- placement
+- work handoff
+- version-skew management
+
+### Milestone 5 — trustless mesh
+
+Treat this as a separate research and security program, not a near-term product milestone.
+
+Wharfie work:
+
+- identity bootstrap
+- signed protocols
+- authorization policy
+- abuse resistance
+- quarantine/reputation mechanics
+
+That sequence preserves the current repo’s strengths while finally putting the near-term product energy where the repo is most likely to win: short-lived agentic executables first, operationalized agent runtimes second, evented flows third, distributed mesh much later.
