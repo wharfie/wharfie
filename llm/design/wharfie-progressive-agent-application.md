@@ -14,12 +14,15 @@
 - Current graph + operations persistence: [`src/core/lib/graph/index.js`](../../src/core/lib/graph/index.js) and [`src/core/lib/db/tables/operations.js`](../../src/core/lib/db/tables/operations.js)
 - Current scheduler service: [`src/core/runtime/services/scheduler-service.js`](../../src/core/runtime/services/scheduler-service.js)
 - Current node supervisor: [`src/core/runtime/services/node-agent.js`](../../src/core/runtime/services/node-agent.js)
+- Current SEA self-build command: [`src/cli/cmds/build_self.js`](../../src/cli/cmds/build_self.js)
+- Current SSH/SCP-backed remote node deployment path: [`src/core/resources/node.js`](../../src/core/resources/node.js)
+- Current Linux/systemd artifact deployment command: [`src/core/resources/builds/actor-system-cli/infrastructure_cmds/deploy.js`](../../src/core/resources/builds/actor-system-cli/infrastructure_cmds/deploy.js)
 
 ---
 
 ## One sentence
 
-**A Wharfie app should fundamentally be one executable artifact per target that starts as a short-lived agentic CLI, grows into a stateful scheduled or event-triggered agent application, and only later expands into trusted or trustless mesh participation — without forcing the developer to adopt a Wharfie-owned end-user CLI surface.**
+**A Wharfie app should fundamentally be one executable artifact per target that starts as a short-lived agentic CLI, can always burst or load-shed into cloud Linux capacity, grows into a stateful scheduled or event-triggered agent application, and only later expands into trusted or trustless mesh participation — without forcing the developer to adopt a Wharfie-owned end-user CLI surface.**
 
 ---
 
@@ -64,6 +67,8 @@ That means the first-class root primitive should probably be **`Executable`** or
 
 `Function` can remain valuable, but as an **optional advanced primitive** for actor invocation, workflows, graph execution, and RPC-style callable units.
 
+For progressive agent apps, Wharfie should also make one portability promise explicit: the executable should not be trapped on the developer’s host platform. It should be easy to emit Linux artifacts directly, ideally `linux/x64` and `linux/arm64`, or to ship code to a remote Linux builder/host and build there.
+
 ---
 
 ## Repo reality today
@@ -77,6 +82,28 @@ The current repo already supports a surprising amount of this story:
 - SEA packaging is real and already produces a single artifact per target.
 - the runtime already has scheduling, services, persisted operation DAGs, and node-agent groundwork.
 - `apps/wharfie-v1/wharfie.app.js` proves Wharfie can package a custom CLI into a single binary.
+- the current self-build path already models multi-target SEA output across `darwin`/`linux`/`win32` and `arm64`/`x64`.
+- the current node/deploy path already knows how to upload artifacts over SSH/SCP and install them as Linux/systemd-managed services.
+
+### What needs to become an explicit product promise
+
+A Wharfie executable should not be trapped on the developer’s workstation.
+
+If a developer builds or tests an app on macOS or Windows, the artifact story should still make it easy to shift work onto remote Linux capacity when the local machine is saturated, offline, or simply the wrong place for the workload to live.
+
+That means Wharfie should treat **cloud burstability** as a default expectation for executable artifacts:
+
+- either include Linux deploy targets in the release matrix, ideally both `linux/x64` and `linux/arm64`
+- or provide a first-class remote Linux build-and-ship flow that can copy sources or artifacts over SSH/SCP to an EC2-style host and build there
+
+This is not yet “mesh.” It is just a practical single-node portability promise: the same executable can move from laptop to cloud without being redesigned.
+
+The current repo already points in this direction:
+
+- `build-self` already models cross-target SEA builds across `darwin`/`linux`/`win32` and `arm64`/`x64`
+- `apps/wharfie-v1/wharfie.app.js` already declares a multi-target release matrix
+- `Node` already knows how to upload a binary over SSH/SCP and install a Linux/systemd service
+- the packaged artifact deploy command is already Linux/systemd-first
 
 ### What is still too opinionated
 
@@ -181,6 +208,12 @@ A normal Node CLI should be able to become a Wharfie executable with this minimu
    - trusted mesh participation
    - trustless mesh participation
 
+7. **cloud burst policy**
+   - explicit Linux deployment targets, ideally `linux/x64` and `linux/arm64`
+   - or a remote Linux build-and-ship profile for developers working from macOS or Windows
+
+The formal minimum contract can stay small, but Wharfie should still strongly steer every executable toward a Linux cloud path. Otherwise “same artifact can grow up” breaks the moment the workload needs to leave the laptop.
+
 ### Explicitly not required for step 1
 
 A developer should **not** need any of the following just to package a CLI:
@@ -208,7 +241,7 @@ A run is the smallest end-to-end unit of useful agent work:
 5. render, persist, or forward the result
 6. exit with a normal process status
 
-That flow is still just a normal executable. It fits the developer-owned CLI story on day one, and it maps cleanly onto the repo’s existing `Operation`/`Action` persistence model once Wharfie starts operationalizing the same flow.
+That flow is still just a normal executable. It fits the developer-owned CLI story on day one, it can move from a workstation onto Linux cloud capacity without changing app identity, and it maps cleanly onto the repo’s existing `Operation`/`Action` persistence model once Wharfie starts operationalizing the same flow.
 
 This framing also gives Wharfie a much cleaner progression story:
 
@@ -242,12 +275,14 @@ The binary:
 - submits inference
 - can block and wait for a response
 - exits normally
+- can be rebuilt or shipped onto remote Linux capacity without redesigning the app
 
 Wharfie provides only:
 
 - packaging
 - artifact metadata
 - target builds
+- optional remote build/ship helpers for Linux cloud capacity
 - optional local dev helpers
 - a tiny executable app contract
 
@@ -324,7 +359,7 @@ Wharfie then adds:
 - signed protocols
 - reputation/quarantine or similar safety mechanics
 
-The key idea is that **these are modes of the same artifact**, but the delivery order matters: short-lived runs first, operationalization second, evented flows third, mesh later.
+The key idea is that **these are modes of the same artifact**, but the delivery order matters: short-lived runs first, cloud burstability as a baseline, operationalization second, evented flows third, mesh later.
 
 ---
 
@@ -410,6 +445,8 @@ with resolution order:
 
 This is the fastest baby step.
 
+For progressive agent apps, this path should also make it easy to emit Linux artifacts or push sources/artifacts to a remote Linux builder or host.
+
 ### Path B — tiny manifest path
 
 When users want reproducible targets and optional capabilities, they can add a very small `wharfie.app.js`.
@@ -424,6 +461,7 @@ export default {
   },
   targets: [
     { nodeVersion: '24', platform: 'linux', architecture: 'x64' },
+    { nodeVersion: '24', platform: 'linux', architecture: 'arm64' },
   ],
 };
 ```
@@ -436,6 +474,8 @@ That should be enough to:
 - leave the user’s CLI completely untouched
 
 No `Function`. No `ActorSystem`. No framework-owned command surface.
+
+For agentic apps, Wharfie should strongly encourage at least one Linux deployment target even when the developer primarily works on macOS or Windows. If local cross-target packaging is not reliable enough, Wharfie should provide a first-class remote Linux build-and-ship path instead of leaving that step to ad hoc shell scripts.
 
 ---
 
@@ -582,6 +622,14 @@ Wharfie should treat these as separate maturity levels:
 
 If those are blurred together, the design will overpromise.
 
+### Stress test 6 — can a macOS/Windows-developed app shed work onto Linux cloud capacity?
+
+It should.
+
+A developer should not have to redesign the application just because it needs to move from a laptop onto an EC2-style Linux host. Wharfie should either emit Linux artifacts alongside the local target, or provide a first-class remote build-and-ship path over SSH/SCP.
+
+If that path is missing, the “progressive” story breaks too early.
+
 ---
 
 ## Recommended terminology
@@ -628,6 +676,8 @@ Needs only:
 - `name`
 - `entrypoint`
 - `targets`
+
+In practice, the default release story should strongly prefer at least one Linux deploy target or a remote Linux build-and-ship path so the executable can burst into cloud capacity later.
 
 This is the baby step for a normal Node CLI.
 
@@ -691,7 +741,7 @@ If the question is:
 
 Then the answer should be:
 
-**A name, an executable entrypoint, and a target set — with `Function` and `ActorSystem` moved up into optional advanced layers rather than being the first thing every app must become.**
+**A name, an executable entrypoint, and a target set — with Wharfie strongly steering every app toward a Linux cloud path, and with `Function` and `ActorSystem` moved up into optional advanced layers rather than being the first thing every app must become.**
 
 And if the question is:
 
@@ -707,7 +757,7 @@ And if the question is:
 
 Then the answer is:
 
-**Wharfie as a framework for progressive agent applications: single executables that start as useful agent runs, then become persistent scheduled or event-triggered agent systems, and only later become self-healing networked applications.**
+**Wharfie as a framework for progressive agent applications: single executables that start as useful agent runs, can spill or load-shed into cloud Linux capacity, then become persistent scheduled or event-triggered agent systems, and only later become self-healing networked applications.**
 
 ---
 
@@ -727,11 +777,20 @@ Wharfie work:
    - let `wharfie build` target a normal Node CLI entrypoint directly
    - infer from `package.json.bin` when possible
 
-3. **Define a minimal agent run contract**
+3. **Make Linux burst targets a first-class default**
+   - strongly encourage `linux/x64` and `linux/arm64` in release target matrices
+   - make “can this artifact move to cloud Linux?” a default design check
+
+4. **Add a remote Linux build-and-ship path**
+   - support shipping sources or packaged artifacts from macOS/Windows/Linux onto an EC2-style host over SSH/SCP
+   - allow Wharfie to build there when local cross-target packaging is insufficient
+   - reuse the repo’s existing Linux/systemd deployment direction where possible
+
+5. **Define a minimal agent run contract**
    - treat “context → prompt/request → inference → output” as a first-class design pattern
    - keep model/provider specifics outside the root app primitive
 
-4. **Preserve the developer’s CLI surface**
+6. **Preserve the developer’s CLI surface**
    - do not inject Wharfie-owned public commands into every artifact by default
 
 Explicit non-goals for this milestone:
@@ -816,4 +875,4 @@ Wharfie work:
 - abuse resistance
 - quarantine/reputation mechanics
 
-That sequence preserves the current repo’s strengths while finally putting the near-term product energy where the repo is most likely to win: short-lived agentic executables first, operationalized agent runtimes second, evented flows third, distributed mesh much later.
+That sequence preserves the current repo’s strengths while finally putting the near-term product energy where the repo is most likely to win: short-lived agentic executables first, cloud-burstable packaging as part of the foundation, operationalized agent runtimes second, evented flows third, distributed mesh much later.
