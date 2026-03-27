@@ -1,34 +1,69 @@
 # Wharfie v2
 
 **Status:** Draft (actively iterating)  
-**Last updated:** 2026-02-15  
+**Last updated:** 2026-03-27  
 **Audience:** contributors implementing the rewrite; optimized for LLM context + direct code navigation.
 
-- Back to docs index: [`docs/README.md`](../../specs/README.md)
-- Repo example to align with: [`scratch/test.js`](../../scratch/test.js)
-- Current prioritized follow-up work: [`wharfie-v2-next-work-items.md`](./wharfie-v2-next-work-items.md)
+- Back to design index: [`README.md`](./README.md)
+- Related design note: [`wharfie-progressive-agent-application.md`](./wharfie-progressive-agent-application.md)
 - Existing workflow graph code: [`src/core/lib/graph/index.js`](../../src/core/lib/graph/index.js)
 
 ---
 
 ## One sentence
 
-**Wharfie v2 is a provider-neutral, single-executable framework for writing serverless-style applications (Queue + Cron → Actors) and higher-level Workflow DAGs (Operations → Actions) that run locally (macOS/Windows/Linux) and can deploy themselves anywhere — cloud providers are adapters, not dependencies.**
+**Wharfie v2 is a manifest-first, provider-neutral framework for packaging developer-owned CLIs and named activities into single executable artifacts, then progressively operationalizing them with queue/cron triggers, workflow DAGs, shared runtime resources, and later multi-node placement. Progressive agent applications are the lodestar workload.**
 
 ---
 
 ## Why v2 exists
 
-v1 Wharfie centered around “table-oriented data apps on AWS Athena”. v2 changes the product into:
+v1 Wharfie centered around table-oriented data apps on AWS Athena. v2 moves Wharfie toward:
 
-- **serverless-style application composition** (actors + queues + cron),
-- **workflow DAGs** for orchestrating multi-step operations using actors,
-- **immutable artifacts** (single executable output; content-addressed),
-- **local-first parity** (run locally without cloud),
-- **deploy-anywhere** (SSH + optional provisioning),
-- **provider neutrality** (no AWS coupling in core).
+- packaging useful Node applications into single executable artifacts,
+- preserving the developer’s own CLI by default,
+- exposing named activities that schedules, queues, and workflows can call,
+- running locally first and deploying to Linux without changing the app model,
+- keeping cloud providers as adapters rather than core dependencies.
+
+The key product promise is smooth progression:
+
+- a CLI should not need to be rewritten to become a scheduled service,
+- a scheduled service should not need to be rewritten to become workflow-backed,
+- a workflow-backed app should have a path to later multi-node placement.
 
 Breaking changes are explicitly allowed.
+
+---
+
+## Locked decisions (do not re-litigate)
+
+- **Public contract:** manifest-first app definition in code
+- **Public app model:** developer-owned `cli` + named `activities`
+- **Packaging funnel:** `wharfie app manifest` and `wharfie app package`
+- **Artifact UX:** packaged apps preserve the developer-owned CLI by default
+- **Wharfie internals:** runtime control is hidden behind an env-selected bootstrap path, not a public artifact command tree
+- **Shared resource refs:** stored in a config-dir backed registry
+- **Shared resource kinds (first cut):** `db`, `queue`, `objectStorage`
+- **Triggers in MVP:** Queue + Cron only
+- **Cron timezone:** UTC
+- **Cron misfires:** skipped by default (no catch-up)
+- **Infra model:** IaC reconciliation using `Reconcilable` / `BaseResource`
+- **Multi-node scaling (MVP):** “more pollers” (no membership/leader election yet)
+- **Core types:** provider-neutral (no provider SDK request/response types in core)
+- **Naming:** enforce `{app}-{env}-{logicalName}` prefixing unless explicitly overridden
+
+---
+
+## Product principles
+
+- **CLI stays yours:** packaged apps should keep the developer’s own command surface, argv shape, stdio, and exit codes.
+- **Activities are the machine contract:** schedules, queues, workflows, and later placement target named activities, not parser internals.
+- **Release = file:** a release is a content-addressed executable artifact.
+- **No accidental cloud usage:** core never infers cloud providers from ambient environment.
+- **Parity:** local run and deployed runtime should use the same app model.
+- **Recoverable workflows:** operation DAG state is persisted in DB so work can resume after crashes/restarts.
+- **Progression without rewrite:** CLI → scheduled/evented app → workflow-backed app → distributed placement should reuse the same activity catalog.
 
 ---
 
@@ -44,21 +79,20 @@ Examples:
 - `NodeBinary`, `SeaBuild`, `MacOSBinarySignature`
 - `SQSQueue`, `DynamoTable`
 - `HetznerVPS`, `HetznerSSHKey`
-- `Node` / `systemd` installation units
+- `Node` / systemd installation units
 
 See:
 - [`src/core/resources/reconcilable.js`](../../src/core/resources/reconcilable.js)
 - [`src/core/resources/base-resource.js`](../../src/core/resources/base-resource.js)
 
-### Capability (runtime interface exposed to actors)
+### Capability (runtime interface exposed to activities)
 
-A pluggable runtime interface usable from an actor execution context, typically behind a gRPC service.
+A pluggable runtime interface usable from activity execution context, typically behind a service boundary.
 
 Examples:
 - `Queue`
 - `DB`
-- `ObjectStorage` (later)
-- `Logger` (later)
+- `ObjectStorage`
 
 See current capability wiring:
 - [`src/core/runtime/resources.js`](../../src/core/runtime/resources.js)
@@ -70,346 +104,245 @@ A concrete implementation of a capability.
 **MVP constraint:** no user-defined adapters yet; only built-ins shipped in this repo.
 
 Examples (existing):
-- Queue: `vanilla`, `lmdb`, `sqs`  
-  [`src/core/lib/queue/adapters`](../../src/core/lib/queue/adapters)
-- DB: `vanilla`, `lmdb`, `dynamodb`  
-  [`src/core/lib/db/adapters`](../../src/core/lib/db/adapters)
+- Queue: `vanilla`, `lmdb`, `sqs`
+- DB: `vanilla`, `lmdb`, `dynamodb`
+- Object storage: `vanilla`, `s3`, `r2`, `b2`
 
-### Workflow / Operation graph (new first-class concept in v2)
+### Activity (public machine-facing unit)
 
-A **DAG** of steps that the system runs to accomplish a higher-level task.
+A named unit of work that Wharfie can invoke from:
+
+- the developer CLI,
+- scheduler triggers,
+- queue messages,
+- workflow actions,
+- later placement/routing logic.
+
+Near-term implementation detail: activities can compile onto the repo’s existing internal `functions` shape and current `actor` / `functionName` invocation plumbing.
+
+### Workflow / Operation graph
+
+A DAG of steps that the system runs to accomplish a higher-level task.
 
 - **Operation**: a single run/instance of a workflow DAG
-- **Action**: a node/step in the DAG (typically maps to an actor invocation)
-- **Edge**: dependency (Action B depends on Action A)
+- **Action**: a node/step in the DAG
+- **Edge**: dependency between actions
 - **State**: persisted in the DB capability so operations can resume across restarts
 
 Existing code:
-- Graph model: [`src/core/lib/graph*`](../../src/core/lib/graph/index.js)
+- Graph model: [`src/core/lib/graph/index.js`](../../src/core/lib/graph/index.js)
 - Persistence adapter: [`src/core/lib/db/tables/operations.js`](../../src/core/lib/db/tables/operations.js)
-
----
-
-## Locked decisions (do not re-litigate)
-
-- **Artifact includes full deploy UX** (deploy/status/logs/rollback/infra apply are inside the built executable)
-- **Triggers in MVP:** Queue + Cron only
-- **Cron timezone:** UTC
-- **Cron misfires:** skipped by default (no catch-up)
-- **Infra model:** IaC reconciliation using `Reconcilable` / `BaseResource`
-- **Multi-node scaling (MVP):** “more pollers” (no membership/leader election yet)
-- **Core types:** provider-neutral (no provider SDK request/response types in core)
-- **Naming:** enforce `{app}-{env}-{logicalName}` prefixing unless explicitly overridden
-
----
-
-## Product principles
-
-- **Release = file:** a release is a content-addressed executable. Rollback is selecting a previous `artifactId`.
-- **No accidental cloud usage:** no `inAWS()` auto-selection in core; cloud adapters must be explicitly selected.
-- **Parity:** local run uses the same process topology as “production”.
-- **Isolation:** adapter clients live out-of-process behind gRPC; actor code never owns/keeps raw clients.
-- **Convergent infra:** deploy converges desired state and can be re-run safely.
-- **Recoverable workflows:** operation DAG state is persisted in DB so operations can resume after crashes/restarts.
 
 ---
 
 ## UX and CLI surface
 
-### Two modes: installed CLI vs artifact CLI
+### Installed Wharfie CLI vs packaged app CLI
 
-One CLI codebase, two contexts:
+There are two separate command surfaces.
 
-- **Project mode** (`wharfie` installed): create apps, run dev, build artifacts.
-- **Artifact mode** (built executable): run/deploy/status/logs/rollback/infra.
+#### Installed Wharfie CLI
 
-### Command surface (proposed)
+This is the authoring and operator tool.
 
-Project mode:
-- `wharfie init`
-- `wharfie dev`
-- `wharfie build --target <os-arch>`
+Near-term commands stay in the existing app lane:
 
-Artifact mode (also usable in project mode):
-- `<artifact> run --env <env>`
-- `<artifact> deploy --env <env>`
-- `<artifact> infra plan|apply|destroy --env <env>`
-- `<artifact> status --env <env>`
-- `<artifact> logs --env <env> [--follow]`
-- `<artifact> rollback --env <env> [--to <artifactId>]`
-- `<artifact> actor invoke <name> --event <json>`
+- `wharfie app manifest`
+- `wharfie app package`
+- `wharfie app run`
 
-Workflow operations (v2):
-- `<artifact> op start <workflowName> --input <json> [--scope <id>]`
-- `<artifact> op status <operationId>`
-- `<artifact> op cancel <operationId>`
-- `<artifact> op logs <operationId>`
+This is where build/package/deploy workflows should continue to live.
 
-> These `op *` commands are optional for the first MVP cut, but the workflow concept must exist in the design and data model.
+#### Packaged app CLI
 
-### Repo reality: internal artifact CLI already exists
+This belongs to the developer.
 
-The SEA artifacts today boot into an internal CLI:
+The default artifact experience should:
 
-- [`src/core/resources/builds/actor-system-cli/index.js`](../../src/core/resources/builds/actor-system-cli/index.js)
+- enter the developer’s `cli.entrypoint`,
+- preserve normal `process.argv`, stdio, and exit codes,
+- avoid exposing Wharfie-owned `func`, `ctl`, or `infra` commands as the public help surface.
 
-It already contains plumbing for:
-- starting node-agent (`ctl state start`)
-- serving queue/db/lambda services (`ctl state serve ...`)
-- invoking a function (`func run`)
+### Hidden bootstrap for runtime mode
 
-v2 should extend this CLI rather than inventing a parallel one.
+Wharfie still needs a way to launch runtime services for scheduling, queue polling, and deployment-managed residency.
+
+The locked choice is:
+
+- **env-var selected bootstrap mode**
+
+That keeps runtime control available for Linux/systemd and internal orchestration without taking over the app’s public UX.
 
 ---
 
-## App definition: **code**, not YAML
+## App definition: code, compiled to a manifest
 
-Wharfie v2 apps are defined in code (JS/TS), not in `wharfie.yaml`.
+Wharfie v2 apps are defined in code (`wharfie.app.js`), not in YAML.
 
-- This keeps composition programmable and keeps Wharfie itself honest (dogfooding).
-- Apps built with Wharfie can still define YAML-based DSLs for their own domain use-cases, but Wharfie core should not require YAML.
+The public contract should stay small and mechanical.
 
-### Recommended layout (MVP)
+### Recommended minimal shape
 
+```js
+export default {
+  name: 'my-app',
+  cli: {
+    entrypoint: './src/cli.js',
+  },
+  activities: {
+    collect: {
+      entrypoint: './src/activities/collect.js',
+      export: 'run',
+    },
+    sync: {
+      entrypoint: './src/activities/sync.js',
+      export: 'run',
+    },
+  },
+  resources: {
+    db: { ref: 'default-db' },
+    queue: { ref: 'agent-work' },
+    objectStorage: { ref: 'default-objects' },
+  },
+  scheduler: {
+    triggers: [{ activity: 'collect', cron: '0 * * * *' }],
+  },
+  workflows: {
+    nightly: {
+      actions: [
+        { id: 'collect', type: 'ACTIVITY', activity: 'collect' },
+        { id: 'sync', type: 'ACTIVITY', activity: 'sync', dependsOn: ['collect'] },
+      ],
+    },
+  },
+  targets: [{ nodeVersion: '24', platform: 'linux', architecture: 'x64' }],
+};
 ```
-my-app/
-  wharfie.app.js        # app spec entrypoint (code)
-  actors/
-    worker.js
-    nightly.js
-  dist/
-  .wharfie/             # local mutable state (dev only)
-```
 
-### App spec: minimal “compile to manifest” contract
+### Compilation mapping
 
-The CLI needs to load an app spec and derive a normalized manifest that is embedded into the artifact:
+The manifest compiler should map this public contract onto the repo’s current runtime/build substrate:
 
-- actors (name, entrypoint, externals)
-- triggers (queue polling config, cron schedules)
-- capabilities config (DB + Queue are first-class)
-- workflows (operation graphs)
-- deployments (nodes, roles, service manager)
-- targets (mac/windows/linux builds)
+- `cli.entrypoint` becomes the default process root for packaged artifacts
+- `activities` compile onto the current `functions` representation
+- scheduler triggers compile from public `activity` to current internal `actor`
+- workflow actions compile onto current graph/action structures
+- the manifest is embedded into the SEA artifact as an asset
 
-This manifest is embedded into the SEA artifact as an asset.
+This keeps the public model stable while implementation continues to reuse existing internals.
 
 ---
 
-## Capabilities + adapters (DB is as important as Queue)
+## Capabilities + adapters (DB matters as much as Queue)
 
 ### Why DB is first-class in v2
 
-DB is not “nice to have”. DB is required for:
+DB is required for:
 
-1) **Workflow operation DAG state** (Operation/Action status + outputs)
-2) **IaC reconciliation state** (`BaseResource.stateDB`)
-3) (optional) application state used by actors
+1. workflow operation DAG state,
+2. IaC reconciliation state,
+3. optional application state used by activities.
 
-If Queue is “how work gets distributed”, DB is “how the system remembers what happened”.
+If Queue is how work gets distributed, DB is how the system remembers what happened.
 
-### Repo reality: DB + Queue adapters already exist
+### Repo reality
 
-- Queue adapters: [`src/core/lib/queue/adapters`](../../src/core/lib/queue/adapters)
-  - `vanilla`, `lmdb`, `sqs`
-- DB adapters: [`src/core/lib/db/adapters`](../../src/core/lib/db/adapters)
-  - `vanilla`, `lmdb`, `dynamodb`
+The repo already has built-in capability adapters:
 
-**MVP constraint:** no user-defined adapters yet.
+- Queue adapters: `vanilla`, `lmdb`, `sqs`
+- DB adapters: `vanilla`, `lmdb`, `dynamodb`
+- Object storage adapters: `vanilla`, `s3`, `r2`, `b2`
 
-### Provider neutrality constraints (practical)
+### Shared resource references
 
-- Capability interfaces/types must not import provider SDK request/response types.
-- Provider SDK types live only inside provider adapters.
+Multiple Wharfie apps owned by the same user should be able to share persistent resources.
 
-Concrete refactors required (existing coupling):
-- Queue typedefs import AWS SDK types:  
-  [`src/core/lib/queue/base.js`](../../src/core/lib/queue/base.js)
-- Capability selection auto-detects AWS:  
-  [`src/core/runtime/resources.js`](../../src/core/runtime/resources.js)
-- State store auto-selects DynamoDB when AWS env vars exist:  
-  [`src/core/lib/db/state/store.js`](../../src/core/lib/db/state/store.js)
+The first cut should use a **config-dir backed registry** and support refs for:
 
-v2 policy:
-- explicit adapter selection only (defaults may exist, but never based on AWS env vars)
+- `db`
+- `queue`
+- `objectStorage`
+
+Example:
+
+```js
+resources: {
+  db: { ref: 'default-db' },
+  queue: { ref: 'agent-work' },
+  objectStorage: { ref: 'default-objects' },
+}
+```
+
+`lambda` is not part of this shared resource registry in the first cut. In the current repo it is an execution service, not a durable shared capability.
+
+### Provider neutrality constraints
+
+- capability interfaces/types must not import provider SDK request/response types,
+- provider SDK types live only inside provider adapters,
+- adapter selection must stay explicit.
+
+The repo has already moved in this direction in runtime resource resolution.
 
 ---
 
-## Workflow DAGs: Operations → Actions (graph)
+## Workflow DAGs: Operations → Actions
 
-This section formalizes the DAG concept as a v2 feature.
+The workflow graph remains a first-class v2 concept.
 
 ### What problem the graph solves
 
-Queue + cron gives you triggers, but complex operations usually need:
+Queue + cron give Wharfie triggers. The graph adds:
 
-- sequencing (“do A then B then C”)
-- fan-out/fan-in
-- retries and idempotency per step
-- long-running state and recovery
-- a clear, inspectable execution record
+- sequencing,
+- fan-out/fan-in,
+- retries and idempotency per step,
+- durable state and recovery,
+- a clear execution record.
 
-The graph gives you this without turning Wharfie into a monolithic “platform”.
+### Repo reality
 
-### Data model (existing code, generalized for v2)
+Wharfie already has:
 
-Wharfie already has a graph model:
+- `Operation`: a run containing actions + dependency edges
+- `Action`: a step record with status + outputs
+- DB persistence for serialized graphs and action status
 
-- `Operation`: contains actions + dependency edges + operation metadata  
-  [`src/core/lib/graph/operation.js`](../../src/core/lib/graph/operation.js)
-- `Action`: step record with status + outputs  
-  [`src/core/lib/graph/action.js`](../../src/core/lib/graph/action.js)
+That means v2 does not need a new workflow substrate. It needs a better public app model and better mapping from activities into the existing graph runtime.
 
-v2 generalization:
-- An **Action** maps to an **actor invocation** (instead of Athena-specific action types).
-- Store actor name as:
-  - `action.type = "ACTOR:<name>"` (minimal change), or
-  - add `action.actor = "<name>"` (cleaner; requires schema change)
+### Near-term conclusion
 
-### Persistence: DB “operations table”
+The atomic operational unit should be a **run**, with **agent runs** as the lodestar use case.
 
-Graph state is stored in DB via:
+That means:
 
-- [`src/core/lib/db/tables/operations.js`](../../src/core/lib/db/tables/operations.js)
-
-This table stores:
-- operation record (includes `serialized_action_graph`)
-- action records (status + outputs)
-- (optional) “attempt”/execution records (today called `Query`)
-
-v2 must treat this table as a **core subsystem**, not legacy.
-
-### Execution model (how DAGs run)
-
-#### Core idea
-
-- DB stores ground truth for operation state.
-- Queue is used to distribute **ready** actions to workers.
-- Workers execute the actor, then update DB and schedule downstream actions.
-
-#### Scheduling algorithm (push + reconcile)
-
-**Push scheduling (fast path):**
-1) Create operation + action records in DB.
-2) Enqueue all actions with no prerequisites.
-3) When an action completes:
-   - mark it COMPLETED in DB (and store outputs if provided),
-   - for each downstream action, check prerequisites and enqueue if now ready.
-
-**Reconcile scheduling (repair path):**
-- A periodic reconciler scans for actions that are PENDING but not enqueued (or stuck) and re-enqueues them if prerequisites are satisfied.
-
-This makes DAG execution robust against:
-- worker crashes between “complete” and “enqueue downstream”
-- transient queue/send failures
-
-#### Where the scheduler runs
-
-MVP options (both valid):
-- **Embedded library in executor-service** (recommended): executor already polls queues and invokes actors; it can also perform the graph bookkeeping.
-- **Dedicated graph-service**: separate process for workflow orchestration. Cleaner separation, but more plumbing.
-
-v2 spec should not block either; start with “embedded” to ship.
-
-### Status + inspection
-
-A workflow must be inspectable without reading logs:
-
-- operation status: PENDING/RUNNING/COMPLETED/FAILED/CANCELLED
-- per-action status + timestamps
-- action outputs (small JSON only; large outputs go to object storage later)
-
-The CLI `op status` should query the operations table and render a compact view.
-
-### Cancellation semantics (MVP)
-
-- Cancelling an operation sets operation status to CANCELLED.
-- Workers should check operation status before running a dequeued action.
-- Already-running actions are not forcibly killed in MVP.
+- CLI commands can invoke activities directly,
+- cron can create activity runs,
+- queue messages can create activity runs,
+- workflows can orchestrate the same activity catalog.
 
 ---
 
-## Artifact build system (SEA) + dogfooding
+## Runtime architecture (node services + supervision)
 
-### Repo reality: SEA already works
+### Repo reality
 
-The current build system already supports:
-- downloading target Node binaries: [`NodeBinary`](../../src/core/resources/builds/node-binary.js)
-- building a SEA blob + injecting it: [`SeaBuild`](../../src/core/resources/builds/sea-build.js)
-- bundling function code + externals tar: [`FunctionResource`](../../src/core/resources/builds/function-resource.js)
-- executing function bundles in worker sandboxes: [`worker.js`](../../src/core/lib/code-execution/worker.js)
+The runtime already contains the right service-level pieces:
 
-The existing `ActorSystem` composes this graph:
-- [`src/core/resources/builds/actor-system.js`](../../src/core/resources/builds/actor-system.js)
+- `node-agent` for supervision and service planning,
+- `queue-service` for queue capability hosting,
+- `db-service` for DB capability hosting,
+- `lambda-service` for invoke + poll execution,
+- `scheduler-service` for cron.
 
-### What v2 adds
+### v2 direction
 
-- an **App Manifest asset** embedded into SEA (not just function bundles)
-- workflows in the manifest (DAG definitions)
-- deploy UX exposed from the artifact CLI
+The near-term runtime should stay close to the repo’s current shape:
 
----
+- **developer CLI mode**: packaged app starts the developer CLI
+- **hidden runtime mode**: env-selected bootstrap starts queue/db/scheduler/execution services as needed
+- **activity execution**: continues to reuse current function/invoke plumbing until the public activity layer is in place
 
-## Runtime architecture (node services + gRPC)
-
-### Repo reality: node-agent + gRPC services already exist
-
-- node-agent supervisor: [`node-agent.js`](../../src/core/runtime/services/node-agent.js)
-- queue-service (ResourceRpc): [`queue-service.js`](../../src/core/runtime/services/queue-service.js)
-- db-service (ResourceRpc): [`db-service.js`](../../src/core/runtime/services/db-service.js)
-- lambda-service (Invoke + poll loops): [`lambda-service.js`](../../src/core/runtime/services/lambda-service.js)
-- JSON-over-gRPC plumbing: [`rpc-grpc.js`](../../src/core/runtime/services/rpc-grpc.js)
-
-### v2 topology (recommended MVP)
-
-- **node-agent**: supervises services; exposes `/health`
-- **queue-service**: hosts queue adapter client behind ResourceRpc
-- **db-service**: hosts DB adapter client behind ResourceRpc (**first-class**)
-- **executor-service**: existing lambda-service (Invoke + queue pollers)
-- **scheduler-service**: new (Cron UTC) → invokes executor-service (leader-only)
-
-ASCII sketch:
-
-```
-           HTTP /health
-+-------------------------+
-|        node-agent       |
-|  supervise + readiness  |
-+-----------+-------------+
-            |
-            | spawn self (same artifact)
-            v
-+------------------+     gRPC      +-------------------+
-|  queue-service   |<------------->|  executor-service |
-|  adapter client  |               | worker sandboxes  |
-+------------------+               | queue pollers     |
-+------------------+               | workflow DAG exec |
-|   db-service     |<------------->|  (optional here)  |
-|  adapter client  |               +---------+---------+
-+------------------+                         ^
-                                             | gRPC Invoke
-                                   +---------+---------+
-                                   | scheduler-service |
-                                   | cron (UTC)        |
-                                   +-------------------+
-```
-
-### Queue polling format (repo reality)
-
-The lambda-service poll loop expects message bodies shaped like:
-
-```json
-{ "functionName": "my-function", "event": { ... }, "context": { ... } }
-```
-
-See:
-- [`src/core/runtime/services/lambda-service.js`](../../src/core/runtime/services/lambda-service.js)
-
-This is good for v2:
-- queue is a generic dispatch plane
-- messages are self-describing (which actor to run)
-
-Workflows can reuse this by enqueueing action steps as `{ functionName: actorName, context: { operationId, actionId, ... } }`.
+This is why the next work is mostly about manifest shape, packaging, and bootstrap, not inventing an entirely new runtime.
 
 ---
 
@@ -417,331 +350,147 @@ Workflows can reuse this by enqueueing action steps as `{ functionName: actorNam
 
 ### Queue trigger (MVP)
 
-MVP behavior:
-- executor-service runs poll loops against one or more configured queue URLs
-- each message specifies which actor to invoke (`functionName`)
-- on success: delete/ack
-- on failure: do not delete; message retries after visibility timeout
+MVP behavior remains:
+
+- executor-service runs poll loops against configured queues,
+- each message identifies which activity to invoke,
+- success deletes/acks the message,
+- failure leaves the message for retry.
+
+Repo reality: `lambda-service` already accepts both legacy `functionName` envelopes and a v2-style `actor` envelope. That is enough compatibility space for the activity layer to compile onto.
 
 ### Cron trigger (UTC)
 
-- evaluated in **UTC**
-- misfires are **skipped**
-- cron runs only on leader nodes (MVP “exactly once” policy without membership)
+Locked behavior remains:
+
+- evaluated in UTC,
+- misfires skipped,
+- cron runs on leader nodes only in the current multi-node model.
 
 ---
 
-## IaC reconciliation engine (Reconcilable/BaseResource) + naming
+## Deployments (Linux/systemd first)
 
-### Repo reality: IaC engine exists and is good
+### Current direction
 
-- engine:
-  - [`reconcilable.js`](../../src/core/resources/reconcilable.js)
-  - [`base-resource.js`](../../src/core/resources/base-resource.js)
-- AWS queue IaC:
-  - [`src/core/resources/aws/queue.js`](../../src/core/resources/aws/queue.js)
-- nodes / systemd:
-  - [`src/core/resources/node.js`](../../src/core/resources/node.js)
-- Hetzner provisioning:
-  - [`src/core/resources/hetzner`](../../src/core/resources/hetzner)
+MVP deploy remains Linux/systemd first.
 
-### Naming rule
+The repo already has:
 
-Default physical names are derived as:
+- SSH/SCP-backed node deployment,
+- systemd release installation,
+- content-addressed artifact release structure.
 
-```
-physicalName = "{app}-{env}-{logicalName}"
-```
+### v2 correction
 
-Override exists (explicit only). No hidden naming magic.
+The deployed runtime should not depend on a public artifact command tree like `ctl state start`.
 
-### Shared DB: IaC state store uses the same DB capability
+Instead:
 
-`BaseResource.stateDB` is set to a DB-backed state store:
+- the installed `wharfie` CLI can remain the operator tool,
+- the packaged app stays user-facing by default,
+- hidden bootstrap mode is what systemd and deployment wiring should target.
 
-- [`src/core/lib/db/state/store.js`](../../src/core/lib/db/state/store.js)
-
-v2 requirement:
-- remove AWS auto-selection
-- state backend must be explicit
+Rollback remains “switch to prior artifact and restart.”
 
 ---
 
-## Deployments (SSH + optional provisioning) + rollback
-
-### Deployment shape
-
-MVP deploy uses:
-- static SSH nodes (host/user/key)
-- Linux service manager = systemd
-- artifact copied to `/opt/wharfie/apps/<app>/releases/<artifactId>/...`
-- `current` symlink
-- systemd unit points to `current`
-
-Rollback = switch `current` to prior artifactId and restart.
-
-### Cross-platform note
-
-- Runtime + artifacts should support macOS/Windows/Linux.
-- Server deployment automation is Linux-first (systemd).
-- Non-technical UX goal: artifacts should run with sensible defaults and minimal required flags.
-
----
-
-## Multi-node scaling now vs future cluster membership
+## Multi-node scaling now vs later
 
 ### MVP scaling
 
-- Run N nodes to scale queue throughput → N independent pollers.
-- Cron runs only on leader nodes.
-- Workflows distribute actions via the queue and persist state via DB; adding nodes increases action throughput.
+The near-term multi-node model stays simple:
 
-### Future
+- more nodes = more pollers,
+- cron runs on leader nodes only,
+- workflows distribute action execution through queue + DB.
 
-- Cluster membership + leader election (cron exact-once guarantees)
-- Distributed locks for workflows (if/when required)
-- Secure inter-node gRPC (mTLS) if remote service calls are introduced
+### Later
 
----
+Only after the single-node progression is coherent should Wharfie add:
 
-## Proposed public JS API (compile-to-graph, built on today’s primitives)
+- membership,
+- leader election,
+- distributed locks when required,
+- secure inter-node RPC,
+- trusted placement,
+- later trustless mesh research.
 
-The repo already supports “define in code” through `ActorSystem` + `Function` + `Reconcilable`.
-
-v2 adds a thin layer that:
-1) makes app definition ergonomic,
-2) compiles to a normalized manifest asset,
-3) composes the existing build graph.
-
-### App + workflows DSL (proposed)
-
-```js
-// wharfie.app.js
-import {
-  defineApp,
-  actor,
-  workflow,
-  step,
-  queue,
-  cron,
-  deployment,
-} from "wharfie/app";
-
-export default defineApp({
-  name: "my-app",
-
-  targets: [
-    { nodeVersion: "24", platform: "darwin", architecture: "arm64" },
-    { nodeVersion: "24", platform: "linux", architecture: "x64" },
-    { nodeVersion: "24", platform: "win32", architecture: "x64" },
-  ],
-
-  capabilities: {
-    // built-in adapters only (MVP)
-    queue: { adapter: "vanilla", options: { path: ".wharfie" } },
-    db:    { adapter: "vanilla", options: { path: ".wharfie" } },
-  },
-
-  actors: {
-    worker: actor({ entry: "./actors/worker.js#handler" }),
-    nightly: actor({ entry: "./actors/nightly.js#handler" }),
-    fetch: actor({ entry: "./actors/fetch.js#handler" }),
-    transform: actor({ entry: "./actors/transform.js#handler" }),
-    load: actor({ entry: "./actors/load.js#handler" }),
-  },
-
-  triggers: [
-    cron("0 2 * * *", { tz: "UTC", actor: "nightly" }),
-    // Queue trigger in v2 is “poll these queue URLs”; messages self-describe the functionName.
-    // queuePoll("jobsQueueUrl") ...
-  ],
-
-  workflows: {
-    ingest: workflow({
-      steps: {
-        fetch: step({ actor: "fetch" }),
-        transform: step({ actor: "transform", dependsOn: ["fetch"] }),
-        load: step({ actor: "load", dependsOn: ["transform"] }),
-      },
-    }),
-  },
-
-  deployments: {
-    prod: deployment({
-      env: "prod",
-      nodes: [
-        { host: "1.2.3.4", user: "root", sshKey: "~/.ssh/id_ed25519", role: "leader" },
-        { host: "1.2.3.5", user: "root", sshKey: "~/.ssh/id_ed25519", role: "worker" },
-      ],
-      service: { manager: "systemd", name: "my-app" },
-    }),
-  },
-});
-```
-
-### Compilation mapping (how this fits the repo)
-
-The DSL compiles into two things:
-
-1) **Existing build graph** (what produces the SEA artifact):
-   - `Function` per actor (`src/core/resources/builds/function.js`)
-   - `ActorSystem` as the top-level build group (`src/core/resources/builds/actor-system.js`)
-   - `NodeBinary` + `SeaBuild` under the hood
-
-2) **A normalized App Manifest embedded as a SEA asset**:
-   - includes workflows + triggers + deployments
-   - read at runtime to configure pollers/scheduler/workflow behaviors
+Progressive agent applications remain the lodestar, but trusted/trustless mesh is not the near-term center of gravity.
 
 ---
 
-## Implementation checklist (mapped to concrete files)
+## What happens to `Function` and `ActorSystem`
 
-This section is intentionally “actionable”. Each checkbox should translate into a PR with obvious diffs.
+### `Function`
 
-### A) Replace YAML-era project init with v2 skeleton
+Keep it as an internal or advanced primitive for:
 
-- [ ] Update `wharfie init` to generate `wharfie.app.js` + `actors/` instead of `wharfie.yaml` + `sources/` + `models/`  
-  Files:
-  - [`src/cli/cmds/project_cmds/init.js`](../../src/cli/cmds/project_cmds/init.js)
+- activity packaging,
+- runtime invocation,
+- workflow steps,
+- resource-scoped callable units.
 
-- [ ] Update / remove YAML environment loader (v1)  
-  Files:
-  - [`src/cli/project/load-environment.js`](../../src/cli/project/load-environment.js)
+Do not make it the first primitive a CLI author has to learn.
 
-### B) App spec loader + manifest compiler (new v2 module)
+### `ActorSystem`
 
-- [ ] Create `src/cli/app/load-app.js` that:
-  - loads `wharfie.app.js` (ESM),
-  - executes it to produce an app spec,
-  - validates required fields,
-  - outputs a normalized manifest object.
+Keep it as an advanced composition/build primitive.
 
-- [ ] Add a manifest serializer:
-  - stable JSON ordering
-  - no timestamps/UUIDs in output
-  - suitable for artifactId hashing
+Do not keep it as the only supported packageable app export.
 
-### C) Embed manifest into SEA artifacts
-
-- [ ] Modify `ActorSystem` to include `manifest.json` as a SEA asset  
-  Files:
-  - [`src/core/resources/builds/actor-system.js`](../../src/core/resources/builds/actor-system.js)
-  - [`src/core/resources/builds/sea-build.js`](../../src/core/resources/builds/sea-build.js)
-
-### D) Cron runtime (UTC) — scheduler-service + leader-only
-
-- [ ] Add new service: `scheduler-service.js` (Cron UTC, skip misfires)  
-  New file:
-  - `src/core/runtime/services/scheduler-service.js`
-
-- [ ] Update node-agent to spawn scheduler-service when role is `leader` (or `all`)  
-  Files:
-  - [`src/core/runtime/services/node-agent.js`](../../src/core/runtime/services/node-agent.js)
-
-### E) Make DB capability explicit and first-class
-
-- [ ] Ensure node-agent always starts db-service and passes address to workers  
-  Files:
-  - [`src/core/runtime/services/node-agent.js`](../../src/core/runtime/services/node-agent.js)
-  - [`src/core/runtime/services/db-service.js`](../../src/core/runtime/services/db-service.js)
-
-- [ ] Remove AWS auto-selection in state store  
-  File:
-  - [`src/core/lib/db/state/store.js`](../../src/core/lib/db/state/store.js)
-
-### F) Workflow DAGs: make graph explicit (manifest + persistence + execution)
-
-- [ ] **Manifest:** allow workflows to be defined in `wharfie.app.js` and embed workflow definitions  
-  Files:
-  - new manifest compiler module (`src/cli/app*`)
-
-- [ ] **Persistence:** standardize Operations table usage (DB adapter + tableName selection)  
-  Files:
-  - [`src/core/lib/db/tables/operations.js`](../../src/core/lib/db/tables/operations.js)
-  - (optionally) a new wrapper module `src/core/lib/workflows*`
-
-- [ ] **Execution:** implement push + reconcile scheduling  
-  Option A (recommended): embed in executor-service:
-  - [`src/core/runtime/services/lambda-service.js`](../../src/core/runtime/services/lambda-service.js)
-  Option B: graph-service (new process)
-
-- [ ] **CLI:** add `op start/status/cancel` commands (optional for MVP, but should exist soon)  
-  Files:
-  - [`src/core/resources/builds/actor-system-cli/index.js`](../../src/core/resources/builds/actor-system-cli/index.js)
-
-### G) Provider neutrality: remove AWS SDK typedef imports + remove AWS auto-selection
-
-- [ ] Replace AWS SDK typedef imports in queue base with local/provider-neutral typedefs  
-  File:
-  - [`src/core/lib/queue/base.js`](../../src/core/lib/queue/base.js)
-
-- [ ] Remove `inAWS()` / `defaultAdapter()` auto-selection in capability wiring  
-  File:
-  - [`src/core/runtime/resources.js`](../../src/core/runtime/resources.js)
-
-### H) Deploy UX inside artifact
-
-- [ ] Implement `deploy/status/logs/rollback` commands in the artifact CLI  
-  Files:
-  - [`src/core/resources/builds/actor-system-cli/index.js`](../../src/core/resources/builds/actor-system-cli/index.js)
-  - [`src/core/resources/builds/actor-system-cli/infrastructure.js`](../../src/core/resources/builds/actor-system-cli/infrastructure.js)
-
-- [ ] Reuse existing SSH + systemd logic  
-  File:
-  - [`src/core/resources/node.js`](../../src/core/resources/node.js)
-
-### I) IaC queue reconcile + naming prefix enforcement
-
-- [ ] Ensure queue IaC resources derive names using `{app}-{env}-{logicalName}` unless overridden  
-  File:
-  - [`src/core/resources/aws/queue.js`](../../src/core/resources/aws/queue.js)
-
-- [ ] Implement `infra plan/apply/destroy` command surface that builds the desired-state graph from the manifest and runs reconcile.
-
-### J) Tests (adapt existing tests)
-
-- [ ] Extend existing poll tests to cover v2 message envelope + workflow context fields  
-  File:
-  - [`test/actor/runtime/lambda-service-poll.test.js`](../../test/actor/runtime/lambda-service-poll.test.js)
-
-- [ ] Add scheduler-service tests:
-  - cron evaluated in UTC
-  - misfires skipped
-  - leader-only behavior
-
-- [ ] Add workflow DAG tests:
-  - operation persists in DB
-  - ready actions are scheduled
-  - downstream actions only schedule after prerequisites complete
-  - reconcile re-enqueues missing work
+The public app contract should be broader than `ActorSystem`, and `wharfie app package` should eventually support CLI apps directly.
 
 ---
 
-## Appendix: pointers for fast navigation
+## Implementation checklist (next coherent cuts)
 
-- Graph model:  
-  [`src/core/lib/graph/index.js`](../../src/core/lib/graph/index.js)
+This checklist is intentionally aligned to the repo’s real bottlenecks.
 
-- Operations table (graph persistence):  
-  [`src/core/lib/db/tables/operations.js`](../../src/core/lib/db/tables/operations.js)
+### A) Recenter the public app contract
 
-- ActorSystem SEA composition:  
-  [`src/core/resources/builds/actor-system.js`](../../src/core/resources/builds/actor-system.js)
+- [ ] Add `cli.entrypoint` to the manifest compiler in [`src/cli/app/load-app.js`](../../src/cli/app/load-app.js)
+- [ ] Add public `activities` and compile them onto the current internal `functions` representation
+- [ ] Support public trigger references to activities while preserving internal compatibility with current `actor` fields
 
-- Function asset loading in SEA:  
-  [`src/core/resources/builds/function.js`](../../src/core/resources/builds/function.js)
+### B) Make the existing packaging lane support CLI apps
 
-- node-agent service supervisor:  
-  [`src/core/runtime/services/node-agent.js`](../../src/core/runtime/services/node-agent.js)
+- [ ] Extend [`src/cli/app/local-app.js`](../../src/cli/app/local-app.js) so `wharfie app package` supports manifest-defined CLI apps, not only `ActorSystem` exports
+- [ ] Preserve manifest embedding in the SEA artifact
+- [ ] Keep the developer CLI as the default process root for packaged artifacts
 
-- Queue poll message decode:  
-  [`src/core/runtime/services/lambda-service.js`](../../src/core/runtime/services/lambda-service.js)
+### C) Hide Wharfie internals behind bootstrap mode
 
-- Capability wiring and current AWS auto-selection:  
-  [`src/core/runtime/resources.js`](../../src/core/runtime/resources.js)
+- [ ] Introduce env-var selected bootstrap for runtime service mode
+- [ ] Generalize deployment/systemd startup away from public `ctl state start` assumptions
+- [ ] Keep `func` / `ctl` / `infra` as internal plumbing or installed-CLI behavior, not the packaged app’s public UX
 
-- State store AWS auto-selection (to remove):  
-  [`src/core/lib/db/state/store.js`](../../src/core/lib/db/state/store.js)
+### D) Add shared resource refs
 
-- v1 project init (to rewrite):  
-  [`src/cli/cmds/project_cmds/init.js`](../../src/cli/cmds/project_cmds/init.js)
+- [ ] Add config-dir backed registry support for user-scoped shared `db`, `queue`, and `objectStorage` refs
+- [ ] Resolve refs during manifest/runtime preparation without forcing app manifests to inline backend details
+
+### E) Operationalize runs
+
+- [ ] Persist activity runs on top of the existing `Operation` / `Action` substrate
+- [ ] Capture trigger provenance (`manual`, `cron`, `event`)
+- [ ] Reuse scheduler and lambda execution paths to create those runs
+
+### F) Defer the right things
+
+- [ ] Do not add a new top-level `wharfie build` command yet
+- [ ] Do not make trustless mesh part of the near-term implementation roadmap
+- [ ] Do not add `lambda` to the shared resource registry in the first cut
+
+---
+
+## Evidence from the repo
+
+- [`src/cli/app/load-app.js`](../../src/cli/app/load-app.js) already compiles plain object and `ActorSystem` exports into a manifest; this is the right place to make `cli` and `activities` public.
+- [`src/cli/app/local-app.js`](../../src/cli/app/local-app.js) is the exact packaging bottleneck: local run assumes `invoke(functionName, event, context)` and packaging still rejects non-`ActorSystem` apps.
+- [`src/core/runtime/services/scheduler-service.js`](../../src/core/runtime/services/scheduler-service.js) and [`src/core/runtime/services/lambda-service.js`](../../src/core/runtime/services/lambda-service.js) prove the runtime already wants named machine-invocable units.
+- [`src/core/runtime/services/node-agent.js`](../../src/core/runtime/services/node-agent.js) already plans services from the manifest, which is why hidden bootstrap is more urgent than inventing another runtime abstraction.
+- [`src/core/resources/builds/actor-system-cli/index.js`](../../src/core/resources/builds/actor-system-cli/index.js) shows the current artifact UX is still Wharfie-owned; v2 needs to stop making that the default for packaged CLI apps.
+- [`src/core/runtime/resources.js`](../../src/core/runtime/resources.js) and [`src/core/lib/paths.js`](../../src/core/lib/paths.js) show why config-dir backed shared refs are a clean next step for `db`, `queue`, and `objectStorage`.
+- [`src/core/lib/graph/index.js`](../../src/core/lib/graph/index.js) and [`src/core/lib/db/tables/operations.js`](../../src/core/lib/db/tables/operations.js) already provide the durable workflow/run substrate that the progressive app model should build on.
+- [`apps/wharfie-v1/wharfie.app.js`](../../apps/wharfie-v1/wharfie.app.js) proves that packaging a custom CLI into a SEA artifact already works; the missing product work is routing that through the supported `wharfie app package` path.

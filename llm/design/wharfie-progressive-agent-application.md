@@ -1,878 +1,352 @@
 # Wharfie progressive agent application
 
 **Status:** draft design note  
-**Last updated:** 2026-03-26  
+**Last updated:** 2026-03-27  
 **Audience:** maintainers refining Wharfie’s app model and packaging contract
 
 - Related design doc: [`wharfie-v2.md`](./wharfie-v2.md)
 - Repo evidence for current app loading: [`src/cli/app/load-app.js`](../../src/cli/app/load-app.js)
 - Repo evidence for current local run/package behavior: [`src/cli/app/local-app.js`](../../src/cli/app/local-app.js)
-- Current `Function` primitive: [`src/core/resources/builds/function.js`](../../src/core/resources/builds/function.js)
-- Current `ActorSystem` primitive: [`src/core/resources/builds/actor-system.js`](../../src/core/resources/builds/actor-system.js)
+- Current runtime trigger surfaces: [`src/core/runtime/services/scheduler-service.js`](../../src/core/runtime/services/scheduler-service.js) and [`src/core/runtime/services/lambda-service.js`](../../src/core/runtime/services/lambda-service.js)
+- Current node supervision: [`src/core/runtime/services/node-agent.js`](../../src/core/runtime/services/node-agent.js)
 - Current packaged artifact CLI: [`src/core/resources/builds/actor-system-cli/index.js`](../../src/core/resources/builds/actor-system-cli/index.js)
-- Current custom CLI proof case: [`apps/wharfie-v1/wharfie.app.js`](../../apps/wharfie-v1/wharfie.app.js)
+- Current runtime capability wiring: [`src/core/runtime/resources.js`](../../src/core/runtime/resources.js)
 - Current graph + operations persistence: [`src/core/lib/graph/index.js`](../../src/core/lib/graph/index.js) and [`src/core/lib/db/tables/operations.js`](../../src/core/lib/db/tables/operations.js)
-- Current scheduler service: [`src/core/runtime/services/scheduler-service.js`](../../src/core/runtime/services/scheduler-service.js)
-- Current node supervisor: [`src/core/runtime/services/node-agent.js`](../../src/core/runtime/services/node-agent.js)
-- Current SEA self-build command: [`src/cli/cmds/build_self.js`](../../src/cli/cmds/build_self.js)
-- Current SSH/SCP-backed remote node deployment path: [`src/core/resources/node.js`](../../src/core/resources/node.js)
-- Current Linux/systemd artifact deployment command: [`src/core/resources/builds/actor-system-cli/infrastructure_cmds/deploy.js`](../../src/core/resources/builds/actor-system-cli/infrastructure_cmds/deploy.js)
+- Current custom CLI proof case: [`apps/wharfie-v1/wharfie.app.js`](../../apps/wharfie-v1/wharfie.app.js)
+- Current config-dir pathing: [`src/core/lib/paths.js`](../../src/core/lib/paths.js)
 
 ---
 
 ## One sentence
 
-**A Wharfie app should fundamentally be one executable artifact per target that starts as a short-lived agentic CLI, can always burst or load-shed into cloud Linux capacity, grows into a stateful scheduled or event-triggered agent application, and only later expands into trusted or trustless mesh participation — without forcing the developer to adopt a Wharfie-owned end-user CLI surface.**
+**Wharfie should package manifest-defined applications through `wharfie app package`, preserve the developer-owned CLI by default, expose named activities for schedules/events/workflows, and hide Wharfie runtime control behind an env-selected bootstrap path. Progressive agent applications are the lodestar workload for that contract.**
 
 ---
 
 ## The question this note is answering
 
-> What is the minimum contract for a normal Node CLI to become a Wharfie executable without adopting any Wharfie-owned command surface at all?
+> What is the minimum Wharfie app model that lets a normal Node CLI grow into a scheduled, event-triggered, and later distributed agent application without forcing a rewrite?
 
 And related:
 
-- Is `Function` the right first primitive?
-- Does `ActorSystem` currently sit too low in the stack?
-- What kinds of applications actually fit the “same binary grows into a mesh” model?
+- Should Wharfie optimize for arbitrary executables?
+- Should `ActorSystem` remain the root packageable primitive?
+- How do we keep agentic apps as the product lodestar without making “agent” the first primitive every user has to learn?
 
 ---
 
-## The answer in plain English
+## The repo reality today
 
-Not quite: **today the closest primitive is `Function`, but that is not the right long-term minimum contract**.
+The current repo already contains most of the runtime ingredients needed for the progression story, but they are exposed through the wrong center of gravity.
 
-It is the closest thing because it already points at code via:
+### What the repo already supports
+
+- `loadApp()` can load either a plain object export or an `ActorSystem` export and compile a normalized manifest.
+- `scheduler-service` already runs cron triggers in UTC.
+- `lambda-service` already dispatches named units of work from queue payloads and direct invoke calls.
+- `node-agent` already plans and supervises runtime services based on the manifest.
+- the graph/operations store already persists `Operation` and `Action` state for longer-lived work.
+- `apps/wharfie-v1/wharfie.app.js` already proves Wharfie can package a custom Commander-based CLI into a SEA artifact.
+
+### What the repo still gets wrong for the product direction
+
+- `runLocalApp()` assumes `invoke(functionName, event, context)`.
+- `packageLocalApp()` still rejects anything that is not an `ActorSystem`.
+- the packaged artifact surface is still Wharfie-owned: `func`, `ctl`, and `infra`.
+- the runtime already wants named callable units, but the public app story is still split between plain manifests, `Function`, and `ActorSystem`.
+
+That means Wharfie is close to the right model, but not there yet.
+
+---
+
+## The product correction
+
+The wrong framing is:
+
+- arbitrary executable vs `ActorSystem`
+
+The right framing is:
+
+- **one app with two surfaces**
+  - a developer-owned **CLI surface** for humans
+  - a Wharfie-addressable **activity surface** for schedules, queues, workflows, and later placement
+
+That is the smooth progression model.
+
+### Why arbitrary executable is not enough
+
+A raw executable-only contract sounds flexible, but the runtime in this repo does not operationalize argv strings. It operationalizes named units of work:
+
+- scheduler triggers target an `actor`
+- lambda-service dispatches `functionName` / `actor`
+- `ops run` maps graph actions onto `app.invoke(functionName, event, context)`
+
+If Wharfie makes “arbitrary executable” the only root primitive, the first time a developer wants scheduling, queue triggers, or workflow execution they will need a second app model.
+
+### Why CLI should not be the only primitive either
+
+CLI is a user experience surface, not the runtime contract. Cron, queue polling, workflow execution, and multi-node placement should not depend on parser internals or hidden CLI subcommands.
+
+The stable machine-facing contract should be **activities**.
+
+---
+
+## The design recommendation
+
+### Public contract first
+
+The public contract should be a manifest shape, not a new public class.
+
+The next app model should be built around:
+
+- `name`
+- `cli.entrypoint`
+- `activities`
+- `resources`
+- optional `scheduler`, `workflows`, and `targets`
+
+The packaging funnel stays where it already exists:
+
+- `wharfie app manifest`
+- `wharfie app package`
+
+Wharfie does not need a new top-level `wharfie build` command for this step.
+
+### Public example
 
 ```js
-const start = new Function({
-  name: 'start',
-  entrypoint: {
-    path: path.resolve(scratchDir, 'functions', 'start.js'),
-    export: 'start',
+export default {
+  name: 'agent-tool',
+  cli: {
+    entrypoint: './src/cli.js',
   },
-});
+  activities: {
+    runOnce: {
+      entrypoint: './src/activities/run-once.js',
+      export: 'run',
+    },
+    collect: {
+      entrypoint: './src/activities/collect.js',
+      export: 'run',
+    },
+  },
+  resources: {
+    db: { ref: 'default-db' },
+    queue: { ref: 'agent-work' },
+    objectStorage: { ref: 'default-objects' },
+  },
+  scheduler: {
+    triggers: [{ activity: 'runOnce', cron: '*/15 * * * *' }],
+  },
+  targets: [{ nodeVersion: '24', platform: 'linux', architecture: 'x64' }],
+};
 ```
 
-But that is still modeling a **callable handler symbol**, not a **normal executable program entrypoint**.
+### Internal compilation mapping
 
-For a normal Node CLI, the minimum contract should be smaller and less opinionated:
+The public term should be **activities**.
 
-- where the executable starts
-- what the executable is called
-- which targets to build
-- optionally, which progressive runtime capabilities it opts into
+The internal implementation can keep reusing the current runtime plumbing at first:
 
-That means the first-class root primitive should probably be **`Executable`** or **`Program`**, not `Function` and not `ActorSystem`.
+- `activities` compile onto the existing `manifest.functions` shape
+- scheduler triggers can compile from public `activity` to current internal `actor`
+- queue envelopes can continue to map onto current `functionName` / `actor` compatibility paths
 
-`Function` can remain valuable, but as an **optional advanced primitive** for actor invocation, workflows, graph execution, and RPC-style callable units.
-
-For progressive agent apps, Wharfie should also make one portability promise explicit: the executable should not be trapped on the developer’s host platform. It should be easy to emit Linux artifacts directly, ideally `linux/x64` and `linux/arm64`, or to ship code to a remote Linux builder/host and build there.
+That keeps the user-facing model cleaner without forcing a full runtime rewrite before the packaging gap is closed.
 
 ---
 
-## Repo reality today
+## The smooth progression model
 
-### What works already
+Wharfie should optimize for the following progression.
 
-The current repo already supports a surprising amount of this story:
+### Stage 0 — developer-owned CLI
 
-- `loadApp()` can load a plain object export or an `ActorSystem` export and compile a manifest from it.
-- `Function` already provides a way to point Wharfie at code and invoke it in-process or from a packaged bundle.
-- SEA packaging is real and already produces a single artifact per target.
-- the runtime already has scheduling, services, persisted operation DAGs, and node-agent groundwork.
-- `apps/wharfie-v1/wharfie.app.js` proves Wharfie can package a custom CLI into a single binary.
-- the current self-build path already models multi-target SEA output across `darwin`/`linux`/`win32` and `arm64`/`x64`.
-- the current node/deploy path already knows how to upload artifacts over SSH/SCP and install them as Linux/systemd-managed services.
+The app is primarily a CLI.
 
-### What needs to become an explicit product promise
+It should:
 
-A Wharfie executable should not be trapped on the developer’s workstation.
+- preserve normal `process.argv`
+- preserve stdio and exit codes
+- work with any CLI library
+- package through `wharfie app package`
+- remain useful as a standalone tool
 
-If a developer builds or tests an app on macOS or Windows, the artifact story should still make it easy to shift work onto remote Linux capacity when the local machine is saturated, offline, or simply the wrong place for the workload to live.
+### Stage 1 — scheduled or event-triggered single-node app
 
-That means Wharfie should treat **cloud burstability** as a default expectation for executable artifacts:
+The same app should add:
 
-- either include Linux deploy targets in the release matrix, ideally both `linux/x64` and `linux/arm64`
-- or provide a first-class remote Linux build-and-ship flow that can copy sources or artifacts over SSH/SCP to an EC2-style host and build there
+- cron-triggered activity execution
+- queue-triggered activity execution
+- persisted run records
+- background runtime services on one trusted node
 
-This is not yet “mesh.” It is just a practical single-node portability promise: the same executable can move from laptop to cloud without being redesigned.
+This is where “progressive agent application” becomes a real product use case instead of a slogan.
 
-The current repo already points in this direction:
+### Stage 2 — workflow-backed activity runs
 
-- `build-self` already models cross-target SEA builds across `darwin`/`linux`/`win32` and `arm64`/`x64`
-- `apps/wharfie-v1/wharfie.app.js` already declares a multi-target release matrix
-- `Node` already knows how to upload a binary over SSH/SCP and install a Linux/systemd service
-- the packaged artifact deploy command is already Linux/systemd-first
+The same app should add:
 
-### What is still too opinionated
+- operation graphs
+- action-level persistence
+- resumable multi-step work
+- inspectable run history
 
-There are three places where the current framework still collapses toward a more opinionated function-host model:
+The repo already has most of the substrate for this in the graph and operations store.
 
-1. **`Function` is the smallest current code primitive**  
-   It assumes a named callable unit, optional exported symbol, and `event/context` invocation semantics.
+### Stage 3 — trusted multi-node placement
 
-2. **local run assumes `invoke(functionName, event, context)`**  
-   `src/cli/app/local-app.js` treats “runnable app” as something exposing `invoke(...)`.
-
-3. **packaging only supports `ActorSystem` exports**  
-   `packageLocalApp()` explicitly rejects anything that is not an `ActorSystem`.
-
-So the current truth is:
-
-- **yes**, Wharfie can already point at code
-- **no**, a normal Node CLI is not yet a first-class minimal Wharfie app
-- **no**, `Function` by itself is not enough to “become a Wharfie executable” through the supported packaging path
-
-That last point matters. Right now, a developer who wants a custom CLI executable either:
-
-- wraps things in `ActorSystem`, or
-- writes a bespoke build driver like `apps/wharfie-v1/wharfie.app.js`
-
-That is a useful proof case, but not yet the desired product contract.
-
----
-
-## Why `Function` is close, but not the right first primitive
-
-`Function` is not wrong. It is just a level too high and too specific for step 1.
-
-### What `Function` is good at
-
-`Function` is a good primitive when Wharfie is doing any of the following:
-
-- invoking a named handler
-- routing work through a scheduler or queue
-- representing a node in a workflow graph
-- packaging a callable unit with resource metadata
-- exposing a consistent `event/context` invocation model
-
-That makes it a strong primitive for **actors**, **workflows**, and **internal callable units**.
-
-### Why it is confusing as the first thing a user meets
-
-For a developer trying to package a normal CLI, `Function` is awkward because:
-
-- the name collides with the JavaScript built-in `Function`
-- it implies serverless/handler semantics rather than “this is my program”
-- it pushes users toward `event/context` mental models too early
-- it requires `export` selection when a normal CLI often just needs module execution
-- it nudges Wharfie toward a function-host identity instead of an executable-first identity
-
-### Recommendation on naming
-
-- Keep `Function` as an internal/advanced primitive for actor and workflow composition.
-- Do **not** make `Function` the public foundational primitive for the first “package my Node CLI” step.
-- Introduce a lower-level primitive such as:
-  - `Executable`
-  - `Program`
-  - `Entry`
-
-Of those, **`Executable`** is the clearest user-facing name.
-
----
-
-## The minimum contract
-
-A normal Node CLI should be able to become a Wharfie executable with this minimum contract:
-
-### Required
-
-1. **app identity**
-   - `name`
-   - default source: `package.json.name`
-
-2. **entrypoint**
-   - path to the module that should become the process root
-   - for a CLI, this should usually mean **module execution**, not “call export X with event/context”
-
-3. **target set**
-   - one or more target triples
-   - if omitted, the current host target is a reasonable default for the baby-step path
-
-### Optional
-
-4. **packaging metadata**
-   - external dependencies
-   - assets
-   - environment variables
-
-5. **runtime capabilities**
-   - local state
-   - scheduler
-   - graph execution
-   - services/resources
-
-6. **agent capabilities**
-   - single-node service mode
-   - trusted mesh participation
-   - trustless mesh participation
-
-7. **cloud burst policy**
-   - explicit Linux deployment targets, ideally `linux/x64` and `linux/arm64`
-   - or a remote Linux build-and-ship profile for developers working from macOS or Windows
-
-The formal minimum contract can stay small, but Wharfie should still strongly steer every executable toward a Linux cloud path. Otherwise “same artifact can grow up” breaks the moment the workload needs to leave the laptop.
-
-### Explicitly not required for step 1
-
-A developer should **not** need any of the following just to package a CLI:
-
-- `ActorSystem`
-- `Function`
-- `invoke(functionName, event, context)`
-- workflows
-- queues
-- databases
-- a Wharfie-owned command tree inside the artifact
-
----
-
-## The atomic unit should be an agent run
-
-For the next product cut, Wharfie should optimize for the lifecycle of a single **agent run**, not a resident node.
-
-A run is the smallest end-to-end unit of useful agent work:
-
-1. fetch or derive context
-2. build the prompt or model request
-3. submit inference
-4. optionally block for the response
-5. render, persist, or forward the result
-6. exit with a normal process status
-
-That flow is still just a normal executable. It fits the developer-owned CLI story on day one, it can move from a workstation onto Linux cloud capacity without changing app identity, and it maps cleanly onto the repo’s existing `Operation`/`Action` persistence model once Wharfie starts operationalizing the same flow.
-
-This framing also gives Wharfie a much cleaner progression story:
-
-- a **run** is one unit of agent work
-- a **schedule** creates runs automatically
-- an **event trigger** creates runs from external stimuli
-- a **service** keeps the executable warm so it can launch runs continuously
-- a **mesh** is only a later placement and coordination strategy for runs
-
-That is the priority correction this design note needed: **mesh is not the first proof point**. The first proof point is that Wharfie can help developers build and operationalize useful one-shot agent runs.
-
----
-
-## The right progression model
-
-The product concept here is not “app framework with optional deployment.”
-
-The better model is:
-
-### Progressive agent application
-
-A **progressive agent application** is a single executable artifact per target whose operational envelope expands in stages.
-
-### Stage 0 — short-lived agentic CLI
-
-The binary:
-
-- runs locally
-- owns its own CLI UX
-- fetches or builds context
-- submits inference
-- can block and wait for a response
-- exits normally
-- can be rebuilt or shipped onto remote Linux capacity without redesigning the app
-
-Wharfie provides only:
-
-- packaging
-- artifact metadata
-- target builds
-- optional remote build/ship helpers for Linux cloud capacity
-- optional local dev helpers
-- a tiny executable app contract
-
-### Stage 1 — operationalized single-node agent
-
-The same binary can also:
-
-- persist run history and local state
-- collect, catalog, archive, and re-use context data
-- schedule recurring runs
-- supervise lightweight background collection jobs
-- expose inspectable run records
-
-Wharfie adds:
-
-- state store
-- operations/run persistence
-- scheduler
-- context catalog primitives
-- deployment helpers for a resident single-node process
-
-### Stage 2 — event-triggered / agent-triggered application
-
-The same binary can also:
-
-- respond to queues, webhooks, file changes, or other event sources
-- accept work from other agents or orchestrators
-- apply idempotency and dedup rules to incoming runs
-- preserve provenance for who or what triggered a run
-- keep the developer’s public CLI separate from Wharfie’s operational plumbing
-
-Wharfie adds:
-
-- trigger normalization
-- ingress/auth hooks
-- run envelopes and provenance metadata
-- concurrency / dedup controls
-- internal control-plane plumbing
-
-### Stage 3 — trusted multi-node mesh
-
-Only after stages 0-2 are solid should the same binary also:
-
-- discover peers
-- advertise capabilities
-- assign or rebalance work
-- recover from node loss
-- replicate or redistribute selected state
-
-Wharfie then adds:
+Only after the single-node path is coherent should Wharfie add:
 
 - membership
 - health
-- routing
 - placement
 - work handoff
 - upgrade/version skew rules
 
 ### Stage 4 — trustless mesh
 
-Only after trusted mesh is proven should the same binary also:
+This is separate from the near-term product roadmap.
 
-- operate across partially trusted or untrusted peers
-- validate peer identity
-- sign protocol messages
-- protect against abuse and replay
-- tolerate hostile network conditions
-
-Wharfie then adds:
-
-- identity
-- trust bootstrap
-- authorization policy
-- signed protocols
-- reputation/quarantine or similar safety mechanics
-
-The key idea is that **these are modes of the same artifact**, but the delivery order matters: short-lived runs first, cloud burstability as a baseline, operationalization second, evented flows third, mesh later.
+Treat it as a later research and security program, not as the first justification for the app model.
 
 ---
 
-## The interface should be mode-based, not framework-command-based
+## Hidden Wharfie bootstrap
 
-If the goal is “no Wharfie-owned command surface in the artifact,” then Wharfie should avoid shipping artifacts that are primarily entered through framework commands like `func`, `ctl`, or `infra`.
+Executable artifacts should hide Wharfie internals by default.
 
-Instead:
+That means:
 
-- the user-facing CLI belongs to the developer
-- the executable’s default behavior stays user-owned
-- Wharfie-specific lifecycle behavior is selected through **mode** or **environment**, not by taking over the visible CLI surface
+- normal execution enters the developer-owned CLI
+- Wharfie lifecycle control is selected by **environment**, not by a public framework command tree
+- the installed `wharfie` CLI can remain the authoring and operator tool
+- packaged executable artifacts should not expose `func`, `ctl`, or `infra` as the public help surface
 
-That means the important interface is not:
+The concrete near-term choice is:
 
-- “what commands does this Wharfie app expose?”
+- **env-var selected bootstrap mode**
 
-It is:
-
-- “what process lifecycle can this executable participate in?”
-- “what kinds of triggers can create new runs?”
-
-### Two axes matter more than one mode list
-
-#### Process lifecycle
-
-- `exec` — run once and exit
-- `service` — stay resident on one trusted node
-- `mesh` — join a trusted mesh
-- `mesh-trustless` — join a trustless mesh
-
-#### Run activation
-
-- `manual` — user or script starts a run directly
-- `schedule` — cron or interval creates runs automatically
-- `event` — external events create runs
-- `agent` — another agent or orchestrator creates runs
-
-For the next roadmap cut, Wharfie should prioritize these combinations in order:
-
-1. `exec + manual`
-2. `exec/service + schedule`
-3. `service + event/agent`
-4. `mesh + schedule/event/agent`
-
-These do **not** need to be end-user commands. They can be runtime launch modes or trigger sources selected by:
-
-- config
-- environment variables
-- deployment profile
-- internal bootstrap flags
-- an external Wharfie management tool
-
-That keeps the developer’s CLI intact while giving Wharfie a real operational model behind the scenes.
+That keeps help output clean and works naturally with Linux/systemd deployment.
 
 ---
 
-## What the minimum UX should probably look like
+## Shared resources should be user-scoped references
 
-There should be two onboarding paths.
+Wharfie should support persistent resources that several Wharfie apps owned by the same user can share.
 
-### Path A — zero-code packaging path
+The first cut should be limited to the resource types the repo already models cleanly:
 
-A normal Node CLI should be buildable directly from its entrypoint without first writing a Wharfie app object.
+- `db`
+- `queue`
+- `objectStorage`
 
-Example direction:
+Those shared references should live in a **config-dir backed registry**, not in the app manifest itself.
 
-```bash
-wharfie build --entrypoint ./src/cli.js --name my-tool
-```
-
-Or, even lower friction:
-
-```bash
-wharfie build
-```
-
-with resolution order:
-
-1. explicit `--entrypoint`
-2. `package.json.bin`
-3. `package.json.main`
-
-This is the fastest baby step.
-
-For progressive agent apps, this path should also make it easy to emit Linux artifacts or push sources/artifacts to a remote Linux builder or host.
-
-### Path B — tiny manifest path
-
-When users want reproducible targets and optional capabilities, they can add a very small `wharfie.app.js`.
-
-Example:
+The app manifest should only name the reference:
 
 ```js
-export default {
-  name: 'my-tool',
-  executable: {
-    entrypoint: './src/cli.js',
-  },
-  targets: [
-    { nodeVersion: '24', platform: 'linux', architecture: 'x64' },
-    { nodeVersion: '24', platform: 'linux', architecture: 'arm64' },
-  ],
-};
+resources: {
+  db: { ref: 'default-db' },
+  queue: { ref: 'agent-work' },
+  objectStorage: { ref: 'default-objects' },
+}
 ```
 
-That should be enough to:
-
-- inspect the manifest
-- package a single executable per target
-- embed metadata into the artifact
-- leave the user’s CLI completely untouched
-
-No `Function`. No `ActorSystem`. No framework-owned command surface.
-
-For agentic apps, Wharfie should strongly encourage at least one Linux deployment target even when the developer primarily works on macOS or Windows. If local cross-target packaging is not reliable enough, Wharfie should provide a first-class remote Linux build-and-ship path instead of leaving that step to ad hoc shell scripts.
+`lambda` should not be part of this shared resource registry in the first cut. In the current repo, lambda behaves as an execution service inferred from runnable functions, not as a durable user-owned capability.
 
 ---
 
-## What should happen to `ActorSystem`
+## What should happen to `Function` and `ActorSystem`
 
-`ActorSystem` should move **up** the stack.
+### `Function`
 
-Today it acts like the main packageable unit. That feels too opinionated for the product direction emerging here.
+`Function` remains a useful internal or advanced primitive for:
 
-### Proposed role change
+- callable units
+- workflow nodes
+- runtime composition
+- packaging activity code and resource metadata
 
-`ActorSystem` should become an **optional advanced runtime layer** built on top of the lower-level executable primitive.
+But it should not be the first primitive a user meets when they want to package a CLI.
 
-In that model:
+### `ActorSystem`
 
-- `Executable` is the default packaging unit
-- `ActorSystem` is one higher-level composition model
-- workflows/graphs are optional
-- resource-backed actor invocation is optional
-- deployment and mesh features can exist without forcing every app into a function catalog
+`ActorSystem` should move up the stack.
 
-### Practical implication
+It remains useful for:
 
-`packageLocalApp()` should eventually package any valid executable app, not only `ActorSystem` instances.
+- advanced composition
+- richer runtime packaging
+- internal build graph grouping
+- legacy/current compatibility
 
-That is probably the most important implementation change implied by this note.
+But it should stop being the only supported packageable app export.
 
----
-
-## What should happen to the current artifact CLI
-
-The current packaged artifact path is still centered around Wharfie-owned internal CLI commands.
-
-That is useful infrastructure, but it is the wrong default if the product is trying to be:
-
-- executable-first
-- user-CLI-preserving
-- viral/progressive
-
-### Recommendation
-
-Wharfie operational control should move toward one of these patterns:
-
-1. **out-of-band management**
-   - the installed `wharfie` CLI manages artifacts and running nodes externally
-
-2. **internal control plane, not user surface**
-   - a local socket / localhost RPC / control endpoint reserved for Wharfie internals
-
-3. **reserved hidden bootstrap flags**
-   - only for launching service/mesh modes, not as part of the app’s public UX
-
-The important rule is:
-
-**Wharfie can own operational plumbing without owning the application’s end-user command surface.**
+The public packaging contract should be broader than `ActorSystem`.
 
 ---
 
-## What kinds of applications fit this model best
+## The atomic unit should be a run, with agent runs as the lodestar
 
-The best fit is not “all apps.”
+The repo does not yet have a first-class prompt/provider/model runtime. It does have:
 
-The strongest fit is:
+- executable packaging
+- named callable units
+- cron scheduling
+- queue dispatch
+- node supervision
+- persisted `Operation` / `Action` state
 
-**portable tools that are useful alone, more useful when resident, and even more useful when many copies cooperate.**
+So the next operational abstraction should be a **run**.
 
-### Strong fits
+For this design, **agent runs are the lodestar use case**, but the contract should stay more general than any single prompt/inference provider model.
 
-- sync / backup / replication tools
-- automation agents
-- crawlers / collectors / indexers
-- build, test, or execution workers
-- local-first collaboration backends
-- edge cache / mirror / distribution tools
-- log / event / telemetry collectors
-- developer tools that can later become shared infrastructure
+A run is:
 
-### Weak fits
+1. one invocation of an activity or workflow
+2. created manually, by cron, or by an event source
+3. persisted when Wharfie operationalizes it
+4. inspectable through Wharfie tooling
 
-- plain CRUD web apps whose center of gravity is a central database
-- systems requiring heavy, globally consistent transactions from day one
-- purely UI-first products where the executable is secondary
-- apps that never benefit from residency or peer cooperation
+That gives Wharfie a real “no rewrite” story:
 
-This matters because the product promise should match the kinds of software that actually get better as they move from:
-
-- local
-- to resident
-- to mesh
+- CLI commands call activities
+- schedules call the same activities
+- queue messages call the same activities
+- workflow actions call the same activities
+- later placement routes the same activities
 
 ---
 
-## Stress tests for this direction
+## Immediate near-term cuts implied by this note
 
-### Stress test 1 — can a normal CLI stay totally normal?
+1. Add `cli.entrypoint` to the manifest contract.
+2. Add public `activities` and compile them onto the existing function/runtime plumbing.
+3. Make `wharfie app package` support CLI apps, not only `ActorSystem` exports.
+4. Hide Wharfie runtime control behind an env-selected bootstrap path.
+5. Generalize Linux/systemd deploy so executable artifacts do not need a public `ctl state start` surface.
+6. Add config-dir backed shared resource refs for `db`, `queue`, and `objectStorage`.
+7. Persist activity runs on top of the existing `Operation` / `Action` substrate.
 
-It should.
+### Explicit non-goals for the next implementation cycle
 
-A Wharfie executable should be able to preserve:
-
-- normal `process.argv`
-- normal stdio
-- normal exit codes
-- whatever CLI library the developer wants
-
-If Wharfie requires wrapping the whole app in framework-specific subcommands, the design is too opinionated.
-
-### Stress test 2 — can service/mesh behavior be added without rewriting the app model?
-
-It should.
-
-The same artifact should be able to gain:
-
-- local state
-- scheduler
-- internal services
-- peer membership
-
-without the developer having to throw away the original CLI shape.
-
-### Stress test 3 — does the developer need to think in “handlers” too early?
-
-They should not.
-
-If the first baby step requires `event/context`, named handlers, or workflow nodes, Wharfie is introducing advanced runtime abstractions too early.
-
-### Stress test 4 — can Wharfie still support workflows and graph execution?
-
-Yes, as an optional layer.
-
-This direction does **not** reject functions, actors, workflows, services, or resources. It just says those should be optional capabilities layered on top of an executable-first base.
-
-### Stress test 5 — does the mesh story get ahead of itself?
-
-This is the biggest risk.
-
-“Many trusted nodes” and “many trustless nodes” are radically different problems.
-
-Wharfie should treat these as separate maturity levels:
-
-1. local self-supervision
-2. trusted clustered nodes
-3. trustless p2p mesh
-
-If those are blurred together, the design will overpromise.
-
-### Stress test 6 — can a macOS/Windows-developed app shed work onto Linux cloud capacity?
-
-It should.
-
-A developer should not have to redesign the application just because it needs to move from a laptop onto an EC2-style Linux host. Wharfie should either emit Linux artifacts alongside the local target, or provide a first-class remote build-and-ship path over SSH/SCP.
-
-If that path is missing, the “progressive” story breaks too early.
+- a new top-level `wharfie build` command
+- a public artifact command tree built around `func`, `ctl`, or `infra`
+- arbitrary mesh design as the near-term product center of gravity
+- trustless networking or reputation systems
+- `lambda` as a shared resource registry entry
 
 ---
 
-## Recommended terminology
-
-### Good design umbrella term
-
-**Progressive agent application** is a good design phrase.
-
-It captures:
-
-- same artifact
-- staged growth
-- local-to-mesh progression
-- agent-like behavior when always-on or networked
-
-### Good API-level terms
-
-Use shorter, more mechanical names in code:
-
-- `Executable` for the base packageable primitive
-- `Agent` or `AgentRuntime` for service/mesh capabilities
-- keep `Function` only for callable units inside higher-level actor/workflow systems
-
-### Terms to avoid as the first concept users meet
-
-- `Function` as the root packaging primitive
-- `ActorSystem` as the default app identity
-- “serverless” as the central framing
-
-Those terms are still useful internally, but they are not the cleanest starting point for the product direction described here.
-
----
-
-## Concrete product recommendation
-
-Wharfie should define its app model in four layers.
-
-### Layer 1 — executable
-
-The smallest buildable unit.
-
-Needs only:
-
-- `name`
-- `entrypoint`
-- `targets`
-
-In practice, the default release story should strongly prefer at least one Linux deploy target or a remote Linux build-and-ship path so the executable can burst into cloud capacity later.
-
-This is the baby step for a normal Node CLI.
-
-### Layer 2 — agent run
-
-Optional but near-term application semantics for the same executable.
-
-Adds:
-
-- context acquisition or derivation
-- prompt/request construction
-- inference submission
-- blocking or streaming response handling
-- a normalized run record shape
-
-This is the actual first wedge for agentic application development.
-
-### Layer 3 — operational agent runtime
-
-Optional runtime behaviors for the same executable.
-
-Adds:
-
-- local state
-- context cataloging and archival
-- run persistence
-- scheduling
-- event/agent triggers
-- self-supervision and deployment/runtime bootstrap
-
-### Layer 4 — distributed agent
-
-Optional networked behaviors for the same executable.
-
-Adds:
-
-- trusted mesh
-- later trustless mesh
-- routing, membership, placement, healing
-- work and state distribution
-
-### Optional composition layers above that
-
-Built on top, not beneath:
-
-- `Function`
-- `ActorSystem`
-- graph/workflow execution
-- persistent services/resources
-- deploy/status/logs/rollback tooling
-
-That stack feels aligned with the repo’s deeper direction while keeping the first-user experience much simpler and much more obviously useful for agentic application development.
-
----
-
-## Immediate design conclusion
-
-If the question is:
-
-> What is the minimum contract for a normal Node CLI to become a Wharfie executable without adopting any Wharfie-owned command surface at all?
-
-Then the answer should be:
-
-**A name, an executable entrypoint, and a target set — with Wharfie strongly steering every app toward a Linux cloud path, and with `Function` and `ActorSystem` moved up into optional advanced layers rather than being the first thing every app must become.**
-
-And if the question is:
-
-> Is `Function` the right term or primitive for the first step?
-
-Then the answer is:
-
-**It is useful, but not as the first primitive.** It models a callable handler, not a whole executable program.
-
-And if the question is:
-
-> What product concept are we circling around?
-
-Then the answer is:
-
-**Wharfie as a framework for progressive agent applications: single executables that start as useful agent runs, can spill or load-shed into cloud Linux capacity, then become persistent scheduled or event-triggered agent systems, and only later become self-healing networked applications.**
-
----
-
-## Prioritized future work
-
-### Milestone 1 — short-lived agentic executable
-
-Ship a plain CLI packaging story that supports one-shot runs first.
-
-Wharfie work:
-
-1. **Add a lower-level executable app shape**
-   - support `executable.entrypoint` in `wharfie.app.js`
-   - package it without requiring `ActorSystem`
-
-2. **Add a zero-code build path**
-   - let `wharfie build` target a normal Node CLI entrypoint directly
-   - infer from `package.json.bin` when possible
-
-3. **Make Linux burst targets a first-class default**
-   - strongly encourage `linux/x64` and `linux/arm64` in release target matrices
-   - make “can this artifact move to cloud Linux?” a default design check
-
-4. **Add a remote Linux build-and-ship path**
-   - support shipping sources or packaged artifacts from macOS/Windows/Linux onto an EC2-style host over SSH/SCP
-   - allow Wharfie to build there when local cross-target packaging is insufficient
-   - reuse the repo’s existing Linux/systemd deployment direction where possible
-
-5. **Define a minimal agent run contract**
-   - treat “context → prompt/request → inference → output” as a first-class design pattern
-   - keep model/provider specifics outside the root app primitive
-
-6. **Preserve the developer’s CLI surface**
-   - do not inject Wharfie-owned public commands into every artifact by default
-
-Explicit non-goals for this milestone:
-
-- background daemons
-- scheduling
-- event ingress
-- mesh participation
-
-### Milestone 2 — operationalized runs
-
-Take the same executable and make repeated runs inspectable, durable, and schedulable.
-
-Wharfie work:
-
-1. **Persist run records using the existing operations/graph substrate**
-   - map agent runs onto `Operation`/`Action` records where it helps
-   - capture trigger metadata, status, outputs, and references to archived context
-
-2. **Add context cataloging and archival primitives**
-   - support active collection jobs
-   - store snapshots/artifacts that later runs can reference
-   - make retention and rehydration explicit
-
-3. **Operationalize scheduling**
-   - use the existing scheduler service as the first trigger engine
-   - schedule runs, not bespoke long-lived handlers
-
-4. **Treat `ActorSystem` as optional**
-   - keep it for function catalogs, workflows, and runtime composition
-   - stop treating it as the root packaging contract
-
-Explicit non-goals for this milestone:
-
-- peer discovery
-- distributed placement
-- trustless protocols
-
-### Milestone 3 — event-triggered and agent-triggered runs
-
-Support agents invoking agents and event-driven execution without changing the artifact identity.
-
-Wharfie work:
-
-1. **Define trigger ingress contracts**
-   - queue, webhook, file, or other event sources should all create normalized runs
-
-2. **Define agent-to-agent invocation envelopes**
-   - preserve provenance, auth hooks, and structured payloads
-
-3. **Add idempotency and concurrency controls**
-   - dedup runs
-   - limit fan-out
-   - guard against replay or overlapping execution
-
-4. **Use resident service mode only as needed**
-   - keep service residency in service of evented runs
-   - do not let “daemon mode” become the whole product story
-
-### Milestone 4 — trusted mesh
-
-Only after the first three milestones are solid should Wharfie invest in distributed placement for runs.
-
-Wharfie work:
-
-- membership
-- health
-- routing
-- placement
-- work handoff
-- version-skew management
-
-### Milestone 5 — trustless mesh
-
-Treat this as a separate research and security program, not a near-term product milestone.
-
-Wharfie work:
-
-- identity bootstrap
-- signed protocols
-- authorization policy
-- abuse resistance
-- quarantine/reputation mechanics
-
-That sequence preserves the current repo’s strengths while finally putting the near-term product energy where the repo is most likely to win: short-lived agentic executables first, cloud-burstable packaging as part of the foundation, operationalized agent runtimes second, evented flows third, distributed mesh much later.
+## Evidence from the repo
+
+- [`src/cli/app/load-app.js`](../../src/cli/app/load-app.js) already normalizes plain object exports and `ActorSystem` exports into a manifest. That is the right place to add `cli.entrypoint`, `activities`, and resource refs.
+- [`src/cli/app/local-app.js`](../../src/cli/app/local-app.js) shows the current product cliff directly: local execution assumes `invoke(functionName, event, context)` and packaging still rejects non-`ActorSystem` apps.
+- [`src/core/runtime/services/scheduler-service.js`](../../src/core/runtime/services/scheduler-service.js) shows cron triggers are already real, UTC-based, and target a named unit of work.
+- [`src/core/runtime/services/lambda-service.js`](../../src/core/runtime/services/lambda-service.js) already accepts both legacy `functionName` envelopes and a v2-style `actor` envelope, which is exactly the kind of compatibility bridge this direction needs.
+- [`src/core/runtime/services/node-agent.js`](../../src/core/runtime/services/node-agent.js) already turns manifest content into a service plan. That is why hidden bootstrap and deploy generalization matter more than inventing another app abstraction.
+- [`src/core/resources/builds/actor-system-cli/index.js`](../../src/core/resources/builds/actor-system-cli/index.js) shows the current packaged artifact surface is still Wharfie-owned (`func`, `infra`, `ctl`). That is the main UX coupling this design is trying to remove for CLI apps.
+- [`src/core/runtime/resources.js`](../../src/core/runtime/resources.js) and [`src/core/lib/paths.js`](../../src/core/lib/paths.js) show why shared resource refs should start with `db`, `queue`, and `objectStorage`, and why a config-dir registry is the cleanest first backing store.
+- [`src/core/lib/graph/index.js`](../../src/core/lib/graph/index.js) and [`src/core/lib/db/tables/operations.js`](../../src/core/lib/db/tables/operations.js) already provide the substrate for persisted activity runs and longer-lived workflow state.
+- [`apps/wharfie-v1/wharfie.app.js`](../../apps/wharfie-v1/wharfie.app.js) is the strongest proof that Wharfie can already package a custom CLI without taking over `process.argv`; the missing work is productizing that path through `wharfie app package`.
