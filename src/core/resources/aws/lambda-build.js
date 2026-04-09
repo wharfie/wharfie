@@ -1,35 +1,18 @@
-import { resolve, dirname } from 'path';
-import { createHash } from 'crypto';
-import JSZip from 'jszip';
+import { createHash } from 'node:crypto';
+import { dirname } from 'node:path';
+
 import { NotFound } from '@aws-sdk/client-s3';
 import { build as __build } from 'esbuild';
-import { getAsset, isSea } from '../../lib/node-sea.js';
+import JSZip from 'jszip';
+
 import S3 from '../../lib/aws/s3.js';
 import BaseResource from '../base-resource.js';
 
-const __dirname = import.meta.dirname;
-// Statically import all known handlers
-/**
- * @type {Object<string,string>}
- */
-const HANDLERS = {
-  '<WHARFIE_BUILT_IN>/daemon.handler': isSea()
-    ? getAsset('<WHARFIE_BUILT_IN>/daemon.handler', 'utf8')
-    : resolve(__dirname, '../../../../lambdas/daemon.handler'),
-  '<WHARFIE_BUILT_IN>/cleanup.handler': isSea()
-    ? getAsset('<WHARFIE_BUILT_IN>/cleanup.handler', 'utf8')
-    : resolve(__dirname, '../../../../lambdas/cleanup.handler'),
-  '<WHARFIE_BUILT_IN>/events.handler': isSea()
-    ? getAsset('<WHARFIE_BUILT_IN>/events.handler', 'utf8')
-    : resolve(__dirname, '../../../../lambdas/events.handler'),
-  '<WHARFIE_BUILT_IN>/monitor.handler': isSea()
-    ? getAsset('<WHARFIE_BUILT_IN>/monitor.handler', 'utf8')
-    : resolve(__dirname, '../../../../lambdas/monitor.handler'),
-};
+const LEGACY_BUILT_IN_HANDLER_PREFIX = '<WHARFIE_BUILT_IN>/';
 
 /**
  * @typedef LambdaBuildProperties
- * @property {string | function(): string} handler - handler.
+ * @property {string | function(): string} handler - Explicit handler module path in `<path>.<export>` form.
  * @property {string | function(): string} artifactBucket - artifactBucket.
  */
 
@@ -52,17 +35,17 @@ class LambdaBuild extends BaseResource {
   }
 
   async _reconcile() {
-    if (!this.get('handler')) throw new Error('No handler defined');
-    if (!this.get('handler').split('.').pop())
-      throw new Error('No handler method defined');
+    const handler = this.get('handler');
 
-    // Lookup and set the handler based on metadata
-    const resolvedHandlerKey = this.get('handler');
-    const builtInHandler = HANDLERS[resolvedHandlerKey];
+    if (!handler) throw new Error('No handler defined');
+    if (handler.startsWith(LEGACY_BUILT_IN_HANDLER_PREFIX)) {
+      throw new Error(
+        `LambdaBuild no longer supports legacy built-in handler aliases like "${handler}". Pass an explicit handler module path instead.`,
+      );
+    }
+    if (!handler.split('.').pop()) throw new Error('No handler method defined');
 
-    const build = isSea()
-      ? builtInHandler
-      : await this._build(builtInHandler || resolvedHandlerKey);
+    const build = await this._build(handler);
 
     // The bundled code is available in `result.outputFiles`
     const functionCodeHash = createHash('sha256').update(build).digest('hex');
