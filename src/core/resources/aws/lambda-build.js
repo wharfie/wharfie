@@ -124,16 +124,18 @@ class LambdaBuild extends BaseResource {
       },
       bundle: true,
       minify: true,
-      keepNames: true,
-      sourcemap: 'inline',
       platform: 'node',
-      target: 'node22',
-      write: false, // Prevent writing to disk
+      target: ['node14'],
+      format: 'cjs',
+      write: false,
     });
+
+    if (!result.outputFiles || !result.outputFiles.length) {
+      throw new Error('Failed to build Lambda handler bundle');
+    }
+
     return result.outputFiles[0].text;
   }
-
-  async _destroy() {}
 }
 
 export default LambdaBuild;

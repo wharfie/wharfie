@@ -19,6 +19,40 @@ import {
   displaySuccess,
 } from '../../src/cli/output/basic.js';
 
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * @param {string} rootDir - rootDir
+ * @returns {boolean} - Whether the directory contains the Wharfie sources required by this build app.
+ */
+function hasWharfieSources(rootDir) {
+  return (
+    fs.existsSync(path.join(rootDir, 'src', 'cli', 'entry.js')) &&
+    fs.existsSync(
+      path.join(rootDir, 'src', 'cli', 'project', 'project_structure_examples'),
+    )
+  );
+}
+
+/**
+ * Prefer the current workspace when building from the repo, but fall back to
+ * the installed package location when invoked from a normal project.
+ *
+ * @param {string} [startDir] - startDir
+ * @returns {string} - Wharfie source root.
+ */
+function resolveSourceRoot(startDir = process.cwd()) {
+  const workspaceRoot = findRepoRoot(startDir);
+  if (hasWharfieSources(workspaceRoot)) return workspaceRoot;
+
+  const installedPackageRoot = findRepoRoot(MODULE_DIR);
+  if (hasWharfieSources(installedPackageRoot)) return installedPackageRoot;
+
+  throw new Error(
+    `Unable to locate Wharfie package sources from ${startDir}. Expected src/cli/entry.js and init templates to exist.`,
+  );
+}
+
 /**
  * Wharfie v1 CLI (today's `bin/wharfie`) built as a v2-style SEA artifact via SeaBuild.
  *
@@ -179,11 +213,12 @@ function buildTemplateAssets(repoRoot, distDir) {
  * @returns {Promise<string>} - Path to the built artifact in ./dist
  */
 async function buildWharfieV1(options) {
-  const repoRoot = findRepoRoot(process.cwd());
-  const distDir = path.join(repoRoot, 'dist');
+  const workspaceRoot = findRepoRoot(process.cwd());
+  const sourceRoot = resolveSourceRoot(process.cwd());
+  const distDir = path.join(workspaceRoot, 'dist');
   fs.mkdirSync(distDir, { recursive: true });
 
-  const templateAssets = buildTemplateAssets(repoRoot, distDir);
+  const templateAssets = buildTemplateAssets(sourceRoot, distDir);
 
   const normalizedPlatform = normalizePlatform(options.platform);
   const normalizedArch = normalizeArch(options.arch);
@@ -221,7 +256,7 @@ async function buildWharfieV1(options) {
             process.exitCode = 1;
           });
         `,
-      resolveDir: () => repoRoot,
+      resolveDir: () => sourceRoot,
       nodeBinaryPath: () => nodeBinary.get('binaryPath'),
       nodeVersion: () => nodeBinary.get('exactVersion').slice(1),
       platform: normalizedPlatform,

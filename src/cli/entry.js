@@ -68,6 +68,7 @@ export function createProgram(options = {}) {
 
     const args = argv.slice(2);
     const isHelp = args.includes('--help') || args.includes('-h');
+    const isConfigCommand = args[0] === 'config';
     const isLocalOnly =
       args[0] === 'app' ||
       args[0] === 'ops' ||
@@ -82,7 +83,7 @@ export function createProgram(options = {}) {
       'wharfie.config',
     );
 
-    if (isHelp || isLocalOnly) return;
+    if (isHelp || isConfigCommand || isLocalOnly) return;
 
     if (fsModule.existsSync(process.env.CONFIG_FILE_PATH)) {
       try {

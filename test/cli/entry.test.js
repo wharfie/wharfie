@@ -78,6 +78,73 @@ describe('CLI entrypoint', () => {
     expect(output).toMatch(/build-self is disabled under jest/i);
   });
 
+  test('lets config run without pre-validating an existing Wharfie config', async () => {
+    const originalConfigDir = process.env.CONFIG_DIR;
+    const originalConfigFilePath = process.env.CONFIG_FILE_PATH;
+    const validate = jest.fn(async () => {});
+    const releaseChecker = jest.fn(async () => false);
+    const failureReporter = jest.fn();
+    let configActionRan = false;
+
+    try {
+      const program = createProgram({
+        argv: ['node', 'wharfie', 'config'],
+        fsModule: {
+          existsSync: () => false,
+          readFileSync: () => {
+            throw new Error('readFileSync should not be called for config');
+          },
+        },
+        pathsModule: {
+          config: '/tmp/wharfie-config',
+          createWharfiePaths: async () => {},
+        },
+        configHelpers: {
+          setConfig: jest.fn(),
+          setEnvironment: jest.fn(),
+          validate,
+        },
+        releaseChecker,
+        failureReporter,
+      });
+
+      const configCommand = program.commands.find(
+        (command) => command.name() === 'config',
+      );
+
+      if (!configCommand) {
+        throw new Error('Expected config command to be registered');
+      }
+
+      configCommand.action(async () => {
+        configActionRan = true;
+        expect(process.env.CONFIG_DIR).toBe('/tmp/wharfie-config');
+        expect(process.env.CONFIG_FILE_PATH).toBe(
+          '/tmp/wharfie-config/wharfie.config',
+        );
+      });
+
+      await program.parseAsync(['node', 'wharfie', 'config']);
+
+      expect(configActionRan).toBe(true);
+      expect(validate).not.toHaveBeenCalled();
+      expect(releaseChecker).not.toHaveBeenCalled();
+      expect(failureReporter).not.toHaveBeenCalled();
+    } finally {
+      if (originalConfigDir === undefined) {
+        delete process.env.CONFIG_DIR;
+      } else {
+        process.env.CONFIG_DIR = originalConfigDir;
+      }
+
+      if (originalConfigFilePath === undefined) {
+        delete process.env.CONFIG_FILE_PATH;
+      } else {
+        process.env.CONFIG_FILE_PATH = originalConfigFilePath;
+      }
+    }
+  });
+
   test('registers the supported top-level commands', () => {
     const program = createProgram();
 

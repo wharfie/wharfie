@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { Command } from 'commander';
 
@@ -17,6 +18,45 @@ import {
   displayInfo,
   displaySuccess,
 } from '../output/basic.js';
+
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * @param {string} rootDir - rootDir
+ * @returns {boolean} - Whether this directory contains the shipped Wharfie sources required by build-self.
+ */
+export function hasBuildSources(rootDir) {
+  return (
+    fs.existsSync(path.join(rootDir, 'src', 'cli', 'entry.js')) &&
+    fs.existsSync(
+      path.join(rootDir, 'src', 'cli', 'project', 'project_structure_examples'),
+    )
+  );
+}
+
+/**
+ * Resolve the Wharfie source tree used by build-self.
+ *
+ * Prefer the current workspace when running from the repo (or a copied package
+ * tree), but fall back to the installed package location when the current
+ * working directory is just an arbitrary project with its own package.json.
+ *
+ * @param {string} [startDir] - Directory to inspect first.
+ * @returns {string} - Wharfie source root.
+ */
+export function resolveBuildSourceRoot(startDir = process.cwd()) {
+  const workspaceRoot = findRepoRoot(startDir);
+  if (hasBuildSources(workspaceRoot)) return workspaceRoot;
+
+  const installedPackageRoot = findRepoRoot(MODULE_DIR);
+  if (hasBuildSources(installedPackageRoot)) {
+    return installedPackageRoot;
+  }
+
+  throw new Error(
+    `Unable to locate Wharfie build sources from ${startDir}. Expected src/cli/entry.js and init templates to exist.`,
+  );
+}
 
 /**
  * build-self intentionally downloads Node.js distribution artifacts (via NodeBinary)
@@ -161,11 +201,12 @@ export function _buildTemplateAssets(repoRoot, distDir) {
  * @returns {Promise<void>}
  */
 export async function buildSelf({ platform, arch, nodeVersion }) {
-  const repoRoot = findRepoRoot(process.cwd());
-  const distDir = path.join(repoRoot, 'dist');
+  const workspaceRoot = findRepoRoot(process.cwd());
+  const sourceRoot = resolveBuildSourceRoot(process.cwd());
+  const distDir = path.join(workspaceRoot, 'dist');
   fs.mkdirSync(distDir, { recursive: true });
 
-  const templateAssets = _buildTemplateAssets(repoRoot, distDir);
+  const templateAssets = _buildTemplateAssets(sourceRoot, distDir);
 
   const normalizedPlatform = normalizePlatform(platform);
   const normalizedArch = normalizeArch(arch);
@@ -202,7 +243,7 @@ export async function buildSelf({ platform, arch, nodeVersion }) {
             process.exitCode = 1;
           });
         `,
-      resolveDir: () => repoRoot,
+      resolveDir: () => sourceRoot,
       nodeBinaryPath: () => nodeBinary.get('binaryPath'),
       nodeVersion: () => nodeBinary.get('exactVersion').slice(1),
       platform: normalizedPlatform,

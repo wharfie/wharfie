@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const binPath = fileURLToPath(new URL('../../../bin/wharfie', import.meta.url));
+const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const BUILD_SELF_IMPORT = '../../../src/cli/cmds/build_self.js';
 const NODE_BINARY_IMPORT = '../../../src/core/resources/builds/node-binary.js';
 const SEA_BUILD_IMPORT = '../../../src/core/resources/builds/sea-build.js';
@@ -94,6 +95,38 @@ describe('wharfie build-self', () => {
 
     expect(res.status).toBe(1);
     expect(`${res.stdout}\n${res.stderr}`).toMatch(/disabled under jest/i);
+  });
+
+  test('resolveBuildSourceRoot prefers the current workspace when Wharfie sources are present', async () => {
+    const tmpRepo = makeTmpRepo();
+
+    try {
+      const mod = await import(BUILD_SELF_IMPORT);
+      expect(mod.resolveBuildSourceRoot(tmpRepo)).toBe(tmpRepo);
+    } finally {
+      rmSync(tmpRepo, { recursive: true, force: true });
+      jest.resetModules();
+    }
+  });
+
+  test('resolveBuildSourceRoot falls back to the installed package when cwd lacks Wharfie sources', async () => {
+    const tmpWorkspace = mkdtempSync(
+      path.join(tmpdir(), 'wharfie-build-self-workspace-'),
+    );
+
+    try {
+      writeFileSync(
+        path.join(tmpWorkspace, 'package.json'),
+        JSON.stringify({ name: 'workspace-fixture', private: true }),
+        'utf8',
+      );
+
+      const mod = await import(BUILD_SELF_IMPORT);
+      expect(mod.resolveBuildSourceRoot(tmpWorkspace)).toBe(repoRoot);
+    } finally {
+      rmSync(tmpWorkspace, { recursive: true, force: true });
+      jest.resetModules();
+    }
   });
 
   test('buildSelf creates a dist binary and template manifest with mocked builders', async () => {

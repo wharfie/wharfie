@@ -2,7 +2,7 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { describe, expect, it } from '@jest/globals';
-import { existsSync, promises as fsp } from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -25,27 +25,6 @@ const staleCommands = [
   'wharfie project dev',
 ];
 
-const removedCliPaths = [
-  'src/cli/cmds/deployment.js',
-  'src/cli/cmds/deployment_cmds',
-  'src/cli/cmds/project.js',
-  'src/cli/cmds/project_cmds',
-  'src/cli/cmds/utils.js',
-  'src/cli/cmds/utils_cmds',
-  'src/cli/output/deployment',
-  'src/cli/output/project',
-  'src/cli/output/error.js',
-  'src/cli/output/escapes.js',
-  'src/cli/project/index.js',
-  'src/cli/project/load.js',
-  'src/cli/project/template-actor.js',
-];
-
-const preservedCliPaths = [
-  'src/cli/project/project_structure_examples/models/abo-aggregated.sql',
-  'src/cli/project/project_structure_examples/sources/noaa-global-surface-summary.yaml',
-];
-
 describe('docs command surface', () => {
   it('does not advertise unsupported command groups in public docs', async () => {
     const contents = await Promise.all(
@@ -59,6 +38,49 @@ describe('docs command surface', () => {
         expect(content).not.toContain(staleCommand);
       }
     }
+  });
+
+  it('keeps the installation guide pointed at the current AWS CLI docs', async () => {
+    const installationDoc = await fsp.readFile(
+      path.join(repoRoot, 'docs/src/assets/markdown/installation.md'),
+      'utf8',
+    );
+
+    expect(installationDoc).toContain(
+      'https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html',
+    );
+    expect(installationDoc).not.toContain(
+      'https://docs.aws.amazon.com/src/cli/v1/userguide/cli-chap-configure.html',
+    );
+  });
+
+  it('keeps the Wharfie v1 template asset path under src/cli', async () => {
+    const wharfieApp = await fsp.readFile(
+      path.join(repoRoot, 'apps', 'wharfie-v1', 'wharfie.app.js'),
+      'utf8',
+    );
+
+    expect(wharfieApp).toMatch(
+      /path\.join\(\s*repoRoot,\s*'src',\s*'cli',\s*'project',\s*'project_structure_examples',\s*\)/m,
+    );
+    expect(wharfieApp).not.toMatch(
+      /path\.join\(\s*repoRoot,\s*'cli',\s*'project',\s*'project_structure_examples',\s*\)/m,
+    );
+  });
+
+  it('narrows the published npm surface to supported CLI modules', async () => {
+    const packageJson = JSON.parse(
+      await fsp.readFile(path.join(repoRoot, 'package.json'), 'utf8'),
+    );
+
+    expect(packageJson.files).toContain('src/core/**');
+    expect(packageJson.files).toContain(
+      'src/cli/project/project_structure_examples/**',
+    );
+    expect(packageJson.files).not.toContain('src/');
+    expect(packageJson.files).not.toContain('src/cli/project/**');
+    expect(packageJson.files).not.toContain('src/cli/cmds/project_cmds/**');
+    expect(packageJson.files).not.toContain('!src/cli/cmds/project_cmds/**');
   });
 
   it('documents working onboarding commands in the quickstart', async () => {
