@@ -141,6 +141,7 @@ function collectTemplateFiles(rootDir) {
 function buildTemplateAssets(repoRoot, distDir) {
   const templatesDir = path.join(
     repoRoot,
+    'src',
     'cli',
     'project',
     'project_structure_examples',
