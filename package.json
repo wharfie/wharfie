@@ -26,13 +26,7 @@
     "README.md",
     "bin/",
     "apps/wharfie-v1/wharfie.app.js",
-    "src/",
-    "!src/cli/cmds/deployment.js",
-    "!src/cli/cmds/deployment_cmds/**",
-    "!src/cli/cmds/project.js",
-    "!src/cli/cmds/project_cmds/**",
-    "!src/cli/cmds/utils.js",
-    "!src/cli/cmds/utils_cmds/**"
+    "src/"
   ],
   "scripts": {
     "typecheck": "tsc",

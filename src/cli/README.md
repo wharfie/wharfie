@@ -1,3 +1,3 @@
 # CLI
 
-The shipped Wharfie CLI lives here. Legacy command groups remain in this tree until they are fully removed, but the published surface is still limited to `config`, `init`, `app`, `ops`, `list`, and `build-self`.
+The shipped Wharfie CLI lives here. The supported command surface is limited to `config`, `init`, `app`, `ops`, `list`, and `build-self`.
