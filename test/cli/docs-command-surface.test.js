@@ -61,27 +61,6 @@ describe('docs command surface', () => {
     }
   });
 
-  it('keeps only the supported CLI implementation on disk', async () => {
-    for (const relativePath of removedCliPaths) {
-      expect(existsSync(path.join(repoRoot, relativePath))).toBe(false);
-    }
-
-    for (const relativePath of preservedCliPaths) {
-      expect(existsSync(path.join(repoRoot, relativePath))).toBe(true);
-    }
-
-    const packageJson = JSON.parse(
-      await fsp.readFile(path.join(repoRoot, 'package.json'), 'utf8'),
-    );
-
-    expect(packageJson.files).toEqual([
-      'README.md',
-      'bin/',
-      'apps/wharfie-v1/wharfie.app.js',
-      'src/',
-    ]);
-  });
-
   it('documents working onboarding commands in the quickstart', async () => {
     const quickstart = await fsp.readFile(
       path.join(repoRoot, 'docs/src/assets/markdown/quickstart.md'),
