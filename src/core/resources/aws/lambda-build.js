@@ -34,9 +34,11 @@ class LambdaBuild extends BaseResource {
     this.s3 = new S3({});
   }
 
-  async _reconcile() {
-    const handler = this.get('handler');
-
+  /**
+   * @param {string} handler - handler.
+   * @returns {void}
+   */
+  _validateHandler(handler) {
     if (!handler) throw new Error('No handler defined');
     if (handler.startsWith(LEGACY_BUILT_IN_HANDLER_PREFIX)) {
       throw new Error(
@@ -44,6 +46,16 @@ class LambdaBuild extends BaseResource {
       );
     }
     if (!handler.split('.').pop()) throw new Error('No handler method defined');
+  }
+
+  async _pre_reconcile() {
+    this._validateHandler(this.get('handler'));
+    await super._pre_reconcile();
+  }
+
+  async _reconcile() {
+    const handler = this.get('handler');
+    this._validateHandler(handler);
 
     const build = await this._build(handler);
 
@@ -136,6 +148,8 @@ class LambdaBuild extends BaseResource {
 
     return result.outputFiles[0].text;
   }
+
+  async _destroy() {}
 }
 
 export default LambdaBuild;

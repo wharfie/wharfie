@@ -20,7 +20,7 @@ iex (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wharfie/wharfie/m
 aws sts get-caller-identity
 ```
 
-If that command returns a valid aws identity, you are ready to continue. For configuring the AWS CLI refer to its [docs](https://docs.aws.amazon.com/cli/v1/userguide/cli-chap-configure.html)
+If that command returns a valid AWS identity, you are ready to continue. For configuring the AWS CLI refer to its [docs](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html)
 
 ## Configure Wharfie CLI
 

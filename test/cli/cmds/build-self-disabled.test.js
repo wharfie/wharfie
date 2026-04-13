@@ -17,7 +17,9 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const binPath = fileURLToPath(new URL('../../../bin/wharfie', import.meta.url));
-const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
+const repoRoot = path.resolve(
+  fileURLToPath(new URL('../../../', import.meta.url)),
+);
 const BUILD_SELF_IMPORT = '../../../src/cli/cmds/build_self.js';
 const NODE_BINARY_IMPORT = '../../../src/core/resources/builds/node-binary.js';
 const SEA_BUILD_IMPORT = '../../../src/core/resources/builds/sea-build.js';
@@ -52,6 +54,11 @@ function makeTmpRepo() {
   writeFileSync(
     path.join(root, 'package.json'),
     JSON.stringify({ name: 'wharfie-build-self-fixture', private: true }),
+    'utf8',
+  );
+  writeFileSync(
+    path.join(root, 'src', 'cli', 'entry.js'),
+    'export async function main() {}\n',
     'utf8',
   );
   writeFileSync(
@@ -102,7 +109,9 @@ describe('wharfie build-self', () => {
 
     try {
       const mod = await import(BUILD_SELF_IMPORT);
-      expect(mod.resolveBuildSourceRoot(tmpRepo)).toBe(tmpRepo);
+      expect(path.resolve(mod.resolveBuildSourceRoot(tmpRepo))).toBe(
+        path.resolve(tmpRepo),
+      );
     } finally {
       rmSync(tmpRepo, { recursive: true, force: true });
       jest.resetModules();
@@ -122,7 +131,9 @@ describe('wharfie build-self', () => {
       );
 
       const mod = await import(BUILD_SELF_IMPORT);
-      expect(mod.resolveBuildSourceRoot(tmpWorkspace)).toBe(repoRoot);
+      expect(path.resolve(mod.resolveBuildSourceRoot(tmpWorkspace))).toBe(
+        repoRoot,
+      );
     } finally {
       rmSync(tmpWorkspace, { recursive: true, force: true });
       jest.resetModules();
