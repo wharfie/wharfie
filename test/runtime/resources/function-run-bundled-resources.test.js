@@ -11,6 +11,7 @@ import { createActorSystemResources } from '../../../src/core/runtime/resources.
 import sandboxWorker from '../../../src/core/lib/code-execution/worker.js';
 
 const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
+const BUNDLED_RESOURCE_TEST_TIMEOUT_MS = 15_000;
 
 /** @type {Map<string, any>} */
 const seaAssets = new Map();
@@ -30,15 +31,17 @@ describe('Function.run bundled resource specs', () => {
     seaAssets.clear();
   });
 
-  it('instantiates bundled function resource specs when no host resources are provided', async () => {
-    const tmp = await fsp.mkdtemp(
-      path.join(os.tmpdir(), 'wharfie-function-run-bundled-'),
-    );
-    const fnName = `bundled-resource-spec-${Date.now()}-${Math.floor(
-      Math.random() * 1e9,
-    )}`;
+  it(
+    'instantiates bundled function resource specs when no host resources are provided',
+    async () => {
+      const tmp = await fsp.mkdtemp(
+        path.join(os.tmpdir(), 'wharfie-function-run-bundled-'),
+      );
+      const fnName = `bundled-resource-spec-${Date.now()}-${Math.floor(
+        Math.random() * 1e9,
+      )}`;
 
-    const bundleCode = `
+      const bundleCode = `
       global[Symbol.for(${JSON.stringify(fnName)})] = async (event, context) => {
         const who = event?.who || 'world';
         await context.resources.db.put({
@@ -49,47 +52,50 @@ describe('Function.run bundled resource specs', () => {
       };
     `;
 
-    seaAssets.set(fnName, {
-      codeBundle: brotliCompressSync(Buffer.from(bundleCode, 'utf8')).toString(
-        'base64',
-      ),
-      externalsTar: '',
-      resourceSpecs: {
-        db: { adapter: 'vanilla', options: { path: tmp } },
-      },
-    });
-
-    const { default: Function } =
-      await import('../../../src/core/resources/builds/function.js');
-
-    try {
-      await Function.run(fnName, { who: 'bundled' }, { requestId: 'req-1' });
-
-      const { resources, close } = await createActorSystemResources({
-        db: { adapter: 'vanilla', options: { path: tmp } },
+      seaAssets.set(fnName, {
+        codeBundle: brotliCompressSync(
+          Buffer.from(bundleCode, 'utf8'),
+        ).toString('base64'),
+        externalsTar: '',
+        resourceSpecs: {
+          db: { adapter: 'vanilla', options: { path: tmp } },
+        },
       });
 
+      const { default: Function } =
+        await import('../../../src/core/resources/builds/function.js');
+
       try {
-        if (!resources.db) {
-          throw new Error('db resource not available');
-        }
-        const record = await resources.db.get({
-          tableName: 'bundled-function',
-          keyName: 'id',
-          keyValue: 'greeting',
+        await Function.run(fnName, { who: 'bundled' }, { requestId: 'req-1' });
+
+        const { resources, close } = await createActorSystemResources({
+          db: { adapter: 'vanilla', options: { path: tmp } },
         });
 
-        expect(record).toEqual({
-          id: 'greeting',
-          who: 'bundled',
-          message: 'hello bundled',
-        });
+        try {
+          if (!resources.db) {
+            throw new Error('db resource not available');
+          }
+          const record = await resources.db.get({
+            tableName: 'bundled-function',
+            keyName: 'id',
+            keyValue: 'greeting',
+          });
+
+          expect(record).toEqual({
+            id: 'greeting',
+            who: 'bundled',
+            message: 'hello bundled',
+          });
+        } finally {
+          await close();
+        }
       } finally {
-        await close();
+        await sandboxWorker._destroyWorker();
+        sandboxWorker._clearSandboxCache();
+        await fsp.rm(tmp, { recursive: true, force: true });
       }
-    } finally {
-      await sandboxWorker._destroyWorker();
-      sandboxWorker._clearSandboxCache();
-    }
-  });
+    },
+    BUNDLED_RESOURCE_TEST_TIMEOUT_MS,
+  );
 });
