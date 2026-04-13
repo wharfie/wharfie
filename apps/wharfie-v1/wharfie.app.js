@@ -37,7 +37,6 @@ function hasWharfieSources(rootDir) {
 /**
  * Prefer the current workspace when building from the repo, but fall back to
  * the installed package location when invoked from a normal project.
- *
  * @param {string} [startDir] - startDir
  * @returns {string} - Wharfie source root.
  */
