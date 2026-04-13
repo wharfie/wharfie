@@ -2,6 +2,9 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { promises as fsp } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import sandboxWorker from '../../../src/core/lib/code-execution/worker.js';
 
@@ -131,5 +134,30 @@ describe('runner.worker edge cases', () => {
     await sandboxWorker.runInSandbox(fnName, codeString, [
       { expectedInitCount: 1 },
     ]);
+  });
+
+  it('resolves runner.worker.js independently from process.cwd()', async () => {
+    const previousCwd = process.cwd();
+    const tmpRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-worker-cwd-'),
+    );
+    const fnName = makeName('worker-cwd-independent');
+    const codeString = `
+      global[Symbol.for(${JSON.stringify(fnName)})] = async (event) => {
+        if (event.value !== 42) {
+          throw new Error('Unexpected value: ' + event.value);
+        }
+      };
+    `;
+
+    try {
+      process.chdir(tmpRoot);
+      await expect(
+        sandboxWorker.runInSandbox(fnName, codeString, [{ value: 42 }]),
+      ).resolves.toBeUndefined();
+    } finally {
+      process.chdir(previousCwd);
+      await fsp.rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 });

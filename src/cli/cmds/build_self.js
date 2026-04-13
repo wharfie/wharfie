@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { Command } from 'commander';
 
+import { dirPathFromImportMetaUrl } from '../../core/lib/import-meta-path.js';
 import NodeBinary from '../../core/resources/builds/node-binary.js';
 import SeaBuild from '../../core/resources/builds/sea-build.js';
 import MacOSBinarySignature from '../../core/resources/builds/macos-binary-signature.js';
@@ -19,7 +19,7 @@ import {
   displaySuccess,
 } from '../output/basic.js';
 
-const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const MODULE_DIR = dirPathFromImportMetaUrl(import.meta.url);
 
 /**
  * @param {string} rootDir - rootDir

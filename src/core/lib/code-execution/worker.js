@@ -1,12 +1,13 @@
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { access, mkdir, writeFile } from 'node:fs/promises';
-import { constants as FS, existsSync, readFileSync } from 'node:fs';
+import { constants as FS, readFileSync } from 'node:fs';
 import { Worker } from 'node:worker_threads';
 import { x } from 'tar';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { buffer as streamToBuffer } from 'node:stream/consumers';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 
 // esbuild inlines this file as text (configure: loader { '.worker.js': 'text' })
 // In normal Node/Jest execution, this import resolves to the module default export (a function),
@@ -17,6 +18,7 @@ import workerSource from './runner.worker.js';
 
 import paths from '../paths.js';
 const VM_PATH = join(paths.data, 'vms');
+const require = createRequire(import.meta.url);
 
 // --- singleton worker + response router ---
 /**
@@ -61,21 +63,12 @@ function isNodeReadable(v) {
 /**
  * Locate runner.worker.js on disk for non-bundled execution (e.g. Node/Jest).
  *
- * We intentionally avoid module URL APIs so this module can be bundled to CJS
- * (SEA build) without triggering esbuild's `empty-import-meta` warning.
+ * Resolve relative to this module so installed-package callers can change
+ * `process.cwd()` without breaking sandbox startup.
  * @returns {string} - Result.
  */
 function findRunnerWorkerPath() {
-  const rel = join('src', 'core', 'lib', 'code-execution', 'runner.worker.js');
-  let dir = process.cwd();
-  for (let i = 0; i < 25; i++) {
-    const p = join(dir, rel);
-    if (existsSync(p)) return p;
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return join(process.cwd(), rel);
+  return require.resolve('./runner.worker.js');
 }
 
 /**

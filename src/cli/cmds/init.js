@@ -1,10 +1,10 @@
 import { Command } from 'commander';
-import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import fs from 'node:fs';
 import inquirer from 'inquirer';
 
+import { dirPathFromImportMetaUrl } from '../../core/lib/import-meta-path.js';
 import {
   displayFailure,
   displayInfo,
@@ -13,6 +13,7 @@ import {
 import { extractTemplates } from '../assets/extract-templates.js';
 
 const PROJECT_NAME_RE = /^[a-zA-Z0-9_ ]*$/;
+const MODULE_DIR = dirPathFromImportMetaUrl(import.meta.url);
 
 /**
  * @param {string} raw
@@ -101,9 +102,8 @@ async function initProject(options) {
   ]);
 
   if (includeExamples) {
-    const __dirname = path.dirname(fileURLToPath(import.meta.url));
     const diskTemplatesDir = path.resolve(
-      __dirname,
+      MODULE_DIR,
       '..',
       'project',
       'project_structure_examples',

@@ -1,9 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { Command } from 'commander';
 
+import {
+  dirPathFromImportMetaUrl,
+  filePathFromImportMetaUrl,
+} from '../../src/core/lib/import-meta-path.js';
 import NodeBinary from '../../src/core/resources/builds/node-binary.js';
 import SeaBuild from '../../src/core/resources/builds/sea-build.js';
 import MacOSBinarySignature from '../../src/core/resources/builds/macos-binary-signature.js';
@@ -19,7 +22,7 @@ import {
   displaySuccess,
 } from '../../src/cli/output/basic.js';
 
-const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const MODULE_DIR = dirPathFromImportMetaUrl(import.meta.url);
 
 /**
  * @param {string} rootDir - rootDir
@@ -292,7 +295,7 @@ async function buildWharfieV1(options) {
  * @returns {boolean} -
  */
 function isExecutedDirectly() {
-  const selfPath = fileURLToPath(import.meta.url);
+  const selfPath = filePathFromImportMetaUrl(import.meta.url);
   const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
   return invokedPath === path.resolve(selfPath);
 }
