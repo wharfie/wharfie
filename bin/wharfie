@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { main } from '../cli/entry.js';
+import { main } from '../src/cli/entry.js';
 
 main(process.argv).catch((err) => {
   // eslint-disable-next-line no-console

@@ -15,7 +15,7 @@ const { S3 } = jest.requireMock('@aws-sdk/client-s3');
 const {
   LambdaBuild,
   Bucket,
-} = require('../../../lambdas/lib/actor/resources/aws/');
+} = require('../../../lambdas/lib/actor/resources/aws');
 const { getMockDeploymentProperties } = require('../util');
 
 describe('lambda function IaC', () => {

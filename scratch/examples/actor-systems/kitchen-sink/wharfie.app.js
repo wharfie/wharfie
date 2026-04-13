@@ -2,8 +2,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import ActorSystem from '../../../../lambdas/lib/actor/resources/builds/actor-system.js';
-import Function from '../../../../lambdas/lib/actor/resources/builds/function.js';
+import ActorSystem from '../../../../src/core/resources/builds/actor-system.js';
+import Function from '../../../../src/core/resources/builds/function.js';
 
 import {
   kitchenSinkDefaultTargets,
@@ -26,7 +26,7 @@ const startEntrypointPath = path.join(scratchDir, 'functions', 'start.js');
  * @typedef CreateKitchenSinkAppOptions
  * @property {any} [stateDB] - Optional scoped state store override.
  * @property {import('node:events').EventEmitter} [emitter] - Optional scoped telemetry emitter.
- * @property {import('../../../../lambdas/lib/actor/resources/runtime-config.js').WharfieRuntimeConfig} [runtime] - Optional structured runtime config.
+ * @property {import('../../../../src/core/resources/runtime-config.js').WharfieRuntimeConfig} [runtime] - Optional structured runtime config.
  * @property {string} [runtimeBasePath] - Base path for vanilla runtime resources.
  * @property {KitchenSinkBuildTarget[]} [targets] - Optional build targets override.
  */

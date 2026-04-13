@@ -9,15 +9,15 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import createVanillaDB from '../../../lambdas/lib/db/adapters/vanilla.js';
-import operationsStoreFactory from '../../../lambdas/lib/graph/operations-store.js';
+import createVanillaDB from '../../../src/core/lib/db/adapters/vanilla.js';
+import operationsStoreFactory from '../../../src/core/lib/graph/operations-store.js';
 import Action, {
   Status as ActionStatus,
-} from '../../../lambdas/lib/graph/action.js';
+} from '../../../src/core/lib/graph/action.js';
 import Operation, {
   Status as OperationStatus,
   Type as OperationType,
-} from '../../../lambdas/lib/graph/operation.js';
+} from '../../../src/core/lib/graph/operation.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
@@ -31,26 +31,10 @@ const helloWorldDir = path.join(
 );
 
 const actorSystemUrl = pathToFileURL(
-  path.join(
-    repoRoot,
-    'lambdas',
-    'lib',
-    'actor',
-    'resources',
-    'builds',
-    'actor-system.js',
-  ),
+  path.join(repoRoot, 'src', 'core', 'resources', 'builds', 'actor-system.js'),
 ).href;
 const functionUrl = pathToFileURL(
-  path.join(
-    repoRoot,
-    'lambdas',
-    'lib',
-    'actor',
-    'resources',
-    'builds',
-    'function.js',
-  ),
+  path.join(repoRoot, 'src', 'core', 'resources', 'builds', 'function.js'),
 ).href;
 
 /**
@@ -185,12 +169,12 @@ describe('wharfie ops run', () => {
     const dbPath = mkdtempSync(path.join(os.tmpdir(), 'wharfie-ops-run-'));
     const tableName = 'operations-test';
     const resourceId = 'resource-1';
-    /** @type {import('../../../lambdas/lib/db/base.js').DBClient | undefined} */
+    /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
     let inspectDb;
 
-    /** @type {import('../../../lambdas/lib/graph/operation.js').default} */
+    /** @type {import('../../../src/core/lib/graph/operation.js').default} */
     let operation;
-    /** @type {import('../../../lambdas/lib/graph/action.js').default} */
+    /** @type {import('../../../src/core/lib/graph/action.js').default} */
     let invokeAction;
 
     try {
@@ -288,7 +272,7 @@ describe('wharfie ops run', () => {
     const tableName = 'operations-workflow-test';
     const resourceId = 'workflow-resource';
     const operationId = 'workflow-op';
-    /** @type {import('../../../lambdas/lib/db/base.js').DBClient | undefined} */
+    /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
     let inspectDb;
 
     try {
@@ -407,7 +391,7 @@ describe('wharfie ops run', () => {
     const tableName = 'operations-workflow-test';
     const resourceId = 'workflow-resource';
     const operationId = 'workflow-failing';
-    /** @type {import('../../../lambdas/lib/db/base.js').DBClient | undefined} */
+    /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
     let inspectDb;
 
     try {
@@ -479,7 +463,7 @@ describe('wharfie ops run', () => {
     const tableName = 'operations-workflow-test';
     const resourceId = 'workflow-resource';
     const operationId = 'workflow-blocked';
-    /** @type {import('../../../lambdas/lib/db/base.js').DBClient | undefined} */
+    /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
     let inspectDb;
 
     try {

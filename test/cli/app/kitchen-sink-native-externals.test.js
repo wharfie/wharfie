@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { loadApp } from '../../../cli/app/load-app.js';
+import { loadApp } from '../../../src/cli/app/load-app.js';
 import { kitchenSinkExternalDependencies } from '../../../scratch/examples/actor-systems/kitchen-sink/config.js';
 
 const require = createRequire(import.meta.url);

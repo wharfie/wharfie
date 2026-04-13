@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url);
 process.env.AWS_MOCKS = true;
 const { Glue } = jest.requireMock('@aws-sdk/client-glue');
 
-const { GlueDatabase } = require('../../../lambdas/lib/actor/resources/aws/');
+const { GlueDatabase } = require('../../../lambdas/lib/actor/resources/aws');
 const { getMockDeploymentProperties } = require('../util');
 
 describe('glue database IaC', () => {

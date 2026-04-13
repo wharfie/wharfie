@@ -5,11 +5,11 @@ const require = createRequire(import.meta.url);
 const S3 = require('./s3');
 const Glue = require('./glue');
 const SQS = require('./sqs');
-jest.mock('../../../lambdas/lib/dynamo/operations');
+jest.mock('../../../src/core/lib/dynamo/operations');
 const QueryParser = jest.requireActual(
-  '../../../lambdas/lib/athena/query-parser',
+  '../../../src/core/lib/athena/query-parser',
 );
-const dynamo_resource = require('../../../lambdas/lib/dynamo/operations');
+const dynamo_resource = require('../../../src/core/lib/dynamo/operations');
 
 class QueryRunner {
   constructor() {
@@ -69,10 +69,10 @@ class QueryRunner {
   /**
    * @param {string} query_execution_id -
    * @param {string} query_string -
-   * @param {import('../../../lambdas/lib/graph/').Resource} resource -
-   * @param {import('../../../lambdas/lib/graph/').Operation} operation -
-   * @param {import('../../../lambdas/lib/graph/').Action} _action -
-   * @param {import('../../../lambdas/lib/graph/').Query} _query -
+   * @param {import('../../../src/core/lib/graph').Resource} resource -
+   * @param {import('../../../src/core/lib/graph').Operation} operation -
+   * @param {import('../../../src/core/lib/graph').Action} _action -
+   * @param {import('../../../src/core/lib/graph').Query} _query -
    */
   async _run_single_compaction_side_effects(
     query_execution_id,

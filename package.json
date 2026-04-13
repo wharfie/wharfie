@@ -19,21 +19,35 @@
   "engineStrict": true,
   "engines": {
     "node": "24.13.1",
-    "npm": "11.10.0"
+    "npm": "11.12.0"
   },
-  "main": "./cli/entry.js",
+  "main": "./src/cli/entry.js",
   "files": [
     "README.md",
     "bin/",
+    "apps/README.md",
     "apps/wharfie-v1/wharfie.app.js",
-    "cli/",
-    "lambdas/",
-    "!cli/cmds/deployment.js",
-    "!cli/cmds/deployment_cmds/**",
-    "!cli/cmds/project.js",
-    "!cli/cmds/project_cmds/**",
-    "!cli/cmds/utils.js",
-    "!cli/cmds/utils_cmds/**"
+    "src/README.md",
+    "src/cli/README.md",
+    "src/cli/app/**",
+    "src/cli/assets/**",
+    "src/cli/cmds/app.js",
+    "src/cli/cmds/app_cmds/**",
+    "src/cli/cmds/build_self.js",
+    "src/cli/cmds/config.js",
+    "src/cli/cmds/init.js",
+    "src/cli/cmds/list.js",
+    "src/cli/cmds/operation-rows.js",
+    "src/cli/cmds/operations-store.js",
+    "src/cli/cmds/ops.js",
+    "src/cli/cmds/ops_cmds/**",
+    "src/cli/config.js",
+    "src/cli/entry.js",
+    "src/cli/input.js",
+    "src/cli/output/basic.js",
+    "src/cli/project/project_structure_examples/**",
+    "src/cli/upgrade.js",
+    "src/core/**"
   ],
   "scripts": {
     "typecheck": "tsc",
@@ -52,9 +66,9 @@
   },
   "jest": {
     "collectCoverageFrom": [
-      "lambdas/lib/actor/runtime/**/*.js",
-      "lambdas/lib/actor/resources/builds/**/*.js",
-      "lambdas/lib/code-execution/**/*.js"
+      "src/core/runtime/**/*.js",
+      "src/core/resources/builds/**/*.js",
+      "src/core/lib/code-execution/**/*.js"
     ],
     "testEnvironment": "node",
     "modulePathIgnorePatterns": [
@@ -90,7 +104,7 @@
       "dist/",
       "tmp/",
       "docs/",
-      "cli/",
+      "src/cli/",
       "test/",
       "scratch/",
       "coverage/"

@@ -22,4 +22,5 @@ docs/public/
 docs/.env
 docs/.env.local
 LLM_CONTEXT*
+DIFF_LLM_CONTEXT*
 llm_artifacts/

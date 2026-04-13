@@ -3,10 +3,10 @@
 
 import { jest } from '@jest/globals';
 
-import listCommand from '../../../cli/cmds/list.js';
-import opsListCommand from '../../../cli/cmds/ops_cmds/list.js';
-import cancelCommand from '../../../cli/cmds/ops_cmds/cancel.js';
-import runCommand from '../../../cli/cmds/ops_cmds/run.js';
+import listCommand from '../../../src/cli/cmds/list.js';
+import opsListCommand from '../../../src/cli/cmds/ops_cmds/list.js';
+import cancelCommand from '../../../src/cli/cmds/ops_cmds/cancel.js';
+import runCommand from '../../../src/cli/cmds/ops_cmds/run.js';
 
 const ORIGINAL_ENV = process.env;
 

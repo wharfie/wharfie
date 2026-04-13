@@ -5,11 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 
-import { createActorSystemResources } from '../../../lambdas/lib/actor/runtime/resources.js';
-import { startDbService } from '../../../lambdas/lib/actor/runtime/services/db-service.js';
-import { startQueueService } from '../../../lambdas/lib/actor/runtime/services/queue-service.js';
-import { createGrpcRpcClient } from '../../../lambdas/lib/actor/runtime/services/rpc-grpc.js';
-import sandboxWorker from '../../../lambdas/lib/code-execution/worker.js';
+import { createActorSystemResources } from '../../../src/core/runtime/resources.js';
+import { startDbService } from '../../../src/core/runtime/services/db-service.js';
+import { startQueueService } from '../../../src/core/runtime/services/queue-service.js';
+import { createGrpcRpcClient } from '../../../src/core/runtime/services/rpc-grpc.js';
+import sandboxWorker from '../../../src/core/lib/code-execution/worker.js';
 
 describe('ActorSystem resources over service RPC (gRPC)', () => {
   it('worker sandbox: resources can be remote gRPC RPC clients', async () => {

@@ -7,16 +7,18 @@ import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { brotliCompressSync } from 'node:zlib';
 
-import { startDbService } from '../../../lambdas/lib/actor/runtime/services/db-service.js';
-import { startQueueService } from '../../../lambdas/lib/actor/runtime/services/queue-service.js';
-import { startLambdaService } from '../../../lambdas/lib/actor/runtime/services/lambda-service.js';
-import { createGrpcRpcClient } from '../../../lambdas/lib/actor/runtime/services/rpc-grpc.js';
+import { startDbService } from '../../../src/core/runtime/services/db-service.js';
+import { startQueueService } from '../../../src/core/runtime/services/queue-service.js';
+import { startLambdaService } from '../../../src/core/runtime/services/lambda-service.js';
+import { createGrpcRpcClient } from '../../../src/core/runtime/services/rpc-grpc.js';
+
+const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
 
 /** @type {Map<string, any>} */
 const seaAssets = new Map();
 
 // Mock SEA asset lookup to serve our in-memory bundles.
-jest.unstable_mockModule('node:sea', () => ({
+jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
   getAsset: async (/** @type {string} */ name) => {
     const assetDescription = seaAssets.get(name);
     if (!assetDescription) {
@@ -74,7 +76,7 @@ describe('Lambda service queue poll loop (gRPC)', () => {
     seaAssets.set(fnName, assetDescription);
 
     const { default: Function } =
-      await import('../../../lambdas/lib/actor/resources/builds/function.js');
+      await import('../../../src/core/resources/builds/function.js');
 
     const lambdaSvc = await startLambdaService({
       host: '127.0.0.1',
@@ -187,7 +189,7 @@ describe('Lambda service queue poll loop (gRPC)', () => {
     seaAssets.set(fnName, assetDescription);
 
     const { default: Function } =
-      await import('../../../lambdas/lib/actor/resources/builds/function.js');
+      await import('../../../src/core/resources/builds/function.js');
 
     const lambdaSvc = await startLambdaService({
       host: '127.0.0.1',

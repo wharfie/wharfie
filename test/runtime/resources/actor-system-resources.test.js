@@ -6,10 +6,10 @@ import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import Function from '../../../lambdas/lib/actor/resources/builds/function.js';
-import ActorSystem from '../../../lambdas/lib/actor/resources/builds/actor-system.js';
-import { createActorSystemResources } from '../../../lambdas/lib/actor/runtime/resources.js';
-import sandboxWorker from '../../../lambdas/lib/code-execution/worker.js';
+import Function from '../../../src/core/resources/builds/function.js';
+import ActorSystem from '../../../src/core/resources/builds/actor-system.js';
+import { createActorSystemResources } from '../../../src/core/runtime/resources.js';
+import sandboxWorker from '../../../src/core/lib/code-execution/worker.js';
 
 describe('ActorSystem runtime resources', () => {
   it('createActorSystemResources: vanilla adapters create usable clients', async () => {

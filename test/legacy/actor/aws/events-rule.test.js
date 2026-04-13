@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 
 process.env.AWS_MOCKS = '1';
-const { EventsRule } = require('../../../lambdas/lib/actor/resources/aws/');
+const { EventsRule } = require('../../../lambdas/lib/actor/resources/aws');
 const { CloudWatchEvents } = jest.requireMock(
   '@aws-sdk/client-cloudwatch-events',
 );

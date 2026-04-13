@@ -14,8 +14,8 @@ const prefix = '';
 
 async function main() {
   const [{ default: S3 }, { map }] = await Promise.all([
-    import('../../lambdas/lib/s3.js'),
-    import('../../lambdas/lib/promises.js'),
+    import('../../src/core/lib/aws/s3.js'),
+    import('../../src/core/lib/promises.js'),
   ]);
 
   const s3 = new S3();

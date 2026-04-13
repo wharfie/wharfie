@@ -9,15 +9,15 @@ import { promises as fsp } from 'node:fs';
 import {
   createDeployCommand,
   deployArtifact,
-} from '../../../lambdas/lib/actor/resources/builds/actor-system-cli/infrastructure_cmds/deploy.js';
-import { getDeploymentStatus } from '../../../lambdas/lib/actor/resources/builds/actor-system-cli/infrastructure_cmds/status.js';
-import { getDeploymentLogs } from '../../../lambdas/lib/actor/resources/builds/actor-system-cli/infrastructure_cmds/logs.js';
-import { rollbackArtifact } from '../../../lambdas/lib/actor/resources/builds/actor-system-cli/infrastructure_cmds/rollback.js';
+} from '../../../src/core/resources/builds/actor-system-cli/infrastructure_cmds/deploy.js';
+import { getDeploymentStatus } from '../../../src/core/resources/builds/actor-system-cli/infrastructure_cmds/status.js';
+import { getDeploymentLogs } from '../../../src/core/resources/builds/actor-system-cli/infrastructure_cmds/logs.js';
+import { rollbackArtifact } from '../../../src/core/resources/builds/actor-system-cli/infrastructure_cmds/rollback.js';
 import {
   createDeployPlan,
   materializeDeployPlan,
   readCurrentReleaseId,
-} from '../../../lambdas/lib/actor/resources/builds/actor-system-cli/lib/systemd-release.js';
+} from '../../../src/core/resources/builds/actor-system-cli/lib/systemd-release.js';
 
 const manifest = {
   app: { name: 'artifact-infra-demo' },
@@ -46,7 +46,7 @@ const manifest = {
 };
 
 /**
- * @returns {Promise<{ artifactPath: string, releaseRoot: string, systemdDir: string, previousPlan: import('../../../lambdas/lib/actor/resources/builds/actor-system-cli/lib/systemd-release.js').DeployPlan, currentPlan: import('../../../lambdas/lib/actor/resources/builds/actor-system-cli/lib/systemd-release.js').DeployPlan }>} - Result.
+ * @returns {Promise<{ artifactPath: string, releaseRoot: string, systemdDir: string, previousPlan: import('../../../src/core/resources/builds/actor-system-cli/lib/systemd-release.js').DeployPlan, currentPlan: import('../../../src/core/resources/builds/actor-system-cli/lib/systemd-release.js').DeployPlan }>} - Result.
  */
 async function createReleaseFixture() {
   const rootDir = await fsp.mkdtemp(

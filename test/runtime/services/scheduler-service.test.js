@@ -3,7 +3,7 @@
 
 import { jest } from '@jest/globals';
 
-import { startSchedulerService } from '../../../lambdas/lib/actor/runtime/services/scheduler-service.js';
+import { startSchedulerService } from '../../../src/core/runtime/services/scheduler-service.js';
 
 describe('Scheduler service (cron, UTC)', () => {
   afterEach(() => {

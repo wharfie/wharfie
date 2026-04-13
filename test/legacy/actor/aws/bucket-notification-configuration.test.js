@@ -10,7 +10,7 @@ const { S3 } = jest.requireMock('@aws-sdk/client-s3');
 const {
   Bucket,
   BucketNotificationConfiguration,
-} = require('../../../lambdas/lib/actor/resources/aws/');
+} = require('../../../lambdas/lib/actor/resources/aws');
 const { getMockDeploymentProperties } = require('../util');
 
 describe('bucket notification configuration IaC', () => {

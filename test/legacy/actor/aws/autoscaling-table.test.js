@@ -9,7 +9,7 @@ jest.mock('../../../lambdas/lib/db/state/store');
 jest.mock('../../../lambdas/lib/id');
 const {
   AutoscalingTable,
-} = require('../../../lambdas/lib/actor/resources/aws/');
+} = require('../../../lambdas/lib/actor/resources/aws');
 const Reconcilable = require('../../../lambdas/lib/actor/resources/reconcilable');
 
 const { load } = require('../../../lambdas/lib/actor/deserialize/full');

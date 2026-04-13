@@ -17,9 +17,7 @@ jest.mock('../../lambdas/lib/dynamo/dependency');
 jest.mock('../../lambdas/lib/dynamo/operations');
 // eslint-disable-next-line jest/no-untyped-mock-factory
 jest.mock('../../package.json', () => ({ version: '0.0.1' }));
-const {
-  WharfieOperationCompleted,
-} = require('../../lambdas/scheduler/events/');
+const { WharfieOperationCompleted } = require('../../lambdas/scheduler/events');
 
 let date,
   scheduler_db,

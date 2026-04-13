@@ -51,7 +51,7 @@ wharfie app manifest ./apps/wharfie-v1
 ```
 
 The current ESM CLI ships these top-level commands: `config`, `init`, `app`, `ops`, `list`, and `build-self`.
-Legacy `deployment`, `project`, and `utils` command groups are migration leftovers in the repo and are not part of the shipped CLI surface.
+The legacy `deployment`, `project`, and `utils` command groups have been removed from the repo.
 
 ### Reference
 
@@ -74,4 +74,9 @@ export WHARFIE_DB_ADAPTER=vanilla   # or lmdb|dynamodb
 export WHARFIE_DB_PATH=/path/to/db
 ```
 
+### Repository layout
 
+- `src/cli/` contains the shipped CLI entrypoint and commands.
+- `src/core/` contains runtime code, with `actors/`, `resources/`, and `runtime/` split out from the shared `lib/` subsystems.
+- `apps/` contains buildable reference apps and dogfood manifests.
+- `llm/` contains local design docs and prompt templates.

@@ -6,8 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import Function from '../../../lambdas/lib/actor/resources/builds/function.js';
-import { loadApp } from '../../../cli/app/load-app.js';
+import Function from '../../../src/core/resources/builds/function.js';
+import { loadApp } from '../../../src/cli/app/load-app.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');

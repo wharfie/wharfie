@@ -1,23 +1,59 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { Command } from 'commander';
 
-import NodeBinary from '../../lambdas/lib/actor/resources/builds/node-binary.js';
-import SeaBuild from '../../lambdas/lib/actor/resources/builds/sea-build.js';
-import MacOSBinarySignature from '../../lambdas/lib/actor/resources/builds/macos-binary-signature.js';
+import {
+  dirPathFromImportMetaUrl,
+  filePathFromImportMetaUrl,
+} from '../../src/core/lib/import-meta-path.js';
+import NodeBinary from '../../src/core/resources/builds/node-binary.js';
+import SeaBuild from '../../src/core/resources/builds/sea-build.js';
+import MacOSBinarySignature from '../../src/core/resources/builds/macos-binary-signature.js';
 
 import {
   TEMPLATES_ASSET_BASE,
   TEMPLATES_ASSET_MANIFEST_KEY,
-} from '../../cli/assets/extract-templates.js';
+} from '../../src/cli/assets/extract-templates.js';
 
 import {
   displayFailure,
   displayInfo,
   displaySuccess,
-} from '../../cli/output/basic.js';
+} from '../../src/cli/output/basic.js';
+
+const MODULE_DIR = dirPathFromImportMetaUrl(import.meta.url);
+
+/**
+ * @param {string} rootDir - rootDir
+ * @returns {boolean} - Whether the directory contains the Wharfie sources required by this build app.
+ */
+function hasWharfieSources(rootDir) {
+  return (
+    fs.existsSync(path.join(rootDir, 'src', 'cli', 'entry.js')) &&
+    fs.existsSync(
+      path.join(rootDir, 'src', 'cli', 'project', 'project_structure_examples'),
+    )
+  );
+}
+
+/**
+ * Prefer the current workspace when building from the repo, but fall back to
+ * the installed package location when invoked from a normal project.
+ * @param {string} [startDir] - startDir
+ * @returns {string} - Wharfie source root.
+ */
+function resolveSourceRoot(startDir = process.cwd()) {
+  const workspaceRoot = findRepoRoot(startDir);
+  if (hasWharfieSources(workspaceRoot)) return workspaceRoot;
+
+  const installedPackageRoot = findRepoRoot(MODULE_DIR);
+  if (hasWharfieSources(installedPackageRoot)) return installedPackageRoot;
+
+  throw new Error(
+    `Unable to locate Wharfie package sources from ${startDir}. Expected src/cli/entry.js and init templates to exist.`,
+  );
+}
 
 /**
  * Wharfie v1 CLI (today's `bin/wharfie`) built as a v2-style SEA artifact via SeaBuild.
@@ -141,6 +177,7 @@ function collectTemplateFiles(rootDir) {
 function buildTemplateAssets(repoRoot, distDir) {
   const templatesDir = path.join(
     repoRoot,
+    'src',
     'cli',
     'project',
     'project_structure_examples',
@@ -178,11 +215,12 @@ function buildTemplateAssets(repoRoot, distDir) {
  * @returns {Promise<string>} - Path to the built artifact in ./dist
  */
 async function buildWharfieV1(options) {
-  const repoRoot = findRepoRoot(process.cwd());
-  const distDir = path.join(repoRoot, 'dist');
+  const workspaceRoot = findRepoRoot(process.cwd());
+  const sourceRoot = resolveSourceRoot(process.cwd());
+  const distDir = path.join(workspaceRoot, 'dist');
   fs.mkdirSync(distDir, { recursive: true });
 
-  const templateAssets = buildTemplateAssets(repoRoot, distDir);
+  const templateAssets = buildTemplateAssets(sourceRoot, distDir);
 
   const normalizedPlatform = normalizePlatform(options.platform);
   const normalizedArch = normalizeArch(options.arch);
@@ -212,7 +250,7 @@ async function buildWharfieV1(options) {
     properties: {
       entryCode: () =>
         `
-          import { main } from './cli/entry.js';
+          import { main } from './src/cli/entry.js';
 
           main(process.argv).catch((err) => {
             // eslint-disable-next-line no-console
@@ -220,7 +258,7 @@ async function buildWharfieV1(options) {
             process.exitCode = 1;
           });
         `,
-      resolveDir: () => repoRoot,
+      resolveDir: () => sourceRoot,
       nodeBinaryPath: () => nodeBinary.get('binaryPath'),
       nodeVersion: () => nodeBinary.get('exactVersion').slice(1),
       platform: normalizedPlatform,
@@ -257,7 +295,7 @@ async function buildWharfieV1(options) {
  * @returns {boolean} -
  */
 function isExecutedDirectly() {
-  const selfPath = fileURLToPath(import.meta.url);
+  const selfPath = filePathFromImportMetaUrl(import.meta.url);
   const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
   return invokedPath === path.resolve(selfPath);
 }

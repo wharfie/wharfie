@@ -4,7 +4,7 @@
 import {
   formatOperationRows,
   toIsoTimestamp,
-} from '../../../cli/cmds/operation-rows.js';
+} from '../../../src/cli/cmds/operation-rows.js';
 
 describe('operation row formatting', () => {
   it('formats and sorts operations using started_at and last_updated_at', () => {

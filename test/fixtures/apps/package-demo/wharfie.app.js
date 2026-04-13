@@ -2,9 +2,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 
-import ActorSystem from '../../../../lambdas/lib/actor/resources/builds/actor-system.js';
-import SeaBuild from '../../../../lambdas/lib/actor/resources/builds/sea-build.js';
-import { APP_MANIFEST_ASSET_NAME } from '../../../../lambdas/lib/actor/resources/builds/lib/app-manifest-asset.js';
+import ActorSystem from '../../../../src/core/resources/builds/actor-system.js';
+import SeaBuild from '../../../../src/core/resources/builds/sea-build.js';
+import { APP_MANIFEST_ASSET_NAME } from '../../../../src/core/resources/builds/lib/app-manifest-asset.js';
 
 const currentTarget = {
   nodeVersion: process.versions.node,

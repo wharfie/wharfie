@@ -15,7 +15,7 @@
     "types": ["jest", "node"]
   },
   "include": [
-    "lambdas/**/*.js",
+    "src/core/**/*.js",
     "test/cli/**/*.js",
     "test/runtime/**/*.js",
     "test/graph/**/*.js",
@@ -24,9 +24,9 @@
     "types/**/*.d.ts"
   ],
   "exclude": [
-    "lambdas/udf_entrypoint.js",
-    "lambdas/lib/actor/resources/aws/**",
-    "lambdas/lib/actor/resources/records/**",
+    "src/core/udf_entrypoint.js",
+    "src/core/resources/aws/**",
+    "src/core/resources/records/**",
     "test/legacy/**"
   ]
 }

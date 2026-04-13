@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { InvalidRequestException } = jest.requireActual(
   '@aws-sdk/client-athena',
 );
-const { createId } = require('../../../lambdas/lib/id');
+const { createId } = require('../../../src/core/lib/id');
 const SQS = require('./sqs');
 const QueryRunner = require('./query-runner');
 

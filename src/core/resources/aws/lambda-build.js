@@ -1,0 +1,155 @@
+import { createHash } from 'node:crypto';
+import { dirname } from 'node:path';
+
+import { NotFound } from '@aws-sdk/client-s3';
+import { build as __build } from 'esbuild';
+import JSZip from 'jszip';
+
+import S3 from '../../lib/aws/s3.js';
+import BaseResource from '../base-resource.js';
+
+const LEGACY_BUILT_IN_HANDLER_PREFIX = '<WHARFIE_BUILT_IN>/';
+
+/**
+ * @typedef LambdaBuildProperties
+ * @property {string | function(): string} handler - Explicit handler module path in `<path>.<export>` form.
+ * @property {string | function(): string} artifactBucket - artifactBucket.
+ */
+
+/**
+ * @typedef LambdaBuildOptions
+ * @property {string} name - name.
+ * @property {string} [parent] - parent.
+ * @property {import('../reconcilable.js').default.Status} [status] - status.
+ * @property {LambdaBuildProperties & import('../../actors/typedefs.js').SharedProperties} properties - properties.
+ * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
+ */
+
+class LambdaBuild extends BaseResource {
+  /**
+   * @param {LambdaBuildOptions} options - options.
+   */
+  constructor({ name, parent, status, dependsOn = [], properties }) {
+    super({ name, parent, status, properties, dependsOn });
+    this.s3 = new S3({});
+  }
+
+  /**
+   * @param {string} handler - handler.
+   * @returns {void}
+   */
+  _validateHandler(handler) {
+    if (!handler) throw new Error('No handler defined');
+    if (handler.startsWith(LEGACY_BUILT_IN_HANDLER_PREFIX)) {
+      throw new Error(
+        `LambdaBuild no longer supports legacy built-in handler aliases like "${handler}". Pass an explicit handler module path instead.`,
+      );
+    }
+    if (!handler.split('.').pop()) throw new Error('No handler method defined');
+  }
+
+  async _pre_reconcile() {
+    this._validateHandler(this.get('handler'));
+    await super._pre_reconcile();
+  }
+
+  async _reconcile() {
+    const handler = this.get('handler');
+    this._validateHandler(handler);
+
+    const build = await this._build(handler);
+
+    // The bundled code is available in `result.outputFiles`
+    const functionCodeHash = createHash('sha256').update(build).digest('hex');
+
+    this.set(
+      'artifactKey',
+      `actor-artifacts/${this.name}/${functionCodeHash}.zip`,
+    );
+
+    this.set('functionCodeHash', functionCodeHash);
+
+    try {
+      await this.s3.headObject({
+        Bucket: this.get('artifactBucket'),
+        Key: this.get('artifactKey'),
+      });
+      return;
+    } catch (error) {
+      if (!(error instanceof NotFound)) {
+        throw error;
+      }
+    }
+
+    const stream = await this._zip([{ text: build, path: 'index.js' }]);
+
+    await this.s3.putObject({
+      Bucket: this.get('artifactBucket'),
+      Key: this.get('artifactKey'),
+      Body: stream,
+    });
+  }
+
+  /**
+   * Compresses files into a ZIP archive from provided file data.
+   * @param {Object[]} files - An array of objects representing files,
+   *                           each with a `path` and `contents`.
+   *                           Example: [{ path: 'folder1/file1.txt', contents: 'Hello World' }]
+   * @returns {Promise<Buffer>} - A Promise resolving to a Buffer containing the ZIP archive.
+   */
+  async _zip(files) {
+    const zipInstance = new JSZip();
+
+    // Loop over provided files
+    // @ts-ignore
+    for (const { path, text } of files) {
+      // Add file content to the ZIP instance using its path
+      zipInstance.file(path, text);
+    }
+
+    // Generate the ZIP archive as a Buffer
+    return await zipInstance.generateAsync({
+      type: 'nodebuffer',
+      streamFiles: true,
+    });
+  }
+
+  /**
+   * @param {string} handler - handler.
+   * @returns {Promise<string>} - Result.
+   */
+  async _build(handler) {
+    const requirePathParts = handler.split('.');
+    const functionName = requirePathParts.pop();
+    const requirePath = requirePathParts.join('.');
+    const handlerContent = `
+    const { ${functionName}: handler } = require('${requirePath}');
+    // Lambda handler setup to use actor's handler method
+    exports.handler = handler
+    `;
+    const result = await __build({
+      stdin: {
+        contents: handlerContent,
+        resolveDir: dirname(requirePath),
+        sourcefile: 'index.js',
+        loader: 'js',
+      },
+      bundle: true,
+      minify: true,
+      platform: 'node',
+      target: ['node14'],
+      format: 'cjs',
+      write: false,
+    });
+
+    if (!result.outputFiles || !result.outputFiles.length) {
+      throw new Error('Failed to build Lambda handler bundle');
+    }
+
+    return result.outputFiles[0].text;
+  }
+
+  async _destroy() {}
+}
+
+export default LambdaBuild;

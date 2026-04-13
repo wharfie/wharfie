@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { __resolveAdapterName } from '../../../lambdas/lib/db/state/store.js';
+import { __resolveAdapterName } from '../../../src/core/lib/db/state/store.js';
 
 describe('Actor runtime state store adapter selection', () => {
   it('defaults to vanilla even when AWS_REGION is set (no explicit adapter)', () => {

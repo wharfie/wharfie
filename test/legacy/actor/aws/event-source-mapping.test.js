@@ -12,7 +12,7 @@ const { Lambda } = jest.requireMock('@aws-sdk/client-lambda');
 const {
   LambdaFunction,
   EventSourceMapping,
-} = require('../../../lambdas/lib/actor/resources/aws/');
+} = require('../../../lambdas/lib/actor/resources/aws');
 const { getMockDeploymentProperties } = require('../util');
 
 describe('event source mapping IaC', () => {

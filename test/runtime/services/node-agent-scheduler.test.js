@@ -3,7 +3,7 @@
 
 import { jest } from '@jest/globals';
 
-import NodeAgent from '../../../lambdas/lib/actor/runtime/services/node-agent.js';
+import NodeAgent from '../../../src/core/runtime/services/node-agent.js';
 
 describe('NodeAgent scheduler wiring', () => {
   afterEach(() => {

@@ -3,9 +3,9 @@ import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import Function from '../lambdas/lib/actor/resources/builds/function.js';
-import ActorSystem from '../lambdas/lib/actor/resources/builds/actor-system.js';
-import Reconcilable from '../lambdas/lib/actor/resources/reconcilable.js';
+import Function from '../src/core/resources/builds/function.js';
+import ActorSystem from '../src/core/resources/builds/actor-system.js';
+import Reconcilable from '../src/core/resources/reconcilable.js';
 
 import {
   kitchenSinkDefaultTargets,
@@ -18,7 +18,7 @@ import {
   getResourceStatus,
   getResources,
   deleteResource,
-} from '../lambdas/lib/db/state/store.js';
+} from '../src/core/lib/db/state/store.js';
 
 const stateDB = {
   putResource,

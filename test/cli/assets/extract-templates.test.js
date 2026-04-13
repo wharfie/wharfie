@@ -6,17 +6,19 @@ import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 
+const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
+
 // Ensure tests never rely on a real SEA environment.
-jest.unstable_mockModule('node:sea', () => ({
+jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
   isSea: () => false,
   getAsset: (/** @type {string} */ name) => {
     throw new Error(`Unexpected getAsset(${name})`);
   },
 }));
 
-describe('cli/assets/extract-templates', () => {
+describe('src/cli/assets/extract-templates', () => {
   it('extracts template files from a provided in-memory SEA asset provider', async () => {
-    const mod = await import('../../../cli/assets/extract-templates.js');
+    const mod = await import('../../../src/cli/assets/extract-templates.js');
 
     const tmp = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-extract-templates-sea-'),
@@ -71,7 +73,7 @@ describe('cli/assets/extract-templates', () => {
   });
 
   it('falls back to disk copy when SEA assets are unavailable', async () => {
-    const mod = await import('../../../cli/assets/extract-templates.js');
+    const mod = await import('../../../src/cli/assets/extract-templates.js');
 
     const src = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-extract-templates-fs-src-'),

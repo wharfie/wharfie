@@ -26,7 +26,7 @@ describe('tests for Athena', () => {
     process.env.AWS_MOCKS = true;
     S3 = jest.requireMock('@aws-sdk/client-s3').S3;
     jest.requireMock('@aws-sdk/client-glue');
-    Athena = require('../../../lambdas/lib/athena/');
+    Athena = require('../../../lambdas/lib/athena');
   });
 
   afterAll(() => {

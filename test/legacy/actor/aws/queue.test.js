@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url);
 process.env.AWS_MOCKS = true;
 const { SQS } = jest.requireMock('@aws-sdk/client-sqs');
 
-const { Queue } = require('../../../lambdas/lib/actor/resources/aws/');
+const { Queue } = require('../../../lambdas/lib/actor/resources/aws');
 const { getMockDeploymentProperties } = require('../util');
 
 describe('sqs queue IaC', () => {
