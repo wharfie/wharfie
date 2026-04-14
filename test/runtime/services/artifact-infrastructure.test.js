@@ -127,6 +127,33 @@ describe('artifact infrastructure commands', () => {
         args: ['restart', 'artifact-infra-demo.service'],
       },
     ]);
+
+    const plan = createDeployPlan({
+      manifest,
+      artifactPath: '/tmp/wharfie-artifact',
+      releaseRoot: '/srv/wharfie',
+      systemdDir: '/etc/systemd/system',
+      environment: { FOO: 'bar', BAZ: 'qux' },
+      extraArgs: ['--control-port', '8890'],
+      role: 'leader',
+    });
+
+    expect(plan.environment).toMatchObject({
+      FOO: 'bar',
+      BAZ: 'qux',
+      WHARFIE_BOOTSTRAP_MODE: 'state-start',
+      WHARFIE_BOOTSTRAP_ARGS: '["--role","leader","--control-port","8890"]',
+    });
+    expect(plan.unitContent).toContain(
+      `ExecStart=${plan.paths.currentArtifactPath}`,
+    );
+    expect(plan.unitContent).not.toContain('ctl state start');
+    expect(plan.unitContent).toContain(
+      'Environment=WHARFIE_BOOTSTRAP_MODE=state-start',
+    );
+    expect(plan.unitContent).toContain(
+      'Environment=WHARFIE_BOOTSTRAP_ARGS=[\\"--role\\",\\"leader\\",\\"--control-port\\",\\"8890\\"]',
+    );
   });
 
   it('resolves release status, logs, and rollback targets from packaged release metadata', async () => {

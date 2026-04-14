@@ -5,6 +5,7 @@ import FunctionResource from './function-resource.js';
 import SeaBuild from './sea-build.js';
 import MacOSBinarySignature from './macos-binary-signature.js';
 import cli from './actor-system-cli/index.js';
+import { createPackagedAppEntryCode } from './lib/packaged-app-entry-code.js';
 import { createActorSystemResources } from '../../runtime/resources.js';
 import { withResourceScope } from '../resource-scope.js';
 import { createResourceScope } from '../runtime-config.js';
@@ -127,6 +128,53 @@ function buildTargetSelector(target) {
   return `node${target.nodeVersion}-${target.platform}-${target.architecture}${
     target.libc ? `-${target.libc}` : ''
   }`;
+}
+
+/**
+ * @param {unknown} cliSpec - cliSpec.
+ * @returns {{ entrypoint: string, export?: string } | undefined} - Result.
+ */
+function normalizeCliSpec(cliSpec) {
+  if (typeof cliSpec === 'string' && cliSpec.trim()) {
+    return { entrypoint: cliSpec.trim() };
+  }
+
+  if (!cliSpec || typeof cliSpec !== 'object') {
+    return undefined;
+  }
+
+  const cliRecord = /** @type {{ entrypoint?: unknown, export?: unknown }} */ (
+    cliSpec
+  );
+  const cliEntrypoint =
+    cliRecord.entrypoint && typeof cliRecord.entrypoint === 'object'
+      ? /** @type {{ path?: unknown, export?: unknown }} */ (
+          cliRecord.entrypoint
+        )
+      : null;
+
+  const entrypoint =
+    typeof cliRecord.entrypoint === 'string'
+      ? cliRecord.entrypoint.trim()
+      : typeof cliEntrypoint?.path === 'string'
+        ? cliEntrypoint.path.trim()
+        : '';
+
+  if (!entrypoint) {
+    return undefined;
+  }
+
+  const exportName =
+    typeof cliRecord.export === 'string' && cliRecord.export.trim()
+      ? cliRecord.export.trim()
+      : typeof cliEntrypoint?.export === 'string' && cliEntrypoint.export.trim()
+        ? cliEntrypoint.export.trim()
+        : '';
+
+  return {
+    entrypoint,
+    ...(exportName ? { export: exportName } : {}),
+  };
 }
 
 /**
@@ -338,21 +386,11 @@ class ActorSystem extends BuildResourceGroup {
       dependsOn: [node_binary, ...targetFunctions],
       properties: {
         entryCode: () => {
-          const __dirname = import.meta.dirname;
-          return `
-              import cli from '${path.resolve(
-                __dirname,
-                'actor-system-cli',
-                'index.js',
-              )}';
-              import sourceMapSupport from 'source-map-support';
-              (async () => {
-                console.time('overall');
-                sourceMapSupport.install();
-                await cli()
-                console.timeEnd('overall');
-              })();
-          `;
+          const cliSpec = normalizeCliSpec(this.get('cli', undefined));
+          return createPackagedAppEntryCode({
+            cliEntrypointPath: cliSpec?.entrypoint,
+            cliExportName: cliSpec?.export,
+          });
         },
         resolveDir: () => path.dirname(import.meta.dirname),
         nodeBinaryPath: () => node_binary.get('binaryPath'),

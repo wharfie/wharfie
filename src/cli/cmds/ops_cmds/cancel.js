@@ -1,6 +1,8 @@
 import { Command } from 'commander';
 
+import { loadApp } from '../../app/load-app.js';
 import { withOperationsStore } from '../operations-store.js';
+import { getSyntheticAppResourceId } from '../../../core/runtime/app-runs.js';
 import {
   displayFailure,
   displayInstruction,
@@ -8,9 +10,9 @@ import {
 } from '../../output/basic.js';
 
 /**
- * Cancels operations for a given resource ID, operation ID, or operation type.
+ * Cancels operations for a given app resource ID, operation ID, or operation type.
  * @param {import('../../../core/lib/db/tables/operations.js').OperationsTableClient} store - store.
- * @param {string} resource_id - The ID of the resource.
+ * @param {string} resource_id - The synthetic app resource ID.
  * @param {string} [operation_id] - The specific operation ID to cancel.
  * @param {string} [operation_type] - The type of operation to cancel.
  */
@@ -42,15 +44,15 @@ const cancel = async (store, resource_id, operation_id, operation_type) => {
 };
 
 const cancelCommand = new Command('cancel')
-  .description('Cancel operations for a single resource')
-  .argument('<resource_id>', 'Wharfie resource ID')
+  .description('Cancel persisted runs for an app')
+  .option('--dir <dir>', 'Directory containing wharfie.app.js', process.cwd())
   .option('-o, --operationId <operationId>', 'Operation ID')
   .option(
     '-t, --type <type>',
     'Operation type',
     /^(LOAD|BACKFILL|MIGRATE|PIPELINE)$/i,
   )
-  .action(async (resource_id, options) => {
+  .action(async (options) => {
     const { type, operationId } = options;
     const normalizedType = type ? String(type).toUpperCase() : undefined;
 
@@ -60,8 +62,12 @@ const cancelCommand = new Command('cancel')
     }
 
     try {
+      const appDir = options.dir || process.cwd();
+      const { manifest } = await loadApp({ dir: appDir });
+      const resourceId = getSyntheticAppResourceId(manifest);
+
       await withOperationsStore((store) =>
-        cancel(store, resource_id, operationId, normalizedType),
+        cancel(store, resourceId, operationId, normalizedType),
       );
     } catch (err) {
       displayFailure(err);

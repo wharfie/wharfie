@@ -38,6 +38,19 @@ function resolveNodeSeaModule() {
 }
 
 /**
+ * @returns {Record<string, string> | null} - Result.
+ */
+function resolveFallbackAssetMap() {
+  const candidate = /** @type {{ __wharfieSeaAssets?: unknown }} */ (globalThis)
+    .__wharfieSeaAssets;
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+    return null;
+  }
+
+  return /** @type {Record<string, string>} */ (candidate);
+}
+
+/**
  * @param {string} name - SEA asset name.
  * @param {string} [encoding] - Optional asset encoding.
  * @returns {any} - Asset contents.
@@ -45,13 +58,23 @@ function resolveNodeSeaModule() {
 export function getAsset(name, encoding) {
   const resolvedNodeSeaModule = resolveNodeSeaModule();
 
-  if (typeof resolvedNodeSeaModule?.getAsset !== 'function') {
+  if (typeof resolvedNodeSeaModule?.getAsset === 'function') {
+    return typeof encoding === 'string'
+      ? resolvedNodeSeaModule.getAsset(name, encoding)
+      : resolvedNodeSeaModule.getAsset(name);
+  }
+
+  const fallbackAssetMap = resolveFallbackAssetMap();
+  const assetValue = fallbackAssetMap?.[name];
+  if (typeof assetValue !== 'string') {
     throw new Error('node:sea is unavailable in this Node.js runtime');
   }
 
-  return typeof encoding === 'string'
-    ? resolvedNodeSeaModule.getAsset(name, encoding)
-    : resolvedNodeSeaModule.getAsset(name);
+  const buffer = Buffer.from(assetValue, 'base64');
+  if (typeof encoding === 'string' && Buffer.isEncoding(encoding)) {
+    return buffer.toString(/** @type {any} */ (encoding));
+  }
+  return buffer;
 }
 
 /**
@@ -60,9 +83,11 @@ export function getAsset(name, encoding) {
 export function isSea() {
   const resolvedNodeSeaModule = resolveNodeSeaModule();
 
-  return typeof resolvedNodeSeaModule?.isSea === 'function'
-    ? resolvedNodeSeaModule.isSea()
-    : false;
+  if (typeof resolvedNodeSeaModule?.isSea === 'function') {
+    return resolvedNodeSeaModule.isSea();
+  }
+
+  return Boolean(resolveFallbackAssetMap());
 }
 
 export default {

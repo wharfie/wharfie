@@ -5,6 +5,10 @@ import {
   getManifestAppName,
   getManifestPrimaryTarget,
 } from './app-manifest.js';
+import {
+  BOOTSTRAP_MODE_STATE_START,
+  createBootstrapEnvironment,
+} from './bootstrap-mode.js';
 
 /**
  * @param {string} value - value.
@@ -182,7 +186,7 @@ export function createReleasePaths(options) {
  * @property {ReleasePaths} paths - paths.
  * @property {ReleaseRecord} record - record.
  * @property {string} unitContent - unitContent.
- * @property {string[]} execArgs - execArgs.
+ * @property {string[]} bootstrapArgs - bootstrapArgs.
  * @property {Record<string, string>} environment - environment.
  * @property {Array<{ command: string, args: string[] }>} shellCommands - shellCommands.
  */
@@ -212,10 +216,7 @@ export function createDeployPlan(options) {
       .replace(/[-:]/g, '')
       .replace(/\.\d{3}Z$/, 'Z')}`;
   const unitName = `${serviceName}.service`;
-  const execArgs = [
-    'ctl',
-    'state',
-    'start',
+  const bootstrapArgs = [
     '--role',
     options.role || 'all',
     ...(Array.isArray(options.extraArgs) ? options.extraArgs : []),
@@ -231,7 +232,7 @@ export function createDeployPlan(options) {
   const workingDirectory = path.resolve(
     options.workingDirectory || paths.currentLinkPath,
   );
-  const environment = Object.keys(options.environment || {}).reduce(
+  const configuredEnvironment = Object.keys(options.environment || {}).reduce(
     (acc, key) => {
       const value = options.environment?.[key];
       if (typeof value === 'string') {
@@ -241,9 +242,14 @@ export function createDeployPlan(options) {
     },
     /** @type {Record<string, string>} */ ({}),
   );
-  const execStart = [paths.currentArtifactPath, ...execArgs]
-    .map((segment) => shellQuote(segment))
-    .join(' ');
+  const environment = {
+    ...configuredEnvironment,
+    ...createBootstrapEnvironment({
+      mode: BOOTSTRAP_MODE_STATE_START,
+      args: bootstrapArgs,
+    }),
+  };
+  const execStart = shellQuote(paths.currentArtifactPath);
   const unitContent = buildLinuxSystemdUnit({
     description: `${appName} artifact service`,
     execStart,
@@ -277,7 +283,7 @@ export function createDeployPlan(options) {
     paths,
     record,
     unitContent,
-    execArgs,
+    bootstrapArgs,
     environment,
     shellCommands: [
       { command: 'systemctl', args: ['daemon-reload'] },

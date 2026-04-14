@@ -28,6 +28,13 @@ const packageDemoDir = path.join(
   'apps',
   'package-demo',
 );
+const plainPackageDemoDir = path.join(
+  repoRoot,
+  'test',
+  'fixtures',
+  'apps',
+  'plain-package-demo',
+);
 const kitchenSinkDir = path.join(
   repoRoot,
   'scratch',
@@ -191,15 +198,12 @@ describe('wharfie app commands', () => {
 
     const payload = JSON.parse(result.stdout);
     expect(payload.app).toEqual({ name: 'kitchen-sink-demo' });
-    expect(payload.functions).toEqual([
-      expect.objectContaining({
-        name: 'start',
-        entrypoint: expect.objectContaining({
-          export: 'start',
-          path: expect.stringContaining(
-            path.join('scratch', 'functions', 'start.js'),
-          ),
-        }),
+    expect(payload.activities).toEqual({
+      start: expect.objectContaining({
+        entrypoint: expect.stringContaining(
+          path.join('scratch', 'functions', 'start.js'),
+        ),
+        export: 'start',
         resources: expect.objectContaining({
           db: expect.objectContaining({ adapter: 'vanilla' }),
           queue: expect.objectContaining({ adapter: 'vanilla' }),
@@ -209,7 +213,7 @@ describe('wharfie app commands', () => {
           normalizeExpectedExternals(kitchenSinkExternalDependencies),
         ),
       }),
-    ]);
+    });
   });
 
   it('packages every app target when no target filter is provided and embeds a target-specific manifest asset', () => {
@@ -398,6 +402,51 @@ describe('wharfie app commands', () => {
       alternateTarget,
       currentTarget,
     ]);
+  });
+
+  it('packages a plain-object CLI app and the artifact defaults to the developer CLI surface', () => {
+    const outputDir = path.join(
+      os.tmpdir(),
+      'wharfie-package-command-test',
+      'plain-object-cli',
+      String(process.pid),
+    );
+
+    const result = runCli([
+      'app',
+      'package',
+      plainPackageDemoDir,
+      '--output-dir',
+      outputDir,
+      '--no-pretty',
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+
+    /** @type {{ app: { name: string }, targets: { nodeVersion: string, platform: string, architecture: string, libc?: string }[], artifacts: { path: string, target: { nodeVersion: string, platform: string, architecture: string, libc?: string } }[] }} */
+    const payload = JSON.parse(result.stdout);
+    expect(payload.app).toEqual({ name: 'plain-package-demo' });
+    expect(payload.targets).toEqual([currentTarget]);
+    expect(payload.artifacts).toHaveLength(1);
+    expect(existsSync(payload.artifacts[0].path)).toBe(true);
+
+    const artifactRun = spawnSync(payload.artifacts[0].path, [], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        WHARFIE_ARTIFACT_BUCKET: 'service-bucket',
+      },
+    });
+
+    expect(artifactRun.status).toBe(0);
+    expect(artifactRun.stdout).toContain('plain-package-demo cli []');
+    expect(artifactRun.stdout).toContain('overall');
+    expect(artifactRun.stdout).not.toContain('Wharfie function commands');
+    expect(artifactRun.stdout).not.toContain(
+      'Self-managing artifact infrastructure commands',
+    );
   });
 
   it('fails with a helpful error when a requested target does not exist', () => {
