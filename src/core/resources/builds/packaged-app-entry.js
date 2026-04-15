@@ -51,12 +51,18 @@ export function getBootstrapMode(environment = process.env) {
  */
 export function getRuntimeCommand(environment = process.env) {
   const bootstrapInvocation = resolveBootstrapInvocation(environment);
+  const runtimeCommand =
+    typeof environment.WHARFIE_RUNTIME_COMMAND === 'string'
+      ? environment.WHARFIE_RUNTIME_COMMAND.trim()
+      : '';
+
   if (bootstrapInvocation) {
-    if (
-      bootstrapInvocation.mode === BOOTSTRAP_MODE_STATE_START ||
-      bootstrapInvocation.mode === 'runtime'
-    ) {
+    if (bootstrapInvocation.mode === BOOTSTRAP_MODE_STATE_START) {
       return 'start';
+    }
+
+    if (bootstrapInvocation.mode === 'runtime') {
+      return runtimeCommand || 'start';
     }
 
     throw new Error(
@@ -64,11 +70,7 @@ export function getRuntimeCommand(environment = process.env) {
     );
   }
 
-  const command =
-    typeof environment.WHARFIE_RUNTIME_COMMAND === 'string'
-      ? environment.WHARFIE_RUNTIME_COMMAND.trim()
-      : '';
-  return command || 'start';
+  return runtimeCommand || 'start';
 }
 
 /**
@@ -78,6 +80,13 @@ export function getRuntimeCommand(environment = process.env) {
 function getRuntimeArgs(environment = process.env) {
   const bootstrapInvocation = resolveBootstrapInvocation(environment);
   if (bootstrapInvocation) {
+    if (bootstrapInvocation.mode === 'runtime') {
+      const runtimeArgsValue = environment.WHARFIE_RUNTIME_ARGS;
+      return typeof runtimeArgsValue === 'string' && runtimeArgsValue.trim()
+        ? parseBootstrapArgs(runtimeArgsValue, 'WHARFIE_RUNTIME_ARGS')
+        : bootstrapInvocation.args;
+    }
+
     return bootstrapInvocation.args;
   }
 
