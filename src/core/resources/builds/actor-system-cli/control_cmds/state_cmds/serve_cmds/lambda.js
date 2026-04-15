@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import Function from '../../../../function.js';
+import makeOperationsStore from '../../../../../../lib/graph/operations-store.js';
 import { createActorSystemResources } from '../../../../../../runtime/resources.js';
 import { createGrpcRpcClient } from '../../../../../../runtime/services/rpc-grpc.js';
 import { startLambdaService } from '../../../../../../runtime/services/lambda-service.js';
@@ -107,6 +108,20 @@ const lambdaCmd = new Command('lambda')
 
     const objectStorage = local.objectStorage;
     const pollQueueUrls = bootstrap.pollQueueUrls;
+    const operationsTableName =
+      typeof process.env.OPERATIONS_TABLE === 'string' &&
+      process.env.OPERATIONS_TABLE.trim()
+        ? process.env.OPERATIONS_TABLE.trim()
+        : undefined;
+    const appName =
+      typeof bootstrap.manifest?.app?.name === 'string' &&
+      bootstrap.manifest.app.name.trim()
+        ? bootstrap.manifest.app.name.trim()
+        : undefined;
+    const operationsStore =
+      db && operationsTableName
+        ? makeOperationsStore({ db, tableName: operationsTableName })
+        : undefined;
 
     const svc = await startLambdaService({
       host: String(opts.host),
@@ -131,6 +146,8 @@ const lambdaCmd = new Command('lambda')
               waitTimeSeconds: Number(opts.pollWaitSeconds),
               maxNumberOfMessages: Number(opts.pollMaxMessages),
               visibilityTimeout: Number(opts.pollVisibilityTimeout),
+              operationsStore,
+              appName,
               log: (msg, extra) =>
                 console.error('[lambda-service:poll]', msg, extra ?? ''),
             }

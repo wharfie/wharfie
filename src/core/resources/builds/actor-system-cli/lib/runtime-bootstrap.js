@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { resolveSharedResourceSpecs } from '../../../../runtime/shared-resource-registry.js';
 import {
   getManifestFunctions,
   getManifestPollQueueUrls,
@@ -156,17 +157,27 @@ export async function loadRuntimeBootstrap(opts = {}, options = {}) {
     ? loadResourcesSpec(opts)
     : undefined;
   const manifestResources = getManifestResources(manifest);
-  const resourcesSpec = isObjectRecord(explicitResources)
+  const unresolvedResourcesSpec = isObjectRecord(explicitResources)
     ? explicitResources
     : isObjectRecord(manifestResources)
       ? manifestResources
       : {};
+  const resourcesSpec = isObjectRecord(unresolvedResourcesSpec)
+    ? await resolveSharedResourceSpecs(unresolvedResourcesSpec)
+    : {};
 
   const explicitPollQueueUrls = normalizeStringArray(opts.pollQueueUrl);
+  const pollQueueManifest = manifest
+    ? {
+        ...manifest,
+        capabilities: resourcesSpec,
+        resources: resourcesSpec,
+      }
+    : resourcesSpec;
   const pollQueueUrls =
     explicitPollQueueUrls.length > 0
       ? explicitPollQueueUrls
-      : getManifestPollQueueUrls(manifest);
+      : getManifestPollQueueUrls(pollQueueManifest);
   const schedulerTriggers = extractCronTriggers(manifest || resourcesSpec);
   const functions = getManifestFunctions(manifest);
 

@@ -1,10 +1,12 @@
 import { setTimeout as delay } from 'node:timers/promises';
 
+import { runPersistedEventActivity } from '../../lib/graph/app-run.js';
 import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
 
 /**
  * @typedef LambdaInvokeRequest
  * @property {string} functionName - functionName.
+ * @property {string} [activity] - activity.
  * @property {any} [event] - event.
  * @property {any} [context] - context.
  */
@@ -16,6 +18,8 @@ import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
  * @property {number} [waitTimeSeconds] - Long poll seconds (0-20).
  * @property {number} [maxNumberOfMessages] - 1-10.
  * @property {number} [visibilityTimeout] - seconds
+ * @property {import('../../lib/db/tables/operations.js').OperationsTableClient} [operationsStore] - operationsStore.
+ * @property {string} [appName] - appName.
  * @property {(msg: string, extra?: any) => void} [log] - log.
  */
 
@@ -29,14 +33,42 @@ import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
  */
 
 /**
+ * @param {unknown} value - value.
+ * @returns {string | undefined} - Result.
+ */
+function normalizeOptionalString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+/**
+ * @param {any} value - value.
+ * @returns {Record<string, any> | undefined} - Result.
+ */
+function normalizeContext(value) {
+  return value && typeof value === 'object' ? value : undefined;
+}
+
+/**
+ * @param {any} payload - payload.
+ * @returns {string | undefined} - Result.
+ */
+function resolveActivityName(payload) {
+  return (
+    normalizeOptionalString(payload?.activity) ||
+    normalizeOptionalString(payload?.actor) ||
+    normalizeOptionalString(payload?.functionName)
+  );
+}
+
+/**
  * Start the Lambda service (execution plane).
  *
  * - Exposes a gRPC `Invoke` API for explicit invocations.
  * - Optionally runs one or more queue poll loops that decode messages into invocations.
  *
  * Message format (Queue Message Body):
- * v1: { "functionName": "my-function", "event": { ... }, "context": { ... } }
- * v2: { "v": 2, "actor": "my-function", "event": { ... }, "context": { ... } }
+ * public: { "activity": "my-activity", "event": { ... }, "context": { ... } }
+ * legacy envelopes using "actor" or "functionName" are still normalized for internal compatibility.
  * @param {LambdaServiceOptions} options - options.
  * @returns {Promise<{ address: string, host: string, port: number, close: () => Promise<void> }>} - Result.
  */
@@ -124,26 +156,58 @@ export async function startLambdaService({
                 continue;
               }
 
-              // Compatibility: accept either legacy {functionName,...} or v2 envelope {actor,...}
-              const functionName =
-                typeof payload?.actor === 'string'
-                  ? payload.actor
-                  : payload?.functionName;
-              if (!functionName || typeof functionName !== 'string') {
+              const activity = resolveActivityName(payload);
+              if (!activity) {
                 pollLog &&
-                  pollLog('lambda poll: missing functionName', {
+                  pollLog('lambda poll: missing activity', {
                     queueUrl,
                     payload,
                   });
                 continue;
               }
 
+              const invocationContext = {
+                ...(normalizeContext(payload?.context) || {}),
+                trigger: {
+                  source: 'event',
+                  queueUrl,
+                  ...(normalizeOptionalString(msg?.MessageId)
+                    ? { messageId: normalizeOptionalString(msg?.MessageId) }
+                    : {}),
+                },
+              };
+
               try {
-                await execute({
-                  functionName,
-                  event: payload?.event,
-                  context: payload?.context,
-                });
+                if (poll.operationsStore && poll.appName) {
+                  await runPersistedEventActivity({
+                    store: poll.operationsStore,
+                    appName: poll.appName,
+                    activity,
+                    event: payload?.event,
+                    context: invocationContext,
+                    payload,
+                    message: {
+                      queueUrl,
+                      messageId: normalizeOptionalString(msg?.MessageId),
+                      receiptHandle: normalizeOptionalString(receipt),
+                    },
+                    execute: async ({ functionName, event, context }) => {
+                      await execute({
+                        functionName,
+                        activity,
+                        event,
+                        context,
+                      });
+                    },
+                  });
+                } else {
+                  await execute({
+                    functionName: activity,
+                    activity,
+                    event: payload?.event,
+                    context: invocationContext,
+                  });
+                }
 
                 // Ack/delete only on success.
                 await queue.deleteMessage({
@@ -162,7 +226,10 @@ export async function startLambdaService({
                     'lambda poll: invocation failed (message will retry)',
                     {
                       queueUrl,
-                      functionName,
+                      activity,
+                      ...(normalizeOptionalString(msg?.MessageId)
+                        ? { messageId: normalizeOptionalString(msg?.MessageId) }
+                        : {}),
                       error: msgStr,
                     },
                   );

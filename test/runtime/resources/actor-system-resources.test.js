@@ -4,12 +4,19 @@
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
+
+import { afterEach, describe, expect, it } from '@jest/globals';
 import { fileURLToPath } from 'node:url';
 
+import { SHARED_RESOURCE_REGISTRY_FILE_NAME } from '../../../src/core/runtime/shared-resource-registry.js';
 import Function from '../../../src/core/resources/builds/function.js';
 import ActorSystem from '../../../src/core/resources/builds/actor-system.js';
 import { createActorSystemResources } from '../../../src/core/runtime/resources.js';
 import sandboxWorker from '../../../src/core/lib/code-execution/worker.js';
+
+afterEach(() => {
+  delete process.env.CONFIG_DIR;
+});
 
 describe('ActorSystem runtime resources', () => {
   it('createActorSystemResources: vanilla adapters create usable clients', async () => {
@@ -29,6 +36,59 @@ describe('ActorSystem runtime resources', () => {
     expect(typeof resources.db?.put).toBe('function');
     expect(typeof resources.queue?.sendMessage).toBe('function');
     expect(typeof resources.objectStorage?.putObject).toBe('function');
+
+    await close();
+  });
+
+  it('createActorSystemResources: resolves shared refs from the config dir registry', async () => {
+    const configDir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-shared-resource-config-'),
+    );
+    process.env.CONFIG_DIR = configDir;
+
+    await fsp.writeFile(
+      path.join(configDir, SHARED_RESOURCE_REGISTRY_FILE_NAME),
+      JSON.stringify(
+        {
+          db: {
+            appdb: {
+              adapter: 'vanilla',
+              options: { path: path.join(configDir, 'db') },
+            },
+          },
+          queue: {
+            jobs: {
+              adapter: 'vanilla',
+              options: { path: path.join(configDir, 'queue') },
+            },
+          },
+          objectStorage: {
+            blobs: {
+              adapter: 'vanilla',
+              options: { path: path.join(configDir, 'object-storage') },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+
+    const { resources, close } = await createActorSystemResources({
+      db: { ref: 'appdb' },
+      queue: { ref: 'jobs' },
+      objectStorage: { ref: 'blobs' },
+    });
+    if (!resources.db || !resources.queue || !resources.objectStorage) {
+      throw new Error(
+        'Expected shared refs to resolve to initialized resources',
+      );
+    }
+
+    expect(typeof resources.db.put).toBe('function');
+    expect(typeof resources.queue.sendMessage).toBe('function');
+    expect(typeof resources.objectStorage.putObject).toBe('function');
 
     await close();
   });

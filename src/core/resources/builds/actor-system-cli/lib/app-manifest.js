@@ -199,7 +199,11 @@ export function getManifestAppName(manifest) {
  * @returns {any[]} - Result.
  */
 export function getManifestFunctions(manifest) {
-  return Array.isArray(manifest?.functions) ? manifest.functions : [];
+  if (Array.isArray(manifest?.functions)) {
+    return manifest.functions;
+  }
+
+  return Array.isArray(manifest?.activities) ? manifest.activities : [];
 }
 
 /**
