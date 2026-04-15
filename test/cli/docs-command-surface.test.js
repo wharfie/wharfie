@@ -95,7 +95,10 @@ describe('docs command surface', () => {
       'wharfie app manifest ./path/to/wharfie.app.js',
     );
     expect(quickstart).toContain(
-      `wharfie app run <function_name> --dir ./path/to/app --event '{"who":"cli-user"}'`,
+      `wharfie app run <activity_name> --dir ./path/to/app --event '{\"who\":\"cli-user\"}'`,
+    );
+    expect(quickstart).toContain(
+      `wharfie ops run --activity <activity_name> --dir ./path/to/app --event '{\"who\":\"cli-user\"}'`,
     );
   });
 });

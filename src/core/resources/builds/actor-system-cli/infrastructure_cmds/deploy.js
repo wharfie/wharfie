@@ -140,7 +140,7 @@ export function createDeployCommand(deps = {}) {
     )
     .option(
       '--start-arg <arg>',
-      'Additional hidden runtime bootstrap argument passed to the packaged artifact (repeatable)',
+      'Additional runtime bootstrap argument passed to the packaged artifact (repeatable)',
       appendRepeatableOption,
       /** @type {string[]} */ ([]),
     )

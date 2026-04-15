@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { resolveSharedResourceSpecs } from '../../../../runtime/shared-resource-registry.js';
 import {
+  getManifestActivities,
   getManifestFunctions,
   getManifestPollQueueUrls,
   getManifestResources,
@@ -95,6 +96,7 @@ function normalizeStringArray(value) {
  * Extract cron triggers from a manifest/config-like object.
  *
  * Supported shapes (MVP):
+ * - { scheduler: { triggers: [{ activity, cron }] } }
  * - { scheduler: { triggers: [{ actor, cron }] } }
  * - { cronTriggers: [{ actor, cron }] }
  * - { cron: [{ actor, cron }] }
@@ -119,11 +121,13 @@ export function extractCronTriggers(spec) {
     for (const trigger of candidate) {
       if (!isObjectRecord(trigger)) continue;
       const actor =
-        typeof trigger.actor === 'string'
-          ? trigger.actor
-          : typeof trigger.functionName === 'string'
-            ? trigger.functionName
-            : null;
+        typeof trigger.activity === 'string'
+          ? trigger.activity
+          : typeof trigger.actor === 'string'
+            ? trigger.actor
+            : typeof trigger.functionName === 'string'
+              ? trigger.functionName
+              : null;
       const cron = typeof trigger.cron === 'string' ? trigger.cron : null;
       if (!actor || !cron) continue;
       triggers.push({ actor: actor.trim(), cron: cron.trim() });
@@ -167,7 +171,7 @@ export async function loadRuntimeBootstrap(opts = {}, options = {}) {
     : {};
 
   const explicitPollQueueUrls = normalizeStringArray(opts.pollQueueUrl);
-  const pollQueueManifest = manifest
+  const pollQueueSource = manifest
     ? {
         ...manifest,
         capabilities: resourcesSpec,
@@ -177,9 +181,10 @@ export async function loadRuntimeBootstrap(opts = {}, options = {}) {
   const pollQueueUrls =
     explicitPollQueueUrls.length > 0
       ? explicitPollQueueUrls
-      : getManifestPollQueueUrls(pollQueueManifest);
+      : getManifestPollQueueUrls(pollQueueSource);
   const schedulerTriggers = extractCronTriggers(manifest || resourcesSpec);
   const functions = getManifestFunctions(manifest);
+  const activities = getManifestActivities(manifest);
 
   return {
     manifest,
@@ -190,7 +195,9 @@ export async function loadRuntimeBootstrap(opts = {}, options = {}) {
       db: resourcesSpec.db !== undefined,
       queue: resourcesSpec.queue !== undefined,
       objectStorage: resourcesSpec.objectStorage !== undefined,
-      lambda: manifest ? functions.length > 0 : true,
+      lambda: manifest
+        ? functions.length > 0 || Object.keys(activities).length > 0
+        : true,
       scheduler: schedulerTriggers.length > 0,
     },
   };

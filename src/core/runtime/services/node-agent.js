@@ -165,12 +165,16 @@ function createServicePlan(resourcesSpec, manifest) {
   const functions = Array.isArray(manifest?.functions)
     ? manifest.functions
     : [];
+  const activities =
+    manifest && typeof manifest.activities === 'object' && manifest.activities
+      ? Object.keys(manifest.activities)
+      : [];
   const schedulerTriggers = extractCronTriggers(manifest || resourceConfig);
 
   return {
     db: resourceConfig.db !== undefined,
     queue: resourceConfig.queue !== undefined,
-    lambda: manifest ? functions.length > 0 : true,
+    lambda: manifest ? functions.length > 0 || activities.length > 0 : true,
     scheduler: schedulerTriggers.length > 0,
   };
 }
@@ -185,6 +189,72 @@ function createChildManifestEnv(manifest) {
   }
 
   return { WHARFIE_APP_MANIFEST: JSON.stringify(manifest) };
+}
+
+/**
+ * @param {string[]} prefixArgs - prefixArgs.
+ * @returns {boolean} - Result.
+ */
+function usesPackagedRuntime(prefixArgs) {
+  return !Array.isArray(prefixArgs) || prefixArgs.length === 0;
+}
+
+/**
+ * @param {string} runtimeCommand - runtimeCommand.
+ * @param {string[]} runtimeArgs - runtimeArgs.
+ * @param {string[]} prefixArgs - prefixArgs.
+ * @returns {string[]} - Result.
+ */
+function createLegacySpawnArgs(runtimeCommand, runtimeArgs, prefixArgs) {
+  if (runtimeCommand === 'start') {
+    return [...prefixArgs, 'ctl', 'state', 'start', ...runtimeArgs];
+  }
+
+  if (runtimeCommand === 'serve-db') {
+    return [...prefixArgs, 'ctl', 'state', 'serve', 'db', ...runtimeArgs];
+  }
+
+  if (runtimeCommand === 'serve-queue') {
+    return [...prefixArgs, 'ctl', 'state', 'serve', 'queue', ...runtimeArgs];
+  }
+
+  if (runtimeCommand === 'serve-lambda') {
+    return [...prefixArgs, 'ctl', 'state', 'serve', 'lambda', ...runtimeArgs];
+  }
+
+  return [...prefixArgs, ...runtimeArgs];
+}
+
+/**
+ * @param {string} name - name.
+ * @param {NodeAgentOptions} options - options.
+ * @param {Record<string, string>} childEnv - childEnv.
+ * @param {string} runtimeCommand - runtimeCommand.
+ * @param {string[]} runtimeArgs - runtimeArgs.
+ * @returns {ServiceChild} - Result.
+ */
+function spawnManagedService(
+  name,
+  options,
+  childEnv,
+  runtimeCommand,
+  runtimeArgs,
+) {
+  if (usesPackagedRuntime(options.prefixArgs)) {
+    return spawnService(name, options.cmd, [], {
+      ...childEnv,
+      WHARFIE_BOOTSTRAP_MODE: 'runtime',
+      WHARFIE_RUNTIME_COMMAND: runtimeCommand,
+      WHARFIE_RUNTIME_ARGS: JSON.stringify(runtimeArgs),
+    });
+  }
+
+  return spawnService(
+    name,
+    options.cmd,
+    createLegacySpawnArgs(runtimeCommand, runtimeArgs, options.prefixArgs),
+    childEnv,
+  );
 }
 
 export default class NodeAgent {
@@ -239,44 +309,24 @@ export default class NodeAgent {
     if (spawnServices && o.role !== 'worker') {
       if (servicePlan.db && !this.dbAddress) {
         this.children.push(
-          spawnService(
-            'db',
-            o.cmd,
-            [
-              ...o.prefixArgs,
-              'ctl',
-              'state',
-              'serve',
-              'db',
-              '--host',
-              String(o.dbHost),
-              '--port',
-              String(o.dbPort),
-            ],
-            childEnv,
-          ),
+          spawnManagedService('db', o, childEnv, 'serve-db', [
+            '--host',
+            String(o.dbHost),
+            '--port',
+            String(o.dbPort),
+          ]),
         );
         this.dbAddress = `${o.dbHost}:${o.dbPort}`;
       }
 
       if (servicePlan.queue && !this.queueAddress) {
         this.children.push(
-          spawnService(
-            'queue',
-            o.cmd,
-            [
-              ...o.prefixArgs,
-              'ctl',
-              'state',
-              'serve',
-              'queue',
-              '--host',
-              String(o.queueHost),
-              '--port',
-              String(o.queuePort),
-            ],
-            childEnv,
-          ),
+          spawnManagedService('queue', o, childEnv, 'serve-queue', [
+            '--host',
+            String(o.queueHost),
+            '--port',
+            String(o.queuePort),
+          ]),
         );
         this.queueAddress = `${o.queueHost}:${o.queuePort}`;
       }
@@ -297,12 +347,8 @@ export default class NodeAgent {
     }
 
     if (spawnServices && servicePlan.lambda) {
+      /** @type {string[]} */
       const lambdaArgs = [
-        ...o.prefixArgs,
-        'ctl',
-        'state',
-        'serve',
-        'lambda',
         '--host',
         String(o.lambdaHost),
         '--port',
@@ -320,7 +366,9 @@ export default class NodeAgent {
         lambdaArgs.push('--poll-queue-url', qUrl);
       }
 
-      this.children.push(spawnService('lambda', o.cmd, lambdaArgs, childEnv));
+      this.children.push(
+        spawnManagedService('lambda', o, childEnv, 'serve-lambda', lambdaArgs),
+      );
     }
 
     await this._maybeStartScheduler();

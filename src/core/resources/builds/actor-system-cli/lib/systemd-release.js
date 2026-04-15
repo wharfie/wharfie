@@ -186,6 +186,7 @@ export function createReleasePaths(options) {
  * @property {ReleasePaths} paths - paths.
  * @property {ReleaseRecord} record - record.
  * @property {string} unitContent - unitContent.
+ * @property {string[]} execArgs - execArgs.
  * @property {string[]} bootstrapArgs - bootstrapArgs.
  * @property {Record<string, string>} environment - environment.
  * @property {Array<{ command: string, args: string[] }>} shellCommands - shellCommands.
@@ -221,6 +222,8 @@ export function createDeployPlan(options) {
     options.role || 'all',
     ...(Array.isArray(options.extraArgs) ? options.extraArgs : []),
   ];
+  /** @type {string[]} */
+  const execArgs = [];
   const paths = createReleasePaths({
     appName,
     releaseRoot: options.releaseRoot || '/var/lib/wharfie',
@@ -283,6 +286,7 @@ export function createDeployPlan(options) {
     paths,
     record,
     unitContent,
+    execArgs,
     bootstrapArgs,
     environment,
     shellCommands: [

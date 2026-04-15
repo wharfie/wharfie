@@ -2,17 +2,19 @@ import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
 import ActorSystem from '../../core/resources/builds/actor-system.js';
-import FunctionResource from '../../core/resources/builds/function-resource.js';
-import WharfieFunction from '../../core/resources/builds/function.js';
 import SeaBuild from '../../core/resources/builds/sea-build.js';
 import {
   APP_MANIFEST_ASSET_NAME,
   writeEmbeddedAppManifestAsset,
 } from '../../core/resources/builds/lib/app-manifest-asset.js';
-import { createPackagedAppEntryCode } from '../../core/resources/builds/lib/packaged-app-entry-code.js';
 import { withResourceScope } from '../../core/resources/resource-scope.js';
 import { createResourceScope } from '../../core/resources/runtime-config.js';
-import { createActorSystemResources } from '../../core/runtime/resources.js';
+import {
+  createManifestActivityFunction,
+  getManifestActivityNames,
+  getManifestResourcesSpec,
+  invokeManifestActivity,
+} from '../../core/runtime/app-runs.js';
 
 import { loadApp } from './load-app.js';
 
@@ -24,24 +26,19 @@ import { loadApp } from './load-app.js';
 /**
  * @typedef RunLocalAppOptions
  * @property {string} dir - App directory.
- * @property {string} activityName - Activity name.
+ * @property {string} [activityName] - Activity name.
+ * @property {string} [functionName] - Compatibility alias for activity name.
  * @property {string | undefined} [eventInput] - Event JSON string.
  * @property {string | undefined} [contextInput] - Context JSON string.
  * @property {string | undefined} [stdinInput] - STDIN payload.
  */
 
 /**
- * @typedef {import('node:process')['platform']} PackageArtifactPlatform
- * @typedef {import('node:process')['arch']} PackageArtifactArchitecture
- * @typedef {import('detect-libc').GLIBC|import('detect-libc').MUSL} PackageArtifactLibc
- */
-
-/**
  * @typedef PackageArtifactTarget
  * @property {string} nodeVersion - nodeVersion.
- * @property {PackageArtifactPlatform} platform - platform.
- * @property {PackageArtifactArchitecture} architecture - architecture.
- * @property {PackageArtifactLibc} [libc] - libc.
+ * @property {string} platform - platform.
+ * @property {string} architecture - architecture.
+ * @property {string} [libc] - libc.
  */
 
 /**
@@ -105,86 +102,97 @@ export function stringifyJson(value, options = {}) {
 }
 
 /**
- * @param {{ functions?: { name: string }[] }} manifest - manifest.
- * @returns {string[]} - Result.
- */
-function getAvailableActivityNames(manifest) {
-  if (!Array.isArray(manifest.functions)) {
-    return [];
-  }
-
-  return manifest.functions
-    .map((func) => (typeof func?.name === 'string' ? func.name.trim() : ''))
-    .filter(Boolean)
-    .sort((left, right) => left.localeCompare(right));
-}
-
-/**
- * @param {{ functions?: any[] }} manifest - manifest.
- * @param {string} activityName - activityName.
+ * @param {any} value - value.
  * @returns {any} - Result.
  */
-function getManifestActivityDefinition(manifest, activityName) {
-  const trimmedName = String(activityName || '').trim();
-  const functions = Array.isArray(manifest.functions) ? manifest.functions : [];
-  const definition = functions.find(
-    (func) =>
-      typeof func?.name === 'string' && func.name.trim() === trimmedName,
+function cloneJson(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+/**
+ * @param {RunLocalAppOptions} options - options.
+ * @param {any} manifest - manifest.
+ * @param {any} publicManifest - publicManifest.
+ * @returns {string} - Result.
+ */
+function resolveActivityName(options, manifest, publicManifest) {
+  const activityName =
+    typeof options.activityName === 'string' && options.activityName.trim()
+      ? options.activityName.trim()
+      : typeof options.functionName === 'string' && options.functionName.trim()
+        ? options.functionName.trim()
+        : '';
+
+  if (activityName) {
+    return activityName;
+  }
+
+  const availableActivities = getManifestActivityNames(
+    manifest,
+    publicManifest,
+  );
+  if (availableActivities.length === 1) {
+    return availableActivities[0];
+  }
+
+  throw new Error('Activity name is required.');
+}
+
+/**
+ * @param {{ appExport: any, manifest: any, publicManifest: any }} loaded - loaded.
+ * @returns {ActorSystem} - Result.
+ */
+function toPackageableActorSystem(loaded) {
+  if (loaded.appExport instanceof ActorSystem) {
+    return loaded.appExport;
+  }
+
+  const manifest = loaded.manifest;
+  const publicManifest = loaded.publicManifest;
+  const cliEntrypoint =
+    typeof publicManifest?.cli?.entrypoint === 'string' &&
+    publicManifest.cli.entrypoint
+      ? publicManifest.cli.entrypoint
+      : undefined;
+
+  if (!cliEntrypoint) {
+    throw new Error(
+      'Manifest-defined app packaging requires cli.entrypoint in wharfie.app.js.',
+    );
+  }
+
+  const functions = getManifestActivityNames(manifest, publicManifest).map(
+    (activityName) =>
+      createManifestActivityFunction({
+        manifest,
+        publicManifest,
+        activityName,
+      }),
   );
 
-  if (definition) {
-    return definition;
-  }
-
-  const availableActivities = getAvailableActivityNames(manifest);
-  const suggestions = availableActivities.length
-    ? ` Available activities: ${availableActivities.join(', ')}`
-    : '';
-  throw new Error(`Unknown activity '${trimmedName}'.${suggestions}`);
-}
-
-/**
- * @param {any} manifestFunction - manifestFunction.
- * @returns {WharfieFunction} - Result.
- */
-function createManifestActivity(manifestFunction) {
-  return new WharfieFunction({
-    name: manifestFunction.name,
-    entrypoint: manifestFunction.entrypoint,
-    properties: {
-      ...(Array.isArray(manifestFunction.external)
-        ? { external: manifestFunction.external }
-        : {}),
-      ...(isObjectRecord(manifestFunction.environmentVariables)
-        ? { environmentVariables: manifestFunction.environmentVariables }
-        : {}),
-      ...(isObjectRecord(manifestFunction.resources)
-        ? { resources: manifestFunction.resources }
-        : {}),
+  const properties = /** @type {any} */ ({
+    targets: Array.isArray(publicManifest.targets)
+      ? publicManifest.targets
+      : Array.isArray(manifest.targets)
+        ? manifest.targets
+        : [],
+    resources: getManifestResourcesSpec(manifest, publicManifest),
+    ...(Array.isArray(manifest.workflows)
+      ? { workflows: manifest.workflows }
+      : {}),
+    ...(isObjectRecord(manifest.scheduler)
+      ? { scheduler: manifest.scheduler }
+      : {}),
+    cli: {
+      entrypoint: cliEntrypoint,
     },
   });
-}
 
-/**
- * @param {any} manifest - manifest.
- * @returns {Record<string, any>} - Result.
- */
-function getManifestResourceSpecs(manifest) {
-  if (isObjectRecord(manifest?.resources)) {
-    return manifest.resources;
-  }
-  if (isObjectRecord(manifest?.capabilities)) {
-    return manifest.capabilities;
-  }
-  return {};
-}
-
-/**
- * @param {any} manifest - manifest.
- * @returns {Promise<{ resources: Record<string, any>, close: () => Promise<void> }>} - Result.
- */
-function createManifestRuntimeResources(manifest) {
-  return createActorSystemResources(getManifestResourceSpecs(manifest));
+  return new ActorSystem({
+    name: manifest.app.name,
+    functions,
+    properties,
+  });
 }
 
 /**
@@ -226,13 +234,9 @@ function getSeaBuildResources(actorSystem) {
 function cloneTarget(target) {
   return {
     nodeVersion: String(target.nodeVersion),
-    platform: /** @type {PackageArtifactPlatform} */ (target.platform),
-    architecture: /** @type {PackageArtifactArchitecture} */ (
-      target.architecture
-    ),
-    ...(typeof target.libc === 'string'
-      ? { libc: /** @type {PackageArtifactLibc} */ (target.libc) }
-      : {}),
+    platform: String(target.platform),
+    architecture: String(target.architecture),
+    ...(typeof target.libc === 'string' ? { libc: target.libc } : {}),
   };
 }
 
@@ -355,13 +359,9 @@ function applyTargetSelection(actorSystem, selectedTargets) {
 function getBuildTarget(build) {
   return {
     nodeVersion: String(build.get('nodeVersion')),
-    platform: /** @type {PackageArtifactPlatform} */ (build.get('platform')),
-    architecture: /** @type {PackageArtifactArchitecture} */ (
-      build.get('architecture')
-    ),
-    ...(build.has('libc')
-      ? { libc: /** @type {PackageArtifactLibc} */ (build.get('libc')) }
-      : {}),
+    platform: String(build.get('platform')),
+    architecture: String(build.get('architecture')),
+    ...(build.has('libc') ? { libc: String(build.get('libc')) } : {}),
   };
 }
 
@@ -400,7 +400,7 @@ async function attachEmbeddedManifestAssets(builds, manifest) {
     builds.map(async (build) => {
       const buildTarget = getBuildTarget(build);
       const embeddedManifest = {
-        ...manifest,
+        ...cloneJson(manifest),
         ...(Array.isArray(manifest.targets)
           ? { targets: [cloneTarget(buildTarget)] }
           : {}),
@@ -417,202 +417,12 @@ async function attachEmbeddedManifestAssets(builds, manifest) {
 }
 
 /**
- * @param {any} manifest - manifest.
- * @returns {void}
- */
-function assertPackageableManifest(manifest) {
-  if (!Array.isArray(manifest.targets) || manifest.targets.length === 0) {
-    throw new Error(
-      'App has no build targets. Define targets in wharfie.app.js before packaging.',
-    );
-  }
-}
-
-/**
- * @param {PackageArtifactTarget} target - target.
- * @returns {boolean} - Result.
- */
-function isCurrentHostTarget(target) {
-  const targetPlatform = String(target.platform);
-  const targetArchitecture = String(target.architecture);
-  const targetNodeVersion = String(target.nodeVersion).replace(/^v/, '');
-  const currentNodeVersion = String(process.versions.node).replace(/^v/, '');
-
-  return (
-    targetPlatform === process.platform &&
-    targetArchitecture === process.arch &&
-    (targetNodeVersion === currentNodeVersion ||
-      targetNodeVersion === currentNodeVersion.split('.')[0])
-  );
-}
-
-/**
- * @param {PackageArtifactTarget[]} targets - targets.
- * @returns {void}
- */
-function assertPlainObjectTargetsAreSupported(targets) {
-  const unsupported = targets.filter((target) => !isCurrentHostTarget(target));
-  if (unsupported.length === 0) {
-    return;
-  }
-
-  throw new Error(
-    `Manifest-defined CLI app packaging currently supports only the current host target (${ActorSystem.getBuildTargetSelector(
-      {
-        nodeVersion: process.versions.node,
-        platform: process.platform,
-        architecture: process.arch,
-      },
-    )}). Unsupported target(s): ${unsupported
-      .map((target) => ActorSystem.getBuildTargetSelector(target))
-      .join(', ')}`,
-  );
-}
-
-/**
- * @param {any} manifest - manifest.
- * @returns {void}
- */
-function assertPlainObjectPackageableManifest(manifest) {
-  assertPackageableManifest(manifest);
-
-  if (
-    !isObjectRecord(manifest.cli) ||
-    typeof manifest.cli.entrypoint !== 'string'
-  ) {
-    throw new Error(
-      'Manifest-defined CLI app packaging requires cli.entrypoint in wharfie.app.js.',
-    );
-  }
-}
-
-/**
- * @param {any} manifest - manifest.
- * @param {PackageArtifactTarget} target - target.
- * @returns {FunctionResource[]} - Result.
- */
-function createManifestFunctionResources(manifest, target) {
-  /** @type {any[]} */
-  const functions = Array.isArray(manifest.functions) ? manifest.functions : [];
-
-  return functions.map(
-    (/** @type {any} */ func) =>
-      new FunctionResource({
-        name: `${func.name}-${target.nodeVersion}-${target.platform}-${target.architecture}`,
-        properties: {
-          functionName: func.name,
-          entrypoint: func.entrypoint,
-          ...(Array.isArray(func.external) ? { external: func.external } : {}),
-          ...(isObjectRecord(func.environmentVariables)
-            ? { environmentVariables: func.environmentVariables }
-            : {}),
-          ...(isObjectRecord(func.resources)
-            ? { resources: func.resources }
-            : {}),
-          buildTarget: () => cloneTarget(target),
-        },
-      }),
-  );
-}
-
-/**
- * @param {any} manifest - manifest.
- * @param {PackageArtifactTarget} target - target.
- * @param {FunctionResource[]} functionResources - functionResources.
- * @returns {SeaBuild} - Result.
- */
-function createManifestCliBuild(manifest, target, functionResources) {
-  const selector = ActorSystem.getBuildTargetSelector(target);
-  return new SeaBuild({
-    name: `${manifest.app.name}-build-${selector}`,
-    dependsOn: [...functionResources],
-    properties: {
-      entryCode: () =>
-        createPackagedAppEntryCode({
-          cliEntrypointPath: manifest.cli.entrypoint,
-          cliExportName:
-            typeof manifest.cli.export === 'string'
-              ? manifest.cli.export
-              : undefined,
-        }),
-      resolveDir: () => path.dirname(manifest.cli.entrypoint),
-      nodeBinaryPath: () => process.execPath,
-      nodeVersion: target.nodeVersion,
-      platform: target.platform,
-      architecture: target.architecture,
-      ...(typeof target.libc === 'string' ? { libc: target.libc } : {}),
-      environmentVariables: () => ({}),
-      assets: () =>
-        functionResources.reduce(
-          (/** @type {Record<string, string>} */ acc, func) => {
-            acc[
-              func.name.replace(
-                `-${target.nodeVersion}-${target.platform}-${target.architecture}`,
-                '',
-              )
-            ] = func.get('singleExecutableAssetPath');
-            return acc;
-          },
-          {},
-        ),
-    },
-  });
-}
-
-/**
- * @param {(FunctionResource | SeaBuild)[]} resources - resources.
- * @returns {Promise<void>} - Result.
- */
-async function initializeBuildResources(resources) {
-  await Promise.all(
-    resources.map(async (resource) => {
-      const maybeInitializable =
-        /** @type {{ initializeEnvironment?: () => Promise<void> }} */ (
-          resource
-        );
-      if (typeof maybeInitializable.initializeEnvironment === 'function') {
-        await maybeInitializable.initializeEnvironment();
-      }
-    }),
-  );
-}
-
-/**
- * @param {any} manifest - manifest.
- * @param {PackageArtifactTarget[]} selectedTargets - selectedTargets.
- * @returns {Promise<Array<{ build: SeaBuild, functionResources: FunctionResource[] }>>} - Result.
- */
-async function buildManifestCliArtifacts(manifest, selectedTargets) {
-  assertPlainObjectPackageableManifest(manifest);
-  assertPlainObjectTargetsAreSupported(selectedTargets);
-
-  /** @type {{ build: SeaBuild, functionResources: FunctionResource[] }[]} */
-  const plans = [];
-
-  for (const target of selectedTargets) {
-    const functionResources = createManifestFunctionResources(manifest, target);
-    const build = createManifestCliBuild(manifest, target, functionResources);
-    const allResources = [...functionResources, build];
-    await initializeBuildResources(allResources);
-    plans.push({ build, functionResources });
-  }
-
-  return plans;
-}
-
-/**
  * @param {RunLocalAppOptions} options - options.
  * @returns {Promise<{ manifest: any, result: any }>} - Result.
  */
 export async function runLocalApp(options) {
-  const { manifest } = await loadApp({ dir: options.dir });
-  const activityDefinition = getManifestActivityDefinition(
-    manifest,
-    options.activityName,
-  );
-  const activity = createManifestActivity(activityDefinition);
-  const appRuntimeResources = await createManifestRuntimeResources(manifest);
-
+  const { manifest, publicManifest } = await loadApp({ dir: options.dir });
+  const activityName = resolveActivityName(options, manifest, publicManifest);
   const eventSource = options.eventInput ?? options.stdinInput;
   const event = parseJsonInput(eventSource, 'event', {});
   const context = parseJsonInput(options.contextInput, 'context', {});
@@ -621,15 +431,18 @@ export async function runLocalApp(options) {
     throw new Error('Context JSON must be an object.');
   }
 
-  try {
-    const result = await activity.fn(event, context, {
-      baseResources: appRuntimeResources.resources,
-    });
-    return { manifest, result };
-  } finally {
-    await activity.closeRuntimeResources();
-    await appRuntimeResources.close();
-  }
+  const result = await invokeManifestActivity({
+    manifest,
+    publicManifest,
+    activityName,
+    event,
+    context,
+  });
+
+  return {
+    manifest: publicManifest,
+    result,
+  };
 }
 
 /**
@@ -637,70 +450,54 @@ export async function runLocalApp(options) {
  * @returns {Promise<PackageLocalAppResult>} - Result.
  */
 export async function packageLocalApp(options) {
-  let { appExport, manifest } = await loadApp({ dir: options.dir });
-  assertPackageableManifest(manifest);
+  let loaded = await loadApp({ dir: options.dir });
+  let actorSystem = toPackageableActorSystem(loaded);
+  let manifest = cloneJson(loaded.publicManifest);
+
+  const availableTargets = Array.isArray(manifest.targets)
+    ? manifest.targets
+    : [];
+  if (availableTargets.length === 0) {
+    throw new Error(
+      'App has no build targets. Define targets in wharfie.app.js before packaging.',
+    );
+  }
 
   const selectedTargets = selectTargets(
-    /** @type {PackageArtifactTarget[]} */ (manifest.targets || []),
+    availableTargets,
     options.targetFilters,
   );
   if (selectedTargets.length === 0) {
     throw new Error('No targets matched the requested package filter.');
   }
 
-  /** @type {SeaBuild[]} */
-  let builds = [];
-  /** @type {FunctionResource[]} */
-  let plainObjectFunctionResources = [];
-
-  if (appExport instanceof ActorSystem) {
-    let actorSystem = appExport;
-    const requestedTargetSelectors = selectedTargets.map((target) =>
-      ActorSystem.getBuildTargetSelector(target),
-    );
-    if (
-      Array.isArray(options.targetFilters) &&
-      options.targetFilters.length > 0 &&
-      requestedTargetSelectors.length > 0
-    ) {
-      ({ appExport, manifest } = await loadApp({
-        dir: options.dir,
-        requestedTargetSelectors,
-      }));
-      if (!(appExport instanceof ActorSystem)) {
-        throw new Error('Filtered packaging expected an ActorSystem export.');
-      }
-      actorSystem = appExport;
-    }
-
-    applyTargetSelection(actorSystem, selectedTargets);
-    manifest.targets = selectedTargets.map((target) => cloneTarget(target));
-
-    builds = getSeaBuildResources(actorSystem);
-    await attachEmbeddedManifestAssets(builds, manifest);
-
-    if (typeof actorSystem.initializeEnvironment === 'function') {
-      await actorSystem.initializeEnvironment();
-    }
-    await actorSystem.reconcile();
-  } else {
-    manifest.targets = selectedTargets.map((target) => cloneTarget(target));
-    const buildPlans = await buildManifestCliArtifacts(
-      manifest,
-      selectedTargets,
-    );
-    builds = buildPlans.map((plan) => plan.build);
-    plainObjectFunctionResources = buildPlans.flatMap(
-      (plan) => plan.functionResources,
-    );
-    await attachEmbeddedManifestAssets(builds, manifest);
-    for (const functionResource of plainObjectFunctionResources) {
-      await functionResource.reconcile();
-    }
-    for (const build of builds) {
-      await build.reconcile();
-    }
+  const requestedTargetSelectors = selectedTargets.map((target) =>
+    ActorSystem.getBuildTargetSelector(target),
+  );
+  if (
+    loaded.appExport instanceof ActorSystem &&
+    Array.isArray(options.targetFilters) &&
+    options.targetFilters.length > 0 &&
+    requestedTargetSelectors.length > 0
+  ) {
+    loaded = await loadApp({
+      dir: options.dir,
+      requestedTargetSelectors,
+    });
+    actorSystem = toPackageableActorSystem(loaded);
+    manifest = cloneJson(loaded.publicManifest);
   }
+
+  applyTargetSelection(actorSystem, selectedTargets);
+  manifest.targets = selectedTargets.map((target) => cloneTarget(target));
+
+  const builds = getSeaBuildResources(actorSystem);
+
+  if (typeof actorSystem.initializeEnvironment === 'function') {
+    await actorSystem.initializeEnvironment();
+  }
+  await attachEmbeddedManifestAssets(builds, manifest);
+  await actorSystem.reconcile();
 
   if (builds.length === 0) {
     throw new Error(
@@ -737,15 +534,9 @@ export async function packageLocalApp(options) {
     });
   }
 
-  const manifestTargets = Array.isArray(manifest.targets)
-    ? manifest.targets.map((target) =>
-        cloneTarget(/** @type {PackageArtifactTarget} */ (target)),
-      )
-    : undefined;
-
   return {
     app: manifest.app,
-    ...(manifestTargets ? { targets: manifestTargets } : {}),
+    ...(Array.isArray(manifest.targets) ? { targets: manifest.targets } : {}),
     outputDir,
     artifacts,
   };

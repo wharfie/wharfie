@@ -5,12 +5,22 @@ import FunctionResource from './function-resource.js';
 import SeaBuild from './sea-build.js';
 import MacOSBinarySignature from './macos-binary-signature.js';
 import cli from './actor-system-cli/index.js';
-import { createPackagedAppEntryCode } from './lib/packaged-app-entry-code.js';
 import { createActorSystemResources } from '../../runtime/resources.js';
 import { withResourceScope } from '../resource-scope.js';
 import { createResourceScope } from '../runtime-config.js';
 
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const actorSystemMetaUrl =
+  typeof import.meta.url === 'string' ? import.meta.url : '';
+const actorSystemFilePath = actorSystemMetaUrl.startsWith('file:')
+  ? fileURLToPath(actorSystemMetaUrl)
+  : actorSystemMetaUrl;
+const actorSystemDir =
+  typeof import.meta.dirname === 'string'
+    ? import.meta.dirname
+    : path.dirname(actorSystemFilePath);
 
 /**
  * @typedef {import('node:process')['platform']} TargetPlatform
@@ -45,6 +55,7 @@ import path from 'node:path';
  * @property {ActorSystemResourcesSpec} [resources] - resources.
  * @property {import('./function.js').default[]} [functions] - functions.
  * @property {any[]} [workflows] - Serializable workflow definitions.
+ * @property {{ entrypoint: string }} [cli] - CLI entrypoint config.
  */
 
 /**
@@ -128,53 +139,6 @@ function buildTargetSelector(target) {
   return `node${target.nodeVersion}-${target.platform}-${target.architecture}${
     target.libc ? `-${target.libc}` : ''
   }`;
-}
-
-/**
- * @param {unknown} cliSpec - cliSpec.
- * @returns {{ entrypoint: string, export?: string } | undefined} - Result.
- */
-function normalizeCliSpec(cliSpec) {
-  if (typeof cliSpec === 'string' && cliSpec.trim()) {
-    return { entrypoint: cliSpec.trim() };
-  }
-
-  if (!cliSpec || typeof cliSpec !== 'object') {
-    return undefined;
-  }
-
-  const cliRecord = /** @type {{ entrypoint?: unknown, export?: unknown }} */ (
-    cliSpec
-  );
-  const cliEntrypoint =
-    cliRecord.entrypoint && typeof cliRecord.entrypoint === 'object'
-      ? /** @type {{ path?: unknown, export?: unknown }} */ (
-          cliRecord.entrypoint
-        )
-      : null;
-
-  const entrypoint =
-    typeof cliRecord.entrypoint === 'string'
-      ? cliRecord.entrypoint.trim()
-      : typeof cliEntrypoint?.path === 'string'
-        ? cliEntrypoint.path.trim()
-        : '';
-
-  if (!entrypoint) {
-    return undefined;
-  }
-
-  const exportName =
-    typeof cliRecord.export === 'string' && cliRecord.export.trim()
-      ? cliRecord.export.trim()
-      : typeof cliEntrypoint?.export === 'string' && cliEntrypoint.export.trim()
-        ? cliEntrypoint.export.trim()
-        : '';
-
-  return {
-    entrypoint,
-    ...(exportName ? { export: exportName } : {}),
-  };
 }
 
 /**
@@ -386,13 +350,86 @@ class ActorSystem extends BuildResourceGroup {
       dependsOn: [node_binary, ...targetFunctions],
       properties: {
         entryCode: () => {
-          const cliSpec = normalizeCliSpec(this.get('cli', undefined));
-          return createPackagedAppEntryCode({
-            cliEntrypointPath: cliSpec?.entrypoint,
-            cliExportName: cliSpec?.export,
-          });
+          const developerCliEntrypoint =
+            typeof this.get('cli', {})?.entrypoint === 'string' &&
+            this.get('cli', {}).entrypoint
+              ? path.resolve(this.get('cli', {}).entrypoint)
+              : null;
+          const packagedAppEntryPath = path.resolve(
+            actorSystemDir,
+            'packaged-app-entry.js',
+          );
+          const runtimeCliPath = path.resolve(
+            actorSystemDir,
+            'actor-system-cli',
+            'index.js',
+          );
+          const runtimeStartPath = path.resolve(
+            actorSystemDir,
+            'actor-system-cli',
+            'control_cmds',
+            'state_cmds',
+            'start.js',
+          );
+          const runtimeDbPath = path.resolve(
+            actorSystemDir,
+            'actor-system-cli',
+            'control_cmds',
+            'state_cmds',
+            'serve_cmds',
+            'db.js',
+          );
+          const runtimeQueuePath = path.resolve(
+            actorSystemDir,
+            'actor-system-cli',
+            'control_cmds',
+            'state_cmds',
+            'serve_cmds',
+            'queue.js',
+          );
+          const runtimeLambdaPath = path.resolve(
+            actorSystemDir,
+            'actor-system-cli',
+            'control_cmds',
+            'state_cmds',
+            'serve_cmds',
+            'lambda.js',
+          );
+          const developerImport = developerCliEntrypoint
+            ? `import * as developerCliModule from ${JSON.stringify(
+                developerCliEntrypoint,
+              )};`
+            : 'const developerCliModule = null;';
+
+          return `
+              import sourceMapSupport from 'source-map-support';
+              import { runPackagedApp } from ${JSON.stringify(
+                packagedAppEntryPath,
+              )};
+              ${developerImport}
+              import runtimeCli from ${JSON.stringify(runtimeCliPath)};
+              import startCmd from ${JSON.stringify(runtimeStartPath)};
+              import serveDbCmd from ${JSON.stringify(runtimeDbPath)};
+              import serveQueueCmd from ${JSON.stringify(runtimeQueuePath)};
+              import serveLambdaCmd from ${JSON.stringify(runtimeLambdaPath)};
+              (async () => {
+                console.time('overall');
+                sourceMapSupport.install();
+                await runPackagedApp({
+                  developerCliModule,
+                  runtimeModules: {
+                    cli: runtimeCli,
+                    start: startCmd,
+                    'serve-db': serveDbCmd,
+                    'serve-queue': serveQueueCmd,
+                    'serve-lambda': serveLambdaCmd,
+                  },
+                });
+                console.timeEnd('overall');
+              })();
+          `;
         },
-        resolveDir: () => path.dirname(import.meta.dirname),
+        resolveDir: () => path.dirname(actorSystemDir),
         nodeBinaryPath: () => node_binary.get('binaryPath'),
         nodeVersion: () => node_binary.get('exactVersion').slice(1),
         platform,

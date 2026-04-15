@@ -45,7 +45,9 @@ function normalizeOptionalString(value) {
  * @returns {Record<string, any> | undefined} - Result.
  */
 function normalizeContext(value) {
-  return value && typeof value === 'object' ? value : undefined;
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value
+    : undefined;
 }
 
 /**
@@ -166,14 +168,15 @@ export async function startLambdaService({
                 continue;
               }
 
+              const messageId = normalizeOptionalString(msg?.MessageId);
+              const receiptHandle = normalizeOptionalString(receipt);
               const invocationContext = {
                 ...(normalizeContext(payload?.context) || {}),
                 trigger: {
                   source: 'event',
                   queueUrl,
-                  ...(normalizeOptionalString(msg?.MessageId)
-                    ? { messageId: normalizeOptionalString(msg?.MessageId) }
-                    : {}),
+                  ...(messageId ? { messageId } : {}),
+                  ...(receiptHandle ? { receiptHandle } : {}),
                 },
               };
 
@@ -188,8 +191,8 @@ export async function startLambdaService({
                     payload,
                     message: {
                       queueUrl,
-                      messageId: normalizeOptionalString(msg?.MessageId),
-                      receiptHandle: normalizeOptionalString(receipt),
+                      ...(messageId ? { messageId } : {}),
+                      ...(receiptHandle ? { receiptHandle } : {}),
                     },
                     execute: async ({ functionName, event, context }) => {
                       await execute({
@@ -227,9 +230,7 @@ export async function startLambdaService({
                     {
                       queueUrl,
                       activity,
-                      ...(normalizeOptionalString(msg?.MessageId)
-                        ? { messageId: normalizeOptionalString(msg?.MessageId) }
-                        : {}),
+                      ...(messageId ? { messageId } : {}),
                       error: msgStr,
                     },
                   );
@@ -276,15 +277,18 @@ export async function startLambdaService({
       Invoke: async (call, callback) => {
         try {
           const req = call?.request || {};
-          const functionName = req.functionName;
+          const functionName =
+            normalizeOptionalString(req.functionName) ||
+            normalizeOptionalString(req.activity);
 
-          if (!functionName || typeof functionName !== 'string') {
+          if (!functionName) {
             callback(null, { ok: false, error: 'Missing functionName' });
             return;
           }
 
           await execute({
             functionName,
+            activity: functionName,
             event: req.event,
             context: req.context,
           });

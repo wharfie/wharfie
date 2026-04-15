@@ -140,6 +140,46 @@ export function getManifestResources(manifest) {
 }
 
 /**
+ * @param {any} manifest - manifest.
+ * @returns {Record<string, any>} - Result.
+ */
+export function getManifestActivities(manifest) {
+  if (isObjectRecord(manifest?.activities)) {
+    return manifest.activities;
+  }
+
+  const functions = Array.isArray(manifest?.functions)
+    ? manifest.functions
+    : [];
+  return functions.reduce(
+    (/** @type {Record<string, any>} */ acc, /** @type {any} */ definition) => {
+      if (
+        !isObjectRecord(definition) ||
+        typeof definition.name !== 'string' ||
+        !isObjectRecord(definition.entrypoint)
+      ) {
+        return acc;
+      }
+
+      acc[definition.name] = {
+        entrypoint: definition.entrypoint,
+        ...(Array.isArray(definition.external)
+          ? { external: definition.external }
+          : {}),
+        ...(isObjectRecord(definition.environmentVariables)
+          ? { environmentVariables: definition.environmentVariables }
+          : {}),
+        ...(isObjectRecord(definition.resources)
+          ? { resources: definition.resources }
+          : {}),
+      };
+      return acc;
+    },
+    /** @type {Record<string, any>} */ ({}),
+  );
+}
+
+/**
  * @param {unknown} value - value.
  * @returns {string[]} - Result.
  */
@@ -203,7 +243,13 @@ export function getManifestFunctions(manifest) {
     return manifest.functions;
   }
 
-  return Array.isArray(manifest?.activities) ? manifest.activities : [];
+  const activities = getManifestActivities(manifest);
+  return Object.keys(activities)
+    .sort((left, right) => left.localeCompare(right))
+    .map((name) => ({
+      name,
+      ...activities[name],
+    }));
 }
 
 /**
@@ -232,6 +278,7 @@ export function getManifestPrimaryTarget(manifest) {
 }
 
 export default {
+  getManifestActivities,
   getManifestAppName,
   getManifestFunctions,
   getManifestPollQueueUrls,

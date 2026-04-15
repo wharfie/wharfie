@@ -9,7 +9,6 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { SHARED_RESOURCE_REGISTRY_FILE_NAME } from '../../../src/core/runtime/shared-resource-registry.js';
 import createVanillaDB from '../../../src/core/lib/db/adapters/vanilla.js';
 import operationsStoreFactory from '../../../src/core/lib/graph/operations-store.js';
 import Action, {
@@ -151,96 +150,6 @@ async function createWorkflowAppDir() {
 }
 
 /**
- * @returns {Promise<string>} - Result.
- */
-async function createSharedResourceOpsAppDir() {
-  const dir = await fsp.mkdtemp(
-    path.join(os.tmpdir(), 'wharfie-shared-ops-app-'),
-  );
-  const handlerPath = path.join(dir, 'shared-handler.js');
-
-  await fsp.writeFile(
-    path.join(dir, 'package.json'),
-    JSON.stringify({ type: 'module' }),
-    'utf8',
-  );
-  await fsp.writeFile(
-    handlerPath,
-    [
-      'export async function helloResources(event = {}, context = {}) {',
-      "  const who = event?.who || 'world';",
-      '  const message = `hello ${who}`;',
-      '  await context.resources.db.put({',
-      "    tableName: 'test',",
-      "    keyName: 'id',",
-      "    record: { id: 'greeting', who, message },",
-      '  });',
-      '  await context.resources.queue.sendMessage({',
-      "    QueueUrl: 'test-queue',",
-      '    MessageBody: JSON.stringify({ hello: who }),',
-      '  });',
-      "  await context.resources.objectStorage.createBucket({ Bucket: 'test-bucket' });",
-      '  await context.resources.objectStorage.putObject({',
-      "    Bucket: 'test-bucket',",
-      "    Key: 'greeting.txt',",
-      '    Body: message,',
-      '  });',
-      '  return {',
-      '    ok: true,',
-      '    who,',
-      '    dbRecord: await context.resources.db.get({',
-      "      tableName: 'test',",
-      "      keyName: 'id',",
-      "      keyValue: 'greeting',",
-      '    }),',
-      '    queueBody: (await context.resources.queue.receiveMessage({',
-      "      QueueUrl: 'test-queue',",
-      '      MaxNumberOfMessages: 1,',
-      '      WaitTimeSeconds: 0,',
-      '    }))?.Messages?.[0]?.Body || null,',
-      '    objectBody: await context.resources.objectStorage.getObject({',
-      "      Bucket: 'test-bucket',",
-      "      Key: 'greeting.txt',",
-      '    }),',
-      '  };',
-      '}',
-    ].join('\n'),
-    'utf8',
-  );
-  await fsp.writeFile(
-    path.join(dir, 'wharfie.app.js'),
-    `
-      import ActorSystem from ${JSON.stringify(actorSystemUrl)};
-      import Function from ${JSON.stringify(functionUrl)};
-
-      export default new ActorSystem({
-        name: 'ops-shared-resources-demo',
-        functions: [
-          new Function({
-            name: 'hello-resources',
-            entrypoint: {
-              path: ${JSON.stringify(handlerPath)},
-              export: 'helloResources',
-            },
-          }),
-        ],
-        properties: {
-          targets: [],
-          resources: {
-            db: { ref: 'appdb' },
-            queue: { ref: 'jobs' },
-            objectStorage: { ref: 'blobs' },
-          },
-        },
-      });
-    `,
-    'utf8',
-  );
-
-  return dir;
-}
-
-/**
  * @param {string[]} args - args.
  * @param {Record<string, string | undefined>} env - env.
  * @returns {import('node:child_process').SpawnSyncReturns<string>} - Result.
@@ -256,190 +165,28 @@ function runCli(args, env) {
 }
 
 describe('wharfie ops run', () => {
-  it('resolves shared app resource refs before executing persisted operations', async () => {
-    const dbPath = mkdtempSync(
-      path.join(os.tmpdir(), 'wharfie-ops-shared-db-'),
-    );
-    const configRoot = mkdtempSync(
-      path.join(os.tmpdir(), 'wharfie-ops-shared-config-'),
-    );
-    const configDir = path.join(configRoot, 'wharfie-nodejs');
-    const runtimeDir = mkdtempSync(
-      path.join(os.tmpdir(), 'wharfie-ops-runtime-'),
-    );
-    const tableName = 'operations-shared-resources';
-    const resourceId = 'resource-shared';
-    const appDir = await createSharedResourceOpsAppDir();
-
-    /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
-    let inspectDb;
-
-    try {
-      await fsp.mkdir(configDir, { recursive: true });
-      await fsp.writeFile(
-        path.join(configDir, SHARED_RESOURCE_REGISTRY_FILE_NAME),
-        JSON.stringify(
-          {
-            db: {
-              appdb: {
-                adapter: 'vanilla',
-                options: { path: path.join(runtimeDir, 'db') },
-              },
-            },
-            queue: {
-              jobs: {
-                adapter: 'vanilla',
-                options: { path: path.join(runtimeDir, 'queue') },
-              },
-            },
-            objectStorage: {
-              blobs: {
-                adapter: 'vanilla',
-                options: { path: path.join(runtimeDir, 'object-storage') },
-              },
-            },
-          },
-          null,
-          2,
-        ),
-        'utf8',
-      );
-
-      const db = createVanillaDB({ path: dbPath });
-      const store = operationsStoreFactory({ db, tableName });
-
-      const operation = new Operation({
-        id: 'op-shared',
-        resource_id: resourceId,
-        resource_version: 1,
-        type: OperationType.PIPELINE,
-        started_at: 1,
-        last_updated_at: 1,
-      });
-      const startAction = operation.createAction({
-        id: 'start-shared',
-        type: Action.Type.START,
-      });
-      const invokeAction = operation.createAction({
-        id: 'invoke-shared',
-        type: Action.Type.INVOKE_FUNCTION,
-        function_name: 'hello-resources',
-        inputs: { who: 'ops-shared' },
-        placement: { mode: 'local' },
-        retry: { max_attempts: 1 },
-        dependsOn: [startAction],
-      });
-      operation.createAction({
-        id: 'finish-shared',
-        type: Action.Type.FINISH,
-        dependsOn: [invokeAction],
-      });
-
-      await store.putOperation(operation);
-      await db.close();
-
-      const result = runCli(
-        ['ops', 'run', resourceId, operation.id, '--dir', appDir],
-        {
-          ...process.env,
-          NODE_ENV: 'development',
-          OPERATIONS_TABLE: tableName,
-          WHARFIE_ARTIFACT_BUCKET: 'service-bucket',
-          WHARFIE_DB_ADAPTER: 'vanilla',
-          WHARFIE_DB_PATH: dbPath,
-          XDG_CONFIG_HOME: configRoot,
-        },
-      );
-
-      expect(result.status).toBe(0);
-      expect(result.stderr).toBe('');
-      expect(result.stdout).toContain('invoke-shared');
-
-      inspectDb = createVanillaDB({ path: dbPath });
-      const inspectStore = operationsStoreFactory({ db: inspectDb, tableName });
-      const storedAction = await inspectStore.getAction(
-        resourceId,
-        operation.id,
-        'invoke-shared',
-      );
-
-      expect(storedAction).not.toBeNull();
-      if (!storedAction) {
-        throw new Error('Expected stored action to exist');
-      }
-
-      expect(storedAction.status).toBe(ActionStatus.COMPLETED);
-      expect(storedAction.outputs).toEqual({
-        ok: true,
-        who: 'ops-shared',
-        dbRecord: {
-          id: 'greeting',
-          who: 'ops-shared',
-          message: 'hello ops-shared',
-        },
-        queueBody: JSON.stringify({ hello: 'ops-shared' }),
-        objectBody: 'hello ops-shared',
-      });
-    } finally {
-      if (inspectDb) {
-        await inspectDb.close();
-      }
-      rmSync(dbPath, { recursive: true, force: true });
-      rmSync(configRoot, { recursive: true, force: true });
-      rmSync(runtimeDir, { recursive: true, force: true });
-      rmSync(appDir, { recursive: true, force: true });
-    }
-  });
-
-  it('executes INVOKE_FUNCTION actions against a local app and persists outputs', async () => {
+  it('executes an app activity as a persisted run and stores outputs', async () => {
     const dbPath = mkdtempSync(path.join(os.tmpdir(), 'wharfie-ops-run-'));
     const tableName = 'operations-test';
-    const resourceId = 'resource-1';
+    const resourceId = 'app:hello-world-demo';
+    const operationId = 'op-1';
     /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
     let inspectDb;
 
-    /** @type {import('../../../src/core/lib/graph/operation.js').default} */
-    let operation;
-    /** @type {import('../../../src/core/lib/graph/action.js').default} */
-    let invokeAction;
-
     try {
-      const db = createVanillaDB({ path: dbPath });
-      const store = operationsStoreFactory({ db, tableName });
-
-      operation = new Operation({
-        id: 'op-1',
-        resource_id: resourceId,
-        resource_version: 1,
-        type: OperationType.PIPELINE,
-        started_at: 1,
-        last_updated_at: 1,
-      });
-
-      const startAction = operation.createAction({
-        id: 'start-1',
-        type: Action.Type.START,
-      });
-      invokeAction = operation.createAction({
-        id: 'invoke-1',
-        type: Action.Type.INVOKE_FUNCTION,
-        function_name: 'echo-event',
-        inputs: { who: 'ops-run' },
-        placement: { mode: 'local' },
-        retry: { max_attempts: 1 },
-        dependsOn: [startAction],
-      });
-      operation.createAction({
-        id: 'finish-1',
-        type: Action.Type.FINISH,
-        dependsOn: [invokeAction],
-      });
-
-      await store.putOperation(operation);
-      await db.close();
-
       const result = runCli(
-        ['ops', 'run', resourceId, operation.id, '--dir', helloWorldDir],
+        [
+          'ops',
+          'run',
+          '--activity',
+          'echo-event',
+          '--operation-id',
+          operationId,
+          '--dir',
+          helloWorldDir,
+          '--event',
+          '{"who":"ops-run"}',
+        ],
         {
           ...process.env,
           NODE_ENV: 'development',
@@ -452,7 +199,7 @@ describe('wharfie ops run', () => {
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe('');
-      expect(result.stdout).toContain('invoke-1');
+      expect(result.stdout).toContain('INVOKE_FUNCTION:echo-event');
       expect(result.stdout).toContain('Executed 3 actions.');
 
       inspectDb = createVanillaDB({ path: dbPath });
@@ -460,12 +207,12 @@ describe('wharfie ops run', () => {
 
       const storedAction = await inspectStore.getAction(
         resourceId,
-        operation.id,
-        invokeAction.id,
+        operationId,
+        'invoke',
       );
       const storedOperation = await inspectStore.getOperation(
         resourceId,
-        operation.id,
+        operationId,
       );
 
       expect(storedAction).not.toBeNull();
@@ -496,7 +243,7 @@ describe('wharfie ops run', () => {
     const appDir = await createWorkflowAppDir();
     const dbPath = mkdtempSync(path.join(os.tmpdir(), 'wharfie-ops-workflow-'));
     const tableName = 'operations-workflow-test';
-    const resourceId = 'workflow-resource';
+    const resourceId = 'app:ops-workflow-demo';
     const operationId = 'workflow-op';
     /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
     let inspectDb;
@@ -506,10 +253,10 @@ describe('wharfie ops run', () => {
         [
           'ops',
           'run',
-          resourceId,
-          operationId,
           '--workflow',
           'happyPath',
+          '--operation-id',
+          operationId,
           '--dir',
           appDir,
         ],
@@ -579,15 +326,7 @@ describe('wharfie ops run', () => {
 
     try {
       const result = runCli(
-        [
-          'ops',
-          'run',
-          'workflow-resource',
-          '--workflow',
-          'missingPath',
-          '--dir',
-          appDir,
-        ],
+        ['ops', 'run', '--workflow', 'missingPath', '--dir', appDir],
         {
           ...process.env,
           NODE_ENV: 'development',
@@ -615,7 +354,7 @@ describe('wharfie ops run', () => {
       path.join(os.tmpdir(), 'wharfie-ops-workflow-failing-'),
     );
     const tableName = 'operations-workflow-test';
-    const resourceId = 'workflow-resource';
+    const resourceId = 'app:ops-workflow-demo';
     const operationId = 'workflow-failing';
     /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
     let inspectDb;
@@ -625,10 +364,10 @@ describe('wharfie ops run', () => {
         [
           'ops',
           'run',
-          resourceId,
-          operationId,
           '--workflow',
           'failingPath',
+          '--operation-id',
+          operationId,
           '--dir',
           appDir,
         ],
@@ -687,7 +426,7 @@ describe('wharfie ops run', () => {
       path.join(os.tmpdir(), 'wharfie-ops-workflow-blocked-'),
     );
     const tableName = 'operations-workflow-test';
-    const resourceId = 'workflow-resource';
+    const resourceId = 'app:ops-workflow-demo';
     const operationId = 'workflow-blocked';
     /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
     let inspectDb;
@@ -697,10 +436,10 @@ describe('wharfie ops run', () => {
         [
           'ops',
           'run',
-          resourceId,
-          operationId,
           '--workflow',
           'blockedPath',
+          '--operation-id',
+          operationId,
           '--dir',
           appDir,
         ],

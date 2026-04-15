@@ -7,7 +7,7 @@ import {
 } from '../../../src/cli/cmds/operation-rows.js';
 
 describe('operation row formatting', () => {
-  it('formats and sorts operations using started_at, last_updated_at, and app metadata', () => {
+  it('formats and sorts operations using started_at and last_updated_at', () => {
     const rows = formatOperationRows([
       {
         id: 'older',
@@ -15,11 +15,6 @@ describe('operation row formatting', () => {
         status: 'RUNNING',
         started_at: 1700000000,
         last_updated_at: 1700000005,
-        operation_config: {
-          app: 'demo-app',
-          workflow: 'nightly-sync',
-          trigger: { source: 'cron' },
-        },
       },
       {
         id: 'newer',
@@ -27,34 +22,29 @@ describe('operation row formatting', () => {
         status: 'PENDING',
         started_at: 1700000100000,
         last_updated_at: 1700000105000,
-        operation_config: {
-          app: 'demo-app',
-          activity: 'collect',
-          trigger: { source: 'manual' },
-        },
       },
     ]);
 
     expect(rows).toEqual([
       {
         id: 'newer',
-        app: 'demo-app',
-        activity: 'collect',
+        app: '',
+        activity: '',
         workflow: '',
+        trigger: '',
         type: 'PIPELINE',
         status: 'PENDING',
-        trigger: 'manual',
         started_at: '2023-11-14T22:15:00.000Z',
         last_updated_at: '2023-11-14T22:15:05.000Z',
       },
       {
         id: 'older',
-        app: 'demo-app',
+        app: '',
         activity: '',
-        workflow: 'nightly-sync',
+        workflow: '',
+        trigger: '',
         type: 'LOAD',
         status: 'RUNNING',
-        trigger: 'cron',
         started_at: '2023-11-14T22:13:20.000Z',
         last_updated_at: '2023-11-14T22:13:25.000Z',
       },

@@ -24,7 +24,7 @@ const functionPath = fileURLToPath(
 const functionUrl = pathToFileURL(functionPath).href;
 
 describe('Wharfie app loader', () => {
-  it('loads a plain object export and compiles a JSON-safe manifest with functions and workflows', async () => {
+  it('loads a plain object export and compiles internal and public manifests', async () => {
     const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wharfie-app-'));
 
     await fsp.writeFile(
@@ -42,84 +42,85 @@ describe('Wharfie app loader', () => {
 
         export default {
           name: 'plain-object-app',
-          properties: {
-            targets: [
-              {
-                nodeVersion: '24',
-                platform: 'linux',
-                architecture: 'x64',
-                ignored: () => 'ignored',
-              },
-            ],
-            resources: {
-              db: {
-                adapter: 'vanilla',
-                helper: () => 'ignored',
-                options: { beta: 2, alpha: 1 },
-              },
-              queue: { adapter: 'vanilla', options: { path: '.queue' } },
-              objectStorage: runtimeObjectStorage,
+          cli: {
+            entrypoint: './workflow-handler.js',
+          },
+          targets: [
+            {
+              nodeVersion: '24',
+              platform: 'linux',
+              architecture: 'x64',
+              ignored: () => 'ignored',
             },
-            workflows: {
-              helloPipeline: {
-                actions: [
-                  { id: 'start', type: 'START' },
-                  {
-                    id: 'invoke-hello',
-                    type: 'INVOKE_FUNCTION',
-                    functionName: 'hello-resources',
-                    inputs: { who: 'workflow-user' },
-                    placement: { mode: 'local' },
-                    retry: { max_attempts: 2 },
-                    prerequisites: ['start'],
-                  },
-                  {
-                    id: 'finish',
-                    type: 'FINISH',
-                    dependencies: ['invoke-hello'],
-                  },
-                ],
-              },
+          ],
+          resources: {
+            db: {
+              adapter: 'vanilla',
+              helper: () => 'ignored',
+              options: { beta: 2, alpha: 1 },
             },
-            scheduler: {
-              triggers: [
-                { actor: 'hello-resources', cron: '* * * * *' },
-                { functionName: 'hello-resources', cron: '*/5 * * * *' },
+            queue: { adapter: 'vanilla', options: { path: '.queue' } },
+            objectStorage: runtimeObjectStorage,
+          },
+          workflows: {
+            helloPipeline: {
+              actions: [
+                { id: 'start', type: 'START' },
+                {
+                  id: 'invoke-hello',
+                  type: 'INVOKE_FUNCTION',
+                  activity: 'hello-resources',
+                  inputs: { who: 'workflow-user' },
+                  placement: { mode: 'local' },
+                  retry: { max_attempts: 2 },
+                  prerequisites: ['start'],
+                },
+                {
+                  id: 'finish',
+                  type: 'FINISH',
+                  dependencies: ['invoke-hello'],
+                },
               ],
             },
           },
-          functions: [
-            {
-              name: 'hello-resources',
+          scheduler: {
+            triggers: [
+              { activity: 'hello-resources', cron: '* * * * *' },
+              { activity: 'hello-resources', cron: '*/5 * * * *' },
+            ],
+          },
+          activities: {
+            'hello-resources': {
               entrypoint: {
                 path: ${JSON.stringify(helloResourcesPath)},
                 export: 'helloResources',
                 debug: () => 'ignored',
               },
-              properties: {
-                external: ['lmdb', '@duckdb/node-api'],
-                environmentVariables: {
-                  BETA: '2',
-                  ALPHA: '1',
-                  OMIT: 1,
+              external: ['lmdb', '@duckdb/node-api'],
+              environmentVariables: {
+                BETA: '2',
+                ALPHA: '1',
+                OMIT: 1,
+              },
+              resources: {
+                db: {
+                  adapter: 'vanilla',
+                  options: { zed: 1, alpha: 2 },
                 },
-                resources: {
-                  db: {
-                    adapter: 'vanilla',
-                    options: { zed: 1, alpha: 2 },
-                  },
-                  objectStorage: runtimeObjectStorage,
-                },
+                objectStorage: runtimeObjectStorage,
               },
             },
-          ],
+          },
         };
       `,
     );
 
-    const { manifest } = await loadApp({ dir });
+    const { manifest, publicManifest } = await loadApp({ dir });
     expect(manifest).toEqual({
       app: { name: 'plain-object-app' },
+      cli: {
+        entrypoint: path.join(dir, 'workflow-handler.js'),
+      },
       targets: [
         {
           nodeVersion: '24',
@@ -204,13 +205,93 @@ describe('Wharfie app loader', () => {
         ],
       },
     });
+    expect(publicManifest).toEqual({
+      app: { name: 'plain-object-app' },
+      cli: {
+        entrypoint: path.join(dir, 'workflow-handler.js'),
+      },
+      targets: [
+        {
+          nodeVersion: '24',
+          platform: 'linux',
+          architecture: 'x64',
+        },
+      ],
+      resources: {
+        db: {
+          adapter: 'vanilla',
+          options: { alpha: 1, beta: 2 },
+        },
+        queue: {
+          adapter: 'vanilla',
+          options: { path: '.queue' },
+        },
+      },
+      activities: {
+        'hello-resources': {
+          entrypoint: {
+            path: helloResourcesPath,
+            export: 'helloResources',
+          },
+          external: [
+            { name: 'lmdb', version: expect.any(String) },
+            { name: '@duckdb/node-api', version: expect.any(String) },
+          ],
+          environmentVariables: {
+            ALPHA: '1',
+            BETA: '2',
+            OMIT: '1',
+          },
+          resources: {
+            db: {
+              adapter: 'vanilla',
+              options: { alpha: 2, zed: 1 },
+            },
+          },
+        },
+      },
+      workflows: [
+        {
+          name: 'helloPipeline',
+          type: 'PIPELINE',
+          actions: [
+            {
+              id: 'start',
+              type: 'START',
+            },
+            {
+              id: 'invoke-hello',
+              type: 'INVOKE_FUNCTION',
+              activity: 'hello-resources',
+              inputs: { who: 'workflow-user' },
+              placement: { mode: 'local' },
+              retry: { max_attempts: 2 },
+              dependsOn: ['start'],
+            },
+            {
+              id: 'finish',
+              type: 'FINISH',
+              dependsOn: ['invoke-hello'],
+            },
+          ],
+        },
+      ],
+      scheduler: {
+        triggers: [
+          { activity: 'hello-resources', cron: '* * * * *' },
+          { activity: 'hello-resources', cron: '*/5 * * * *' },
+        ],
+      },
+    });
     expect(JSON.parse(JSON.stringify(manifest))).toEqual(manifest);
+    expect(JSON.parse(JSON.stringify(publicManifest))).toEqual(publicManifest);
     if (
       !manifest.capabilities?.db ||
-      !manifest.functions?.[0]?.environmentVariables
+      !manifest.functions?.[0]?.environmentVariables ||
+      !publicManifest.activities?.['hello-resources']?.environmentVariables
     ) {
       throw new Error(
-        'Expected manifest capabilities/functions to be defined.',
+        'Expected manifest capabilities/functions and public manifest activities to be defined.',
       );
     }
     expect(Object.keys(manifest.capabilities.db.options)).toEqual([
@@ -222,6 +303,44 @@ describe('Wharfie app loader', () => {
       'BETA',
       'OMIT',
     ]);
+    expect(
+      Object.keys(
+        publicManifest.activities['hello-resources'].environmentVariables,
+      ),
+    ).toEqual(['ALPHA', 'BETA', 'OMIT']);
+  });
+
+  it('rejects legacy plain-object functions authoring fields', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-app-legacy-'),
+    );
+
+    await fsp.writeFile(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ type: 'module' }),
+    );
+
+    await fsp.writeFile(
+      path.join(dir, 'wharfie.app.js'),
+      `
+        export default {
+          name: 'legacy-plain-object-app',
+          functions: [
+            {
+              name: 'hello-resources',
+              entrypoint: {
+                path: ${JSON.stringify(helloResourcesPath)},
+                export: 'helloResources',
+              },
+            },
+          ],
+        };
+      `,
+    );
+
+    await expect(loadApp({ dir })).rejects.toThrow(
+      /activities instead of functions/i,
+    );
   });
 
   it('loads an ActorSystem export and preserves function/workflow definitions in the manifest', async () => {

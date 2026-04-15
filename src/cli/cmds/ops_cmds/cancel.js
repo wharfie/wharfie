@@ -2,17 +2,17 @@ import { Command } from 'commander';
 
 import { loadApp } from '../../app/load-app.js';
 import { withOperationsStore } from '../operations-store.js';
-import { getSyntheticAppResourceId } from '../../../core/runtime/app-runs.js';
 import {
   displayFailure,
   displayInstruction,
   displaySuccess,
 } from '../../output/basic.js';
+import { getAppResourceId } from '../../../core/runtime/app-runs.js';
 
 /**
- * Cancels operations for a given app resource ID, operation ID, or operation type.
+ * Cancels operations for a given app resource, operation ID, or operation type.
  * @param {import('../../../core/lib/db/tables/operations.js').OperationsTableClient} store - store.
- * @param {string} resource_id - The synthetic app resource ID.
+ * @param {string} resource_id - The ID of the resource.
  * @param {string} [operation_id] - The specific operation ID to cancel.
  * @param {string} [operation_type] - The type of operation to cancel.
  */
@@ -44,7 +44,7 @@ const cancel = async (store, resource_id, operation_id, operation_type) => {
 };
 
 const cancelCommand = new Command('cancel')
-  .description('Cancel persisted runs for an app')
+  .description('Cancel persisted operations for an app')
   .option('--dir <dir>', 'Directory containing wharfie.app.js', process.cwd())
   .option('-o, --operationId <operationId>', 'Operation ID')
   .option(
@@ -62,9 +62,8 @@ const cancelCommand = new Command('cancel')
     }
 
     try {
-      const appDir = options.dir || process.cwd();
-      const { manifest } = await loadApp({ dir: appDir });
-      const resourceId = getSyntheticAppResourceId(manifest);
+      const { manifest } = await loadApp({ dir: options.dir || process.cwd() });
+      const resourceId = getAppResourceId(manifest.app.name);
 
       await withOperationsStore((store) =>
         cancel(store, resourceId, operationId, normalizedType),

@@ -2,7 +2,6 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { jest } from '@jest/globals';
-import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -12,8 +11,8 @@ import cancelCommand from '../../../src/cli/cmds/ops_cmds/cancel.js';
 import runCommand from '../../../src/cli/cmds/ops_cmds/run.js';
 
 const ORIGINAL_ENV = process.env;
-const testDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(testDir, '../../..');
+
+const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const helloWorldDir = path.join(
   repoRoot,
   'scratch',
@@ -21,7 +20,6 @@ const helloWorldDir = path.join(
   'actor-systems',
   'hello-world',
 );
-const binPath = path.join(repoRoot, 'bin', 'wharfie');
 
 /**
  * @param {{ mock: { calls: unknown[][] } }} spy - spy.
@@ -87,12 +85,9 @@ describe.each([
   [
     'wharfie ops cancel',
     () =>
-      cancelCommand.parseAsync(
-        ['node', 'cancel', '--dir', helloWorldDir, '--operationId', 'op-1'],
-        {
-          from: 'node',
-        },
-      ),
+      cancelCommand.parseAsync(['node', 'cancel', '--dir', helloWorldDir], {
+        from: 'node',
+      }),
   ],
   [
     'wharfie ops run',
@@ -115,21 +110,4 @@ describe.each([
   test('reports a missing OPERATIONS_TABLE as a CLI failure', async () => {
     await expectCliFailure(invoke, /OPERATIONS_TABLE/i);
   });
-});
-
-test('wharfie ops run rejects missing app run selectors', () => {
-  const result = spawnSync(
-    process.execPath,
-    [binPath, 'ops', 'run', '--dir', helloWorldDir],
-    {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      env: { ...process.env, NODE_ENV: 'test' },
-    },
-  );
-
-  expect(result.status).toBe(1);
-  expect(result.stderr).toMatch(
-    /requires either --activity <activityName> or --workflow <workflowName>/i,
-  );
 });

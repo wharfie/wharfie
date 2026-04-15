@@ -2,22 +2,11 @@ import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import Action from '../../core/lib/graph/action.js';
+import Operation from '../../core/lib/graph/operation.js';
 import ActorSystem from '../../core/resources/builds/actor-system.js';
 import WharfieFunction from '../../core/resources/builds/function.js';
 import { normalizeExternalDependencies } from '../../core/resources/builds/lib/resolve-externals.js';
-import Action from '../../core/lib/graph/action.js';
-import Operation from '../../core/lib/graph/operation.js';
-
-/**
- * Wharfie v2 app loader + manifest compiler.
- *
- * Wharfie v2 apps are code-defined (no YAML). The CLI needs a strict contract so
- * it can:
- *  - locate the app entrypoint (`wharfie.app.js`)
- *  - load it (ESM)
- *  - derive a normalized internal runtime manifest
- *  - derive a normalized public manifest for `wharfie app manifest`
- */
 
 /**
  * @typedef {Record<string, any>} PlainObject
@@ -28,12 +17,6 @@ import Operation from '../../core/lib/graph/operation.js';
  * @property {any} [db] - DB adapter spec / instance.
  * @property {any} [queue] - Queue adapter spec / instance.
  * @property {any} [objectStorage] - Object storage adapter spec / instance.
- */
-
-/**
- * @typedef ManifestCliDefinition
- * @property {string} entrypoint - entrypoint.
- * @property {string} [export] - export.
  */
 
 /**
@@ -52,10 +35,29 @@ import Operation from '../../core/lib/graph/operation.js';
  */
 
 /**
+ * @typedef ManifestActivityDefinition
+ * @property {ManifestFunctionEntrypoint} entrypoint - entrypoint.
+ * @property {{ name: string, version: string }[]} [external] - external.
+ * @property {Record<string, string>} [environmentVariables] - environmentVariables.
+ * @property {CapabilitySpecs} [resources] - Activity-scoped resources.
+ */
+
+/**
  * @typedef ManifestWorkflowActionDefinition
  * @property {string} id - id.
  * @property {string} type - type.
  * @property {string} [functionName] - functionName.
+ * @property {any} [inputs] - inputs.
+ * @property {Record<string, any>} [placement] - placement.
+ * @property {Record<string, any>} [retry] - retry.
+ * @property {string[]} [dependsOn] - dependsOn.
+ */
+
+/**
+ * @typedef ManifestPublicWorkflowActionDefinition
+ * @property {string} id - id.
+ * @property {string} type - type.
+ * @property {string} [activity] - activity.
  * @property {any} [inputs] - inputs.
  * @property {Record<string, any>} [placement] - placement.
  * @property {Record<string, any>} [retry] - retry.
@@ -70,8 +72,21 @@ import Operation from '../../core/lib/graph/operation.js';
  */
 
 /**
+ * @typedef ManifestPublicWorkflowDefinition
+ * @property {string} name - name.
+ * @property {string} type - type.
+ * @property {ManifestPublicWorkflowActionDefinition[]} actions - actions.
+ */
+
+/**
  * @typedef ManifestSchedulerTrigger
  * @property {string} actor - actor.
+ * @property {string} cron - cron.
+ */
+
+/**
+ * @typedef ManifestPublicSchedulerTrigger
+ * @property {string} activity - activity.
  * @property {string} cron - cron.
  */
 
@@ -81,64 +96,31 @@ import Operation from '../../core/lib/graph/operation.js';
  */
 
 /**
+ * @typedef ManifestPublicSchedulerDefinition
+ * @property {ManifestPublicSchedulerTrigger[]} triggers - triggers.
+ */
+
+/**
  * @typedef WharfieAppManifest
  * @property {{ name: string }} app - App metadata.
- * @property {ManifestCliDefinition} [cli] - Bundled app CLI entrypoint.
+ * @property {{ entrypoint: string }} [cli] - cli.
  * @property {Array<{ nodeVersion: string, platform: string, architecture: string, libc?: string }>} [targets] - Build targets, if provided.
  * @property {CapabilitySpecs} [capabilities] - Runtime capability specs (db/queue/objectStorage), if discoverable.
- * @property {CapabilitySpecs} [resources] - Alias for `capabilities`.
+ * @property {CapabilitySpecs} [resources] - Alias for `capabilities` (kept for compatibility with existing ActorSystem terminology).
  * @property {ManifestFunctionDefinition[]} [functions] - Function definitions, if discoverable.
  * @property {ManifestWorkflowDefinition[]} [workflows] - Workflow definitions, if discoverable.
  * @property {ManifestSchedulerDefinition} [scheduler] - Scheduler trigger definitions, if discoverable.
  */
 
 /**
- * @typedef PublicActivityDefinition
- * @property {string} entrypoint - entrypoint.
- * @property {string} [export] - export.
- * @property {{ name: string, version: string }[]} [external] - external.
- * @property {Record<string, string>} [environmentVariables] - environmentVariables.
- * @property {CapabilitySpecs} [resources] - Activity-scoped resources.
- */
-
-/**
- * @typedef PublicWorkflowActionDefinition
- * @property {string} id - id.
- * @property {string} type - type.
- * @property {string} [activity] - activity.
- * @property {any} [inputs] - inputs.
- * @property {Record<string, any>} [placement] - placement.
- * @property {Record<string, any>} [retry] - retry.
- * @property {string[]} [dependsOn] - dependsOn.
- */
-
-/**
- * @typedef PublicWorkflowDefinition
- * @property {string} name - name.
- * @property {string} type - type.
- * @property {PublicWorkflowActionDefinition[]} actions - actions.
- */
-
-/**
- * @typedef PublicSchedulerTrigger
- * @property {string} activity - activity.
- * @property {string} cron - cron.
- */
-
-/**
- * @typedef PublicSchedulerDefinition
- * @property {PublicSchedulerTrigger[]} triggers - triggers.
- */
-
-/**
- * @typedef PublicWharfieAppManifest
+ * @typedef WharfiePublicAppManifest
  * @property {{ name: string }} app - App metadata.
- * @property {ManifestCliDefinition} [cli] - Bundled app CLI entrypoint.
+ * @property {{ entrypoint: string }} [cli] - cli.
  * @property {Array<{ nodeVersion: string, platform: string, architecture: string, libc?: string }>} [targets] - Build targets, if provided.
- * @property {CapabilitySpecs} [resources] - Runtime capability specs (db/queue/objectStorage), if discoverable.
- * @property {Record<string, PublicActivityDefinition>} [activities] - Activity definitions, if discoverable.
- * @property {PublicWorkflowDefinition[]} [workflows] - Workflow definitions, if discoverable.
- * @property {PublicSchedulerDefinition} [scheduler] - Scheduler trigger definitions, if discoverable.
+ * @property {CapabilitySpecs} [resources] - Runtime resource specs.
+ * @property {Record<string, ManifestActivityDefinition>} [activities] - Activity definitions.
+ * @property {ManifestPublicWorkflowDefinition[]} [workflows] - Workflow definitions.
+ * @property {ManifestPublicSchedulerDefinition} [scheduler] - Scheduler trigger definitions.
  */
 
 /**
@@ -171,21 +153,19 @@ function jsonSafeClone(value) {
   if (value === null) return null;
 
   if (isPlainObject(value)) {
-    /** @type {Record<string, unknown>} */
-    const cloned = {};
-
-    for (const key of Object.keys(value).sort((left, right) =>
-      left.localeCompare(right),
-    )) {
-      const child = value[key];
-      if (typeof child === 'function' || child === undefined) continue;
-      const normalized = jsonSafeClone(child);
-      if (normalized !== undefined) {
-        cloned[key] = normalized;
-      }
-    }
-
-    return cloned;
+    return Object.keys(value)
+      .sort((left, right) => left.localeCompare(right))
+      .reduce((acc, key) => {
+        const child = value[key];
+        if (typeof child === 'function' || child === undefined) {
+          return acc;
+        }
+        const normalized = jsonSafeClone(child);
+        if (normalized !== undefined) {
+          acc[key] = normalized;
+        }
+        return acc;
+      }, /** @type {Record<string, unknown>} */ ({}));
   }
 
   if (
@@ -206,23 +186,22 @@ function jsonSafeClone(value) {
 function normalizeEnvironmentVariables(value) {
   if (!isPlainObject(value)) return undefined;
 
-  /** @type {Record<string, string>} */
-  const normalized = {};
-  for (const key of Object.keys(value).sort((left, right) =>
-    left.localeCompare(right),
-  )) {
-    const candidate = value[key];
-    if (
-      candidate === null ||
-      typeof candidate === 'undefined' ||
-      typeof candidate === 'function' ||
-      typeof candidate === 'symbol' ||
-      (typeof candidate === 'object' && candidate !== null)
-    ) {
-      continue;
-    }
-    normalized[key] = String(candidate);
-  }
+  const normalized = Object.keys(value)
+    .sort((left, right) => left.localeCompare(right))
+    .reduce((acc, key) => {
+      const candidate = value[key];
+      if (
+        candidate === null ||
+        typeof candidate === 'undefined' ||
+        typeof candidate === 'function' ||
+        typeof candidate === 'symbol' ||
+        (typeof candidate === 'object' && candidate !== null)
+      ) {
+        return acc;
+      }
+      acc[key] = String(candidate);
+      return acc;
+    }, /** @type {Record<string, string>} */ ({}));
 
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -250,16 +229,12 @@ function serializeCapabilitySpec(spec) {
 function pickCapabilitySpecs(maybeSpecs) {
   if (!isPlainObject(maybeSpecs)) return undefined;
 
-  /** @type {CapabilitySpecs} */
-  const picked = {};
-
+  const picked = /** @type {CapabilitySpecs} */ ({});
   for (const key of ['db', 'queue', 'objectStorage']) {
     if (!(key in maybeSpecs)) continue;
-    const serialized = serializeCapabilitySpec(
-      /** @type {PlainObject} */ (maybeSpecs)[key],
-    );
+    const serialized = serializeCapabilitySpec(maybeSpecs[key]);
     if (serialized !== undefined) {
-      // @ts-ignore - keyof narrowing is cumbersome in JSDoc mode.
+      // @ts-ignore - JSDoc narrowing is cumbersome here.
       picked[key] = serialized;
     }
   }
@@ -269,85 +244,18 @@ function pickCapabilitySpecs(maybeSpecs) {
 }
 
 /**
- * @param {unknown} targets - targets.
- * @returns {WharfieAppManifest['targets']} - Result.
+ * @param {unknown[]} candidates - candidates.
+ * @returns {CapabilitySpecs | undefined} - Result.
  */
-function normalizeTargets(targets) {
-  if (!Array.isArray(targets) || targets.length === 0) return undefined;
-
-  const normalized = targets.reduce(
-    (/** @type {NonNullable<WharfieAppManifest['targets']>} */ acc, target) => {
-      if (!isPlainObject(target)) return acc;
-      const nodeVersion = target.nodeVersion;
-      const platform = target.platform;
-      const architecture = target.architecture;
-      if (
-        typeof nodeVersion !== 'string' ||
-        typeof platform !== 'string' ||
-        typeof architecture !== 'string'
-      ) {
-        return acc;
-      }
-
-      acc.push({
-        nodeVersion,
-        platform,
-        architecture,
-        ...(typeof target.libc === 'string' ? { libc: target.libc } : {}),
-      });
-      return acc;
-    },
-    [],
-  );
-
-  return normalized.length > 0 ? normalized : undefined;
-}
-
-/**
- * @param {string} entrypointPath - entrypointPath.
- * @param {string} appDir - appDir.
- * @returns {string} - Result.
- */
-function resolveEntrypointPath(entrypointPath, appDir) {
-  return path.isAbsolute(entrypointPath)
-    ? entrypointPath
-    : path.resolve(appDir, entrypointPath);
-}
-
-/**
- * @param {unknown} cli - cli.
- * @param {string} appDir - appDir.
- * @returns {ManifestCliDefinition | undefined} - Result.
- */
-function normalizeCliDefinition(cli, appDir) {
-  if (typeof cli === 'string' && cli.trim()) {
-    return { entrypoint: resolveEntrypointPath(cli.trim(), appDir) };
+function firstCapabilityCandidate(candidates) {
+  for (const candidate of candidates) {
+    const normalized = pickCapabilitySpecs(candidate);
+    if (normalized) {
+      return normalized;
+    }
   }
 
-  if (!isPlainObject(cli)) return undefined;
-
-  const entrypointInput =
-    typeof cli.entrypoint === 'string'
-      ? cli.entrypoint
-      : isPlainObject(cli.entrypoint) && typeof cli.entrypoint.path === 'string'
-        ? cli.entrypoint.path
-        : '';
-
-  if (!entrypointInput || !entrypointInput.trim()) {
-    return undefined;
-  }
-
-  const exportName =
-    (typeof cli.export === 'string' && cli.export.trim()) ||
-    (isPlainObject(cli.entrypoint) &&
-      typeof cli.entrypoint.export === 'string' &&
-      cli.entrypoint.export.trim()) ||
-    '';
-
-  return {
-    entrypoint: resolveEntrypointPath(entrypointInput.trim(), appDir),
-    ...(exportName ? { export: exportName } : {}),
-  };
+  return undefined;
 }
 
 /**
@@ -360,38 +268,6 @@ function firstArrayCandidate(candidates) {
       return candidate;
     }
   }
-
-  return undefined;
-}
-
-/**
- * @param {unknown[]} candidates - candidates.
- * @returns {CapabilitySpecs | undefined} - Result.
- */
-function firstCapabilityCandidate(candidates) {
-  for (const candidate of candidates) {
-    const normalized = pickCapabilitySpecs(candidate);
-    if (normalized) return normalized;
-  }
-
-  return undefined;
-}
-
-/**
- * @param {unknown[]} candidates - candidates.
- * @returns {unknown} - Result.
- */
-function firstWorkflowCandidate(candidates) {
-  for (const candidate of candidates) {
-    if (Array.isArray(candidate) && candidate.length > 0) {
-      return candidate;
-    }
-
-    if (isPlainObject(candidate) && Object.keys(candidate).length > 0) {
-      return candidate;
-    }
-  }
-
   return undefined;
 }
 
@@ -405,67 +281,207 @@ function firstObjectCandidate(candidates) {
       return candidate;
     }
   }
-
   return undefined;
+}
+
+/**
+ * @param {unknown[]} candidates - candidates.
+ * @returns {unknown} - Result.
+ */
+function firstWorkflowCandidate(candidates) {
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate) && candidate.length > 0) {
+      return candidate;
+    }
+    if (isPlainObject(candidate) && Object.keys(candidate).length > 0) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * @param {unknown[]} candidates - candidates.
+ * @returns {string | undefined} - Result.
+ */
+function firstStringCandidate(candidates) {
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return undefined;
+}
+
+/**
+ * @param {unknown} targets - targets.
+ * @returns {WharfieAppManifest['targets']} - Result.
+ */
+function normalizeTargets(targets) {
+  if (!Array.isArray(targets) || targets.length === 0) return undefined;
+
+  const normalized = targets.reduce((acc, target) => {
+    if (!isPlainObject(target)) return acc;
+    const nodeVersion = target.nodeVersion;
+    const platform = target.platform;
+    const architecture = target.architecture;
+    if (
+      typeof nodeVersion !== 'string' ||
+      typeof platform !== 'string' ||
+      typeof architecture !== 'string'
+    ) {
+      return acc;
+    }
+
+    acc.push({
+      nodeVersion,
+      platform,
+      architecture,
+      ...(typeof target.libc === 'string' ? { libc: target.libc } : {}),
+    });
+    return acc;
+  }, /** @type {NonNullable<WharfieAppManifest['targets']>} */ ([]));
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+/**
+ * @param {unknown} candidate - candidate.
+ * @param {string} appDir - appDir.
+ * @returns {ManifestFunctionEntrypoint | undefined} - Result.
+ */
+function normalizeEntrypoint(candidate, appDir) {
+  if (!isPlainObject(candidate) || typeof candidate.path !== 'string') {
+    return undefined;
+  }
+
+  const entrypointPath = path.isAbsolute(candidate.path)
+    ? candidate.path
+    : path.resolve(appDir, candidate.path);
+
+  return {
+    path: entrypointPath,
+    ...(typeof candidate.export === 'string'
+      ? { export: candidate.export }
+      : {}),
+  };
 }
 
 /**
  * @param {any} func - func.
  * @param {string} appDir - appDir.
+ * @param {string} [nameHint] - nameHint.
  * @returns {ManifestFunctionDefinition | undefined} - Result.
  */
-function serializeFunctionDefinition(func, appDir) {
+function serializeFunctionDefinition(func, appDir, nameHint) {
   if (!func || typeof func !== 'object') return undefined;
 
-  const name = typeof func.name === 'string' ? func.name : '';
-  if (!name) return undefined;
+  const inferredName =
+    (typeof nameHint === 'string' && nameHint.trim()) ||
+    (typeof func.name === 'string' ? func.name.trim() : '');
+  if (!inferredName) return undefined;
 
   const properties = isPlainObject(func.properties) ? func.properties : {};
-  const entrypoint = isPlainObject(func.entrypoint)
-    ? func.entrypoint
-    : isPlainObject(properties.entrypoint)
-      ? properties.entrypoint
-      : null;
-
-  if (!entrypoint || typeof entrypoint.path !== 'string') {
+  const entrypoint = normalizeEntrypoint(
+    isPlainObject(func.entrypoint)
+      ? func.entrypoint
+      : isPlainObject(properties.entrypoint)
+        ? properties.entrypoint
+        : undefined,
+    appDir,
+  );
+  if (!entrypoint) {
     return undefined;
   }
 
-  const entrypointPath = resolveEntrypointPath(entrypoint.path, appDir);
-
   const externalInput =
     properties.external ?? (Array.isArray(func.external) ? func.external : []);
-  const external = normalizeExternalDependencies(externalInput, entrypointPath);
-
+  const external = normalizeExternalDependencies(
+    externalInput,
+    entrypoint.path,
+  );
   const environmentVariables = normalizeEnvironmentVariables(
     properties.environmentVariables ?? func.environmentVariables,
   );
   const resources = pickCapabilitySpecs(properties.resources ?? func.resources);
 
-  /** @type {ManifestFunctionDefinition} */
-  const normalized = {
-    name,
-    entrypoint: {
-      path: entrypointPath,
-      ...(typeof entrypoint.export === 'string'
-        ? { export: entrypoint.export }
-        : {}),
-    },
-  };
+  const normalized = /** @type {ManifestFunctionDefinition} */ ({
+    name: inferredName,
+    entrypoint,
+  });
 
   if (Array.isArray(external) && external.length > 0) {
     normalized.external = external;
   }
-
   if (environmentVariables) {
     normalized.environmentVariables = environmentVariables;
   }
-
   if (resources) {
     normalized.resources = resources;
   }
 
   return normalized;
+}
+
+/**
+ * @param {ManifestFunctionDefinition} definition - definition.
+ * @returns {ManifestActivityDefinition} - Result.
+ */
+function toActivityDefinition(definition) {
+  return {
+    entrypoint: definition.entrypoint,
+    ...(Array.isArray(definition.external) && definition.external.length > 0
+      ? { external: definition.external }
+      : {}),
+    ...(definition.environmentVariables
+      ? { environmentVariables: definition.environmentVariables }
+      : {}),
+    ...(definition.resources ? { resources: definition.resources } : {}),
+  };
+}
+
+/**
+ * @param {ManifestWorkflowActionDefinition | ManifestPublicWorkflowActionDefinition} action - action.
+ * @returns {string | undefined} - Result.
+ */
+function getWorkflowActionActivityName(action) {
+  if (
+    'activity' in action &&
+    typeof action.activity === 'string' &&
+    action.activity
+  ) {
+    return action.activity;
+  }
+  if (
+    'functionName' in action &&
+    typeof action.functionName === 'string' &&
+    action.functionName
+  ) {
+    return action.functionName;
+  }
+  return undefined;
+}
+
+/**
+ * @param {ManifestSchedulerTrigger | ManifestPublicSchedulerTrigger} trigger - trigger.
+ * @returns {string | undefined} - Result.
+ */
+function getSchedulerTriggerActivityName(trigger) {
+  if (
+    'activity' in trigger &&
+    typeof trigger.activity === 'string' &&
+    trigger.activity
+  ) {
+    return trigger.activity;
+  }
+  if (
+    'actor' in trigger &&
+    typeof trigger.actor === 'string' &&
+    trigger.actor
+  ) {
+    return trigger.actor;
+  }
+  return undefined;
 }
 
 /**
@@ -476,25 +492,77 @@ function serializeFunctionDefinition(func, appDir) {
 function normalizeFunctions(functions, appDir) {
   if (!Array.isArray(functions) || functions.length === 0) return undefined;
 
-  const normalized = functions.reduce(
-    (/** @type {ManifestFunctionDefinition[]} */ acc, func) => {
-      if (
-        !(func instanceof WharfieFunction) &&
-        (!func || typeof func !== 'object')
-      ) {
-        return acc;
-      }
-
-      const serialized = serializeFunctionDefinition(func, appDir);
-      if (serialized) {
-        acc.push(serialized);
-      }
+  const normalized = functions.reduce((acc, func) => {
+    if (
+      !(func instanceof WharfieFunction) &&
+      (!func || typeof func !== 'object')
+    ) {
       return acc;
-    },
-    [],
-  );
+    }
+
+    const serialized = serializeFunctionDefinition(func, appDir);
+    if (serialized) {
+      acc.push(serialized);
+    }
+    return acc;
+  }, /** @type {ManifestFunctionDefinition[]} */ ([]));
 
   return normalized.length > 0 ? normalized : undefined;
+}
+
+/**
+ * @param {unknown} activities - activities.
+ * @param {string} appDir - appDir.
+ * @returns {Record<string, ManifestActivityDefinition> | undefined} - Result.
+ */
+function normalizeActivities(activities, appDir) {
+  if (Array.isArray(activities)) {
+    const normalized = activities.reduce((acc, activity) => {
+      const serialized = serializeFunctionDefinition(activity, appDir);
+      if (serialized) {
+        acc[serialized.name] = toActivityDefinition(serialized);
+      }
+      return acc;
+    }, /** @type {Record<string, ManifestActivityDefinition>} */ ({}));
+    return Object.keys(normalized).length > 0 ? normalized : undefined;
+  }
+
+  if (!isPlainObject(activities)) {
+    return undefined;
+  }
+
+  const normalized = Object.keys(activities)
+    .sort((left, right) => left.localeCompare(right))
+    .reduce((acc, key) => {
+      const serialized = serializeFunctionDefinition(
+        activities[key],
+        appDir,
+        key,
+      );
+      if (serialized) {
+        acc[key] = toActivityDefinition(serialized);
+      }
+      return acc;
+    }, /** @type {Record<string, ManifestActivityDefinition>} */ ({}));
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+/**
+ * @param {Record<string, ManifestActivityDefinition> | undefined} activities - activities.
+ * @returns {ManifestFunctionDefinition[] | undefined} - Result.
+ */
+function activitiesToFunctions(activities) {
+  if (!activities) return undefined;
+
+  const functions = Object.keys(activities)
+    .sort((left, right) => left.localeCompare(right))
+    .map((name) => ({
+      name,
+      ...activities[name],
+    }));
+
+  return functions.length > 0 ? functions : undefined;
 }
 
 /**
@@ -504,25 +572,23 @@ function normalizeFunctions(functions, appDir) {
 function normalizeWorkflowDependencies(value) {
   if (!Array.isArray(value) || value.length === 0) return undefined;
 
-  const dependencies = value.reduce(
-    (/** @type {string[]} */ acc, dependency) => {
-      if (typeof dependency !== 'string') return acc;
-      const trimmed = dependency.trim();
-      if (!trimmed || acc.includes(trimmed)) return acc;
-      acc.push(trimmed);
-      return acc;
-    },
-    [],
-  );
+  const dependencies = value.reduce((acc, dependency) => {
+    if (typeof dependency !== 'string') return acc;
+    const trimmed = dependency.trim();
+    if (!trimmed || acc.includes(trimmed)) return acc;
+    acc.push(trimmed);
+    return acc;
+  }, /** @type {string[]} */ ([]));
 
   return dependencies.length > 0 ? dependencies : undefined;
 }
 
 /**
  * @param {unknown} action - action.
- * @returns {ManifestWorkflowActionDefinition | undefined} - Result.
+ * @param {{ publicShape: boolean }} options - options.
+ * @returns {ManifestWorkflowActionDefinition | ManifestPublicWorkflowActionDefinition | undefined} - Result.
  */
-function normalizeInternalWorkflowAction(action) {
+function normalizeWorkflowAction(action, options) {
   if (!isPlainObject(action)) return undefined;
 
   const id =
@@ -536,9 +602,11 @@ function normalizeInternalWorkflowAction(action) {
     return undefined;
   }
 
-  const functionName =
+  const activityName =
+    (typeof action.activity === 'string' && action.activity.trim()) ||
     (typeof action.functionName === 'string' && action.functionName.trim()) ||
     (typeof action.function_name === 'string' && action.function_name.trim()) ||
+    (typeof action.actor === 'string' && action.actor.trim()) ||
     '';
   const dependsOn = normalizeWorkflowDependencies(
     action.dependsOn ?? action.dependencies ?? action.prerequisites,
@@ -547,28 +615,33 @@ function normalizeInternalWorkflowAction(action) {
   const placement = jsonSafeClone(action.placement);
   const retry = jsonSafeClone(action.retry);
 
-  /** @type {ManifestWorkflowActionDefinition} */
-  const normalized = {
-    id,
-    type,
-  };
+  const normalized =
+    /** @type {ManifestWorkflowActionDefinition | ManifestPublicWorkflowActionDefinition} */ ({
+      id,
+      type,
+    });
 
-  if (functionName) {
-    normalized.functionName = functionName;
+  if (activityName) {
+    if (options.publicShape) {
+      /** @type {ManifestPublicWorkflowActionDefinition} */ (
+        normalized
+      ).activity = activityName;
+    } else {
+      /** @type {ManifestWorkflowActionDefinition} */ (
+        normalized
+      ).functionName = activityName;
+    }
   }
 
   if (inputs !== undefined) {
     normalized.inputs = inputs;
   }
-
   if (isPlainObject(placement) && Object.keys(placement).length > 0) {
     normalized.placement = /** @type {Record<string, any>} */ (placement);
   }
-
   if (isPlainObject(retry) && Object.keys(retry).length > 0) {
     normalized.retry = /** @type {Record<string, any>} */ (retry);
   }
-
   if (dependsOn) {
     normalized.dependsOn = dependsOn;
   }
@@ -578,10 +651,11 @@ function normalizeInternalWorkflowAction(action) {
 
 /**
  * @param {unknown} workflow - workflow.
- * @param {string} [nameHint] - nameHint.
- * @returns {ManifestWorkflowDefinition | undefined} - Result.
+ * @param {string | undefined} nameHint - nameHint.
+ * @param {{ publicShape: boolean }} options - options.
+ * @returns {ManifestWorkflowDefinition | ManifestPublicWorkflowDefinition | undefined} - Result.
  */
-function normalizeInternalWorkflowDefinition(workflow, nameHint) {
+function normalizeWorkflowDefinition(workflow, nameHint, options) {
   if (!isPlainObject(workflow)) return undefined;
 
   const name =
@@ -599,16 +673,13 @@ function normalizeInternalWorkflowDefinition(workflow, nameHint) {
     : Operation.Type.PIPELINE;
 
   const actions = Array.isArray(workflow.actions)
-    ? workflow.actions.reduce(
-        (/** @type {ManifestWorkflowActionDefinition[]} */ acc, action) => {
-          const normalized = normalizeInternalWorkflowAction(action);
-          if (normalized) {
-            acc.push(normalized);
-          }
-          return acc;
-        },
-        [],
-      )
+    ? workflow.actions.reduce((acc, action) => {
+        const normalized = normalizeWorkflowAction(action, options);
+        if (normalized) {
+          acc.push(normalized);
+        }
+        return acc;
+      }, /** @type {(ManifestWorkflowActionDefinition | ManifestPublicWorkflowActionDefinition)[]} */ ([]))
     : [];
 
   if (actions.length === 0) return undefined;
@@ -622,36 +693,39 @@ function normalizeInternalWorkflowDefinition(workflow, nameHint) {
 
 /**
  * @param {unknown} workflows - workflows.
- * @returns {ManifestWorkflowDefinition[] | undefined} - Result.
+ * @param {{ publicShape: boolean }} options - options.
+ * @returns {ManifestWorkflowDefinition[] | ManifestPublicWorkflowDefinition[] | undefined} - Result.
  */
-function normalizeInternalWorkflows(workflows) {
+function normalizeWorkflows(workflows, options) {
   if (Array.isArray(workflows)) {
-    const normalized = workflows.reduce(
-      (/** @type {ManifestWorkflowDefinition[]} */ acc, workflow) => {
-        const serialized = normalizeInternalWorkflowDefinition(workflow);
-        if (serialized) {
-          acc.push(serialized);
-        }
-        return acc;
-      },
-      [],
-    );
+    const normalized = workflows.reduce((acc, workflow) => {
+      const serialized = normalizeWorkflowDefinition(
+        workflow,
+        undefined,
+        options,
+      );
+      if (serialized) {
+        acc.push(serialized);
+      }
+      return acc;
+    }, /** @type {(ManifestWorkflowDefinition | ManifestPublicWorkflowDefinition)[]} */ ([]));
     return normalized.length > 0 ? normalized : undefined;
   }
 
   if (isPlainObject(workflows)) {
     const normalized = Object.keys(workflows)
       .sort((left, right) => left.localeCompare(right))
-      .reduce((/** @type {ManifestWorkflowDefinition[]} */ acc, key) => {
-        const serialized = normalizeInternalWorkflowDefinition(
+      .reduce((acc, key) => {
+        const serialized = normalizeWorkflowDefinition(
           workflows[key],
           key,
+          options,
         );
         if (serialized) {
           acc.push(serialized);
         }
         return acc;
-      }, []);
+      }, /** @type {(ManifestWorkflowDefinition | ManifestPublicWorkflowDefinition)[]} */ ([]));
     return normalized.length > 0 ? normalized : undefined;
   }
 
@@ -660,9 +734,10 @@ function normalizeInternalWorkflows(workflows) {
 
 /**
  * @param {unknown} scheduler - scheduler.
- * @returns {ManifestSchedulerDefinition | undefined} - Result.
+ * @param {{ publicShape: boolean }} options - options.
+ * @returns {ManifestSchedulerDefinition | ManifestPublicSchedulerDefinition | undefined} - Result.
  */
-function normalizeInternalScheduler(scheduler) {
+function normalizeScheduler(scheduler, options) {
   if (!isPlainObject(scheduler) && !Array.isArray(scheduler)) {
     return undefined;
   }
@@ -675,786 +750,102 @@ function normalizeInternalScheduler(scheduler) {
   const triggers = Array.isArray(cloned.triggers)
     ? cloned.triggers.reduce((acc, trigger) => {
         if (!isPlainObject(trigger)) return acc;
-        const actor =
-          typeof trigger.actor === 'string' && trigger.actor.trim()
-            ? trigger.actor.trim()
-            : typeof trigger.functionName === 'string' &&
-                trigger.functionName.trim()
-              ? trigger.functionName.trim()
-              : '';
-        const cron =
-          typeof trigger.cron === 'string' && trigger.cron.trim()
-            ? trigger.cron.trim()
-            : '';
-        if (!actor || !cron) return acc;
-        acc.push({ actor, cron });
-        return acc;
-      }, /** @type {ManifestSchedulerTrigger[]} */ ([]))
-    : [];
 
-  return triggers.length > 0 ? { triggers } : undefined;
-}
-
-/**
- * @param {unknown} action - action.
- * @returns {PublicWorkflowActionDefinition | undefined} - Result.
- */
-function normalizePublicWorkflowAction(action) {
-  if (!isPlainObject(action)) return undefined;
-
-  const id =
-    (typeof action.id === 'string' && action.id.trim()) ||
-    (typeof action.name === 'string' && action.name.trim()) ||
-    '';
-  if (!id) return undefined;
-
-  if (
-    (typeof action.functionName === 'string' && action.functionName.trim()) ||
-    (typeof action.function_name === 'string' && action.function_name.trim())
-  ) {
-    throw new Error(
-      'Plain-object workflow actions must use activity instead of functionName.',
-    );
-  }
-
-  const activity =
-    typeof action.activity === 'string' && action.activity.trim()
-      ? action.activity.trim()
-      : '';
-  const rawType =
-    typeof action.type === 'string' ? action.type.trim().toUpperCase() : '';
-  const type = activity
-    ? 'ACTIVITY'
-    : rawType && Object.values(Action.Type).includes(rawType)
-      ? rawType
-      : '';
-
-  if (!type) return undefined;
-
-  const dependsOn = normalizeWorkflowDependencies(
-    action.dependsOn ?? action.dependencies ?? action.prerequisites,
-  );
-  const inputs = jsonSafeClone(action.inputs);
-  const placement = jsonSafeClone(action.placement);
-  const retry = jsonSafeClone(action.retry);
-
-  /** @type {PublicWorkflowActionDefinition} */
-  const normalized = {
-    id,
-    type,
-  };
-
-  if (activity) {
-    normalized.activity = activity;
-  }
-
-  if (inputs !== undefined) {
-    normalized.inputs = inputs;
-  }
-
-  if (isPlainObject(placement) && Object.keys(placement).length > 0) {
-    normalized.placement = /** @type {Record<string, any>} */ (placement);
-  }
-
-  if (isPlainObject(retry) && Object.keys(retry).length > 0) {
-    normalized.retry = /** @type {Record<string, any>} */ (retry);
-  }
-
-  if (dependsOn) {
-    normalized.dependsOn = dependsOn;
-  }
-
-  return normalized;
-}
-
-/**
- * @param {unknown} workflow - workflow.
- * @param {string} [nameHint] - nameHint.
- * @returns {PublicWorkflowDefinition | undefined} - Result.
- */
-function normalizePublicWorkflowDefinition(workflow, nameHint) {
-  if (!isPlainObject(workflow)) return undefined;
-
-  const name =
-    (typeof workflow.name === 'string' && workflow.name.trim()) ||
-    (typeof nameHint === 'string' && nameHint.trim()) ||
-    '';
-  if (!name) return undefined;
-
-  const typeCandidate =
-    typeof workflow.type === 'string' && workflow.type.trim()
-      ? workflow.type.trim().toUpperCase()
-      : Operation.Type.PIPELINE;
-  const type = Object.values(Operation.Type).includes(typeCandidate)
-    ? typeCandidate
-    : Operation.Type.PIPELINE;
-
-  const actions = Array.isArray(workflow.actions)
-    ? workflow.actions.reduce(
-        (/** @type {PublicWorkflowActionDefinition[]} */ acc, action) => {
-          const normalized = normalizePublicWorkflowAction(action);
-          if (normalized) {
-            acc.push(normalized);
-          }
-          return acc;
-        },
-        [],
-      )
-    : [];
-
-  if (actions.length === 0) return undefined;
-
-  return {
-    name,
-    type,
-    actions,
-  };
-}
-
-/**
- * @param {unknown} workflows - workflows.
- * @returns {PublicWorkflowDefinition[] | undefined} - Result.
- */
-function normalizePublicWorkflows(workflows) {
-  if (Array.isArray(workflows)) {
-    const normalized = workflows.reduce(
-      (/** @type {PublicWorkflowDefinition[]} */ acc, workflow) => {
-        const serialized = normalizePublicWorkflowDefinition(workflow);
-        if (serialized) {
-          acc.push(serialized);
-        }
-        return acc;
-      },
-      [],
-    );
-    return normalized.length > 0 ? normalized : undefined;
-  }
-
-  if (isPlainObject(workflows)) {
-    const normalized = Object.keys(workflows)
-      .sort((left, right) => left.localeCompare(right))
-      .reduce((/** @type {PublicWorkflowDefinition[]} */ acc, key) => {
-        const serialized = normalizePublicWorkflowDefinition(
-          workflows[key],
-          key,
-        );
-        if (serialized) {
-          acc.push(serialized);
-        }
-        return acc;
-      }, []);
-    return normalized.length > 0 ? normalized : undefined;
-  }
-
-  return undefined;
-}
-
-/**
- * @param {unknown} scheduler - scheduler.
- * @returns {PublicSchedulerDefinition | undefined} - Result.
- */
-function normalizePublicScheduler(scheduler) {
-  if (!isPlainObject(scheduler) && !Array.isArray(scheduler)) {
-    return undefined;
-  }
-
-  const cloned = jsonSafeClone(scheduler);
-  if (!isPlainObject(cloned)) {
-    return undefined;
-  }
-
-  const triggers = Array.isArray(cloned.triggers)
-    ? cloned.triggers.reduce((acc, trigger) => {
-        if (!isPlainObject(trigger)) return acc;
-        if (
+        const activityName =
+          (typeof trigger.activity === 'string' && trigger.activity.trim()) ||
           (typeof trigger.actor === 'string' && trigger.actor.trim()) ||
           (typeof trigger.functionName === 'string' &&
-            trigger.functionName.trim())
-        ) {
-          throw new Error(
-            'Plain-object scheduler triggers must use activity instead of actor/functionName.',
-          );
-        }
-
-        const activity =
-          typeof trigger.activity === 'string' && trigger.activity.trim()
-            ? trigger.activity.trim()
-            : '';
+          trigger.functionName.trim()
+            ? trigger.functionName.trim()
+            : '');
         const cron =
           typeof trigger.cron === 'string' && trigger.cron.trim()
             ? trigger.cron.trim()
             : '';
-        if (!activity || !cron) return acc;
-        acc.push({ activity, cron });
+        if (!activityName || !cron) return acc;
+
+        if (options.publicShape) {
+          acc.push({ activity: activityName, cron });
+        } else {
+          acc.push({ actor: activityName, cron });
+        }
         return acc;
-      }, /** @type {PublicSchedulerTrigger[]} */ ([]))
+      }, /** @type {(ManifestSchedulerTrigger | ManifestPublicSchedulerTrigger)[]} */ ([]))
     : [];
 
   return triggers.length > 0 ? { triggers } : undefined;
 }
 
 /**
- * @param {unknown} activity - activity.
- * @param {string} name - name.
- * @param {string} appDir - appDir.
- * @returns {PublicActivityDefinition | undefined} - Result.
- */
-function normalizePublicActivityDefinition(activity, name, appDir) {
-  const trimmedName = String(name || '').trim();
-  if (!trimmedName) return undefined;
-
-  let entrypointInput = '';
-  let exportName = '';
-  let externalInput = [];
-  let environmentVariablesInput;
-  let resourcesInput;
-
-  if (typeof activity === 'string') {
-    entrypointInput = activity;
-  } else if (isPlainObject(activity)) {
-    if (typeof activity.entrypoint === 'string') {
-      entrypointInput = activity.entrypoint;
-    } else if (
-      isPlainObject(activity.entrypoint) &&
-      typeof activity.entrypoint.path === 'string'
-    ) {
-      entrypointInput = activity.entrypoint.path;
-      if (
-        typeof activity.entrypoint.export === 'string' &&
-        activity.entrypoint.export.trim()
-      ) {
-        exportName = activity.entrypoint.export.trim();
-      }
-    }
-
-    if (typeof activity.export === 'string' && activity.export.trim()) {
-      exportName = activity.export.trim();
-    }
-
-    if (Array.isArray(activity.external)) {
-      externalInput = activity.external;
-    }
-
-    environmentVariablesInput = activity.environmentVariables;
-    resourcesInput = activity.resources;
-  }
-
-  if (!entrypointInput || !entrypointInput.trim()) return undefined;
-
-  const entrypoint = resolveEntrypointPath(entrypointInput.trim(), appDir);
-  const external = normalizeExternalDependencies(externalInput, entrypoint);
-  const environmentVariables = normalizeEnvironmentVariables(
-    environmentVariablesInput,
-  );
-  const resources = pickCapabilitySpecs(resourcesInput);
-
-  /** @type {PublicActivityDefinition} */
-  const normalized = {
-    entrypoint,
-  };
-
-  if (exportName) {
-    normalized.export = exportName;
-  }
-
-  if (Array.isArray(external) && external.length > 0) {
-    normalized.external = external;
-  }
-
-  if (environmentVariables) {
-    normalized.environmentVariables = environmentVariables;
-  }
-
-  if (resources) {
-    normalized.resources = resources;
-  }
-
-  return normalized;
-}
-
-/**
- * @param {unknown} activities - activities.
- * @param {string} appDir - appDir.
- * @returns {Record<string, PublicActivityDefinition> | undefined} - Result.
- */
-function normalizePublicActivities(activities, appDir) {
-  if (!isPlainObject(activities)) return undefined;
-
-  /** @type {Record<string, PublicActivityDefinition>} */
-  const normalized = {};
-
-  for (const name of Object.keys(activities).sort((left, right) =>
-    left.localeCompare(right),
-  )) {
-    const activity = normalizePublicActivityDefinition(
-      activities[name],
-      name,
-      appDir,
-    );
-    if (activity) {
-      normalized[name] = activity;
-    }
-  }
-
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
-/**
- * @param {unknown[]} candidates - candidates.
- * @returns {boolean} - Result.
- */
-function hasLegacyPlainObjectFunctions(candidates) {
-  return candidates.some(
-    (candidate) => Array.isArray(candidate) && candidate.length > 0,
-  );
-}
-
-/**
- * @param {unknown} workflows - workflows.
- * @returns {boolean} - Result.
- */
-function hasLegacyWorkflowFunctionNames(workflows) {
-  if (Array.isArray(workflows)) {
-    return workflows.some((workflow) =>
-      hasLegacyWorkflowFunctionNames(workflow),
-    );
-  }
-
-  if (isPlainObject(workflows)) {
-    if (Array.isArray(workflows.actions)) {
-      return workflows.actions.some((action) => {
-        if (!isPlainObject(action)) return false;
-        return Boolean(
-          (typeof action.functionName === 'string' &&
-            action.functionName.trim()) ||
-          (typeof action.function_name === 'string' &&
-            action.function_name.trim()),
-        );
-      });
-    }
-
-    return Object.values(workflows).some((workflow) =>
-      hasLegacyWorkflowFunctionNames(workflow),
-    );
-  }
-
-  return false;
-}
-
-/**
- * @param {unknown} scheduler - scheduler.
- * @returns {boolean} - Result.
- */
-function hasLegacySchedulerActors(scheduler) {
-  if (!isPlainObject(scheduler)) return false;
-  if (!Array.isArray(scheduler.triggers)) return false;
-
-  return scheduler.triggers.some((trigger) => {
-    if (!isPlainObject(trigger)) return false;
-    return Boolean(
-      (typeof trigger.actor === 'string' && trigger.actor.trim()) ||
-      (typeof trigger.functionName === 'string' && trigger.functionName.trim()),
-    );
-  });
-}
-
-/**
- * @param {PlainObject} appExport - appExport.
+ * @param {any} appExport - appExport.
  * @returns {void}
  */
 function assertPlainObjectV2Contract(appExport) {
-  if (
-    hasLegacyPlainObjectFunctions([
-      appExport.functions,
-      appExport.properties?.functions,
-      appExport.app?.functions,
-      appExport.app?.properties?.functions,
-    ])
-  ) {
+  const legacyFunctions = firstArrayCandidate([
+    appExport.functions,
+    appExport.properties?.functions,
+    appExport.app?.functions,
+    appExport.app?.properties?.functions,
+  ]);
+
+  if (legacyFunctions) {
     throw new Error(
       'Plain-object wharfie.app.js exports must use activities instead of functions.',
     );
   }
 
-  if (
-    [
-      appExport.workflows,
-      appExport.properties?.workflows,
-      appExport.app?.workflows,
-      appExport.app?.properties?.workflows,
-    ].some((candidate) => hasLegacyWorkflowFunctionNames(candidate))
-  ) {
-    throw new Error(
-      'Plain-object workflow actions must use activity instead of functionName.',
-    );
-  }
-
-  if (
-    [
-      appExport.scheduler,
-      appExport.properties?.scheduler,
-      appExport.app?.scheduler,
-      appExport.app?.properties?.scheduler,
-    ].some((candidate) => hasLegacySchedulerActors(candidate))
-  ) {
-    throw new Error(
-      'Plain-object scheduler triggers must use activity instead of actor/functionName.',
-    );
-  }
-}
-
-/**
- * @param {WharfieAppManifest} manifest - manifest.
- * @returns {PublicWharfieAppManifest} - Result.
- */
-function derivePublicManifestFromInternalManifest(manifest) {
-  /** @type {PublicWharfieAppManifest} */
-  const publicManifest = {
-    app: { name: manifest.app.name },
-  };
-
-  if (manifest.cli) {
-    publicManifest.cli = /** @type {ManifestCliDefinition} */ (
-      jsonSafeClone(manifest.cli)
-    );
-  }
-
-  if (Array.isArray(manifest.targets) && manifest.targets.length > 0) {
-    publicManifest.targets = normalizeTargets(manifest.targets);
-  }
-
-  const resources = pickCapabilitySpecs(
-    manifest.resources ?? manifest.capabilities,
-  );
-  if (resources) {
-    publicManifest.resources = resources;
-  }
-
-  if (Array.isArray(manifest.functions) && manifest.functions.length > 0) {
-    /** @type {Record<string, PublicActivityDefinition>} */
-    const activities = {};
-
-    for (const func of [...manifest.functions].sort((left, right) =>
-      left.name.localeCompare(right.name),
-    )) {
-      activities[func.name] = {
-        entrypoint: func.entrypoint.path,
-        ...(typeof func.entrypoint.export === 'string'
-          ? { export: func.entrypoint.export }
-          : {}),
-        ...(Array.isArray(func.external) && func.external.length > 0
-          ? {
-              external: /** @type {{ name: string, version: string }[]} */ (
-                jsonSafeClone(func.external)
-              ),
-            }
-          : {}),
-        ...(func.environmentVariables
-          ? {
-              environmentVariables: /** @type {Record<string, string>} */ (
-                jsonSafeClone(func.environmentVariables)
-              ),
-            }
-          : {}),
-        ...(func.resources
-          ? {
-              resources: /** @type {CapabilitySpecs} */ (
-                jsonSafeClone(func.resources)
-              ),
-            }
-          : {}),
-      };
-    }
-
-    publicManifest.activities = activities;
-  }
-
-  if (Array.isArray(manifest.workflows) && manifest.workflows.length > 0) {
-    /** @type {PublicWorkflowDefinition[]} */
-    const workflows = manifest.workflows.map((workflow) => {
-      /** @type {PublicWorkflowActionDefinition[]} */
-      const actions = workflow.actions.map((action) => {
-        /** @type {PublicWorkflowActionDefinition} */
-        const mappedAction = {
-          id: action.id,
-          type:
-            action.type === Action.Type.INVOKE_FUNCTION && action.functionName
-              ? 'ACTIVITY'
-              : action.type,
-        };
-
-        if (
-          action.type === Action.Type.INVOKE_FUNCTION &&
-          action.functionName
-        ) {
-          mappedAction.activity = action.functionName;
-        }
-
-        if (action.inputs !== undefined) {
-          mappedAction.inputs = jsonSafeClone(action.inputs);
-        }
-
-        if (action.placement) {
-          mappedAction.placement = /** @type {Record<string, any>} */ (
-            jsonSafeClone(action.placement)
-          );
-        }
-
-        if (action.retry) {
-          mappedAction.retry = /** @type {Record<string, any>} */ (
-            jsonSafeClone(action.retry)
-          );
-        }
-
-        if (action.dependsOn) {
-          mappedAction.dependsOn = [...action.dependsOn];
-        }
-
-        return mappedAction;
-      });
-
-      return {
-        name: workflow.name,
-        type: workflow.type,
-        actions,
-      };
-    });
-
-    publicManifest.workflows = workflows;
-  }
-
-  if (manifest.scheduler?.triggers?.length) {
-    publicManifest.scheduler = {
-      triggers: manifest.scheduler.triggers.map((trigger) => ({
-        activity: trigger.actor,
-        cron: trigger.cron,
-      })),
-    };
-  }
-
-  return publicManifest;
-}
-
-/**
- * @param {PublicWharfieAppManifest} publicManifest - publicManifest.
- * @returns {WharfieAppManifest} - Result.
- */
-function deriveInternalManifestFromPublicManifest(publicManifest) {
-  /** @type {WharfieAppManifest} */
-  const manifest = {
-    app: { name: publicManifest.app.name },
-  };
-
-  if (publicManifest.cli) {
-    manifest.cli = /** @type {ManifestCliDefinition} */ (
-      jsonSafeClone(publicManifest.cli)
-    );
-  }
-
-  if (
-    Array.isArray(publicManifest.targets) &&
-    publicManifest.targets.length > 0
-  ) {
-    manifest.targets = normalizeTargets(publicManifest.targets);
-  }
-
-  const resources = pickCapabilitySpecs(publicManifest.resources);
-  if (resources) {
-    manifest.resources = resources;
-    manifest.capabilities = resources;
-  }
-
-  if (isPlainObject(publicManifest.activities)) {
-    const activities = /** @type {Record<string, PublicActivityDefinition>} */ (
-      publicManifest.activities
-    );
-    /** @type {ManifestFunctionDefinition[]} */
-    const functions = Object.keys(activities)
-      .sort((left, right) => left.localeCompare(right))
-      .map((name) => {
-        const activity = activities[name];
-        if (!activity) {
-          throw new Error(`Public manifest activity '${name}' is undefined.`);
-        }
-
-        /** @type {ManifestFunctionDefinition} */
-        const func = {
-          name,
-          entrypoint: {
-            path: activity.entrypoint,
-            ...(activity.export ? { export: activity.export } : {}),
-          },
-        };
-
-        if (Array.isArray(activity.external) && activity.external.length > 0) {
-          func.external = /** @type {{ name: string, version: string }[]} */ (
-            jsonSafeClone(activity.external)
-          );
-        }
-
-        if (activity.environmentVariables) {
-          func.environmentVariables = /** @type {Record<string, string>} */ (
-            jsonSafeClone(activity.environmentVariables)
-          );
-        }
-
-        if (activity.resources) {
-          func.resources = /** @type {CapabilitySpecs} */ (
-            jsonSafeClone(activity.resources)
-          );
-        }
-
-        return func;
-      });
-
-    manifest.functions = functions;
-  }
-
-  if (
-    Array.isArray(publicManifest.workflows) &&
-    publicManifest.workflows.length > 0
-  ) {
-    /** @type {ManifestWorkflowDefinition[]} */
-    const workflows = publicManifest.workflows.map((workflow) => {
-      /** @type {ManifestWorkflowActionDefinition[]} */
-      const actions = workflow.actions.map((action) => {
-        /** @type {ManifestWorkflowActionDefinition} */
-        const mappedAction = {
-          id: action.id,
-          type:
-            action.type === 'ACTIVITY' || action.activity
-              ? Action.Type.INVOKE_FUNCTION
-              : action.type,
-        };
-
-        if (action.activity) {
-          mappedAction.functionName = action.activity;
-        }
-
-        if (action.inputs !== undefined) {
-          mappedAction.inputs = jsonSafeClone(action.inputs);
-        }
-
-        if (action.placement) {
-          mappedAction.placement = /** @type {Record<string, any>} */ (
-            jsonSafeClone(action.placement)
-          );
-        }
-
-        if (action.retry) {
-          mappedAction.retry = /** @type {Record<string, any>} */ (
-            jsonSafeClone(action.retry)
-          );
-        }
-
-        if (action.dependsOn) {
-          mappedAction.dependsOn = [...action.dependsOn];
-        }
-
-        return mappedAction;
-      });
-
-      return {
-        name: workflow.name,
-        type: workflow.type,
-        actions,
-      };
-    });
-
-    manifest.workflows = workflows;
-  }
-
-  if (publicManifest.scheduler?.triggers?.length) {
-    manifest.scheduler = {
-      triggers: publicManifest.scheduler.triggers.map((trigger) => ({
-        actor: trigger.activity,
-        cron: trigger.cron,
-      })),
-    };
-  }
-
-  return manifest;
-}
-
-/**
- * @param {ActorSystem} appExport - appExport.
- * @param {{ appDir: string }} options - options.
- * @returns {WharfieAppManifest} - Result.
- */
-function compileInternalManifestFromActorSystem(appExport, options) {
-  const { appDir } = options;
-  const name = appExport.name;
-  if (!name) {
-    throw new Error('ActorSystem export is missing a name');
-  }
-
-  /** @type {WharfieAppManifest} */
-  const manifest = { app: { name } };
-
-  const cli = normalizeCliDefinition(
-    firstObjectCandidate([
-      appExport.get('cli', undefined),
-      appExport.properties?.cli,
-    ]),
-    appDir,
-  );
-  if (cli) {
-    manifest.cli = cli;
-  }
-
-  const targets = normalizeTargets(appExport.get('targets', []));
-  if (targets) {
-    manifest.targets = targets;
-  }
-
-  const resources = firstCapabilityCandidate([
-    appExport.get('resources', {}),
-    appExport.properties?.resources,
-    appExport.properties?.capabilities,
+  const workflows = firstWorkflowCandidate([
+    appExport.workflows,
+    appExport.properties?.workflows,
+    appExport.app?.workflows,
+    appExport.app?.properties?.workflows,
   ]);
-  if (resources) {
-    manifest.capabilities = resources;
-    manifest.resources = resources;
+
+  const workflowDefinitions = Array.isArray(workflows)
+    ? workflows
+    : isPlainObject(workflows)
+      ? Object.values(workflows)
+      : [];
+  for (const workflow of workflowDefinitions) {
+    const actions = Array.isArray(workflow?.actions) ? workflow.actions : [];
+    for (const action of actions) {
+      if (
+        isPlainObject(action) &&
+        (typeof action.functionName === 'string' ||
+          typeof action.function_name === 'string')
+      ) {
+        throw new Error(
+          'Plain-object workflow actions must use activity instead of functionName.',
+        );
+      }
+    }
   }
 
-  const functions = normalizeFunctions(appExport.functions, appDir);
-  if (functions) {
-    manifest.functions = functions;
+  const scheduler = firstObjectCandidate([
+    appExport.scheduler,
+    appExport.properties?.scheduler,
+    appExport.app?.scheduler,
+    appExport.app?.properties?.scheduler,
+  ]);
+  const triggers = Array.isArray(scheduler?.triggers) ? scheduler.triggers : [];
+  for (const trigger of triggers) {
+    if (
+      isPlainObject(trigger) &&
+      (typeof trigger.actor === 'string' ||
+        typeof trigger.functionName === 'string')
+    ) {
+      throw new Error(
+        'Plain-object scheduler triggers must use activity instead of actor/functionName.',
+      );
+    }
   }
-
-  const workflows = normalizeInternalWorkflows(
-    firstWorkflowCandidate([
-      appExport.get('workflows', []),
-      appExport.properties?.workflows,
-    ]),
-  );
-  if (workflows) {
-    manifest.workflows = workflows;
-  }
-
-  const scheduler = normalizeInternalScheduler(
-    firstObjectCandidate([
-      appExport.get('scheduler', {}),
-      appExport.properties?.scheduler,
-    ]),
-  );
-  if (scheduler) {
-    manifest.scheduler = scheduler;
-  }
-
-  return manifest;
 }
 
 /**
- * @param {PlainObject} appExport - appExport.
- * @param {{ appDir: string }} options - options.
- * @returns {PublicWharfieAppManifest} - Result.
+ * @param {any} appExport - appExport.
+ * @returns {string} - Result.
  */
-function compilePublicManifestFromPlainObject(appExport, options) {
-  const { appDir } = options;
-
-  assertPlainObjectV2Contract(appExport);
-
+function resolveAppName(appExport) {
   const name =
     (isPlainObject(appExport.app) &&
       typeof appExport.app.name === 'string' &&
@@ -1468,78 +859,283 @@ function compilePublicManifestFromPlainObject(appExport, options) {
     );
   }
 
-  /** @type {PublicWharfieAppManifest} */
-  const publicManifest = {
-    app: { name },
-  };
-
-  const cli = normalizeCliDefinition(
-    appExport.cli ?? appExport.app?.cli,
-    appDir,
-  );
-  if (cli) {
-    publicManifest.cli = cli;
-  }
-
-  const targets = normalizeTargets(appExport.targets ?? appExport.app?.targets);
-  if (targets) {
-    publicManifest.targets = targets;
-  }
-
-  const resources = pickCapabilitySpecs(
-    appExport.resources ?? appExport.app?.resources,
-  );
-  if (resources) {
-    publicManifest.resources = resources;
-  }
-
-  const activities = normalizePublicActivities(
-    appExport.activities ?? appExport.app?.activities,
-    appDir,
-  );
-  if (activities) {
-    publicManifest.activities = activities;
-  }
-
-  const workflows = normalizePublicWorkflows(
-    appExport.workflows ?? appExport.app?.workflows,
-  );
-  if (workflows) {
-    publicManifest.workflows = workflows;
-  }
-
-  const scheduler = normalizePublicScheduler(
-    appExport.scheduler ?? appExport.app?.scheduler,
-  );
-  if (scheduler) {
-    publicManifest.scheduler = scheduler;
-  }
-
-  return publicManifest;
+  return name;
 }
 
 /**
- * Compile manifests from a supported `wharfie.app.js` export.
  * @param {any} appExport - appExport.
- * @param {{ appDir: string }} options - options.
- * @returns {{ manifest: WharfieAppManifest, publicManifest: PublicWharfieAppManifest }} - Result.
+ * @param {string} appDir - appDir.
+ * @returns {{ manifest: WharfieAppManifest, publicManifest: WharfiePublicAppManifest }} - Result.
  */
-function compileManifests(appExport, options) {
-  // --- Shape 1: ActorSystem instance ---
-  if (appExport instanceof ActorSystem) {
-    const manifest = compileInternalManifestFromActorSystem(appExport, options);
-    const publicManifest = derivePublicManifestFromInternalManifest(manifest);
-    return { manifest, publicManifest };
+function compileActorSystemManifests(appExport, appDir) {
+  const name = appExport.name;
+  if (!name) {
+    throw new Error('ActorSystem export is missing a name');
   }
 
-  // --- Shape 2: plain object export ---
-  if (isPlainObject(appExport)) {
-    const publicManifest = compilePublicManifestFromPlainObject(
-      appExport,
-      options,
+  const targets = normalizeTargets(appExport.get('targets', []));
+  const resources = firstCapabilityCandidate([
+    appExport.get('resources', {}),
+    appExport.properties?.resources,
+    appExport.properties?.capabilities,
+  ]);
+  const functions = normalizeFunctions(appExport.functions, appDir);
+  const workflows = normalizeWorkflows(
+    firstWorkflowCandidate([
+      appExport.get('workflows', []),
+      appExport.properties?.workflows,
+    ]),
+    { publicShape: false },
+  );
+  const scheduler = normalizeScheduler(
+    firstObjectCandidate([
+      appExport.get('scheduler', {}),
+      appExport.properties?.scheduler,
+    ]),
+    { publicShape: false },
+  );
+  const cliEntrypoint = firstStringCandidate([
+    appExport.get('cli', {})?.entrypoint,
+    appExport.properties?.cli?.entrypoint,
+  ]);
+
+  const manifest = /** @type {WharfieAppManifest} */ ({ app: { name } });
+  if (cliEntrypoint) {
+    manifest.cli = { entrypoint: path.resolve(appDir, cliEntrypoint) };
+  }
+  if (targets) {
+    manifest.targets = targets;
+  }
+  if (resources) {
+    manifest.resources = resources;
+    manifest.capabilities = resources;
+  }
+  if (functions) {
+    manifest.functions = functions;
+  }
+  if (workflows) {
+    manifest.workflows = /** @type {ManifestWorkflowDefinition[]} */ (
+      workflows
     );
-    const manifest = deriveInternalManifestFromPublicManifest(publicManifest);
-    return { manifest, publicManifest };
+  }
+  if (scheduler) {
+    manifest.scheduler = /** @type {ManifestSchedulerDefinition} */ (scheduler);
+  }
+
+  const activities = functions
+    ? Object.keys(
+        functions.reduce((acc, definition) => {
+          acc[definition.name] = toActivityDefinition(definition);
+          return acc;
+        }, /** @type {Record<string, ManifestActivityDefinition>} */ ({})),
+      )
+        .sort((left, right) => left.localeCompare(right))
+        .reduce((acc, name) => {
+          const definition = functions.find(
+            (candidate) => candidate.name === name,
+          );
+          if (definition) {
+            acc[name] = toActivityDefinition(definition);
+          }
+          return acc;
+        }, /** @type {Record<string, ManifestActivityDefinition>} */ ({}))
+    : undefined;
+
+  const publicManifest = /** @type {WharfiePublicAppManifest} */ ({
+    app: { name },
+  });
+  if (manifest.cli) {
+    publicManifest.cli = manifest.cli;
+  }
+  if (targets) {
+    publicManifest.targets = targets;
+  }
+  if (resources) {
+    publicManifest.resources = resources;
+  }
+  if (activities && Object.keys(activities).length > 0) {
+    publicManifest.activities = activities;
+  }
+  if (workflows) {
+    publicManifest.workflows =
+      /** @type {ManifestPublicWorkflowDefinition[]} */ (
+        workflows.map((workflow) => ({
+          name: workflow.name,
+          type: workflow.type,
+          actions: workflow.actions.map((action) => ({
+            id: action.id,
+            type: action.type,
+            ...(typeof getWorkflowActionActivityName(action) === 'string'
+              ? { activity: getWorkflowActionActivityName(action) }
+              : {}),
+            ...(action.inputs !== undefined ? { inputs: action.inputs } : {}),
+            ...(action.placement ? { placement: action.placement } : {}),
+            ...(action.retry ? { retry: action.retry } : {}),
+            ...(action.dependsOn ? { dependsOn: action.dependsOn } : {}),
+          })),
+        }))
+      );
+  }
+  if (scheduler) {
+    publicManifest.scheduler = {
+      triggers: scheduler.triggers.map((trigger) => ({
+        activity: getSchedulerTriggerActivityName(trigger) || '',
+        cron: trigger.cron,
+      })),
+    };
+  }
+
+  return { manifest, publicManifest };
+}
+
+/**
+ * @param {any} appExport - appExport.
+ * @param {string} appDir - appDir.
+ * @returns {{ manifest: WharfieAppManifest, publicManifest: WharfiePublicAppManifest }} - Result.
+ */
+function compilePlainObjectManifests(appExport, appDir) {
+  assertPlainObjectV2Contract(appExport);
+
+  const name = resolveAppName(appExport);
+  const targets = normalizeTargets(
+    firstArrayCandidate([
+      appExport.targets,
+      appExport.properties?.targets,
+      appExport.app?.targets,
+      appExport.app?.properties?.targets,
+    ]),
+  );
+  const resources = firstCapabilityCandidate([
+    appExport.resources,
+    appExport.properties?.resources,
+    appExport.app?.resources,
+    appExport.app?.properties?.resources,
+    appExport.capabilities,
+    appExport.properties?.capabilities,
+  ]);
+  const cliEntrypoint = firstStringCandidate([
+    appExport.cli?.entrypoint,
+    appExport.properties?.cli?.entrypoint,
+    appExport.app?.cli?.entrypoint,
+    appExport.app?.properties?.cli?.entrypoint,
+  ]);
+  const activities = normalizeActivities(
+    firstObjectCandidate([
+      appExport.activities,
+      appExport.properties?.activities,
+      appExport.app?.activities,
+      appExport.app?.properties?.activities,
+    ]) ||
+      firstArrayCandidate([
+        appExport.activities,
+        appExport.properties?.activities,
+        appExport.app?.activities,
+        appExport.app?.properties?.activities,
+      ]),
+    appDir,
+  );
+  const functions = activitiesToFunctions(activities);
+  const workflows = normalizeWorkflows(
+    firstWorkflowCandidate([
+      appExport.workflows,
+      appExport.properties?.workflows,
+      appExport.app?.workflows,
+      appExport.app?.properties?.workflows,
+    ]),
+    { publicShape: false },
+  );
+  const publicWorkflows = normalizeWorkflows(
+    firstWorkflowCandidate([
+      appExport.workflows,
+      appExport.properties?.workflows,
+      appExport.app?.workflows,
+      appExport.app?.properties?.workflows,
+    ]),
+    { publicShape: true },
+  );
+  const scheduler = normalizeScheduler(
+    firstObjectCandidate([
+      appExport.scheduler,
+      appExport.properties?.scheduler,
+      appExport.app?.scheduler,
+      appExport.app?.properties?.scheduler,
+    ]),
+    { publicShape: false },
+  );
+  const publicScheduler = normalizeScheduler(
+    firstObjectCandidate([
+      appExport.scheduler,
+      appExport.properties?.scheduler,
+      appExport.app?.scheduler,
+      appExport.app?.properties?.scheduler,
+    ]),
+    { publicShape: true },
+  );
+
+  const manifest = /** @type {WharfieAppManifest} */ ({ app: { name } });
+  if (cliEntrypoint) {
+    manifest.cli = { entrypoint: path.resolve(appDir, cliEntrypoint) };
+  }
+  if (targets) {
+    manifest.targets = targets;
+  }
+  if (resources) {
+    manifest.resources = resources;
+    manifest.capabilities = resources;
+  }
+  if (functions) {
+    manifest.functions = functions;
+  }
+  if (workflows) {
+    manifest.workflows = /** @type {ManifestWorkflowDefinition[]} */ (
+      workflows
+    );
+  }
+  if (scheduler) {
+    manifest.scheduler = /** @type {ManifestSchedulerDefinition} */ (scheduler);
+  }
+
+  const publicManifest = /** @type {WharfiePublicAppManifest} */ ({
+    app: { name },
+  });
+  if (cliEntrypoint) {
+    publicManifest.cli = { entrypoint: path.resolve(appDir, cliEntrypoint) };
+  }
+  if (targets) {
+    publicManifest.targets = targets;
+  }
+  if (resources) {
+    publicManifest.resources = resources;
+  }
+  if (activities) {
+    publicManifest.activities = activities;
+  }
+  if (publicWorkflows) {
+    publicManifest.workflows =
+      /** @type {ManifestPublicWorkflowDefinition[]} */ (publicWorkflows);
+  }
+  if (publicScheduler) {
+    publicManifest.scheduler =
+      /** @type {ManifestPublicSchedulerDefinition} */ (publicScheduler);
+  }
+
+  return { manifest, publicManifest };
+}
+
+/**
+ * @param {any} appExport - appExport.
+ * @param {{ appDir: string }} options - options.
+ * @returns {{ manifest: WharfieAppManifest, publicManifest: WharfiePublicAppManifest }} - Result.
+ */
+function compileManifests(appExport, options) {
+  const { appDir } = options;
+
+  if (appExport instanceof ActorSystem) {
+    return compileActorSystemManifests(appExport, appDir);
+  }
+
+  if (isPlainObject(appExport)) {
+    return compilePlainObjectManifests(appExport, appDir);
   }
 
   throw new Error(
@@ -1573,7 +1169,7 @@ function createFreshImportUrl(appPath, requestedTargetSelectors) {
 /**
  * Load `wharfie.app.js` from disk and compile manifests.
  * @param {LoadAppOptions} [options] - options.
- * @returns {Promise<{ appExport: any, manifest: WharfieAppManifest, publicManifest: PublicWharfieAppManifest }>} - Result.
+ * @returns {Promise<{ appExport: any, manifest: WharfieAppManifest, publicManifest: WharfiePublicAppManifest }>} - Result.
  */
 export async function loadApp(options = {}) {
   const dir = options.dir ?? process.cwd();
@@ -1581,7 +1177,7 @@ export async function loadApp(options = {}) {
 
   try {
     await fsp.access(appPath);
-  } catch (_err) {
+  } catch (_error) {
     throw new Error(`Could not find wharfie.app.js in: ${dir}`);
   }
 

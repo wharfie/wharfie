@@ -1,4 +1,4 @@
-import { resolveSharedResourceSpecs } from './shared-resource-registry.js';
+import { resolveSharedResourceRefs } from './shared-resource-registry.js';
 
 /**
  * Actor-system runtime resources.
@@ -242,10 +242,11 @@ async function loadObjectStorageFactory(adapter) {
 /**
  * Create resources for an actor-system.
  * @param {ActorSystemResourceSpecs} [specs] - specs.
+ * @param {{ registryPath?: string }} [options] - options.
  * @returns {Promise<{ resources: ActorSystemResources, close: () => Promise<void> }>} - Result.
  */
-export async function createActorSystemResources(specs = {}) {
-  const resolvedSpecs = await resolveSharedResourceSpecs(specs);
+export async function createActorSystemResources(specs = {}, options = {}) {
+  const resolvedSpecs = await resolveSharedResourceRefs(specs, options);
 
   /** @type {ActorSystemResources} */
   const resources = {};
@@ -253,7 +254,7 @@ export async function createActorSystemResources(specs = {}) {
   /** @type {Array<() => Promise<void> | void>} */
   const closers = [];
 
-  const dbSpec = normalizeSpec(resolvedSpecs?.db, 'db');
+  const dbSpec = normalizeSpec(resolvedSpecs.db, 'db');
   if (dbSpec) {
     if ('instance' in dbSpec) {
       resources.db = dbSpec.instance;
@@ -267,7 +268,7 @@ export async function createActorSystemResources(specs = {}) {
     }
   }
 
-  const queueSpec = normalizeSpec(resolvedSpecs?.queue, 'queue');
+  const queueSpec = normalizeSpec(resolvedSpecs.queue, 'queue');
   if (queueSpec) {
     if ('instance' in queueSpec) {
       resources.queue = queueSpec.instance;
@@ -282,7 +283,7 @@ export async function createActorSystemResources(specs = {}) {
   }
 
   const objectStorageSpec = normalizeSpec(
-    resolvedSpecs?.objectStorage,
+    resolvedSpecs.objectStorage,
     'objectStorage',
   );
   if (objectStorageSpec) {

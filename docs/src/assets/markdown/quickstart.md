@@ -34,10 +34,16 @@ Once you have a `wharfie.app.js`, you can inspect the compiled manifest locally:
 wharfie app manifest ./path/to/wharfie.app.js
 ```
 
-## Run a Local App Function
+## Run a Local App Activity
 
 ```bash
-wharfie app run <function_name> --dir ./path/to/app --event '{"who":"cli-user"}'
+wharfie app run <activity_name> --dir ./path/to/app --event '{"who":"cli-user"}'
+```
+
+To create a persisted local run for an activity or workflow, use `wharfie ops`:
+
+```bash
+wharfie ops run --activity <activity_name> --dir ./path/to/app --event '{"who":"cli-user"}'
 ```
 
 The shipped top-level CLI surface today is `config`, `init`, `app`, `ops`, `list`, and `build-self`.
