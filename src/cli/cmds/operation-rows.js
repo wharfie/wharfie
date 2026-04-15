@@ -21,6 +21,22 @@ export function formatOperationRows(operations = []) {
     )
     .map((operation) => ({
       id: operation.id,
+      app:
+        typeof operation.operation_config?.app_name === 'string'
+          ? operation.operation_config.app_name
+          : '',
+      activity:
+        typeof operation.operation_config?.activity_name === 'string'
+          ? operation.operation_config.activity_name
+          : '',
+      workflow:
+        typeof operation.operation_config?.workflow_name === 'string'
+          ? operation.operation_config.workflow_name
+          : '',
+      trigger:
+        typeof operation.operation_config?.trigger?.source === 'string'
+          ? operation.operation_config.trigger.source
+          : '',
       type: operation.type,
       status: operation.status,
       started_at: toIsoTimestamp(operation.started_at),

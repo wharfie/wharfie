@@ -1,8 +1,11 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
+import { mkdtempSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
+import os from 'node:os';
+import path from 'node:path';
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
@@ -106,6 +109,38 @@ async function loadNodeAgent(options = {}) {
   return { NodeAgent, spawnMock, startSchedulerService };
 }
 
+/**
+ * @template T
+ * @param {Record<string, string | undefined>} overrides - overrides.
+ * @param {() => T | Promise<T>} fn - fn.
+ * @returns {Promise<T>} - Result.
+ */
+async function withEnv(overrides, fn) {
+  /** @type {Record<string, string | undefined>} */
+  const previous = {};
+
+  for (const [key, value] of Object.entries(overrides)) {
+    previous[key] = process.env[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 afterEach(() => {
   jest.restoreAllMocks();
   jest.resetModules();
@@ -138,155 +173,173 @@ describe('NodeAgent orchestration', () => {
     const schedulerInvoke = jest.fn(async () => {});
     /** @type {Map<string, { args: string[], options: any, child: any }>} */
     const spawned = new Map();
+    const dbPath = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-node-agent-orchestration-'),
+    );
 
-    const { NodeAgent, spawnMock, startSchedulerService } = await loadNodeAgent(
-      {
-        spawnImpl: (cmd, args, options) => {
-          const serveIndex = args.indexOf('serve');
-          const name =
-            serveIndex >= 0 && typeof args[serveIndex + 1] === 'string'
-              ? args[serveIndex + 1]
-              : `unknown-${spawned.size}`;
-          const child = createChild(name, {
-            exitOnSigterm: name !== 'queue',
+    try {
+      const { NodeAgent, spawnMock, startSchedulerService } =
+        await loadNodeAgent({
+          spawnImpl: (cmd, args, options) => {
+            const serveIndex = args.indexOf('serve');
+            const name =
+              serveIndex >= 0 && typeof args[serveIndex + 1] === 'string'
+                ? args[serveIndex + 1]
+                : `unknown-${spawned.size}`;
+            const child = createChild(name, {
+              exitOnSigterm: name !== 'queue',
+            });
+            spawned.set(name, { args, options: { ...options, cmd }, child });
+            return child;
+          },
+          startSchedulerServiceImpl: async () => ({ stop: schedulerStop }),
+        });
+
+      jest.spyOn(console, 'log').mockImplementation(() => {});
+      jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      await withEnv(
+        {
+          NODE_ENV: 'development',
+          OPERATIONS_TABLE: 'node-agent-orchestration-test',
+          WHARFIE_DB_ADAPTER: 'vanilla',
+          WHARFIE_DB_PATH: dbPath,
+        },
+        async () => {
+          const agent = new NodeAgent({
+            nodeId: 'node-all',
+            role: 'all',
+            resourcesSpec,
+            manifest,
+            cmd: '/fake/node',
+            prefixArgs: ['/fake/cli'],
+            lambdaHost: '127.0.0.1',
+            lambdaPort: 8787,
+            dbHost: '127.0.0.1',
+            dbPort: 8788,
+            queueHost: '127.0.0.1',
+            queuePort: 8789,
+            controlHost: '127.0.0.1',
+            controlPort: 0,
+            dbAddressOverride: null,
+            queueAddressOverride: null,
+            pollQueueUrls: ['queue://scheduled'],
+            schedulerInvoke,
           });
-          spawned.set(name, { args, options: { ...options, cmd }, child });
-          return child;
+
+          await agent.start();
+
+          expect(spawnMock).toHaveBeenCalledTimes(3);
+          expect(startSchedulerService).toHaveBeenCalledWith(
+            expect.objectContaining({
+              role: 'all',
+              triggers: [{ actor: 'alpha', cron: '* * * * *' }],
+              invoke: expect.any(Function),
+              log: expect.any(Function),
+            }),
+          );
+
+          expect(spawned.get('db')?.args).toEqual(
+            expect.arrayContaining([
+              '/fake/cli',
+              'ctl',
+              'state',
+              'serve',
+              'db',
+              '--host',
+              '127.0.0.1',
+              '--port',
+              '8788',
+            ]),
+          );
+          expect(spawned.get('queue')?.args).toEqual(
+            expect.arrayContaining([
+              '/fake/cli',
+              'ctl',
+              'state',
+              'serve',
+              'queue',
+              '--host',
+              '127.0.0.1',
+              '--port',
+              '8789',
+            ]),
+          );
+          expect(spawned.get('lambda')?.args).toEqual(
+            expect.arrayContaining([
+              '/fake/cli',
+              'ctl',
+              'state',
+              'serve',
+              'lambda',
+              '--host',
+              '127.0.0.1',
+              '--port',
+              '8787',
+              '--db-address',
+              '127.0.0.1:8788',
+              '--queue-address',
+              '127.0.0.1:8789',
+              '--poll-queue-url',
+              'queue://scheduled',
+            ]),
+          );
+
+          expect(spawned.get('db')?.options.env.WHARFIE_APP_MANIFEST).toBe(
+            JSON.stringify(manifest),
+          );
+
+          const controlAddress = agent.control?.address();
+          if (!controlAddress || typeof controlAddress === 'string') {
+            throw new Error('control plane did not expose a usable address');
+          }
+
+          const health = await getJson(
+            `http://127.0.0.1:${controlAddress.port}/health`,
+          );
+
+          expect(health.statusCode).toBe(200);
+          expect(health.body).toEqual(
+            expect.objectContaining({
+              ok: true,
+              nodeId: 'node-all',
+              role: 'all',
+              endpoints: {
+                lambda: '127.0.0.1:8787',
+                db: '127.0.0.1:8788',
+                queue: '127.0.0.1:8789',
+              },
+            }),
+          );
+          const services = /** @type {{ name: string, running: boolean }[]} */ (
+            health.body.services
+          );
+          expect(services.map((service) => service.name)).toEqual([
+            'db',
+            'queue',
+            'lambda',
+          ]);
+          expect(services.every((service) => service.running)).toBe(true);
+
+          const waitPromise = agent.waitForever();
+          await agent.stop('SIGTERM');
+          await waitPromise;
+
+          expect(schedulerStop).toHaveBeenCalledTimes(1);
+          expect(spawned.get('db')?.child.kill).toHaveBeenCalledWith('SIGTERM');
+          expect(spawned.get('lambda')?.child.kill).toHaveBeenCalledWith(
+            'SIGTERM',
+          );
+          expect(spawned.get('queue')?.child.kill.mock.calls).toEqual([
+            ['SIGTERM'],
+            ['SIGKILL'],
+          ]);
+          expect(agent.control).toBeNull();
         },
-        startSchedulerServiceImpl: async () => ({ stop: schedulerStop }),
-      },
-    );
-
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    jest.spyOn(console, 'error').mockImplementation(() => {});
-
-    const agent = new NodeAgent({
-      nodeId: 'node-all',
-      role: 'all',
-      resourcesSpec,
-      manifest,
-      cmd: '/fake/node',
-      prefixArgs: ['/fake/cli'],
-      lambdaHost: '127.0.0.1',
-      lambdaPort: 8787,
-      dbHost: '127.0.0.1',
-      dbPort: 8788,
-      queueHost: '127.0.0.1',
-      queuePort: 8789,
-      controlHost: '127.0.0.1',
-      controlPort: 0,
-      dbAddressOverride: null,
-      queueAddressOverride: null,
-      pollQueueUrls: ['queue://scheduled'],
-      schedulerInvoke,
-    });
-
-    await agent.start();
-
-    expect(spawnMock).toHaveBeenCalledTimes(3);
-    expect(startSchedulerService).toHaveBeenCalledWith(
-      expect.objectContaining({
-        role: 'all',
-        triggers: [{ actor: 'alpha', cron: '* * * * *' }],
-        invoke: schedulerInvoke,
-        log: expect.any(Function),
-      }),
-    );
-
-    expect(spawned.get('db')?.args).toEqual(
-      expect.arrayContaining([
-        '/fake/cli',
-        'ctl',
-        'state',
-        'serve',
-        'db',
-        '--host',
-        '127.0.0.1',
-        '--port',
-        '8788',
-      ]),
-    );
-    expect(spawned.get('queue')?.args).toEqual(
-      expect.arrayContaining([
-        '/fake/cli',
-        'ctl',
-        'state',
-        'serve',
-        'queue',
-        '--host',
-        '127.0.0.1',
-        '--port',
-        '8789',
-      ]),
-    );
-    expect(spawned.get('lambda')?.args).toEqual(
-      expect.arrayContaining([
-        '/fake/cli',
-        'ctl',
-        'state',
-        'serve',
-        'lambda',
-        '--host',
-        '127.0.0.1',
-        '--port',
-        '8787',
-        '--db-address',
-        '127.0.0.1:8788',
-        '--queue-address',
-        '127.0.0.1:8789',
-        '--poll-queue-url',
-        'queue://scheduled',
-      ]),
-    );
-
-    expect(spawned.get('db')?.options.env.WHARFIE_APP_MANIFEST).toBe(
-      JSON.stringify(manifest),
-    );
-
-    const controlAddress = agent.control?.address();
-    if (!controlAddress || typeof controlAddress === 'string') {
-      throw new Error('control plane did not expose a usable address');
+      );
+    } finally {
+      rmSync(dbPath, { recursive: true, force: true });
     }
-
-    const health = await getJson(
-      `http://127.0.0.1:${controlAddress.port}/health`,
-    );
-
-    expect(health.statusCode).toBe(200);
-    expect(health.body).toEqual(
-      expect.objectContaining({
-        ok: true,
-        nodeId: 'node-all',
-        role: 'all',
-        endpoints: {
-          lambda: '127.0.0.1:8787',
-          db: '127.0.0.1:8788',
-          queue: '127.0.0.1:8789',
-        },
-      }),
-    );
-    const services = /** @type {{ name: string, running: boolean }[]} */ (
-      health.body.services
-    );
-    expect(services.map((service) => service.name)).toEqual([
-      'db',
-      'queue',
-      'lambda',
-    ]);
-    expect(services.every((service) => service.running)).toBe(true);
-
-    const waitPromise = agent.waitForever();
-    await agent.stop('SIGTERM');
-    await waitPromise;
-
-    expect(schedulerStop).toHaveBeenCalledTimes(1);
-    expect(spawned.get('db')?.child.kill).toHaveBeenCalledWith('SIGTERM');
-    expect(spawned.get('lambda')?.child.kill).toHaveBeenCalledWith('SIGTERM');
-    expect(spawned.get('queue')?.child.kill.mock.calls).toEqual([
-      ['SIGTERM'],
-      ['SIGKILL'],
-    ]);
-    expect(agent.control).toBeNull();
   });
 
   it('uses normalized remote state overrides for worker nodes and only spawns lambda', async () => {

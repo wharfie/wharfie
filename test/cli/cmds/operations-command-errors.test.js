@@ -2,6 +2,8 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { jest } from '@jest/globals';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import listCommand from '../../../src/cli/cmds/list.js';
 import opsListCommand from '../../../src/cli/cmds/ops_cmds/list.js';
@@ -9,6 +11,15 @@ import cancelCommand from '../../../src/cli/cmds/ops_cmds/cancel.js';
 import runCommand from '../../../src/cli/cmds/ops_cmds/run.js';
 
 const ORIGINAL_ENV = process.env;
+
+const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
+const helloWorldDir = path.join(
+  repoRoot,
+  'scratch',
+  'examples',
+  'actor-systems',
+  'hello-world',
+);
 
 /**
  * @param {{ mock: { calls: unknown[][] } }} spy - spy.
@@ -67,23 +78,26 @@ describe.each([
   [
     'wharfie ops list',
     () =>
-      opsListCommand.parseAsync(['node', 'list', 'resource-1'], {
+      opsListCommand.parseAsync(['node', 'list', '--dir', helloWorldDir], {
         from: 'node',
       }),
   ],
   [
     'wharfie ops cancel',
     () =>
-      cancelCommand.parseAsync(['node', 'cancel', 'resource-1'], {
+      cancelCommand.parseAsync(['node', 'cancel', '--dir', helloWorldDir], {
         from: 'node',
       }),
   ],
   [
     'wharfie ops run',
     () =>
-      runCommand.parseAsync(['node', 'run', 'resource-1', 'op-1'], {
-        from: 'node',
-      }),
+      runCommand.parseAsync(
+        ['node', 'run', '--dir', helloWorldDir, '--activity', 'echo-event'],
+        {
+          from: 'node',
+        },
+      ),
   ],
 ])('%s', (_label, invoke) => {
   test('reports invalid WHARFIE_DB_ADAPTER as a CLI failure', async () => {

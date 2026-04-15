@@ -3,12 +3,18 @@ import path from 'node:path';
 
 import ActorSystem from '../../core/resources/builds/actor-system.js';
 import SeaBuild from '../../core/resources/builds/sea-build.js';
-import { withResourceScope } from '../../core/resources/resource-scope.js';
-import { createResourceScope } from '../../core/resources/runtime-config.js';
 import {
   APP_MANIFEST_ASSET_NAME,
   writeEmbeddedAppManifestAsset,
 } from '../../core/resources/builds/lib/app-manifest-asset.js';
+import { withResourceScope } from '../../core/resources/resource-scope.js';
+import { createResourceScope } from '../../core/resources/runtime-config.js';
+import {
+  createManifestActivityFunction,
+  getManifestActivityNames,
+  getManifestResourcesSpec,
+  invokeManifestActivity,
+} from '../../core/runtime/app-runs.js';
 
 import { loadApp } from './load-app.js';
 
@@ -20,7 +26,8 @@ import { loadApp } from './load-app.js';
 /**
  * @typedef RunLocalAppOptions
  * @property {string} dir - App directory.
- * @property {string} functionName - Function name.
+ * @property {string} [activityName] - Activity name.
+ * @property {string} [functionName] - Compatibility alias for activity name.
  * @property {string | undefined} [eventInput] - Event JSON string.
  * @property {string | undefined} [contextInput] - Context JSON string.
  * @property {string | undefined} [stdinInput] - STDIN payload.
@@ -95,36 +102,97 @@ export function stringifyJson(value, options = {}) {
 }
 
 /**
- * @param {any} appExport - appExport.
- * @returns {void}
+ * @param {any} value - value.
+ * @returns {any} - Result.
  */
-function assertRunnableApp(appExport) {
-  if (!appExport || typeof appExport.invoke !== 'function') {
-    throw new Error(
-      'App is not runnable. Expected a default export with invoke(functionName, event, context).',
-    );
-  }
+function cloneJson(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 }
 
 /**
- * @param {any} appExport - appExport.
- * @param {{ app: { name: string }, targets?: PackageArtifactTarget[] }} manifest - manifest.
+ * @param {RunLocalAppOptions} options - options.
+ * @param {any} manifest - manifest.
+ * @param {any} publicManifest - publicManifest.
+ * @returns {string} - Result.
+ */
+function resolveActivityName(options, manifest, publicManifest) {
+  const activityName =
+    typeof options.activityName === 'string' && options.activityName.trim()
+      ? options.activityName.trim()
+      : typeof options.functionName === 'string' && options.functionName.trim()
+        ? options.functionName.trim()
+        : '';
+
+  if (activityName) {
+    return activityName;
+  }
+
+  const availableActivities = getManifestActivityNames(
+    manifest,
+    publicManifest,
+  );
+  if (availableActivities.length === 1) {
+    return availableActivities[0];
+  }
+
+  throw new Error('Activity name is required.');
+}
+
+/**
+ * @param {{ appExport: any, manifest: any, publicManifest: any }} loaded - loaded.
  * @returns {ActorSystem} - Result.
  */
-function assertPackageableApp(appExport, manifest) {
-  if (!(appExport instanceof ActorSystem)) {
+function toPackageableActorSystem(loaded) {
+  if (loaded.appExport instanceof ActorSystem) {
+    return loaded.appExport;
+  }
+
+  const manifest = loaded.manifest;
+  const publicManifest = loaded.publicManifest;
+  const cliEntrypoint =
+    typeof publicManifest?.cli?.entrypoint === 'string' &&
+    publicManifest.cli.entrypoint
+      ? publicManifest.cli.entrypoint
+      : undefined;
+
+  if (!cliEntrypoint) {
     throw new Error(
-      'App packaging currently supports ActorSystem exports only.',
+      'Manifest-defined app packaging requires cli.entrypoint in wharfie.app.js.',
     );
   }
 
-  if (!Array.isArray(manifest.targets) || manifest.targets.length === 0) {
-    throw new Error(
-      'App has no build targets. Define properties.targets in wharfie.app.js before packaging.',
-    );
-  }
+  const functions = getManifestActivityNames(manifest, publicManifest).map(
+    (activityName) =>
+      createManifestActivityFunction({
+        manifest,
+        publicManifest,
+        activityName,
+      }),
+  );
 
-  return appExport;
+  const properties = /** @type {any} */ ({
+    targets: Array.isArray(publicManifest.targets)
+      ? publicManifest.targets
+      : Array.isArray(manifest.targets)
+        ? manifest.targets
+        : [],
+    resources: getManifestResourcesSpec(manifest, publicManifest),
+    ...(Array.isArray(manifest.workflows)
+      ? { workflows: manifest.workflows }
+      : {}),
+    ...(isObjectRecord(manifest.scheduler)
+      ? { scheduler: manifest.scheduler }
+      : {}),
+    cli: {
+      entrypoint: cliEntrypoint,
+    },
+  });
+
+  return new ActorSystem({
+    name: manifest.app.name,
+    functions,
+    properties,
+  });
 }
 
 /**
@@ -332,7 +400,7 @@ async function attachEmbeddedManifestAssets(builds, manifest) {
     builds.map(async (build) => {
       const buildTarget = getBuildTarget(build);
       const embeddedManifest = {
-        ...manifest,
+        ...cloneJson(manifest),
         ...(Array.isArray(manifest.targets)
           ? { targets: [cloneTarget(buildTarget)] }
           : {}),
@@ -353,9 +421,8 @@ async function attachEmbeddedManifestAssets(builds, manifest) {
  * @returns {Promise<{ manifest: any, result: any }>} - Result.
  */
 export async function runLocalApp(options) {
-  const { appExport, manifest } = await loadApp({ dir: options.dir });
-  assertRunnableApp(appExport);
-
+  const { manifest, publicManifest } = await loadApp({ dir: options.dir });
+  const activityName = resolveActivityName(options, manifest, publicManifest);
   const eventSource = options.eventInput ?? options.stdinInput;
   const event = parseJsonInput(eventSource, 'event', {});
   const context = parseJsonInput(options.contextInput, 'context', {});
@@ -364,14 +431,18 @@ export async function runLocalApp(options) {
     throw new Error('Context JSON must be an object.');
   }
 
-  try {
-    const result = await appExport.invoke(options.functionName, event, context);
-    return { manifest, result };
-  } finally {
-    if (typeof appExport.closeRuntimeResources === 'function') {
-      await appExport.closeRuntimeResources();
-    }
-  }
+  const result = await invokeManifestActivity({
+    manifest,
+    publicManifest,
+    activityName,
+    event,
+    context,
+  });
+
+  return {
+    manifest: publicManifest,
+    result,
+  };
 }
 
 /**
@@ -379,11 +450,21 @@ export async function runLocalApp(options) {
  * @returns {Promise<PackageLocalAppResult>} - Result.
  */
 export async function packageLocalApp(options) {
-  let { appExport, manifest } = await loadApp({ dir: options.dir });
-  let actorSystem = assertPackageableApp(appExport, manifest);
+  let loaded = await loadApp({ dir: options.dir });
+  let actorSystem = toPackageableActorSystem(loaded);
+  let manifest = cloneJson(loaded.publicManifest);
+
+  const availableTargets = Array.isArray(manifest.targets)
+    ? manifest.targets
+    : [];
+  if (availableTargets.length === 0) {
+    throw new Error(
+      'App has no build targets. Define targets in wharfie.app.js before packaging.',
+    );
+  }
 
   const selectedTargets = selectTargets(
-    manifest.targets || [],
+    availableTargets,
     options.targetFilters,
   );
   if (selectedTargets.length === 0) {
@@ -394,26 +475,28 @@ export async function packageLocalApp(options) {
     ActorSystem.getBuildTargetSelector(target),
   );
   if (
+    loaded.appExport instanceof ActorSystem &&
     Array.isArray(options.targetFilters) &&
     options.targetFilters.length > 0 &&
     requestedTargetSelectors.length > 0
   ) {
-    ({ appExport, manifest } = await loadApp({
+    loaded = await loadApp({
       dir: options.dir,
       requestedTargetSelectors,
-    }));
-    actorSystem = assertPackageableApp(appExport, manifest);
+    });
+    actorSystem = toPackageableActorSystem(loaded);
+    manifest = cloneJson(loaded.publicManifest);
   }
 
   applyTargetSelection(actorSystem, selectedTargets);
   manifest.targets = selectedTargets.map((target) => cloneTarget(target));
 
   const builds = getSeaBuildResources(actorSystem);
-  await attachEmbeddedManifestAssets(builds, manifest);
 
   if (typeof actorSystem.initializeEnvironment === 'function') {
     await actorSystem.initializeEnvironment();
   }
+  await attachEmbeddedManifestAssets(builds, manifest);
   await actorSystem.reconcile();
 
   if (builds.length === 0) {

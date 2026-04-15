@@ -165,55 +165,28 @@ function runCli(args, env) {
 }
 
 describe('wharfie ops run', () => {
-  it('executes INVOKE_FUNCTION actions against a local app and persists outputs', async () => {
+  it('executes an app activity as a persisted run and stores outputs', async () => {
     const dbPath = mkdtempSync(path.join(os.tmpdir(), 'wharfie-ops-run-'));
     const tableName = 'operations-test';
-    const resourceId = 'resource-1';
+    const resourceId = 'app:hello-world-demo';
+    const operationId = 'op-1';
     /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
     let inspectDb;
 
-    /** @type {import('../../../src/core/lib/graph/operation.js').default} */
-    let operation;
-    /** @type {import('../../../src/core/lib/graph/action.js').default} */
-    let invokeAction;
-
     try {
-      const db = createVanillaDB({ path: dbPath });
-      const store = operationsStoreFactory({ db, tableName });
-
-      operation = new Operation({
-        id: 'op-1',
-        resource_id: resourceId,
-        resource_version: 1,
-        type: OperationType.PIPELINE,
-        started_at: 1,
-        last_updated_at: 1,
-      });
-
-      const startAction = operation.createAction({
-        id: 'start-1',
-        type: Action.Type.START,
-      });
-      invokeAction = operation.createAction({
-        id: 'invoke-1',
-        type: Action.Type.INVOKE_FUNCTION,
-        function_name: 'echo-event',
-        inputs: { who: 'ops-run' },
-        placement: { mode: 'local' },
-        retry: { max_attempts: 1 },
-        dependsOn: [startAction],
-      });
-      operation.createAction({
-        id: 'finish-1',
-        type: Action.Type.FINISH,
-        dependsOn: [invokeAction],
-      });
-
-      await store.putOperation(operation);
-      await db.close();
-
       const result = runCli(
-        ['ops', 'run', resourceId, operation.id, '--dir', helloWorldDir],
+        [
+          'ops',
+          'run',
+          '--activity',
+          'echo-event',
+          '--operation-id',
+          operationId,
+          '--dir',
+          helloWorldDir,
+          '--event',
+          '{"who":"ops-run"}',
+        ],
         {
           ...process.env,
           NODE_ENV: 'development',
@@ -226,7 +199,7 @@ describe('wharfie ops run', () => {
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe('');
-      expect(result.stdout).toContain('invoke-1');
+      expect(result.stdout).toContain('INVOKE_FUNCTION:echo-event');
       expect(result.stdout).toContain('Executed 3 actions.');
 
       inspectDb = createVanillaDB({ path: dbPath });
@@ -234,12 +207,12 @@ describe('wharfie ops run', () => {
 
       const storedAction = await inspectStore.getAction(
         resourceId,
-        operation.id,
-        invokeAction.id,
+        operationId,
+        'invoke',
       );
       const storedOperation = await inspectStore.getOperation(
         resourceId,
-        operation.id,
+        operationId,
       );
 
       expect(storedAction).not.toBeNull();
@@ -270,7 +243,7 @@ describe('wharfie ops run', () => {
     const appDir = await createWorkflowAppDir();
     const dbPath = mkdtempSync(path.join(os.tmpdir(), 'wharfie-ops-workflow-'));
     const tableName = 'operations-workflow-test';
-    const resourceId = 'workflow-resource';
+    const resourceId = 'app:ops-workflow-demo';
     const operationId = 'workflow-op';
     /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
     let inspectDb;
@@ -280,10 +253,10 @@ describe('wharfie ops run', () => {
         [
           'ops',
           'run',
-          resourceId,
-          operationId,
           '--workflow',
           'happyPath',
+          '--operation-id',
+          operationId,
           '--dir',
           appDir,
         ],
@@ -353,15 +326,7 @@ describe('wharfie ops run', () => {
 
     try {
       const result = runCli(
-        [
-          'ops',
-          'run',
-          'workflow-resource',
-          '--workflow',
-          'missingPath',
-          '--dir',
-          appDir,
-        ],
+        ['ops', 'run', '--workflow', 'missingPath', '--dir', appDir],
         {
           ...process.env,
           NODE_ENV: 'development',
@@ -389,7 +354,7 @@ describe('wharfie ops run', () => {
       path.join(os.tmpdir(), 'wharfie-ops-workflow-failing-'),
     );
     const tableName = 'operations-workflow-test';
-    const resourceId = 'workflow-resource';
+    const resourceId = 'app:ops-workflow-demo';
     const operationId = 'workflow-failing';
     /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
     let inspectDb;
@@ -399,10 +364,10 @@ describe('wharfie ops run', () => {
         [
           'ops',
           'run',
-          resourceId,
-          operationId,
           '--workflow',
           'failingPath',
+          '--operation-id',
+          operationId,
           '--dir',
           appDir,
         ],
@@ -461,7 +426,7 @@ describe('wharfie ops run', () => {
       path.join(os.tmpdir(), 'wharfie-ops-workflow-blocked-'),
     );
     const tableName = 'operations-workflow-test';
-    const resourceId = 'workflow-resource';
+    const resourceId = 'app:ops-workflow-demo';
     const operationId = 'workflow-blocked';
     /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
     let inspectDb;
@@ -471,10 +436,10 @@ describe('wharfie ops run', () => {
         [
           'ops',
           'run',
-          resourceId,
-          operationId,
           '--workflow',
           'blockedPath',
+          '--operation-id',
+          operationId,
           '--dir',
           appDir,
         ],

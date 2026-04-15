@@ -1,12 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { Command } from 'commander';
-
-import {
-  dirPathFromImportMetaUrl,
-  filePathFromImportMetaUrl,
-} from '../../src/core/lib/import-meta-path.js';
 import NodeBinary from '../../src/core/resources/builds/node-binary.js';
 import SeaBuild from '../../src/core/resources/builds/sea-build.js';
 import MacOSBinarySignature from '../../src/core/resources/builds/macos-binary-signature.js';
@@ -22,7 +18,8 @@ import {
   displaySuccess,
 } from '../../src/cli/output/basic.js';
 
-const MODULE_DIR = dirPathFromImportMetaUrl(import.meta.url);
+const MODULE_PATH = fileURLToPath(import.meta.url);
+const MODULE_DIR = path.dirname(MODULE_PATH);
 
 /**
  * @param {string} rootDir - rootDir
@@ -71,6 +68,10 @@ function resolveSourceRoot(startDir = process.cwd()) {
  */
 export default {
   name: 'wharfie-v1',
+  cli: {
+    entrypoint: path.join(resolveSourceRoot(), 'src', 'cli', 'entry.js'),
+    export: 'main',
+  },
   // Default "release-like" targets (can be expanded later).
   targets: [
     { nodeVersion: '24', platform: 'darwin', architecture: 'arm64' },
@@ -295,7 +296,7 @@ async function buildWharfieV1(options) {
  * @returns {boolean} -
  */
 function isExecutedDirectly() {
-  const selfPath = filePathFromImportMetaUrl(import.meta.url);
+  const selfPath = MODULE_PATH;
   const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
   return invokedPath === path.resolve(selfPath);
 }

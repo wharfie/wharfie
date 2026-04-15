@@ -7,6 +7,8 @@ const PROCESS_RUNNER_IMPORT =
   '../../../src/core/resources/builds/actor-system-cli/lib/process-runner.js';
 const START_IMPORT =
   '../../../src/core/resources/builds/actor-system-cli/start.js';
+const ACTOR_SYSTEM_CLI_IMPORT =
+  '../../../src/core/resources/builds/actor-system-cli/index.js';
 const DB_CMD_IMPORT =
   '../../../src/core/resources/builds/actor-system-cli/serve_cmds/db.js';
 const QUEUE_CMD_IMPORT =
@@ -19,6 +21,9 @@ const RESOURCE_UTIL_IMPORT =
 const SPAWN_SELF_IMPORT =
   '../../../src/core/resources/builds/actor-system-cli/control_cmds/state_cmds/util/spawn-self.js';
 const DB_SERVICE_IMPORT = '../../../src/core/runtime/services/db-service.js';
+const PATHS_IMPORT = '../../../src/core/lib/paths.js';
+const STATE_START_CMD_IMPORT =
+  '../../../src/core/resources/builds/actor-system-cli/control_cmds/state_cmds/start.js';
 const QUEUE_SERVICE_IMPORT =
   '../../../src/core/runtime/services/queue-service.js';
 const FUNCTION_IMPORT = '../../../src/core/resources/builds/function.js';
@@ -26,6 +31,8 @@ const RUNTIME_RESOURCES_IMPORT = '../../../src/core/runtime/resources.js';
 const RPC_GRPC_IMPORT = '../../../src/core/runtime/services/rpc-grpc.js';
 const LAMBDA_SERVICE_IMPORT =
   '../../../src/core/runtime/services/lambda-service.js';
+const PACKAGED_APP_ENTRY_IMPORT =
+  '../../../src/core/resources/builds/packaged-app-entry.js';
 
 /**
  * @returns {Promise<void>} - Result.
@@ -62,6 +69,97 @@ afterEach(() => {
 });
 
 describe('actor-system CLI runtime surfaces', () => {
+  it('routes direct artifact execution through the hidden bootstrap mode', async () => {
+    const { default: stateStartCmd } = await import(STATE_START_CMD_IMPORT);
+    const parseAsync = jest
+      .spyOn(stateStartCmd, 'parseAsync')
+      .mockResolvedValue(stateStartCmd);
+    const { default: paths } = await import(PATHS_IMPORT);
+    const createWharfiePaths = jest
+      .spyOn(paths, 'createWharfiePaths')
+      .mockResolvedValue(undefined);
+    const originalArgv = process.argv;
+    const stdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+
+    process.env.WHARFIE_BOOTSTRAP_MODE = 'state-start';
+    process.env.WHARFIE_BOOTSTRAP_ARGS = JSON.stringify([
+      '--role',
+      'leader',
+      '--control-port',
+      '8890',
+    ]);
+
+    Object.defineProperty(process.stdin, 'isTTY', {
+      configurable: true,
+      value: true,
+    });
+    process.argv = ['node', 'wharfie-artifact'];
+
+    try {
+      const { default: entrypoint } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+      await entrypoint();
+    } finally {
+      process.argv = originalArgv;
+      delete process.env.WHARFIE_BOOTSTRAP_MODE;
+      delete process.env.WHARFIE_BOOTSTRAP_ARGS;
+      if (stdinIsTTY) {
+        Object.defineProperty(process.stdin, 'isTTY', stdinIsTTY);
+      } else {
+        Reflect.deleteProperty(process.stdin, 'isTTY');
+      }
+    }
+
+    expect(createWharfiePaths).toHaveBeenCalledTimes(1);
+    expect(parseAsync).toHaveBeenCalledWith(
+      ['node', 'start', '--role', 'leader', '--control-port', '8890'],
+      { from: 'node' },
+    );
+  });
+
+  it('honors runtime command env for packaged child-service bootstrap', async () => {
+    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    const parseAsync = jest.fn(async (_argv, _options) => undefined);
+    const originalEnv = {
+      WHARFIE_BOOTSTRAP_MODE: process.env.WHARFIE_BOOTSTRAP_MODE,
+      WHARFIE_BOOTSTRAP_ARGS: process.env.WHARFIE_BOOTSTRAP_ARGS,
+      WHARFIE_RUNTIME_COMMAND: process.env.WHARFIE_RUNTIME_COMMAND,
+      WHARFIE_RUNTIME_ARGS: process.env.WHARFIE_RUNTIME_ARGS,
+    };
+    const originalArgv = process.argv;
+
+    process.env.WHARFIE_BOOTSTRAP_MODE = 'runtime';
+    process.env.WHARFIE_BOOTSTRAP_ARGS = JSON.stringify(['--role', 'leader']);
+    process.env.WHARFIE_RUNTIME_COMMAND = 'serve-db';
+    process.env.WHARFIE_RUNTIME_ARGS = JSON.stringify([
+      '--db-address',
+      '127.0.0.1:9100',
+    ]);
+    process.argv = ['node', 'wharfie-artifact'];
+
+    try {
+      await runPackagedApp({
+        runtimeModules: {
+          'serve-db': { parseAsync },
+        },
+        argv: process.argv,
+      });
+    } finally {
+      process.argv = originalArgv;
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+
+    expect(parseAsync).toHaveBeenCalledWith(
+      ['node', 'serve-db', '--db-address', '127.0.0.1:9100'],
+      { from: 'node' },
+    );
+  });
+
   it('captures stdout/stderr for successful process runs', async () => {
     const { runProcess } = await import(PROCESS_RUNNER_IMPORT);
 

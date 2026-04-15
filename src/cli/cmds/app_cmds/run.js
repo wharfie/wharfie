@@ -4,13 +4,13 @@ import { runLocalApp, stringifyJson } from '../../app/local-app.js';
 import { displayFailure } from '../../output/basic.js';
 
 /**
- * @param {string} functionName - functionName.
+ * @param {string} activityName - activityName.
  * @param {{ dir?: string, event?: string, context?: string, pretty?: boolean }} options - options.
  */
-async function runFunction(functionName, options) {
+async function runActivity(activityName, options) {
   const { result } = await runLocalApp({
     dir: options.dir || process.cwd(),
-    functionName,
+    activityName,
     eventInput: options.event,
     contextInput: options.context,
     stdinInput: process.env.stdin,
@@ -20,16 +20,16 @@ async function runFunction(functionName, options) {
 }
 
 const runCommand = new Command('run')
-  .description('Invoke a function from wharfie.app.js locally')
-  .argument('<functionName>', 'Function name to invoke')
+  .description('Invoke an activity from wharfie.app.js locally')
+  .argument('<activityName>', 'Activity name to invoke')
   .option('--dir <dir>', 'Directory containing wharfie.app.js', process.cwd())
   .option('--event <json>', 'Event JSON (default: stdin JSON or {})')
   .option('--context <json>', 'Context JSON (default: {})')
   .option('--json', 'Output JSON (default)')
   .option('--no-pretty', 'Disable pretty JSON output')
-  .action(async (functionName, options) => {
+  .action(async (activityName, options) => {
     try {
-      await runFunction(functionName, options);
+      await runActivity(activityName, options);
     } catch (err) {
       displayFailure(err);
       process.exitCode = 1;

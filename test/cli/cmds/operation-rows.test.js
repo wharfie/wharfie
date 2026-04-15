@@ -28,6 +28,10 @@ describe('operation row formatting', () => {
     expect(rows).toEqual([
       {
         id: 'newer',
+        app: '',
+        activity: '',
+        workflow: '',
+        trigger: '',
         type: 'PIPELINE',
         status: 'PENDING',
         started_at: '2023-11-14T22:15:00.000Z',
@@ -35,6 +39,10 @@ describe('operation row formatting', () => {
       },
       {
         id: 'older',
+        app: '',
+        activity: '',
+        workflow: '',
+        trigger: '',
         type: 'LOAD',
         status: 'RUNNING',
         started_at: '2023-11-14T22:13:20.000Z',

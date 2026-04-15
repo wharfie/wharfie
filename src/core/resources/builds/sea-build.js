@@ -1,4 +1,5 @@
 import { v4 } from 'uuid';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { promises, existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { build as _build } from '../../lib/esbuild.js';
@@ -140,6 +141,64 @@ async function _withSuppressedPostjectWarnings(fn) {
   }
 }
 
+/** @type {boolean | undefined} */
+let _supportsExperimentalSeaConfig;
+
+/**
+ * @returns {boolean} - Result.
+ */
+function supportsExperimentalSeaConfig() {
+  if (typeof _supportsExperimentalSeaConfig === 'boolean') {
+    return _supportsExperimentalSeaConfig;
+  }
+
+  const result = spawnSync(process.execPath, ['--help'], {
+    encoding: 'utf8',
+  });
+  const output = `${result.stdout || ''}
+${result.stderr || ''}`;
+  _supportsExperimentalSeaConfig = output.includes('--experimental-sea-config');
+  return _supportsExperimentalSeaConfig;
+}
+
+/**
+ * @param {Record<string, string>} assets - assets.
+ * @returns {Promise<Record<string, string>>} - Result.
+ */
+async function encodeEmbeddedAssets(assets) {
+  /** @type {Record<string, string>} */
+  const encoded = {};
+
+  for (const [name, assetPath] of Object.entries(assets).sort(
+    ([left], [right]) => left.localeCompare(right),
+  )) {
+    if (typeof assetPath !== 'string' || !assetPath) {
+      continue;
+    }
+
+    const buffer = await promises.readFile(assetPath);
+    encoded[name] = buffer.toString('base64');
+  }
+
+  return encoded;
+}
+
+/**
+ * @param {string} bundleCode - bundleCode.
+ * @param {Record<string, string>} encodedAssets - encodedAssets.
+ * @returns {string} - Result.
+ */
+function buildFallbackExecutableSource(bundleCode, encodedAssets) {
+  return `#!/usr/bin/env node
+globalThis.__wharfieSeaAssets = Object.assign(
+  {},
+  globalThis.__wharfieSeaAssets || {},
+  ${JSON.stringify(encodedAssets)}
+);
+${bundleCode}
+`;
+}
+
 /**
  * @typedef {import('node:process')['platform']} TargetPlatform -
  * @typedef {import('node:process')['arch']} TargetArch -
@@ -191,20 +250,47 @@ class SeaBuild extends BaseResource {
     await promises.mkdir(tmpBuildDir, { recursive: true });
     await this.esbuild(tmpBuildDir);
     await this.prepareExternalBinaries();
-    const tempNodeBinaryPath = join(tmpBuildDir, 'node-binary');
-    await promises.copyFile(
-      await this.get('nodeBinaryPath'),
-      tempNodeBinaryPath,
-    );
-    await this.seaBuild(tmpBuildDir, tempNodeBinaryPath);
+
     if (!existsSync(SeaBuild.BINARIES_DIR)) {
       await promises.mkdir(SeaBuild.BINARIES_DIR, { recursive: true });
     }
-    await promises.copyFile(tempNodeBinaryPath, binaryPath);
+
+    if (supportsExperimentalSeaConfig()) {
+      const tempNodeBinaryPath = join(tmpBuildDir, 'node-binary');
+      await promises.copyFile(
+        await this.get('nodeBinaryPath'),
+        tempNodeBinaryPath,
+      );
+      await this.seaBuild(tmpBuildDir, tempNodeBinaryPath);
+      await promises.copyFile(tempNodeBinaryPath, binaryPath);
+    } else {
+      await this.scriptBuild(tmpBuildDir, binaryPath);
+    }
+
     this._setUNSAFE('binaryPath', binaryPath);
   }
 
   async prepareExternalBinaries() {}
+
+  /**
+   * @param {string} buildDir - buildDir.
+   * @param {string} outputPath - outputPath.
+   * @returns {Promise<void>} - Result.
+   */
+  async scriptBuild(buildDir, outputPath) {
+    const bundleCode = await promises.readFile(
+      this.get('codeBundlePath'),
+      'utf8',
+    );
+    const encodedAssets = await encodeEmbeddedAssets(this.get('assets', {}));
+    const executableSource = buildFallbackExecutableSource(
+      bundleCode,
+      encodedAssets,
+    );
+
+    await promises.writeFile(outputPath, executableSource, 'utf8');
+    await promises.chmod(outputPath, 0o755);
+  }
 
   async fetchUserDefinedBinaries() {}
 
@@ -343,7 +429,6 @@ class SeaBuild extends BaseResource {
     }
 
     await this.build();
-    console.log(this.get('binaryPath'));
   }
 
   async _destroy() {

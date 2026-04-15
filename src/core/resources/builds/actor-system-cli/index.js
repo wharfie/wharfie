@@ -4,6 +4,12 @@ import paths from '../../../lib/paths.js';
 import functionsCLI from './functions.js';
 import infrastructureCLI from './infrastructure.js';
 import controlCLI from './control.js';
+import stateStartCmd from './control_cmds/state_cmds/start.js';
+import {
+  BOOTSTRAP_MODE_ENV,
+  BOOTSTRAP_MODE_STATE_START,
+  resolveBootstrapInvocation,
+} from './lib/bootstrap-mode.js';
 
 /**
  *
@@ -24,6 +30,22 @@ async function entrypoint() {
   process.env.CONFIG_FILE_PATH = `${process.env.CONFIG_DIR}/wharfie.config`;
   process.env.LOGGING_FORMAT = 'cli';
   process.env.LOGGING_LEVEL = 'warn';
+
+  const bootstrapInvocation = resolveBootstrapInvocation();
+  if (bootstrapInvocation) {
+    await paths.createWharfiePaths();
+    if (bootstrapInvocation.mode !== BOOTSTRAP_MODE_STATE_START) {
+      throw new Error(
+        `Unsupported ${BOOTSTRAP_MODE_ENV}: ${bootstrapInvocation.mode}`,
+      );
+    }
+    await stateStartCmd.parseAsync(
+      [argv[0] || 'node', 'start', ...bootstrapInvocation.args],
+      { from: 'node' },
+    );
+    return;
+  }
+
   const program = new Command();
   program.name('wharfie').description('CLI tool for Wharfie');
   // .version(version);ctor/resources/builds/actor-system.js

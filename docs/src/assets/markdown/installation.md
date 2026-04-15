@@ -20,7 +20,7 @@ iex (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wharfie/wharfie/m
 aws sts get-caller-identity
 ```
 
-If that command returns a valid AWS identity, you are ready to continue. For configuring the AWS CLI refer to its [docs](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html)
+If that command returns a valid aws identity, you are ready to continue. For configuring the AWS CLI refer to its [docs](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html)
 
 ## Configure Wharfie CLI
 
@@ -29,5 +29,3 @@ wharfie config
 ```
 
 You will need to select what AWS region to deploy wharfie in, as a rule of thumb running wharfie in the same region that your data is stored in will be cheaper, due to transfer costs. You will also need to select a wharfie deployment name which will be how you target what specific deployment you will use when running wharfie cli commands. For more information on deployments refer to the [project structure docs](./project-structure)
-
-

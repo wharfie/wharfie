@@ -139,7 +139,7 @@ function runCli(args, options = {}) {
 }
 
 describe('wharfie app commands', () => {
-  it('runs a demo function from the CLI with --event JSON', () => {
+  it('runs a demo activity from the CLI with --event JSON', () => {
     const result = runCli([
       'app',
       'run',
@@ -161,7 +161,7 @@ describe('wharfie app commands', () => {
     });
   });
 
-  it('runs a demo function from the CLI using stdin JSON as the event', () => {
+  it('runs a demo activity from the CLI using stdin JSON as the event', () => {
     const result = runCli(
       ['app', 'run', 'hello-resources', '--dir', helloWorldDir, '--no-pretty'],
       {
@@ -191,9 +191,8 @@ describe('wharfie app commands', () => {
 
     const payload = JSON.parse(result.stdout);
     expect(payload.app).toEqual({ name: 'kitchen-sink-demo' });
-    expect(payload.functions).toEqual([
-      expect.objectContaining({
-        name: 'start',
+    expect(payload.activities).toEqual({
+      start: expect.objectContaining({
         entrypoint: expect.objectContaining({
           export: 'start',
           path: expect.stringContaining(
@@ -209,7 +208,7 @@ describe('wharfie app commands', () => {
           normalizeExpectedExternals(kitchenSinkExternalDependencies),
         ),
       }),
-    ]);
+    });
   });
 
   it('packages every app target when no target filter is provided and embeds a target-specific manifest asset', () => {

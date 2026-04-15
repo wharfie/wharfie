@@ -27,7 +27,7 @@ async function packageApp(dir, options) {
 }
 
 const packageCommand = new Command('package')
-  .description('Package an ActorSystem app into executable artifacts')
+  .description('Package a Wharfie app into executable artifacts')
   .argument('[dir]', 'Directory containing wharfie.app.js (default: cwd)')
   .option(
     '--output-dir <dir>',

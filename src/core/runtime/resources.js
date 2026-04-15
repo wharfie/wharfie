@@ -1,3 +1,5 @@
+import { resolveSharedResourceRefs } from './shared-resource-registry.js';
+
 /**
  * Actor-system runtime resources.
  *
@@ -240,16 +242,19 @@ async function loadObjectStorageFactory(adapter) {
 /**
  * Create resources for an actor-system.
  * @param {ActorSystemResourceSpecs} [specs] - specs.
+ * @param {{ registryPath?: string }} [options] - options.
  * @returns {Promise<{ resources: ActorSystemResources, close: () => Promise<void> }>} - Result.
  */
-export async function createActorSystemResources(specs = {}) {
+export async function createActorSystemResources(specs = {}, options = {}) {
+  const resolvedSpecs = await resolveSharedResourceRefs(specs, options);
+
   /** @type {ActorSystemResources} */
   const resources = {};
 
   /** @type {Array<() => Promise<void> | void>} */
   const closers = [];
 
-  const dbSpec = normalizeSpec(specs.db, 'db');
+  const dbSpec = normalizeSpec(resolvedSpecs.db, 'db');
   if (dbSpec) {
     if ('instance' in dbSpec) {
       resources.db = dbSpec.instance;
@@ -263,7 +268,7 @@ export async function createActorSystemResources(specs = {}) {
     }
   }
 
-  const queueSpec = normalizeSpec(specs.queue, 'queue');
+  const queueSpec = normalizeSpec(resolvedSpecs.queue, 'queue');
   if (queueSpec) {
     if ('instance' in queueSpec) {
       resources.queue = queueSpec.instance;
@@ -277,7 +282,10 @@ export async function createActorSystemResources(specs = {}) {
     }
   }
 
-  const objectStorageSpec = normalizeSpec(specs.objectStorage, 'objectStorage');
+  const objectStorageSpec = normalizeSpec(
+    resolvedSpecs.objectStorage,
+    'objectStorage',
+  );
   if (objectStorageSpec) {
     if ('instance' in objectStorageSpec) {
       resources.objectStorage = objectStorageSpec.instance;

@@ -25,12 +25,15 @@
   "files": [
     "README.md",
     "bin/",
-    "apps/README.md",
     "apps/wharfie-v1/wharfie.app.js",
-    "src/README.md",
-    "src/cli/README.md",
+    "src/core/**",
+    "src/cli/entry.js",
+    "src/cli/config.js",
+    "src/cli/input.js",
+    "src/cli/upgrade.js",
     "src/cli/app/**",
     "src/cli/assets/**",
+    "src/cli/output/**",
     "src/cli/cmds/app.js",
     "src/cli/cmds/app_cmds/**",
     "src/cli/cmds/build_self.js",
@@ -41,13 +44,7 @@
     "src/cli/cmds/operations-store.js",
     "src/cli/cmds/ops.js",
     "src/cli/cmds/ops_cmds/**",
-    "src/cli/config.js",
-    "src/cli/entry.js",
-    "src/cli/input.js",
-    "src/cli/output/basic.js",
-    "src/cli/project/project_structure_examples/**",
-    "src/cli/upgrade.js",
-    "src/core/**"
+    "src/cli/project/project_structure_examples/**"
   ],
   "scripts": {
     "typecheck": "tsc",
