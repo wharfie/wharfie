@@ -1,7 +1,7 @@
 {
   "name": "@wharfie/wharfie",
   "version": "0.0.14",
-  "description": "",
+  "description": "Manifest-first CLI/activity packaging and runtime toolkit",
   "type": "module",
   "repository": {
     "type": "git",
@@ -25,7 +25,7 @@
   "files": [
     "README.md",
     "bin/",
-    "apps/wharfie-v1/wharfie.app.js",
+    "apps/wharfie-cli/wharfie.app.js",
     "src/core/**",
     "src/cli/entry.js",
     "src/cli/config.js",
@@ -55,7 +55,7 @@
     "lint:js": "eslint . && prettier --check \"{*,**/*}.{js,json}\"",
     "lint": "npm run lint:js",
     "lint:fix": "eslint --fix . && prettier --write \"{*,**/*}.{js,json}\"",
-    "build:wharfie-v1": "node ./apps/wharfie-v1/wharfie.app.js"
+    "build:wharfie-cli": "node ./apps/wharfie-cli/wharfie.app.js"
   },
   "prettier": {
     "singleQuote": true,

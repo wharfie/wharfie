@@ -1,28 +1,43 @@
 # The Wharfie Project Structure
 
-The Wharfie project structure is a simplified, opinionated interface for building with Wharfie. Executing `wharfie init` creates the following local scaffold:
+The default Wharfie project structure is a runnable v2 app. Executing `wharfie init` creates the following local scaffold:
 
-- A `wharfie.yaml`
-- A `sources` directory
-- A `models` directory
-- Example models and sources unless you pass `--no-examples`
+- `package.json`
+- `wharfie.app.js`
+- `src/cli.js`
+- `src/activities/hello.js`
+- `README.md`
 
-## `wharfie.yaml`
+Pass `--no-examples` if you want the minimal scaffold without the sample workflow/scheduler blocks. Pass `--template legacy-v1` only when you need the historical Athena/table-oriented scaffold.
 
-This file is intended for project-specific configuration. Currently, it does not contain any configuration options. Support for environment-specific configurations (for example `wharfie.dev.yaml` and `wharfie.prod.yaml`) exists, but the current shipped CLI keeps the scaffold intentionally minimal.
+## `package.json`
 
-## Sources
+The default scaffold writes a minimal `package.json` with `"type": "module"` so `wharfie.app.js`, the developer CLI, and activities all run as ESM.
 
-A source describes existing data on S3, intended for data ingestion with Wharfie into optimized formats for further transformation with models. Each source is defined in a single `<source_name>.yaml` file.
+## `wharfie.app.js`
 
-## Models
+This file is the app manifest source. It is where you declare:
 
-A model is a materialized view, consisting of two files: a `<model_name>.sql` file and a `<model_name>.yaml` file. The `.sql` file supports templating, with `${db}` as the current template variable. Currently, models should only reference other Wharfie models or sources.
+- app metadata
+- the developer CLI entrypoint
+- named activities
+- explicit runtime resources
+- optional workflows
+- optional scheduler triggers
+- optional packaging targets
 
-## What `wharfie init` Does Today
+## `src/cli.js`
 
-`wharfie init` is a local scaffolding command. It creates the project directory structure on disk and can seed it with example models/sources. It does not create AWS infrastructure by itself.
+This is the developer-owned CLI surface that packaged Wharfie artifacts run by default. Wharfie does not require you to rewrite your app around an internal command tree first.
 
-## How Is This Different From dbt?
+## `src/activities/`
 
-The primary difference lies in execution. There is no scheduler or orchestrator in the shipped CLI surface. Wharfie focuses on describing sources, models, app manifests, and operation graphs with local tooling exposed through `wharfie app`, `wharfie ops`, and `wharfie list`.
+Activities are named entrypoints that can be invoked directly with `wharfie app run`, scheduled, or referenced from persisted workflows and operation graphs.
+
+## Optional workflows and scheduler examples
+
+The default scaffold includes a small workflow and cron trigger example so the manifest shows how activities compose into longer-running execution paths. Use `--no-examples` if you want to start without them.
+
+## Legacy: Wharfie v1
+
+The old Wharfie v1 scaffold is still available behind `wharfie init --template legacy-v1`. That legacy template creates `wharfie.yaml`, `sources/`, and `models/` for historical Athena-oriented projects. It is no longer the default project identity.

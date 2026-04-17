@@ -12,6 +12,7 @@ const docsToCheck = [
   'docs/src/assets/markdown/home.md',
   'docs/src/assets/markdown/quickstart.md',
   'docs/src/assets/markdown/project-structure.md',
+  'docs/src/assets/markdown/legacy-v1.md',
   'contributing/FAQ.md',
   'contributing/project.md',
 ];
@@ -54,9 +55,9 @@ describe('docs command surface', () => {
     );
   });
 
-  it('keeps the Wharfie v1 template asset path under src/cli', async () => {
+  it('keeps the self-hosted Wharfie CLI template asset path under src/cli', async () => {
     const wharfieApp = await fsp.readFile(
-      path.join(repoRoot, 'apps', 'wharfie-v1', 'wharfie.app.js'),
+      path.join(repoRoot, 'apps', 'wharfie-cli', 'wharfie.app.js'),
       'utf8',
     );
 
@@ -73,6 +74,8 @@ describe('docs command surface', () => {
       await fsp.readFile(path.join(repoRoot, 'package.json'), 'utf8'),
     );
 
+    expect(packageJson.files).toContain('apps/wharfie-cli/wharfie.app.js');
+    expect(packageJson.files).not.toContain('apps/wharfie-v1/wharfie.app.js');
     expect(packageJson.files).toContain('src/core/**');
     expect(packageJson.files).toContain(
       'src/cli/project/project_structure_examples/**',
@@ -89,16 +92,15 @@ describe('docs command surface', () => {
       'utf8',
     );
 
-    expect(quickstart).toContain('wharfie config');
-    expect(quickstart).toContain('wharfie init my_project');
+    expect(quickstart).not.toContain('wharfie config');
+    expect(quickstart).toContain('wharfie init my_app');
+    expect(quickstart).toContain('wharfie app manifest ./my_app');
     expect(quickstart).toContain(
-      'wharfie app manifest ./path/to/wharfie.app.js',
+      `wharfie app run hello --dir ./my_app --event '{"who":"cli-user"}'`,
     );
+    expect(quickstart).toContain('wharfie app package ./my_app');
     expect(quickstart).toContain(
-      `wharfie app run <activity_name> --dir ./path/to/app --event '{\"who\":\"cli-user\"}'`,
-    );
-    expect(quickstart).toContain(
-      `wharfie ops run --activity <activity_name> --dir ./path/to/app --event '{\"who\":\"cli-user\"}'`,
+      `wharfie ops run --activity hello --dir ./my_app --event '{"who":"cli-user"}'`,
     );
   });
 });

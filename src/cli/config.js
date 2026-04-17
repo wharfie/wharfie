@@ -7,29 +7,34 @@ const configuration = {
   deployment_name: process.env.WHARFIE_DEPLOYMENT_NAME,
   service_bucket: process.env.WHARFIE_SERVICE_BUCKET,
 };
+
+const LEGACY_CONFIG_HINT =
+  'Run `wharfie config` if you are using the legacy AWS deployment workflow.';
+
 /**
  * @typedef CLIConfig
  * @property {string} [region] -
  * @property {string} [deployment_name] -
  * @property {string} [service_bucket] -
  */
+
 /**
  * @param {CLIConfig} params -
  */
 const check = ({ region, deployment_name, service_bucket }) => {
   if (!region) {
     throw new Error(
-      'wharfie region not found. Please make sure you set up the cli config correctly (run `wharfie config`)',
+      `Legacy Wharfie AWS region not found. ${LEGACY_CONFIG_HINT}`,
     );
   }
   if (!deployment_name) {
     throw new Error(
-      'wharfie service name not found. Please make sure you set up the cli config correctly (run `wharfie config`)',
+      `Legacy Wharfie deployment name not found. ${LEGACY_CONFIG_HINT}`,
     );
   }
   if (!service_bucket) {
     throw new Error(
-      'wharfie service name not found. Please make sure you set up the cli config correctly (run `wharfie config`)',
+      `Legacy Wharfie service bucket not found. ${LEGACY_CONFIG_HINT}`,
     );
   }
 };
@@ -90,13 +95,12 @@ export async function validate() {
   let credentials;
   const sts = new STS();
 
-  // Check credentials
   const credentialProvider = defaultProvider();
   try {
     credentials = await credentialProvider();
   } catch (err) {
     throw new Error(
-      'AWS credentials are not configured for terminal, please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html ' +
+      'AWS credentials are not configured for the legacy Wharfie deployment workflow. Please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html ' +
         `\nfailed with this error:\n${getErrorMessage(err)}`,
     );
   }
@@ -106,15 +110,14 @@ export async function validate() {
 
   if (!keySet || !sessionSet) {
     throw new Error(
-      'AWS credentials are incomplete in terminal please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html',
+      'AWS credentials are incomplete for the legacy Wharfie deployment workflow. Please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html',
     );
   }
 
-  // Check region configuration
   const region = await sts.sts.config.region();
   if (!region) {
     throw new Error(
-      'AWS Region is not configured for terminal, please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html',
+      'AWS Region is not configured for the legacy Wharfie deployment workflow. Please follow instructions at https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-envvars.html',
     );
   }
 

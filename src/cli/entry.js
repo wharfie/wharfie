@@ -53,7 +53,7 @@ export function createProgram(options = {}) {
 
   program
     .name('wharfie')
-    .description('CLI tool for Wharfie')
+    .description('CLI for Wharfie apps, packaging, and persisted operations')
     .version(WHARFIE_VERSION);
 
   program.addCommand(configCommand);
@@ -94,11 +94,9 @@ export function createProgram(options = {}) {
         );
         configHelpers.setEnvironment();
       } catch (_err) {
-        // Allow `wharfie config` to run even if the config file is malformed so
-        // users can repair it.
         if (args[0] !== 'config') {
           failureReporter(
-            'Failed to load config. Run "wharfie config" to resolve.',
+            'Failed to load legacy AWS config. Run "wharfie config" if you are using the legacy deployment workflow.',
           );
           // eslint-disable-next-line no-process-exit
           process.exit(1);

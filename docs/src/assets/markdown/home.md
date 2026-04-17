@@ -4,22 +4,9 @@
   Wharfie
 </h1>
 
-Wharfie is an experimental table-oriented data application framework built ontop of [AWS Athena](https://aws.amazon.com/athena/). Designed to be fast to develop, confident to modify and cheap to run.
+Wharfie is a manifest-first framework for packaging developer-owned Node CLIs and named activities into single executable artifacts.
 
-Unlike most data tools, Wharfie has ZERO fixed infrastructure costs. Money is only spent when data is processed. Costs are also proportional to the size of the data processed, averaging around $5 per terabyte. Wharfie can tell you how much it will cost to run your application before you run it, and also can make sure that it will output what you expect before you spend time waiting for it to run.
-
-Wharfie can work with data sizes ranging from bytes to petabytes. There are no looming performance cliffs that require a platform switch.
-
-Wharfie is serverless and relies entirely on managed AWS services. There's no need for performance tuning or an on-call rotation to keep Wharfie running. When Wharfie breaks, it's usually because of upstream outages, which when resolved, unblock Wharfie from reprocessing and catching up to a functional state.
-
-When defining tables with Wharfie, you only need to statically define your table structure or the query used to materialize, and Wharfie takes care of the rest.
-
-"The Rest" includes:
-
-- Registering new partitions
-- Converting compression and data formats
-- Repartitioning
-- Managing schema changes
+A Wharfie app lives in `wharfie.app.js` and can declare a CLI, activities, explicit runtime resources, optional workflows, optional cron triggers, and build targets. The shipped CLI is centered on `wharfie init`, `wharfie app`, `wharfie ops`, `wharfie list`, and `wharfie build-self`. `wharfie config` is only for legacy AWS deployment workflows.
 
 ### ⚡️ Quickstart
 
@@ -38,10 +25,14 @@ iex (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wharfie/wharfie/m
 #### Example
 
 ```bash
-wharfie config
-wharfie init my_project
+wharfie init my_app
+wharfie app manifest ./my_app
+wharfie app run hello --dir ./my_app --event '{"who":"docs-user"}'
+wharfie app package ./my_app
 ```
 
-The current CLI ships these top-level commands: `config`, `init`, `app`, `ops`, `list`, and `build-self`.
+### Legacy: Wharfie v1
 
-For more follow the [QuickStart Guide](/quickstart)
+Wharfie v1 was the original Athena/table-oriented product organized around `sources/` and `models/`. That shape remains available behind `wharfie init --template legacy-v1`, but it is not the default Wharfie story anymore.
+
+For more follow the [QuickStart Guide](/quickstart) or the [Legacy: Wharfie v1 guide](/legacy-v1).

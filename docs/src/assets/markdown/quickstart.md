@@ -12,38 +12,46 @@ For Windows:
 iex (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wharfie/wharfie/master/install.ps1" -UseBasicParsing).Content
 ```
 
-## Configure
+## Initialize a v2 App
 
 ```bash
-wharfie config
+wharfie init my_app
 ```
 
-## Initialize a Project
+The default scaffold creates a runnable v2 app with:
 
-```bash
-wharfie init my_project
-```
+- `package.json`
+- `wharfie.app.js`
+- `src/cli.js`
+- `src/activities/hello.js`
+- `README.md`
 
-`wharfie init` creates a local project scaffold with `wharfie.yaml`, `sources/`, and `models/`. Add `--no-examples` if you want an empty scaffold.
+Use `--no-examples` if you want the minimal scaffold without the sample workflow/scheduler blocks. Use `--template legacy-v1` only when you are working on the historical Athena/table-oriented workflow.
 
 ## Inspect an App Manifest
 
-Once you have a `wharfie.app.js`, you can inspect the compiled manifest locally:
-
 ```bash
-wharfie app manifest ./path/to/wharfie.app.js
+wharfie app manifest ./my_app
 ```
 
 ## Run a Local App Activity
 
 ```bash
-wharfie app run <activity_name> --dir ./path/to/app --event '{"who":"cli-user"}'
+wharfie app run hello --dir ./my_app --event '{"who":"cli-user"}'
 ```
 
-To create a persisted local run for an activity or workflow, use `wharfie ops`:
+## Package an App
 
 ```bash
-wharfie ops run --activity <activity_name> --dir ./path/to/app --event '{"who":"cli-user"}'
+wharfie app package ./my_app
 ```
 
-The shipped top-level CLI surface today is `config`, `init`, `app`, `ops`, `list`, and `build-self`.
+## Create a Persisted Local Run
+
+`wharfie ops` stores and executes persisted operation runs against the same app manifest:
+
+```bash
+wharfie ops run --activity hello --dir ./my_app --event '{"who":"cli-user"}'
+```
+
+The shipped top-level CLI surface today is `init`, `app`, `ops`, `list`, `build-self`, and `config` (legacy AWS deployment setup only).

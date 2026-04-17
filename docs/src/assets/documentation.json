@@ -4,9 +4,9 @@
       "path": "home",
       "title": "Wharfie Documentation",
       "slug": "",
-      "description": "Wharfie is an experimental table-oriented data application framework built ontop of AWS Athena.",
+      "description": "Wharfie packages developer-owned CLIs and named activities into single executables.",
       "created_at": 1738635590000,
-      "updated_at": 1738635590000,
+      "updated_at": 1760000000000,
       "published_at": 1738635590000,
       "published": true
     },
@@ -14,9 +14,9 @@
       "path": "quickstart",
       "title": "Quickstart",
       "slug": "/quickstart",
-      "description": "How to get started with Wharfie",
+      "description": "How to get started with the Wharfie v2 app workflow",
       "created_at": 1738635590000,
-      "updated_at": 1738635590000,
+      "updated_at": 1760000000000,
       "published_at": 1738635590000,
       "published": true
     },
@@ -24,9 +24,9 @@
       "path": "installation",
       "title": "Installation & Setup",
       "slug": "/install",
-      "description": "How to install and configure wharfie",
+      "description": "How to install Wharfie and when legacy AWS config is required",
       "created_at": 1738635590000,
-      "updated_at": 1738635590000,
+      "updated_at": 1760000000000,
       "published_at": 1738635590000,
       "published": true
     },
@@ -34,9 +34,19 @@
       "path": "project-structure",
       "title": "Project Structure",
       "slug": "/project-structure",
-      "description": "How a wharfie project is structured",
+      "description": "How the default Wharfie v2 app scaffold is structured",
       "created_at": 1738635590000,
-      "updated_at": 1738635590000,
+      "updated_at": 1760000000000,
+      "published_at": 1738635590000,
+      "published": true
+    },
+    {
+      "path": "legacy-v1",
+      "title": "Legacy: Wharfie v1",
+      "slug": "/legacy-v1",
+      "description": "Historical Athena/table-oriented Wharfie v1 background and compatibility notes",
+      "created_at": 1738635590000,
+      "updated_at": 1760000000000,
       "published_at": 1738635590000,
       "published": true
     }
@@ -58,6 +68,10 @@
     {
       "label": "Project Structure",
       "path": "/project-structure"
+    },
+    {
+      "label": "Legacy: Wharfie v1",
+      "path": "/legacy-v1"
     }
   ]
 }

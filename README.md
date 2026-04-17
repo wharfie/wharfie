@@ -11,22 +11,18 @@
   <a href="https://github.com/wharfie/wharfie/actions/workflows/ci.yml"><img src="https://github.com/wharfie/wharfie/actions/workflows/ci.yml/badge.svg" alt="Wharfie CI"></a>
 </p>
 
-Wharfie is an experimental table-oriented data application framework built ontop of [AWS Athena](https://aws.amazon.com/athena/). Designed to be fast to develop, confident to modify and cheap to run.
+Wharfie is a manifest-first framework for packaging developer-owned Node CLIs and named activities into single executable artifacts.
 
-Unlike most data tools, Wharfie has ZERO fixed infrastructure costs. Money is only spent when data is processed. Costs are also proportional to the size of the data processed, averaging around $5 per terabyte. Wharfie can tell you how much it will cost to run your application before you run it, and also can make sure that it will output what you expect before you spend time waiting for it to run.
+A Wharfie app is defined in `wharfie.app.js` and can declare:
 
-Wharfie can work with data sizes ranging from bytes to petabytes. There are no looming performance cliffs that require a platform switch.
+- a developer CLI (`cli`)
+- named activities (`activities`)
+- explicit runtime resources (`resources`)
+- optional workflows (`workflows`)
+- optional cron triggers (`scheduler`)
+- packaging targets (`targets`)
 
-Wharfie is serverless and relies entirely on managed AWS services. There's no need for performance tuning or an on-call rotation to keep Wharfie running. When Wharfie breaks, it's usually because of upstream outages, which when resolved, unblock Wharfie from reprocessing and catching up to a functional state.
-
-When defining tables with Wharfie, you only need to statically define your table structure or the query used to materialize, and Wharfie takes care of the rest.
-
-"The Rest" includes:
-
-- Registering new partitions
-- Converting compression and data formats
-- Repartitioning
-- Managing schema changes
+The shipped CLI is centered on local authoring, packaging, and persisted operation runs. The primary command surface is `wharfie init`, `wharfie app`, `wharfie ops`, `wharfie list`, and `wharfie build-self`. `wharfie config` remains available for legacy AWS deployment workflows only.
 
 ### ⚡️ Quickstart
 
@@ -45,17 +41,29 @@ iex (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wharfie/wharfie/m
 #### Example
 
 ```bash
-wharfie config
-wharfie init my_project
-wharfie app manifest ./apps/wharfie-v1
+wharfie init my_app
+wharfie app manifest ./my_app
+wharfie app run hello --dir ./my_app --event '{"who":"cli-user"}'
+wharfie app package ./my_app
 ```
 
-The current ESM CLI ships these top-level commands: `config`, `init`, `app`, `ops`, `list`, and `build-self`.
+The current ESM CLI ships these top-level commands: `init`, `app`, `ops`, `list`, `build-self`, and `config` (legacy AWS deployment setup).
 The legacy `deployment`, `project`, and `utils` command groups have been removed from the repo.
+
+### Legacy: Wharfie v1
+
+Wharfie v1 was the original table-oriented AWS/Athena data application framework organized around `sources/` and `models/`. That workflow is still available as an explicit legacy scaffold:
+
+```bash
+wharfie init my_legacy_project --template legacy-v1
+wharfie config
+```
+
+Use that path only for historical v1 work. The current Wharfie product is the manifest-first v2 app/runtime surface described above. For more background see [Legacy: Wharfie v1](./docs/src/assets/markdown/legacy-v1.md).
 
 ### Reference
 
-[docs.wharfie.dev](docs.wharfie.dev)
+[docs.wharfie.dev](https://docs.wharfie.dev)
 
 ### Operation DAG inspection/execution (v2)
 

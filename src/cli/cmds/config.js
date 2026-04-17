@@ -7,7 +7,7 @@ import STS from '../../core/lib/aws/sts.js';
 import { displayFailure, displaySuccess } from '../output/basic.js';
 
 const configCommand = new Command('config')
-  .description('Set up Wharfie configuration')
+  .description('Configure legacy AWS deployment settings')
   .action(async () => {
     const sts = new STS({});
 
@@ -18,26 +18,26 @@ const configCommand = new Command('config')
       {
         type: 'input',
         name: 'deployment_name',
-        message: 'wharfie deployment name (also used in wharfie.yaml):',
+        message:
+          'legacy Wharfie deployment name (also used by legacy wharfie.yaml files):',
         default: process.env.WHARFIE_DEPLOYMENT_NAME,
       },
       {
         type: 'input',
         name: 'region',
-        message: 'wharfie AWS region:',
+        message: 'legacy Wharfie AWS region:',
         default: process.env.WHARFIE_REGION || (await sts.sts.config.region()),
       },
       {
         type: 'input',
         name: 'service_bucket',
-        message: 'wharfie service bucket:',
+        message: 'legacy Wharfie service bucket:',
         default: process.env.WHARFIE_SERVICE_BUCKET,
       },
     ];
 
     const answers = await inquirer.prompt(questions);
 
-    // Validate
     try {
       if (!answers.deployment_name) {
         throw new Error('deployment_name is required');

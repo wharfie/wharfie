@@ -19,9 +19,9 @@ describe('src migration smoke tests', () => {
     expect(deployScript).not.toContain("import('../../src/core/lib/s3.js')");
   });
 
-  it('keeps the Wharfie v1 template asset path under src/cli', async () => {
+  it('keeps the self-hosted Wharfie CLI template asset path under src/cli', async () => {
     const wharfieApp = await fsp.readFile(
-      path.join(repoRoot, 'apps', 'wharfie-v1', 'wharfie.app.js'),
+      path.join(repoRoot, 'apps', 'wharfie-cli', 'wharfie.app.js'),
       'utf8',
     );
 

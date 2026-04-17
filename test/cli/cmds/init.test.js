@@ -89,7 +89,7 @@ describe('wharfie init command', () => {
     await fsp.rm(tmpRoot, { recursive: true, force: true });
   });
 
-  it('creates a normalized project scaffold without prompting when the project name is provided', async () => {
+  it('creates a runnable v2 scaffold by default without prompting when the project name is provided', async () => {
     const { initCommand, prompt, extractTemplates, displaySuccess } =
       await loadInitCommand();
 
@@ -101,18 +101,48 @@ describe('wharfie init command', () => {
 
     expect(prompt).not.toHaveBeenCalled();
     expect(extractTemplates).not.toHaveBeenCalled();
-    expect(existsSync(path.join(projectDir, 'wharfie.yaml'))).toBe(true);
-    expect(existsSync(path.join(projectDir, 'sources'))).toBe(true);
-    expect(existsSync(path.join(projectDir, 'models'))).toBe(true);
+    expect(existsSync(path.join(projectDir, 'package.json'))).toBe(true);
+    expect(existsSync(path.join(projectDir, 'README.md'))).toBe(true);
+    expect(existsSync(path.join(projectDir, 'wharfie.app.js'))).toBe(true);
+    expect(existsSync(path.join(projectDir, 'src', 'cli.js'))).toBe(true);
+    expect(
+      existsSync(path.join(projectDir, 'src', 'activities', 'hello.js')),
+    ).toBe(true);
+
+    await expect(
+      fsp.readFile(path.join(projectDir, 'wharfie.app.js'), 'utf8'),
+    ).resolves.toContain("name: 'my_project'");
+    await expect(
+      fsp.readFile(path.join(projectDir, 'wharfie.app.js'), 'utf8'),
+    ).resolves.not.toContain('helloPipeline');
     expect(displaySuccess).toHaveBeenCalledWith(
-      expect.stringContaining('Project my_project initialized successfully!'),
+      expect.stringContaining('App my_project initialized successfully!'),
     );
     expect(process.exitCode).toBeUndefined();
   });
 
-  it('prompts for a missing project name and extracts example templates by default', async () => {
+  it('prompts for a missing project name and writes the example workflow/scheduler blocks by default', async () => {
     const { initCommand, prompt, extractTemplates } = await loadInitCommand({
-      promptResult: { project_name: 'Prompt Project' },
+      promptResult: { project_name: 'Prompt Project', include_examples: true },
+    });
+
+    await initCommand.parseAsync([], { from: 'user' });
+
+    const projectDir = path.join(tmpRoot, 'prompt_project');
+    const appSource = await fsp.readFile(
+      path.join(projectDir, 'wharfie.app.js'),
+      'utf8',
+    );
+
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(extractTemplates).not.toHaveBeenCalled();
+    expect(appSource).toContain('helloPipeline');
+    expect(appSource).toContain("cron: '*/15 * * * *'");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('supports the explicit legacy-v1 template and extracts legacy examples by default', async () => {
+    const { initCommand, extractTemplates } = await loadInitCommand({
       extractTemplatesImpl: async ({ destinationDir }) => {
         await fsp.writeFile(
           path.join(destinationDir, 'models', 'example.sql'),
@@ -123,11 +153,16 @@ describe('wharfie init command', () => {
       },
     });
 
-    await initCommand.parseAsync([], { from: 'user' });
+    await initCommand.parseAsync(
+      ['Legacy Project', '--template', 'legacy-v1'],
+      { from: 'user' },
+    );
 
-    const projectDir = path.join(tmpRoot, 'prompt_project');
+    const projectDir = path.join(tmpRoot, 'legacy_project');
 
-    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(existsSync(path.join(projectDir, 'wharfie.yaml'))).toBe(true);
+    expect(existsSync(path.join(projectDir, 'sources'))).toBe(true);
+    expect(existsSync(path.join(projectDir, 'models'))).toBe(true);
     expect(extractTemplates).toHaveBeenCalledWith(
       expect.objectContaining({
         destinationDir: expect.stringContaining(projectDir),
@@ -155,6 +190,23 @@ describe('wharfie init command', () => {
       }),
     );
     expect(extractTemplates).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('reports unsupported templates', async () => {
+    const { initCommand, displayFailure } = await loadInitCommand();
+
+    await initCommand.parseAsync(
+      ['My Project', '--template', 'not-a-template'],
+      { from: 'user' },
+    );
+
+    expect(displayFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          "Unsupported template 'not-a-template'. Supported templates: v2, legacy-v1.",
+      }),
+    );
     expect(process.exitCode).toBe(1);
   });
 
