@@ -37,4 +37,4 @@ Current Wharfie is the manifest-first v2 surface:
 - optional `scheduler`
 - executable packaging targets
 
-Use the rest of the documentation for that v2 authoring model.
+Use the rest of the documentation for that v2 authoring model. If you want to describe how a historical v1 workload maps onto the current substrate, see [Mapping Wharfie v1 onto v2](/v1-on-v2).

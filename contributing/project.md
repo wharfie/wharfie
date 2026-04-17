@@ -1,6 +1,6 @@
 # The Wharfie Project Structure
 
-The default Wharfie project structure is a runnable v2 app. Executing `wharfie init` creates the following local scaffold:
+The default Wharfie project structure is a runnable manifest-first v2 app. Executing `wharfie init` creates the following local scaffold:
 
 - `package.json`
 - `wharfie.app.js`

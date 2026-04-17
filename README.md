@@ -59,7 +59,7 @@ wharfie init my_legacy_project --template legacy-v1
 wharfie config
 ```
 
-Use that path only for historical v1 work. The current Wharfie product is the manifest-first v2 app/runtime surface described above. For more background see [Legacy: Wharfie v1](./docs/src/assets/markdown/legacy-v1.md).
+Use that path only for historical v1 work. The current Wharfie product is the manifest-first v2 app/runtime surface described above. For more background see [Legacy: Wharfie v1](./docs/src/assets/markdown/legacy-v1.md) and [Mapping Wharfie v1 onto v2](./docs/src/assets/markdown/v1-on-v2.md).
 
 ### Reference
 

@@ -49,6 +49,16 @@
       "updated_at": 1760000000000,
       "published_at": 1738635590000,
       "published": true
+    },
+    {
+      "path": "v1-on-v2",
+      "title": "Mapping Wharfie v1 onto v2",
+      "slug": "/v1-on-v2",
+      "description": "How the historical Wharfie v1 workload maps onto the current manifest-first v2 substrate",
+      "created_at": 1738635590000,
+      "updated_at": 1760000000000,
+      "published_at": 1738635590000,
+      "published": true
     }
   ],
   "hierarchy": [
@@ -72,6 +82,10 @@
     {
       "label": "Legacy: Wharfie v1",
       "path": "/legacy-v1"
+    },
+    {
+      "label": "Mapping Wharfie v1 onto v2",
+      "path": "/v1-on-v2"
     }
   ]
 }

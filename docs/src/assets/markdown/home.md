@@ -35,4 +35,4 @@ wharfie app package ./my_app
 
 Wharfie v1 was the original Athena/table-oriented product organized around `sources/` and `models/`. That shape remains available behind `wharfie init --template legacy-v1`, but it is not the default Wharfie story anymore.
 
-For more follow the [QuickStart Guide](/quickstart) or the [Legacy: Wharfie v1 guide](/legacy-v1).
+For more follow the [QuickStart Guide](/quickstart), the [Legacy: Wharfie v1 guide](/legacy-v1), or [Mapping Wharfie v1 onto v2](/v1-on-v2).
