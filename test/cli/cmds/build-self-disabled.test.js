@@ -7,6 +7,7 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
+  realpathSync,
   readFileSync,
   rmSync,
   statSync,
@@ -202,9 +203,11 @@ describe('wharfie build-self', () => {
         'wharfie-cli-node24.13.1-linux-x64',
       );
 
+      const expectedRepoRoot = realpathSync(tmpRepo);
+
       expect(packageLocalApp).toHaveBeenCalledWith({
-        dir: path.join(tmpRepo, 'apps', 'wharfie-cli'),
-        outputDir: path.join(tmpRepo, 'dist'),
+        dir: path.join(expectedRepoRoot, 'apps', 'wharfie-cli'),
+        outputDir: path.join(expectedRepoRoot, 'dist'),
         targetFilters: ['linux-x64'],
       });
       expect(observedNodeVersion).toBe('24.13.1');
