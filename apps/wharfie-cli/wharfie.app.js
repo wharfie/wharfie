@@ -3,20 +3,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { Command } from 'commander';
-import NodeBinary from '../../src/core/resources/builds/node-binary.js';
-import SeaBuild from '../../src/core/resources/builds/sea-build.js';
-import MacOSBinarySignature from '../../src/core/resources/builds/macos-binary-signature.js';
 
+import { packageLocalApp, stringifyJson } from '../../src/cli/app/local-app.js';
 import {
   TEMPLATES_ASSET_BASE,
   TEMPLATES_ASSET_MANIFEST_KEY,
 } from '../../src/cli/assets/extract-templates.js';
-
-import {
-  displayFailure,
-  displayInfo,
-  displaySuccess,
-} from '../../src/cli/output/basic.js';
+import { displayFailure } from '../../src/cli/output/basic.js';
 
 const MODULE_PATH = fileURLToPath(import.meta.url);
 const MODULE_DIR = path.dirname(MODULE_PATH);
@@ -53,33 +46,19 @@ function resolveSourceRoot(startDir = process.cwd()) {
 }
 
 /**
- * Wharfie CLI self-host app (today's `bin/wharfie`) built as a v2-style SEA artifact via SeaBuild.
+ * Wharfie CLI self-host app built via the standard `wharfie app package` path.
  *
  * This module plays two roles:
  *  1) A v2 app spec (default export) so `wharfie app manifest apps/wharfie-cli` works.
- *  2) A build driver when executed directly:
+ *  2) A local build driver when executed directly:
  *
  *     npm run build:wharfie-cli
  *
  * Manual smoke test:
  *  1) npm run build:wharfie-cli
- *  2) ./dist/wharfie-cli-${process.platform}-${process.arch} --help
- *  3) ./dist/wharfie-cli-${process.platform}-${process.arch} app manifest --help
+ *  2) ./dist/wharfie-cli-node<version>-<platform>-<arch> --help
+ *  3) ./dist/wharfie-cli-node<version>-<platform>-<arch> app manifest --help
  */
-export default {
-  name: 'wharfie-cli',
-  cli: {
-    entrypoint: path.join(resolveSourceRoot(), 'src', 'cli', 'entry.js'),
-    export: 'main',
-  },
-  // Default "release-like" targets (can be expanded later).
-  targets: [
-    { nodeVersion: '24', platform: 'darwin', architecture: 'arm64' },
-    { nodeVersion: '24', platform: 'darwin', architecture: 'x64' },
-    { nodeVersion: '24', platform: 'linux', architecture: 'x64' },
-    { nodeVersion: '24', platform: 'win32', architecture: 'x64' },
-  ],
-};
 
 /**
  * build:wharfie-cli intentionally downloads Node.js distribution artifacts (via NodeBinary)
@@ -172,10 +151,10 @@ function collectTemplateFiles(rootDir) {
 /**
  * Build a SEA asset map for the init templates (plus a manifest).
  * @param {string} repoRoot -
- * @param {string} distDir -
+ * @param {string} outputDir -
  * @returns {Record<string, string>} -
  */
-function buildTemplateAssets(repoRoot, distDir) {
+function buildTemplateAssets(repoRoot, outputDir) {
   const templatesDir = path.join(
     repoRoot,
     'src',
@@ -195,7 +174,7 @@ function buildTemplateAssets(repoRoot, distDir) {
   };
 
   const manifestPath = path.join(
-    distDir,
+    outputDir,
     'wharfie-cli-templates.manifest.json',
   );
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
@@ -214,86 +193,101 @@ function buildTemplateAssets(repoRoot, distDir) {
 }
 
 /**
- * Build a SEA single-executable for the Wharfie CLI self-host app.
- * @param {{ platform: string, arch: string, nodeVersion: string }} options - options
- * @returns {Promise<string>} - Path to the built artifact in ./dist
+ * @returns {string} - Result.
  */
-async function buildWharfieCli(options) {
-  const workspaceRoot = findRepoRoot(process.cwd());
-  const sourceRoot = resolveSourceRoot(process.cwd());
-  const distDir = path.join(workspaceRoot, 'dist');
-  fs.mkdirSync(distDir, { recursive: true });
+function resolveBuildNodeVersion() {
+  const value =
+    typeof process.env.WHARFIE_SELF_NODE_VERSION === 'string'
+      ? process.env.WHARFIE_SELF_NODE_VERSION.trim()
+      : '';
 
-  const templateAssets = buildTemplateAssets(sourceRoot, distDir);
-
-  const normalizedPlatform = normalizePlatform(options.platform);
-  const normalizedArch = normalizeArch(options.arch);
-
-  const outName = `wharfie-cli-${normalizedPlatform}-${normalizedArch}${
-    normalizedPlatform === 'win32' ? '.exe' : ''
-  }`;
-  const outPath = path.join(distDir, outName);
-
-  displayInfo(
-    `Building Wharfie CLI SEA executable for ${normalizedPlatform}/${normalizedArch} (node ${options.nodeVersion})...`,
-  );
-
-  const nodeBinary = new NodeBinary({
-    name: `wharfie-cli-node-${normalizedPlatform}-${normalizedArch}`,
-    properties: {
-      version: options.nodeVersion,
-      platform: normalizedPlatform,
-      architecture: normalizedArch,
-    },
-  });
-
-  // NOTE: Keep entryCode minimal and ESM-only to keep esbuild bundling predictable.
-  // This runs the same commander program as `bin/wharfie`.
-  const seaBuild = new SeaBuild({
-    name: `wharfie-cli-${normalizedPlatform}-${normalizedArch}`,
-    properties: {
-      entryCode: () =>
-        `
-          import { main } from './src/cli/entry.js';
-
-          main(process.argv).catch((err) => {
-            // eslint-disable-next-line no-console
-            console.error(err);
-            process.exitCode = 1;
-          });
-        `,
-      resolveDir: () => sourceRoot,
-      nodeBinaryPath: () => nodeBinary.get('binaryPath'),
-      nodeVersion: () => nodeBinary.get('exactVersion').slice(1),
-      platform: normalizedPlatform,
-      architecture: normalizedArch,
-      assets: () => templateAssets,
-    },
-  });
-
-  // NodeBinary must be reconciled first (SeaBuild waits on stable dependsOn but does not reconcile it).
-  await nodeBinary.reconcile();
-  await seaBuild.reconcile();
-
-  fs.copyFileSync(seaBuild.get('binaryPath'), outPath);
-
-  if (normalizedPlatform !== 'win32') {
-    fs.chmodSync(outPath, 0o755);
-  }
-
-  if (normalizedPlatform === 'darwin' && process.platform === 'darwin') {
-    const signature = new MacOSBinarySignature({
-      name: `${outName}-signature`,
-      properties: {
-        binaryPath: () => outPath,
-      },
-    });
-    await signature.reconcile();
-  }
-
-  displaySuccess(`Built: ${outPath}`);
-  return outPath;
+  return value || '24';
 }
+
+/**
+ * @param {string} nodeVersion - nodeVersion.
+ * @returns {{ nodeVersion: string, platform: 'darwin'|'linux'|'win32', architecture: 'arm64'|'x64' }[]} - Result.
+ */
+function createBuildTargets(nodeVersion) {
+  return [
+    { nodeVersion, platform: 'darwin', architecture: 'arm64' },
+    { nodeVersion, platform: 'darwin', architecture: 'x64' },
+    { nodeVersion, platform: 'linux', architecture: 'arm64' },
+    { nodeVersion, platform: 'linux', architecture: 'x64' },
+    { nodeVersion, platform: 'win32', architecture: 'arm64' },
+    { nodeVersion, platform: 'win32', architecture: 'x64' },
+  ];
+}
+
+/**
+ * @param {string} nodeVersion - nodeVersion.
+ * @param {() => Promise<any>} handler - handler.
+ * @returns {Promise<any>} - Result.
+ */
+async function withBuildNodeVersion(nodeVersion, handler) {
+  const previousValue = process.env.WHARFIE_SELF_NODE_VERSION;
+  process.env.WHARFIE_SELF_NODE_VERSION = nodeVersion;
+
+  try {
+    return await handler();
+  } finally {
+    if (previousValue === undefined) {
+      delete process.env.WHARFIE_SELF_NODE_VERSION;
+    } else {
+      process.env.WHARFIE_SELF_NODE_VERSION = previousValue;
+    }
+  }
+}
+
+/**
+ * @param {string} platform - platform.
+ * @param {string} arch - arch.
+ * @returns {string} - Result.
+ */
+function resolveTargetFilter(platform, arch) {
+  return `${normalizePlatform(platform)}-${normalizeArch(arch)}`;
+}
+
+/**
+ * @returns {string} - Result.
+ */
+function resolveDefaultOutputDir() {
+  return path.join(findRepoRoot(process.cwd()), 'dist');
+}
+
+/**
+ * @param {{ platform: string, arch: string, nodeVersion: string, outputDir?: string }} options - options.
+ * @returns {Promise<import('../../src/cli/app/local-app.js').PackageLocalAppResult>} - Result.
+ */
+export async function packageWharfieCli(options) {
+  return await withBuildNodeVersion(
+    options.nodeVersion,
+    async () =>
+      await packageLocalApp({
+        dir: MODULE_DIR,
+        outputDir: options.outputDir || resolveDefaultOutputDir(),
+        targetFilters: [resolveTargetFilter(options.platform, options.arch)],
+      }),
+  );
+}
+
+export default {
+  name: 'wharfie-cli',
+  cli: {
+    entrypoint: path.join(resolveSourceRoot(), 'src', 'cli', 'entry.js'),
+    export: 'main',
+  },
+  targets: createBuildTargets(resolveBuildNodeVersion()),
+  packaging: {
+    actorSystemProperties: {
+      macosCertBase64: process.env.WHARFIE_MACOS_CERT_BASE64 || '',
+      macosCertPassword: process.env.WHARFIE_MACOS_CERT_PASSWORD || '',
+      macosKeychainPassword: process.env.WHARFIE_MACOS_KEYCHAIN_PASSWORD || '',
+    },
+    assets: ({ outputDir }) =>
+      buildTemplateAssets(resolveSourceRoot(), outputDir),
+  },
+};
 
 /**
  * @returns {boolean} -
@@ -307,7 +301,7 @@ function isExecutedDirectly() {
 if (isExecutedDirectly()) {
   const cmd = new Command('build:wharfie-cli')
     .description(
-      'Build the self-hosted Wharfie CLI app as a single executable (SEA via SeaBuild)',
+      'Package the self-hosted Wharfie CLI app with the standard app packaging flow',
     )
     .option(
       '--platform <platform>',
@@ -317,17 +311,25 @@ if (isExecutedDirectly()) {
     .option('--arch <arch>', 'Target architecture (arm64|x64)', process.arch)
     .option(
       '--node-version <nodeVersion>',
-      'Node version prefix to embed (default: current node)',
-      process.versions.node,
+      'Node version prefix to embed (default: 24)',
+      resolveBuildNodeVersion(),
     )
+    .option(
+      '--output-dir <dir>',
+      'Directory to copy packaged artifacts into (default: <repo root>/dist)',
+    )
+    .option('--json', 'Output JSON (default)')
+    .option('--no-pretty', 'Disable pretty JSON output')
     .action(async (opts) => {
       try {
         assertNotUnderJest();
-        await buildWharfieCli({
+        const result = await packageWharfieCli({
           platform: opts.platform,
           arch: opts.arch,
           nodeVersion: opts.nodeVersion,
+          outputDir: opts.outputDir,
         });
+        process.stdout.write(`${stringifyJson(result, opts)}\n`);
       } catch (err) {
         displayFailure(err);
         process.exitCode = 1;

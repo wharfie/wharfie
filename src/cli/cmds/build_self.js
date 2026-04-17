@@ -1,18 +1,11 @@
 import fs from 'node:fs';
+import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
 import { Command } from 'commander';
 
 import { dirPathFromImportMetaUrl } from '../../core/lib/import-meta-path.js';
-import NodeBinary from '../../core/resources/builds/node-binary.js';
-import SeaBuild from '../../core/resources/builds/sea-build.js';
-import MacOSBinarySignature from '../../core/resources/builds/macos-binary-signature.js';
-
-import {
-  TEMPLATES_ASSET_BASE,
-  TEMPLATES_ASSET_MANIFEST_KEY,
-} from '../assets/extract-templates.js';
-
+import { packageLocalApp } from '../app/local-app.js';
 import {
   displayFailure,
   displayInfo,
@@ -30,7 +23,8 @@ export function hasBuildSources(rootDir) {
     fs.existsSync(path.join(rootDir, 'src', 'cli', 'entry.js')) &&
     fs.existsSync(
       path.join(rootDir, 'src', 'cli', 'project', 'project_structure_examples'),
-    )
+    ) &&
+    fs.existsSync(path.join(rootDir, 'apps', 'wharfie-cli', 'wharfie.app.js'))
   );
 }
 
@@ -49,12 +43,10 @@ export function resolveBuildSourceRoot(startDir = process.cwd()) {
   if (hasBuildSources(workspaceRoot)) return workspaceRoot;
 
   const installedPackageRoot = findRepoRoot(MODULE_DIR);
-  if (hasBuildSources(installedPackageRoot)) {
-    return installedPackageRoot;
-  }
+  if (hasBuildSources(installedPackageRoot)) return installedPackageRoot;
 
   throw new Error(
-    `Unable to locate Wharfie build sources from ${startDir}. Expected src/cli/entry.js and init templates to exist.`,
+    `Unable to locate Wharfie build sources from ${startDir}. Expected apps/wharfie-cli/wharfie.app.js, src/cli/entry.js, and init templates to exist.`,
   );
 }
 
@@ -115,6 +107,47 @@ export function findRepoRoot(startDir) {
 }
 
 /**
+ * @param {string} startDir - startDir.
+ * @returns {string} - Result.
+ */
+function resolveSelfAppDir(startDir) {
+  return path.join(resolveBuildSourceRoot(startDir), 'apps', 'wharfie-cli');
+}
+
+/**
+ * @param {string} nodeVersion - nodeVersion.
+ * @param {() => Promise<any>} handler - handler.
+ * @returns {Promise<any>} - Result.
+ */
+async function withBuildNodeVersion(nodeVersion, handler) {
+  const previousValue = process.env.WHARFIE_SELF_NODE_VERSION;
+  process.env.WHARFIE_SELF_NODE_VERSION = nodeVersion;
+
+  try {
+    return await handler();
+  } finally {
+    if (previousValue === undefined) {
+      delete process.env.WHARFIE_SELF_NODE_VERSION;
+    } else {
+      process.env.WHARFIE_SELF_NODE_VERSION = previousValue;
+    }
+  }
+}
+
+/**
+ * @param {'darwin'|'linux'|'win32'} platform - platform.
+ * @param {'arm64'|'x64'} arch - arch.
+ * @returns {string} - Result.
+ */
+function getLegacyArtifactPath(platform, arch) {
+  const workspaceRoot = findRepoRoot(process.cwd());
+  const distDir = path.join(workspaceRoot, 'dist');
+  const extension = platform === 'win32' ? '.exe' : '';
+
+  return path.join(distDir, `wharfie-${platform}-${arch}${extension}`);
+}
+
+/**
  * Build a SEA single-executable for Wharfie CLI.
  *
  * Smoke test (manual):
@@ -124,159 +157,53 @@ export function findRepoRoot(startDir) {
  */
 
 /**
- * Recursively list files under a directory, returning POSIX-style relative paths.
- * @param {string} rootDir
- * @returns {string[]} - Relative file paths with forward slashes.
- */
-export function _collectTemplateFiles(rootDir) {
-  /** @type {string[]} */
-  const out = [];
-
-  /**
-   * @param {string} absDir
-   * @param {string} relDir
-   */
-  function walk(absDir, relDir) {
-    const entries = fs.readdirSync(absDir, { withFileTypes: true });
-
-    for (const ent of entries) {
-      const absPath = path.join(absDir, ent.name);
-      const relPath = relDir ? `${relDir}/${ent.name}` : ent.name;
-
-      if (ent.isDirectory()) {
-        walk(absPath, relPath);
-      } else if (ent.isFile()) {
-        out.push(relPath);
-      }
-    }
-  }
-
-  walk(rootDir, '');
-  return out;
-}
-
-/**
- * Build a SEA asset map for the init templates (plus a manifest).
- * @param {string} repoRoot
- * @param {string} distDir
- * @returns {Record<string, string>}
- */
-export function _buildTemplateAssets(repoRoot, distDir) {
-  const templatesDir = path.join(
-    repoRoot,
-    'src',
-    'cli',
-    'project',
-    'project_structure_examples',
-  );
-
-  if (!fs.existsSync(templatesDir)) {
-    throw new Error(`Templates directory not found: ${templatesDir}`);
-  }
-
-  const relFiles = _collectTemplateFiles(templatesDir);
-  const manifest = {
-    baseKey: TEMPLATES_ASSET_BASE,
-    files: relFiles,
-  };
-
-  const manifestPath = path.join(distDir, 'wharfie-templates.manifest.json');
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
-
-  /** @type {Record<string, string>} */
-  const assets = {
-    [TEMPLATES_ASSET_MANIFEST_KEY]: manifestPath,
-  };
-
-  for (const rel of relFiles) {
-    const key = `${TEMPLATES_ASSET_BASE}/${rel}`;
-    assets[key] = path.join(templatesDir, ...rel.split('/'));
-  }
-
-  return assets;
-}
-
-/**
  * @param {{ platform: string, arch: string, nodeVersion: string }} options - Build options.
  * @returns {Promise<void>}
  */
 export async function buildSelf({ platform, arch, nodeVersion }) {
-  const workspaceRoot = findRepoRoot(process.cwd());
-  const sourceRoot = resolveBuildSourceRoot(process.cwd());
-  const distDir = path.join(workspaceRoot, 'dist');
-  fs.mkdirSync(distDir, { recursive: true });
-
-  const templateAssets = _buildTemplateAssets(sourceRoot, distDir);
-
   const normalizedPlatform = normalizePlatform(platform);
   const normalizedArch = normalizeArch(arch);
-
-  const outName = `wharfie-${normalizedPlatform}-${normalizedArch}${
-    normalizedPlatform === 'win32' ? '.exe' : ''
-  }`;
-  const outPath = path.join(distDir, outName);
+  const selfAppDir = resolveSelfAppDir(process.cwd());
+  const workspaceRoot = findRepoRoot(process.cwd());
+  const distDir = path.join(workspaceRoot, 'dist');
+  await fsp.mkdir(distDir, { recursive: true });
 
   displayInfo(
     `Building Wharfie SEA executable for ${normalizedPlatform}/${normalizedArch} (node ${nodeVersion})...`,
   );
 
-  const nodeBinary = new NodeBinary({
-    name: `wharfie-self-node-${normalizedPlatform}-${normalizedArch}`,
-    properties: {
-      version: nodeVersion,
-      platform: normalizedPlatform,
-      architecture: normalizedArch,
-    },
-  });
+  const result = await withBuildNodeVersion(
+    nodeVersion,
+    async () =>
+      await packageLocalApp({
+        dir: selfAppDir,
+        outputDir: distDir,
+        targetFilters: [`${normalizedPlatform}-${normalizedArch}`],
+      }),
+  );
 
-  // NOTE: We keep entryCode minimal and ESM-only to keep esbuild bundling predictable.
-  const seaBuild = new SeaBuild({
-    name: `wharfie-self-${normalizedPlatform}-${normalizedArch}`,
-    properties: {
-      entryCode: () =>
-        `
-          import { main } from './src/cli/entry.js';
+  if (result.artifacts.length !== 1) {
+    throw new Error(
+      `Expected build-self to produce exactly one artifact, received ${result.artifacts.length}.`,
+    );
+  }
 
-          main(process.argv).catch((err) => {
-            // eslint-disable-next-line no-console
-            console.error(err);
-            process.exitCode = 1;
-          });
-        `,
-      resolveDir: () => sourceRoot,
-      nodeBinaryPath: () => nodeBinary.get('binaryPath'),
-      nodeVersion: () => nodeBinary.get('exactVersion').slice(1),
-      platform: normalizedPlatform,
-      architecture: normalizedArch,
-      assets: () => templateAssets,
-    },
-  });
+  const builtArtifact = result.artifacts[0];
+  const legacyArtifactPath = getLegacyArtifactPath(
+    normalizedPlatform,
+    normalizedArch,
+  );
 
-  // NodeBinary must be reconciled first (SeaBuild waits on stable dependsOn but does not reconcile it).
-  await nodeBinary.reconcile();
-  await seaBuild.reconcile();
-
-  fs.copyFileSync(seaBuild.get('binaryPath'), outPath);
+  if (path.resolve(builtArtifact.path) !== path.resolve(legacyArtifactPath)) {
+    await fsp.rm(legacyArtifactPath, { force: true });
+    await fsp.rename(builtArtifact.path, legacyArtifactPath);
+  }
 
   if (normalizedPlatform !== 'win32') {
-    fs.chmodSync(outPath, 0o755);
+    await fsp.chmod(legacyArtifactPath, 0o755);
   }
 
-  if (normalizedPlatform === 'darwin' && process.platform === 'darwin') {
-    const signature = new MacOSBinarySignature({
-      name: `${outName}-signature`,
-      properties: {
-        binaryPath: () => outPath,
-        macosCertBase64: () => process.env.WHARFIE_MACOS_CERT_BASE64 || '',
-        macosCertPassword: () => process.env.WHARFIE_MACOS_CERT_PASSWORD || '',
-        macosKeychainPassword: () =>
-          process.env.WHARFIE_MACOS_KEYCHAIN_PASSWORD || '',
-      },
-    });
-    await signature.reconcile();
-  }
-
-  displaySuccess(`Built: ${outPath}`);
+  displaySuccess(`Built: ${legacyArtifactPath}`);
 }
 
 const buildSelfCommand = new Command('build-self')

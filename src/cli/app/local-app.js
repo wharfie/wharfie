@@ -56,6 +56,20 @@ import { loadApp } from './load-app.js';
  */
 
 /**
+ * @typedef LocalAppPackagingContext
+ * @property {string} appDir - App directory.
+ * @property {string} outputDir - Output directory.
+ * @property {Record<string, any>} manifest - Full compiled manifest.
+ * @property {Record<string, any>} publicManifest - Public compiled manifest.
+ */
+
+/**
+ * @typedef LocalAppPackagingConfig
+ * @property {Record<string, any>} [actorSystemProperties] - Additional ActorSystem properties to apply before packaging.
+ * @property {Record<string, string> | ((context: LocalAppPackagingContext) => Record<string, string>)} [assets] - Additional SEA assets to embed.
+ */
+
+/**
  * @typedef PackageLocalAppResult
  * @property {{ name: string }} app - App metadata.
  * @property {PackageArtifactTarget[]} [targets] - targets.
@@ -107,6 +121,85 @@ export function stringifyJson(value, options = {}) {
  */
 function cloneJson(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+/**
+ * @param {any} appExport - appExport.
+ * @returns {LocalAppPackagingConfig} - Result.
+ */
+function getLocalAppPackagingConfig(appExport) {
+  if (!isObjectRecord(appExport)) {
+    return {};
+  }
+
+  const packaging = appExport.packaging;
+  return isObjectRecord(packaging)
+    ? /** @type {LocalAppPackagingConfig} */ (packaging)
+    : {};
+}
+
+/**
+ * @param {any} appExport - appExport.
+ * @returns {Record<string, any>} - Result.
+ */
+function getPackagingActorSystemProperties(appExport) {
+  const config = getLocalAppPackagingConfig(appExport);
+
+  return isObjectRecord(config.actorSystemProperties)
+    ? { ...config.actorSystemProperties }
+    : {};
+}
+
+/**
+ * @param {ActorSystem} actorSystem - actorSystem.
+ * @param {any} appExport - appExport.
+ * @returns {void} - Result.
+ */
+function applyPackagingActorSystemProperties(actorSystem, appExport) {
+  const properties = getPackagingActorSystemProperties(appExport);
+
+  for (const [key, value] of Object.entries(properties)) {
+    actorSystem.set(key, value);
+  }
+}
+
+/**
+ * @param {unknown} assetSource - assetSource.
+ * @returns {Record<string, string>} - Result.
+ */
+function normalizePackagingAssets(assetSource) {
+  if (!isObjectRecord(assetSource)) {
+    return {};
+  }
+
+  return Object.entries(assetSource).reduce(
+    (/** @type {Record<string, string>} */ acc, [name, value]) => {
+      if (typeof value === 'string' && value) {
+        acc[name] = value;
+      }
+      return acc;
+    },
+    {},
+  );
+}
+
+/**
+ * @param {{ appExport: any, appDir: string, outputDir: string, manifest: Record<string, any>, publicManifest: Record<string, any> }} options - options.
+ * @returns {Record<string, string>} - Result.
+ */
+function resolvePackagingAssets(options) {
+  const config = getLocalAppPackagingConfig(options.appExport);
+  const assets =
+    typeof config.assets === 'function'
+      ? config.assets({
+          appDir: options.appDir,
+          outputDir: options.outputDir,
+          manifest: options.manifest,
+          publicManifest: options.publicManifest,
+        })
+      : config.assets;
+
+  return normalizePackagingAssets(assets);
 }
 
 /**
@@ -393,9 +486,14 @@ function resolveBuildAssets(build, assetSource) {
 /**
  * @param {SeaBuild[]} builds - builds.
  * @param {Record<string, any>} manifest - manifest.
+ * @param {Record<string, string>} [additionalAssets] - additionalAssets.
  * @returns {Promise<void>} - Result.
  */
-async function attachEmbeddedManifestAssets(builds, manifest) {
+async function attachEmbeddedManifestAssets(
+  builds,
+  manifest,
+  additionalAssets = {},
+) {
   await Promise.all(
     builds.map(async (build) => {
       const buildTarget = getBuildTarget(build);
@@ -410,6 +508,7 @@ async function attachEmbeddedManifestAssets(builds, manifest) {
       const originalAssets = build.properties?.assets;
       build._setUNSAFE('assets', () => ({
         ...resolveBuildAssets(build, originalAssets),
+        ...additionalAssets,
         [APP_MANIFEST_ASSET_NAME]: manifestAssetPath,
       }));
     }),
@@ -488,15 +587,28 @@ export async function packageLocalApp(options) {
     manifest = cloneJson(loaded.publicManifest);
   }
 
+  applyPackagingActorSystemProperties(actorSystem, loaded.appExport);
   applyTargetSelection(actorSystem, selectedTargets);
   manifest.targets = selectedTargets.map((target) => cloneTarget(target));
 
   const builds = getSeaBuildResources(actorSystem);
+  const outputDir = path.resolve(
+    options.outputDir || path.join(options.dir, 'dist'),
+  );
+  await fsp.mkdir(outputDir, { recursive: true });
+
+  const packagingAssets = resolvePackagingAssets({
+    appExport: loaded.appExport,
+    appDir: path.resolve(options.dir),
+    outputDir,
+    manifest: loaded.manifest,
+    publicManifest: loaded.publicManifest,
+  });
 
   if (typeof actorSystem.initializeEnvironment === 'function') {
     await actorSystem.initializeEnvironment();
   }
-  await attachEmbeddedManifestAssets(builds, manifest);
+  await attachEmbeddedManifestAssets(builds, manifest, packagingAssets);
   await actorSystem.reconcile();
 
   if (builds.length === 0) {
@@ -504,11 +616,6 @@ export async function packageLocalApp(options) {
       'App reconcile completed but no packaged binaries were discovered.',
     );
   }
-
-  const outputDir = path.resolve(
-    options.outputDir || path.join(options.dir, 'dist'),
-  );
-  await fsp.mkdir(outputDir, { recursive: true });
 
   /** @type {PackageArtifactSummary[]} */
   const artifacts = [];

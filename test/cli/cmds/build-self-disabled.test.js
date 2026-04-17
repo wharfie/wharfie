@@ -21,10 +21,7 @@ const repoRoot = path.resolve(
   fileURLToPath(new URL('../../../', import.meta.url)),
 );
 const BUILD_SELF_IMPORT = '../../../src/cli/cmds/build_self.js';
-const NODE_BINARY_IMPORT = '../../../src/core/resources/builds/node-binary.js';
-const SEA_BUILD_IMPORT = '../../../src/core/resources/builds/sea-build.js';
-const MACOS_SIGNATURE_IMPORT =
-  '../../../src/core/resources/builds/macos-binary-signature.js';
+const PACKAGE_LOCAL_APP_IMPORT = '../../../src/cli/app/local-app.js';
 
 /**
  * @returns {string} - Result.
@@ -37,6 +34,7 @@ function makeTmpRepo() {
       recursive: true,
     },
   );
+  mkdirSync(path.join(root, 'apps', 'wharfie-cli'), { recursive: true });
   mkdirSync(
     path.join(
       root,
@@ -59,6 +57,11 @@ function makeTmpRepo() {
   writeFileSync(
     path.join(root, 'src', 'cli', 'entry.js'),
     'export async function main() {}\n',
+    'utf8',
+  );
+  writeFileSync(
+    path.join(root, 'apps', 'wharfie-cli', 'wharfie.app.js'),
+    'export default { name: "wharfie-cli" };\n',
     'utf8',
   );
   writeFileSync(
@@ -140,90 +143,49 @@ describe('wharfie build-self', () => {
     }
   });
 
-  test('buildSelf creates a dist binary and template manifest with mocked builders', async () => {
+  test('buildSelf packages the self-hosted app via packageLocalApp and renames the final artifact', async () => {
     const previousCwd = process.cwd();
+    const previousNodeVersion = process.env.WHARFIE_SELF_NODE_VERSION;
     const tmpRepo = makeTmpRepo();
-
-    /** @type {Array<{ properties: Record<string, any>, binaryPath: string }>} */
-    const nodeBinaryInstances = [];
-    /** @type {Array<{ properties: Record<string, any>, binaryPath: string }>} */
-    const seaBuildInstances = [];
-    const signatureReconcile = jest.fn(async () => {});
+    let observedNodeVersion;
 
     try {
       process.chdir(tmpRepo);
       jest.resetModules();
 
-      jest.unstable_mockModule(NODE_BINARY_IMPORT, () => ({
-        default: class FakeNodeBinary {
-          /**
-           * @param {{ properties: Record<string, any> }} options - options.
-           */
-          constructor(options) {
-            this.properties = options.properties;
-            this.binaryPath = path.join(tmpRepo, '.fake-build', 'node-binary');
-            nodeBinaryInstances.push(this);
-          }
+      const packageLocalApp = jest.fn(
+        /**
+         * @param {{ dir: string, outputDir: string, targetFilters: string[] }} options - options.
+         */
+        async (options) => {
+          observedNodeVersion = process.env.WHARFIE_SELF_NODE_VERSION;
+          const outputFile = path.join(
+            options.outputDir,
+            'wharfie-cli-node24.13.1-linux-x64',
+          );
+          mkdirSync(options.outputDir, { recursive: true });
+          writeFileSync(outputFile, 'fake sea binary', 'utf8');
 
-          /**
-           * @returns {Promise<void>} - Result.
-           */
-          async reconcile() {
-            mkdirSync(path.dirname(this.binaryPath), { recursive: true });
-            writeFileSync(this.binaryPath, 'fake node binary', 'utf8');
-          }
-
-          /**
-           * @param {string} key - key.
-           * @returns {string} - Result.
-           */
-          get(key) {
-            if (key === 'binaryPath') return this.binaryPath;
-            if (key === 'exactVersion') return `v${this.properties.version}`;
-            throw new Error(`Unsupported NodeBinary get(${key})`);
-          }
+          return {
+            app: { name: 'wharfie-cli' },
+            outputDir: options.outputDir,
+            artifacts: [
+              {
+                fileName: path.basename(outputFile),
+                path: outputFile,
+                target: {
+                  nodeVersion: '24.13.1',
+                  platform: 'linux',
+                  architecture: 'x64',
+                },
+              },
+            ],
+          };
         },
-      }));
+      );
 
-      jest.unstable_mockModule(SEA_BUILD_IMPORT, () => ({
-        default: class FakeSeaBuild {
-          /**
-           * @param {{ properties: Record<string, any> }} options - options.
-           */
-          constructor(options) {
-            this.properties = options.properties;
-            this.binaryPath = path.join(tmpRepo, '.fake-build', 'sea-binary');
-            seaBuildInstances.push(this);
-          }
-
-          /**
-           * @returns {Promise<void>} - Result.
-           */
-          async reconcile() {
-            mkdirSync(path.dirname(this.binaryPath), { recursive: true });
-            writeFileSync(this.binaryPath, 'fake sea binary', 'utf8');
-          }
-
-          /**
-           * @param {string} key - key.
-           * @returns {string} - Result.
-           */
-          get(key) {
-            if (key === 'binaryPath') return this.binaryPath;
-            throw new Error(`Unsupported SeaBuild get(${key})`);
-          }
-        },
-      }));
-
-      jest.unstable_mockModule(MACOS_SIGNATURE_IMPORT, () => ({
-        default: class FakeMacOSBinarySignature {
-          /**
-           * @returns {Promise<void>} - Result.
-           */
-          async reconcile() {
-            await signatureReconcile();
-          }
-        },
+      jest.unstable_mockModule(PACKAGE_LOCAL_APP_IMPORT, () => ({
+        packageLocalApp,
       }));
 
       const mod = await import(BUILD_SELF_IMPORT);
@@ -234,32 +196,33 @@ describe('wharfie build-self', () => {
       });
 
       const distBinaryPath = path.join(tmpRepo, 'dist', 'wharfie-linux-x64');
-      const manifestPath = path.join(
+      const originalArtifactPath = path.join(
         tmpRepo,
         'dist',
-        'wharfie-templates.manifest.json',
+        'wharfie-cli-node24.13.1-linux-x64',
       );
-      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 
-      expect(nodeBinaryInstances).toHaveLength(1);
-      expect(nodeBinaryInstances[0].properties).toMatchObject({
-        version: '24.13.1',
-        platform: 'linux',
-        architecture: 'x64',
+      expect(packageLocalApp).toHaveBeenCalledWith({
+        dir: path.join(tmpRepo, 'apps', 'wharfie-cli'),
+        outputDir: path.join(tmpRepo, 'dist'),
+        targetFilters: ['linux-x64'],
       });
-
-      expect(seaBuildInstances).toHaveLength(1);
-      expect(typeof seaBuildInstances[0].properties.assets).toBe('function');
+      expect(observedNodeVersion).toBe('24.13.1');
+      expect(existsSync(originalArtifactPath)).toBe(false);
       expect(existsSync(distBinaryPath)).toBe(true);
       expect(readFileSync(distBinaryPath, 'utf8')).toBe('fake sea binary');
       expect(statSync(distBinaryPath).mode & 0o111).toBeGreaterThan(0);
-      expect(manifest.files.sort()).toEqual(['base.txt', 'nested/child.txt']);
-      expect(signatureReconcile).not.toHaveBeenCalled();
       expect(mod.normalizeArch('amd64')).toBe('x64');
       expect(mod.normalizePlatform('linux')).toBe('linux');
       expect(mod.findRepoRoot(path.join(tmpRepo, 'src', 'cli'))).toBe(tmpRepo);
+      expect(process.env.WHARFIE_SELF_NODE_VERSION).toBe(previousNodeVersion);
     } finally {
       process.chdir(previousCwd);
+      if (previousNodeVersion === undefined) {
+        delete process.env.WHARFIE_SELF_NODE_VERSION;
+      } else {
+        process.env.WHARFIE_SELF_NODE_VERSION = previousNodeVersion;
+      }
       rmSync(tmpRepo, { recursive: true, force: true });
       jest.resetModules();
       jest.restoreAllMocks();
