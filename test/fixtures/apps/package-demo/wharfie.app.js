@@ -4,7 +4,10 @@ import { promises as fsp } from 'node:fs';
 
 import ActorSystem from '../../../../src/core/resources/builds/actor-system.js';
 import SeaBuild from '../../../../src/core/resources/builds/sea-build.js';
-import { APP_MANIFEST_ASSET_NAME } from '../../../../src/core/resources/builds/lib/app-manifest-asset.js';
+import {
+  APP_MANIFEST_ASSET_NAME,
+  APP_SOURCE_ASSET_NAME,
+} from '../../../../src/core/resources/builds/lib/app-manifest-asset.js';
 
 const currentTarget = {
   nodeVersion: process.versions.node,
@@ -62,6 +65,8 @@ app.reconcile = async () => {
   const builtTargets = [];
   /** @type {Record<string, { appName: string | null, targetSelectors: string[] }>} */
   const embeddedManifestByTarget = {};
+  /** @type {Record<string, { assetName: string, containsDefaultExport: boolean }>} */
+  const embeddedSourceByTarget = {};
 
   for (const target of app.get('targets')) {
     const selector = getTargetSelector(target);
@@ -81,6 +86,15 @@ echo ${selector}
     builtTargets.push(selector);
 
     const assets = build.get('assets', {});
+    const sourceAssetPath = assets[APP_SOURCE_ASSET_NAME];
+    if (typeof sourceAssetPath === 'string' && sourceAssetPath) {
+      const sourceText = await fsp.readFile(sourceAssetPath, 'utf8');
+      embeddedSourceByTarget[selector] = {
+        assetName: APP_SOURCE_ASSET_NAME,
+        containsDefaultExport: sourceText.includes('export default app'),
+      };
+    }
+
     const manifestAssetPath = assets[APP_MANIFEST_ASSET_NAME];
     if (typeof manifestAssetPath === 'string' && manifestAssetPath) {
       const embeddedManifest = JSON.parse(
@@ -105,7 +119,11 @@ echo ${selector}
     await fsp.mkdir(path.dirname(traceFile), { recursive: true });
     await fsp.writeFile(
       traceFile,
-      JSON.stringify({ builtTargets, embeddedManifestByTarget }, null, 2),
+      JSON.stringify(
+        { builtTargets, embeddedManifestByTarget, embeddedSourceByTarget },
+        null,
+        2,
+      ),
     );
   }
 };

@@ -166,8 +166,6 @@ function runBundleOnce({ codeString, pkgFile, entryFile, tmpRoot, env }) {
   // @ts-ignore
   if (global.__wharfieWorkerInit.bundleLoaded) return;
 
-  console.log('[worker] REQUIRING WORKER CODE ONCE');
-
   const sandboxRequire = createRequire(pkgFile);
 
   const sandboxProcess = Object.create(process);
@@ -274,14 +272,13 @@ if (
       }
 
       const result = fn(...args);
-
-      if (result && typeof result.then === 'function') {
-        await result;
-      }
+      const awaitedResult =
+        result && typeof result.then === 'function' ? await result : result;
 
       await drainOneTick();
 
-      parentPort && parentPort.postMessage({ id, ok: true });
+      parentPort &&
+        parentPort.postMessage({ id, ok: true, value: awaitedResult });
     } catch (err) {
       parentPort &&
         parentPort.postMessage({

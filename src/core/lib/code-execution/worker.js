@@ -406,7 +406,7 @@ async function ensureSandboxForName(name, codeString, externalsTar) {
  * @param {string} codeString - codeString.
  * @param {any[] | any} params - params.
  * @param {VMSandboxOptions} options - options.
- * @returns {Promise<void>}  // you don't care about return value
+ * @returns {Promise<any>} - Result.
  */
 async function runInSandbox(
   name,
@@ -481,6 +481,8 @@ async function runInSandbox(
     if (!msg || !msg.ok) {
       throw new Error(msg && msg.error ? msg.error : 'Unknown worker error');
     }
+
+    return msg.value;
   } finally {
     if (cleanupRpc) cleanupRpc();
   }

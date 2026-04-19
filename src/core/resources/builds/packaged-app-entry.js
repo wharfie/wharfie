@@ -3,8 +3,6 @@ import {
   resolveBootstrapInvocation,
 } from './actor-system-cli/lib/bootstrap-mode.js';
 
-const INTERNAL_COMMANDS = new Set(['ctl', 'func', 'infra']);
-
 /**
  * @param {string | undefined} value - value.
  * @param {string} label - label.
@@ -197,7 +195,6 @@ export async function runRuntimeBootstrap(runtimeModules, options = {}) {
  */
 export async function runPackagedApp(options = {}) {
   const argv = Array.isArray(options.argv) ? options.argv : process.argv;
-  const args = argv.slice(2);
   const runtimeModules = options.runtimeModules || {};
 
   if (getBootstrapMode() === 'runtime') {
@@ -205,27 +202,23 @@ export async function runPackagedApp(options = {}) {
     return;
   }
 
-  if (args.length > 0 && INTERNAL_COMMANDS.has(String(args[0] || '').trim())) {
-    const internalCli = runtimeModules.cli;
-    if (typeof internalCli === 'function') {
-      await internalCli(argv);
-      return;
-    }
-    if (internalCli && typeof internalCli.parseAsync === 'function') {
-      await internalCli.parseAsync(argv);
-      return;
-    }
-  }
-
   const developerCliModule = options.developerCliModule ?? options.cliModule;
-  if (!developerCliModule) {
-    throw new Error('Packaged app is missing cli.entrypoint.');
+  if (developerCliModule) {
+    await runDeveloperCli(developerCliModule, {
+      cliExportName: options.cliExportName,
+      argv,
+    });
+    return;
   }
 
-  await runDeveloperCli(developerCliModule, {
-    cliExportName: options.cliExportName,
-    argv,
-  });
+  if (runtimeModules.cli) {
+    await runDeveloperCli({ default: runtimeModules.cli }, { argv });
+    return;
+  }
+
+  throw new Error(
+    'Packaged app is missing cli.entrypoint and bundled runtime CLI.',
+  );
 }
 
 export default runPackagedApp;

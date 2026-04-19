@@ -220,6 +220,7 @@ class Function {
    * @param {any} event - event.
    * @param {any} context - context.
    * @param {FunctionRunOptions} [options] - options.
+   * @returns {Promise<any>} - Result.
    */
   static async run(name, event, context = {}, options = {}) {
     const functionAssetBuffer = await getAsset(name);
@@ -260,8 +261,7 @@ class Function {
         ...(contextRpcResources || {}),
       };
 
-      console.time('WORKER time');
-      await worker.runInSandbox(
+      return await worker.runInSandbox(
         name,
         functionCodeString,
         [event, safeContext],
@@ -272,7 +272,6 @@ class Function {
             : undefined,
         },
       );
-      console.timeEnd('WORKER time');
     } finally {
       if (scopedResources) {
         await scopedResources.close();

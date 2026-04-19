@@ -1,9 +1,21 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import { promises as fsp } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { brotliCompressSync } from 'node:zlib';
 
 const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
+const EMBEDDED_ACTIVITY_TIMEOUT_MS = 15_000;
 
 const embeddedManifest = {
   app: { name: 'embedded-demo' },
@@ -25,8 +37,25 @@ const embeddedManifest = {
   ],
 };
 
+const embeddedRunnableManifest = {
+  app: { name: 'embedded-runnable-demo' },
+  activities: {
+    start: {
+      entrypoint: {
+        path: '/artifact/functions/start.js',
+        export: 'start',
+      },
+    },
+  },
+};
+
 describe('embedded app manifest asset helpers', () => {
   beforeEach(() => {
+    jest.resetModules();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
     jest.resetModules();
   });
 
@@ -45,6 +74,23 @@ describe('embedded app manifest asset helpers', () => {
     await expect(mod.readEmbeddedAppManifest()).resolves.toEqual(
       embeddedManifest,
     );
+  });
+
+  it('reads the embedded wharfie.app.js source from SEA assets', async () => {
+    const source = 'export default { name: "embedded-demo" };\n';
+
+    jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
+      isSea: () => true,
+      getAsset: async (/** @type {string} */ name) => {
+        expect(name).toBe('<WHARFIE_APP>/wharfie.app.js');
+        return Buffer.from(source, 'utf8');
+      },
+    }));
+
+    const mod =
+      await import('../../../src/core/resources/builds/lib/app-manifest-asset.js');
+
+    await expect(mod.readEmbeddedAppSource()).resolves.toBe(source);
   });
 
   it('prints a provided manifest without requiring SEA assets', async () => {
@@ -88,4 +134,80 @@ describe('embedded app manifest asset helpers', () => {
 
     expect(JSON.parse(writes.join(''))).toEqual(embeddedManifest);
   });
+
+  it(
+    'runs an embedded app activity without wharfie.app.js on disk',
+    async () => {
+      /** @type {Map<string, any>} */
+      const seaAssets = new Map();
+      const functionSource = `
+        global[Symbol.for('start')] = async (event, context) => ({
+          ok: true,
+          who: event?.who || 'world',
+          requestId: context?.requestId || null,
+        });
+      `;
+
+      seaAssets.set(
+        '<WHARFIE_APP>/manifest.json',
+        JSON.stringify(embeddedRunnableManifest),
+      );
+      seaAssets.set(
+        '<WHARFIE_APP>/wharfie.app.js',
+        'export default { name: "embedded-runnable-demo" };\n',
+      );
+      seaAssets.set(
+        'start',
+        JSON.stringify({
+          codeBundle: brotliCompressSync(
+            Buffer.from(functionSource, 'utf8'),
+          ).toString('base64'),
+          externalsTar: '',
+          resourceSpecs: {},
+        }),
+      );
+
+      jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
+        isSea: () => true,
+        getAsset: async (/** @type {string} */ name) => {
+          if (!seaAssets.has(name)) {
+            throw new Error(`Unexpected asset request: ${name}`);
+          }
+          return Buffer.from(seaAssets.get(name), 'utf8');
+        },
+      }));
+
+      const tmpDir = await fsp.mkdtemp(
+        path.join(os.tmpdir(), 'wharfie-embedded-app-run-'),
+      );
+      const previousCwd = process.cwd();
+      process.chdir(tmpDir);
+
+      const { runLocalApp } = await import('../../../src/cli/app/local-app.js');
+      const { default: sandboxWorker } =
+        await import('../../../src/core/lib/code-execution/worker.js');
+
+      try {
+        const { manifest, result } = await runLocalApp({
+          activityName: 'start',
+          eventInput: '{"who":"embedded"}',
+          contextInput: '{"requestId":"req-1"}',
+          allowEmbedded: true,
+        });
+
+        expect(manifest).toEqual(embeddedRunnableManifest);
+        expect(result).toEqual({
+          ok: true,
+          who: 'embedded',
+          requestId: 'req-1',
+        });
+      } finally {
+        process.chdir(previousCwd);
+        await sandboxWorker._destroyWorker();
+        sandboxWorker._clearSandboxCache();
+        await fsp.rm(tmpDir, { recursive: true, force: true });
+      }
+    },
+    EMBEDDED_ACTIVITY_TIMEOUT_MS,
+  );
 });

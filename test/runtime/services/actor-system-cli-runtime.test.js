@@ -160,6 +160,108 @@ describe('actor-system CLI runtime surfaces', () => {
     );
   });
 
+  it.each([
+    {
+      internalCommand: 'ctl',
+      argvSuffix: ['state', 'start'],
+    },
+    {
+      internalCommand: 'func',
+      argvSuffix: ['hello'],
+    },
+    {
+      internalCommand: 'infra',
+      argvSuffix: ['deploy'],
+    },
+  ])(
+    'keeps packaged $internalCommand argv on the developer CLI surface when not bootstrapping',
+    async ({ internalCommand, argvSuffix }) => {
+      const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+      const developerCli = jest.fn(async (_argv) => undefined);
+      const internalCli = { parseAsync: jest.fn(async () => undefined) };
+      const originalEnv = {
+        WHARFIE_BOOTSTRAP_MODE: process.env.WHARFIE_BOOTSTRAP_MODE,
+        WHARFIE_BOOTSTRAP_ARGS: process.env.WHARFIE_BOOTSTRAP_ARGS,
+        WHARFIE_RUNTIME_COMMAND: process.env.WHARFIE_RUNTIME_COMMAND,
+        WHARFIE_RUNTIME_ARGS: process.env.WHARFIE_RUNTIME_ARGS,
+      };
+      const originalArgv = process.argv;
+      const packagedArgv = [
+        'node',
+        'wharfie-artifact',
+        internalCommand,
+        ...argvSuffix,
+      ];
+
+      delete process.env.WHARFIE_BOOTSTRAP_MODE;
+      delete process.env.WHARFIE_BOOTSTRAP_ARGS;
+      delete process.env.WHARFIE_RUNTIME_COMMAND;
+      delete process.env.WHARFIE_RUNTIME_ARGS;
+      process.argv = packagedArgv;
+
+      try {
+        await runPackagedApp({
+          developerCliModule: { default: developerCli },
+          runtimeModules: {
+            [internalCommand]: internalCli,
+          },
+          argv: packagedArgv,
+        });
+      } finally {
+        process.argv = originalArgv;
+        for (const [key, value] of Object.entries(originalEnv)) {
+          if (value === undefined) {
+            delete process.env[key];
+          } else {
+            process.env[key] = value;
+          }
+        }
+      }
+
+      expect(developerCli).toHaveBeenCalledWith(packagedArgv);
+      expect(internalCli.parseAsync).not.toHaveBeenCalled();
+    },
+  );
+
+  it('falls back to the bundled runtime CLI when the app has no developer CLI entrypoint', async () => {
+    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    const runtimeCli = jest.fn(async (_argv) => undefined);
+    const originalEnv = {
+      WHARFIE_BOOTSTRAP_MODE: process.env.WHARFIE_BOOTSTRAP_MODE,
+      WHARFIE_BOOTSTRAP_ARGS: process.env.WHARFIE_BOOTSTRAP_ARGS,
+      WHARFIE_RUNTIME_COMMAND: process.env.WHARFIE_RUNTIME_COMMAND,
+      WHARFIE_RUNTIME_ARGS: process.env.WHARFIE_RUNTIME_ARGS,
+    };
+    const originalArgv = process.argv;
+    const packagedArgv = ['node', 'wharfie-artifact', 'ctl', 'manifest'];
+
+    delete process.env.WHARFIE_BOOTSTRAP_MODE;
+    delete process.env.WHARFIE_BOOTSTRAP_ARGS;
+    delete process.env.WHARFIE_RUNTIME_COMMAND;
+    delete process.env.WHARFIE_RUNTIME_ARGS;
+    process.argv = packagedArgv;
+
+    try {
+      await runPackagedApp({
+        runtimeModules: {
+          cli: runtimeCli,
+        },
+        argv: packagedArgv,
+      });
+    } finally {
+      process.argv = originalArgv;
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+
+    expect(runtimeCli).toHaveBeenCalledWith(packagedArgv);
+  });
+
   it('captures stdout/stderr for successful process runs', async () => {
     const { runProcess } = await import(PROCESS_RUNNER_IMPORT);
 

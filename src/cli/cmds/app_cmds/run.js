@@ -9,7 +9,8 @@ import { displayFailure } from '../../output/basic.js';
  */
 async function runActivity(activityName, options) {
   const { result } = await runLocalApp({
-    dir: options.dir || process.cwd(),
+    dir: options.dir,
+    allowEmbedded: typeof options.dir !== 'string' || !options.dir.trim(),
     activityName,
     eventInput: options.event,
     contextInput: options.context,
@@ -20,9 +21,9 @@ async function runActivity(activityName, options) {
 }
 
 const runCommand = new Command('run')
-  .description('Invoke an activity from wharfie.app.js locally')
+  .description('Invoke an activity from wharfie.app.js or this SEA artifact')
   .argument('<activityName>', 'Activity name to invoke')
-  .option('--dir <dir>', 'Directory containing wharfie.app.js', process.cwd())
+  .option('--dir <dir>', 'Directory containing wharfie.app.js')
   .option('--event <json>', 'Event JSON (default: stdin JSON or {})')
   .option('--context <json>', 'Context JSON (default: {})')
   .option('--json', 'Output JSON (default)')

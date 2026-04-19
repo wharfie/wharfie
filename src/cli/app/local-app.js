@@ -5,6 +5,8 @@ import ActorSystem from '../../core/resources/builds/actor-system.js';
 import SeaBuild from '../../core/resources/builds/sea-build.js';
 import {
   APP_MANIFEST_ASSET_NAME,
+  APP_SOURCE_ASSET_NAME,
+  readEmbeddedAppManifest,
   writeEmbeddedAppManifestAsset,
 } from '../../core/resources/builds/lib/app-manifest-asset.js';
 import { withResourceScope } from '../../core/resources/resource-scope.js';
@@ -25,12 +27,21 @@ import { loadApp } from './load-app.js';
 
 /**
  * @typedef RunLocalAppOptions
- * @property {string} dir - App directory.
+ * @property {string} [dir] - App directory.
+ * @property {boolean} [allowEmbedded] - Fall back to the embedded SEA app manifest when no local app exists.
  * @property {string} [activityName] - Activity name.
  * @property {string} [functionName] - Compatibility alias for activity name.
  * @property {string | undefined} [eventInput] - Event JSON string.
  * @property {string | undefined} [contextInput] - Context JSON string.
  * @property {string | undefined} [stdinInput] - STDIN payload.
+ */
+
+/**
+ * @typedef LoadedAppForCommand
+ * @property {any | null} appExport - appExport.
+ * @property {any} manifest - manifest.
+ * @property {any} publicManifest - publicManifest.
+ * @property {'disk' | 'embedded'} source - source.
  */
 
 /**
@@ -53,6 +64,20 @@ import { loadApp } from './load-app.js';
  * @property {string} dir - dir.
  * @property {string} [outputDir] - outputDir.
  * @property {string[]} [targetFilters] - targetFilters.
+ */
+
+/**
+ * @typedef LocalAppPackagingContext
+ * @property {string} appDir - App directory.
+ * @property {string} outputDir - Output directory.
+ * @property {Record<string, any>} manifest - Full compiled manifest.
+ * @property {Record<string, any>} publicManifest - Public compiled manifest.
+ */
+
+/**
+ * @typedef LocalAppPackagingConfig
+ * @property {Record<string, any>} [actorSystemProperties] - Additional ActorSystem properties to apply before packaging.
+ * @property {Record<string, string> | ((context: LocalAppPackagingContext) => Record<string, string>)} [assets] - Additional SEA assets to embed.
  */
 
 /**
@@ -107,6 +132,160 @@ export function stringifyJson(value, options = {}) {
  */
 function cloneJson(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+/**
+ * @param {unknown} error - error.
+ * @returns {string} - Result.
+ */
+function getErrorMessage(error) {
+  return error instanceof Error ? error.message : String(error || '');
+}
+
+/**
+ * @param {unknown} error - error.
+ * @returns {boolean} - Result.
+ */
+function isMissingLocalAppError(error) {
+  return getErrorMessage(error).includes('Could not find wharfie.app.js in:');
+}
+
+/**
+ * @param {unknown} error - error.
+ * @returns {boolean} - Result.
+ */
+function isMissingEmbeddedAppError(error) {
+  const message = getErrorMessage(error);
+  return (
+    message.includes('only available inside a packaged SEA artifact') ||
+    message.includes(
+      `Embedded app manifest asset '${APP_MANIFEST_ASSET_NAME}' was not found`,
+    ) ||
+    message.includes('node:sea is unavailable')
+  );
+}
+
+/**
+ * @returns {Promise<LoadedAppForCommand>} - Result.
+ */
+async function loadEmbeddedAppForCommand() {
+  const manifest = await readEmbeddedAppManifest();
+  return {
+    appExport: null,
+    manifest,
+    publicManifest: manifest,
+    source: 'embedded',
+  };
+}
+
+/**
+ * @param {{ dir?: string, allowEmbedded?: boolean }} [options] - options.
+ * @returns {Promise<LoadedAppForCommand>} - Result.
+ */
+export async function loadAppForCommand(options = {}) {
+  const hasExplicitDir = typeof options.dir === 'string' && options.dir.trim();
+  const dir = hasExplicitDir ? String(options.dir) : process.cwd();
+
+  try {
+    const loaded = await loadApp({ dir });
+    return { ...loaded, source: 'disk' };
+  } catch (error) {
+    if (
+      hasExplicitDir ||
+      !options.allowEmbedded ||
+      !isMissingLocalAppError(error)
+    ) {
+      throw error;
+    }
+
+    try {
+      return await loadEmbeddedAppForCommand();
+    } catch (embeddedError) {
+      if (isMissingEmbeddedAppError(embeddedError)) {
+        throw error;
+      }
+      throw embeddedError;
+    }
+  }
+}
+
+/**
+ * @param {any} appExport - appExport.
+ * @returns {LocalAppPackagingConfig} - Result.
+ */
+function getLocalAppPackagingConfig(appExport) {
+  if (!isObjectRecord(appExport)) {
+    return {};
+  }
+
+  const packaging = appExport.packaging;
+  return isObjectRecord(packaging)
+    ? /** @type {LocalAppPackagingConfig} */ (packaging)
+    : {};
+}
+
+/**
+ * @param {any} appExport - appExport.
+ * @returns {Record<string, any>} - Result.
+ */
+function getPackagingActorSystemProperties(appExport) {
+  const config = getLocalAppPackagingConfig(appExport);
+
+  return isObjectRecord(config.actorSystemProperties)
+    ? { ...config.actorSystemProperties }
+    : {};
+}
+
+/**
+ * @param {ActorSystem} actorSystem - actorSystem.
+ * @param {any} appExport - appExport.
+ * @returns {void} - Result.
+ */
+function applyPackagingActorSystemProperties(actorSystem, appExport) {
+  const properties = getPackagingActorSystemProperties(appExport);
+
+  for (const [key, value] of Object.entries(properties)) {
+    actorSystem.set(key, value);
+  }
+}
+
+/**
+ * @param {unknown} assetSource - assetSource.
+ * @returns {Record<string, string>} - Result.
+ */
+function normalizePackagingAssets(assetSource) {
+  if (!isObjectRecord(assetSource)) {
+    return {};
+  }
+
+  return Object.entries(assetSource).reduce(
+    (/** @type {Record<string, string>} */ acc, [name, value]) => {
+      if (typeof value === 'string' && value) {
+        acc[name] = value;
+      }
+      return acc;
+    },
+    {},
+  );
+}
+
+/**
+ * @param {{ appExport: any, appDir: string, outputDir: string, manifest: Record<string, any>, publicManifest: Record<string, any> }} options - options.
+ * @returns {Record<string, string>} - Result.
+ */
+function resolvePackagingAssets(options) {
+  const config = getLocalAppPackagingConfig(options.appExport);
+  const assets =
+    typeof config.assets === 'function'
+      ? config.assets({
+          appDir: options.appDir,
+          outputDir: options.outputDir,
+          manifest: options.manifest,
+          publicManifest: options.publicManifest,
+        })
+      : config.assets;
+
+  return normalizePackagingAssets(assets);
 }
 
 /**
@@ -393,9 +572,16 @@ function resolveBuildAssets(build, assetSource) {
 /**
  * @param {SeaBuild[]} builds - builds.
  * @param {Record<string, any>} manifest - manifest.
+ * @param {string} appDir - App directory.
+ * @param {Record<string, string>} [additionalAssets] - additionalAssets.
  * @returns {Promise<void>} - Result.
  */
-async function attachEmbeddedManifestAssets(builds, manifest) {
+async function attachEmbeddedManifestAssets(
+  builds,
+  manifest,
+  appDir,
+  additionalAssets = {},
+) {
   await Promise.all(
     builds.map(async (build) => {
       const buildTarget = getBuildTarget(build);
@@ -407,9 +593,12 @@ async function attachEmbeddedManifestAssets(builds, manifest) {
       };
       const manifestAssetPath =
         await writeEmbeddedAppManifestAsset(embeddedManifest);
+      const appSourceAssetPath = path.resolve(appDir, 'wharfie.app.js');
       const originalAssets = build.properties?.assets;
       build._setUNSAFE('assets', () => ({
         ...resolveBuildAssets(build, originalAssets),
+        ...additionalAssets,
+        [APP_SOURCE_ASSET_NAME]: appSourceAssetPath,
         [APP_MANIFEST_ASSET_NAME]: manifestAssetPath,
       }));
     }),
@@ -421,7 +610,11 @@ async function attachEmbeddedManifestAssets(builds, manifest) {
  * @returns {Promise<{ manifest: any, result: any }>} - Result.
  */
 export async function runLocalApp(options) {
-  const { manifest, publicManifest } = await loadApp({ dir: options.dir });
+  const loaded = await loadAppForCommand({
+    dir: options.dir,
+    allowEmbedded: options.allowEmbedded,
+  });
+  const { manifest, publicManifest } = loaded;
   const activityName = resolveActivityName(options, manifest, publicManifest);
   const eventSource = options.eventInput ?? options.stdinInput;
   const event = parseJsonInput(eventSource, 'event', {});
@@ -437,6 +630,7 @@ export async function runLocalApp(options) {
     activityName,
     event,
     context,
+    executionMode: loaded.source === 'embedded' ? 'embedded' : 'source',
   });
 
   return {
@@ -488,15 +682,33 @@ export async function packageLocalApp(options) {
     manifest = cloneJson(loaded.publicManifest);
   }
 
+  applyPackagingActorSystemProperties(actorSystem, loaded.appExport);
   applyTargetSelection(actorSystem, selectedTargets);
   manifest.targets = selectedTargets.map((target) => cloneTarget(target));
 
   const builds = getSeaBuildResources(actorSystem);
+  const outputDir = path.resolve(
+    options.outputDir || path.join(options.dir, 'dist'),
+  );
+  await fsp.mkdir(outputDir, { recursive: true });
+
+  const packagingAssets = resolvePackagingAssets({
+    appExport: loaded.appExport,
+    appDir: path.resolve(options.dir),
+    outputDir,
+    manifest: loaded.manifest,
+    publicManifest: loaded.publicManifest,
+  });
 
   if (typeof actorSystem.initializeEnvironment === 'function') {
     await actorSystem.initializeEnvironment();
   }
-  await attachEmbeddedManifestAssets(builds, manifest);
+  await attachEmbeddedManifestAssets(
+    builds,
+    manifest,
+    options.dir,
+    packagingAssets,
+  );
   await actorSystem.reconcile();
 
   if (builds.length === 0) {
@@ -504,11 +716,6 @@ export async function packageLocalApp(options) {
       'App reconcile completed but no packaged binaries were discovered.',
     );
   }
-
-  const outputDir = path.resolve(
-    options.outputDir || path.join(options.dir, 'dist'),
-  );
-  await fsp.mkdir(outputDir, { recursive: true });
 
   /** @type {PackageArtifactSummary[]} */
   const artifacts = [];

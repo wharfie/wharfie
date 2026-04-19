@@ -8,6 +8,7 @@ import {
 } from '../../../lib/node-sea.js';
 
 export const APP_MANIFEST_ASSET_NAME = '<WHARFIE_APP>/manifest.json';
+export const APP_SOURCE_ASSET_NAME = '<WHARFIE_APP>/wharfie.app.js';
 
 /**
  * @param {unknown} value - value.
@@ -97,9 +98,9 @@ export async function writeEmbeddedAppManifestAsset(manifest, options = {}) {
 
 /**
  * @param {{ assetProvider?: EmbeddedManifestAssetProvider }} [options] - options.
- * @returns {Promise<any>} - Result.
+ * @returns {EmbeddedManifestAssetProvider} - Result.
  */
-export async function readEmbeddedAppManifest(options = {}) {
+function resolveAssetProvider(options = {}) {
   const assetProvider =
     options.assetProvider ||
     /** @type {EmbeddedManifestAssetProvider} */ ({
@@ -108,18 +109,45 @@ export async function readEmbeddedAppManifest(options = {}) {
     });
 
   if (typeof assetProvider.getAsset !== 'function') {
-    throw new Error('Embedded app manifest asset provider is unavailable.');
+    throw new Error('Embedded app asset provider is unavailable.');
   }
 
+  return assetProvider;
+}
+
+/**
+ * @param {EmbeddedManifestAssetProvider} assetProvider - assetProvider.
+ * @param {boolean} hasExplicitProvider - hasExplicitProvider.
+ * @param {string} label - label.
+ * @returns {void}
+ */
+function assertPackagedSeaAssetAccess(
+  assetProvider,
+  hasExplicitProvider,
+  label,
+) {
   if (
-    !options.assetProvider &&
+    !hasExplicitProvider &&
     typeof assetProvider.isSea === 'function' &&
     !assetProvider.isSea()
   ) {
     throw new Error(
-      'Embedded app manifest is only available inside a packaged SEA artifact.',
+      `Embedded app ${label} is only available inside a packaged SEA artifact.`,
     );
   }
+}
+
+/**
+ * @param {{ assetProvider?: EmbeddedManifestAssetProvider }} [options] - options.
+ * @returns {Promise<any>} - Result.
+ */
+export async function readEmbeddedAppManifest(options = {}) {
+  const assetProvider = resolveAssetProvider(options);
+  assertPackagedSeaAssetAccess(
+    assetProvider,
+    Boolean(options.assetProvider),
+    'manifest',
+  );
 
   const rawAsset = await assetProvider.getAsset(APP_MANIFEST_ASSET_NAME);
   if (rawAsset == null) {
@@ -132,9 +160,33 @@ export async function readEmbeddedAppManifest(options = {}) {
   return JSON.parse(text);
 }
 
+/**
+ * @param {{ assetProvider?: EmbeddedManifestAssetProvider }} [options] - options.
+ * @returns {Promise<string>} - Result.
+ */
+export async function readEmbeddedAppSource(options = {}) {
+  const assetProvider = resolveAssetProvider(options);
+  assertPackagedSeaAssetAccess(
+    assetProvider,
+    Boolean(options.assetProvider),
+    'source',
+  );
+
+  const rawAsset = await assetProvider.getAsset(APP_SOURCE_ASSET_NAME);
+  if (rawAsset == null) {
+    throw new Error(
+      `Embedded app source asset '${APP_SOURCE_ASSET_NAME}' was not found.`,
+    );
+  }
+
+  return Buffer.from(rawAsset).toString('utf8');
+}
+
 export default {
   APP_MANIFEST_ASSET_NAME,
+  APP_SOURCE_ASSET_NAME,
   readEmbeddedAppManifest,
+  readEmbeddedAppSource,
   stringifyEmbeddedAppManifest,
   writeEmbeddedAppManifestAsset,
 };

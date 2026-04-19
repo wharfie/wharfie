@@ -279,6 +279,16 @@ describe('wharfie app commands', () => {
           targetSelectors: [getTargetSelector(alternateTarget)],
         },
       },
+      embeddedSourceByTarget: {
+        [getTargetSelector(currentTarget)]: {
+          assetName: '<WHARFIE_APP>/wharfie.app.js',
+          containsDefaultExport: true,
+        },
+        [getTargetSelector(alternateTarget)]: {
+          assetName: '<WHARFIE_APP>/wharfie.app.js',
+          containsDefaultExport: true,
+        },
+      },
     });
   });
 
@@ -331,6 +341,12 @@ describe('wharfie app commands', () => {
         [targetSelector]: {
           appName: 'package-demo',
           targetSelectors: [targetSelector],
+        },
+      },
+      embeddedSourceByTarget: {
+        [targetSelector]: {
+          assetName: '<WHARFIE_APP>/wharfie.app.js',
+          containsDefaultExport: true,
         },
       },
     });

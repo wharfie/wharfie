@@ -135,7 +135,46 @@ export function createManifestActivityFunction(options) {
  * @param {{ manifest: any, publicManifest: any, activityName: string, event?: any, context?: any, resourceResolution?: { registryPath?: string } }} options - options.
  * @returns {Promise<any>} - Result.
  */
+export async function invokeEmbeddedManifestActivity(options) {
+  const activityName = String(options.activityName || '').trim();
+  const definition = getManifestActivityDefinition(options);
+
+  if (!definition || !isObjectRecord(definition.entrypoint)) {
+    const available = getManifestActivityNames(
+      options.manifest,
+      options.publicManifest,
+    );
+    throw new Error(
+      `Unknown activity '${activityName}'. Available activities: ${available.join(', ') || '(none)'}`,
+    );
+  }
+
+  const { resources: baseResources, close } = await createActorSystemResources(
+    getManifestResourcesSpec(options.manifest, options.publicManifest),
+    options.resourceResolution,
+  );
+
+  try {
+    return await WharfieFunction.run(
+      activityName,
+      options.event ?? {},
+      options.context ?? {},
+      { resources: baseResources },
+    );
+  } finally {
+    await close();
+  }
+}
+
+/**
+ * @param {{ manifest: any, publicManifest: any, activityName: string, event?: any, context?: any, resourceResolution?: { registryPath?: string }, executionMode?: 'source' | 'embedded' }} options - options.
+ * @returns {Promise<any>} - Result.
+ */
 export async function invokeManifestActivity(options) {
+  if (options.executionMode === 'embedded') {
+    return await invokeEmbeddedManifestActivity(options);
+  }
+
   const fn = createManifestActivityFunction(options);
   const { resources: baseResources, close } = await createActorSystemResources(
     getManifestResourcesSpec(options.manifest, options.publicManifest),
@@ -328,5 +367,6 @@ export default {
   getManifestActivityDefinition,
   getManifestActivityNames,
   getManifestResourcesSpec,
+  invokeEmbeddedManifestActivity,
   invokeManifestActivity,
 };
