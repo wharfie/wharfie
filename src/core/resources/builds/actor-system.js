@@ -142,6 +142,25 @@ function buildTargetSelector(target) {
 }
 
 /**
+ * @param {NodeBinary} nodeBinary - nodeBinary.
+ * @param {string | function(): string} configuredVersion - configuredVersion.
+ * @returns {string} - Result.
+ */
+function resolveNodeBinaryVersion(nodeBinary, configuredVersion) {
+  const exactVersion = nodeBinary.has('exactVersion')
+    ? nodeBinary.get('exactVersion')
+    : '';
+  const candidate =
+    typeof exactVersion === 'string' && exactVersion.trim()
+      ? exactVersion.trim()
+      : typeof configuredVersion === 'function'
+        ? configuredVersion()
+        : configuredVersion;
+
+  return String(candidate).replace(/^v/, '');
+}
+
+/**
  * @typedef WharfieActorSystemOptions
  * @property {string} name - name.
  * @property {import('./function.js').default[]} [functions] - functions.
@@ -335,7 +354,7 @@ class ActorSystem extends BuildResourceGroup {
             entrypoint: func.entrypoint,
             ...func.properties,
             buildTarget: () => ({
-              nodeVersion: node_binary.get('exactVersion').slice(1),
+              nodeVersion: resolveNodeBinaryVersion(node_binary, nodeVersion),
               platform,
               architecture,
               libc,
@@ -431,7 +450,7 @@ class ActorSystem extends BuildResourceGroup {
         },
         resolveDir: () => path.dirname(actorSystemDir),
         nodeBinaryPath: () => node_binary.get('binaryPath'),
-        nodeVersion: () => node_binary.get('exactVersion').slice(1),
+        nodeVersion: () => resolveNodeBinaryVersion(node_binary, nodeVersion),
         platform,
         architecture,
         environmentVariables: () => {
