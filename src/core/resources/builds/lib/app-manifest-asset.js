@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -7,8 +6,8 @@ import {
   isSea as nodeIsSea,
 } from '../../../lib/node-sea.js';
 
-export const APP_MANIFEST_ASSET_NAME = '<WHARFIE_APP>/manifest.json';
-export const APP_SOURCE_ASSET_NAME = '<WHARFIE_APP>/wharfie.app.js';
+export const APP_MANIFEST_ASSET_PREFIX = '<WHARFIE_APP>/';
+export const APP_MANIFEST_ASSET_NAME = `${APP_MANIFEST_ASSET_PREFIX}manifest.json`;
 
 /**
  * @param {unknown} value - value.
@@ -71,23 +70,37 @@ export function stringifyEmbeddedAppManifest(manifest, options = {}) {
 
 /**
  * @param {unknown} manifest - manifest.
- * @param {{ assetDir?: string }} [options] - options.
- * @returns {Promise<string>} - Result.
+ * @typedef EmbeddedAppManifestAsset
+ * @property {string} path - Private temporary manifest path.
+ * @property {() => Promise<void>} cleanup - Remove the temporary manifest.
  */
-export async function writeEmbeddedAppManifestAsset(manifest, options = {}) {
-  const assetDir = path.resolve(
-    options.assetDir || path.join(tmpdir(), 'wharfie-app-manifest-assets'),
-  );
-  await fsp.mkdir(assetDir, { recursive: true });
 
-  const assetPath = path.join(assetDir, `${randomUUID()}.json`);
+/**
+ * Materialize an embedded manifest only for the lifetime of a SEA build.
+ * Manifests describe artifact behavior and must not contain secrets, but the
+ * temporary file is private as defense in depth.
+ * @param {unknown} manifest - manifest.
+ * @returns {Promise<EmbeddedAppManifestAsset>} - Temporary asset handle.
+ */
+export async function createEmbeddedAppManifestAsset(manifest) {
+  const assetDir = await fsp.mkdtemp(
+    path.join(tmpdir(), 'wharfie-app-manifest-'),
+  );
+  await fsp.chmod(assetDir, 0o700);
+
+  const assetPath = path.join(assetDir, 'manifest.json');
   await fsp.writeFile(
     assetPath,
     `${stringifyEmbeddedAppManifest(manifest, { pretty: true })}
 `,
-    'utf8',
+    { encoding: 'utf8', flag: 'wx', mode: 0o600 },
   );
-  return assetPath;
+  return {
+    path: assetPath,
+    cleanup: async () => {
+      await fsp.rm(assetDir, { force: true, recursive: true });
+    },
+  };
 }
 
 /**
@@ -160,33 +173,10 @@ export async function readEmbeddedAppManifest(options = {}) {
   return JSON.parse(text);
 }
 
-/**
- * @param {{ assetProvider?: EmbeddedManifestAssetProvider }} [options] - options.
- * @returns {Promise<string>} - Result.
- */
-export async function readEmbeddedAppSource(options = {}) {
-  const assetProvider = resolveAssetProvider(options);
-  assertPackagedSeaAssetAccess(
-    assetProvider,
-    Boolean(options.assetProvider),
-    'source',
-  );
-
-  const rawAsset = await assetProvider.getAsset(APP_SOURCE_ASSET_NAME);
-  if (rawAsset == null) {
-    throw new Error(
-      `Embedded app source asset '${APP_SOURCE_ASSET_NAME}' was not found.`,
-    );
-  }
-
-  return Buffer.from(rawAsset).toString('utf8');
-}
-
 export default {
+  APP_MANIFEST_ASSET_PREFIX,
   APP_MANIFEST_ASSET_NAME,
-  APP_SOURCE_ASSET_NAME,
+  createEmbeddedAppManifestAsset,
   readEmbeddedAppManifest,
-  readEmbeddedAppSource,
   stringifyEmbeddedAppManifest,
-  writeEmbeddedAppManifestAsset,
 };

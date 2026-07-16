@@ -8,7 +8,6 @@ const ORIGINAL_EXIT_CODE = process.exitCode;
 const ORIGINAL_STDIN_IS_TTY = process.stdin.isTTY;
 const PATHS_MODULE = '../../src/core/lib/paths.js';
 const LOAD_APP_MODULE = '../../src/cli/app/load-app.js';
-const CONFIG_MODULE = '../../src/cli/config.js';
 const ENTRY_MODULE = '../../src/cli/entry.js';
 
 describe('src/cli/entry main', () => {
@@ -69,17 +68,6 @@ describe('src/cli/entry main', () => {
         events.push('action:start');
         return loadAppPromise;
       },
-    }));
-
-    await jest.unstable_mockModule(CONFIG_MODULE, () => ({
-      default: {
-        setConfig: () => {},
-        setEnvironment: () => {},
-        validate: async () => {},
-      },
-      setConfig: () => {},
-      setEnvironment: () => {},
-      validate: async () => {},
     }));
 
     const stdoutSpy = jest

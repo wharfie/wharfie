@@ -53,6 +53,26 @@ afterEach(() => {
 });
 
 describe('runtime bootstrap helpers', () => {
+  it('rejects removed activity environment fields in provided manifests', async () => {
+    const secret = 'runtime-manifest-environment-secret-sentinel';
+    const result = loadRuntimeBootstrap({
+      manifest: JSON.stringify({
+        app: { name: 'unsupported-environment-manifest' },
+        activities: {
+          start: {
+            entrypoint: { path: '/artifact/functions/start.js' },
+            environmentVariables: { API_TOKEN: secret },
+          },
+        },
+      }),
+    });
+
+    await expect(result).rejects.toThrow(
+      /activity 'start'.*environmentVariables.*not supported/i,
+    );
+    await expect(result).rejects.not.toThrow(secret);
+  });
+
   it('derives resources, queue polling, services, and scheduler triggers from a manifest', async () => {
     const bootstrap = await loadRuntimeBootstrap(
       {

@@ -59,7 +59,8 @@ Wharfie should provide:
 
 - a TypeScript/Node authoring and control-plane model;
 - a normal local CLI experience before any deployment is required;
-- a portable, self-hosting executable distribution, currently built with Node SEA;
+- portable application executables, currently built by the npm-distributed Node
+  toolchain with Node SEA; a standalone self-hosting builder remains future work;
 - durable single-node execution with an inspectable run, invocation, attempt, and effect ledger;
 - schedules, workflows, retries, cancellation, intervention, and recovery;
 - a trusted-node mesh with explicit enrollment, capability-aware placement, and fenced leases;
@@ -67,6 +68,12 @@ Wharfie should provide:
 - capability fulfillment for the finite substrate required to run Wharfie applications;
 - standard plan, deploy, inspect, upgrade, rollback, and destroy operations under an explicit reserved operator namespace that cannot silently take over developer CLI commands; and
 - machine-readable CLI output so humans, scripts, and coding agents can operate the same system.
+
+The packaged command contract reserves one top-level word: `<app> wharfie
+<command>`. Wharfie strips that word and dispatches the remainder to its bundled
+operator CLI. Every other argv sequence belongs to the developer CLI, including
+the old internal names `ctl`, `func`, and `infra`. Environment-selected bootstrap
+is internal service wiring and takes precedence over interactive argv.
 
 ## Deliberate boundaries
 

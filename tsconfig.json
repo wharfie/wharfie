@@ -15,12 +15,15 @@
     "types": ["jest", "node"]
   },
   "include": [
+    "src/app.js",
+    "src/app.d.ts",
     "src/core/**/*.js",
     "test/cli/**/*.js",
     "test/runtime/**/*.js",
     "test/graph/**/*.js",
     "test/db/**/*.js",
     "test/fixtures/actors/**/*.js",
+    "test/types/**/*.ts",
     "types/**/*.d.ts"
   ],
   "exclude": [

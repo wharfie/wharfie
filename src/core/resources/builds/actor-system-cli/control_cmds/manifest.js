@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 
+import { assertManifestIsSecretFree } from '../../lib/manifest-security.js';
 import { resolveAppManifest } from '../lib/app-manifest.js';
 
 /**
@@ -16,6 +17,7 @@ export async function printEmbeddedManifest(options, io = {}) {
       'No app manifest was provided and no embedded app manifest was available.',
     );
   }
+  assertManifestIsSecretFree(manifest);
   const pretty = options.pretty !== false;
   const output = pretty
     ? JSON.stringify(manifest, null, 2)

@@ -6,7 +6,7 @@ import { x } from 'tar';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { buffer as streamToBuffer } from 'node:stream/consumers';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 
 // esbuild inlines this file as text (configure: loader { '.worker.js': 'text' })
@@ -20,13 +20,33 @@ import paths from '../paths.js';
 const VM_PATH = join(paths.data, 'vms');
 const require = createRequire(import.meta.url);
 
-// --- singleton worker + response router ---
-/**
- * @type {Worker | null}
- */
-let worker = null;
+// --- bundle-isolated workers + response routing ---
 let nextId = 1;
-const pending = new Map();
+
+/**
+ * @typedef PendingExecution
+ * @property {(value: any) => void} resolve - Resolve the execution.
+ * @property {(error: any) => void} reject - Reject the execution.
+ */
+
+/**
+ * @typedef WorkerState
+ * @property {string} key - Stable bundle key.
+ * @property {string} activityKey - Stable activity name/source key.
+ * @property {string} externalBundleDigest - External bundle content digest.
+ * @property {string} name - Activity name.
+ * @property {Worker} worker - Worker instance.
+ * @property {Map<number, PendingExecution>} pending - Executions awaiting responses.
+ * @property {Set<string>} rpcSessionIds - RPC sessions owned by this worker.
+ * @property {number} activeExecutions - Number of active runInSandbox calls.
+ * @property {boolean} destroyRequested - Whether to terminate once idle.
+ * @property {boolean} terminating - Whether termination has started.
+ * @property {boolean} exited - Whether the worker has exited.
+ * @property {Promise<number> | null} terminationPromise - Active termination.
+ */
+
+/** @type {Map<string, WorkerState>} */
+const workers = new Map();
 
 /**
  * Active RPC sessions, keyed by `sessionId`.
@@ -35,6 +55,46 @@ const pending = new Map();
  * @type {Map<string, { resources: Record<string, any> }>}
  */
 const rpcSessions = new Map();
+
+/**
+ * @param {string} name - Activity name.
+ * @param {string} codeString - Bundled activity source.
+ * @returns {string} - Stable activity name/source key.
+ */
+function getActivityKey(name, codeString) {
+  return createHash('sha256')
+    .update('wharfie-activity-v1\0')
+    .update(String(name))
+    .update('\0')
+    .update(String(codeString))
+    .digest('hex');
+}
+
+/**
+ * @param {Buffer | Uint8Array | null | undefined} externalsTar - External bundle bytes.
+ * @returns {string} - Stable external bundle content digest.
+ */
+function getExternalBundleDigest(externalsTar) {
+  const bytes = externalsTar ? Buffer.from(externalsTar) : Buffer.alloc(0);
+  return createHash('sha256')
+    .update('wharfie-externals-v1\0')
+    .update(bytes)
+    .digest('hex');
+}
+
+/**
+ * @param {string} activityKey - Stable activity name/source key.
+ * @param {string} externalBundleDigest - External bundle content digest.
+ * @returns {string} - Stable worker/sandbox key.
+ */
+function getBundleKey(activityKey, externalBundleDigest) {
+  return createHash('sha256')
+    .update('wharfie-sandbox-v1\0')
+    .update(activityKey)
+    .update('\0')
+    .update(externalBundleDigest)
+    .digest('hex');
+}
 
 /**
  * @returns {string} - Result.
@@ -232,11 +292,83 @@ async function handleRpcMessage(w, msg) {
 }
 
 /**
- * @param {string} name - name.
- * @returns {Worker} - Result.
+ * @param {WorkerState} state - Worker state.
+ * @param {Error} error - Rejection error.
+ * @returns {void}
  */
-function ensureWorker(name) {
-  if (worker) return worker;
+function rejectPendingExecutions(state, error) {
+  for (const { reject } of state.pending.values()) {
+    reject(error);
+  }
+  state.pending.clear();
+}
+
+/**
+ * @param {WorkerState} state - Worker state.
+ * @returns {void}
+ */
+function clearWorkerRpcSessions(state) {
+  for (const sessionId of state.rpcSessionIds) {
+    rpcSessions.delete(sessionId);
+  }
+  state.rpcSessionIds.clear();
+}
+
+/**
+ * @param {WorkerState} state - Worker state.
+ * @returns {void}
+ */
+function removeWorkerState(state) {
+  if (workers.get(state.key) === state) {
+    workers.delete(state.key);
+  }
+}
+
+/**
+ * @param {WorkerState} state - Worker state.
+ * @param {{ force?: boolean }} [options] - Termination options.
+ * @returns {Promise<void>}
+ */
+async function terminateWorkerState(state, options = {}) {
+  if (state.terminationPromise) {
+    await state.terminationPromise;
+    return;
+  }
+
+  state.destroyRequested = true;
+  if (state.activeExecutions > 0 && options.force !== true) {
+    return;
+  }
+
+  state.terminating = true;
+  removeWorkerState(state);
+  clearWorkerRpcSessions(state);
+
+  if (state.pending.size > 0) {
+    rejectPendingExecutions(state, new Error('Sandbox worker was terminated.'));
+  }
+
+  if (state.exited) {
+    return;
+  }
+
+  state.terminationPromise = state.worker.terminate();
+  await state.terminationPromise;
+}
+
+/**
+ * @param {string} name - name.
+ * @param {string} codeString - Bundled activity source.
+ * @param {string} externalBundleDigest - External bundle content digest.
+ * @returns {WorkerState} - Result.
+ */
+function ensureWorker(name, codeString, externalBundleDigest) {
+  const activityKey = getActivityKey(name, codeString);
+  const key = getBundleKey(activityKey, externalBundleDigest);
+  const existing = workers.get(key);
+  if (existing && !existing.terminating && !existing.exited) {
+    return existing;
+  }
 
   const src = getWorkerSourceText();
   const workerUrl = new URL(
@@ -248,6 +380,22 @@ function ensureWorker(name) {
     stdout: true,
     stderr: true,
   });
+  /** @type {WorkerState} */
+  const state = {
+    key,
+    activityKey,
+    externalBundleDigest,
+    name,
+    worker: w,
+    pending: new Map(),
+    rpcSessionIds: new Set(),
+    activeExecutions: 0,
+    destroyRequested: false,
+    terminating: false,
+    exited: false,
+    terminationPromise: null,
+  };
+  workers.set(key, state);
 
   // forward stdio once
   w.stdout.setEncoding('utf8');
@@ -269,9 +417,9 @@ function ensureWorker(name) {
     }
 
     // Normal exec response path
-    const p = msg && pending.get(msg.id);
+    const p = msg && state.pending.get(msg.id);
     if (!p) return;
-    pending.delete(msg.id);
+    state.pending.delete(msg.id);
 
     if (msg.ok) {
       p.resolve(msg);
@@ -281,30 +429,29 @@ function ensureWorker(name) {
   });
 
   w.on('error', (err) => {
-    for (const { reject } of pending.values()) reject(err);
-    pending.clear();
-    rpcSessions.clear();
-    worker = null;
+    rejectPendingExecutions(state, err);
+    clearWorkerRpcSessions(state);
+    removeWorkerState(state);
   });
 
   w.on('exit', (code) => {
-    if (code !== 0) {
-      for (const { reject } of pending.values()) {
-        reject(new Error(`Worker exited with code ${code}`));
-      }
-      pending.clear();
+    state.exited = true;
+    if (state.pending.size > 0) {
+      rejectPendingExecutions(
+        state,
+        new Error(`Worker exited with code ${code} before responding.`),
+      );
     }
-    rpcSessions.clear();
-    worker = null;
+    clearWorkerRpcSessions(state);
+    removeWorkerState(state);
   });
 
-  worker = w;
-  return worker;
+  return state;
 }
 
-// --- per-name sandbox cache: avoids recreating/extracting per call ---
+// --- per-bundle sandbox cache: avoids recreating/extracting per call ---
 /**
- * Map<name, { root, nodeModules, pkgFile, entryFile, prepared: boolean, codeString }>
+ * Map<bundleKey, { root, nodeModules, pkgFile, entryFile, prepared: boolean, codeString }>
  */
 
 /**
@@ -321,6 +468,8 @@ function ensureWorker(name) {
  * @type {Map<string,Sandbox>}
  */
 const sandboxes = new Map();
+/** @type {Map<string, Promise<Sandbox>>} */
+const sandboxPreparations = new Map();
 
 /**
  * @param {import("fs").PathLike} p - p.
@@ -338,52 +487,99 @@ async function pathExists(p) {
 /**
  * @param {string} name - name.
  * @param {string} codeString - codeString.
- * @param {Iterable<any> | AsyncIterable<any> | undefined} externalsTar - externalsTar.
+ * @param {Buffer | null} externalsTar - Materialized external bundle bytes.
+ * @param {string} externalBundleDigest - External bundle content digest.
  * @returns {Promise<Sandbox>} - Result.
  */
-async function ensureSandboxForName(name, codeString, externalsTar) {
-  let sb = sandboxes.get(name);
-  if (sb) return sb;
+async function ensureSandboxForName(
+  name,
+  codeString,
+  externalsTar,
+  externalBundleDigest,
+) {
+  const activityKey = getActivityKey(name, codeString);
+  const key = getBundleKey(activityKey, externalBundleDigest);
+  const cached = sandboxes.get(key);
+  if (cached) return cached;
 
-  await mkdir(VM_PATH, { recursive: true });
+  const existingPreparation = sandboxPreparations.get(key);
+  if (existingPreparation) return await existingPreparation;
 
-  const root = join(VM_PATH, name);
-  const nodeModules = join(root, 'node_modules');
-  const pkgFile = join(root, 'package.json');
-  const entryFile = join(root, `${name}.js`);
+  const preparation = (async () => {
+    await mkdir(VM_PATH, { recursive: true });
 
-  await mkdir(root, { recursive: true });
-  await mkdir(nodeModules, { recursive: true });
+    const root = join(VM_PATH, key);
+    const nodeModules = join(root, 'node_modules');
+    const pkgFile = join(root, 'package.json');
+    const entryFile = join(root, 'entry.js');
 
-  if (!(await pathExists(pkgFile))) {
-    await writeFile(
-      pkgFile,
-      JSON.stringify({ name: `${name}-sandbox`, private: true }, null, 2),
-    );
-  }
+    await mkdir(root, { recursive: true });
+    await mkdir(nodeModules, { recursive: true });
 
-  // Extract externals only once per name
-  if (externalsTar) {
-    // NOTE: Buffers/Uint8Arrays are iterable in JS (yielding numbers), which breaks tar extraction.
-    // Wrap them as a single chunk so Readable.from() emits bytes correctly.
-    /** @type {Iterable<any> | AsyncIterable<any> | null} */
-    let tarInput = externalsTar;
-
-    if (Buffer.isBuffer(externalsTar) || externalsTar instanceof Uint8Array) {
-      const buf = Buffer.from(externalsTar);
-      tarInput = buf.length > 0 ? [buf] : null;
+    if (!(await pathExists(pkgFile))) {
+      await writeFile(
+        pkgFile,
+        JSON.stringify(
+          { name: `wharfie-sandbox-${key.slice(0, 16)}`, private: true },
+          null,
+          2,
+        ),
+      );
     }
 
-    if (tarInput) {
-      const src = Readable.from(tarInput);
+    // Extract externals only once per bundle.
+    if (externalsTar && externalsTar.length > 0) {
+      const src = Readable.from([externalsTar]);
       const extractor = x({ C: root, preserveOwner: false, unlink: true });
       await pipeline(src, extractor);
     }
+
+    const sandbox = {
+      root,
+      nodeModules,
+      pkgFile,
+      entryFile,
+      prepared: true,
+      codeString,
+    };
+    sandboxes.set(key, sandbox);
+    return sandbox;
+  })();
+
+  sandboxPreparations.set(key, preparation);
+  try {
+    return await preparation;
+  } finally {
+    if (sandboxPreparations.get(key) === preparation) {
+      sandboxPreparations.delete(key);
+    }
+  }
+}
+
+/**
+ * Materialize an external bundle once so its bytes can be hashed and extracted
+ * without consuming an iterable twice.
+ * @param {Buffer | Uint8Array | Iterable<any> | AsyncIterable<any> | undefined} externalsTar - External bundle input.
+ * @returns {Promise<Buffer | null>} - Materialized bundle bytes.
+ */
+async function materializeExternalBundle(externalsTar) {
+  if (externalsTar === undefined || externalsTar === null) return null;
+  if (Buffer.isBuffer(externalsTar) || externalsTar instanceof Uint8Array) {
+    return Buffer.from(externalsTar);
   }
 
-  sb = { root, nodeModules, pkgFile, entryFile, prepared: true, codeString };
-  sandboxes.set(name, sb);
-  return sb;
+  const iterable = /** @type {any} */ (externalsTar);
+  const isIterable =
+    typeof iterable === 'object' &&
+    (typeof iterable[Symbol.iterator] === 'function' ||
+      typeof iterable[Symbol.asyncIterator] === 'function');
+  if (!isIterable) {
+    throw new TypeError(
+      'externalsTar must be a Buffer, Uint8Array, or byte iterable.',
+    );
+  }
+
+  return await streamToBuffer(Readable.from(iterable));
 }
 
 /**
@@ -396,7 +592,8 @@ async function ensureSandboxForName(name, codeString, externalsTar) {
 
 /**
  * @typedef VMSandboxOptions
- * @property {Buffer} [externalsTar] - externalsTar.
+ * @property {Buffer | Uint8Array | Iterable<any> | AsyncIterable<any>} [externalsTar] - externalsTar.
+ * @property {string} [externalBundleDigest] - Expected external bundle content digest.
  * @property {Object<string,string>} [env] - env.
  * @property {ResourceRPCOptions} [rpc] - Optional RPC wiring for `context.resources.*`
  */
@@ -412,60 +609,76 @@ async function runInSandbox(
   name,
   codeString,
   params,
-  { externalsTar, env = {}, rpc } = {},
+  { externalsTar, externalBundleDigest: expectedDigest, env = {}, rpc } = {},
 ) {
-  // Prepare once per name (no repeated extraction/packaging or pkg writes)
-  const sb = await ensureSandboxForName(name, codeString, externalsTar);
+  const materializedExternals = await materializeExternalBundle(externalsTar);
+  const externalBundleDigest = getExternalBundleDigest(materializedExternals);
+  if (expectedDigest !== undefined && expectedDigest !== externalBundleDigest) {
+    throw new Error(
+      'External bundle digest does not match externalsTar bytes.',
+    );
+  }
+
+  // Prepare once per bundle (no repeated extraction/packaging or pkg writes).
+  const sb = await ensureSandboxForName(
+    name,
+    codeString,
+    materializedExternals,
+    externalBundleDigest,
+  );
+  const state = ensureWorker(name, codeString, externalBundleDigest);
+  state.activeExecutions += 1;
 
   /** @type {any[]} */
   const __ENTRY_ARGS__ = Array.isArray(params) ? [...params] : [params];
 
   // Optional resource RPC session for `context.resources`
   let cleanupRpc = null;
-  if (rpc && rpc.resources && Object.keys(rpc.resources).length > 0) {
-    const sessionId = rpc.sessionId || randomUUID();
-    const rawContextIndex =
-      typeof rpc.contextIndex === 'number' ? rpc.contextIndex : -1;
-    const contextIndex =
-      Number.isInteger(rawContextIndex) && rawContextIndex >= 0
-        ? rawContextIndex
-        : 1;
-
-    rpcSessions.set(sessionId, { resources: rpc.resources });
-    cleanupRpc = () => {
-      rpcSessions.delete(sessionId);
-    };
-
-    while (__ENTRY_ARGS__.length <= contextIndex) __ENTRY_ARGS__.push({});
-    const ctx = __ENTRY_ARGS__[contextIndex];
-    const safeCtx = ctx && typeof ctx === 'object' ? ctx : {};
-    const existingResources =
-      safeCtx.resources && typeof safeCtx.resources === 'object'
-        ? safeCtx.resources
-        : {};
-
-    const resourceNames = Array.isArray(rpc.resourceNames)
-      ? rpc.resourceNames
-      : Object.keys(rpc.resources);
-
-    __ENTRY_ARGS__[contextIndex] = {
-      ...safeCtx,
-      resources: {
-        ...existingResources,
-        __wharfie_rpc: true,
-        __wharfie_rpc_sessionId: sessionId,
-        __wharfie_rpc_resources: resourceNames,
-      },
-    };
-  }
-
-  const w = ensureWorker(name);
   const id = nextId++;
 
   try {
+    if (rpc && rpc.resources && Object.keys(rpc.resources).length > 0) {
+      const sessionId = rpc.sessionId || randomUUID();
+      const rawContextIndex =
+        typeof rpc.contextIndex === 'number' ? rpc.contextIndex : -1;
+      const contextIndex =
+        Number.isInteger(rawContextIndex) && rawContextIndex >= 0
+          ? rawContextIndex
+          : 1;
+
+      rpcSessions.set(sessionId, { resources: rpc.resources });
+      state.rpcSessionIds.add(sessionId);
+      cleanupRpc = () => {
+        rpcSessions.delete(sessionId);
+        state.rpcSessionIds.delete(sessionId);
+      };
+
+      while (__ENTRY_ARGS__.length <= contextIndex) __ENTRY_ARGS__.push({});
+      const ctx = __ENTRY_ARGS__[contextIndex];
+      const safeCtx = ctx && typeof ctx === 'object' ? ctx : {};
+      const existingResources =
+        safeCtx.resources && typeof safeCtx.resources === 'object'
+          ? safeCtx.resources
+          : {};
+
+      const resourceNames = Array.isArray(rpc.resourceNames)
+        ? rpc.resourceNames
+        : Object.keys(rpc.resources);
+
+      __ENTRY_ARGS__[contextIndex] = {
+        ...safeCtx,
+        resources: {
+          ...existingResources,
+          __wharfie_rpc: true,
+          __wharfie_rpc_sessionId: sessionId,
+          __wharfie_rpc_resources: resourceNames,
+        },
+      };
+    }
+
     const msg = await new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-      w.postMessage({
+      state.pending.set(id, { resolve, reject });
+      state.worker.postMessage({
         id,
         kind: 'exec',
         codeString: sb.codeString,
@@ -484,23 +697,56 @@ async function runInSandbox(
 
     return msg.value;
   } finally {
+    state.pending.delete(id);
     if (cleanupRpc) cleanupRpc();
+    state.activeExecutions -= 1;
+    if (state.destroyRequested && state.activeExecutions === 0) {
+      await terminateWorkerState(state);
+    }
   }
+}
+
+/**
+ * Terminate all workers, or only workers for one activity/bundle.
+ * @param {string} [name] - Optional activity name.
+ * @param {string} [codeString] - Optional exact bundle source.
+ * @param {string} [externalBundleDigest] - Optional exact external bundle digest.
+ * @returns {Promise<void>}
+ */
+async function destroyWorker(name, codeString, externalBundleDigest) {
+  let states;
+  if (
+    typeof name === 'string' &&
+    typeof codeString === 'string' &&
+    typeof externalBundleDigest === 'string'
+  ) {
+    const state = workers.get(
+      getBundleKey(getActivityKey(name, codeString), externalBundleDigest),
+    );
+    states = state ? [state] : [];
+  } else if (typeof name === 'string' && typeof codeString === 'string') {
+    const activityKey = getActivityKey(name, codeString);
+    states = [...workers.values()].filter(
+      (state) => state.activityKey === activityKey,
+    );
+  } else if (typeof name === 'string') {
+    states = [...workers.values()].filter((state) => state.name === name);
+  } else {
+    states = [...workers.values()];
+  }
+
+  const force = typeof name !== 'string';
+  await Promise.all(
+    states.map((state) => terminateWorkerState(state, { force })),
+  );
 }
 
 export default {
   runInSandbox,
-  _destroyWorker: async () => {
-    if (worker) {
-      try {
-        await worker.terminate();
-      } finally {
-        worker = null;
-        rpcSessions.clear();
-      }
-    }
-  },
+  getExternalBundleDigest,
+  _destroyWorker: destroyWorker,
   _clearSandboxCache: () => {
     sandboxes.clear();
+    sandboxPreparations.clear();
   },
 };

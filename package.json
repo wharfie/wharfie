@@ -1,14 +1,15 @@
 {
   "name": "@wharfie/wharfie",
-  "version": "0.0.14",
-  "description": "",
+  "version": "0.0.15",
+  "description": "Experimental toolkit for building TypeScript CLIs and packaging them as portable Node SEA executables",
+  "private": true,
   "type": "module",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/wharfie/wharfie.git"
   },
   "author": "",
-  "license": "ISC",
+  "license": "Apache-2.0",
   "bugs": {
     "url": "https://github.com/wharfie/wharfie/issues"
   },
@@ -16,46 +17,52 @@
     "wharfie": "./bin/wharfie"
   },
   "homepage": "https://github.com/wharfie/wharfie#readme",
+  "packageManager": "npm@11.12.0",
   "engineStrict": true,
   "engines": {
-    "node": "24.13.1",
-    "npm": "11.12.0"
+    "node": "24.13.1"
   },
   "main": "./src/cli/entry.js",
+  "exports": {
+    ".": "./src/cli/entry.js",
+    "./app": {
+      "types": "./src/app.d.ts",
+      "import": "./src/app.js",
+      "default": "./src/app.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "README.md",
     "bin/",
-    "apps/wharfie-v1/wharfie.app.js",
+    "scripts/**",
+    "src/app.js",
+    "src/app.d.ts",
     "src/core/**",
-    "src/cli/entry.js",
-    "src/cli/config.js",
-    "src/cli/input.js",
-    "src/cli/upgrade.js",
-    "src/cli/app/**",
-    "src/cli/assets/**",
-    "src/cli/output/**",
-    "src/cli/cmds/app.js",
-    "src/cli/cmds/app_cmds/**",
-    "src/cli/cmds/build_self.js",
-    "src/cli/cmds/config.js",
-    "src/cli/cmds/init.js",
-    "src/cli/cmds/list.js",
-    "src/cli/cmds/operation-rows.js",
-    "src/cli/cmds/operations-store.js",
-    "src/cli/cmds/ops.js",
-    "src/cli/cmds/ops_cmds/**",
-    "src/cli/project/project_structure_examples/**"
+    "src/cli/**",
+    "!src/cli/assets/**",
+    "!src/cli/config.js",
+    "!src/cli/input.js",
+    "!src/cli/upgrade.js",
+    "!src/cli/cmds/config.js",
+    "!src/cli/cmds/init.js",
+    "!src/cli/cmds/list.js",
+    "!src/cli/project/project_structure_examples/**"
   ],
   "scripts": {
     "typecheck": "tsc",
     "test:js": "TZ=UTC node ./test/run-jest.js --silent --coverage",
     "test:update": "TZ=UTC node ./test/run-jest.js --silent --updateSnapshot",
     "test": "TZ=UTC node ./test/run-jest.js --silent --coverage",
-    "test:ci": "npm run lint && npm run typecheck && npm run test",
+    "test:ci": "npm run lint && npm run typecheck && npm run test && npm run verify:package",
     "lint:js": "eslint . && prettier --check \"{*,**/*}.{js,json}\"",
     "lint": "npm run lint:js",
     "lint:fix": "eslint --fix . && prettier --write \"{*,**/*}.{js,json}\"",
-    "build:wharfie-v1": "node ./apps/wharfie-v1/wharfie.app.js"
+    "verify:package": "node ./scripts/verify-package-contents.js",
+    "verify:package:sea": "node ./scripts/verify-package-sea.js",
+    "verify:release-ready": "node ./scripts/verify-release-ready.js",
+    "verify:release-version": "node ./scripts/verify-release-version.js",
+    "verify:release-unpublished": "node ./scripts/verify-release-unpublished.js"
   },
   "prettier": {
     "singleQuote": true,

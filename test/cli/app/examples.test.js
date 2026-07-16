@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import Function from '../../../src/core/resources/builds/function.js';
 import { loadApp } from '../../../src/cli/app/load-app.js';
+import { invokeActivity } from '../../../src/app.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
@@ -108,6 +109,23 @@ describe('Function + ActorSystem demos', () => {
     } finally {
       await appExport.closeRuntimeResources();
     }
+  });
+
+  it('invokes a named source activity through the public app API', async () => {
+    const dir = path.join(examplesDir, 'actor-systems', 'hello-world');
+
+    await expect(
+      invokeActivity('echo-event', {
+        dir,
+        event: { who: 'public-api' },
+        context: { requestId: 'req-public-api' },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      who: 'public-api',
+      message: 'hello public-api',
+      requestId: 'req-public-api',
+    });
   });
 
   it('loads the context-override ActorSystem demo and shows resource merging', async () => {

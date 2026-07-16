@@ -1,6 +1,8 @@
 import Action from '../lib/graph/action.js';
 import Operation, { Type as OperationType } from '../lib/graph/operation.js';
 import WharfieFunction from '../resources/builds/function.js';
+import { assertNoActivityEnvironmentVariables } from '../resources/builds/lib/activity-environment.js';
+import { cloneJsonObject, cloneJsonValue } from './json-value.js';
 import { createActorSystemResources } from './resources.js';
 
 /**
@@ -12,13 +14,45 @@ function isObjectRecord(value) {
 }
 
 /**
+ * Clone caller-owned values before they cross an activity boundary.
+ * @param {{ event?: any, context?: any }} options - Invocation options.
+ * @returns {{ event: any, context: Record<string, any> }} - JSON-only inputs.
+ */
+function cloneActivityInputs(options) {
+  const hasEvent = Object.prototype.hasOwnProperty.call(options, 'event');
+  const hasContext = Object.prototype.hasOwnProperty.call(options, 'context');
+  return {
+    event: cloneJsonValue(hasEvent ? options.event : {}, 'Activity event'),
+    context: cloneJsonObject(
+      hasContext ? options.context : {},
+      'Activity context',
+    ),
+  };
+}
+
+/**
  * @param {any} manifest - manifest.
  * @param {any} publicManifest - publicManifest.
  * @returns {Record<string, any>} - Result.
  */
 export function getManifestActivities(manifest, publicManifest) {
   if (isObjectRecord(publicManifest?.activities)) {
-    return publicManifest.activities;
+    return Object.keys(publicManifest.activities).reduce((acc, name) => {
+      const definition = publicManifest.activities[name];
+      if (!isObjectRecord(definition)) {
+        acc[name] = definition;
+        return acc;
+      }
+
+      assertNoActivityEnvironmentVariables(
+        definition.environmentVariables,
+        name,
+      );
+      const normalized = { ...definition };
+      delete normalized.environmentVariables;
+      acc[name] = normalized;
+      return acc;
+    }, /** @type {Record<string, any>} */ ({}));
   }
 
   const functions = Array.isArray(manifest?.functions)
@@ -34,13 +68,14 @@ export function getManifestActivities(manifest, publicManifest) {
         return acc;
       }
 
+      assertNoActivityEnvironmentVariables(
+        definition.environmentVariables,
+        definition.name,
+      );
       acc[definition.name] = {
         entrypoint: definition.entrypoint,
         ...(Array.isArray(definition.external)
           ? { external: definition.external }
-          : {}),
-        ...(isObjectRecord(definition.environmentVariables)
-          ? { environmentVariables: definition.environmentVariables }
           : {}),
         ...(isObjectRecord(definition.resources)
           ? { resources: definition.resources }
@@ -121,9 +156,6 @@ export function createManifestActivityFunction(options) {
       ...(Array.isArray(definition.external)
         ? { external: definition.external }
         : {}),
-      ...(isObjectRecord(definition.environmentVariables)
-        ? { environmentVariables: definition.environmentVariables }
-        : {}),
       ...(isObjectRecord(definition.resources)
         ? { resources: definition.resources }
         : {}),
@@ -149,18 +181,18 @@ export async function invokeEmbeddedManifestActivity(options) {
     );
   }
 
+  const { event, context } = cloneActivityInputs(options);
+
   const { resources: baseResources, close } = await createActorSystemResources(
     getManifestResourcesSpec(options.manifest, options.publicManifest),
     options.resourceResolution,
   );
 
   try {
-    return await WharfieFunction.run(
-      activityName,
-      options.event ?? {},
-      options.context ?? {},
-      { resources: baseResources },
-    );
+    const result = await WharfieFunction.run(activityName, event, context, {
+      resources: baseResources,
+    });
+    return cloneJsonValue(result, 'Activity result');
   } finally {
     await close();
   }
@@ -176,15 +208,17 @@ export async function invokeManifestActivity(options) {
   }
 
   const fn = createManifestActivityFunction(options);
+  const { event, context } = cloneActivityInputs(options);
   const { resources: baseResources, close } = await createActorSystemResources(
     getManifestResourcesSpec(options.manifest, options.publicManifest),
     options.resourceResolution,
   );
 
   try {
-    return await fn.fn(options.event ?? {}, options.context ?? {}, {
+    const result = await fn.fn(event, context, {
       baseResources,
     });
+    return cloneJsonValue(result, 'Activity result');
   } finally {
     await Promise.allSettled([
       close(),

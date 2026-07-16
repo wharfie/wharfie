@@ -7,6 +7,7 @@ import paths from '../../lib/paths.js';
 import { runCmd, execFile } from '../../lib/cmd.js';
 import { inject } from 'postject';
 import BaseResource from '../base-resource.js';
+import { assertSeaNodeVersionCompatible } from './lib/sea-node-version.js';
 
 const LIEF_SECTION_NAME_WARNING =
   "Can't find string offset for section name '.note";
@@ -172,7 +173,7 @@ ${result.stderr || ''}`;
  * @property {string | function(): string} entryCode - entryCode.
  * @property {string | function(): string} resolveDir - resolveDir.
  * @property {string | function(): string} nodeBinaryPath - nodeBinaryPath.
- * @property {string | function(): string} nodeVersion - nodeVersion.
+ * @property {string | function(): string} nodeVersion - Exact Node.js target version; must match the builder runtime.
  * @property {TargetPlatform | function(): TargetPlatform} platform - platform.
  * @property {TargetArch | function(): TargetArch} architecture - architecture.
  * @property {TargetLibc | function(): TargetLibc} [libc] - libc.
@@ -204,43 +205,87 @@ class SeaBuild extends BaseResource {
   }
 
   async build() {
+    this.assertNodeVersionCompatible();
     this.assertSeaBuildSupported();
 
-    const distFile = `${this.name}`;
+    const buildId = v4();
+    const distFile = `${this.name}-${buildId}`;
     const finalName =
       this.get('platform') === 'win32' ? `${distFile}.exe` : distFile;
     const binaryPath = join(SeaBuild.BINARIES_DIR, finalName);
-    const tmpBuildDir = join(SeaBuild.BUILD_DIR, `build-${v4()}`);
-    await promises.mkdir(tmpBuildDir, { recursive: true });
-    await this.esbuild(tmpBuildDir);
-    await this.prepareExternalBinaries();
+    const tmpBuildDir = join(SeaBuild.BUILD_DIR, `build-${buildId}`);
+    /** @type {unknown} */
+    let buildError;
 
-    if (!existsSync(SeaBuild.BINARIES_DIR)) {
-      await promises.mkdir(SeaBuild.BINARIES_DIR, { recursive: true });
+    try {
+      await promises.mkdir(tmpBuildDir, { mode: 0o700, recursive: true });
+      await promises.chmod(tmpBuildDir, 0o700);
+      await this.esbuild(tmpBuildDir);
+      await this.prepareExternalBinaries();
+
+      if (!existsSync(SeaBuild.BINARIES_DIR)) {
+        await promises.mkdir(SeaBuild.BINARIES_DIR, { recursive: true });
+      }
+
+      const tempNodeBinaryPath = join(tmpBuildDir, 'node-binary');
+      await promises.copyFile(
+        await this.get('nodeBinaryPath'),
+        tempNodeBinaryPath,
+      );
+      await this.seaBuild(tmpBuildDir, tempNodeBinaryPath);
+      await promises.copyFile(tempNodeBinaryPath, binaryPath);
+    } catch (error) {
+      buildError = error;
     }
 
-    const tempNodeBinaryPath = join(tmpBuildDir, 'node-binary');
-    await promises.copyFile(
-      await this.get('nodeBinaryPath'),
-      tempNodeBinaryPath,
-    );
-    await this.seaBuild(tmpBuildDir, tempNodeBinaryPath);
-    await promises.copyFile(tempNodeBinaryPath, binaryPath);
+    /** @type {unknown[]} */
+    const cleanupErrors = [];
+    try {
+      await promises.rm(tmpBuildDir, { force: true, recursive: true });
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+
+    if (buildError || cleanupErrors.length > 0) {
+      try {
+        await promises.rm(binaryPath, { force: true });
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+
+      if (buildError && cleanupErrors.length === 0) {
+        throw buildError;
+      }
+      throw new AggregateError(
+        [...(buildError ? [buildError] : []), ...cleanupErrors],
+        buildError
+          ? 'SEA build failed and temporary output cleanup was incomplete.'
+          : 'SEA build output was created, but temporary build cleanup failed.',
+      );
+    }
 
     this._setUNSAFE('binaryPath', binaryPath);
+  }
+
+  /**
+   * @returns {string} - Normalized exact target Node.js version.
+   */
+  assertNodeVersionCompatible() {
+    return assertSeaNodeVersionCompatible(this.get('nodeVersion'));
   }
 
   /**
    * @returns {void}
    */
   assertSeaBuildSupported() {
+    const nodeVersion = this.assertNodeVersionCompatible();
     if (supportsExperimentalSeaConfig()) {
       return;
     }
 
-    const target = `${this.get('platform')}/${this.get('architecture')} node ${this.get('nodeVersion')}`;
+    const target = `${this.get('platform')}/${this.get('architecture')} node ${nodeVersion}`;
     throw new Error(
-      `Cannot build ${this.name} for ${target}: Wharfie packaged artifacts must be real Node SEA executables, but the builder runtime ${process.execPath} (${process.version}) does not support --experimental-sea-config. Install and run Wharfie with a SEA-capable Node runtime; the repo is pinned to Node 24.13.1.`,
+      `Cannot build ${this.name} for ${target}: Wharfie packaged artifacts must be real Node SEA executables, but the builder runtime ${process.execPath} (${process.version}) does not support --experimental-sea-config. Install and run Wharfie with a SEA-capable Node runtime.`,
     );
   }
 
@@ -281,6 +326,7 @@ class SeaBuild extends BaseResource {
    * @param {string} buildDir - buildDir.
    */
   async esbuild(buildDir) {
+    const nodeVersion = this.assertNodeVersionCompatible();
     const outputPath = join(buildDir, 'esbundle.js');
     const { errors, warnings } = await _build({
       stdin: {
@@ -297,7 +343,7 @@ class SeaBuild extends BaseResource {
       minify: true,
       keepNames: false,
       sourcemap: 'inline',
-      target: `node${this.get('nodeVersion')}`,
+      target: `node${nodeVersion}`,
       logLevel: 'silent',
       external: [
         'esbuild',
@@ -329,6 +375,7 @@ class SeaBuild extends BaseResource {
    * @param {string} nodeBinaryPath - nodeBinaryPath.
    */
   async seaBuild(buildDir, nodeBinaryPath) {
+    this.assertNodeVersionCompatible();
     const seaConfigPath = join(buildDir, 'sea-config.json');
     const blobPath = join(buildDir, 'sea.blob');
     const seaConfig = {
@@ -372,16 +419,6 @@ class SeaBuild extends BaseResource {
         recursive: true,
       });
     }
-    const hostVersion = process.version.slice(1);
-    const targetVersion = this.get('nodeVersion');
-    if (
-      Number(hostVersion.split('.')[0]) < Number(targetVersion.split('.')[0])
-    ) {
-      throw new Error(
-        `Cannot build target (${this.name}) with node version (${targetVersion}) when using ${hostVersion}. Upgrade to at least ${targetVersion}`,
-      );
-    }
-
     await this.build();
   }
 

@@ -44,6 +44,7 @@ describe('Wharfie app loader', () => {
           name: 'plain-object-app',
           cli: {
             entrypoint: './workflow-handler.js',
+            export: 'launch',
           },
           targets: [
             {
@@ -97,11 +98,6 @@ describe('Wharfie app loader', () => {
                 debug: () => 'ignored',
               },
               external: ['lmdb', '@duckdb/node-api'],
-              environmentVariables: {
-                BETA: '2',
-                ALPHA: '1',
-                OMIT: 1,
-              },
               resources: {
                 db: {
                   adapter: 'vanilla',
@@ -120,6 +116,7 @@ describe('Wharfie app loader', () => {
       app: { name: 'plain-object-app' },
       cli: {
         entrypoint: path.join(dir, 'workflow-handler.js'),
+        export: 'launch',
       },
       targets: [
         {
@@ -159,11 +156,6 @@ describe('Wharfie app loader', () => {
             { name: 'lmdb', version: expect.any(String) },
             { name: '@duckdb/node-api', version: expect.any(String) },
           ],
-          environmentVariables: {
-            ALPHA: '1',
-            BETA: '2',
-            OMIT: '1',
-          },
           resources: {
             db: {
               adapter: 'vanilla',
@@ -209,6 +201,7 @@ describe('Wharfie app loader', () => {
       app: { name: 'plain-object-app' },
       cli: {
         entrypoint: path.join(dir, 'workflow-handler.js'),
+        export: 'launch',
       },
       targets: [
         {
@@ -237,11 +230,6 @@ describe('Wharfie app loader', () => {
             { name: 'lmdb', version: expect.any(String) },
             { name: '@duckdb/node-api', version: expect.any(String) },
           ],
-          environmentVariables: {
-            ALPHA: '1',
-            BETA: '2',
-            OMIT: '1',
-          },
           resources: {
             db: {
               adapter: 'vanilla',
@@ -287,8 +275,8 @@ describe('Wharfie app loader', () => {
     expect(JSON.parse(JSON.stringify(publicManifest))).toEqual(publicManifest);
     if (
       !manifest.capabilities?.db ||
-      !manifest.functions?.[0]?.environmentVariables ||
-      !publicManifest.activities?.['hello-resources']?.environmentVariables
+      !manifest.functions?.[0] ||
+      !publicManifest.activities?.['hello-resources']
     ) {
       throw new Error(
         'Expected manifest capabilities/functions and public manifest activities to be defined.',
@@ -298,16 +286,6 @@ describe('Wharfie app loader', () => {
       'alpha',
       'beta',
     ]);
-    expect(Object.keys(manifest.functions[0].environmentVariables)).toEqual([
-      'ALPHA',
-      'BETA',
-      'OMIT',
-    ]);
-    expect(
-      Object.keys(
-        publicManifest.activities['hello-resources'].environmentVariables,
-      ),
-    ).toEqual(['ALPHA', 'BETA', 'OMIT']);
   });
 
   it('rejects legacy plain-object functions authoring fields', async () => {
@@ -343,6 +321,92 @@ describe('Wharfie app loader', () => {
     );
   });
 
+  it('rejects activity-level environment variables without exposing values', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wharfie-app-env-'));
+    const secret = 'activity-environment-secret-sentinel';
+
+    await fsp.writeFile(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ type: 'module' }),
+    );
+    await fsp.writeFile(
+      path.join(dir, 'wharfie.app.js'),
+      `
+        export default {
+          name: 'unsupported-environment-app',
+          activities: {
+            hello: {
+              entrypoint: { path: ${JSON.stringify(helloResourcesPath)} },
+              environmentVariables: { API_TOKEN: '${secret}' },
+            },
+          },
+        };
+      `,
+    );
+
+    const result = loadApp({ dir });
+    await expect(result).rejects.toThrow(
+      /activity 'hello'.*environmentVariables.*not supported/i,
+    );
+    await expect(result).rejects.not.toThrow(secret);
+  });
+
+  it('uses trimmed activity names and rejects normalization collisions', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-activity-name-normalization-'),
+    );
+    const collisionDir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-activity-name-collision-'),
+    );
+
+    try {
+      await fsp.writeFile(
+        path.join(dir, 'package.json'),
+        JSON.stringify({ type: 'module' }),
+      );
+      await fsp.writeFile(
+        path.join(collisionDir, 'package.json'),
+        JSON.stringify({ type: 'module' }),
+      );
+      await fsp.writeFile(
+        path.join(dir, 'wharfie.app.js'),
+        `export default {
+  name: 'activity-name-normalization',
+  activities: {
+    ' hello ': { entrypoint: { path: ${JSON.stringify(helloResourcesPath)} } },
+  },
+};
+`,
+      );
+
+      const loaded = await loadApp({ dir });
+      expect(Object.keys(loaded.publicManifest.activities || {})).toEqual([
+        'hello',
+      ]);
+
+      await fsp.writeFile(
+        path.join(collisionDir, 'wharfie.app.js'),
+        `export default {
+  name: 'activity-name-collision',
+  activities: {
+    hello: { entrypoint: { path: ${JSON.stringify(helloResourcesPath)} } },
+    ' hello ': { entrypoint: { path: ${JSON.stringify(helloResourcesPath)} } },
+  },
+};
+`,
+      );
+
+      await expect(loadApp({ dir: collisionDir })).rejects.toThrow(
+        /activity names must be unique after trimming/i,
+      );
+    } finally {
+      await Promise.all([
+        fsp.rm(dir, { recursive: true, force: true }),
+        fsp.rm(collisionDir, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
   it('loads an ActorSystem export and preserves function/workflow definitions in the manifest', async () => {
     const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'wharfie-app-'));
 
@@ -372,9 +436,6 @@ describe('Wharfie app loader', () => {
               },
               properties: {
                 external: ['lmdb'],
-                environmentVariables: {
-                  MODE: 'test',
-                },
                 resources: {
                   db: {
                     adapter: 'vanilla',
@@ -386,6 +447,10 @@ describe('Wharfie app loader', () => {
             }),
           ],
           properties: {
+            cli: {
+              entrypoint: './workflow-handler.js',
+              export: 'launchActorSystem',
+            },
             targets: [
               {
                 nodeVersion: () => '24',
@@ -433,11 +498,16 @@ describe('Wharfie app loader', () => {
     const { manifest } = await loadApp({ dir });
     expect(manifest).toEqual({
       app: { name: 'actor-system-app' },
+      cli: {
+        entrypoint: path.join(dir, 'workflow-handler.js'),
+        export: 'launchActorSystem',
+      },
       targets: [
         {
           nodeVersion: '24',
           platform: 'linux',
           architecture: 'x64',
+          libc: 'glibc',
         },
       ],
       capabilities: {
@@ -460,9 +530,6 @@ describe('Wharfie app loader', () => {
             export: 'helloResources',
           },
           external: [{ name: 'lmdb', version: expect.any(String) }],
-          environmentVariables: {
-            MODE: 'test',
-          },
           resources: {
             db: {
               adapter: 'vanilla',
@@ -539,7 +606,7 @@ describe('Wharfie app loader', () => {
 
     const filtered = await loadApp({
       dir,
-      requestedTargetSelectors: ['node24-linux-arm64'],
+      requestedTargetSelectors: ['node24-linux-arm64-glibc'],
     });
 
     expect(filtered.manifest.targets).toEqual([
@@ -547,6 +614,7 @@ describe('Wharfie app loader', () => {
         nodeVersion: '24',
         platform: 'linux',
         architecture: 'arm64',
+        libc: 'glibc',
       },
     ]);
     expect(filtered.appExport.get('targets')).toEqual([
@@ -554,6 +622,7 @@ describe('Wharfie app loader', () => {
         nodeVersion: '24',
         platform: 'linux',
         architecture: 'arm64',
+        libc: 'glibc',
       },
     ]);
   });

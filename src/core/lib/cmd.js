@@ -1,21 +1,57 @@
 import { spawn, execFile as _execFile, spawnSync } from 'node:child_process';
 
 /**
+ * @typedef RunCmdOptions
+ * @property {number[]} [sensitiveArgIndexes] - Argument positions to redact from rendered errors.
+ */
+
+/**
+ * Render a command for diagnostics without exposing marked argument values.
+ * @param {string} cmd - The command to execute.
+ * @param {string[]} args - Arguments for the command.
+ * @param {RunCmdOptions} [options] - Rendering options.
+ * @returns {string} - Safe command rendering.
+ */
+function formatCommandForError(cmd, args, options = {}) {
+  const sensitiveArgIndexes = new Set(options.sensitiveArgIndexes || []);
+  return [
+    cmd,
+    ...args.map((arg, index) =>
+      sensitiveArgIndexes.has(index) ? '[REDACTED]' : arg,
+    ),
+  ].join(' ');
+}
+
+/**
  * Run a shell command and throw on error.
  * @param {string} cmd - The command to execute.
  * @param {string[]} args - Arguments for the command.
+ * @param {RunCmdOptions} [options] - Command options.
  * @returns {Promise<void>} - Result.
  */
-async function runCmd(cmd, args) {
+async function runCmd(cmd, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, args, { stdio: 'inherit' });
+    /** @type {import('node:child_process').ChildProcess} */
+    let proc;
+    try {
+      proc = spawn(cmd, args, { stdio: 'inherit' });
+    } catch (err) {
+      const errorCode =
+        err && typeof err === 'object' && 'code' in err ? ` (${err.code})` : '';
+      reject(
+        new Error(
+          `Command failed to start: ${formatCommandForError(cmd, args, options)}${errorCode}`,
+        ),
+      );
+      return;
+    }
     proc.on('exit', (code, signal) => {
       if (code !== null) {
         if (code === 0) resolve();
         else
           reject(
             new Error(
-              `Command failed: ${cmd} ${args.join(' ')}, exit code ${code}`,
+              `Command failed: ${formatCommandForError(cmd, args, options)}, exit code ${code}`,
             ),
           );
       } else {
@@ -24,7 +60,32 @@ async function runCmd(cmd, args) {
     });
 
     proc.on('error', (err) => {
-      reject(err);
+      const errorCode =
+        err && typeof err === 'object' && 'code' in err ? ` (${err.code})` : '';
+      reject(
+        new Error(
+          `Command failed to start: ${formatCommandForError(cmd, args, options)}${errorCode}`,
+        ),
+      );
+    });
+  });
+}
+
+/**
+ * Run a command and capture its output.
+ * @param {string} filepath - The command to execute.
+ * @param {string[]} [args] - Arguments for the command.
+ * @param {import('node:child_process').ExecFileOptions} [options] - Process options.
+ * @returns {Promise<{ stdout: string, stderr: string }>} - Captured output.
+ */
+async function execFileOutput(filepath, args = [], options = {}) {
+  return new Promise((resolve, reject) => {
+    _execFile(filepath, args, options, (error, stdout, stderr) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve({ stdout: String(stdout), stderr: String(stderr) });
     });
   });
 }
@@ -68,4 +129,4 @@ async function execFile(filepath, args = [], options = {}, silent = false) {
   });
 }
 
-export { runCmd, execFile, spawnSync };
+export { runCmd, execFile, execFileOutput, spawnSync, formatCommandForError };

@@ -96,8 +96,10 @@ describe('src/core/lib/node-sea.js', () => {
         expect(result.status).toBe(0);
         expect(result.stderr).toBe('');
         expect(result.stdout).toContain('Usage: wharfie');
-        expect(result.stdout).toContain('build-self');
-        expect(result.stdout).toContain('init');
+        expect(result.stdout).toContain('app');
+        expect(result.stdout).toContain('ops');
+        expect(result.stdout).not.toContain('build-self');
+        expect(result.stdout).not.toContain('init');
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }

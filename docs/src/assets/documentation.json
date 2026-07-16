@@ -4,7 +4,7 @@
       "path": "home",
       "title": "Wharfie Documentation",
       "slug": "",
-      "description": "Wharfie is an experimental table-oriented data application framework built ontop of AWS Athena.",
+      "description": "Wharfie is an experimental local-first TypeScript runtime for portable, durable applications.",
       "created_at": 1738635590000,
       "updated_at": 1738635590000,
       "published_at": 1738635590000,
@@ -22,9 +22,9 @@
     },
     {
       "path": "installation",
-      "title": "Installation & Setup",
+      "title": "Installation",
       "slug": "/install",
-      "description": "How to install and configure wharfie",
+      "description": "How to run the current Wharfie source tree",
       "created_at": 1738635590000,
       "updated_at": 1738635590000,
       "published_at": 1738635590000,
@@ -32,9 +32,9 @@
     },
     {
       "path": "project-structure",
-      "title": "Project Structure",
+      "title": "Application Structure",
       "slug": "/project-structure",
-      "description": "How a wharfie project is structured",
+      "description": "How a Wharfie application is structured",
       "created_at": 1738635590000,
       "updated_at": 1738635590000,
       "published_at": 1738635590000,
@@ -48,7 +48,7 @@
       "isItalic": true
     },
     {
-      "label": "Installation & Setup",
+      "label": "Installation",
       "path": "/install"
     },
     {
@@ -56,7 +56,7 @@
       "path": "/quickstart"
     },
     {
-      "label": "Project Structure",
+      "label": "Application Structure",
       "path": "/project-structure"
     }
   ]

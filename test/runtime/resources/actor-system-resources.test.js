@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { SHARED_RESOURCE_REGISTRY_FILE_NAME } from '../../../src/core/runtime/shared-resource-registry.js';
 import Function from '../../../src/core/resources/builds/function.js';
 import ActorSystem from '../../../src/core/resources/builds/actor-system.js';
+import MacOSBinarySignature from '../../../src/core/resources/builds/macos-binary-signature.js';
+import SeaBuild from '../../../src/core/resources/builds/sea-build.js';
 import { createActorSystemResources } from '../../../src/core/runtime/resources.js';
 import sandboxWorker from '../../../src/core/lib/code-execution/worker.js';
 
@@ -188,6 +190,147 @@ describe('ActorSystem runtime resources', () => {
     expect(events).toEqual(
       expect.arrayContaining(['ActorSystem:runtime-config-system:STABLE']),
     );
+  });
+
+  it('keeps macOS signing credentials out of serialized and persisted resource state', async () => {
+    /** @type {string[]} */
+    const persistedResources = [];
+    const store = {
+      putResource: async (/** @type {ActorSystem} */ resource) => {
+        persistedResources.push(JSON.stringify(resource.serialize()));
+      },
+      putResourceStatus: async () => {},
+      getResource: async () => undefined,
+      getResourceStatus: async () => undefined,
+      getResources: async () => [],
+      deleteResource: async () => {},
+    };
+    const credentials = {
+      certificateBase64: 'ephemeral-certificate-data',
+      certificatePassword: 'ephemeral-certificate-password',
+      keychainPassword: 'ephemeral-keychain-password',
+    };
+
+    const system = new ActorSystem({
+      name: 'ephemeral-signing-system',
+      macosSigningCredentials: credentials,
+      stateDB: store,
+      properties: /** @type {any} */ ({
+        targets: [],
+        resources: {},
+        macosCertBase64: 'legacy-certificate-data',
+        macosCertPassword: 'legacy-certificate-password',
+        macosKeychainPassword: 'legacy-keychain-password',
+        macosSigningCredentials: {
+          certificatePassword: 'misplaced-credential-password',
+        },
+      }),
+    });
+
+    expect(system.getMacOSSigningCredentials()).toEqual(credentials);
+    expect(system.has('macosCertBase64')).toBe(false);
+    expect(system.has('macosCertPassword')).toBe(false);
+    expect(system.has('macosKeychainPassword')).toBe(false);
+    expect(system.has('macosSigningCredentials')).toBe(false);
+    const credentialSymbol = Object.getOwnPropertySymbols(system).find(
+      (symbol) => symbol.description === 'macosSigningCredentials',
+    );
+    if (!credentialSymbol) {
+      throw new Error('Expected a private macOS signing credential channel');
+    }
+    expect(
+      Object.getOwnPropertyDescriptor(system, credentialSymbol)?.enumerable,
+    ).toBe(false);
+
+    await system.save();
+
+    const serialized = JSON.stringify(system.serialize());
+    const persisted = persistedResources.join('\n');
+    for (const secret of [
+      ...Object.values(credentials),
+      'legacy-certificate-data',
+      'legacy-certificate-password',
+      'legacy-keychain-password',
+      'misplaced-credential-password',
+    ]) {
+      expect(serialized).not.toContain(secret);
+      expect(persisted).not.toContain(secret);
+    }
+  });
+
+  it('provides late signing credentials to existing macOS signature resources', () => {
+    const system = new ActorSystem({
+      name: 'late-signing-system',
+      properties: {
+        targets: [
+          {
+            nodeVersion: process.versions.node,
+            platform: 'darwin',
+            architecture: 'arm64',
+          },
+        ],
+        resources: {},
+      },
+    });
+    const signature = system
+      .getResources()
+      .find((resource) => resource instanceof MacOSBinarySignature);
+    if (!(signature instanceof MacOSBinarySignature)) {
+      throw new Error('Expected a macOS signature resource');
+    }
+
+    expect(signature.getMacOSSigningCredentials()).toEqual({
+      certificateBase64: '',
+      certificatePassword: '',
+      keychainPassword: '',
+    });
+
+    const credentials = {
+      certificateBase64: 'late-certificate-data',
+      certificatePassword: 'late-certificate-password',
+      keychainPassword: 'late-keychain-password',
+    };
+    system.setMacOSSigningCredentials(credentials);
+
+    expect(
+      system
+        .getResources()
+        .find((resource) => resource instanceof MacOSBinarySignature),
+    ).toBe(signature);
+    expect(signature.getMacOSSigningCredentials()).toEqual(credentials);
+    expect(JSON.stringify(signature.serialize())).not.toContain(
+      'late-certificate',
+    );
+  });
+
+  it('propagates canonical glibc identity to Linux SEA builds', () => {
+    const system = new ActorSystem({
+      name: 'linux-libc-system',
+      properties: {
+        targets: [
+          {
+            nodeVersion: process.versions.node,
+            platform: 'linux',
+            architecture: 'arm64',
+          },
+        ],
+        resources: {},
+      },
+    });
+    const build = system
+      .getResources()
+      .find((resource) => resource instanceof SeaBuild);
+
+    expect(system.get('targets')).toEqual([
+      {
+        nodeVersion: process.versions.node,
+        platform: 'linux',
+        architecture: 'arm64',
+        libc: 'glibc',
+      },
+    ]);
+    expect(build).toBeInstanceOf(SeaBuild);
+    expect(build?.get('libc')).toBe('glibc');
   });
 
   it('worker sandbox: context.resources proxies use an RPC bridge to host resources', async () => {

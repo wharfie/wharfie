@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import semver from 'semver';
 
 /**
  * @typedef ExternalDependencyInputObject
@@ -52,6 +53,24 @@ function normalizeExternalInput(external) {
   throw new TypeError(
     'External dependencies must be package names or { name, version? } objects',
   );
+}
+
+/**
+ * Portable activity bundles must identify registry packages by one immutable
+ * published version. Ranges, tags, URLs, and VCS specs make the same manifest
+ * resolve to different bytes over time.
+ * @param {string} packageName - Package name.
+ * @param {string} version - Requested version.
+ * @returns {string} - Canonical exact semantic version.
+ */
+function normalizeExactExternalVersion(packageName, version) {
+  const exactVersion = semver.valid(version.trim());
+  if (!exactVersion) {
+    throw new TypeError(
+      `External dependency '${packageName}' requires an exact semantic version; ranges, tags, URLs, and VCS specs are not supported.`,
+    );
+  }
+  return exactVersion;
 }
 
 /**
@@ -162,10 +181,17 @@ export function normalizeExternalDependencies(externals, entrypointPath) {
     if (normalized.version) {
       return {
         name: normalized.name,
-        version: normalized.version,
+        version: normalizeExactExternalVersion(
+          normalized.name,
+          normalized.version,
+        ),
       };
     }
-    return resolveInstalledExternal(normalized.name, resolvers);
+    const installed = resolveInstalledExternal(normalized.name, resolvers);
+    return {
+      name: installed.name,
+      version: normalizeExactExternalVersion(installed.name, installed.version),
+    };
   });
 }
 

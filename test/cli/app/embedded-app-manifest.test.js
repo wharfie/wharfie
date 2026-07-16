@@ -30,7 +30,7 @@ const embeddedManifest = {
     {
       name: 'start',
       entrypoint: {
-        path: '/artifact/functions/start.js',
+        path: 'wharfie:embedded/activity/start',
         export: 'start',
       },
     },
@@ -42,7 +42,7 @@ const embeddedRunnableManifest = {
   activities: {
     start: {
       entrypoint: {
-        path: '/artifact/functions/start.js',
+        path: 'wharfie:embedded/activity/start',
         export: 'start',
       },
     },
@@ -76,21 +76,21 @@ describe('embedded app manifest asset helpers', () => {
     );
   });
 
-  it('reads the embedded wharfie.app.js source from SEA assets', async () => {
-    const source = 'export default { name: "embedded-demo" };\n';
-
-    jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
-      isSea: () => true,
-      getAsset: async (/** @type {string} */ name) => {
-        expect(name).toBe('<WHARFIE_APP>/wharfie.app.js');
-        return Buffer.from(source, 'utf8');
-      },
-    }));
-
+  it('uses private temporary manifest files with explicit cleanup', async () => {
     const mod =
       await import('../../../src/core/resources/builds/lib/app-manifest-asset.js');
+    const asset = await mod.createEmbeddedAppManifestAsset(embeddedManifest);
 
-    await expect(mod.readEmbeddedAppSource()).resolves.toBe(source);
+    expect((await fsp.stat(path.dirname(asset.path))).mode & 0o777).toBe(0o700);
+    expect((await fsp.stat(asset.path)).mode & 0o777).toBe(0o600);
+    await expect(fsp.readFile(asset.path, 'utf8')).resolves.toContain(
+      'embedded-demo',
+    );
+
+    await asset.cleanup();
+    await expect(fsp.stat(asset.path)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   it('prints a provided manifest without requiring SEA assets', async () => {
@@ -111,7 +111,7 @@ describe('embedded app manifest asset helpers', () => {
     expect(JSON.parse(writes.join(''))).toEqual(embeddedManifest);
   });
 
-  it('prints the embedded manifest through ctl manifest', async () => {
+  it('prints the embedded manifest through the operator manifest command', async () => {
     jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
       isSea: () => true,
       getAsset: async () =>
@@ -153,10 +153,6 @@ describe('embedded app manifest asset helpers', () => {
         JSON.stringify(embeddedRunnableManifest),
       );
       seaAssets.set(
-        '<WHARFIE_APP>/wharfie.app.js',
-        'export default { name: "embedded-runnable-demo" };\n',
-      );
-      seaAssets.set(
         'start',
         JSON.stringify({
           codeBundle: brotliCompressSync(
@@ -184,6 +180,7 @@ describe('embedded app manifest asset helpers', () => {
       process.chdir(tmpDir);
 
       const { runLocalApp } = await import('../../../src/cli/app/local-app.js');
+      const { invokeActivity } = await import('../../../src/app.js');
       const { default: sandboxWorker } =
         await import('../../../src/core/lib/code-execution/worker.js');
 
@@ -200,6 +197,18 @@ describe('embedded app manifest asset helpers', () => {
           ok: true,
           who: 'embedded',
           requestId: 'req-1',
+        });
+
+        await expect(
+          invokeActivity('start', {
+            dir: tmpDir,
+            event: { who: 'immutable-embedded-revision' },
+            context: { requestId: 'req-2' },
+          }),
+        ).resolves.toEqual({
+          ok: true,
+          who: 'immutable-embedded-revision',
+          requestId: 'req-2',
         });
       } finally {
         process.chdir(previousCwd);

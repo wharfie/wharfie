@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createContext, runInContext } from 'node:vm';
 
 import Function from '../../../src/core/resources/builds/function.js';
 import FunctionResource from '../../../src/core/resources/builds/function-resource.js';
@@ -41,6 +42,57 @@ function readInstalledVersion(packageName) {
 }
 
 describe('Function configuration hard edges', () => {
+  it('rejects activity environment declarations at authoring and build boundaries', () => {
+    const secret = 'function-environment-secret-sentinel';
+    const entrypoint = { path: fileURLToPath(import.meta.url) };
+
+    for (const create of [
+      () =>
+        new Function({
+          name: 'unsupported-environment',
+          entrypoint,
+          properties: /** @type {any} */ ({
+            environmentVariables: { API_TOKEN: secret },
+          }),
+        }),
+      () =>
+        new FunctionResource({
+          name: 'unsupported-environment-resource',
+          properties: /** @type {any} */ ({
+            functionName: 'unsupported-environment',
+            entrypoint,
+            buildTarget: {
+              nodeVersion: process.versions.node,
+              platform: process.platform,
+              architecture: process.arch,
+            },
+            environmentVariables: { API_TOKEN: secret },
+          }),
+        }),
+    ]) {
+      let thrown;
+      try {
+        create();
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toEqual(expect.any(Error));
+      const message = thrown instanceof Error ? thrown.message : String(thrown);
+      expect(message).toMatch(
+        /activity 'unsupported-environment'.*environmentVariables.*not supported/i,
+      );
+      expect(message).not.toContain(secret);
+    }
+
+    const fn = new Function({
+      name: 'empty-environment',
+      entrypoint,
+      properties: /** @type {any} */ ({ environmentVariables: {} }),
+    });
+    expect(fn.properties).not.toHaveProperty('environmentVariables');
+  });
+
   it('supports function-scoped resources and auto-resolves bare externals', async () => {
     const tmp = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-function-config-'),
@@ -128,5 +180,51 @@ describe('Function configuration hard edges', () => {
     ]);
 
     await fsp.rm(tmp, { recursive: true, force: true });
+  });
+
+  it('quotes activity names and resolves non-identifier exports safely', async () => {
+    const tmp = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-function-entry-code-'),
+    );
+    const entryPath = path.join(tmp, 'handler.js');
+    const functionName = "activity'); globalThis.__wharfieInjected = true; //";
+    const runtimeGlobal = /** @type {any} */ ({ Symbol });
+
+    try {
+      await fsp.writeFile(
+        entryPath,
+        [
+          "const handler = () => 'safe-result';",
+          "export { handler as 'handler-name' };",
+        ].join('\n'),
+        'utf8',
+      );
+
+      const resource = new FunctionResource({
+        name: 'safe-entry-code',
+        properties: {
+          functionName,
+          entrypoint: { path: entryPath, export: 'handler-name' },
+          buildTarget: {
+            nodeVersion: process.versions.node,
+            platform: process.platform,
+            architecture: process.arch,
+          },
+        },
+      });
+
+      const code = await resource.esbuild();
+      const runtimeContext = createContext(runtimeGlobal);
+      runInContext(code, runtimeContext);
+      const registeredActivity = runInContext(
+        `globalThis[Symbol.for(${JSON.stringify(functionName)})]`,
+        runtimeContext,
+      );
+
+      expect(runtimeGlobal.__wharfieInjected).toBeUndefined();
+      expect(registeredActivity()).toBe('safe-result');
+    } finally {
+      await fsp.rm(tmp, { recursive: true, force: true });
+    }
   });
 });

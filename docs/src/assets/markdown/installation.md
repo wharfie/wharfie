@@ -1,31 +1,30 @@
-# Installation & Setup
+# Installation
 
-## Installation
-
-Wharfie is distributed as a single executable, you can download a specific release from the github releases
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/wharfie/wharfie/master/install.sh | bash
-```
-
-For Windows:
-
-```ps1
-iex (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wharfie/wharfie/master/install.ps1" -UseBasicParsing).Content
-```
-
-## Validate AWS credentials
+Wharfie is experimental and is not ready for production use. There is no
+release-ready binary installer during the project reset. Run the current code
+from a source checkout:
 
 ```bash
-aws sts get-caller-identity
+git clone https://github.com/wharfie/wharfie.git
+cd wharfie
+npm ci
+node ./bin/wharfie --help
 ```
 
-If that command returns a valid aws identity, you are ready to continue. For configuring the AWS CLI refer to its [docs](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html)
+Use the exact Node version declared in `package.json#engines` and the npm version
+declared in `package.json#packageManager`.
 
-## Configure Wharfie CLI
+Wharfie's builder currently runs through Node from a source checkout or a
+locally packed npm tarball. Registry publication is deliberately blocked until
+the abandoned v1 source and dependencies are deleted. Wharfie does not publish
+a standalone builder binary yet: the existing self-hosting prototype still
+depends on build-host modules that are not embedded. Generated application SEAs
+are the portable deliverable.
 
-```bash
-wharfie config
-```
+Local `app` and `ops` commands do not require cloud credentials or global
+Wharfie configuration. Provider-backed deployment is roadmap work. When it is
+introduced, applications will use the provider's normal credential chain to
+preview and create only the resources required by Wharfie capabilities;
+Wharfie will not become a general infrastructure-as-code system.
 
-You will need to select what AWS region to deploy wharfie in, as a rule of thumb running wharfie in the same region that your data is stored in will be cheaper, due to transfer costs. You will also need to select a wharfie deployment name which will be how you target what specific deployment you will use when running wharfie cli commands. For more information on deployments refer to the [project structure docs](./project-structure)
+See the [Quickstart](./quickstart) for the working local command surface.

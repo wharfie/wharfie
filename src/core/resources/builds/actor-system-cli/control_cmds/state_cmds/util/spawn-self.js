@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { isSea } from '../../../../../../lib/node-sea.js';
 
 /**
  * Determine how to spawn a new copy of the current CLI program.
@@ -11,6 +12,11 @@ import fs from 'node:fs';
  */
 export function getSelfSpawnCommand() {
   const cmd = process.execPath;
+
+  if (isSea()) {
+    return { cmd, prefixArgs: [] };
+  }
+
   const maybeScript = process.argv[1];
 
   if (

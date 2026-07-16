@@ -1,7 +1,6 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { jest } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,12 +42,12 @@ describe('CLI entrypoint', () => {
 
     expect(result.status).toBe(0);
     expect(output).toMatch(/Usage: wharfie/i);
-    expect(output).toMatch(/config/);
-    expect(output).toMatch(/init/);
     expect(output).toMatch(/app/);
     expect(output).toMatch(/ops/);
-    expect(output).toMatch(/list/);
-    expect(output).toMatch(/build-self/);
+    expect(output).not.toMatch(/build-self/);
+    expect(output).not.toMatch(/^\s+config\b/m);
+    expect(output).not.toMatch(/^\s+init\b/m);
+    expect(output).not.toMatch(/^\s+list\b/m);
     expect(output).not.toMatch(/^\s+deployment\b/m);
     expect(output).not.toMatch(/^\s+project\b/m);
     expect(output).not.toMatch(/^\s+utils\b/m);
@@ -62,108 +61,21 @@ describe('CLI entrypoint', () => {
     expect(output).toMatch(/Usage: wharfie/i);
   });
 
-  test('prints command help for config without crashing the ESM boot path', () => {
-    const result = runCli(['config', '--help']);
-    const output = collectOutput(result);
-
-    expect(result.status).toBe(0);
-    expect(output).toMatch(/Set up Wharfie configuration/i);
-  });
-
-  test('reports build-self as disabled under jest', () => {
-    const result = runCli(['build-self']);
-    const output = collectOutput(result);
-
-    expect(result.status).toBe(1);
-    expect(output).toMatch(/build-self is disabled under jest/i);
-  });
-
-  test('lets config run without pre-validating an existing Wharfie config', async () => {
-    const originalConfigDir = process.env.CONFIG_DIR;
-    const originalConfigFilePath = process.env.CONFIG_FILE_PATH;
-    const validate = jest.fn(async () => {});
-    const releaseChecker = jest.fn(async () => false);
-    const failureReporter = jest.fn();
-    let configActionRan = false;
-
-    try {
-      const program = createProgram({
-        argv: ['node', 'wharfie', 'config'],
-        fsModule: {
-          existsSync: () => false,
-          readFileSync: () => {
-            throw new Error('readFileSync should not be called for config');
-          },
-        },
-        pathsModule: {
-          config: '/tmp/wharfie-config',
-          createWharfiePaths: async () => {},
-        },
-        configHelpers: {
-          setConfig: jest.fn(),
-          setEnvironment: jest.fn(),
-          validate,
-        },
-        releaseChecker,
-        failureReporter,
-      });
-
-      const configCommand = program.commands.find(
-        (command) => command.name() === 'config',
-      );
-
-      if (!configCommand) {
-        throw new Error('Expected config command to be registered');
-      }
-
-      configCommand.action(async () => {
-        configActionRan = true;
-        expect(process.env.CONFIG_DIR).toBe('/tmp/wharfie-config');
-        expect(process.env.CONFIG_FILE_PATH).toBe(
-          '/tmp/wharfie-config/wharfie.config',
-        );
-      });
-
-      await program.parseAsync(['node', 'wharfie', 'config']);
-
-      expect(configActionRan).toBe(true);
-      expect(validate).not.toHaveBeenCalled();
-      expect(releaseChecker).not.toHaveBeenCalled();
-      expect(failureReporter).not.toHaveBeenCalled();
-    } finally {
-      if (originalConfigDir === undefined) {
-        delete process.env.CONFIG_DIR;
-      } else {
-        process.env.CONFIG_DIR = originalConfigDir;
-      }
-
-      if (originalConfigFilePath === undefined) {
-        delete process.env.CONFIG_FILE_PATH;
-      } else {
-        process.env.CONFIG_FILE_PATH = originalConfigFilePath;
-      }
-    }
-  });
-
   test('registers the supported top-level commands', () => {
     const program = createProgram();
 
     expect(program.commands.map((command) => command.name())).toEqual([
-      'config',
-      'list',
-      'ops',
       'app',
-      'build-self',
-      'init',
+      'ops',
     ]);
   });
 
   test('awaits async preAction work before parseAsync resolves', async () => {
     /** @type {string[]} */
     const order = [];
+    const originalConfigDir = process.env.CONFIG_DIR;
 
     const program = createProgram({
-      argv: ['node', 'wharfie', 'probe'],
       pathsModule: {
         config: path.join(process.cwd(), '.wharfie-test-config'),
         createWharfiePaths: async () => {
@@ -171,38 +83,29 @@ describe('CLI entrypoint', () => {
           order.push('paths');
         },
       },
-      configHelpers: {
-        setConfig: jest.fn(),
-        setEnvironment: jest.fn(),
-        validate: async () => {
-          await new Promise((resolve) => setTimeout(resolve, 5));
-          order.push('validate');
-        },
-      },
-      releaseChecker: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        order.push('release');
-        return false;
-      },
-      failureReporter: jest.fn(),
     });
 
     program.addCommand(
       new Command('probe').action(async () => {
+        expect(process.env.CONFIG_DIR).toBe(
+          path.join(process.cwd(), '.wharfie-test-config'),
+        );
         await new Promise((resolve) => setTimeout(resolve, 5));
         order.push('action');
       }),
     );
 
-    await program.parseAsync(['node', 'wharfie', 'probe']);
-    order.push('after-parse');
+    try {
+      await program.parseAsync(['node', 'wharfie', 'probe']);
+      order.push('after-parse');
 
-    expect(order).toEqual([
-      'paths',
-      'validate',
-      'release',
-      'action',
-      'after-parse',
-    ]);
+      expect(order).toEqual(['paths', 'action', 'after-parse']);
+    } finally {
+      if (originalConfigDir === undefined) {
+        delete process.env.CONFIG_DIR;
+      } else {
+        process.env.CONFIG_DIR = originalConfigDir;
+      }
+    }
   });
 });

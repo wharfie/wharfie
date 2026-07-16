@@ -5,11 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 
 import { packageLocalApp, stringifyJson } from '../../src/cli/app/local-app.js';
-import {
-  TEMPLATES_ASSET_BASE,
-  TEMPLATES_ASSET_MANIFEST_KEY,
-} from '../../src/cli/assets/extract-templates.js';
 import { displayFailure } from '../../src/cli/output/basic.js';
+import { assertSeaNodeVersionCompatible } from '../../src/core/resources/builds/lib/sea-node-version.js';
 
 const MODULE_PATH = fileURLToPath(import.meta.url);
 const MODULE_DIR = path.dirname(MODULE_PATH);
@@ -21,9 +18,7 @@ const MODULE_DIR = path.dirname(MODULE_PATH);
 function hasWharfieSources(rootDir) {
   return (
     fs.existsSync(path.join(rootDir, 'src', 'cli', 'entry.js')) &&
-    fs.existsSync(
-      path.join(rootDir, 'src', 'cli', 'project', 'project_structure_examples'),
-    )
+    fs.existsSync(path.join(rootDir, 'apps', 'wharfie-cli', 'wharfie.app.js'))
   );
 }
 
@@ -41,35 +36,37 @@ function resolveSourceRoot(startDir = process.cwd()) {
   if (hasWharfieSources(installedPackageRoot)) return installedPackageRoot;
 
   throw new Error(
-    `Unable to locate Wharfie package sources from ${startDir}. Expected src/cli/entry.js and init templates to exist.`,
+    `Unable to locate Wharfie package sources from ${startDir}. Expected src/cli/entry.js and apps/wharfie-cli/wharfie.app.js to exist.`,
   );
 }
 
 /**
- * Wharfie CLI self-host app built via the standard `wharfie app package` path.
+ * Unshipped Wharfie CLI self-hosting experiment built via the standard
+ * `wharfie app package` path. It is retained as design material, not as a
+ * supported standalone builder: build-host dependencies are not embedded yet.
  *
  * This module plays two roles:
  *  1) A v2 app spec (default export) so `wharfie app manifest apps/wharfie-cli` works.
  *  2) A local build driver when executed directly:
  *
- *     npm run build:wharfie-cli
+ *     node ./apps/wharfie-cli/wharfie.app.js
  *
- * Manual smoke test:
- *  1) npm run build:wharfie-cli
+ * Experimental manual smoke test (expected to expose remaining self-host gaps):
+ *  1) node ./apps/wharfie-cli/wharfie.app.js
  *  2) ./dist/wharfie-cli-node<version>-<platform>-<arch> --help
  *  3) ./dist/wharfie-cli-node<version>-<platform>-<arch> app manifest ./scratch/examples/actor-systems/kitchen-sink
  *  4) ./dist/wharfie-cli-node<version>-<platform>-<arch> app run start --dir ./scratch/examples/actor-systems/kitchen-sink --event '{"who":"smoke"}'
  */
 
 /**
- * build:wharfie-cli intentionally downloads Node.js distribution artifacts (via NodeBinary)
+ * The self-hosting prototype intentionally downloads Node.js distribution artifacts (via NodeBinary)
  * and postjects a SEA blob into the target node binary.
  *
  * Jest runs must never trigger that network/download path.
  */
 function assertNotUnderJest() {
   if (process.env.JEST_WORKER_ID) {
-    throw new Error('build:wharfie-cli is disabled under jest');
+    throw new Error('The self-hosting prototype is disabled under jest');
   }
 }
 
@@ -118,82 +115,6 @@ function findRepoRoot(startDir) {
 }
 
 /**
- * Recursively list files under a directory, returning POSIX-style relative paths.
- * @param {string} rootDir -
- * @returns {string[]} - Relative file paths with forward slashes.
- */
-function collectTemplateFiles(rootDir) {
-  /** @type {string[]} */
-  const out = [];
-
-  /**
-   * @param {string} absDir -
-   * @param {string} relDir -
-   */
-  function walk(absDir, relDir) {
-    const entries = fs.readdirSync(absDir, { withFileTypes: true });
-
-    for (const ent of entries) {
-      const absPath = path.join(absDir, ent.name);
-      const relPath = relDir ? `${relDir}/${ent.name}` : ent.name;
-
-      if (ent.isDirectory()) {
-        walk(absPath, relPath);
-      } else if (ent.isFile()) {
-        out.push(relPath);
-      }
-    }
-  }
-
-  walk(rootDir, '');
-  return out;
-}
-
-/**
- * Build a SEA asset map for the init templates (plus a manifest).
- * @param {string} repoRoot -
- * @param {string} outputDir -
- * @returns {Record<string, string>} -
- */
-function buildTemplateAssets(repoRoot, outputDir) {
-  const templatesDir = path.join(
-    repoRoot,
-    'src',
-    'cli',
-    'project',
-    'project_structure_examples',
-  );
-
-  if (!fs.existsSync(templatesDir)) {
-    throw new Error(`Templates directory not found: ${templatesDir}`);
-  }
-
-  const relFiles = collectTemplateFiles(templatesDir);
-  const manifest = {
-    baseKey: TEMPLATES_ASSET_BASE,
-    files: relFiles,
-  };
-
-  const manifestPath = path.join(
-    outputDir,
-    'wharfie-cli-templates.manifest.json',
-  );
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
-
-  /** @type {Record<string, string>} */
-  const assets = {
-    [TEMPLATES_ASSET_MANIFEST_KEY]: manifestPath,
-  };
-
-  for (const rel of relFiles) {
-    const key = `${TEMPLATES_ASSET_BASE}/${rel}`;
-    assets[key] = path.join(templatesDir, ...rel.split('/'));
-  }
-
-  return assets;
-}
-
-/**
  * @returns {string} - Result.
  */
 function resolveBuildNodeVersion() {
@@ -202,7 +123,7 @@ function resolveBuildNodeVersion() {
       ? process.env.WHARFIE_SELF_NODE_VERSION.trim()
       : '';
 
-  return value || '24';
+  return value || process.versions.node;
 }
 
 /**
@@ -257,12 +178,14 @@ function resolveDefaultOutputDir() {
 }
 
 /**
- * @param {{ platform: string, arch: string, nodeVersion: string, outputDir?: string }} options - options.
+ * @param {{ platform: string, arch: string, nodeVersion: string, outputDir?: string }} options - Options; nodeVersion must exactly match the running Node.js version.
  * @returns {Promise<import('../../src/cli/app/local-app.js').PackageLocalAppResult>} - Result.
  */
 export async function packageWharfieCli(options) {
+  const nodeVersion = assertSeaNodeVersionCompatible(options.nodeVersion);
+
   return await withBuildNodeVersion(
-    options.nodeVersion,
+    nodeVersion,
     async () =>
       await packageLocalApp({
         dir: MODULE_DIR,
@@ -272,7 +195,7 @@ export async function packageWharfieCli(options) {
   );
 }
 
-export default {
+const app = {
   name: 'wharfie-cli',
   cli: {
     entrypoint: path.join(resolveSourceRoot(), 'src', 'cli', 'entry.js'),
@@ -280,15 +203,19 @@ export default {
   },
   targets: createBuildTargets(resolveBuildNodeVersion()),
   packaging: {
-    actorSystemProperties: {
-      macosCertBase64: process.env.WHARFIE_MACOS_CERT_BASE64 || '',
-      macosCertPassword: process.env.WHARFIE_MACOS_CERT_PASSWORD || '',
-      macosKeychainPassword: process.env.WHARFIE_MACOS_KEYCHAIN_PASSWORD || '',
+    signing: {
+      macos: {
+        certificateBase64: process.env.WHARFIE_MACOS_CERT_BASE64 || '',
+        certificatePassword: process.env.WHARFIE_MACOS_CERT_PASSWORD || '',
+        keychainPassword: process.env.WHARFIE_MACOS_KEYCHAIN_PASSWORD || '',
+      },
     },
-    assets: ({ outputDir }) =>
-      buildTemplateAssets(resolveSourceRoot(), outputDir),
+    // Packaged init assets are intentionally omitted until the Milestone 2
+    // scaffold is defined; the v1 templates must not be embedded.
   },
 };
+
+export default app;
 
 /**
  * @returns {boolean} -
@@ -300,9 +227,9 @@ function isExecutedDirectly() {
 }
 
 if (isExecutedDirectly()) {
-  const cmd = new Command('build:wharfie-cli')
+  const cmd = new Command('wharfie-self-host-prototype')
     .description(
-      'Package the self-hosted Wharfie CLI app with the standard app packaging flow',
+      'Experimentally package the unshipped Wharfie CLI self-hosting prototype',
     )
     .option(
       '--platform <platform>',
@@ -312,7 +239,7 @@ if (isExecutedDirectly()) {
     .option('--arch <arch>', 'Target architecture (arm64|x64)', process.arch)
     .option(
       '--node-version <nodeVersion>',
-      'Node version prefix to embed (default: 24)',
+      'Exact target Node version; must match the running Node version',
       resolveBuildNodeVersion(),
     )
     .option(

@@ -6,11 +6,6 @@ on:
   pull_request:
     branches: ['master']
 
-env:
-  WHARFIE_REGION: us-west-2
-  WHARFIE_DEPLOYMENT_NAME: wharfie-testing
-  WHARFIE_ARTIFACT_BUCKET: utility-079185815456-us-west-2
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -21,11 +16,9 @@ jobs:
         with:
           node-version-file: 'package.json'
           cache: npm
+      - name: install pinned npm
+        run: npm install --global "$(node --print "require('./package.json').packageManager")"
       - run: npm ci
-      - run: npm run lint
-      - run: npm run test
-        env:
-          WHARFIE_ARTIFACT_BUCKET: service-bucket
-      - run: npm run typecheck
-      - name: build-self smoke
-        run: TZ=UTC node ./test/run-jest.js --silent --runInBand test/cli/cmds/build-self-disabled.test.js
+      - run: npm run test:ci
+      - name: verify packed install and real Linux SEA
+        run: npm run verify:package:sea

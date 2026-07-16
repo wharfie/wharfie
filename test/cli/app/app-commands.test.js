@@ -1,7 +1,14 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
@@ -39,11 +46,13 @@ const currentTarget = {
   nodeVersion: process.versions.node,
   platform: process.platform,
   architecture: process.arch,
+  ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
 };
 const alternateTarget = {
   nodeVersion: process.versions.node,
   platform: process.platform,
   architecture: process.arch === 'x64' ? 'arm64' : 'x64',
+  ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
 };
 
 /**
@@ -211,6 +220,41 @@ describe('wharfie app commands', () => {
     });
   });
 
+  it('refuses to print inline manifest secrets and never echoes the value', () => {
+    const dir = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-secret-manifest-command-'),
+    );
+    const secret = 'manifest-command-secret-sentinel';
+
+    try {
+      writeFileSync(
+        path.join(dir, 'package.json'),
+        JSON.stringify({ type: 'module' }),
+      );
+      writeFileSync(
+        path.join(dir, 'wharfie.app.js'),
+        `export default {
+  name: 'secret-manifest-demo',
+  resources: {
+    db: { adapter: 'vanilla', options: { dbPassword: '${secret}' } },
+  },
+};
+`,
+      );
+
+      const result = runCli(['app', 'manifest', dir, '--no-pretty']);
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).not.toContain(secret);
+      expect(result.stderr).toMatch(
+        /inline secret-like values.*inspectable manifest/i,
+      );
+      expect(result.stderr).not.toContain(secret);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('packages every app target when no target filter is provided and embeds a target-specific manifest asset', () => {
     const outputDir = path.join(
       os.tmpdir(),
@@ -279,16 +323,6 @@ describe('wharfie app commands', () => {
           targetSelectors: [getTargetSelector(alternateTarget)],
         },
       },
-      embeddedSourceByTarget: {
-        [getTargetSelector(currentTarget)]: {
-          assetName: '<WHARFIE_APP>/wharfie.app.js',
-          containsDefaultExport: true,
-        },
-        [getTargetSelector(alternateTarget)]: {
-          assetName: '<WHARFIE_APP>/wharfie.app.js',
-          containsDefaultExport: true,
-        },
-      },
     });
   });
 
@@ -341,12 +375,6 @@ describe('wharfie app commands', () => {
         [targetSelector]: {
           appName: 'package-demo',
           targetSelectors: [targetSelector],
-        },
-      },
-      embeddedSourceByTarget: {
-        [targetSelector]: {
-          assetName: '<WHARFIE_APP>/wharfie.app.js',
-          containsDefaultExport: true,
         },
       },
     });

@@ -55,7 +55,10 @@ describe('FunctionResource bundled externals', () => {
     const entryPath = path.join(tmpRoot, 'handler.js');
     const outputFile = path.join(tmpRoot, 'marker.txt');
     const functionName = 'bundled-native-externals';
+    /** @type {string | undefined} */
+    let externalsTmpDir;
     const installForTarget = jest.fn(async ({ tmpBuildDir, externals }) => {
+      externalsTmpDir = tmpBuildDir;
       expect(externals).toEqual([{ name: 'fake-native', version: '1.0.0' }]);
 
       const packageDir = path.join(tmpBuildDir, 'node_modules', 'fake-native');
@@ -158,7 +161,11 @@ describe('FunctionResource bundled externals', () => {
           tmpBuildDir: expect.any(String),
         }),
       );
+      await expect(fsp.stat(String(externalsTmpDir))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
     } finally {
+      await fsp.rm(resource.get('singleExecutableAssetPath'), { force: true });
       await fsp.rm(tmpRoot, { recursive: true, force: true });
     }
   });

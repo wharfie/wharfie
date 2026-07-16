@@ -1,5 +1,6 @@
 import { promises as fsp } from 'node:fs';
 
+import { assertNoActivityEnvironmentVariables } from '../../lib/activity-environment.js';
 import { readEmbeddedAppManifest } from '../../lib/app-manifest-asset.js';
 
 /**
@@ -145,7 +146,22 @@ export function getManifestResources(manifest) {
  */
 export function getManifestActivities(manifest) {
   if (isObjectRecord(manifest?.activities)) {
-    return manifest.activities;
+    return Object.keys(manifest.activities).reduce((acc, name) => {
+      const definition = manifest.activities[name];
+      if (!isObjectRecord(definition)) {
+        acc[name] = definition;
+        return acc;
+      }
+
+      assertNoActivityEnvironmentVariables(
+        definition.environmentVariables,
+        name,
+      );
+      const normalized = { ...definition };
+      delete normalized.environmentVariables;
+      acc[name] = normalized;
+      return acc;
+    }, /** @type {Record<string, any>} */ ({}));
   }
 
   const functions = Array.isArray(manifest?.functions)
@@ -161,13 +177,14 @@ export function getManifestActivities(manifest) {
         return acc;
       }
 
+      assertNoActivityEnvironmentVariables(
+        definition.environmentVariables,
+        definition.name,
+      );
       acc[definition.name] = {
         entrypoint: definition.entrypoint,
         ...(Array.isArray(definition.external)
           ? { external: definition.external }
-          : {}),
-        ...(isObjectRecord(definition.environmentVariables)
-          ? { environmentVariables: definition.environmentVariables }
           : {}),
         ...(isObjectRecord(definition.resources)
           ? { resources: definition.resources }
@@ -239,10 +256,6 @@ export function getManifestAppName(manifest) {
  * @returns {any[]} - Result.
  */
 export function getManifestFunctions(manifest) {
-  if (Array.isArray(manifest?.functions)) {
-    return manifest.functions;
-  }
-
   const activities = getManifestActivities(manifest);
   return Object.keys(activities)
     .sort((left, right) => left.localeCompare(right))

@@ -33,7 +33,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 ### Repository and tracker
 
-- [ ] Classify every non-default branch and open PR as absorb, supersede, or delete; link each decision to its archive tag.
+- [x] Classify every non-default branch and open PR as absorb, supersede, or delete; link each decision to its archive tag.
 - [ ] Reconcile the three unpublished local `master` commits and `jvd/pr4` against the new charter.
 - [ ] Close stale PRs with a short preservation and supersession note.
 - [ ] Classify every open issue as roadmap work, useful research, or obsolete; label/milestone the first two and close the rest.
@@ -42,10 +42,11 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 ### Codebase
 
 - [ ] Delete the v1 Athena/table application, legacy-only tests, documentation, dependencies, and compatibility paths.
+- [x] Block npm publication explicitly until the v1 source and dependency gate is clean.
 - [ ] Choose one manifest compiler and one persisted-run implementation; delete the alternatives.
-- [ ] Make package metadata, version reporting, license metadata, tarball contents, release commands, environment names, and artifact names agree.
+- [x] Make package metadata, version reporting, license metadata, tarball contents, release commands, environment names, and artifact names agree.
 - [ ] Update direct dependencies, resolve the current production audit findings, and add an appropriate audit gate.
-- [ ] Expand CI to validate the package tarball, build a real SEA artifact, and smoke-test `--help` and `--version` on a clean target.
+- [x] Expand CI to validate the package tarball, build a real generated-app SEA, invoke its activity and embedded operator manifest from a clean directory, and prove Node is unavailable on `PATH`.
 - [ ] Make the remaining test, type-check, and lint exclusions explicit and temporary or remove them.
 
 **Exit:** the README, shipped package, release workflow, CI, current source, and GitHub tracker all describe the same v2 product; no Athena/v1 surface remains.
@@ -58,9 +59,11 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 - [ ] Define schemas and stable identifiers for applications, immutable logical revisions, target-specific artifacts, activities, and deployment profiles.
 - [ ] Preserve normal argv, stdio, exit codes, and CLI-library choice in local and packaged execution.
 - [ ] Package one content-addressed SEA executable for a clean Linux target and record its locked inputs and provenance; reproducible builds are a later hardening goal.
-- [ ] Define a reserved, non-colliding dispatch mechanism for Wharfie operator commands inside an application-owned executable.
+- [x] Define a reserved, non-colliding dispatch mechanism for Wharfie operator commands inside an application-owned executable: `<app> wharfie <command>`.
 - [ ] Define the versioned activity protocol and test its serialization, cancellation, deadline, log, error, and host-effect boundaries without requiring a second language implementation yet.
-- [ ] Build one executable example and an end-to-end test from source to clean-machine execution.
+- [x] Build one executable example and an end-to-end test from authored TypeScript through a clean generated-SEA execution.
+- [ ] Prove one real target-specific Node-API activity dependency from a moved SEA; do not treat text fixtures with a `.node` suffix as native-addon evidence.
+- [ ] Add signed Windows and Developer-ID-signed, notarized macOS release targets after the Linux release path is stable.
 
 **Exit:** a TypeScript CLI runs locally, produces a content-addressed artifact, and runs on a clean machine without a preinstalled Node runtime.
 

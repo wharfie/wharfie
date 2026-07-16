@@ -2,83 +2,72 @@
 
 ## What is Wharfie?
 
-Wharfie is a general purpose utility for doing ETL in AWS
+Wharfie is an experimental, local-first TypeScript application runtime. It aims
+to turn an ordinary CLI into a portable executable and then promote the same
+application to a durable, observable service across trusted machines.
 
-## What type of things that you can do with it
+The deeper motivation is continuity: software created in a coding session
+should be able to keep carrying out its operator-approved behavior after the
+session or laptop is gone, while leaving enough durable history to understand
+and evolve it later.
 
-- Register structured and unstructured data as new tables
-  - **Supported compression formats:** gzip, bzip2, lzo, zlib, snappy.
-  - **Supported structured data formats:** csv, tsv, json, avro, orc, parquet
-  - **Unstructured text data** (like logs) can also be registered by using Athena’s Regex Serde or Grok Serde.
-- Create a dbt-like model, or put differently, making a table by querying existing tables, sometimes called a materialized view by tools like PostgreSQL.
-- Build data pipelines by chaining together multiple Wharfie Models
-- Ingest new data as its delivered in S3
-- Make changes to existing tables without worrying about complex migrations
+## What works today?
 
-## Why should I be interested in using Wharfie?
+The shipped CLI exposes two top-level commands: `wharfie app` and `wharfie ops`.
+The repository contains working foundations for loading manifests, invoking
+activities locally, persisting local operations, and packaging target-specific
+Node SEA executables. A standalone Wharfie builder binary is withheld until its
+build-host dependencies can be embedded. It is not production ready.
 
-1. The shipped CLI gives you fast local entry points for onboarding and inspection through `wharfie config`, `wharfie init`, `wharfie app`, `wharfie ops`, `wharfie list`, and `wharfie build-self`.
-2. Wharfie is "serverless", you won’t have to own or maintain any processing and orchestration infrastructure and have an oncall rotation to ensure uptime.
-3. Wharfie allows you to evolve your schemas and data models without having to worry about complex migrations or breaking tables.
+## Is this the old Athena and table framework?
 
-## How does it work?
+No. Wharfie v1 is abandoned. Its Athena, table, source, model, and ETL APIs are
+not part of the current product, and no backward compatibility is promised.
 
-Wharfie is built ontop of AWS Lambda/SQS/DynamoDB/S3/Athena. By observing change events from S3, Wharfie is able to automatically update and maintain Source datasets as new data is delivered, and refresh models who depend on those sources by understanding the dependencies required by them.
+## Is Wharfie a general cloud infrastructure-as-code tool?
 
-## What’s the interface?
+No. The planned deployment model lets a Wharfie application use a provider's
+normal credential chain to preview and create the finite substrate required by
+Wharfie capabilities, such as a node, durable control state, or artifact
+storage. Provider-native application infrastructure remains application code or
+external IaC.
 
-Wharfie uses an opinionated project file structure and organizes itself around the concept of Sources And Models
+## Does Wharfie require a hosted control plane?
 
-Sources describe existing data on S3
+No. Local and single-node operation should not require an external Wharfie
+service. Automatic coordinator replacement in a future multi-node deployment
+will initially require a provider-backed linearizable durable store.
 
-Models describe mataterialized views, or sql queries that create new data on s3 by querying other Models and Sources.
+## What does “mesh” mean here?
 
-For more information see **[Project](./docs/project.md)**
+A Wharfie mesh is a small set of explicitly enrolled, mutually trusted nodes.
+It is not a trustless, Byzantine, or internet-scale peer-to-peer network. The
+multi-node mesh is roadmap work, not part of the current product proof.
 
-## Do I need to install an NPM package to use this?
+## Does Wharfie guarantee exactly-once execution?
 
-Yes, currently the wharfie CLI is distributed as an NPM package and needs to be installed globally with `npm install -g @wharfie/wharfie`
+It cannot honestly guarantee that arbitrary user code physically executes only
+once. Durable work can use at-least-once dispatch while fencing which attempt
+may commit Wharfie-managed state. An external exactly-once claim is possible
+only when a managed effect adapter and its destination atomically enforce a
+stable effect identity. Ambiguous unmanaged effects must be exposed for
+reconciliation instead of silently retried.
 
-## Can I load data from anywhere on S3?
+## Which languages are supported?
 
-Yes.
+TypeScript and Node are the initial authoring and orchestration model. The
+intended activity boundary leaves room for target-specific Node-API
+dependencies, WASI/WASM, or persistent subprocess workers later, but only the
+pure TypeScript path has a clean generated-SEA release proof today. Wharfie is
+not a general multi-language build system.
 
-## Can I write data to anywhere on S3?
+## Do target machines need Node installed?
 
-Yes.
+Not for packaged applications. Wharfie currently uses Node SEA to produce one
+executable for each selected platform and architecture. Authors still use Node
+and the repository's pinned toolchain while developing and packaging.
 
-## How is S3 access control managed?
+## Where is the canonical scope?
 
-Wharfie manages this automatically with tightly scoped IAM roles set to the specific locations defined for Wharfie Sources and Models
-
-## How does Wharfie automatically partition my data?
-
-Wharfie will partition data based on whatever schema you've defined for your `partitions` config. If `partitions` is omitted or empty the table wont be partitioned. Your partitions must match with the raw data on s3, Wharfie will not repartition raw data for you.
-
-If you need to do repartitioning you'll need to define a Wharfie Model that queries your unpartitioned Sources/Models and writes the data to a new location with the desired partitioning.
-
-## How does scheduling work?
-
-Instead of scheduling, you define **Service Level Agreements** for your data. Wharfie will ensure that your data is processed according to the SLA you've defined.
-
-## Are there any filesize, data format and compression format restrictions for raw data?
-
-Wharfie supports ingesting any files of any size, though many very small files (>10000) or very large file sizes (>100gb) will slow down ETL. Wharfie supports any data format and compression format supported by athena.
-
-Docs: https://docs.aws.amazon.com/athena/latest/ug/supported-serdes.html
-
-## Are there any limitations?
-
-- datasets cannot have rows that exceeded 32mb when compressed
-
-## How much does it cost?
-
-ETL costs are significantly impacted by **Service Level Agreement** configuration, but can run as low as 5\$ per TB. Costs can increase substantially depending on the freshness SLA and partitioning scheme of the dataset, rewriting the entire table on a frequent schedule can become expensive.
-
-## How do schema updates work?
-
-When making a schema change wharfie will do a zero-downtime swap of the old schema resource with an updated and backfilled resource, depending on the size of the table this backfill can take a while to run, and will block downstream updates to be applied.
-
-## My raw dataset is very large and stored in the same S3 path?
-
-Many AWS service log datasets are delivered as objects in the same S3 path (e.g. ALB logs, CloudFront logs, CloudTrail). The amount of data in these paths can make running Wharfie very expensive. For these datasets, you may want to want to configure an S3 object lifecycle rule to either delete them or move into AWS Glacier after a certain amount of time. Wharfie ignores any s3 objects stored in Glacier. Setting up a S3 lifecycle rule in coordination with wharfie's SLA configuration provides a robust mechanism for cost effectively storing and processing large flat datasets, like certain types of AWS access logs. Without setting up some type of s3 lifecycle rule the cost of Wharfie processing will steadily grow unbounded.
+Read the [project charter](../PROJECT.md) for the public concepts, boundaries,
+and semantics, then the [roadmap](../ROADMAP.md) for the delivery sequence.

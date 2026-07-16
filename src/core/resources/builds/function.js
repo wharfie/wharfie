@@ -4,6 +4,7 @@ import { brotliDecompressSync } from 'node:zlib';
 
 import worker from '../../lib/code-execution/worker.js';
 import { createActorSystemResources } from '../../runtime/resources.js';
+import { assertNoActivityEnvironmentVariables } from './lib/activity-environment.js';
 import { normalizeExternalDependencies } from './lib/resolve-externals.js';
 
 /**
@@ -21,7 +22,6 @@ import { normalizeExternalDependencies } from './lib/resolve-externals.js';
 /**
  * @typedef FunctionProperties
  * @property {(string | ExternalDependencyInput)[]} [external] - external.
- * @property {Object<string,string>} [environmentVariables] - environmentVariables.
  * @property {Record<string, any>} [resources] - Function-scoped runtime resources or specs.
  */
 
@@ -114,7 +114,12 @@ class Function {
     if (!name) {
       throw new Error('Function expects a name as an argument');
     }
-    const { external, environmentVariables, resources } = properties;
+    const untypedProperties = /** @type {Record<string, any>} */ (properties);
+    assertNoActivityEnvironmentVariables(
+      untypedProperties.environmentVariables,
+      name,
+    );
+    const { external, resources } = properties;
     const normalizedExternal = normalizeExternalDependencies(
       external,
       entrypoint?.path,
@@ -123,7 +128,6 @@ class Function {
     this.entrypoint = entrypoint;
     this.properties = {
       ...(normalizedExternal ? { external: normalizedExternal } : {}),
-      ...(environmentVariables ? { environmentVariables } : {}),
       ...(resources ? { resources } : {}),
     };
     /** @type {Promise<{ resources: Record<string, any>, close: () => Promise<void> }> | null} */
@@ -236,6 +240,7 @@ class Function {
       typeof externalsTarB64 === 'string' && externalsTarB64.length > 0
         ? Buffer.from(externalsTarB64, 'base64')
         : null;
+    const externalBundleDigest = worker.getExternalBundleDigest(externalsTar);
 
     const split = splitContextForWorker(context);
     const safeContext = split.safeContext;
@@ -267,16 +272,24 @@ class Function {
         [event, safeContext],
         {
           ...(externalsTar && externalsTar.length > 0 ? { externalsTar } : {}),
+          externalBundleDigest,
           rpc: hasAnyResources(rpcResources)
             ? { resources: rpcResources, contextIndex: 1 }
             : undefined,
         },
       );
     } finally {
-      if (scopedResources) {
-        await scopedResources.close();
+      try {
+        if (scopedResources) {
+          await scopedResources.close();
+        }
+      } finally {
+        await worker._destroyWorker(
+          name,
+          functionCodeString,
+          externalBundleDigest,
+        );
       }
-      await worker._destroyWorker();
     }
   }
 

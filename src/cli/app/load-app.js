@@ -6,6 +6,8 @@ import Action from '../../core/lib/graph/action.js';
 import Operation from '../../core/lib/graph/operation.js';
 import ActorSystem from '../../core/resources/builds/actor-system.js';
 import WharfieFunction from '../../core/resources/builds/function.js';
+import { assertNoActivityEnvironmentVariables } from '../../core/resources/builds/lib/activity-environment.js';
+import { assertManifestIsSecretFree } from '../../core/resources/builds/lib/manifest-security.js';
 import { normalizeExternalDependencies } from '../../core/resources/builds/lib/resolve-externals.js';
 
 /**
@@ -30,7 +32,6 @@ import { normalizeExternalDependencies } from '../../core/resources/builds/lib/r
  * @property {string} name - name.
  * @property {ManifestFunctionEntrypoint} entrypoint - entrypoint.
  * @property {{ name: string, version: string }[]} [external] - external.
- * @property {Record<string, string>} [environmentVariables] - environmentVariables.
  * @property {CapabilitySpecs} [resources] - Function-scoped resources.
  */
 
@@ -38,7 +39,6 @@ import { normalizeExternalDependencies } from '../../core/resources/builds/lib/r
  * @typedef ManifestActivityDefinition
  * @property {ManifestFunctionEntrypoint} entrypoint - entrypoint.
  * @property {{ name: string, version: string }[]} [external] - external.
- * @property {Record<string, string>} [environmentVariables] - environmentVariables.
  * @property {CapabilitySpecs} [resources] - Activity-scoped resources.
  */
 
@@ -103,7 +103,7 @@ import { normalizeExternalDependencies } from '../../core/resources/builds/lib/r
 /**
  * @typedef WharfieAppManifest
  * @property {{ name: string }} app - App metadata.
- * @property {{ entrypoint: string }} [cli] - cli.
+ * @property {{ entrypoint: string, export?: string }} [cli] - cli.
  * @property {Array<{ nodeVersion: string, platform: string, architecture: string, libc?: string }>} [targets] - Build targets, if provided.
  * @property {CapabilitySpecs} [capabilities] - Runtime capability specs (db/queue/objectStorage), if discoverable.
  * @property {CapabilitySpecs} [resources] - Alias for `capabilities` (kept for compatibility with existing ActorSystem terminology).
@@ -115,7 +115,7 @@ import { normalizeExternalDependencies } from '../../core/resources/builds/lib/r
 /**
  * @typedef WharfiePublicAppManifest
  * @property {{ name: string }} app - App metadata.
- * @property {{ entrypoint: string }} [cli] - cli.
+ * @property {{ entrypoint: string, export?: string }} [cli] - cli.
  * @property {Array<{ nodeVersion: string, platform: string, architecture: string, libc?: string }>} [targets] - Build targets, if provided.
  * @property {CapabilitySpecs} [resources] - Runtime resource specs.
  * @property {Record<string, ManifestActivityDefinition>} [activities] - Activity definitions.
@@ -177,33 +177,6 @@ function jsonSafeClone(value) {
   }
 
   return value;
-}
-
-/**
- * @param {unknown} value - value.
- * @returns {Record<string, string> | undefined} - Result.
- */
-function normalizeEnvironmentVariables(value) {
-  if (!isPlainObject(value)) return undefined;
-
-  const normalized = Object.keys(value)
-    .sort((left, right) => left.localeCompare(right))
-    .reduce((acc, key) => {
-      const candidate = value[key];
-      if (
-        candidate === null ||
-        typeof candidate === 'undefined' ||
-        typeof candidate === 'function' ||
-        typeof candidate === 'symbol' ||
-        (typeof candidate === 'object' && candidate !== null)
-      ) {
-        return acc;
-      }
-      acc[key] = String(candidate);
-      return acc;
-    }, /** @type {Record<string, string>} */ ({}));
-
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 /**
@@ -382,6 +355,11 @@ function serializeFunctionDefinition(func, appDir, nameHint) {
   if (!inferredName) return undefined;
 
   const properties = isPlainObject(func.properties) ? func.properties : {};
+  assertNoActivityEnvironmentVariables(
+    properties.environmentVariables,
+    inferredName,
+  );
+  assertNoActivityEnvironmentVariables(func.environmentVariables, inferredName);
   const entrypoint = normalizeEntrypoint(
     isPlainObject(func.entrypoint)
       ? func.entrypoint
@@ -400,9 +378,6 @@ function serializeFunctionDefinition(func, appDir, nameHint) {
     externalInput,
     entrypoint.path,
   );
-  const environmentVariables = normalizeEnvironmentVariables(
-    properties.environmentVariables ?? func.environmentVariables,
-  );
   const resources = pickCapabilitySpecs(properties.resources ?? func.resources);
 
   const normalized = /** @type {ManifestFunctionDefinition} */ ({
@@ -412,9 +387,6 @@ function serializeFunctionDefinition(func, appDir, nameHint) {
 
   if (Array.isArray(external) && external.length > 0) {
     normalized.external = external;
-  }
-  if (environmentVariables) {
-    normalized.environmentVariables = environmentVariables;
   }
   if (resources) {
     normalized.resources = resources;
@@ -432,9 +404,6 @@ function toActivityDefinition(definition) {
     entrypoint: definition.entrypoint,
     ...(Array.isArray(definition.external) && definition.external.length > 0
       ? { external: definition.external }
-      : {}),
-    ...(definition.environmentVariables
-      ? { environmentVariables: definition.environmentVariables }
       : {}),
     ...(definition.resources ? { resources: definition.resources } : {}),
   };
@@ -516,11 +485,25 @@ function normalizeFunctions(functions, appDir) {
  * @returns {Record<string, ManifestActivityDefinition> | undefined} - Result.
  */
 function normalizeActivities(activities, appDir) {
+  /**
+   * @param {Record<string, ManifestActivityDefinition>} target - target.
+   * @param {ManifestFunctionDefinition} serialized - serialized.
+   * @returns {void}
+   */
+  function addActivity(target, serialized) {
+    if (Object.prototype.hasOwnProperty.call(target, serialized.name)) {
+      throw new Error(
+        `Activity names must be unique after trimming: '${serialized.name}'.`,
+      );
+    }
+    target[serialized.name] = toActivityDefinition(serialized);
+  }
+
   if (Array.isArray(activities)) {
     const normalized = activities.reduce((acc, activity) => {
       const serialized = serializeFunctionDefinition(activity, appDir);
       if (serialized) {
-        acc[serialized.name] = toActivityDefinition(serialized);
+        addActivity(acc, serialized);
       }
       return acc;
     }, /** @type {Record<string, ManifestActivityDefinition>} */ ({}));
@@ -540,7 +523,7 @@ function normalizeActivities(activities, appDir) {
         key,
       );
       if (serialized) {
-        acc[key] = toActivityDefinition(serialized);
+        addActivity(acc, serialized);
       }
       return acc;
     }, /** @type {Record<string, ManifestActivityDefinition>} */ ({}));
@@ -898,10 +881,17 @@ function compileActorSystemManifests(appExport, appDir) {
     appExport.get('cli', {})?.entrypoint,
     appExport.properties?.cli?.entrypoint,
   ]);
+  const cliExportName = firstStringCandidate([
+    appExport.get('cli', {})?.export,
+    appExport.properties?.cli?.export,
+  ]);
 
   const manifest = /** @type {WharfieAppManifest} */ ({ app: { name } });
   if (cliEntrypoint) {
-    manifest.cli = { entrypoint: path.resolve(appDir, cliEntrypoint) };
+    manifest.cli = {
+      entrypoint: path.resolve(appDir, cliEntrypoint),
+      ...(cliExportName ? { export: cliExportName } : {}),
+    };
   }
   if (targets) {
     manifest.targets = targets;
@@ -1019,6 +1009,12 @@ function compilePlainObjectManifests(appExport, appDir) {
     appExport.app?.cli?.entrypoint,
     appExport.app?.properties?.cli?.entrypoint,
   ]);
+  const cliExportName = firstStringCandidate([
+    appExport.cli?.export,
+    appExport.properties?.cli?.export,
+    appExport.app?.cli?.export,
+    appExport.app?.properties?.cli?.export,
+  ]);
   const activities = normalizeActivities(
     firstObjectCandidate([
       appExport.activities,
@@ -1074,7 +1070,10 @@ function compilePlainObjectManifests(appExport, appDir) {
 
   const manifest = /** @type {WharfieAppManifest} */ ({ app: { name } });
   if (cliEntrypoint) {
-    manifest.cli = { entrypoint: path.resolve(appDir, cliEntrypoint) };
+    manifest.cli = {
+      entrypoint: path.resolve(appDir, cliEntrypoint),
+      ...(cliExportName ? { export: cliExportName } : {}),
+    };
   }
   if (targets) {
     manifest.targets = targets;
@@ -1099,7 +1098,10 @@ function compilePlainObjectManifests(appExport, appDir) {
     app: { name },
   });
   if (cliEntrypoint) {
-    publicManifest.cli = { entrypoint: path.resolve(appDir, cliEntrypoint) };
+    publicManifest.cli = {
+      entrypoint: path.resolve(appDir, cliEntrypoint),
+      ...(cliExportName ? { export: cliExportName } : {}),
+    };
   }
   if (targets) {
     publicManifest.targets = targets;
@@ -1200,6 +1202,8 @@ export async function loadApp(options = {}) {
   const { manifest, publicManifest } = compileManifests(appExport, {
     appDir: dir,
   });
+  assertManifestIsSecretFree(manifest);
+  assertManifestIsSecretFree(publicManifest, 'publicManifest');
   return { appExport, manifest, publicManifest };
 }
 

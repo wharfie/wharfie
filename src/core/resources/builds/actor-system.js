@@ -4,7 +4,11 @@ import BuildResource from './build-resource.js';
 import FunctionResource from './function-resource.js';
 import SeaBuild from './sea-build.js';
 import MacOSBinarySignature from './macos-binary-signature.js';
-import cli from './actor-system-cli/index.js';
+import {
+  getMacOSSigningCredentials,
+  setMacOSSigningCredentials,
+} from './lib/macos-signing-credentials.js';
+import operatorCli from './actor-system-cli/index.js';
 import { createActorSystemResources } from '../../runtime/resources.js';
 import { withResourceScope } from '../resource-scope.js';
 import { createResourceScope } from '../runtime-config.js';
@@ -55,7 +59,7 @@ const actorSystemDir =
  * @property {ActorSystemResourcesSpec} [resources] - resources.
  * @property {import('./function.js').default[]} [functions] - functions.
  * @property {any[]} [workflows] - Serializable workflow definitions.
- * @property {{ entrypoint: string }} [cli] - CLI entrypoint config.
+ * @property {{ entrypoint: string, export?: string }} [cli] - CLI entrypoint config.
  */
 
 /**
@@ -98,15 +102,24 @@ function resolveBuildTarget(target) {
     return null;
   }
 
+  const normalizedPlatform = String(platformValue).trim().toLowerCase();
+  const normalizedArchitecture = String(architectureValue).trim().toLowerCase();
+
   /** @type {ResolvedBuildTarget} */
   const resolved = {
-    nodeVersion: String(nodeVersionValue),
-    platform: /** @type {TargetPlatform} */ (String(platformValue)),
-    architecture: /** @type {TargetArch} */ (String(architectureValue)),
+    nodeVersion: String(nodeVersionValue).trim().replace(/^v/, ''),
+    platform: /** @type {TargetPlatform} */ (normalizedPlatform),
+    architecture: /** @type {TargetArch} */ (normalizedArchitecture),
   };
 
-  if (libcValue) {
-    resolved.libc = /** @type {TargetLibc} */ (String(libcValue));
+  if (normalizedPlatform === 'linux') {
+    resolved.libc = /** @type {TargetLibc} */ (
+      libcValue ? String(libcValue).trim().toLowerCase() : 'glibc'
+    );
+  } else if (libcValue) {
+    resolved.libc = /** @type {TargetLibc} */ (
+      String(libcValue).trim().toLowerCase()
+    );
   }
 
   return resolved;
@@ -164,6 +177,7 @@ function resolveNodeBinaryVersion(nodeBinary, configuredVersion) {
  * @typedef WharfieActorSystemOptions
  * @property {string} name - name.
  * @property {import('./function.js').default[]} [functions] - functions.
+ * @property {{ certificateBase64?: string, certificatePassword?: string, keychainPassword?: string }} [macosSigningCredentials] - Ephemeral macOS signing credentials.
  * @property {string} [parent] - parent.
  * @property {import('../reconcilable.js').default.Status} [status] - status.
  * @property {WharfieActorSystemProperties & import('../../actors/typedefs.js').SharedProperties} properties - properties.
@@ -186,17 +200,23 @@ class ActorSystem extends BuildResourceGroup {
     resources,
     dependsOn,
     functions = [],
+    macosSigningCredentials,
     stateDB,
     emitter,
     runtime,
   }) {
-    const propertiesWithDefaults = Object.assign(
-      {},
-      ActorSystem.DefaultProperties,
-      properties,
+    const propertiesWithDefaults = /** @type {Record<string, any>} */ (
+      Object.assign({}, ActorSystem.DefaultProperties, properties)
     );
+    delete propertiesWithDefaults.macosCertBase64;
+    delete propertiesWithDefaults.macosCertPassword;
+    delete propertiesWithDefaults.macosKeychainPassword;
+    delete propertiesWithDefaults.macosSigningCredentials;
     const requestedTargetSelectors =
       ActorSystem.getRequestedBuildTargetSelectors();
+    propertiesWithDefaults.targets = ActorSystem.resolveBuildTargets(
+      propertiesWithDefaults.targets,
+    );
     if (requestedTargetSelectors) {
       propertiesWithDefaults.targets = ActorSystem.filterBuildTargets(
         propertiesWithDefaults.targets,
@@ -215,6 +235,7 @@ class ActorSystem extends BuildResourceGroup {
       runtime,
     });
     this.functions = functions;
+    setMacOSSigningCredentials(this, macosSigningCredentials);
     /** @type {Promise<{ resources: any, close: () => Promise<void> }> | null} */
     this._runtimeResourcesPromise = null;
     // normally _defineGroupResources is used but this is a workaround to make sure this.functions is set before defining things
@@ -225,6 +246,22 @@ class ActorSystem extends BuildResourceGroup {
     );
     // @ts-ignore
     global[Symbol.for(`${this.getName()}`)] = this.run.bind(this);
+  }
+
+  /**
+   * @param {{ certificateBase64?: string, certificatePassword?: string, keychainPassword?: string }} credentials - credentials.
+   * @returns {this} - Actor system.
+   */
+  setMacOSSigningCredentials(credentials) {
+    setMacOSSigningCredentials(this, credentials);
+    return this;
+  }
+
+  /**
+   * @returns {Readonly<{ certificateBase64: string, certificatePassword: string, keychainPassword: string }>} - credentials.
+   */
+  getMacOSSigningCredentials() {
+    return getMacOSSigningCredentials(this);
   }
 
   async initializeEnvironment() {
@@ -374,6 +411,11 @@ class ActorSystem extends BuildResourceGroup {
             this.get('cli', {}).entrypoint
               ? path.resolve(this.get('cli', {}).entrypoint)
               : null;
+          const developerCliExportName =
+            typeof this.get('cli', {})?.export === 'string' &&
+            this.get('cli', {}).export
+              ? this.get('cli', {}).export
+              : null;
           const packagedAppEntryPath = path.resolve(
             actorSystemDir,
             'packaged-app-entry.js',
@@ -426,25 +468,28 @@ class ActorSystem extends BuildResourceGroup {
                 packagedAppEntryPath,
               )};
               ${developerImport}
-              import runtimeCli from ${JSON.stringify(runtimeCliPath)};
+              import runtimeOperatorCli from ${JSON.stringify(runtimeCliPath)};
               import startCmd from ${JSON.stringify(runtimeStartPath)};
               import serveDbCmd from ${JSON.stringify(runtimeDbPath)};
               import serveQueueCmd from ${JSON.stringify(runtimeQueuePath)};
               import serveLambdaCmd from ${JSON.stringify(runtimeLambdaPath)};
               (async () => {
-                console.time('overall');
                 sourceMapSupport.install();
                 await runPackagedApp({
                   developerCliModule,
+                  ${
+                    developerCliExportName
+                      ? `cliExportName: ${JSON.stringify(developerCliExportName)},`
+                      : ''
+                  }
                   runtimeModules: {
-                    cli: runtimeCli,
+                    operatorCli: runtimeOperatorCli,
                     start: startCmd,
                     'serve-db': serveDbCmd,
                     'serve-queue': serveQueueCmd,
                     'serve-lambda': serveLambdaCmd,
                   },
                 });
-                console.timeEnd('overall');
               })();
           `;
         },
@@ -453,6 +498,7 @@ class ActorSystem extends BuildResourceGroup {
         nodeVersion: () => resolveNodeBinaryVersion(node_binary, nodeVersion),
         platform,
         architecture,
+        ...(libc ? { libc } : {}),
         environmentVariables: () => {
           return {};
         },
@@ -482,11 +528,9 @@ class ActorSystem extends BuildResourceGroup {
         name: `${this.name}-macos-binary-signature-${nodeVersion}-${platform}-${architecture}`,
         parent,
         dependsOn: [build],
+        credentials: () => this.getMacOSSigningCredentials(),
         properties: {
           binaryPath: () => build.get('binaryPath'),
-          macosCertBase64: this.get('macosCertBase64'),
-          macosCertPassword: this.get('macosCertPassword'),
-          macosKeychainPassword: this.get('macosKeychainPassword'),
         },
       });
       resources.push(macosBinarySignature);
@@ -594,7 +638,7 @@ class ActorSystem extends BuildResourceGroup {
   }
 
   async run() {
-    await cli();
+    await operatorCli();
     //   if (process.argv.length <= 2) {
     //     // this should spin up polling actor/workqueues
     //     console.log('starting system');

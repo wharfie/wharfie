@@ -4,6 +4,12 @@ import {
 } from './actor-system-cli/lib/bootstrap-mode.js';
 
 /**
+ * The one top-level word reserved by packaged applications for Wharfie-owned
+ * operator commands. All other argv belongs to the application.
+ */
+export const OPERATOR_NAMESPACE = 'wharfie';
+
+/**
  * @param {string | undefined} value - value.
  * @param {string} label - label.
  * @returns {string[]} - Result.
@@ -102,19 +108,22 @@ function getRuntimeArgs(environment = process.env) {
 function resolveCliHandler(moduleLike, cliExportName) {
   const candidate = moduleLike || {};
 
-  if (
-    typeof cliExportName === 'string' &&
-    cliExportName.trim() &&
-    candidate &&
-    typeof candidate === 'object'
-  ) {
-    const explicit = candidate[cliExportName];
+  if (typeof cliExportName === 'string' && cliExportName.trim()) {
+    const requestedExport = cliExportName.trim();
+    const explicit =
+      candidate && typeof candidate === 'object'
+        ? candidate[requestedExport]
+        : undefined;
     if (explicit && typeof explicit.parseAsync === 'function') {
       return { kind: 'command', value: explicit };
     }
     if (typeof explicit === 'function') {
       return { kind: 'function', value: explicit.bind(candidate) };
     }
+
+    throw new Error(
+      `cli.export '${requestedExport}' was requested, but that export is not a callable function or Commander command.`,
+    );
   }
 
   const candidates = [
@@ -160,6 +169,23 @@ export async function runDeveloperCli(moduleLike, options = {}) {
 }
 
 /**
+ * @param {string[]} argv - Packaged application argv.
+ * @returns {boolean} - Whether this is an explicit operator invocation.
+ */
+export function isOperatorInvocation(argv) {
+  return argv[2] === OPERATOR_NAMESPACE;
+}
+
+/**
+ * Remove the reserved namespace before handing argv to the operator CLI.
+ * @param {string[]} argv - Packaged application argv.
+ * @returns {string[]} - Node-style argv for the operator CLI.
+ */
+export function getOperatorArgv(argv) {
+  return [argv[0] || 'node', argv[1] || 'wharfie-app', ...argv.slice(3)];
+}
+
+/**
  * @param {Record<string, any>} runtimeModules - runtimeModules.
  * @param {{ argv?: string[] }} [options] - options.
  * @returns {Promise<void>} - Result.
@@ -202,6 +228,20 @@ export async function runPackagedApp(options = {}) {
     return;
   }
 
+  if (isOperatorInvocation(argv)) {
+    if (!runtimeModules.operatorCli) {
+      throw new Error(
+        `Packaged app does not include the Wharfie operator CLI requested by '${OPERATOR_NAMESPACE}'.`,
+      );
+    }
+
+    await runDeveloperCli(
+      { default: runtimeModules.operatorCli },
+      { argv: getOperatorArgv(argv) },
+    );
+    return;
+  }
+
   const developerCliModule = options.developerCliModule ?? options.cliModule;
   if (developerCliModule) {
     await runDeveloperCli(developerCliModule, {
@@ -211,13 +251,8 @@ export async function runPackagedApp(options = {}) {
     return;
   }
 
-  if (runtimeModules.cli) {
-    await runDeveloperCli({ default: runtimeModules.cli }, { argv });
-    return;
-  }
-
   throw new Error(
-    'Packaged app is missing cli.entrypoint and bundled runtime CLI.',
+    `Packaged app is missing cli.entrypoint. Wharfie operator commands must be invoked as '<app> ${OPERATOR_NAMESPACE} <command>'.`,
   );
 }
 

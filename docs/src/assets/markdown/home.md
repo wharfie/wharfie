@@ -4,44 +4,36 @@
   Wharfie
 </h1>
 
-Wharfie is an experimental table-oriented data application framework built ontop of [AWS Athena](https://aws.amazon.com/athena/). Designed to be fast to develop, confident to modify and cheap to run.
+Wharfie is an experimental, local-first TypeScript application runtime. Its
+goal is to turn an ordinary CLI into a portable executable, then let that same
+application become a durable, observable service across trusted machines
+without an architectural rewrite.
 
-Unlike most data tools, Wharfie has ZERO fixed infrastructure costs. Money is only spent when data is processed. Costs are also proportional to the size of the data processed, averaging around $5 per terabyte. Wharfie can tell you how much it will cost to run your application before you run it, and also can make sure that it will output what you expect before you spend time waiting for it to run.
+The project is being reset around that goal. Wharfie v1's Athena and table
+framework is no longer part of the product, and breaking changes are expected.
 
-Wharfie can work with data sizes ranging from bytes to petabytes. There are no looming performance cliffs that require a platform switch.
+## The intended path
 
-Wharfie is serverless and relies entirely on managed AWS services. There's no need for performance tuning or an on-call rotation to keep Wharfie running. When Wharfie breaks, it's usually because of upstream outages, which when resolved, unblock Wharfie from reprocessing and catching up to a functional state.
+1. Write and run a normal TypeScript or JavaScript CLI locally.
+2. Declare named activities that can be run and observed durably.
+3. Package the application as a Node SEA executable for a specific target.
+4. Promote that executable to a persistent single-node service.
+5. Enroll more trusted nodes when placement or recovery requires them.
 
-When defining tables with Wharfie, you only need to statically define your table structure or the query used to materialize, and Wharfie takes care of the rest.
+The current implementation proves parts of the first three steps. Durable
+resident services, provider-backed deployment, and the trusted-node mesh remain
+roadmap work; Wharfie is not production ready.
 
-"The Rest" includes:
-
-- Registering new partitions
-- Converting compression and data formats
-- Repartitioning
-- Managing schema changes
-
-### ⚡️ Quickstart
-
-#### Install
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/wharfie/wharfie/master/install.sh | bash
-```
-
-For Windows:
-
-```ps1
-iex (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wharfie/wharfie/master/install.ps1" -UseBasicParsing).Content
-```
-
-#### Example
+## Start locally
 
 ```bash
-wharfie config
-wharfie init my_project
+wharfie app manifest ./path/to/app
+wharfie app run <activity_name> --dir ./path/to/app --event '{"who":"cli-user"}'
+wharfie app package ./path/to/app
 ```
 
-The current CLI ships these top-level commands: `config`, `init`, `app`, `ops`, `list`, and `build-self`.
-
-For more follow the [QuickStart Guide](/quickstart)
+The shipped top-level CLI contains `app` and `ops`. See the
+[Quickstart Guide](/quickstart), the
+[project charter](https://github.com/wharfie/wharfie/blob/master/PROJECT.md), and
+the [roadmap](https://github.com/wharfie/wharfie/blob/master/ROADMAP.md) for the
+current contract and delivery sequence.

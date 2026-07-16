@@ -5,10 +5,11 @@ import BuildResource from './build-resource.js';
 import paths from '../../lib/paths.js';
 import { build } from '../../lib/esbuild.js';
 import { installForTarget } from './lib/install-deps.js';
+import { assertNoActivityEnvironmentVariables } from './lib/activity-environment.js';
 import { normalizeExternalDependencies } from './lib/resolve-externals.js';
 
 import { dirname, join } from 'node:path';
-import { promises, existsSync, writeFileSync } from 'node:fs';
+import { promises, existsSync } from 'node:fs';
 import { brotliCompressSync } from 'node:zlib';
 import { buffer as streamToBuffer } from 'node:stream/consumers';
 
@@ -50,7 +51,6 @@ import { buffer as streamToBuffer } from 'node:stream/consumers';
  * @property {FunctionEntrypoint} entrypoint - entrypoint.
  * @property {BuildTarget | function(): BuildTarget} buildTarget - buildTarget.
  * @property {(string | ExternalDependencyInput)[]} [external] - external.
- * @property {Object<string,string>} [environmentVariables] - environmentVariables.
  * @property {Record<string, any>} [resources] - Function-scoped runtime resource specs.
  * @property {Object<string,string> | function(): Object<string,string>} [assets] - assets.
  */
@@ -69,11 +69,20 @@ class FunctionResource extends BuildResource {
    * @param {FunctionOptions} options - options.
    */
   constructor({ name, parent, status, properties, dependsOn }) {
+    const untypedProperties = /** @type {Record<string, any>} */ (properties);
+    assertNoActivityEnvironmentVariables(
+      untypedProperties.environmentVariables,
+      properties.functionName || name,
+    );
     const propertiesWithDefaults = Object.assign(
       {},
       FunctionResource.DefaultProperties,
       properties,
     );
+    const untypedPropertiesWithDefaults = /** @type {Record<string, any>} */ (
+      propertiesWithDefaults
+    );
+    delete untypedPropertiesWithDefaults.environmentVariables;
     const normalizedExternal = normalizeExternalDependencies(
       propertiesWithDefaults.external,
       propertiesWithDefaults.entrypoint?.path,
@@ -100,11 +109,17 @@ class FunctionResource extends BuildResource {
    * @returns {Promise<string>} - Result.
    */
   async esbuild() {
+    const functionName = String(this.get('functionName'));
+    const exportName = String(this.get('entrypoint').export || 'default');
     const entryCode = `
-      import { ${
-        this.get('entrypoint').export || 'default'
-      } as entrypoint } from ${JSON.stringify(this.get('entrypoint').path)};
-      global[Symbol.for('${this.get('functionName')}')] = entrypoint
+      import * as activityModule from ${JSON.stringify(this.get('entrypoint').path)};
+      const entrypoint = activityModule[${JSON.stringify(exportName)}];
+      if (typeof entrypoint !== 'function') {
+        throw new TypeError(${JSON.stringify(
+          `Activity '${functionName}' export '${exportName}' is not a function.`,
+        )});
+      }
+      globalThis[Symbol.for(${JSON.stringify(functionName)})] = entrypoint;
     `;
     const resolveDir = dirname(this.get('entrypoint').path || '');
     const { outputFiles, errors, warnings } = await build({
@@ -159,30 +174,36 @@ class FunctionResource extends BuildResource {
     const externals = this.get('external', []);
     const tmpBuildDir = join(FunctionResource.BUILD_DIR, `externals-${v4()}`);
     await promises.mkdir(tmpBuildDir, { recursive: true });
-    await installForTarget({
-      buildTarget: this.get('buildTarget'),
-      externals,
-      tmpBuildDir,
-    });
-    const stream = c(
-      {
-        cwd: tmpBuildDir,
-        gzip: { level: 9 }, // gzip compress
-        portable: true, // normalize perms/uid/gid
-        noMtime: true, // omit mtimes for reproducibility
-      },
-      ['.'],
-    );
-    const externalsTar = await streamToBuffer(stream);
-    return externalsTar.toString('base64');
+    try {
+      await installForTarget({
+        buildTarget: this.get('buildTarget'),
+        externals,
+        tmpBuildDir,
+      });
+      const stream = c(
+        {
+          cwd: tmpBuildDir,
+          gzip: { level: 9 }, // gzip compress
+          portable: true, // normalize perms/uid/gid
+          noMtime: true, // omit mtimes for reproducibility
+        },
+        ['.'],
+      );
+      const externalsTar = await streamToBuffer(stream);
+      return externalsTar.toString('base64');
+    } finally {
+      await promises.rm(tmpBuildDir, { force: true, recursive: true });
+    }
   }
 
   async _reconcile() {
     if (!existsSync(FunctionResource.TEMP_ASSET_PATH)) {
       await promises.mkdir(FunctionResource.TEMP_ASSET_PATH, {
+        mode: 0o700,
         recursive: true,
       });
     }
+    await promises.chmod(FunctionResource.TEMP_ASSET_PATH, 0o700);
     const [codeBlob, externalsTar] = await Promise.all([
       this.esbuild(),
       this.bundleExternals(),
@@ -197,20 +218,23 @@ class FunctionResource extends BuildResource {
       FunctionResource.TEMP_ASSET_PATH,
       v4(),
     );
-    writeFileSync(singleExecutableAssetPath, assetDescription);
+    await promises.writeFile(singleExecutableAssetPath, assetDescription, {
+      flag: 'wx',
+      mode: 0o600,
+    });
     this.set('singleExecutableAssetPath', singleExecutableAssetPath);
   }
 
   async _destroy() {
-    if (!existsSync(this.get('assetPath'))) {
+    const assetPath = this.get('singleExecutableAssetPath');
+    if (!assetPath || !existsSync(assetPath)) {
       return;
     }
-    await promises.unlink(this.get('assetPath'));
+    await promises.unlink(assetPath);
   }
 }
 
 FunctionResource.DefaultProperties = {
-  environmentVariables: {},
   resources: {},
   assets: {},
 };

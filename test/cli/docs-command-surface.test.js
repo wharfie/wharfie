@@ -11,6 +11,7 @@ const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const docsToCheck = [
   'docs/src/assets/markdown/home.md',
   'docs/src/assets/markdown/quickstart.md',
+  'docs/src/assets/markdown/installation.md',
   'docs/src/assets/markdown/project-structure.md',
   'contributing/FAQ.md',
   'contributing/project.md',
@@ -23,6 +24,10 @@ const staleCommands = [
   'wharfie project apply',
   'wharfie project cost',
   'wharfie project dev',
+  'wharfie config',
+  'wharfie list',
+  'wharfie init',
+  'wharfie build-self',
 ];
 
 describe('docs command surface', () => {
@@ -40,32 +45,26 @@ describe('docs command surface', () => {
     }
   });
 
-  it('keeps the installation guide pointed at the current AWS CLI docs', async () => {
+  it('documents the honest source-only installation path', async () => {
     const installationDoc = await fsp.readFile(
       path.join(repoRoot, 'docs/src/assets/markdown/installation.md'),
       'utf8',
     );
 
-    expect(installationDoc).toContain(
-      'https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html',
-    );
-    expect(installationDoc).not.toContain(
-      'https://docs.aws.amazon.com/src/cli/v1/userguide/cli-chap-configure.html',
-    );
-  });
+    expect(installationDoc).toContain('npm ci');
+    expect(installationDoc).toContain('node ./bin/wharfie --help');
+    expect(installationDoc).toContain('standalone builder binary');
+    expect(installationDoc).toContain('release-ready binary installer');
+    expect(installationDoc).not.toContain('releases/latest');
+    expect(installationDoc).not.toContain('install.sh');
+    expect(installationDoc).not.toContain('install.ps1');
 
-  it('keeps the Wharfie v1 template asset path under src/cli', async () => {
-    const wharfieApp = await fsp.readFile(
-      path.join(repoRoot, 'apps', 'wharfie-v1', 'wharfie.app.js'),
-      'utf8',
-    );
-
-    expect(wharfieApp).toMatch(
-      /path\.join\(\s*repoRoot,\s*'src',\s*'cli',\s*'project',\s*'project_structure_examples',\s*\)/m,
-    );
-    expect(wharfieApp).not.toMatch(
-      /path\.join\(\s*repoRoot,\s*'cli',\s*'project',\s*'project_structure_examples',\s*\)/m,
-    );
+    await expect(
+      fsp.access(path.join(repoRoot, 'install.sh')),
+    ).rejects.toThrow();
+    await expect(
+      fsp.access(path.join(repoRoot, 'install.ps1')),
+    ).rejects.toThrow();
   });
 
   it('narrows the published npm surface to supported CLI modules', async () => {
@@ -74,11 +73,21 @@ describe('docs command surface', () => {
     );
 
     expect(packageJson.files).toContain('src/core/**');
+    expect(packageJson.files).toContain('src/cli/**');
+    expect(packageJson.files).not.toContain('apps/wharfie-cli/**');
     expect(packageJson.files).toContain(
-      'src/cli/project/project_structure_examples/**',
+      '!src/cli/project/project_structure_examples/**',
     );
+    expect(packageJson.files).toContain('!src/cli/assets/**');
+    expect(packageJson.files).toContain('!src/cli/config.js');
+    expect(packageJson.files).toContain('!src/cli/input.js');
+    expect(packageJson.files).toContain('!src/cli/upgrade.js');
+    expect(packageJson.files).toContain('!src/cli/cmds/config.js');
+    expect(packageJson.files).toContain('!src/cli/cmds/init.js');
+    expect(packageJson.files).toContain('!src/cli/cmds/list.js');
     expect(packageJson.files).not.toContain('src/');
     expect(packageJson.files).not.toContain('src/cli/project/**');
+    expect(packageJson.files).not.toContain('apps/wharfie-v1/**');
     expect(packageJson.files).not.toContain('src/cli/cmds/project_cmds/**');
     expect(packageJson.files).not.toContain('!src/cli/cmds/project_cmds/**');
   });
@@ -89,16 +98,14 @@ describe('docs command surface', () => {
       'utf8',
     );
 
-    expect(quickstart).toContain('wharfie config');
-    expect(quickstart).toContain('wharfie init my_project');
-    expect(quickstart).toContain(
-      'wharfie app manifest ./path/to/wharfie.app.js',
-    );
+    expect(quickstart).toContain('wharfie.app.js');
+    expect(quickstart).toContain('wharfie app manifest ./path/to/app');
     expect(quickstart).toContain(
       `wharfie app run <activity_name> --dir ./path/to/app --event '{\"who\":\"cli-user\"}'`,
     );
     expect(quickstart).toContain(
       `wharfie ops run --activity <activity_name> --dir ./path/to/app --event '{\"who\":\"cli-user\"}'`,
     );
+    expect(quickstart).toContain('wharfie ops list --dir ./path/to/app');
   });
 });

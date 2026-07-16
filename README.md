@@ -26,9 +26,18 @@ The product goal is continuity:
 
 No separate service rewrite, preinstalled Node runtime, Dockerfile, Kubernetes cluster, or hosted orchestration service should be required on the target machine.
 
+Inside a packaged application, normal argv belongs to the application. Wharfie
+reserves only `<app> wharfie <command>` for operator commands; internal service
+startup uses hidden environment-selected bootstrap instead of consuming public
+commands.
+
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
-The repository contains useful v2 runtime and Node SEA packaging foundations, but its release wiring and several implementation paths are still being consolidated. It is not ready for production use.
+The repository contains useful v2 runtime and Node SEA packaging foundations,
+but its release wiring and several implementation paths are still being
+consolidated. The npm package is deliberately marked private, and release
+verification stays blocked until v1 source and dependencies are deleted. It is
+not ready for production use.
 
 ## Start here
 
@@ -36,14 +45,18 @@ The repository contains useful v2 runtime and Node SEA packaging foundations, bu
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
 - [July 2026 checkpoint](llm/checkpoints/2026-07-16-project-reset.md) — immutable historical evidence of the pre-reset state and conversation handoff.
+- [Packaging salvage checkpoint](llm/checkpoints/2026-07-16-packaging-salvage.md) — the first implementation proof, remaining release blockers, and exact resume order before v1 deletion.
 
 The charter and accepted decisions are authoritative; the roadmap is expected to evolve, and dated checkpoints are historical snapshots. Older material under `docs/` and `llm/design/` describes prior iterations and can be stale.
 
 ## Current development checks
 
-Use the pinned versions in `package.json` (currently Node 24.13.1 and npm 11.12.0), install dependencies, and run:
+Use the Node version in `engines` and the contributor npm version in
+`packageManager` (currently Node 24.13.1 and npm 11.12.0), install dependencies,
+and run:
 
 ```bash
+npm ci
 npm run test:ci
 ```
 

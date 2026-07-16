@@ -6,24 +6,21 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 const PROCESS_RUNNER_IMPORT =
   '../../../src/core/resources/builds/actor-system-cli/lib/process-runner.js';
 const START_IMPORT =
-  '../../../src/core/resources/builds/actor-system-cli/start.js';
+  '../../../src/core/resources/builds/actor-system-cli/control_cmds/state_cmds/start.js';
 const ACTOR_SYSTEM_CLI_IMPORT =
   '../../../src/core/resources/builds/actor-system-cli/index.js';
 const DB_CMD_IMPORT =
-  '../../../src/core/resources/builds/actor-system-cli/serve_cmds/db.js';
+  '../../../src/core/resources/builds/actor-system-cli/control_cmds/state_cmds/serve_cmds/db.js';
 const QUEUE_CMD_IMPORT =
-  '../../../src/core/resources/builds/actor-system-cli/serve_cmds/queue.js';
+  '../../../src/core/resources/builds/actor-system-cli/control_cmds/state_cmds/serve_cmds/queue.js';
 const LAMBDA_CMD_IMPORT =
-  '../../../src/core/resources/builds/actor-system-cli/serve_cmds/lambda.js';
+  '../../../src/core/resources/builds/actor-system-cli/control_cmds/state_cmds/serve_cmds/lambda.js';
 const NODE_AGENT_IMPORT = '../../../src/core/runtime/services/node-agent.js';
 const RESOURCE_UTIL_IMPORT =
   '../../../src/core/resources/builds/actor-system-cli/control_cmds/state_cmds/util/resources.js';
 const SPAWN_SELF_IMPORT =
   '../../../src/core/resources/builds/actor-system-cli/control_cmds/state_cmds/util/spawn-self.js';
 const DB_SERVICE_IMPORT = '../../../src/core/runtime/services/db-service.js';
-const PATHS_IMPORT = '../../../src/core/lib/paths.js';
-const STATE_START_CMD_IMPORT =
-  '../../../src/core/resources/builds/actor-system-cli/control_cmds/state_cmds/start.js';
 const QUEUE_SERVICE_IMPORT =
   '../../../src/core/runtime/services/queue-service.js';
 const FUNCTION_IMPORT = '../../../src/core/resources/builds/function.js';
@@ -69,51 +66,54 @@ afterEach(() => {
 });
 
 describe('actor-system CLI runtime surfaces', () => {
-  it('routes direct artifact execution through the hidden bootstrap mode', async () => {
-    const { default: stateStartCmd } = await import(STATE_START_CMD_IMPORT);
-    const parseAsync = jest
-      .spyOn(stateStartCmd, 'parseAsync')
-      .mockResolvedValue(stateStartCmd);
-    const { default: paths } = await import(PATHS_IMPORT);
-    const createWharfiePaths = jest
-      .spyOn(paths, 'createWharfiePaths')
-      .mockResolvedValue(undefined);
-    const originalArgv = process.argv;
-    const stdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+  it('invokes a manifest-selected named-only developer CLI export', async () => {
+    const { runDeveloperCli } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    const launch = jest.fn(async (_argv) => undefined);
+    const argv = ['node', 'packaged-app', 'sync', '--json'];
 
-    process.env.WHARFIE_BOOTSTRAP_MODE = 'state-start';
-    process.env.WHARFIE_BOOTSTRAP_ARGS = JSON.stringify([
-      '--role',
-      'leader',
-      '--control-port',
-      '8890',
-    ]);
-
-    Object.defineProperty(process.stdin, 'isTTY', {
-      configurable: true,
-      value: true,
-    });
-    process.argv = ['node', 'wharfie-artifact'];
-
-    try {
-      const { default: entrypoint } = await import(ACTOR_SYSTEM_CLI_IMPORT);
-      await entrypoint();
-    } finally {
-      process.argv = originalArgv;
-      delete process.env.WHARFIE_BOOTSTRAP_MODE;
-      delete process.env.WHARFIE_BOOTSTRAP_ARGS;
-      if (stdinIsTTY) {
-        Object.defineProperty(process.stdin, 'isTTY', stdinIsTTY);
-      } else {
-        Reflect.deleteProperty(process.stdin, 'isTTY');
-      }
-    }
-
-    expect(createWharfiePaths).toHaveBeenCalledTimes(1);
-    expect(parseAsync).toHaveBeenCalledWith(
-      ['node', 'start', '--role', 'leader', '--control-port', '8890'],
-      { from: 'node' },
+    await runDeveloperCli(
+      { launch },
+      {
+        cliExportName: 'launch',
+        argv,
+      },
     );
+
+    expect(launch).toHaveBeenCalledWith(argv);
+  });
+
+  it('fails when an explicitly selected developer CLI export is missing', async () => {
+    const { runDeveloperCli } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    const fallback = jest.fn(async (_argv) => undefined);
+
+    await expect(
+      runDeveloperCli(
+        { default: fallback },
+        {
+          cliExportName: 'misspelledLaunch',
+          argv: ['node', 'packaged-app'],
+        },
+      ),
+    ).rejects.toThrow(/cli\.export 'misspelledLaunch'.*not a callable/i);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it('exposes only honest packaged-app operator commands', async () => {
+    /** @type {string[]} */
+    const writes = [];
+    jest.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    const { default: entrypoint } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+
+    await entrypoint(['node', 'wharfie-artifact']);
+
+    const help = writes.join('');
+    expect(help).toContain('manifest');
+    expect(help).not.toMatch(/\bfunc\b/);
+    expect(help).not.toMatch(/\binfra\b/);
+    expect(help).not.toMatch(/\bctl\b/);
   });
 
   it('honors runtime command env for packaged child-service bootstrap', async () => {
@@ -178,7 +178,7 @@ describe('actor-system CLI runtime surfaces', () => {
     async ({ internalCommand, argvSuffix }) => {
       const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
       const developerCli = jest.fn(async (_argv) => undefined);
-      const internalCli = { parseAsync: jest.fn(async () => undefined) };
+      const operatorCli = jest.fn(async (_argv) => undefined);
       const originalEnv = {
         WHARFIE_BOOTSTRAP_MODE: process.env.WHARFIE_BOOTSTRAP_MODE,
         WHARFIE_BOOTSTRAP_ARGS: process.env.WHARFIE_BOOTSTRAP_ARGS,
@@ -203,7 +203,7 @@ describe('actor-system CLI runtime surfaces', () => {
         await runPackagedApp({
           developerCliModule: { default: developerCli },
           runtimeModules: {
-            [internalCommand]: internalCli,
+            operatorCli,
           },
           argv: packagedArgv,
         });
@@ -219,13 +219,14 @@ describe('actor-system CLI runtime surfaces', () => {
       }
 
       expect(developerCli).toHaveBeenCalledWith(packagedArgv);
-      expect(internalCli.parseAsync).not.toHaveBeenCalled();
+      expect(operatorCli).not.toHaveBeenCalled();
     },
   );
 
-  it('falls back to the bundled runtime CLI when the app has no developer CLI entrypoint', async () => {
+  it('routes the reserved namespace to the bundled operator CLI', async () => {
     const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
-    const runtimeCli = jest.fn(async (_argv) => undefined);
+    const developerCli = jest.fn(async (_argv) => undefined);
+    const operatorCli = jest.fn(async (_argv) => undefined);
     const originalEnv = {
       WHARFIE_BOOTSTRAP_MODE: process.env.WHARFIE_BOOTSTRAP_MODE,
       WHARFIE_BOOTSTRAP_ARGS: process.env.WHARFIE_BOOTSTRAP_ARGS,
@@ -233,7 +234,7 @@ describe('actor-system CLI runtime surfaces', () => {
       WHARFIE_RUNTIME_ARGS: process.env.WHARFIE_RUNTIME_ARGS,
     };
     const originalArgv = process.argv;
-    const packagedArgv = ['node', 'wharfie-artifact', 'ctl', 'manifest'];
+    const packagedArgv = ['node', 'wharfie-artifact', 'wharfie', 'manifest'];
 
     delete process.env.WHARFIE_BOOTSTRAP_MODE;
     delete process.env.WHARFIE_BOOTSTRAP_ARGS;
@@ -243,8 +244,9 @@ describe('actor-system CLI runtime surfaces', () => {
 
     try {
       await runPackagedApp({
+        developerCliModule: { default: developerCli },
         runtimeModules: {
-          cli: runtimeCli,
+          operatorCli,
         },
         argv: packagedArgv,
       });
@@ -259,7 +261,85 @@ describe('actor-system CLI runtime surfaces', () => {
       }
     }
 
-    expect(runtimeCli).toHaveBeenCalledWith(packagedArgv);
+    expect(developerCli).not.toHaveBeenCalled();
+    expect(operatorCli).toHaveBeenCalledWith([
+      'node',
+      'wharfie-artifact',
+      'manifest',
+    ]);
+  });
+
+  it('fails clearly when the reserved namespace has no operator CLI', async () => {
+    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    const packagedArgv = ['node', 'wharfie-artifact', 'wharfie', 'status'];
+    const originalEnv = {
+      WHARFIE_BOOTSTRAP_MODE: process.env.WHARFIE_BOOTSTRAP_MODE,
+      WHARFIE_BOOTSTRAP_ARGS: process.env.WHARFIE_BOOTSTRAP_ARGS,
+      WHARFIE_RUNTIME_COMMAND: process.env.WHARFIE_RUNTIME_COMMAND,
+      WHARFIE_RUNTIME_ARGS: process.env.WHARFIE_RUNTIME_ARGS,
+    };
+
+    delete process.env.WHARFIE_BOOTSTRAP_MODE;
+    delete process.env.WHARFIE_BOOTSTRAP_ARGS;
+    delete process.env.WHARFIE_RUNTIME_COMMAND;
+    delete process.env.WHARFIE_RUNTIME_ARGS;
+
+    try {
+      await expect(
+        runPackagedApp({
+          developerCliModule: { default: jest.fn() },
+          argv: packagedArgv,
+        }),
+      ).rejects.toThrow(
+        "does not include the Wharfie operator CLI requested by 'wharfie'",
+      );
+    } finally {
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+  });
+
+  it('does not expose the operator CLI as an implicit fallback', async () => {
+    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    const operatorCli = jest.fn(async (_argv) => undefined);
+    const packagedArgv = ['node', 'wharfie-artifact', 'ctl', 'manifest'];
+    const originalEnv = {
+      WHARFIE_BOOTSTRAP_MODE: process.env.WHARFIE_BOOTSTRAP_MODE,
+      WHARFIE_BOOTSTRAP_ARGS: process.env.WHARFIE_BOOTSTRAP_ARGS,
+      WHARFIE_RUNTIME_COMMAND: process.env.WHARFIE_RUNTIME_COMMAND,
+      WHARFIE_RUNTIME_ARGS: process.env.WHARFIE_RUNTIME_ARGS,
+    };
+
+    delete process.env.WHARFIE_BOOTSTRAP_MODE;
+    delete process.env.WHARFIE_BOOTSTRAP_ARGS;
+    delete process.env.WHARFIE_RUNTIME_COMMAND;
+    delete process.env.WHARFIE_RUNTIME_ARGS;
+
+    try {
+      await expect(
+        runPackagedApp({
+          runtimeModules: { operatorCli },
+          argv: packagedArgv,
+        }),
+      ).rejects.toThrow(
+        "Wharfie operator commands must be invoked as '<app> wharfie <command>'",
+      );
+    } finally {
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+
+    expect(operatorCli).not.toHaveBeenCalled();
   });
 
   it('captures stdout/stderr for successful process runs', async () => {
@@ -304,8 +384,13 @@ describe('actor-system CLI runtime surfaces', () => {
       this.stop = agentStop;
       this.waitForever = agentWaitForever;
     });
-    const loadResourcesSpec = jest.fn((opts) => ({
-      queue: { adapter: 'memory', options: { path: '.wharfie/queue' } },
+    const manifest = { app: { name: 'runtime-test' } };
+    const loadRuntimeBootstrap = jest.fn(async (/** @type {any} */ opts) => ({
+      manifest,
+      resourcesSpec: {
+        queue: { adapter: 'memory', options: { path: '.wharfie/queue' } },
+      },
+      pollQueueUrls: opts.pollQueueUrl,
     }));
     const getSelfSpawnCommand = jest.fn(() => ({
       cmd: '/fake/node',
@@ -316,7 +401,7 @@ describe('actor-system CLI runtime surfaces', () => {
       default: NodeAgent,
     }));
     await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
-      loadResourcesSpec,
+      loadRuntimeBootstrap,
     }));
     await jest.unstable_mockModule(SPAWN_SELF_IMPORT, () => ({
       getSelfSpawnCommand,
@@ -353,7 +438,7 @@ describe('actor-system CLI runtime surfaces', () => {
       { from: 'node' },
     );
 
-    expect(loadResourcesSpec).toHaveBeenCalledWith(
+    expect(loadRuntimeBootstrap).toHaveBeenCalledWith(
       expect.objectContaining({
         role: 'worker',
         lambdaHost: '127.0.0.1',
@@ -367,6 +452,7 @@ describe('actor-system CLI runtime surfaces', () => {
       expect.objectContaining({
         nodeId: 'node-123',
         role: 'worker',
+        manifest,
         resourcesSpec: {
           queue: { adapter: 'memory', options: { path: '.wharfie/queue' } },
         },
@@ -392,7 +478,11 @@ describe('actor-system CLI runtime surfaces', () => {
       default: NodeAgent,
     }));
     await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
-      loadResourcesSpec: () => ({ db: { adapter: 'memory' } }),
+      loadRuntimeBootstrap: async () => ({
+        manifest: undefined,
+        resourcesSpec: { db: { adapter: 'memory' } },
+        pollQueueUrls: [],
+      }),
     }));
     await jest.unstable_mockModule(SPAWN_SELF_IMPORT, () => ({
       getSelfSpawnCommand: () => ({ cmd: '/fake/node', prefixArgs: [] }),
@@ -414,8 +504,10 @@ describe('actor-system CLI runtime surfaces', () => {
 
   it('starts and stops the DB serve command using the resolved resources spec', async () => {
     const close = jest.fn(async () => {});
-    const loadResourcesSpec = jest.fn((opts) => ({
-      db: { adapter: 'vanilla', options: { path: '.wharfie/db' } },
+    const loadRuntimeBootstrap = jest.fn(async (/** @type {any} */ _opts) => ({
+      resourcesSpec: {
+        db: { adapter: 'vanilla', options: { path: '.wharfie/db' } },
+      },
     }));
     const startDbService = jest.fn(async (opts) => ({
       address: '127.0.0.1:9101',
@@ -423,7 +515,7 @@ describe('actor-system CLI runtime surfaces', () => {
     }));
 
     await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
-      loadResourcesSpec,
+      loadRuntimeBootstrap,
     }));
     await jest.unstable_mockModule(DB_SERVICE_IMPORT, () => ({
       startDbService,
@@ -449,7 +541,7 @@ describe('actor-system CLI runtime surfaces', () => {
       restore();
     }
 
-    expect(loadResourcesSpec).toHaveBeenCalledWith(
+    expect(loadRuntimeBootstrap).toHaveBeenCalledWith(
       expect.objectContaining({ host: '127.0.0.1', port: 9101 }),
     );
     expect(startDbService).toHaveBeenCalledWith(
@@ -465,7 +557,7 @@ describe('actor-system CLI runtime surfaces', () => {
 
   it('fails cleanly when the DB serve command has no db spec', async () => {
     await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
-      loadResourcesSpec: () => ({}),
+      loadRuntimeBootstrap: async () => ({ resourcesSpec: {} }),
     }));
     await jest.unstable_mockModule(DB_SERVICE_IMPORT, () => ({
       startDbService: jest.fn(),
@@ -475,13 +567,15 @@ describe('actor-system CLI runtime surfaces', () => {
 
     await expect(
       dbCmd.parseAsync(['node', 'db'], { from: 'node' }),
-    ).rejects.toThrow(/DB service requires resources\.db/);
+    ).rejects.toThrow(/DB service requires a db capability/);
   });
 
   it('starts and stops the Queue serve command using the resolved resources spec', async () => {
     const close = jest.fn(async () => {});
-    const loadResourcesSpec = jest.fn((opts) => ({
-      queue: { adapter: 'vanilla', options: { path: '.wharfie/queue' } },
+    const loadRuntimeBootstrap = jest.fn(async (/** @type {any} */ _opts) => ({
+      resourcesSpec: {
+        queue: { adapter: 'vanilla', options: { path: '.wharfie/queue' } },
+      },
     }));
     const startQueueService = jest.fn(async (opts) => ({
       address: '127.0.0.1:9102',
@@ -489,7 +583,7 @@ describe('actor-system CLI runtime surfaces', () => {
     }));
 
     await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
-      loadResourcesSpec,
+      loadRuntimeBootstrap,
     }));
     await jest.unstable_mockModule(QUEUE_SERVICE_IMPORT, () => ({
       startQueueService,
@@ -515,7 +609,7 @@ describe('actor-system CLI runtime surfaces', () => {
       restore();
     }
 
-    expect(loadResourcesSpec).toHaveBeenCalledWith(
+    expect(loadRuntimeBootstrap).toHaveBeenCalledWith(
       expect.objectContaining({ host: '127.0.0.1', port: 9102 }),
     );
     expect(startQueueService).toHaveBeenCalledWith(
@@ -544,11 +638,16 @@ describe('actor-system CLI runtime surfaces', () => {
     let lambdaOptions;
 
     await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
-      loadResourcesSpec: () => ({
-        objectStorage: {
-          adapter: 'vanilla',
-          options: { path: '.wharfie/object-storage' },
+      loadRuntimeBootstrap: async (/** @type {any} */ opts) => ({
+        manifest: { app: { name: 'runtime-test' } },
+        resourcesSpec: {
+          objectStorage: {
+            adapter: 'vanilla',
+            options: { path: '.wharfie/object-storage' },
+          },
         },
+        pollQueueUrls: opts.pollQueueUrl,
+        servicePlan: { db: false, queue: false },
       }),
     }));
     await jest.unstable_mockModule(FUNCTION_IMPORT, () => ({
@@ -685,19 +784,22 @@ describe('actor-system CLI runtime surfaces', () => {
     }
   });
 
-  it('treats missing Lambda state addresses as a commander parse failure', async () => {
-    const { default: lambdaCmd } = await import(LAMBDA_CMD_IMPORT);
+  it('requires a DB address when the runtime declares a DB capability', async () => {
+    await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
+      loadRuntimeBootstrap: async () => ({
+        manifest: { app: { name: 'runtime-test' } },
+        resourcesSpec: { db: { adapter: 'memory' } },
+        pollQueueUrls: [],
+        servicePlan: { db: true, queue: false },
+      }),
+    }));
 
-    lambdaCmd.exitOverride();
-    lambdaCmd.configureOutput({
-      writeOut: () => {},
-      writeErr: () => {},
-    });
+    const { default: lambdaCmd } = await import(LAMBDA_CMD_IMPORT);
 
     await expect(
       lambdaCmd.parseAsync(['node', 'lambda'], { from: 'node' }),
-    ).rejects.toMatchObject({
-      message: expect.stringMatching(/--db-address/),
-    });
+    ).rejects.toThrow(
+      /requires --db-address when the app manifest declares a db capability/,
+    );
   });
 });

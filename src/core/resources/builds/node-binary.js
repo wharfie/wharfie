@@ -1,19 +1,85 @@
+import { createHash, randomUUID } from 'node:crypto';
 import https, { get } from 'node:https';
 import http from 'node:http';
-import { existsSync, createWriteStream, unlink, promises } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import {
   mkdir,
   rename,
-  unlink as _unlink,
   readFile,
   writeFile,
   readdir,
+  rm,
+  stat,
 } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import JSZip from 'jszip';
 import { extract as _extract } from 'tar';
 import paths from '../../lib/paths.js';
 import BaseResource from '../base-resource.js';
+
+const INTEGRITY_RECEIPT_VERSION = 1;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
+
+/**
+ * @typedef DownloadedArchive
+ * @property {string} path - Verified local archive path.
+ * @property {string} fileName - Official Node.js distribution filename.
+ * @property {string} sha256 - SHA-256 from the official checksum manifest.
+ * @property {string} version - Exact Node.js version including the leading `v`.
+ */
+
+/**
+ * @typedef NodeBinaryIntegrityReceipt
+ * @property {number} version - Receipt schema version.
+ * @property {{ nodeVersion: string, platform: string, architecture: string }} target - Cached build target.
+ * @property {{ fileName: string, sha256: string }} archive - Verified upstream archive identity.
+ * @property {{ sha256: string, size: number }} binary - Extracted binary integrity.
+ */
+
+/**
+ * @param {string} filePath - File to hash.
+ * @returns {Promise<string>} - Lowercase SHA-256 digest.
+ */
+async function sha256File(filePath) {
+  const hash = createHash('sha256');
+  await pipeline(createReadStream(filePath), hash);
+  return hash.digest('hex');
+}
+
+/**
+ * @param {string} temporaryPath - Complete temporary file.
+ * @param {string} finalPath - Destination path.
+ * @returns {Promise<void>}
+ */
+async function replaceFileAtomically(temporaryPath, finalPath) {
+  try {
+    await rename(temporaryPath, finalPath);
+  } catch (error) {
+    const code =
+      error && typeof error === 'object' && 'code' in error ? error.code : '';
+    if (!['EEXIST', 'EPERM'].includes(String(code))) {
+      throw error;
+    }
+
+    // Windows does not replace an existing destination with rename(). The
+    // downloaded bytes are already complete and verified at this point, so the
+    // fallback can safely remove the old file before placing the new one.
+    await rm(finalPath, { force: true });
+    await rename(temporaryPath, finalPath);
+  }
+}
+
+/**
+ * @param {string} finalPath - Destination path.
+ * @returns {string} - Unique temporary path in the destination directory.
+ */
+function createAtomicTemporaryPath(finalPath) {
+  return join(
+    dirname(finalPath),
+    `.${basename(finalPath)}.${process.pid}.${randomUUID()}.download`,
+  );
+}
 
 /**
  * @typedef {import('node:process')['platform']} TargetPlatform
@@ -62,8 +128,12 @@ class NodeBinary extends BaseResource {
   async getExactVersion() {
     if (this.has('exactVersion')) return this.get('exactVersion');
     const versions = await NodeBinary.getVersions();
+    const requestedVersion = String(this.get('version')).replace(/^v/, '');
+    const isExactVersion = /^\d+\.\d+\.\d+(?:[-+].+)?$/.test(requestedVersion);
     const matchingVersions = versions.filter((v) =>
-      v.version.startsWith(`v${this.get('version')}`),
+      isExactVersion
+        ? v.version === `v${requestedVersion}`
+        : v.version.startsWith(`v${requestedVersion}`),
     );
     if (matchingVersions.length === 0) {
       throw new Error(`No Node.js version found for ${this.get('version')}`);
@@ -234,62 +304,311 @@ class NodeBinary extends BaseResource {
   }
 
   /**
-   * Download the Node.js archive and verify status + content-type.
+   * @returns {Promise<string>} - Official checksum manifest URL.
    */
-  async download() {
-    if (!existsSync(NodeBinary.TEMP_DIR)) {
-      await mkdir(NodeBinary.TEMP_DIR, { recursive: true });
-    }
+  async getChecksumsUrl() {
+    return `https://nodejs.org/dist/${await this.getExactVersion()}/SHASUMS256.txt`;
+  }
 
-    const url = await this.getUrl();
-    const archivePath = await this.getArchivePath();
-
-    return new Promise((resolve, reject) => {
-      const file = createWriteStream(archivePath);
-      const request = url.startsWith('https') ? https : http;
-
-      request
-        .get(url, (response) => {
-          if (response.statusCode !== 200) {
-            response.resume();
-            return reject(
-              new Error(`Download failed: ${response.statusCode} ${url}`),
-            );
-          }
-          const ct = (response.headers['content-type'] || '').toLowerCase();
-          // Accept the usual suspects; Node sometimes serves octet-stream
-          if (!/zip|tar|gzip|octet-stream/.test(ct)) {
-            response.resume();
-            return reject(
-              new Error(`Unexpected content-type '${ct}' from ${url}`),
-            );
-          }
-
-          response.pipe(file);
-          file.on('finish', () => file.close(resolve));
-        })
-        .on('error', (err) => {
-          unlink(archivePath, () => reject(err));
-        });
+  /**
+   * @param {string} url - HTTP(S) URL.
+   * @returns {Promise<import('node:http').IncomingMessage>} - Response stream.
+   */
+  async requestUrl(url) {
+    const request = url.startsWith('https:') ? https : http;
+    return await new Promise((resolve, reject) => {
+      const pendingRequest = request.get(url, resolve);
+      pendingRequest.on('error', reject);
     });
   }
 
-  async extract() {
-    // Extract node binary
-    let extractedBinary;
-    if (this.get('platform') === 'win32') {
-      extractedBinary = await this.extractWindowsZip(
-        await this.getArchivePath(),
-      );
-    } else {
-      extractedBinary = await this.extractUnixTar(await this.getArchivePath());
+  /**
+   * @param {string} url - HTTP(S) URL.
+   * @returns {Promise<string>} - UTF-8 response body.
+   */
+  async fetchText(url) {
+    const response = await this.requestUrl(url);
+    if (response.statusCode !== 200) {
+      response.resume();
+      throw new Error(`Download failed: ${response.statusCode} ${url}`);
     }
 
-    // Move out of the temp extraction to localPath
-    await rename(extractedBinary, await this.getBinaryPath());
+    const chunks = [];
+    for await (const chunk of response) {
+      chunks.push(Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks).toString('utf8');
+  }
 
-    // Cleanup archive
-    await _unlink(await this.getArchivePath());
+  /**
+   * @param {string} url - HTTP(S) URL.
+   * @param {string} destinationPath - Temporary destination path.
+   * @returns {Promise<void>}
+   */
+  async downloadUrlToFile(url, destinationPath) {
+    const response = await this.requestUrl(url);
+    if (response.statusCode !== 200) {
+      response.resume();
+      throw new Error(`Download failed: ${response.statusCode} ${url}`);
+    }
+
+    const contentType = String(
+      response.headers['content-type'] || '',
+    ).toLowerCase();
+    if (!/zip|tar|gzip|octet-stream/.test(contentType)) {
+      response.resume();
+      throw new Error(`Unexpected content-type '${contentType}' from ${url}`);
+    }
+
+    await pipeline(
+      response,
+      createWriteStream(destinationPath, { flags: 'wx', mode: 0o600 }),
+    );
+  }
+
+  /**
+   * @param {string} manifest - Official SHASUMS256.txt contents.
+   * @param {string} fileName - Exact target distribution filename.
+   * @returns {string} - Lowercase expected SHA-256.
+   */
+  static findChecksum(manifest, fileName) {
+    for (const line of String(manifest).split(/\r?\n/)) {
+      const match = /^([0-9a-f]{64})\s+\*?(.+?)\s*$/i.exec(line);
+      if (match && match[2] === fileName) {
+        return match[1].toLowerCase();
+      }
+    }
+
+    throw new Error(
+      `Official Node.js checksum manifest does not include ${fileName}`,
+    );
+  }
+
+  /**
+   * @param {string} fileName - Exact target distribution filename.
+   * @returns {Promise<string>} - Official lowercase SHA-256.
+   */
+  async getExpectedArchiveChecksum(fileName) {
+    const checksumsUrl = await this.getChecksumsUrl();
+    const manifest = await this.fetchText(checksumsUrl);
+    return NodeBinary.findChecksum(manifest, fileName);
+  }
+
+  /**
+   * Download the Node.js archive and verify status + content-type.
+   * @returns {Promise<DownloadedArchive>} - Verified archive metadata.
+   */
+  async download() {
+    await mkdir(NodeBinary.TEMP_DIR, { recursive: true });
+    const url = await this.getUrl();
+    const archivePath = await this.getArchivePath();
+    const officialFileName = basename(new URL(url).pathname);
+    const expectedSha256 =
+      await this.getExpectedArchiveChecksum(officialFileName);
+    const temporaryPath = createAtomicTemporaryPath(archivePath);
+
+    try {
+      await this.downloadUrlToFile(url, temporaryPath);
+      const actualSha256 = await sha256File(temporaryPath);
+      if (actualSha256 !== expectedSha256) {
+        throw new Error(
+          `Node.js archive checksum mismatch for ${officialFileName}: expected ${expectedSha256}, received ${actualSha256}`,
+        );
+      }
+
+      await replaceFileAtomically(temporaryPath, archivePath);
+      return {
+        path: archivePath,
+        fileName: officialFileName,
+        sha256: expectedSha256,
+        version: await this.getExactVersion(),
+      };
+    } catch (error) {
+      await rm(temporaryPath, { force: true });
+      throw error;
+    }
+  }
+
+  /**
+   * @param {string} [binaryPath] - Cached binary path.
+   * @returns {Promise<string>} - Integrity receipt path.
+   */
+  async getIntegrityReceiptPath(binaryPath) {
+    return `${binaryPath || (await this.getBinaryPath())}.integrity.json`;
+  }
+
+  /**
+   * @param {DownloadedArchive} downloadedArchive - Verified archive metadata.
+   * @param {string} binaryPath - Extracted binary path.
+   * @returns {Promise<NodeBinaryIntegrityReceipt>} - Written receipt.
+   */
+  async writeIntegrityReceipt(downloadedArchive, binaryPath) {
+    const exactVersion = await this.getExactVersion();
+    const officialFileName = basename(new URL(await this.getUrl()).pathname);
+    const archiveSha256 = String(downloadedArchive.sha256 || '').toLowerCase();
+
+    if (
+      downloadedArchive.version !== exactVersion ||
+      downloadedArchive.fileName !== officialFileName ||
+      !SHA256_PATTERN.test(archiveSha256)
+    ) {
+      throw new Error(
+        'Cannot write integrity receipt for an unverified archive',
+      );
+    }
+
+    const binaryStat = await stat(binaryPath);
+    const receipt = /** @type {NodeBinaryIntegrityReceipt} */ ({
+      version: INTEGRITY_RECEIPT_VERSION,
+      target: {
+        nodeVersion: exactVersion,
+        platform: String(this.get('platform')),
+        architecture: String(this.get('architecture')),
+      },
+      archive: {
+        fileName: officialFileName,
+        sha256: archiveSha256,
+      },
+      binary: {
+        sha256: await sha256File(binaryPath),
+        size: binaryStat.size,
+      },
+    });
+
+    const receiptPath = await this.getIntegrityReceiptPath(binaryPath);
+    const temporaryReceiptPath = createAtomicTemporaryPath(receiptPath);
+    try {
+      await writeFile(
+        temporaryReceiptPath,
+        `${JSON.stringify(receipt, null, 2)}\n`,
+        { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+      );
+      await replaceFileAtomically(temporaryReceiptPath, receiptPath);
+    } catch (error) {
+      await rm(temporaryReceiptPath, { force: true });
+      throw error;
+    }
+
+    return receipt;
+  }
+
+  /**
+   * Validate both receipt identity and current cached binary bytes.
+   * @param {string} [binaryPath] - Cached binary path.
+   * @returns {Promise<boolean>} - Whether the cache entry is safe to reuse.
+   */
+  async validateCachedBinary(binaryPath) {
+    const resolvedBinaryPath = binaryPath || (await this.getBinaryPath());
+    if (!existsSync(resolvedBinaryPath)) return false;
+
+    try {
+      const receiptPath =
+        await this.getIntegrityReceiptPath(resolvedBinaryPath);
+      const receipt = JSON.parse(await readFile(receiptPath, 'utf8'));
+      const exactVersion = await this.getExactVersion();
+      const officialFileName = basename(new URL(await this.getUrl()).pathname);
+      const binaryStat = await stat(resolvedBinaryPath);
+
+      if (
+        receipt?.version !== INTEGRITY_RECEIPT_VERSION ||
+        receipt?.target?.nodeVersion !== exactVersion ||
+        receipt?.target?.platform !== String(this.get('platform')) ||
+        receipt?.target?.architecture !== String(this.get('architecture')) ||
+        receipt?.archive?.fileName !== officialFileName ||
+        !SHA256_PATTERN.test(String(receipt?.archive?.sha256 || '')) ||
+        !SHA256_PATTERN.test(String(receipt?.binary?.sha256 || '')) ||
+        receipt?.binary?.size !== binaryStat.size ||
+        !binaryStat.isFile()
+      ) {
+        return false;
+      }
+
+      return (await sha256File(resolvedBinaryPath)) === receipt.binary.sha256;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * @param {string} [binaryPath] - Cached binary path.
+   * @returns {Promise<void>}
+   */
+  async removeCachedBinary(binaryPath) {
+    const resolvedBinaryPath = binaryPath || (await this.getBinaryPath());
+    await Promise.all([
+      rm(resolvedBinaryPath, { force: true }),
+      rm(await this.getIntegrityReceiptPath(resolvedBinaryPath), {
+        force: true,
+      }),
+    ]);
+  }
+
+  /**
+   * Re-hash the placed archive immediately before extraction, closing the
+   * download-to-extraction tampering window.
+   * @param {DownloadedArchive | undefined} downloadedArchive - Download metadata.
+   * @returns {Promise<DownloadedArchive>} - Revalidated archive metadata.
+   */
+  async verifyArchiveBeforeExtraction(downloadedArchive) {
+    const archivePath =
+      downloadedArchive?.path || (await this.getArchivePath());
+    const exactVersion = await this.getExactVersion();
+    const officialFileName = basename(new URL(await this.getUrl()).pathname);
+    const expectedSha256 = downloadedArchive
+      ? String(downloadedArchive.sha256 || '').toLowerCase()
+      : await this.getExpectedArchiveChecksum(officialFileName);
+
+    if (
+      (downloadedArchive && downloadedArchive.version !== exactVersion) ||
+      (downloadedArchive && downloadedArchive.fileName !== officialFileName) ||
+      !SHA256_PATTERN.test(expectedSha256)
+    ) {
+      throw new Error('Cannot extract an unverified Node.js archive');
+    }
+
+    const actualSha256 = await sha256File(archivePath);
+    if (actualSha256 !== expectedSha256) {
+      await rm(archivePath, { force: true });
+      throw new Error(
+        `Node.js archive checksum mismatch for ${officialFileName}: expected ${expectedSha256}, received ${actualSha256}`,
+      );
+    }
+
+    return {
+      path: archivePath,
+      fileName: officialFileName,
+      sha256: expectedSha256,
+      version: exactVersion,
+    };
+  }
+
+  /**
+   * @param {DownloadedArchive} [downloadedArchive] - Verified download metadata.
+   * @returns {Promise<void>}
+   */
+  async extract(downloadedArchive) {
+    const verifiedArchive =
+      await this.verifyArchiveBeforeExtraction(downloadedArchive);
+    const binaryPath = await this.getBinaryPath();
+    const extractionPath = `${verifiedArchive.path}-extract`;
+
+    try {
+      const extractedBinary =
+        this.get('platform') === 'win32'
+          ? await this.extractWindowsZip(verifiedArchive.path)
+          : await this.extractUnixTar(verifiedArchive.path);
+
+      await replaceFileAtomically(extractedBinary, binaryPath);
+      await this.writeIntegrityReceipt(verifiedArchive, binaryPath);
+    } catch (error) {
+      await this.removeCachedBinary(binaryPath);
+      throw error;
+    } finally {
+      await Promise.all([
+        rm(verifiedArchive.path, { force: true }),
+        rm(extractionPath, { force: true, recursive: true }),
+      ]);
+    }
   }
 
   /**
@@ -363,16 +682,21 @@ class NodeBinary extends BaseResource {
   }
 
   async _reconcile() {
-    if (await existsSync(await this.getBinaryPath())) return;
-    await this.download();
-    await this.extract();
+    const binaryPath = await this.getBinaryPath();
+    if (existsSync(binaryPath)) {
+      if (await this.validateCachedBinary(binaryPath)) return;
+      await this.removeCachedBinary(binaryPath);
+    } else {
+      await rm(await this.getIntegrityReceiptPath(binaryPath), { force: true });
+    }
+
+    const downloadedArchive = await this.download();
+    await this.extract(downloadedArchive);
   }
 
   async _destroy() {
-    if (!existsSync(this.get('binaryPath'))) {
-      return;
-    }
-    await promises.unlink(this.get('binaryPath'));
+    if (!this.has('binaryPath')) return;
+    await this.removeCachedBinary(this.get('binaryPath'));
   }
 }
 
