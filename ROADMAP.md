@@ -33,10 +33,11 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 ### Repository and tracker
 
-- [ ] Classify every non-default branch and open PR as absorb, supersede, or delete; link each decision to its archive tag.
+- [x] Classify every legacy non-default branch and PR as keep, absorb, supersede, or delete; see the [cleanup inventory](docs/project-reset/2026-07-16-cleanup-inventory.md).
 - [ ] Reconcile the three unpublished local `master` commits and `jvd/pr4` against the new charter.
 - [ ] Close stale PRs with a short preservation and supersession note.
-- [ ] Classify every open issue as roadmap work, useful research, or obsolete; label/milestone the first two and close the rest.
+- [x] Classify every open issue as roadmap work, useful research, or obsolete; see the [cleanup inventory](docs/project-reset/2026-07-16-cleanup-inventory.md).
+- [ ] Once approved, create the proposed replacement issues, assign roadmap milestones, and close the old issues with preservation/supersession notes.
 - [ ] Remove stale project-board, release, and documentation promises.
 
 ### Codebase
@@ -129,9 +130,9 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 ## Immediate queue
 
 1. Review and merge the project-reset documentation.
-2. Produce a branch/PR/issue decision table from the archived state.
+2. Review the [branch/PR/issue cleanup inventory](docs/project-reset/2026-07-16-cleanup-inventory.md).
 3. Reconcile the unpublished local packaging work and `jvd/pr4` into small keep-or-delete changes.
-4. Close or archive superseded GitHub work.
+4. Create the replacement issues, then close and delete superseded GitHub work.
 5. Delete v1 and repair the release/package path before adding new distributed-runtime features.
 
 The dated handoff at [llm/checkpoints/2026-07-16-project-reset.md](llm/checkpoints/2026-07-16-project-reset.md) contains exact repository state and restart instructions.
