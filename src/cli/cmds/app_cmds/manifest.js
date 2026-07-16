@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 
+import { stringifyAppManifest } from '../../../core/runtime/app-manifest.js';
 import { loadAppForCommand } from '../../app/local-app.js';
 import { displayFailure } from '../../output/basic.js';
 
@@ -8,15 +9,14 @@ import { displayFailure } from '../../output/basic.js';
  * @param {{ json?: boolean, pretty?: boolean }} options - options.
  */
 async function printManifest(dir, options) {
-  const { publicManifest } = await loadAppForCommand({
+  const { manifest } = await loadAppForCommand({
     dir,
     allowEmbedded: typeof dir !== 'string' || !dir.trim(),
   });
 
-  const pretty = options.pretty !== false;
-  const output = pretty
-    ? JSON.stringify(publicManifest, null, 2)
-    : JSON.stringify(publicManifest);
+  const output = stringifyAppManifest(manifest, {
+    pretty: options.pretty,
+  });
 
   process.stdout.write(`${output}\n`);
 }

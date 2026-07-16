@@ -1,23 +1,14 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { createRequire } from 'node:module';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { kitchenSinkExternalDependencies } from '../../../scratch/examples/actor-systems/kitchen-sink/config.js';
+import { kitchenSinkExternalDependencies } from '../../../scratch/examples/apps/kitchen-sink/config.js';
 
-const require = createRequire(import.meta.url);
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
 const binPath = path.join(repoRoot, 'bin', 'wharfie');
@@ -25,108 +16,16 @@ const helloWorldDir = path.join(
   repoRoot,
   'scratch',
   'examples',
-  'actor-systems',
-  'hello-world',
-);
-const packageDemoDir = path.join(
-  repoRoot,
-  'test',
-  'fixtures',
   'apps',
-  'package-demo',
+  'hello-world',
 );
 const kitchenSinkDir = path.join(
   repoRoot,
   'scratch',
   'examples',
-  'actor-systems',
+  'apps',
   'kitchen-sink',
 );
-const currentTarget = {
-  nodeVersion: process.versions.node,
-  platform: process.platform,
-  architecture: process.arch,
-  ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
-};
-const alternateTarget = {
-  nodeVersion: process.versions.node,
-  platform: process.platform,
-  architecture: process.arch === 'x64' ? 'arm64' : 'x64',
-  ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
-};
-
-/**
- * @param {string} packageName - packageName.
- * @returns {string} - Result.
- */
-function readInstalledVersion(packageName) {
-  const entryPath = require.resolve(packageName);
-  let currentDir = path.dirname(entryPath);
-
-  while (true) {
-    const packageJsonPath = path.join(currentDir, 'package.json');
-    try {
-      const manifest = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
-      if (manifest?.name === packageName && manifest?.version) {
-        return manifest.version;
-      }
-    } catch {
-      // keep walking upward
-    }
-
-    const parentDir = path.dirname(currentDir);
-    if (parentDir === currentDir) {
-      break;
-    }
-    currentDir = parentDir;
-  }
-
-  throw new Error(`Could not resolve installed version for ${packageName}`);
-}
-
-/**
- * @param {readonly (string | { name: string, version?: string })[]} externals - externals.
- * @returns {{ name: string, version: string }[]} - Result.
- */
-function normalizeExpectedExternals(externals) {
-  return externals.map((external) => {
-    if (typeof external === 'string') {
-      const trimmed = external.trim();
-      const versionSeparator = trimmed.lastIndexOf('@');
-      if (versionSeparator > 0) {
-        const name = trimmed.slice(0, versionSeparator).trim();
-        const version = trimmed.slice(versionSeparator + 1).trim();
-        if (name && version) {
-          return { name, version };
-        }
-      }
-
-      return {
-        name: trimmed,
-        version: readInstalledVersion(trimmed),
-      };
-    }
-
-    if (!external?.name) {
-      throw new TypeError('External dependency objects require a name');
-    }
-
-    return {
-      name: external.name,
-      version: external.version || readInstalledVersion(external.name),
-    };
-  });
-}
-
-/**
- * @param {{ nodeVersion: string, platform: string, architecture: string, libc?: string }} target - target.
- * @returns {string} - Result.
- */
-function getTargetSelector(target) {
-  return `node${target.nodeVersion}-${target.platform}-${target.architecture}${
-    target.libc ? `-${target.libc}` : ''
-  }`;
-}
 
 /**
  * @param {string[]} args - args.
@@ -138,10 +37,6 @@ function runCli(args, options = {}) {
     spawnSync(process.execPath, [binPath, ...args], {
       cwd: repoRoot,
       encoding: 'utf8',
-      env: {
-        ...process.env,
-        WHARFIE_ARTIFACT_BUCKET: 'service-bucket',
-      },
       ...options,
     })
   );
@@ -173,9 +68,7 @@ describe('wharfie app commands', () => {
   it('runs a demo activity from the CLI using stdin JSON as the event', () => {
     const result = runCli(
       ['app', 'run', 'hello-resources', '--dir', helloWorldDir, '--no-pretty'],
-      {
-        input: '{"who":"stdin-user"}',
-      },
+      { input: '{"who":"stdin-user"}' },
     );
 
     expect(result.status).toBe(0);
@@ -184,7 +77,6 @@ describe('wharfie app commands', () => {
       who: 'stdin-user',
       dbRecord: {
         id: 'greeting',
-        who: 'stdin-user',
         message: 'hello stdin-user',
       },
       queueBody: JSON.stringify({ hello: 'stdin-user' }),
@@ -192,35 +84,35 @@ describe('wharfie app commands', () => {
     });
   });
 
-  it('prints the compiled manifest for the kitchen-sink fixture', () => {
+  it('prints the one canonical manifest for the kitchen-sink fixture', () => {
     const result = runCli(['app', 'manifest', kitchenSinkDir, '--no-pretty']);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe('');
 
     const payload = JSON.parse(result.stdout);
-    expect(payload.app).toEqual({ name: 'kitchen-sink-demo' });
+    expect(payload.schemaVersion).toBe(2);
+    expect(payload.app).toEqual({ id: 'kitchen-sink-demo' });
     expect(payload.activities).toEqual({
       start: expect.objectContaining({
-        entrypoint: expect.objectContaining({
+        entrypoint: {
+          kind: 'node',
           export: 'start',
-          path: expect.stringContaining(
-            path.join('scratch', 'functions', 'start.js'),
-          ),
-        }),
+          path: 'activity.js',
+        },
         resources: expect.objectContaining({
           db: expect.objectContaining({ adapter: 'vanilla' }),
           queue: expect.objectContaining({ adapter: 'vanilla' }),
           objectStorage: expect.objectContaining({ adapter: 'vanilla' }),
         }),
-        external: expect.arrayContaining(
-          normalizeExpectedExternals(kitchenSinkExternalDependencies),
-        ),
+        externalPackages: kitchenSinkExternalDependencies,
       }),
     });
+    expect(payload).not.toHaveProperty('functions');
+    expect(payload).not.toHaveProperty('capabilities');
   });
 
-  it('refuses to print inline manifest secrets and never echoes the value', () => {
+  it('refuses invalid or secret-like manifest fields without echoing values', () => {
     const dir = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-secret-manifest-command-'),
     );
@@ -232,9 +124,17 @@ describe('wharfie app commands', () => {
         JSON.stringify({ type: 'module' }),
       );
       writeFileSync(
+        path.join(dir, 'cli.js'),
+        'export default async function main() {}\n',
+      );
+      writeFileSync(
         path.join(dir, 'wharfie.app.js'),
         `export default {
-  name: 'secret-manifest-demo',
+  schemaVersion: 2,
+  app: { id: 'secret-manifest-demo' },
+  cli: {
+    entrypoint: { kind: 'node', path: './cli.js', export: 'default' },
+  },
   resources: {
     db: { adapter: 'vanilla', options: { dbPassword: '${secret}' } },
   },
@@ -246,218 +146,60 @@ describe('wharfie app commands', () => {
 
       expect(result.status).toBe(1);
       expect(result.stdout).not.toContain(secret);
-      expect(result.stderr).toMatch(
-        /inline secret-like values.*inspectable manifest/i,
-      );
+      expect(result.stderr).toMatch(/dbPassword.*not supported/i);
       expect(result.stderr).not.toContain(secret);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('packages every app target when no target filter is provided and embeds a target-specific manifest asset', () => {
-    const outputDir = path.join(
-      os.tmpdir(),
-      'wharfie-package-command-test',
-      'all-targets',
-      String(process.pid),
-    );
-    const traceFile = path.join(
-      os.tmpdir(),
-      'wharfie-package-command-test',
-      'traces',
-      `all-targets-${process.pid}.json`,
+  it('fails helpfully when a requested package target is not declared', () => {
+    const dir = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-package-target-command-'),
     );
 
-    const result = runCli(
-      [
-        'app',
-        'package',
-        packageDemoDir,
-        '--output-dir',
-        outputDir,
-        '--no-pretty',
-      ],
-      {
-        env: {
-          ...process.env,
-          WHARFIE_PACKAGE_DEMO_TRACE_FILE: traceFile,
-        },
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe('');
-
-    /** @type {{ app: { name: string }, outputDir: string, targets: { nodeVersion: string, platform: string, architecture: string, libc?: string }[], artifacts: { fileName: string, path: string, target: { nodeVersion: string, platform: string, architecture: string, libc?: string } }[] }} */
-    const payload = JSON.parse(result.stdout);
-    expect(payload.app).toEqual({ name: 'package-demo' });
-    expect(payload.outputDir).toBe(outputDir);
-    expect(payload.targets).toEqual([currentTarget, alternateTarget]);
-    expect(payload.artifacts).toHaveLength(2);
-    expect(payload.artifacts.map((artifact) => artifact.target)).toEqual([
-      currentTarget,
-      alternateTarget,
-    ]);
-    payload.artifacts.forEach((artifact) => {
-      expect(existsSync(artifact.path)).toBe(true);
-      expect(readFileSync(artifact.path, 'utf8')).toContain(
-        `echo ${getTargetSelector(artifact.target)}`,
+    try {
+      writeFileSync(
+        path.join(dir, 'package.json'),
+        JSON.stringify({ type: 'module' }),
       );
-    });
-    expect(readdirSync(outputDir).sort()).toEqual(
-      payload.artifacts.map((artifact) => artifact.fileName).sort(),
-    );
-    expect(JSON.parse(readFileSync(traceFile, 'utf8'))).toEqual({
-      builtTargets: [
-        getTargetSelector(currentTarget),
-        getTargetSelector(alternateTarget),
-      ],
-      embeddedManifestByTarget: {
-        [getTargetSelector(currentTarget)]: {
-          appName: 'package-demo',
-          targetSelectors: [getTargetSelector(currentTarget)],
-        },
-        [getTargetSelector(alternateTarget)]: {
-          appName: 'package-demo',
-          targetSelectors: [getTargetSelector(alternateTarget)],
-        },
-      },
-    });
-  });
+      writeFileSync(
+        path.join(dir, 'cli.js'),
+        'export default async function main() {}\n',
+      );
+      writeFileSync(
+        path.join(dir, 'wharfie.app.js'),
+        `export default {
+  schemaVersion: 2,
+  app: { id: 'target-command-demo' },
+  cli: {
+    entrypoint: { kind: 'node', path: './cli.js', export: 'default' },
+  },
+  targets: [{
+    nodeVersion: process.versions.node,
+    platform: process.platform,
+    architecture: process.arch,
+    ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+  }],
+};
+`,
+      );
 
-  it('packages only the selected target when --target is provided', () => {
-    const outputDir = path.join(
-      os.tmpdir(),
-      'wharfie-package-command-test',
-      'selected-target',
-      String(process.pid),
-    );
-    const traceFile = path.join(
-      os.tmpdir(),
-      'wharfie-package-command-test',
-      'traces',
-      `selected-target-${process.pid}.json`,
-    );
-    const targetSelector = getTargetSelector(currentTarget);
-
-    const result = runCli(
-      [
+      const result = runCli([
         'app',
         'package',
-        packageDemoDir,
-        '--output-dir',
-        outputDir,
+        dir,
         '--target',
-        targetSelector,
+        'node99.99.99-linux-x64-glibc',
         '--no-pretty',
-      ],
-      {
-        env: {
-          ...process.env,
-          WHARFIE_PACKAGE_DEMO_TRACE_FILE: traceFile,
-        },
-      },
-    );
+      ]);
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe('');
-
-    /** @type {{ targets: { nodeVersion: string, platform: string, architecture: string, libc?: string }[], artifacts: { fileName: string, path: string, target: { nodeVersion: string, platform: string, architecture: string, libc?: string } }[] }} */
-    const payload = JSON.parse(result.stdout);
-    expect(payload.targets).toEqual([currentTarget]);
-    expect(payload.artifacts).toHaveLength(1);
-    expect(payload.artifacts[0].target).toEqual(currentTarget);
-    expect(readdirSync(outputDir)).toEqual([payload.artifacts[0].fileName]);
-    expect(JSON.parse(readFileSync(traceFile, 'utf8'))).toEqual({
-      builtTargets: [targetSelector],
-      embeddedManifestByTarget: {
-        [targetSelector]: {
-          appName: 'package-demo',
-          targetSelectors: [targetSelector],
-        },
-      },
-    });
-  });
-
-  it('accepts short target aliases for --target', () => {
-    const outputDir = path.join(
-      os.tmpdir(),
-      'wharfie-package-command-test',
-      'short-target',
-      String(process.pid),
-    );
-    const shortAlias = `${currentTarget.platform}-${currentTarget.architecture}`;
-
-    const result = runCli([
-      'app',
-      'package',
-      packageDemoDir,
-      '--output-dir',
-      outputDir,
-      '--target',
-      shortAlias,
-      '--no-pretty',
-    ]);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe('');
-
-    /** @type {{ targets: { nodeVersion: string, platform: string, architecture: string, libc?: string }[], artifacts: { target: { nodeVersion: string, platform: string, architecture: string, libc?: string } }[] }} */
-    const payload = JSON.parse(result.stdout);
-    expect(payload.targets).toEqual([currentTarget]);
-    expect(payload.artifacts).toHaveLength(1);
-    expect(payload.artifacts[0].target).toEqual(currentTarget);
-  });
-
-  it('preserves repeated --target order in the packaged output', () => {
-    const outputDir = path.join(
-      os.tmpdir(),
-      'wharfie-package-command-test',
-      'ordered-targets',
-      String(process.pid),
-    );
-
-    const result = runCli([
-      'app',
-      'package',
-      packageDemoDir,
-      '--output-dir',
-      outputDir,
-      '--target',
-      getTargetSelector(alternateTarget),
-      '--target',
-      getTargetSelector(currentTarget),
-      '--no-pretty',
-    ]);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe('');
-
-    /** @type {{ targets: { nodeVersion: string, platform: string, architecture: string, libc?: string }[], artifacts: { target: { nodeVersion: string, platform: string, architecture: string, libc?: string } }[] }} */
-    const payload = JSON.parse(result.stdout);
-    expect(payload.targets).toEqual([alternateTarget, currentTarget]);
-    expect(payload.artifacts.map((artifact) => artifact.target)).toEqual([
-      alternateTarget,
-      currentTarget,
-    ]);
-  });
-
-  it('fails with a helpful error when a requested target does not exist', () => {
-    const result = runCli([
-      'app',
-      'package',
-      packageDemoDir,
-      '--target',
-      'node99.99.99-linux-x64',
-      '--no-pretty',
-    ]);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('Unknown target');
-    expect(result.stderr).toContain('node99.99.99-linux-x64');
-    expect(result.stderr).toContain(getTargetSelector(currentTarget));
-    expect(result.stderr).toContain(getTargetSelector(alternateTarget));
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('Unknown target');
+      expect(result.stderr).toContain('node99.99.99-linux-x64-glibc');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

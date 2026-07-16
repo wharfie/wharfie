@@ -1,4 +1,5 @@
 import { buffer } from 'node:stream/consumers';
+import { createHash } from 'node:crypto';
 
 /**
  * Resource-backed Function API demo.
@@ -9,6 +10,10 @@ import { buffer } from 'node:stream/consumers';
  */
 export async function helloResources(event = {}, context = {}) {
   const who = event.who || 'world';
+  const queueName = `demo-hello-${createHash('sha256')
+    .update(who)
+    .digest('hex')
+    .slice(0, 16)}`;
   const { db, queue, objectStorage } = context.resources || {};
 
   if (!db || !queue || !objectStorage) {
@@ -27,20 +32,37 @@ export async function helloResources(event = {}, context = {}) {
     keyValue: 'greeting',
   });
 
-  await queue.createQueue({ QueueName: 'demo-hello-queue' });
+  await queue.createQueue({ QueueName: queueName });
   await queue.sendMessage({
-    QueueUrl: 'demo-hello-queue',
+    QueueUrl: queueName,
     MessageBody: JSON.stringify({ hello: who }),
   });
 
   const received = await queue.receiveMessage({
-    QueueUrl: 'demo-hello-queue',
+    QueueUrl: queueName,
     MaxNumberOfMessages: 1,
     WaitTimeSeconds: 0,
     VisibilityTimeout: 1,
   });
+  const receivedMessage = received?.Messages?.[0];
+  if (receivedMessage?.ReceiptHandle) {
+    await queue.deleteMessage({
+      QueueUrl: queueName,
+      ReceiptHandle: receivedMessage.ReceiptHandle,
+    });
+  }
 
-  await objectStorage.createBucket({ Bucket: 'demo-hello-bucket' });
+  try {
+    await objectStorage.createBucket({ Bucket: 'demo-hello-bucket' });
+  } catch (error) {
+    const code =
+      error && typeof error === 'object' && 'name' in error
+        ? String(error.name)
+        : '';
+    if (!['BucketAlreadyExists', 'BucketAlreadyOwnedByYou'].includes(code)) {
+      throw error;
+    }
+  }
   await objectStorage.putObject({
     Bucket: 'demo-hello-bucket',
     Key: 'hello.txt',
@@ -62,7 +84,7 @@ export async function helloResources(event = {}, context = {}) {
   return {
     who,
     dbRecord,
-    queueBody: received?.Messages?.[0]?.Body,
+    queueBody: receivedMessage?.Body,
     objectBody,
   };
 }

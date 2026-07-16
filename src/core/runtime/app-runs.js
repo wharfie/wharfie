@@ -1,8 +1,11 @@
+import path from 'node:path';
+
 import Action from '../lib/graph/action.js';
 import Operation, { Type as OperationType } from '../lib/graph/operation.js';
 import WharfieFunction from '../resources/builds/function.js';
-import { assertNoActivityEnvironmentVariables } from '../resources/builds/lib/activity-environment.js';
+import { compareCanonicalStrings } from './canonical-order.js';
 import { cloneJsonObject, cloneJsonValue } from './json-value.js';
+import { assertLogicalId } from './logical-id.js';
 import { createActorSystemResources } from './resources.js';
 
 /**
@@ -32,118 +35,49 @@ function cloneActivityInputs(options) {
 
 /**
  * @param {any} manifest - manifest.
- * @param {any} publicManifest - publicManifest.
  * @returns {Record<string, any>} - Result.
  */
-export function getManifestActivities(manifest, publicManifest) {
-  if (isObjectRecord(publicManifest?.activities)) {
-    return Object.keys(publicManifest.activities).reduce((acc, name) => {
-      const definition = publicManifest.activities[name];
-      if (!isObjectRecord(definition)) {
-        acc[name] = definition;
-        return acc;
-      }
-
-      assertNoActivityEnvironmentVariables(
-        definition.environmentVariables,
-        name,
-      );
-      const normalized = { ...definition };
-      delete normalized.environmentVariables;
-      acc[name] = normalized;
-      return acc;
-    }, /** @type {Record<string, any>} */ ({}));
-  }
-
-  const functions = Array.isArray(manifest?.functions)
-    ? manifest.functions
-    : [];
-  return functions.reduce(
-    (/** @type {Record<string, any>} */ acc, /** @type {any} */ definition) => {
-      if (
-        !isObjectRecord(definition) ||
-        typeof definition.name !== 'string' ||
-        !isObjectRecord(definition.entrypoint)
-      ) {
-        return acc;
-      }
-
-      assertNoActivityEnvironmentVariables(
-        definition.environmentVariables,
-        definition.name,
-      );
-      acc[definition.name] = {
-        entrypoint: definition.entrypoint,
-        ...(Array.isArray(definition.external)
-          ? { external: definition.external }
-          : {}),
-        ...(isObjectRecord(definition.resources)
-          ? { resources: definition.resources }
-          : {}),
-      };
-      return acc;
-    },
-    /** @type {Record<string, any>} */ ({}),
-  );
+export function getManifestActivities(manifest) {
+  return isObjectRecord(manifest?.activities) ? manifest.activities : {};
 }
 
 /**
  * @param {any} manifest - manifest.
- * @param {any} publicManifest - publicManifest.
  * @returns {string[]} - Result.
  */
-export function getManifestActivityNames(manifest, publicManifest) {
-  return Object.keys(getManifestActivities(manifest, publicManifest)).sort(
-    (left, right) => left.localeCompare(right),
+export function getManifestActivityNames(manifest) {
+  return Object.keys(getManifestActivities(manifest)).sort(
+    compareCanonicalStrings,
   );
 }
 
 /**
- * @param {{ manifest: any, publicManifest: any, activityName: string }} options - options.
+ * @param {{ manifest: any, activityName: string }} options - options.
  * @returns {any | undefined} - Result.
  */
 export function getManifestActivityDefinition(options) {
-  const activityName = String(options.activityName || '').trim();
-  if (!activityName) return undefined;
-
-  const activities = getManifestActivities(
-    options.manifest,
-    options.publicManifest,
-  );
-  return activities[activityName];
+  assertLogicalId(options.activityName, 'activityName');
+  return getManifestActivities(options.manifest)[options.activityName];
 }
 
 /**
  * @param {any} manifest - manifest.
- * @param {any} publicManifest - publicManifest.
  * @returns {Record<string, any>} - Result.
  */
-export function getManifestResourcesSpec(manifest, publicManifest) {
-  if (isObjectRecord(publicManifest?.resources)) {
-    return publicManifest.resources;
-  }
-  if (isObjectRecord(manifest?.resources)) {
-    return manifest.resources;
-  }
-  if (isObjectRecord(manifest?.capabilities)) {
-    return manifest.capabilities;
-  }
-  return {};
+export function getManifestResourcesSpec(manifest) {
+  return isObjectRecord(manifest?.resources) ? manifest.resources : {};
 }
 
 /**
- * @param {{ manifest: any, publicManifest: any, activityName: string }} options - options.
+ * @param {{ manifest: any, activityName: string, appDir: string }} options - options.
  * @returns {WharfieFunction} - Result.
  */
 export function createManifestActivityFunction(options) {
-  const activityName = String(options.activityName || '').trim();
+  const activityName = options.activityName;
   const definition = getManifestActivityDefinition(options);
 
   if (!definition || !isObjectRecord(definition.entrypoint)) {
-    const available = getManifestActivityNames(
-      options.manifest,
-      options.publicManifest,
-    );
+    const available = getManifestActivityNames(options.manifest);
     throw new Error(
       `Unknown activity '${activityName}'. Available activities: ${available.join(', ') || '(none)'}`,
     );
@@ -151,10 +85,13 @@ export function createManifestActivityFunction(options) {
 
   return new WharfieFunction({
     name: activityName,
-    entrypoint: definition.entrypoint,
+    entrypoint: {
+      path: path.resolve(options.appDir, definition.entrypoint.path),
+      export: definition.entrypoint.export,
+    },
     properties: {
-      ...(Array.isArray(definition.external)
-        ? { external: definition.external }
+      ...(Array.isArray(definition.externalPackages)
+        ? { external: definition.externalPackages }
         : {}),
       ...(isObjectRecord(definition.resources)
         ? { resources: definition.resources }
@@ -164,18 +101,15 @@ export function createManifestActivityFunction(options) {
 }
 
 /**
- * @param {{ manifest: any, publicManifest: any, activityName: string, event?: any, context?: any, resourceResolution?: { registryPath?: string } }} options - options.
+ * @param {{ manifest: any, activityName: string, event?: any, context?: any, resourceResolution?: { registryPath?: string } }} options - options.
  * @returns {Promise<any>} - Result.
  */
 export async function invokeEmbeddedManifestActivity(options) {
-  const activityName = String(options.activityName || '').trim();
+  const activityName = options.activityName;
   const definition = getManifestActivityDefinition(options);
 
   if (!definition || !isObjectRecord(definition.entrypoint)) {
-    const available = getManifestActivityNames(
-      options.manifest,
-      options.publicManifest,
-    );
+    const available = getManifestActivityNames(options.manifest);
     throw new Error(
       `Unknown activity '${activityName}'. Available activities: ${available.join(', ') || '(none)'}`,
     );
@@ -184,7 +118,7 @@ export async function invokeEmbeddedManifestActivity(options) {
   const { event, context } = cloneActivityInputs(options);
 
   const { resources: baseResources, close } = await createActorSystemResources(
-    getManifestResourcesSpec(options.manifest, options.publicManifest),
+    getManifestResourcesSpec(options.manifest),
     options.resourceResolution,
   );
 
@@ -199,7 +133,7 @@ export async function invokeEmbeddedManifestActivity(options) {
 }
 
 /**
- * @param {{ manifest: any, publicManifest: any, activityName: string, event?: any, context?: any, resourceResolution?: { registryPath?: string }, executionMode?: 'source' | 'embedded' }} options - options.
+ * @param {{ manifest: any, appDir?: string, activityName: string, event?: any, context?: any, resourceResolution?: { registryPath?: string }, executionMode?: 'source' | 'embedded' }} options - options.
  * @returns {Promise<any>} - Result.
  */
 export async function invokeManifestActivity(options) {
@@ -207,10 +141,19 @@ export async function invokeManifestActivity(options) {
     return await invokeEmbeddedManifestActivity(options);
   }
 
-  const fn = createManifestActivityFunction(options);
+  if (typeof options.appDir !== 'string' || !options.appDir) {
+    throw new Error(
+      'Source activity execution requires the application directory.',
+    );
+  }
+  const fn = createManifestActivityFunction({
+    manifest: options.manifest,
+    activityName: options.activityName,
+    appDir: options.appDir,
+  });
   const { event, context } = cloneActivityInputs(options);
   const { resources: baseResources, close } = await createActorSystemResources(
-    getManifestResourcesSpec(options.manifest, options.publicManifest),
+    getManifestResourcesSpec(options.manifest),
     options.resourceResolution,
   );
 
@@ -230,30 +173,12 @@ export async function invokeManifestActivity(options) {
 }
 
 /**
- * @param {{ manifest: any, publicManifest: any, workflowName: string }} options - options.
- * @returns {any | undefined} - Result.
- */
-export function findManifestWorkflowDefinition(options) {
-  const workflowName = String(options.workflowName || '').trim();
-  if (!workflowName) return undefined;
-
-  /** @type {any[]} */
-  const workflows = Array.isArray(options.manifest?.workflows)
-    ? options.manifest.workflows
-    : [];
-  return workflows.find(
-    (workflow) =>
-      typeof workflow?.name === 'string' &&
-      workflow.name.trim() === workflowName,
-  );
-}
-
-/**
- * @param {string} appName - appName.
+ * @param {string} appId - Canonical application logical ID.
  * @returns {string} - Result.
  */
-export function getAppResourceId(appName) {
-  return `app:${String(appName || '').trim()}`;
+export function getAppResourceId(appId) {
+  assertLogicalId(appId, 'appId');
+  return `app:${appId}`;
 }
 
 /**
@@ -287,12 +212,12 @@ function normalizeTrigger(trigger) {
 }
 
 /**
- * @param {{ appName: string, activityName: string, event?: any, operationId?: string, trigger?: any }} options - options.
+ * @param {{ appId: string, activityName: string, event?: any, operationId?: string, trigger?: any }} options - options.
  * @returns {Operation} - Result.
  */
 export function createOperationFromActivity(options) {
   const operation = new Operation({
-    resource_id: getAppResourceId(options.appName),
+    resource_id: getAppResourceId(options.appId),
     resource_version: getAppResourceVersion(),
     ...(typeof options.operationId === 'string' && options.operationId.trim()
       ? { id: options.operationId.trim() }
@@ -300,7 +225,7 @@ export function createOperationFromActivity(options) {
     type: OperationType.PIPELINE,
     operation_config: {
       source: 'app-manifest',
-      app_name: options.appName,
+      app_id: options.appId,
       activity_name: options.activityName,
       trigger: normalizeTrigger(options.trigger),
     },
@@ -332,69 +257,9 @@ export function createOperationFromActivity(options) {
   return operation;
 }
 
-/**
- * @param {{ workflow: any, appName: string, operationId?: string, trigger?: any }} options - options.
- * @returns {Operation} - Result.
- */
-export function createOperationFromWorkflow(options) {
-  const workflow = options.workflow;
-  const operation = new Operation({
-    resource_id: getAppResourceId(options.appName),
-    resource_version: getAppResourceVersion(),
-    ...(typeof options.operationId === 'string' && options.operationId.trim()
-      ? { id: options.operationId.trim() }
-      : {}),
-    type:
-      typeof workflow?.type === 'string' && workflow.type.trim()
-        ? workflow.type.trim().toUpperCase()
-        : OperationType.PIPELINE,
-    operation_config: {
-      workflow_name: workflow?.name,
-      app_name: options.appName,
-      source: 'app-manifest',
-      trigger: normalizeTrigger(options.trigger),
-    },
-  });
-
-  const actions = Array.isArray(workflow?.actions) ? workflow.actions : [];
-  for (const action of actions) {
-    operation.createAction({
-      id: action.id,
-      type: action.type,
-      function_name:
-        typeof action.functionName === 'string'
-          ? action.functionName
-          : typeof action.activity === 'string'
-            ? action.activity
-            : undefined,
-      inputs: action.inputs,
-      placement: action.placement,
-      retry: action.retry,
-    });
-  }
-
-  for (const action of actions) {
-    const dependencies = Array.isArray(action?.dependsOn)
-      ? action.dependsOn
-      : Array.isArray(action?.dependencies)
-        ? action.dependencies
-        : [];
-    for (const dependencyId of dependencies) {
-      if (typeof dependencyId !== 'string' || !dependencyId.trim()) {
-        continue;
-      }
-      operation._addDependency(dependencyId.trim(), action.id);
-    }
-  }
-
-  return operation;
-}
-
 export default {
   createManifestActivityFunction,
   createOperationFromActivity,
-  createOperationFromWorkflow,
-  findManifestWorkflowDefinition,
   getAppResourceId,
   getAppResourceVersion,
   getManifestActivities,

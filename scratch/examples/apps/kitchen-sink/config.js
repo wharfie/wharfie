@@ -1,28 +1,26 @@
 /**
- * Shared kitchen-sink fixture configuration.
+ * Fixed package targets used by the kitchen-sink portability fixture.
  */
 export const kitchenSinkDefaultTargets = Object.freeze([
   Object.freeze({
-    nodeVersion: '24',
+    nodeVersion: '24.13.1',
     platform: 'darwin',
     architecture: 'arm64',
   }),
   Object.freeze({
-    nodeVersion: '24',
+    nodeVersion: '24.13.1',
     platform: 'linux',
     architecture: 'x64',
+    libc: 'glibc',
   }),
 ]);
 
 /**
- * Native + heavyweight externals that the kitchen-sink fixture is meant to
- * preserve through manifest compilation and packaging.
+ * Exact native package kept outside the activity bundle. Optional probes in
+ * the handler are not portability claims and are deliberately not declared.
  */
 export const kitchenSinkExternalDependencies = Object.freeze([
-  'lmdb',
-  'sharp@0.34.4',
-  'sodium-native@5.0.9',
-  'usb@2.13.0',
+  Object.freeze({ name: 'lmdb', version: '3.4.4' }),
 ]);
 
 export default {

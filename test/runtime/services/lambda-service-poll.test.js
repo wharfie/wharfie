@@ -102,7 +102,7 @@ describe('Lambda service queue poll loop (gRPC)', () => {
         maxNumberOfMessages: 1,
         visibilityTimeout: 5,
         operationsStore,
-        appName: 'lambda-poll-app',
+        appId: 'lambda-poll-app',
       },
     });
 
@@ -235,7 +235,7 @@ describe('Lambda service queue poll loop (gRPC)', () => {
         maxNumberOfMessages: 1,
         visibilityTimeout: 1,
         operationsStore,
-        appName: 'lambda-poll-app',
+        appId: 'lambda-poll-app',
       },
     });
 

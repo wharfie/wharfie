@@ -35,7 +35,7 @@ const cancelCommand = new Command('cancel')
 
     try {
       const { manifest } = await loadApp({ dir: options.dir || process.cwd() });
-      const resourceId = getAppResourceId(manifest.app.name);
+      const resourceId = getAppResourceId(manifest.app.id);
 
       await withOperationsStore((store) =>
         cancel(store, resourceId, operationId),

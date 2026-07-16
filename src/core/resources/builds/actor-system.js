@@ -58,7 +58,6 @@ const actorSystemDir =
  * @property {BuildTarget[] | function(): BuildTarget[]} targets - targets.
  * @property {ActorSystemResourcesSpec} [resources] - resources.
  * @property {import('./function.js').default[]} [functions] - functions.
- * @property {any[]} [workflows] - Serializable workflow definitions.
  * @property {{ entrypoint: string, export?: string }} [cli] - CLI entrypoint config.
  */
 

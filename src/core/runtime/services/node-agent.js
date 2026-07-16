@@ -3,21 +3,6 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { Client, credentials } from '@grpc/grpc-js';
-
-import { grpcUnary, LambdaServiceDefinition } from './rpc-grpc.js';
-import { startSchedulerService } from './scheduler-service.js';
-import {
-  getSyntheticAppResourceId,
-  runPersistedActivityOperation,
-} from './app-run.js';
-import { extractCronTriggers } from '../../resources/builds/actor-system-cli/lib/runtime-bootstrap.js';
-import operationsStoreFactory from '../../lib/graph/operations-store.js';
-import {
-  createDBClient,
-  resolveOperationsTableName,
-} from '../../lib/config/db.js';
-
 /**
  * Node Agent
  *
@@ -62,7 +47,6 @@ import {
  * @property {string|null} queueAddressOverride - queueAddressOverride.
  * @property {string[]} pollQueueUrls - pollQueueUrls.
  * @property {boolean} [spawnServices] - Spawn child services (db/queue/lambda). Default: true.
- * @property {(actor: string, payload: any) => Promise<void>} [schedulerInvoke] - Optional override for cron trigger invocations (tests).
  */
 
 /**
@@ -121,38 +105,16 @@ function normalizeAddress(v) {
 }
 
 /**
- * @param {'all'|'leader'|'worker'} role - role.
- * @returns {boolean} - Result.
- */
-function hasLeaderRole(role) {
-  return role === 'leader' || role === 'all';
-}
-
-/**
- * @param {string} host - host.
- * @returns {string} - Result.
- */
-function normalizeLocalClientHost(host) {
-  const h = String(host || '').trim();
-  if (!h) return '127.0.0.1';
-  // 0.0.0.0 / :: are bind-all addresses; clients should dial loopback.
-  if (h === '0.0.0.0' || h === '::' || h === '::0') return '127.0.0.1';
-  return h;
-}
-
-/**
  * @param {any} resourcesSpec - resourcesSpec.
  * @param {any} manifest - manifest.
- * @returns {{ db: boolean, queue: boolean, lambda: boolean, scheduler: boolean }} - Result.
+ * @returns {{ db: boolean, queue: boolean, lambda: boolean }} - Result.
  */
 function createServicePlan(resourcesSpec, manifest) {
   const manifestResources =
     manifest && typeof manifest === 'object'
       ? manifest.resources && typeof manifest.resources === 'object'
         ? manifest.resources
-        : manifest.capabilities && typeof manifest.capabilities === 'object'
-          ? manifest.capabilities
-          : {}
+        : {}
       : {};
   const resourceConfig = {
     ...(manifestResources && typeof manifestResources === 'object'
@@ -162,20 +124,14 @@ function createServicePlan(resourcesSpec, manifest) {
       ? resourcesSpec
       : {}),
   };
-  const functions = Array.isArray(manifest?.functions)
-    ? manifest.functions
-    : [];
   const activities =
     manifest && typeof manifest.activities === 'object' && manifest.activities
       ? Object.keys(manifest.activities)
       : [];
-  const schedulerTriggers = extractCronTriggers(manifest || resourceConfig);
-
   return {
     db: resourceConfig.db !== undefined,
     queue: resourceConfig.queue !== undefined,
-    lambda: manifest ? functions.length > 0 || activities.length > 0 : true,
-    scheduler: schedulerTriggers.length > 0,
+    lambda: manifest ? activities.length > 0 : true,
   };
 }
 
@@ -270,21 +226,6 @@ export default class NodeAgent {
     /** @type {import('node:http').Server|null} */
     this.control = null;
 
-    /** @type {any|null} */
-    this.scheduler = null;
-
-    /** @type {import('@grpc/grpc-js').Client|null} */
-    this._lambdaClient = null;
-
-    /** @type {import('../../lib/db/base.js').DBClient | null} */
-    this._operationsDb = null;
-
-    /** @type {ReturnType<typeof operationsStoreFactory> | null} */
-    this._operationsStore = null;
-
-    /** @type {Promise<ReturnType<typeof operationsStoreFactory>> | null} */
-    this._operationsStorePromise = null;
-
     this.dbAddress = normalizeAddress(options.dbAddressOverride);
     this.queueAddress = normalizeAddress(options.queueAddressOverride);
 
@@ -371,164 +312,7 @@ export default class NodeAgent {
       );
     }
 
-    await this._maybeStartScheduler();
     await this._startControlPlane();
-  }
-
-  async _maybeStartScheduler() {
-    const o = this.options;
-
-    if (!hasLeaderRole(o.role)) return;
-
-    const triggers = extractCronTriggers(o.manifest || o.resourcesSpec);
-    if (!triggers.length) return;
-
-    /** @type {(actor: string, payload: any, context?: any) => Promise<void>} */
-    const invokeActivity =
-      typeof o.schedulerInvoke === 'function'
-        ? async (actor, payload) => {
-            const schedulerInvoke = o.schedulerInvoke;
-            if (typeof schedulerInvoke !== 'function') {
-              throw new TypeError(
-                'node-agent: schedulerInvoke must be a function',
-              );
-            }
-            await schedulerInvoke(actor, payload);
-          }
-        : this._createLocalLambdaInvoker();
-
-    getSyntheticAppResourceId(o.manifest);
-    await this._ensureOperationsStore();
-
-    this.scheduler = await startSchedulerService({
-      role: o.role,
-      triggers,
-      invoke: async (actor, payload) => {
-        const trigger = {
-          source: 'cron',
-          ...(payload && typeof payload === 'object'
-            ? {
-                ...(typeof payload.cron === 'string' && payload.cron.trim()
-                  ? { cron: payload.cron.trim() }
-                  : {}),
-                ...(typeof payload.scheduledTime === 'string' &&
-                payload.scheduledTime.trim()
-                  ? { scheduledTime: payload.scheduledTime.trim() }
-                  : {}),
-              }
-            : {}),
-        };
-        const store = await this._ensureOperationsStore();
-        const { operation, resourceId, result } =
-          await runPersistedActivityOperation({
-            store,
-            manifest: o.manifest,
-            activityName: actor,
-            event: payload,
-            trigger,
-            invokeActivity,
-          });
-
-        if (result.status !== 'COMPLETED') {
-          const details = [];
-          if (result.failedActionIds.length > 0) {
-            details.push(`failed=${result.failedActionIds.join(',')}`);
-          }
-          if (result.blockedActionIds.length > 0) {
-            details.push(`blocked=${result.blockedActionIds.join(',')}`);
-          }
-          throw new Error(
-            `Scheduled activity ${actor} (${resourceId}#${operation.id}) finished with status ${result.status}${
-              details.length > 0 ? ` (${details.join(' ')})` : ''
-            }.`,
-          );
-        }
-      },
-      log: (msg, extra) =>
-        console.error('[node-agent:scheduler]', msg, extra ?? ''),
-    });
-  }
-
-  /**
-   * @returns {Promise<ReturnType<typeof operationsStoreFactory>>} - Result.
-   */
-  async _ensureOperationsStore() {
-    if (this._operationsStore) {
-      return this._operationsStore;
-    }
-
-    if (this._operationsStorePromise) {
-      return await this._operationsStorePromise;
-    }
-
-    const tableName = resolveOperationsTableName();
-
-    this._operationsStorePromise = (async () => {
-      const db = await createDBClient();
-      try {
-        const store = operationsStoreFactory({ db, tableName });
-        this._operationsDb = db;
-        this._operationsStore = store;
-        return store;
-      } catch (error) {
-        await db?.close?.();
-        throw error;
-      }
-    })();
-
-    try {
-      return await this._operationsStorePromise;
-    } catch (error) {
-      this._operationsStorePromise = null;
-      this._operationsStore = null;
-      this._operationsDb = null;
-      throw error;
-    }
-  }
-
-  /**
-   * @returns {(actor: string, payload: any, context?: any) => Promise<void>} - Invoker.
-   */
-  _createLocalLambdaInvoker() {
-    const o = this.options;
-
-    const host = normalizeLocalClientHost(o.lambdaHost);
-    const port = Number(o.lambdaPort);
-    if (!Number.isFinite(port) || port <= 0) {
-      throw new Error(
-        `node-agent: invalid lambdaPort for scheduler invocation: ${o.lambdaPort}`,
-      );
-    }
-
-    const address = `${host}:${port}`;
-
-    const client = new Client(address, credentials.createInsecure());
-    this._lambdaClient = client;
-
-    return async (actor, payload, context = {}) => {
-      const resp = await grpcUnary(
-        client,
-        LambdaServiceDefinition.Invoke.path,
-        {
-          functionName: actor,
-          event: payload,
-          context: {
-            source: 'cron',
-            nodeId: o.nodeId,
-            ...(context && typeof context === 'object' ? context : {}),
-          },
-        },
-        { deadlineMs: 60_000 },
-      );
-
-      if (!resp || resp.ok !== true) {
-        const msg =
-          resp && typeof resp === 'object' && 'error' in resp
-            ? String(resp.error)
-            : 'Lambda Invoke failed';
-        throw new Error(msg);
-      }
-    };
   }
 
   async _startControlPlane() {
@@ -584,35 +368,6 @@ export default class NodeAgent {
     }
 
     console.log(`[node-agent] shutting down (${signal})`);
-
-    if (this.scheduler) {
-      try {
-        await this.scheduler.stop();
-      } catch {}
-      this.scheduler = null;
-    }
-
-    if (this._lambdaClient) {
-      try {
-        this._lambdaClient.close();
-      } catch {}
-      this._lambdaClient = null;
-    }
-
-    if (this._operationsStorePromise) {
-      try {
-        await this._operationsStorePromise;
-      } catch {}
-    }
-
-    if (this._operationsDb) {
-      try {
-        await this._operationsDb.close?.();
-      } catch {}
-      this._operationsDb = null;
-    }
-    this._operationsStore = null;
-    this._operationsStorePromise = null;
 
     if (this.control) {
       this.control.close();

@@ -1,10 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import {
-  getManifestAppName,
-  getManifestPrimaryTarget,
-} from './app-manifest.js';
+import { stringifyAppManifest } from '../../../../runtime/app-manifest.js';
+import { getManifestAppId, getManifestPrimaryTarget } from './app-manifest.js';
 import {
   BOOTSTRAP_MODE_STATE_START,
   createBootstrapEnvironment,
@@ -197,9 +195,9 @@ export function createReleasePaths(options) {
  * @returns {DeployPlan} - Result.
  */
 export function createDeployPlan(options) {
-  const appName = getManifestAppName(options.manifest);
+  const appName = getManifestAppId(options.manifest);
   if (!appName) {
-    throw new Error('Deploy requires manifest.app.name.');
+    throw new Error('Deploy requires manifest.app.id.');
   }
 
   const serviceName = sanitizeNameSegment(options.serviceName || appName);
@@ -311,7 +309,7 @@ export async function materializeDeployPlan(plan, options = {}) {
   await fsOps.chmod(plan.paths.releaseArtifactPath, 0o755);
   await fsOps.writeFile(
     plan.paths.releaseManifestPath,
-    `${JSON.stringify(plan.manifest, null, 2)}\n`,
+    `${stringifyAppManifest(plan.manifest)}\n`,
     'utf8',
   );
   await fsOps.writeFile(

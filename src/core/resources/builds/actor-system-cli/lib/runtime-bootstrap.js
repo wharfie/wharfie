@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import { resolveSharedResourceSpecs } from '../../../../runtime/shared-resource-registry.js';
 import {
   getManifestActivities,
-  getManifestFunctions,
   getManifestPollQueueUrls,
   getManifestResources,
   resolveAppManifest,
@@ -93,61 +92,11 @@ function normalizeStringArray(value) {
 }
 
 /**
- * Extract cron triggers from a manifest/config-like object.
- *
- * Supported shapes (MVP):
- * - { scheduler: { triggers: [{ activity, cron }] } }
- * - { scheduler: { triggers: [{ actor, cron }] } }
- * - { cronTriggers: [{ actor, cron }] }
- * - { cron: [{ actor, cron }] }
- * @param {any} spec - spec.
- * @returns {{ actor: string, cron: string }[]} - Result.
- */
-export function extractCronTriggers(spec) {
-  if (!spec || typeof spec !== 'object') return [];
-
-  const candidates = [
-    spec?.scheduler?.triggers,
-    spec?.scheduler?.cronTriggers,
-    spec?.cronTriggers,
-    spec?.cron,
-  ];
-
-  for (const candidate of candidates) {
-    if (!Array.isArray(candidate)) continue;
-
-    /** @type {{ actor: string, cron: string }[]} */
-    const triggers = [];
-    for (const trigger of candidate) {
-      if (!isObjectRecord(trigger)) continue;
-      const actor =
-        typeof trigger.activity === 'string'
-          ? trigger.activity
-          : typeof trigger.actor === 'string'
-            ? trigger.actor
-            : typeof trigger.functionName === 'string'
-              ? trigger.functionName
-              : null;
-      const cron = typeof trigger.cron === 'string' ? trigger.cron : null;
-      if (!actor || !cron) continue;
-      triggers.push({ actor: actor.trim(), cron: cron.trim() });
-    }
-
-    if (triggers.length > 0) {
-      return triggers;
-    }
-  }
-
-  return [];
-}
-
-/**
  * @typedef RuntimeBootstrap
  * @property {any | undefined} manifest - manifest.
  * @property {Record<string, any>} resourcesSpec - resourcesSpec.
  * @property {string[]} pollQueueUrls - pollQueueUrls.
- * @property {{ actor: string, cron: string }[]} schedulerTriggers - schedulerTriggers.
- * @property {{ db: boolean, queue: boolean, objectStorage: boolean, lambda: boolean, scheduler: boolean }} servicePlan - servicePlan.
+ * @property {{ db: boolean, queue: boolean, objectStorage: boolean, lambda: boolean }} servicePlan - servicePlan.
  */
 
 /**
@@ -173,8 +122,6 @@ export async function loadRuntimeBootstrap(opts = {}, options = {}) {
   const explicitPollQueueUrls = normalizeStringArray(opts.pollQueueUrl);
   const pollQueueSource = manifest
     ? {
-        ...manifest,
-        capabilities: resourcesSpec,
         resources: resourcesSpec,
       }
     : resourcesSpec;
@@ -182,29 +129,22 @@ export async function loadRuntimeBootstrap(opts = {}, options = {}) {
     explicitPollQueueUrls.length > 0
       ? explicitPollQueueUrls
       : getManifestPollQueueUrls(pollQueueSource);
-  const schedulerTriggers = extractCronTriggers(manifest || resourcesSpec);
-  const functions = getManifestFunctions(manifest);
   const activities = getManifestActivities(manifest);
 
   return {
     manifest,
     resourcesSpec,
     pollQueueUrls,
-    schedulerTriggers,
     servicePlan: {
       db: resourcesSpec.db !== undefined,
       queue: resourcesSpec.queue !== undefined,
       objectStorage: resourcesSpec.objectStorage !== undefined,
-      lambda: manifest
-        ? functions.length > 0 || Object.keys(activities).length > 0
-        : true,
-      scheduler: schedulerTriggers.length > 0,
+      lambda: manifest ? Object.keys(activities).length > 0 : true,
     },
   };
 }
 
 export default {
-  extractCronTriggers,
   loadResourcesSpec,
   loadRuntimeBootstrap,
 };

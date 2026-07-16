@@ -16,7 +16,7 @@ const helloWorldDir = path.join(
   repoRoot,
   'scratch',
   'examples',
-  'actor-systems',
+  'apps',
   'hello-world',
 );
 

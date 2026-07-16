@@ -1,11 +1,15 @@
 import { getAsset } from '../../lib/node-sea.js';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { brotliDecompressSync } from 'node:zlib';
 
 import worker from '../../lib/code-execution/worker.js';
 import { createActorSystemResources } from '../../runtime/resources.js';
 import { assertNoActivityEnvironmentVariables } from './lib/activity-environment.js';
-import { normalizeExternalDependencies } from './lib/resolve-externals.js';
+import {
+  assertInstalledExternalDependencies,
+  normalizeExternalDependencies,
+} from './lib/resolve-externals.js';
 
 /**
  * @typedef ExternalDependencyDescription
@@ -132,6 +136,7 @@ class Function {
     };
     /** @type {Promise<{ resources: Record<string, any>, close: () => Promise<void> }> | null} */
     this._runtimeResourcesPromise = null;
+    this._sourceExternalsVerified = false;
   }
 
   /**
@@ -311,12 +316,17 @@ class Function {
       options.baseResources || {},
     );
 
+    if (!this._sourceExternalsVerified) {
+      assertInstalledExternalDependencies(this.properties.external, entryPath);
+      this._sourceExternalsVerified = true;
+    }
+
     // CJS: require() exists. ESM: use dynamic import().
     const handler =
       typeof require === 'function'
         ? // eslint-disable-next-line import/no-dynamic-require, no-undef
           require(entryPath)
-        : await import(entryPath);
+        : await import(pathToFileURL(entryPath).href);
 
     const candidate = this.entrypoint.export
       ? handler?.[this.entrypoint.export]

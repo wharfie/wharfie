@@ -113,10 +113,9 @@ const lambdaCmd = new Command('lambda')
       process.env.OPERATIONS_TABLE.trim()
         ? process.env.OPERATIONS_TABLE.trim()
         : undefined;
-    const appName =
-      typeof bootstrap.manifest?.app?.name === 'string' &&
-      bootstrap.manifest.app.name.trim()
-        ? bootstrap.manifest.app.name.trim()
+    const appId =
+      typeof bootstrap.manifest?.app?.id === 'string'
+        ? bootstrap.manifest.app.id
         : undefined;
     const operationsStore =
       db && operationsTableName
@@ -147,7 +146,7 @@ const lambdaCmd = new Command('lambda')
               maxNumberOfMessages: Number(opts.pollMaxMessages),
               visibilityTimeout: Number(opts.pollVisibilityTimeout),
               operationsStore,
-              appName,
+              appId,
               log: (msg, extra) =>
                 console.error('[lambda-service:poll]', msg, extra ?? ''),
             }

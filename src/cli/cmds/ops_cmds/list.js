@@ -12,7 +12,7 @@ const listCommand = new Command('list')
   .action(async (options) => {
     try {
       const { manifest } = await loadApp({ dir: options.dir || process.cwd() });
-      const resourceId = getAppResourceId(manifest.app.name);
+      const resourceId = getAppResourceId(manifest.app.id);
 
       await withOperationsStore(async (store) => {
         const records = await store.getRecords(resourceId);

@@ -20,12 +20,21 @@ import {
 } from '../../../src/core/resources/builds/actor-system-cli/lib/systemd-release.js';
 
 const manifest = {
-  app: { name: 'artifact-infra-demo' },
+  schemaVersion: 2,
+  app: { id: 'artifact-infra-demo' },
+  cli: {
+    entrypoint: {
+      kind: 'node',
+      path: 'cli.js',
+      export: 'default',
+    },
+  },
   targets: [
     {
       nodeVersion: process.versions.node,
       platform: process.platform,
       architecture: process.arch,
+      ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
     },
   ],
   resources: {
@@ -34,15 +43,15 @@ const manifest = {
       options: { path: '.wharfie/db' },
     },
   },
-  functions: [
-    {
-      name: 'start',
+  activities: {
+    start: {
       entrypoint: {
-        path: '/artifact/functions/start.js',
+        kind: 'node',
+        path: 'functions/start.js',
         export: 'start',
       },
     },
-  ],
+  },
 };
 
 /**
@@ -114,7 +123,9 @@ describe('artifact infrastructure commands', () => {
       dryRun: true,
     });
     expect(result.targetSelector).toBe(
-      `node${process.versions.node}-${process.platform}-${process.arch}`,
+      `node${process.versions.node}-${process.platform}-${process.arch}${
+        process.platform === 'linux' ? '-glibc' : ''
+      }`,
     );
     expect(result.currentArtifactPath).toContain(
       '/srv/wharfie/artifact-infra-demo/current/wharfie-artifact',
@@ -273,7 +284,7 @@ describe('artifact infrastructure commands', () => {
     await expect(
       readCurrentReleaseId({
         releaseRoot: fixture.releaseRoot,
-        appName: manifest.app.name,
+        appName: manifest.app.id,
       }),
     ).resolves.toBe(fixture.previousPlan.releaseId);
   });

@@ -1,32 +1,77 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { promises as fsp } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import Function from '../../../src/core/resources/builds/function.js';
-import { loadApp } from '../../../src/cli/app/load-app.js';
 import { invokeActivity } from '../../../src/app.js';
+import { runLocalApp } from '../../../src/cli/app/local-app.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
 const examplesDir = path.join(repoRoot, 'scratch', 'examples');
 
-describe('Function + ActorSystem demos', () => {
-  it('runs the echo-event demo through the Function API', async () => {
-    const fn = new Function({
-      name: 'echo-event',
-      entrypoint: {
-        path: path.join(examplesDir, 'functions', 'echo-event.js'),
-        export: 'echoEvent',
-      },
+describe('schemaVersion 2 app demos', () => {
+  it('loads the canonical hello-world manifest and runs an activity', async () => {
+    const dir = path.join(examplesDir, 'apps', 'hello-world');
+    const { manifest, result } = await runLocalApp({
+      dir,
+      activityName: 'echo-event',
+      eventInput: JSON.stringify({ who: 'jest', message: 'demo' }),
+      contextInput: JSON.stringify({ requestId: 'req-123' }),
     });
 
-    await expect(
-      fn.fn({ who: 'jest', message: 'demo' }, { requestId: 'req-123' }),
-    ).resolves.toEqual({
+    expect(manifest).toEqual({
+      schemaVersion: 2,
+      app: { id: 'hello-world-demo' },
+      cli: {
+        entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },
+      },
+      targets: [
+        {
+          nodeVersion: '24.13.1',
+          platform: 'darwin',
+          architecture: 'arm64',
+        },
+        {
+          nodeVersion: '24.13.1',
+          platform: 'linux',
+          architecture: 'x64',
+          libc: 'glibc',
+        },
+      ],
+      resources: {
+        db: {
+          adapter: 'vanilla',
+          options: { path: 'tmp/wharfie-examples/hello-world' },
+        },
+        queue: {
+          adapter: 'vanilla',
+          options: { path: 'tmp/wharfie-examples/hello-world' },
+        },
+        objectStorage: {
+          adapter: 'vanilla',
+          options: { path: 'tmp/wharfie-examples/hello-world' },
+        },
+      },
+      activities: {
+        'echo-event': {
+          entrypoint: {
+            kind: 'node',
+            path: 'activities.js',
+            export: 'echoEvent',
+          },
+        },
+        'hello-resources': {
+          entrypoint: {
+            kind: 'node',
+            path: 'activities.js',
+            export: 'helloResources',
+          },
+        },
+      },
+    });
+    expect(result).toEqual({
       ok: true,
       who: 'jest',
       message: 'demo',
@@ -34,80 +79,28 @@ describe('Function + ActorSystem demos', () => {
     });
   });
 
-  it('runs the scratch native smoke function with required externals', async () => {
-    const lmdbPath = await fsp.mkdtemp(
-      path.join(os.tmpdir(), 'wharfie-scratch-start-'),
-    );
-    const fn = new Function({
-      name: 'start',
-      entrypoint: {
-        path: path.join(repoRoot, 'scratch', 'functions', 'start.js'),
-        export: 'start',
-      },
+  it('runs the resource-backed hello-world activity through the local runner', async () => {
+    const dir = path.join(examplesDir, 'apps', 'hello-world');
+    const { result } = await runLocalApp({
+      dir,
+      activityName: 'hello-resources',
+      eventInput: JSON.stringify({ who: 'demo-user' }),
     });
 
-    try {
-      const result = await fn.fn(
-        { lmdbPath },
-        { requestId: 'scratch-smoke-request' },
-      );
-
-      expect(result).toMatchObject({
-        dependency: 'dependency',
-        requestId: 'scratch-smoke-request',
-        lmdb: {
-          ok: true,
-          value: 'Hello, World!',
-          path: lmdbPath,
-        },
-      });
-      expect(['ok', 'skipped']).toContain(result.sharp.status);
-      expect(['ok', 'skipped']).toContain(result.sodiumNative.status);
-      expect(['ok', 'skipped']).toContain(result.usb.status);
-    } finally {
-      await fsp.rm(lmdbPath, { recursive: true, force: true });
-    }
-  });
-
-  it('loads the hello-world ActorSystem demo and invokes its functions', async () => {
-    const dir = path.join(examplesDir, 'actor-systems', 'hello-world');
-    const { appExport, manifest } = await loadApp({ dir });
-
-    expect(manifest.app.name).toBe('hello-world-demo');
-    expect(Array.isArray(manifest.targets)).toBe(true);
-    expect(manifest.capabilities?.db).toBeDefined();
-    expect(manifest.capabilities?.queue).toBeDefined();
-    expect(manifest.capabilities?.objectStorage).toBeDefined();
-
-    try {
-      await expect(
-        appExport.invoke('echo-event', { who: 'demo-user' }),
-      ).resolves.toEqual({
-        ok: true,
+    expect(result).toMatchObject({
+      who: 'demo-user',
+      dbRecord: {
+        id: 'greeting',
         who: 'demo-user',
         message: 'hello demo-user',
-        requestId: null,
-      });
-
-      await expect(
-        appExport.invoke('hello-resources', { who: 'demo-user' }),
-      ).resolves.toMatchObject({
-        who: 'demo-user',
-        dbRecord: {
-          id: 'greeting',
-          who: 'demo-user',
-          message: 'hello demo-user',
-        },
-        queueBody: JSON.stringify({ hello: 'demo-user' }),
-        objectBody: 'hello demo-user',
-      });
-    } finally {
-      await appExport.closeRuntimeResources();
-    }
+      },
+      queueBody: JSON.stringify({ hello: 'demo-user' }),
+      objectBody: 'hello demo-user',
+    });
   });
 
   it('invokes a named source activity through the public app API', async () => {
-    const dir = path.join(examplesDir, 'actor-systems', 'hello-world');
+    const dir = path.join(examplesDir, 'apps', 'hello-world');
 
     await expect(
       invokeActivity('echo-event', {
@@ -123,36 +116,33 @@ describe('Function + ActorSystem demos', () => {
     });
   });
 
-  it('loads the context-override ActorSystem demo and shows resource merging', async () => {
-    const dir = path.join(examplesDir, 'actor-systems', 'context-override');
-    const { appExport, manifest } = await loadApp({ dir });
-
-    expect(manifest.app.name).toBe('context-override-demo');
-    expect(Array.isArray(manifest.targets)).toBe(true);
-    expect(manifest.capabilities?.db).toBeDefined();
-
-    try {
-      await expect(
-        appExport.invoke(
-          'inspect-context',
-          {},
-          {
-            requestId: 'req-456',
-            resources: {
-              queue: { adapter: 'injected-queue' },
-              extra: { note: 'user-provided' },
-            },
-          },
-        ),
-      ).resolves.toEqual({
+  it('merges caller context over canonical app resources', async () => {
+    const dir = path.join(examplesDir, 'apps', 'context-override');
+    const { manifest, result } = await runLocalApp({
+      dir,
+      activityName: 'inspect-context',
+      contextInput: JSON.stringify({
         requestId: 'req-456',
-        resourceKeys: ['db', 'extra', 'queue'],
-        dbPresent: true,
-        queueAdapter: 'injected-queue',
-        extraNote: 'user-provided',
-      });
-    } finally {
-      await appExport.closeRuntimeResources();
-    }
+        resources: {
+          queue: { adapter: 'injected-queue' },
+          extra: { note: 'user-provided' },
+        },
+      }),
+    });
+
+    expect(manifest.app).toEqual({ id: 'context-override-demo' });
+    expect(manifest.resources).toEqual({
+      db: {
+        adapter: 'vanilla',
+        options: { path: 'tmp/wharfie-examples/context-override' },
+      },
+    });
+    expect(result).toEqual({
+      requestId: 'req-456',
+      resourceKeys: ['db', 'extra', 'queue'],
+      dbPresent: true,
+      queueAdapter: 'injected-queue',
+      extraNote: 'user-provided',
+    });
   });
 });

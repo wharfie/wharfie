@@ -5,55 +5,13 @@ import {
   getAsset as nodeGetAsset,
   isSea as nodeIsSea,
 } from '../../../lib/node-sea.js';
+import {
+  stringifyAppManifest,
+  validateAppManifest,
+} from '../../../runtime/app-manifest.js';
 
 export const APP_MANIFEST_ASSET_PREFIX = '<WHARFIE_APP>/';
 export const APP_MANIFEST_ASSET_NAME = `${APP_MANIFEST_ASSET_PREFIX}manifest.json`;
-
-/**
- * @param {unknown} value - value.
- * @returns {value is Record<string, unknown>} - Result.
- */
-function isObjectRecord(value) {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-/**
- * @param {unknown} value - value.
- * @returns {unknown} - Result.
- */
-function sortJsonValue(value) {
-  if (Array.isArray(value)) {
-    return value.map((item) => sortJsonValue(item));
-  }
-
-  if (value === null) return null;
-
-  if (isObjectRecord(value)) {
-    /** @type {Record<string, unknown>} */
-    const sorted = {};
-
-    for (const key of Object.keys(value).sort((left, right) =>
-      left.localeCompare(right),
-    )) {
-      const child = sortJsonValue(value[key]);
-      if (child !== undefined) {
-        sorted[key] = child;
-      }
-    }
-
-    return sorted;
-  }
-
-  if (
-    typeof value === 'function' ||
-    typeof value === 'symbol' ||
-    typeof value === 'undefined'
-  ) {
-    return undefined;
-  }
-
-  return value;
-}
 
 /**
  * @param {unknown} manifest - manifest.
@@ -61,11 +19,10 @@ function sortJsonValue(value) {
  * @returns {string} - Result.
  */
 export function stringifyEmbeddedAppManifest(manifest, options = {}) {
-  const pretty = options.pretty !== false;
-  const normalized = sortJsonValue(manifest);
-  return pretty
-    ? JSON.stringify(normalized, null, 2)
-    : JSON.stringify(normalized);
+  return stringifyAppManifest(manifest, {
+    pretty: options.pretty,
+    valuePath: 'embedded manifest',
+  });
 }
 
 /**
@@ -170,7 +127,13 @@ export async function readEmbeddedAppManifest(options = {}) {
   }
 
   const text = Buffer.from(rawAsset).toString('utf8');
-  return JSON.parse(text);
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('Embedded app manifest is not valid JSON.');
+  }
+  return validateAppManifest(parsed, 'embedded manifest');
 }
 
 export default {

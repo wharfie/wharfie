@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 
-import { getManifestAppName, requireAppManifest } from '../lib/app-manifest.js';
+import { getManifestAppId, requireAppManifest } from '../lib/app-manifest.js';
 import {
   listReleaseRecords,
   readCurrentReleaseId,
@@ -33,9 +33,9 @@ export async function getDeploymentStatus(opts, deps = {}) {
   const manifest = await requireAppManifest(opts, {
     assetProvider: deps.assetProvider,
   });
-  const appName = getManifestAppName(manifest);
+  const appName = getManifestAppId(manifest);
   if (!appName) {
-    throw new Error('The app manifest is missing app.name.');
+    throw new Error('The app manifest is missing app.id.');
   }
   const releases = await listReleaseRecords({
     releaseRoot: opts.releaseRoot || '/var/lib/wharfie',

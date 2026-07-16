@@ -10,10 +10,10 @@ import {
   readEmbeddedAppManifest,
 } from '../../core/resources/builds/lib/app-manifest-asset.js';
 import FunctionResource from '../../core/resources/builds/function-resource.js';
-import { assertManifestIsSecretFree } from '../../core/resources/builds/lib/manifest-security.js';
 import { assertSeaNodeVersionCompatible } from '../../core/resources/builds/lib/sea-node-version.js';
 import { withResourceScope } from '../../core/resources/resource-scope.js';
 import { createResourceScope } from '../../core/resources/runtime-config.js';
+import { validateAppManifest } from '../../core/runtime/app-manifest.js';
 import {
   createManifestActivityFunction,
   getManifestActivityNames,
@@ -33,7 +33,6 @@ import { loadApp } from './load-app.js';
  * @property {string} [dir] - App directory.
  * @property {boolean} [allowEmbedded] - Fall back to the embedded SEA app manifest when no local app exists.
  * @property {string} [activityName] - Activity name.
- * @property {string} [functionName] - Compatibility alias for activity name.
  * @property {string | undefined} [eventInput] - Event JSON string.
  * @property {string | undefined} [contextInput] - Context JSON string.
  * @property {string | undefined} [stdinInput] - STDIN payload.
@@ -41,9 +40,8 @@ import { loadApp } from './load-app.js';
 
 /**
  * @typedef LoadedAppForCommand
- * @property {any | null} appExport - appExport.
+ * @property {string} [appDir] - Source application directory.
  * @property {any} manifest - manifest.
- * @property {any} publicManifest - publicManifest.
  * @property {'disk' | 'embedded'} source - source.
  */
 
@@ -67,14 +65,14 @@ import { loadApp } from './load-app.js';
  * @property {string} dir - dir.
  * @property {string} [outputDir] - outputDir.
  * @property {string[]} [targetFilters] - targetFilters.
+ * @property {LocalAppBuildConfig} [build] - Ephemeral build request; never embedded in the app manifest.
  */
 
 /**
- * @typedef LocalAppPackagingContext
+ * @typedef LocalAppBuildContext
  * @property {string} appDir - App directory.
  * @property {string} outputDir - Output directory.
- * @property {Record<string, any>} manifest - Full compiled manifest.
- * @property {Record<string, any>} publicManifest - Public compiled manifest.
+ * @property {Record<string, any>} manifest - Canonical compiled manifest.
  */
 
 /**
@@ -90,14 +88,14 @@ import { loadApp } from './load-app.js';
  */
 
 /**
- * @typedef LocalAppPackagingConfig
+ * @typedef LocalAppBuildConfig
  * @property {LocalAppSigningConfig} [signing] - Artifact signing configuration.
- * @property {Record<string, string> | ((context: LocalAppPackagingContext) => Record<string, string>)} [assets] - Additional SEA assets to embed.
+ * @property {Record<string, string> | ((context: LocalAppBuildContext) => Record<string, string>)} [assets] - Additional SEA assets to embed.
  */
 
 /**
  * @typedef PackageLocalAppResult
- * @property {{ name: string }} app - App metadata.
+ * @property {{ id: string }} app - App identity.
  * @property {PackageArtifactTarget[]} [targets] - targets.
  * @property {string} outputDir - outputDir.
  * @property {PackageArtifactSummary[]} artifacts - artifacts.
@@ -150,53 +148,6 @@ function cloneJson(value) {
 }
 
 /**
- * Replace build-host entrypoint paths with stable logical locations used only
- * by the embedded manifest. Embedded activity execution resolves the activity
- * by its SEA asset name rather than importing this path.
- *
- * @param {Record<string, any>} manifest - Public manifest.
- * @returns {Record<string, any>} - Sanitized embedded manifest.
- */
-function sanitizeEmbeddedManifestEntrypoints(manifest) {
-  const embeddedManifest = cloneJson(manifest);
-
-  if (
-    isObjectRecord(embeddedManifest.cli) &&
-    typeof embeddedManifest.cli.entrypoint === 'string'
-  ) {
-    embeddedManifest.cli.entrypoint = 'wharfie:embedded/cli';
-  }
-
-  if (isObjectRecord(embeddedManifest.activities)) {
-    for (const [activityName, definition] of Object.entries(
-      embeddedManifest.activities,
-    )) {
-      if (isObjectRecord(definition) && isObjectRecord(definition.entrypoint)) {
-        definition.entrypoint.path = `wharfie:embedded/activity/${encodeURIComponent(
-          activityName,
-        )}`;
-      }
-    }
-  }
-
-  if (Array.isArray(embeddedManifest.functions)) {
-    for (const definition of embeddedManifest.functions) {
-      if (
-        isObjectRecord(definition) &&
-        typeof definition.name === 'string' &&
-        isObjectRecord(definition.entrypoint)
-      ) {
-        definition.entrypoint.path = `wharfie:embedded/activity/${encodeURIComponent(
-          definition.name,
-        )}`;
-      }
-    }
-  }
-
-  return embeddedManifest;
-}
-
-/**
  * @param {unknown} error - error.
  * @returns {string} - Result.
  */
@@ -225,9 +176,7 @@ function isMissingEmbeddedAppError(error) {
 async function loadEmbeddedAppForCommand() {
   const manifest = await readEmbeddedAppManifest();
   return {
-    appExport: null,
     manifest,
-    publicManifest: manifest,
     source: 'embedded',
   };
 }
@@ -255,42 +204,26 @@ export async function loadAppForCommand(options = {}) {
 }
 
 /**
- * @param {any} appExport - appExport.
- * @returns {LocalAppPackagingConfig} - Result.
- */
-function getLocalAppPackagingConfig(appExport) {
-  if (!isObjectRecord(appExport)) {
-    return {};
-  }
-
-  const packaging = appExport.packaging;
-  return isObjectRecord(packaging)
-    ? /** @type {LocalAppPackagingConfig} */ (packaging)
-    : {};
-}
-
-/**
- * @param {any} appExport - appExport.
+ * @param {LocalAppBuildConfig | undefined} build - Ephemeral build request.
  * @returns {LocalAppMacOSSigningConfig | undefined} - Result.
  */
-function getPackagingMacOSSigningConfig(appExport) {
-  const config = getLocalAppPackagingConfig(appExport);
-  if (!isObjectRecord(config.signing)) {
+function getPackagingMacOSSigningConfig(build) {
+  if (!isObjectRecord(build?.signing)) {
     return undefined;
   }
 
-  return isObjectRecord(config.signing.macos)
-    ? /** @type {LocalAppMacOSSigningConfig} */ (config.signing.macos)
+  return isObjectRecord(build.signing.macos)
+    ? /** @type {LocalAppMacOSSigningConfig} */ (build.signing.macos)
     : undefined;
 }
 
 /**
  * @param {ActorSystem} actorSystem - actorSystem.
- * @param {any} appExport - appExport.
+ * @param {LocalAppBuildConfig | undefined} build - Ephemeral build request.
  * @returns {void} - Result.
  */
-function applyPackagingSigningConfig(actorSystem, appExport) {
-  const signing = getPackagingMacOSSigningConfig(appExport);
+function applyPackagingSigningConfig(actorSystem, build) {
+  const signing = getPackagingMacOSSigningConfig(build);
   if (!signing) return;
 
   actorSystem.setMacOSSigningCredentials({
@@ -321,18 +254,17 @@ function normalizePackagingAssets(assetSource) {
 }
 
 /**
- * @param {{ appExport: any, appDir: string, outputDir: string, manifest: Record<string, any>, publicManifest: Record<string, any> }} options - options.
+ * @param {{ build?: LocalAppBuildConfig, appDir: string, outputDir: string, manifest: Record<string, any> }} options - options.
  * @returns {Promise<Record<string, string>>} - Validated absolute asset paths.
  */
 async function resolvePackagingAssets(options) {
-  const config = getLocalAppPackagingConfig(options.appExport);
+  const config = options.build || {};
   const assets =
     typeof config.assets === 'function'
       ? config.assets({
           appDir: options.appDir,
           outputDir: options.outputDir,
           manifest: options.manifest,
-          publicManifest: options.publicManifest,
         })
       : config.assets;
 
@@ -340,15 +272,10 @@ async function resolvePackagingAssets(options) {
   const reservedNames = new Set([
     APP_MANIFEST_ASSET_NAME,
     ...Object.keys(
-      isObjectRecord(options.publicManifest.activities)
-        ? options.publicManifest.activities
+      isObjectRecord(options.manifest.activities)
+        ? options.manifest.activities
         : {},
     ),
-    ...(Array.isArray(options.manifest.functions)
-      ? options.manifest.functions
-          .map((definition) => definition?.name)
-          .filter((name) => typeof name === 'string' && name)
-      : []),
   ]);
   /** @type {Record<string, string>} */
   const validated = {};
@@ -384,25 +311,17 @@ async function resolvePackagingAssets(options) {
 /**
  * @param {RunLocalAppOptions} options - options.
  * @param {any} manifest - manifest.
- * @param {any} publicManifest - publicManifest.
  * @returns {string} - Result.
  */
-function resolveActivityName(options, manifest, publicManifest) {
+function resolveActivityName(options, manifest) {
   const activityName =
-    typeof options.activityName === 'string' && options.activityName.trim()
-      ? options.activityName.trim()
-      : typeof options.functionName === 'string' && options.functionName.trim()
-        ? options.functionName.trim()
-        : '';
+    typeof options.activityName === 'string' ? options.activityName : '';
 
   if (activityName) {
     return activityName;
   }
 
-  const availableActivities = getManifestActivityNames(
-    manifest,
-    publicManifest,
-  );
+  const availableActivities = getManifestActivityNames(manifest);
   if (availableActivities.length === 1) {
     return availableActivities[0];
   }
@@ -411,164 +330,28 @@ function resolveActivityName(options, manifest, publicManifest) {
 }
 
 /**
- * @param {unknown} spec - Resource adapter specification.
- * @returns {string | undefined} - Normalized adapter name.
- */
-function getResourceAdapterName(spec) {
-  if (typeof spec === 'string') return spec.trim().toLowerCase();
-  if (
-    isObjectRecord(spec) &&
-    typeof spec.adapter === 'string' &&
-    spec.adapter.trim()
-  ) {
-    return spec.adapter.trim().toLowerCase();
-  }
-  return undefined;
-}
-
-/** @type {Record<string, Record<string, Set<string>>>} */
-const PORTABLE_RESOURCE_OPTION_KEYS = {
-  db: {
-    dynamodb: new Set(['region']),
-    vanilla: new Set(['path']),
-  },
-  queue: {
-    sqs: new Set(['region']),
-    vanilla: new Set(['path']),
-  },
-  objectStorage: {
-    s3: new Set(['region']),
-    vanilla: new Set(['path', 'region']),
-  },
-};
-
-/**
- * Native host adapters must not be advertised as portable until their
- * target-specific runtime files are embedded in the generated SEA.
- * @param {unknown} resources - Resource specifications.
- * @param {string} location - Manifest location for diagnostics.
- * @returns {void}
- */
-function assertPortableResourceSpecs(resources, location) {
-  if (!isObjectRecord(resources)) return;
-
-  for (const kind of ['db', 'queue', 'objectStorage']) {
-    const spec = resources[kind];
-    if (spec === undefined) continue;
-
-    const adapter = getResourceAdapterName(spec);
-    if (adapter === 'lmdb') {
-      throw new Error(
-        `Cannot package ${location}.${kind} with adapter 'lmdb': its native runtime is not embedded in Wharfie SEA artifacts yet. Use a portable adapter or declare the native dependency inside an activity until host-native resource assets are implemented.`,
-      );
-    }
-
-    const allowedOptionKeys =
-      PORTABLE_RESOURCE_OPTION_KEYS[
-        /** @type {'db' | 'queue' | 'objectStorage'} */ (kind)
-      ]?.[adapter || ''];
-    if (!allowedOptionKeys) {
-      throw new Error(
-        `Cannot package ${location}.${kind} with adapter '${adapter || '(missing)'}': it has no reviewed portable public configuration schema.`,
-      );
-    }
-
-    if (!isObjectRecord(spec) || spec.options === undefined) continue;
-    if (!isObjectRecord(spec.options)) {
-      throw new Error(
-        `Cannot package ${location}.${kind}.options: portable resource options must be a public configuration object.`,
-      );
-    }
-
-    for (const [optionName, optionValue] of Object.entries(spec.options)) {
-      if (!allowedOptionKeys.has(optionName)) {
-        throw new Error(
-          `Cannot package ${location}.${kind}.options.${optionName}: this option is not part of the adapter's portable public configuration schema. Packaged manifests are inspectable; use ambient credentials until first-class secret references exist.`,
-        );
-      }
-      if (typeof optionValue !== 'string' || !optionValue.trim()) {
-        throw new Error(
-          `Cannot package ${location}.${kind}.options.${optionName}: portable public option values must be non-empty strings.`,
-        );
-      }
-    }
-  }
-}
-
-/**
  * @param {any} manifest - Public application manifest.
  * @returns {void}
  */
 function assertPortableManifestContract(manifest) {
-  const appName =
-    typeof manifest?.app?.name === 'string' ? manifest.app.name.trim() : '';
-  if (!/^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/.test(appName)) {
-    throw new Error(
-      'Cannot package app: app.name must be a lowercase portable identifier of 1-64 letters, numbers, dots, underscores, or hyphens, and must begin and end with a letter or number.',
-    );
-  }
-
-  const activities = isObjectRecord(manifest?.activities)
-    ? manifest.activities
-    : {};
-
-  for (const [activityName, definition] of Object.entries(activities)) {
-    if (activityName.startsWith(APP_MANIFEST_ASSET_PREFIX)) {
-      throw new Error(
-        `Cannot package activity '${activityName}': names beginning with '${APP_MANIFEST_ASSET_PREFIX}' are reserved for Wharfie runtime assets.`,
-      );
-    }
-    if (!/^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/.test(activityName)) {
-      throw new Error(
-        `Cannot package activity '${activityName}': names must be lowercase portable identifiers of 1-64 letters, numbers, dots, underscores, or hyphens, and must begin and end with a letter or number.`,
-      );
-    }
-    if (isObjectRecord(definition)) {
-      assertPortableResourceSpecs(
-        definition.resources,
-        `manifest.activities.${activityName}.resources`,
-      );
-    }
-  }
-
-  assertPortableResourceSpecs(manifest?.resources, 'manifest.resources');
-
-  if (Array.isArray(manifest?.workflows) && manifest.workflows.length > 0) {
-    throw new Error(
-      'Cannot package workflows yet: workflow inputs and durable execution semantics do not have a reviewed portable public schema. Invoke activities explicitly until the durable workflow contract is implemented.',
-    );
-  }
-
-  if (
-    isObjectRecord(manifest?.scheduler) &&
-    Array.isArray(manifest.scheduler.triggers) &&
-    manifest.scheduler.triggers.length > 0
-  ) {
-    throw new Error(
-      'Cannot package scheduler triggers yet: the generated SEA does not have a portable, manifest-derived durable operations store. Run activities explicitly until the durable scheduler contract is implemented.',
-    );
-  }
+  validateAppManifest(manifest);
 }
 
 /**
- * @param {{ appExport: any, manifest: any, publicManifest: any }} loaded - loaded.
+ * @param {{ appDir: string, manifest: any }} loaded - loaded.
  * @returns {ActorSystem} - Result.
  */
 function toPackageableActorSystem(loaded) {
-  if (loaded.appExport instanceof ActorSystem) {
-    return loaded.appExport;
-  }
-
   const manifest = loaded.manifest;
-  const publicManifest = loaded.publicManifest;
   const cliEntrypoint =
-    typeof publicManifest?.cli?.entrypoint === 'string' &&
-    publicManifest.cli.entrypoint
-      ? publicManifest.cli.entrypoint
+    typeof manifest?.cli?.entrypoint?.path === 'string' &&
+    manifest.cli.entrypoint.path
+      ? path.resolve(loaded.appDir, manifest.cli.entrypoint.path)
       : undefined;
   const cliExportName =
-    typeof publicManifest?.cli?.export === 'string' && publicManifest.cli.export
-      ? publicManifest.cli.export
+    typeof manifest?.cli?.entrypoint?.export === 'string' &&
+    manifest.cli.entrypoint.export
+      ? manifest.cli.entrypoint.export
       : undefined;
 
   if (!cliEntrypoint) {
@@ -577,36 +360,25 @@ function toPackageableActorSystem(loaded) {
     );
   }
 
-  const functions = getManifestActivityNames(manifest, publicManifest).map(
-    (activityName) =>
-      createManifestActivityFunction({
-        manifest,
-        publicManifest,
-        activityName,
-      }),
+  const functions = getManifestActivityNames(manifest).map((activityName) =>
+    createManifestActivityFunction({
+      manifest,
+      activityName,
+      appDir: loaded.appDir,
+    }),
   );
 
   const properties = /** @type {any} */ ({
-    targets: Array.isArray(publicManifest.targets)
-      ? publicManifest.targets
-      : Array.isArray(manifest.targets)
-        ? manifest.targets
-        : [],
-    resources: getManifestResourcesSpec(manifest, publicManifest),
-    ...(Array.isArray(manifest.workflows)
-      ? { workflows: manifest.workflows }
-      : {}),
-    ...(isObjectRecord(manifest.scheduler)
-      ? { scheduler: manifest.scheduler }
-      : {}),
+    targets: Array.isArray(manifest.targets) ? manifest.targets : [],
+    resources: getManifestResourcesSpec(manifest),
     cli: {
       entrypoint: cliEntrypoint,
-      ...(cliExportName ? { export: cliExportName } : {}),
+      export: cliExportName,
     },
   });
 
   return new ActorSystem({
-    name: manifest.app.name,
+    name: manifest.app.id,
     functions,
     properties,
   });
@@ -1208,7 +980,7 @@ async function attachEmbeddedManifestAssets(
     for (const build of builds) {
       const buildTarget = getBuildTarget(build);
       const embeddedManifest = {
-        ...sanitizeEmbeddedManifestEntrypoints(manifest),
+        ...cloneJson(manifest),
         ...(Array.isArray(manifest.targets)
           ? { targets: [cloneTarget(buildTarget)] }
           : {}),
@@ -1251,8 +1023,8 @@ export async function runLocalApp(options) {
     dir: options.dir,
     allowEmbedded: options.allowEmbedded,
   });
-  const { manifest, publicManifest } = loaded;
-  const activityName = resolveActivityName(options, manifest, publicManifest);
+  const { manifest } = loaded;
+  const activityName = resolveActivityName(options, manifest);
   const eventSource = options.eventInput ?? options.stdinInput;
   const event = parseJsonInput(eventSource, 'event', {});
   const context = parseJsonInput(options.contextInput, 'context', {});
@@ -1263,7 +1035,7 @@ export async function runLocalApp(options) {
 
   const result = await invokeManifestActivity({
     manifest,
-    publicManifest,
+    appDir: loaded.appDir,
     activityName,
     event,
     context,
@@ -1271,7 +1043,7 @@ export async function runLocalApp(options) {
   });
 
   return {
-    manifest: publicManifest,
+    manifest,
     result,
   };
 }
@@ -1281,8 +1053,8 @@ export async function runLocalApp(options) {
  * @returns {Promise<PackageLocalAppResult>} - Result.
  */
 export async function packageLocalApp(options) {
-  let loaded = await loadApp({ dir: options.dir });
-  let manifest = cloneJson(loaded.publicManifest);
+  const loaded = await loadApp({ dir: options.dir });
+  const manifest = cloneJson(loaded.manifest);
 
   const availableTargets = Array.isArray(manifest.targets)
     ? manifest.targets
@@ -1314,30 +1086,12 @@ export async function packageLocalApp(options) {
     );
   }
 
-  const requestedTargetSelectors = selectedTargets.map((target) =>
-    ActorSystem.getBuildTargetSelector(target),
-  );
-  if (
-    loaded.appExport instanceof ActorSystem &&
-    Array.isArray(options.targetFilters) &&
-    options.targetFilters.length > 0 &&
-    requestedTargetSelectors.length > 0
-  ) {
-    loaded = await loadApp({
-      dir: options.dir,
-      requestedTargetSelectors,
-    });
-    manifest = cloneJson(loaded.publicManifest);
-  }
-
   assertPortableManifestContract(manifest);
 
   const actorSystem = toPackageableActorSystem(loaded);
-  applyPackagingSigningConfig(actorSystem, loaded.appExport);
+  applyPackagingSigningConfig(actorSystem, options.build);
   applyTargetSelection(actorSystem, selectedTargets);
   manifest.targets = selectedTargets.map((target) => cloneTarget(target));
-  assertManifestIsSecretFree(loaded.manifest);
-  assertManifestIsSecretFree(manifest);
 
   const builds = getSeaBuildResources(actorSystem);
   const outputDir = path.resolve(
@@ -1346,11 +1100,10 @@ export async function packageLocalApp(options) {
   await fsp.mkdir(outputDir, { recursive: true });
 
   const packagingAssets = await resolvePackagingAssets({
-    appExport: loaded.appExport,
+    build: options.build,
     appDir: path.resolve(options.dir),
     outputDir,
     manifest: loaded.manifest,
-    publicManifest: loaded.publicManifest,
   });
 
   /** @type {import('../../core/resources/builds/lib/app-manifest-asset.js').EmbeddedAppManifestAsset[]} */
@@ -1367,7 +1120,7 @@ export async function packageLocalApp(options) {
 
   try {
     publicationLockPath = await acquirePackagePublicationLock(
-      manifest.app.name,
+      manifest.app.id,
       outputDir,
     );
     if (typeof actorSystem.initializeEnvironment === 'function') {
@@ -1388,7 +1141,7 @@ export async function packageLocalApp(options) {
 
     artifactTransaction = await stagePackageArtifacts(
       builds,
-      manifest.app.name,
+      manifest.app.id,
       outputDir,
     );
     await removePackageOwnedSeaBuildOutputs(builds);

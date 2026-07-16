@@ -1,6 +1,6 @@
 /* eslint-env jest */
 
-import { assertManifestIsSecretFree } from '../../../src/core/resources/builds/lib/manifest-security.js';
+import { assertManifestIsSecretFree } from '../../../src/core/runtime/manifest-security.js';
 
 describe('manifest security boundary', () => {
   it.each([

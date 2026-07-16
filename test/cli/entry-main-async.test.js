@@ -11,6 +11,10 @@ const LOAD_APP_MODULE = '../../src/cli/app/load-app.js';
 const ENTRY_MODULE = '../../src/cli/entry.js';
 
 describe('src/cli/entry main', () => {
+  beforeEach(() => {
+    process.exitCode = undefined;
+  });
+
   afterEach(() => {
     jest.restoreAllMocks();
     jest.resetModules();
@@ -43,11 +47,23 @@ describe('src/cli/entry main', () => {
       };
     });
 
-    /** @type {Promise<{ manifest: { app: { name: string } } }>} */
+    /** @type {Promise<{ manifest: Record<string, any> }>} */
     const loadAppPromise = new Promise((resolve) => {
       resolveLoadApp = () => {
         events.push('action:end');
-        resolve({ manifest: { app: { name: 'test-app' } } });
+        resolve({
+          manifest: {
+            schemaVersion: 2,
+            app: { id: 'test-app' },
+            cli: {
+              entrypoint: {
+                kind: 'node',
+                path: 'cli.js',
+                export: 'main',
+              },
+            },
+          },
+        });
       };
     });
 

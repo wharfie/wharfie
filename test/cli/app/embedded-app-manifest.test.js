@@ -18,36 +18,59 @@ const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
 const EMBEDDED_ACTIVITY_TIMEOUT_MS = 15_000;
 
 const embeddedManifest = {
-  app: { name: 'embedded-demo' },
+  schemaVersion: 2,
+  app: { id: 'embedded-demo' },
+  cli: {
+    entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },
+  },
   targets: [
     {
       nodeVersion: '24.13.1',
       platform: 'linux',
       architecture: 'x64',
+      libc: 'glibc',
     },
   ],
-  functions: [
-    {
-      name: 'start',
-      entrypoint: {
-        path: 'wharfie:embedded/activity/start',
-        export: 'start',
-      },
-    },
-  ],
-};
-
-const embeddedRunnableManifest = {
-  app: { name: 'embedded-runnable-demo' },
   activities: {
     start: {
       entrypoint: {
-        path: 'wharfie:embedded/activity/start',
+        kind: 'node',
+        path: 'activities/start.js',
         export: 'start',
       },
     },
   },
 };
+
+const embeddedRunnableManifest = {
+  schemaVersion: 2,
+  app: { id: 'embedded-runnable-demo' },
+  cli: {
+    entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },
+  },
+  activities: {
+    start: {
+      entrypoint: {
+        kind: 'node',
+        path: 'activities/start.js',
+        export: 'start',
+      },
+    },
+  },
+};
+
+/**
+ * @param {Promise<unknown>} promise - Promise expected to reject.
+ * @returns {Promise<unknown>} - Rejection reason.
+ */
+async function captureRejection(promise) {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error('Expected the manifest boundary to reject the value.');
+}
 
 describe('embedded app manifest asset helpers', () => {
   beforeEach(() => {
@@ -74,6 +97,125 @@ describe('embedded app manifest asset helpers', () => {
     await expect(mod.readEmbeddedAppManifest()).resolves.toEqual(
       embeddedManifest,
     );
+  });
+
+  it('serializes canonical manifest keys in host-independent order', async () => {
+    const mod =
+      await import('../../../src/core/resources/builds/lib/app-manifest-asset.js');
+    const value = {
+      schemaVersion: 2,
+      cli: {
+        entrypoint: { export: 'main', path: 'cli.js', kind: 'node' },
+      },
+      app: { id: 'ordered-demo' },
+      activities: {
+        zeta: {
+          entrypoint: { path: 'zeta.js', kind: 'node', export: 'zeta' },
+        },
+        alpha: {
+          entrypoint: { path: 'alpha.js', export: 'alpha', kind: 'node' },
+        },
+      },
+    };
+
+    const parsed = JSON.parse(
+      mod.stringifyEmbeddedAppManifest(value, { pretty: false }),
+    );
+
+    expect(Object.keys(parsed)).toEqual([
+      'activities',
+      'app',
+      'cli',
+      'schemaVersion',
+    ]);
+    expect(Object.keys(parsed.activities)).toEqual(['alpha', 'zeta']);
+    expect(Object.keys(parsed.cli.entrypoint)).toEqual([
+      'export',
+      'kind',
+      'path',
+    ]);
+  });
+
+  it('rejects unversioned compatibility manifests at the embedded boundary', async () => {
+    const mod =
+      await import('../../../src/core/resources/builds/lib/app-manifest-asset.js');
+
+    await expect(
+      mod.readEmbeddedAppManifest({
+        assetProvider: {
+          getAsset: async () =>
+            Buffer.from(
+              JSON.stringify({
+                app: { name: 'legacy-demo' },
+                functions: [],
+              }),
+            ),
+        },
+      }),
+    ).rejects.toThrow(/schemaVersion|not supported/i);
+  });
+
+  it('rejects credential-bearing allowed options in provided manifests without rendering the secret', async () => {
+    const secret = 'provided-manifest-password-sentinel';
+    const credentialManifest = {
+      ...embeddedManifest,
+      app: { id: 'provided-credential-demo' },
+      resources: {
+        db: {
+          adapter: 'vanilla',
+          options: {
+            path: `https://runtime-user:${secret}@example.invalid/database`,
+          },
+        },
+      },
+    };
+    const mod =
+      await import('../../../src/core/resources/builds/actor-system-cli/lib/app-manifest.js');
+
+    const error = await captureRejection(
+      mod.loadProvidedAppManifest({
+        manifest: JSON.stringify(credentialManifest),
+      }),
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toMatch(
+      /provided manifest\.resources\.db\.options\.path.*credential-bearing URLs/i,
+    );
+    expect(String(error)).not.toContain(secret);
+  });
+
+  it('rejects credential-bearing allowed options in embedded manifests without rendering the secret', async () => {
+    const secret = 'embedded-manifest-password-sentinel';
+    const credentialManifest = {
+      ...embeddedManifest,
+      app: { id: 'embedded-credential-demo' },
+      resources: {
+        db: {
+          adapter: 'vanilla',
+          options: {
+            path: `https://runtime-user:${secret}@example.invalid/database`,
+          },
+        },
+      },
+    };
+    const mod =
+      await import('../../../src/core/resources/builds/lib/app-manifest-asset.js');
+
+    const error = await captureRejection(
+      mod.readEmbeddedAppManifest({
+        assetProvider: {
+          getAsset: async () =>
+            Buffer.from(JSON.stringify(credentialManifest), 'utf8'),
+        },
+      }),
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toMatch(
+      /embedded manifest\.resources\.db\.options\.path.*credential-bearing URLs/i,
+    );
+    expect(String(error)).not.toContain(secret);
   });
 
   it('uses private temporary manifest files with explicit cleanup', async () => {

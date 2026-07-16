@@ -195,6 +195,41 @@ export function normalizeExternalDependencies(externals, entrypointPath) {
   });
 }
 
+/**
+ * Verify that source-mode execution will resolve the exact package versions
+ * pinned by the canonical manifest. SEA builds install these pins into an
+ * isolated bundle; source execution instead uses the app's installed tree and
+ * must reject drift rather than silently running different code.
+ * @param {ExternalDependencyDescription[] | undefined} externals - Pinned dependencies.
+ * @param {string | undefined} entrypointPath - Activity entrypoint path.
+ * @returns {void}
+ */
+export function assertInstalledExternalDependencies(externals, entrypointPath) {
+  if (!Array.isArray(externals) || externals.length === 0) return;
+
+  const resolvers = createResolvers(entrypointPath);
+  for (const external of externals) {
+    const expected = normalizeExternalInput(external);
+    if (!expected.version) {
+      throw new TypeError(
+        `External dependency '${expected.name}' must have an exact version before source execution.`,
+      );
+    }
+
+    const expectedVersion = normalizeExactExternalVersion(
+      expected.name,
+      expected.version,
+    );
+    const installed = resolveInstalledExternal(expected.name, resolvers);
+    if (installed.version !== expectedVersion) {
+      throw new Error(
+        `Source activity external dependency '${expected.name}' is pinned to ${expectedVersion}, but local resolution found ${installed.version}. Install the exact pinned version before running the activity from source.`,
+      );
+    }
+  }
+}
+
 export default {
+  assertInstalledExternalDependencies,
   normalizeExternalDependencies,
 };

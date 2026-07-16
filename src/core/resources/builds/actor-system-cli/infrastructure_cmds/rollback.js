@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import { Command } from 'commander';
 
-import { getManifestAppName, requireAppManifest } from '../lib/app-manifest.js';
+import { getManifestAppId, requireAppManifest } from '../lib/app-manifest.js';
 import {
   getAppRoot,
   listReleaseRecords,
@@ -28,9 +28,9 @@ export async function rollbackArtifact(opts, deps = {}) {
   const manifest = await requireAppManifest(opts, {
     assetProvider: deps.assetProvider,
   });
-  const appName = getManifestAppName(manifest);
+  const appName = getManifestAppId(manifest);
   if (!appName) {
-    throw new Error('The app manifest is missing app.name.');
+    throw new Error('The app manifest is missing app.id.');
   }
   const releaseRoot = opts.releaseRoot || '/var/lib/wharfie';
   const releases = await listReleaseRecords({

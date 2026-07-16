@@ -10,7 +10,7 @@ import Reconcilable from '../src/core/resources/reconcilable.js';
 import {
   kitchenSinkDefaultTargets,
   kitchenSinkExternalDependencies,
-} from './examples/actor-systems/kitchen-sink/config.js';
+} from './examples/apps/kitchen-sink/config.js';
 import {
   putResource,
   putResourceStatus,

@@ -7,8 +7,6 @@ import Action from '../../../core/lib/graph/action.js';
 import { runOperation } from '../../../core/lib/graph/runner.js';
 import {
   createOperationFromActivity,
-  createOperationFromWorkflow,
-  findManifestWorkflowDefinition,
   getAppResourceId,
   getManifestActivityNames,
   invokeManifestActivity,
@@ -51,30 +49,12 @@ function formatActionRows(operation, fallbackStatuses) {
   }));
 }
 
-/**
- * @param {any} manifest - manifest.
- * @returns {string[]} - Result.
- */
-function getWorkflowNames(manifest) {
-  return Array.isArray(manifest?.workflows)
-    ? manifest.workflows
-        .map((/** @type {any} */ workflow) => workflow?.name)
-        .filter(
-          (/** @type {unknown} */ candidate) => typeof candidate === 'string',
-        )
-    : [];
-}
-
 const runCommand = new Command('run')
-  .description('Execute a persisted app activity or workflow locally')
+  .description('Execute a persisted app activity locally')
   .option('--dir <dir>', 'Directory containing wharfie.app.js', process.cwd())
   .option(
     '--activity <activityName>',
     'Activity name declared in wharfie.app.js',
-  )
-  .option(
-    '--workflow <workflowName>',
-    'Workflow name declared in wharfie.app.js',
   )
   .option('--event <json>', 'Activity event JSON (default: {})')
   .option('--operation-id <operationId>', 'Override generated operation id')
@@ -82,79 +62,40 @@ const runCommand = new Command('run')
     try {
       await withOperationsStore(async (store) => {
         const activityName =
-          typeof options.activity === 'string' ? options.activity.trim() : '';
-        const workflowName =
-          typeof options.workflow === 'string' ? options.workflow.trim() : '';
+          typeof options.activity === 'string' ? options.activity : '';
         const appDir = options.dir || process.cwd();
 
-        if (!activityName && !workflowName) {
-          throw new Error(
-            'ops run requires --activity <activityName> or --workflow <workflowName>.',
-          );
-        }
-        if (activityName && workflowName) {
-          throw new Error(
-            'ops run accepts either --activity <activityName> or --workflow <workflowName>, not both.',
-          );
+        if (!activityName) {
+          throw new Error('ops run requires --activity <activityName>.');
         }
 
         const loadedApp = await loadApp({ dir: appDir });
-        const { manifest, publicManifest } = loadedApp;
-        const appName = manifest.app.name;
-        const resourceId = getAppResourceId(appName);
+        const { manifest } = loadedApp;
+        const appId = manifest.app.id;
+        const resourceId = getAppResourceId(appId);
 
         /** @type {import('../../../core/lib/graph/operation.js').default} */
         let operation;
 
-        if (activityName) {
-          const availableActivities = getManifestActivityNames(
-            manifest,
-            publicManifest,
-          );
-          if (!availableActivities.includes(activityName)) {
-            throw new Error(
-              `Activity '${activityName}' was not found in ${appDir}. Available activities: ${
-                availableActivities.join(', ') || '(none)'
-              }`,
-            );
-          }
-
-          operation = createOperationFromActivity({
-            appName,
-            activityName,
-            event: parseJsonInput(options.event, 'event', {}),
-            operationId: options.operationId,
-            trigger: { source: 'manual' },
-          });
-          displayInfo(
-            `Running activity: ${resourceId}#${operation.id} (${activityName})`,
-          );
-        } else {
-          const workflow = findManifestWorkflowDefinition({
-            manifest,
-            publicManifest,
-            workflowName,
-          });
-
-          if (!workflow) {
-            const availableWorkflows = getWorkflowNames(manifest);
-            throw new Error(
-              `Workflow '${workflowName}' was not found in ${appDir}. Available workflows: ${
-                availableWorkflows.join(', ') || '(none)'
-              }`,
-            );
-          }
-
-          operation = createOperationFromWorkflow({
-            workflow,
-            appName,
-            operationId: options.operationId,
-            trigger: { source: 'manual' },
-          });
-          displayInfo(
-            `Running workflow: ${resourceId}#${operation.id} (${workflow.name})`,
+        const availableActivities = getManifestActivityNames(manifest);
+        if (!availableActivities.includes(activityName)) {
+          throw new Error(
+            `Activity '${activityName}' was not found in ${appDir}. Available activities: ${
+              availableActivities.join(', ') || '(none)'
+            }`,
           );
         }
+
+        operation = createOperationFromActivity({
+          appId,
+          activityName,
+          event: parseJsonInput(options.event, 'event', {}),
+          operationId: options.operationId,
+          trigger: { source: 'manual' },
+        });
+        displayInfo(
+          `Running activity: ${resourceId}#${operation.id} (${activityName})`,
+        );
 
         await store.putOperation(operation);
 
@@ -197,11 +138,11 @@ const runCommand = new Command('run')
 
           const outputs = await invokeManifestActivity({
             manifest,
-            publicManifest,
+            appDir: loadedApp.appDir,
             activityName: action.function_name,
             event: action.inputs ?? {},
             context: {
-              workflow: {
+              operation: {
                 resourceId: action.resource_id,
                 operationId: action.operation_id,
                 actionId: action.id,

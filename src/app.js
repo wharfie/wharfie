@@ -21,14 +21,13 @@ export function defineApp(definition) {
  * prevents packaging-only dependencies from entering the generated runtime's
  * eager module graph.
  * @param {string | undefined} dir - Source application directory.
- * @returns {Promise<{ manifest: any, publicManifest: any, executionMode: 'source' | 'embedded' }>} - Loaded runtime manifest.
+ * @returns {Promise<{ manifest: any, appDir?: string, executionMode: 'source' | 'embedded' }>} - Loaded runtime manifest.
  */
 async function loadRuntimeManifest(dir) {
   if (isSea()) {
     const manifest = await readEmbeddedAppManifest();
     return {
       manifest,
-      publicManifest: manifest,
       executionMode: 'embedded',
     };
   }
@@ -37,7 +36,7 @@ async function loadRuntimeManifest(dir) {
   const loaded = await loadApp({ dir });
   return {
     manifest: loaded.manifest,
-    publicManifest: loaded.publicManifest,
+    appDir: loaded.appDir,
     executionMode: 'source',
   };
 }
@@ -58,10 +57,14 @@ export async function invokeActivity(activityName, options = {}) {
   const loaded = await loadRuntimeManifest(options.dir);
   return await invokeManifestActivity({
     manifest: loaded.manifest,
-    publicManifest: loaded.publicManifest,
+    appDir: loaded.appDir,
     activityName,
-    event: options.event ?? {},
-    context: options.context ?? {},
+    ...(Object.prototype.hasOwnProperty.call(options, 'event')
+      ? { event: options.event }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(options, 'context')
+      ? { context: options.context }
+      : {}),
     executionMode: loaded.executionMode,
   });
 }

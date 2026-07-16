@@ -22,16 +22,12 @@ export function formatOperationRows(operations = []) {
     .map((operation) => ({
       id: operation.id,
       app:
-        typeof operation.operation_config?.app_name === 'string'
-          ? operation.operation_config.app_name
+        typeof operation.operation_config?.app_id === 'string'
+          ? operation.operation_config.app_id
           : '',
       activity:
         typeof operation.operation_config?.activity_name === 'string'
           ? operation.operation_config.activity_name
-          : '',
-      workflow:
-        typeof operation.operation_config?.workflow_name === 'string'
-          ? operation.operation_config.workflow_name
           : '',
       trigger:
         typeof operation.operation_config?.trigger?.source === 'string'

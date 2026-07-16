@@ -43,7 +43,8 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 - [x] Delete the v1 Athena/table application, legacy-only tests, documentation, dependencies, and compatibility paths.
 - [x] Keep npm publication disabled and retain v1 regression checks in the release gate.
-- [ ] Choose one manifest compiler and one persisted-run implementation; delete the alternatives.
+- [x] Choose one app-manifest compiler and one canonical version 2 schema; delete the compatibility alternatives.
+- [ ] Choose one persisted-run implementation and delete the alternatives.
 - [x] Make package metadata, version reporting, license metadata, tarball contents, release commands, environment names, and artifact names agree.
 - [x] Remove the abandoned direct dependency graph and test-only packages from the runtime package.
 - [ ] Resolve the current production audit findings and add an appropriate audit gate.
@@ -56,8 +57,10 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 **Goal:** prove a normal CLI can become one self-contained application artifact without changing its programming model.
 
-- [ ] Define the minimal TypeScript application manifest around a developer-owned CLI and named activities.
-- [ ] Define schemas and stable identifiers for applications, immutable logical revisions, target-specific artifacts, activities, and deployment profiles.
+- [x] Define the minimal TypeScript application manifest around a developer-owned CLI and named activities.
+- [x] Define the strict application/activity logical-ID contract plus exact target and portable-resource descriptors.
+- [ ] Define schemas and stable identifiers for immutable logical revisions, target-specific artifacts, and deployment profiles.
+- [x] Keep build-only settings outside the runtime manifest and reject ActorSystem, workflow, and scheduler public authoring until their contracts are designed.
 - [ ] Preserve normal argv, stdio, exit codes, and CLI-library choice in local and packaged execution.
 - [ ] Package one content-addressed SEA executable for a clean Linux target and record its locked inputs and provenance; reproducible builds are a later hardening goal.
 - [x] Define a reserved, non-colliding dispatch mechanism for Wharfie operator commands inside an application-owned executable: `<app> wharfie <command>`.
@@ -134,7 +137,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 1. Review and merge the stacked reset, inventory, packaging, and v1-deletion changes.
 2. Restore GitHub authentication and execute the archived branch, PR, and issue cleanup decisions.
-3. Replace the permissive compatibility manifest compiler with one strict, versioned v2 schema.
+3. Finish migrating runtime consumers and tests to the strict version 2 manifest, then run the full verification suite.
 4. Re-run the clean Linux SEA proof, inspect the production audit, and decide when the package can stop being private.
 5. Review the resulting narrow boundary before beginning the durable run/invocation/attempt/effect ledger.
 

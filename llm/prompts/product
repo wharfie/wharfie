@@ -76,7 +76,6 @@ For Wharfie product/design work, start here unless the task clearly points elsew
 - src/core/lib/graph/operation.js
 - src/core/lib/graph/app-run.js
 - src/core/lib/db/tables/operations.js
-- src/core/runtime/services/scheduler-service.js
 - src/core/runtime/services/node-agent.js
 
 Expand only as needed.

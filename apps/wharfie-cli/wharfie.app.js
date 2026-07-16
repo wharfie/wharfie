@@ -4,41 +4,13 @@ import { fileURLToPath } from 'node:url';
 
 import { Command } from 'commander';
 
+import { defineApp } from '../../src/app.js';
 import { packageLocalApp, stringifyJson } from '../../src/cli/app/local-app.js';
 import { displayFailure } from '../../src/cli/output/basic.js';
 import { assertSeaNodeVersionCompatible } from '../../src/core/resources/builds/lib/sea-node-version.js';
 
 const MODULE_PATH = fileURLToPath(import.meta.url);
 const MODULE_DIR = path.dirname(MODULE_PATH);
-
-/**
- * @param {string} rootDir - rootDir
- * @returns {boolean} - Whether the directory contains the Wharfie sources required by this build app.
- */
-function hasWharfieSources(rootDir) {
-  return (
-    fs.existsSync(path.join(rootDir, 'src', 'cli', 'entry.js')) &&
-    fs.existsSync(path.join(rootDir, 'apps', 'wharfie-cli', 'wharfie.app.js'))
-  );
-}
-
-/**
- * Prefer the current workspace when building from the repo, but fall back to
- * the installed package location when invoked from a normal project.
- * @param {string} [startDir] - startDir
- * @returns {string} - Wharfie source root.
- */
-function resolveSourceRoot(startDir = process.cwd()) {
-  const workspaceRoot = findRepoRoot(startDir);
-  if (hasWharfieSources(workspaceRoot)) return workspaceRoot;
-
-  const installedPackageRoot = findRepoRoot(MODULE_DIR);
-  if (hasWharfieSources(installedPackageRoot)) return installedPackageRoot;
-
-  throw new Error(
-    `Unable to locate Wharfie package sources from ${startDir}. Expected src/cli/entry.js and apps/wharfie-cli/wharfie.app.js to exist.`,
-  );
-}
 
 /**
  * Unshipped Wharfie CLI self-hosting experiment built via the standard
@@ -54,8 +26,8 @@ function resolveSourceRoot(startDir = process.cwd()) {
  * Experimental manual smoke test (expected to expose remaining self-host gaps):
  *  1) node ./apps/wharfie-cli/wharfie.app.js
  *  2) ./dist/wharfie-cli-node<version>-<platform>-<arch> --help
- *  3) ./dist/wharfie-cli-node<version>-<platform>-<arch> app manifest ./scratch/examples/actor-systems/kitchen-sink
- *  4) ./dist/wharfie-cli-node<version>-<platform>-<arch> app run start --dir ./scratch/examples/actor-systems/kitchen-sink --event '{"who":"smoke"}'
+ *  3) ./dist/wharfie-cli-node<version>-<platform>-<arch> app manifest ./scratch/examples/apps/kitchen-sink
+ *  4) ./dist/wharfie-cli-node<version>-<platform>-<arch> app run start --dir ./scratch/examples/apps/kitchen-sink --event '{"who":"smoke"}'
  */
 
 /**
@@ -128,14 +100,24 @@ function resolveBuildNodeVersion() {
 
 /**
  * @param {string} nodeVersion - nodeVersion.
- * @returns {{ nodeVersion: string, platform: 'darwin'|'linux'|'win32', architecture: 'arm64'|'x64' }[]} - Result.
+ * @returns {import('../../src/app.js').AppTarget[]} - Result.
  */
 function createBuildTargets(nodeVersion) {
   return [
     { nodeVersion, platform: 'darwin', architecture: 'arm64' },
     { nodeVersion, platform: 'darwin', architecture: 'x64' },
-    { nodeVersion, platform: 'linux', architecture: 'arm64' },
-    { nodeVersion, platform: 'linux', architecture: 'x64' },
+    {
+      nodeVersion,
+      platform: 'linux',
+      architecture: 'arm64',
+      libc: 'glibc',
+    },
+    {
+      nodeVersion,
+      platform: 'linux',
+      architecture: 'x64',
+      libc: 'glibc',
+    },
     { nodeVersion, platform: 'win32', architecture: 'arm64' },
     { nodeVersion, platform: 'win32', architecture: 'x64' },
   ];
@@ -191,29 +173,33 @@ export async function packageWharfieCli(options) {
         dir: MODULE_DIR,
         outputDir: options.outputDir || resolveDefaultOutputDir(),
         targetFilters: [resolveTargetFilter(options.platform, options.arch)],
+        build: {
+          signing: {
+            macos: {
+              certificateBase64: process.env.WHARFIE_MACOS_CERT_BASE64 || '',
+              certificatePassword:
+                process.env.WHARFIE_MACOS_CERT_PASSWORD || '',
+              keychainPassword:
+                process.env.WHARFIE_MACOS_KEYCHAIN_PASSWORD || '',
+            },
+          },
+        },
       }),
   );
 }
 
-const app = {
-  name: 'wharfie-cli',
+const app = defineApp({
+  schemaVersion: 2,
+  app: { id: 'wharfie-cli' },
   cli: {
-    entrypoint: path.join(resolveSourceRoot(), 'src', 'cli', 'entry.js'),
-    export: 'main',
+    entrypoint: {
+      kind: 'node',
+      path: './cli.js',
+      export: 'main',
+    },
   },
   targets: createBuildTargets(resolveBuildNodeVersion()),
-  packaging: {
-    signing: {
-      macos: {
-        certificateBase64: process.env.WHARFIE_MACOS_CERT_BASE64 || '',
-        certificatePassword: process.env.WHARFIE_MACOS_CERT_PASSWORD || '',
-        keychainPassword: process.env.WHARFIE_MACOS_KEYCHAIN_PASSWORD || '',
-      },
-    },
-    // Packaged init assets are intentionally omitted until the Milestone 2
-    // scaffold is defined; the v1 templates must not be embedded.
-  },
-};
+});
 
 export default app;
 

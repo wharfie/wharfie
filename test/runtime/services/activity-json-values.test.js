@@ -80,10 +80,22 @@ jest.unstable_mockModule(RUNTIME_RESOURCES_IMPORT, () => ({
 }));
 
 const activityManifest = {
-  app: { name: 'json-boundary-test' },
+  schemaVersion: 2,
+  app: { id: 'json-boundary-test' },
+  cli: {
+    entrypoint: {
+      kind: 'node',
+      path: 'cli.js',
+      export: 'default',
+    },
+  },
   activities: {
     echo: {
-      entrypoint: { path: '/unused/echo.js', export: 'echo' },
+      entrypoint: {
+        kind: 'node',
+        path: 'activities/echo.js',
+        export: 'echo',
+      },
     },
   },
 };
@@ -160,7 +172,7 @@ describe('JSON activity values', () => {
 
     const sourceResult = await invokeManifestActivity({
       manifest: activityManifest,
-      publicManifest: activityManifest,
+      appDir: '/unused',
       activityName: 'echo',
       event,
       context,
@@ -168,7 +180,6 @@ describe('JSON activity values', () => {
     });
     const embeddedResult = await invokeManifestActivity({
       manifest: activityManifest,
-      publicManifest: activityManifest,
       activityName: 'echo',
       event,
       context,
@@ -196,7 +207,7 @@ describe('JSON activity values', () => {
       const invoke = (overrides = {}) =>
         invokeManifestActivity({
           manifest: activityManifest,
-          publicManifest: activityManifest,
+          ...(executionMode === 'source' ? { appDir: '/unused' } : {}),
           activityName: 'echo',
           event: {},
           context: {},

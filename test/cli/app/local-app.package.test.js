@@ -25,7 +25,7 @@ const helloWorldDir = path.join(
   repoRoot,
   'scratch',
   'examples',
-  'actor-systems',
+  'apps',
   'hello-world',
 );
 const currentTarget = {
@@ -61,6 +61,11 @@ function getTargetSelector(target) {
  * @param {{ nodeVersion: string, platform: string, architecture: string, libc?: string }[]} targets - Build targets.
  */
 async function writeTransactionalPackageApp(dir, appName, targets) {
+  const canonicalTargets = targets.map((target) =>
+    target.platform === 'linux' && !target.libc
+      ? { ...target, libc: 'glibc' }
+      : target,
+  );
   await fsp.mkdir(path.join(dir, 'src'), { recursive: true });
   await Promise.all([
     fsp.writeFile(
@@ -76,9 +81,12 @@ async function writeTransactionalPackageApp(dir, appName, targets) {
     fsp.writeFile(
       path.join(dir, 'wharfie.app.js'),
       `export default {
-  name: ${JSON.stringify(appName)},
-  cli: { entrypoint: './src/cli.js' },
-  targets: ${JSON.stringify(targets, null, 2)},
+  schemaVersion: 2,
+  app: { id: ${JSON.stringify(appName)} },
+  cli: {
+    entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
+  },
+  targets: ${JSON.stringify(canonicalTargets, null, 2)},
 };
 `,
       'utf8',
@@ -139,27 +147,23 @@ describe('packageLocalApp', () => {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  name: 'plain-object-package-demo',
+  schemaVersion: 2,
+  app: { id: 'plain-object-package-demo' },
   cli: {
-    entrypoint: './src/cli.js',
-    export: 'launch',
+    entrypoint: {
+      kind: 'node',
+      path: './src/cli.js',
+      export: 'launch',
+    },
   },
   targets: [
     {
       nodeVersion: process.versions.node,
       platform: process.platform,
       architecture: process.arch,
+      ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
     },
   ],
-  packaging: {
-    signing: {
-      macos: {
-        certificateBase64: 'certificate-data',
-        certificatePassword: 'certificate-password',
-        keychainPassword: 'keychain-password',
-      },
-    },
-  },
   resources: {
     db: {
       adapter: 'vanilla',
@@ -169,6 +173,7 @@ describe('packageLocalApp', () => {
   activities: {
     hello: {
       entrypoint: {
+        kind: 'node',
         path: './src/activities/hello.js',
         export: 'hello',
       },
@@ -242,11 +247,15 @@ describe('packageLocalApp', () => {
                 await fsp.readFile(manifestAssetPath, 'utf8'),
               );
               expect(embeddedManifest.cli).toEqual({
-                entrypoint: 'wharfie:embedded/cli',
-                export: 'launch',
+                entrypoint: {
+                  kind: 'node',
+                  path: 'src/cli.js',
+                  export: 'launch',
+                },
               });
               expect(embeddedManifest.activities.hello.entrypoint).toEqual({
-                path: 'wharfie:embedded/activity/hello',
+                kind: 'node',
+                path: 'src/activities/hello.js',
                 export: 'hello',
               });
               const embeddedManifestJson = JSON.stringify(embeddedManifest);
@@ -287,9 +296,18 @@ describe('packageLocalApp', () => {
       const result = await packageLocalApp({
         dir,
         outputDir,
+        build: {
+          signing: {
+            macos: {
+              certificateBase64: 'certificate-data',
+              certificatePassword: 'certificate-password',
+              keychainPassword: 'keychain-password',
+            },
+          },
+        },
       });
 
-      expect(result.app).toEqual({ name: 'plain-object-package-demo' });
+      expect(result.app).toEqual({ id: 'plain-object-package-demo' });
       expect(result.targets).toEqual([currentTarget]);
       expect(result.artifacts).toHaveLength(1);
       expect(result.artifacts[0]).toEqual(
@@ -316,7 +334,7 @@ describe('packageLocalApp', () => {
     }
   });
 
-  it('packages ActorSystem apps before NodeBinary exactVersion exists', async () => {
+  it('packages strict manifests before NodeBinary exactVersion exists', async () => {
     const outputDir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-actor-system-package-'),
     );
@@ -358,9 +376,10 @@ describe('packageLocalApp', () => {
       const result = await packageLocalApp({
         dir: helloWorldDir,
         outputDir,
+        targetFilters: [getTargetSelector(currentTarget)],
       });
 
-      expect(result.app).toEqual({ name: 'hello-world-demo' });
+      expect(result.app).toEqual({ id: 'hello-world-demo' });
       expect(result.targets).toEqual([currentTarget]);
       expect(result.artifacts).toHaveLength(1);
       expect(result.artifacts[0]).toEqual(
@@ -407,12 +426,16 @@ describe('packageLocalApp', () => {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  name: 'incompatible-target-demo',
-  cli: { entrypoint: './src/cli.js' },
+  schemaVersion: 2,
+  app: { id: 'incompatible-target-demo' },
+  cli: {
+    entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
+  },
   targets: [{
     nodeVersion: '${mismatchedNodeVersion}',
     platform: process.platform,
     architecture: process.arch,
+    ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
   }],
 };
 `,
@@ -453,8 +476,11 @@ describe('packageLocalApp', () => {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  name: 'musl-target-demo',
-  cli: { entrypoint: './src/cli.js' },
+  schemaVersion: 2,
+  app: { id: 'musl-target-demo' },
+  cli: {
+    entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
+  },
   targets: [{
     nodeVersion: process.versions.node,
     platform: 'linux',
@@ -467,7 +493,7 @@ describe('packageLocalApp', () => {
       ]);
 
       await expect(packageLocalApp({ dir })).rejects.toThrow(
-        /official Node\.js Linux binaries require glibc/i,
+        /libc must be 'glibc' for Linux/i,
       );
       expect(initializeEnvironment).not.toHaveBeenCalled();
     } finally {
@@ -476,8 +502,18 @@ describe('packageLocalApp', () => {
   });
 
   it.each([
-    ['platform', 'macos', 'x64', /Expected darwin, linux, or win32/i],
-    ['architecture', 'linux', 'amd64', /Expected arm64 or x64/i],
+    [
+      'platform',
+      'macos',
+      'x64',
+      /platform must be 'darwin', 'linux', or 'win32'/i,
+    ],
+    [
+      'architecture',
+      'linux',
+      'amd64',
+      /architecture must be 'arm64' or 'x64'/i,
+    ],
   ])(
     'rejects unsupported SEA %s labels before building',
     async (_kind, platform, architecture, expectedError) => {
@@ -503,12 +539,16 @@ describe('packageLocalApp', () => {
           fsp.writeFile(
             path.join(dir, 'wharfie.app.js'),
             `export default {
-  name: 'invalid-target-demo',
-  cli: { entrypoint: './src/cli.js' },
+  schemaVersion: 2,
+  app: { id: 'invalid-target-demo' },
+  cli: {
+    entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
+  },
   targets: [{
     nodeVersion: process.versions.node,
     platform: '${platform}',
     architecture: '${architecture}',
+    ...('${platform}' === 'linux' ? { libc: 'glibc' } : {}),
   }],
 };
 `,
@@ -542,12 +582,16 @@ describe('packageLocalApp', () => {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  name: '../escaped-app',
-  cli: { entrypoint: './src/cli.js' },
+  schemaVersion: 2,
+  app: { id: '../escaped-app' },
+  cli: {
+    entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
+  },
   targets: [{
     nodeVersion: process.versions.node,
     platform: process.platform,
     architecture: process.arch,
+    ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
   }],
 };
 `,
@@ -555,7 +599,7 @@ describe('packageLocalApp', () => {
       ]);
 
       await expect(packageLocalApp({ dir })).rejects.toThrow(
-        /app\.name must be a lowercase portable identifier/i,
+        /app\.id must be a canonical logical ID/i,
       );
     } finally {
       await fsp.rm(dir, { recursive: true, force: true });
@@ -567,19 +611,19 @@ describe('packageLocalApp', () => {
       'a reserved internal activity name',
       `${APP_MANIFEST_ASSET_PREFIX}manifest.json`,
       '',
-      /names beginning with '<WHARFIE_APP>\/' are reserved/i,
+      /must be a canonical logical ID/i,
     ],
     [
       'an unembedded host-native resource adapter',
       'activity',
       "resources: { db: { adapter: 'lmdb' } },",
-      /adapter 'lmdb'.*native runtime is not embedded/i,
+      /not a supported portable db adapter/i,
     ],
     [
       'a scheduler without a portable durable store',
       'activity',
       "scheduler: { triggers: [{ activity: 'activity', cron: '* * * * *' }] },",
-      /cannot package scheduler triggers.*durable operations store/i,
+      /app\.scheduler is not supported/i,
     ],
   ])(
     'rejects %s before building',
@@ -610,17 +654,25 @@ describe('packageLocalApp', () => {
           fsp.writeFile(
             path.join(dir, 'wharfie.app.js'),
             `export default {
-  name: 'nonportable-demo',
-  cli: { entrypoint: './src/cli.js' },
+  schemaVersion: 2,
+  app: { id: 'nonportable-demo' },
+  cli: {
+    entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
+  },
   targets: [{
     nodeVersion: process.versions.node,
     platform: process.platform,
     architecture: process.arch,
+    ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
   }],
   ${contractDeclaration}
   activities: {
     ${JSON.stringify(activityName)}: {
-      entrypoint: { path: './src/activity.js' },
+      entrypoint: {
+        kind: 'node',
+        path: './src/activity.js',
+        export: 'default',
+      },
     },
   },
 };
@@ -660,23 +712,29 @@ describe('packageLocalApp', () => {
   architecture: 'x64',
 };
 export default {
-  name: 'duplicate-target-demo',
-  cli: { entrypoint: './src/cli.js' },
-  targets: [target, { ...target, libc: 'glibc' }],
+  schemaVersion: 2,
+  app: { id: 'duplicate-target-demo' },
+  cli: {
+    entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
+  },
+  targets: [
+    { ...target, ...(target.platform === 'linux' ? { libc: 'glibc' } : {}) },
+    { ...target, ...(target.platform === 'linux' ? { libc: 'glibc' } : {}) },
+  ],
 };
 `,
         ),
       ]);
 
       await expect(packageLocalApp({ dir })).rejects.toThrow(
-        /build targets must be unique/i,
+        /duplicates an earlier target/i,
       );
     } finally {
       await fsp.rm(dir, { recursive: true, force: true });
     }
   });
 
-  it('revalidates selector-dependent ActorSystem manifests after reloading', async () => {
+  it('rejects ActorSystem authoring before build initialization', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-filtered-portability-package-'),
     );
@@ -748,9 +806,7 @@ try {
       expect(child.error).toBeUndefined();
       expect(child.status).toBe(0);
       const output = JSON.parse(child.stdout.trim());
-      expect(output.message).toMatch(
-        /adapter 'lmdb'.*native runtime is not embedded/i,
-      );
+      expect(output.message).toMatch(/must be a JSON object/i);
     } finally {
       await fsp.rm(dir, { recursive: true, force: true });
     }
@@ -788,25 +844,41 @@ try {
           fsp.writeFile(
             path.join(dir, 'wharfie.app.js'),
             `export default {
-  name: 'invalid-asset-demo',
-  cli: { entrypoint: './src/cli.js' },
+  schemaVersion: 2,
+  app: { id: 'invalid-asset-demo' },
+  cli: {
+    entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
+  },
   targets: [{
     nodeVersion: process.versions.node,
     platform: process.platform,
     architecture: process.arch,
+    ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
   }],
   activities: {
-    hello: { entrypoint: { path: './src/activity.js' } },
-  },
-  packaging: {
-    assets: { ${JSON.stringify(assetName)}: ${JSON.stringify(assetPath)} },
+    hello: {
+      entrypoint: {
+        kind: 'node',
+        path: './src/activity.js',
+        export: 'default',
+      },
+    },
   },
 };
 `,
           ),
         ]);
 
-        await expect(packageLocalApp({ dir })).rejects.toThrow(expectedError);
+        await expect(
+          packageLocalApp({
+            dir,
+            build: {
+              assets: {
+                [assetName]: assetPath,
+              },
+            },
+          }),
+        ).rejects.toThrow(expectedError);
         expect(initializeEnvironment).not.toHaveBeenCalled();
       } finally {
         await fsp.rm(dir, { recursive: true, force: true });
@@ -842,16 +914,24 @@ try {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  name: 'inline-env-demo',
-  cli: { entrypoint: './src/cli.js' },
+  schemaVersion: 2,
+  app: { id: 'inline-env-demo' },
+  cli: {
+    entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
+  },
   targets: [{
     nodeVersion: process.versions.node,
     platform: process.platform,
     architecture: process.arch,
+    ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
   }],
   activities: {
     activity: {
-      entrypoint: { path: './src/activity.js' },
+      entrypoint: {
+        kind: 'node',
+        path: './src/activity.js',
+        export: 'default',
+      },
       environmentVariables: { API_TOKEN_VALUE: '${secret}' },
     },
   },
@@ -862,7 +942,7 @@ try {
 
       const result = packageLocalApp({ dir });
       await expect(result).rejects.toThrow(
-        /activity 'activity'.*environmentVariables.*not supported/i,
+        /environmentVariables is not supported by schemaVersion 2/i,
       );
       await expect(result).rejects.not.toThrow(secret);
       expect(initializeEnvironment).not.toHaveBeenCalled();
@@ -891,12 +971,16 @@ try {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  name: 'inline-secret-demo',
-  cli: { entrypoint: './src/cli.js' },
+  schemaVersion: 2,
+  app: { id: 'inline-secret-demo' },
+  cli: {
+    entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
+  },
   targets: [{
     nodeVersion: process.versions.node,
     platform: process.platform,
     architecture: process.arch,
+    ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
   }],
   resources: {
     db: { adapter: 'vanilla', options: { password: '${secret}' } },
@@ -908,7 +992,7 @@ try {
 
       const result = packageLocalApp({ dir });
       await expect(result).rejects.toThrow(
-        /inline secret-like values.*inspectable manifest/i,
+        /resources\.db\.options\.password is not supported/i,
       );
       await expect(result).rejects.not.toThrow(secret);
     } finally {
@@ -936,12 +1020,16 @@ try {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  name: 'unreviewed-option-demo',
-  cli: { entrypoint: './src/cli.js' },
+  schemaVersion: 2,
+  app: { id: 'unreviewed-option-demo' },
+  cli: {
+    entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
+  },
   targets: [{
     nodeVersion: process.versions.node,
     platform: process.platform,
     architecture: process.arch,
+    ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
   }],
   resources: {
     db: {
@@ -956,7 +1044,7 @@ try {
 
       const result = packageLocalApp({ dir });
       await expect(result).rejects.toThrow(
-        /opaqueRuntimeValue.*not part of.*portable public configuration schema/i,
+        /opaqueRuntimeValue is not supported by schemaVersion 2/i,
       );
       await expect(result).rejects.not.toThrow(secret);
     } finally {
@@ -984,12 +1072,16 @@ try {
         fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
-  name: 'workflow-package-demo',
-  cli: { entrypoint: './src/cli.js' },
+  schemaVersion: 2,
+  app: { id: 'workflow-package-demo' },
+  cli: {
+    entrypoint: { kind: 'node', path: './src/cli.js', export: 'default' },
+  },
   targets: [{
     nodeVersion: process.versions.node,
     platform: process.platform,
     architecture: process.arch,
+    ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
   }],
   workflows: [{
     name: 'unsafe-input-workflow',
@@ -1006,7 +1098,7 @@ try {
 
       const result = packageLocalApp({ dir });
       await expect(result).rejects.toThrow(
-        /cannot package workflows yet.*reviewed portable public schema/i,
+        /app\.workflows is not supported by schemaVersion 2/i,
       );
       await expect(result).rejects.not.toThrow(secret);
     } finally {
@@ -1272,7 +1364,7 @@ try {
 
       releaseFirstReconcile();
       await expect(firstPackage).resolves.toEqual(
-        expect.objectContaining({ app: { name: appName } }),
+        expect.objectContaining({ app: { id: appName } }),
       );
       expect(
         (await fsp.readdir(outputDir)).some((entry) =>

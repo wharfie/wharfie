@@ -384,7 +384,7 @@ describe('actor-system CLI runtime surfaces', () => {
       this.stop = agentStop;
       this.waitForever = agentWaitForever;
     });
-    const manifest = { app: { name: 'runtime-test' } };
+    const manifest = { app: { id: 'runtime-test' } };
     const loadRuntimeBootstrap = jest.fn(async (/** @type {any} */ opts) => ({
       manifest,
       resourcesSpec: {
@@ -639,7 +639,7 @@ describe('actor-system CLI runtime surfaces', () => {
 
     await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
       loadRuntimeBootstrap: async (/** @type {any} */ opts) => ({
-        manifest: { app: { name: 'runtime-test' } },
+        manifest: { app: { id: 'runtime-test' } },
         resourcesSpec: {
           objectStorage: {
             adapter: 'vanilla',
@@ -787,7 +787,7 @@ describe('actor-system CLI runtime surfaces', () => {
   it('requires a DB address when the runtime declares a DB capability', async () => {
     await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
       loadRuntimeBootstrap: async () => ({
-        manifest: { app: { name: 'runtime-test' } },
+        manifest: { app: { id: 'runtime-test' } },
         resourcesSpec: { db: { adapter: 'memory' } },
         pollQueueUrls: [],
         servicePlan: { db: true, queue: false },

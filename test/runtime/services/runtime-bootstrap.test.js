@@ -13,7 +13,15 @@ import { SHARED_RESOURCE_REGISTRY_FILE_NAME } from '../../../src/core/runtime/sh
 const ORIGINAL_ENV = process.env;
 
 const manifest = {
-  app: { name: 'runtime-bootstrap-demo' },
+  schemaVersion: 2,
+  app: { id: 'runtime-bootstrap-demo' },
+  cli: {
+    entrypoint: {
+      kind: 'node',
+      path: 'cli.js',
+      export: 'default',
+    },
+  },
   resources: {
     db: {
       adapter: 'vanilla',
@@ -21,27 +29,36 @@ const manifest = {
     },
     queue: {
       adapter: 'vanilla',
-      options: {
-        path: '.wharfie/queue',
-        pollQueueUrls: ['queue://runtime-bootstrap'],
-      },
+      options: { path: '.wharfie/queue' },
     },
     objectStorage: {
       adapter: 'vanilla',
       options: { path: '.wharfie/object-storage' },
     },
   },
-  functions: [
-    {
-      name: 'start',
+  activities: {
+    start: {
       entrypoint: {
-        path: '/artifact/functions/start.js',
+        kind: 'node',
+        path: 'functions/start.js',
         export: 'start',
       },
     },
-  ],
-  scheduler: {
-    triggers: [{ actor: 'start', cron: '* * * * *' }],
+  },
+};
+
+const invalidEnvironmentManifest = {
+  ...manifest,
+  app: { id: 'unsupported-environment-manifest' },
+  activities: {
+    start: {
+      entrypoint: {
+        kind: 'node',
+        path: 'functions/start.js',
+        export: 'start',
+      },
+      environmentVariables: {},
+    },
   },
 };
 
@@ -57,10 +74,11 @@ describe('runtime bootstrap helpers', () => {
     const secret = 'runtime-manifest-environment-secret-sentinel';
     const result = loadRuntimeBootstrap({
       manifest: JSON.stringify({
-        app: { name: 'unsupported-environment-manifest' },
+        ...invalidEnvironmentManifest,
         activities: {
+          ...invalidEnvironmentManifest.activities,
           start: {
-            entrypoint: { path: '/artifact/functions/start.js' },
+            ...invalidEnvironmentManifest.activities.start,
             environmentVariables: { API_TOKEN: secret },
           },
         },
@@ -68,12 +86,12 @@ describe('runtime bootstrap helpers', () => {
     });
 
     await expect(result).rejects.toThrow(
-      /activity 'start'.*environmentVariables.*not supported/i,
+      /activities\.start\.environmentVariables.*not supported/i,
     );
     await expect(result).rejects.not.toThrow(secret);
   });
 
-  it('derives resources, queue polling, services, and scheduler triggers from a manifest', async () => {
+  it('derives portable resources and services from a canonical manifest', async () => {
     const bootstrap = await loadRuntimeBootstrap(
       {
         manifest: JSON.stringify(manifest),
@@ -87,16 +105,12 @@ describe('runtime bootstrap helpers', () => {
 
     expect(bootstrap.manifest).toEqual(manifest);
     expect(bootstrap.resourcesSpec).toEqual(manifest.resources);
-    expect(bootstrap.pollQueueUrls).toEqual(['queue://runtime-bootstrap']);
-    expect(bootstrap.schedulerTriggers).toEqual([
-      { actor: 'start', cron: '* * * * *' },
-    ]);
+    expect(bootstrap.pollQueueUrls).toEqual([]);
     expect(bootstrap.servicePlan).toEqual({
       db: true,
       queue: true,
       objectStorage: true,
       lambda: true,
-      scheduler: true,
     });
   });
 
@@ -124,7 +138,6 @@ describe('runtime bootstrap helpers', () => {
       queue: true,
       objectStorage: false,
       lambda: true,
-      scheduler: true,
     });
   });
 
@@ -165,13 +178,11 @@ describe('runtime bootstrap helpers', () => {
     );
 
     const bootstrap = await loadRuntimeBootstrap({
-      manifest: JSON.stringify({
-        ...manifest,
-        resources: {
-          db: { ref: 'appdb' },
-          queue: { ref: 'jobs' },
-          objectStorage: { ref: 'blobs' },
-        },
+      manifest: JSON.stringify(manifest),
+      resources: JSON.stringify({
+        db: { ref: 'appdb' },
+        queue: { ref: 'jobs' },
+        objectStorage: { ref: 'blobs' },
       }),
     });
 
@@ -186,7 +197,6 @@ describe('runtime bootstrap helpers', () => {
       queue: true,
       objectStorage: true,
       lambda: true,
-      scheduler: true,
     });
   });
 });

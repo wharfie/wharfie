@@ -1,6 +1,9 @@
 /* eslint-env jest */
 
-import { normalizeExternalDependencies } from '../../../src/core/resources/builds/lib/resolve-externals.js';
+import {
+  assertInstalledExternalDependencies,
+  normalizeExternalDependencies,
+} from '../../../src/core/resources/builds/lib/resolve-externals.js';
 
 describe('external dependency normalization', () => {
   it('canonicalizes exact semantic versions', () => {
@@ -38,5 +41,20 @@ describe('external dependency normalization', () => {
       name: 'semver',
       version: expect.stringMatching(/^\d+\.\d+\.\d+/),
     });
+  });
+
+  it('requires source execution to resolve each exact pinned version', () => {
+    const [installed] =
+      normalizeExternalDependencies(['semver'], undefined) || [];
+
+    expect(() =>
+      assertInstalledExternalDependencies([installed], undefined),
+    ).not.toThrow();
+    expect(() =>
+      assertInstalledExternalDependencies(
+        [{ name: 'semver', version: '0.0.1' }],
+        undefined,
+      ),
+    ).toThrow(/pinned to 0\.0\.1, but local resolution found/i);
   });
 });

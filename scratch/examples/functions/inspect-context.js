@@ -1,8 +1,8 @@
 /**
  * Function demo that reports what arrived in `context`.
  *
- * This is handy for showing how `ActorSystem.createContext()` merges the
- * system-owned resources with caller-provided overrides.
+ * This is handy for showing how Wharfie merges application resources with
+ * caller-provided overrides.
  *
  * @param {unknown} [_event] - Event payload.
  * @param {{ requestId?: string, resources?: Record<string, any> }} [context] - Invocation context.

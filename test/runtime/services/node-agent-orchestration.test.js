@@ -1,17 +1,12 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { mkdtempSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
-import os from 'node:os';
-import path from 'node:path';
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 const NODE_AGENT_IMPORT = '../../../src/core/runtime/services/node-agent.js';
-const SCHEDULER_SERVICE_IMPORT =
-  '../../../src/core/runtime/services/scheduler-service.js';
 const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
 
 let nextPid = 1000;
@@ -45,7 +40,7 @@ function createChild(name, { exitOnSigterm = true } = {}) {
  * @returns {string} - Result.
  */
 function makeEntrypoint(serviceName) {
-  return `/artifact/functions/${serviceName}.js`;
+  return `functions/${serviceName}.js`;
 }
 
 /**
@@ -74,9 +69,8 @@ async function getJson(url) {
 /**
  * @param {{
  *   spawnImpl?: (cmd: string, args: string[], options: any) => any,
- *   startSchedulerServiceImpl?: (options: any) => Promise<any>,
  * }} [options] - options.
- * @returns {Promise<{ NodeAgent: any, spawnMock: any, startSchedulerService: any }>} - Result.
+ * @returns {Promise<{ NodeAgent: any, spawnMock: any }>} - Result.
  */
 async function loadNodeAgent(options = {}) {
   const spawnMock = jest.fn(
@@ -85,13 +79,6 @@ async function loadNodeAgent(options = {}) {
         throw new Error('spawnImpl was not provided');
       }),
   );
-  const startSchedulerService = jest.fn(
-    options.startSchedulerServiceImpl ||
-      (async () => ({
-        stop: async () => {},
-      })),
-  );
-
   await jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
     getAsset: async () => {
       throw new Error('node:sea getAsset was not expected in this test');
@@ -101,44 +88,9 @@ async function loadNodeAgent(options = {}) {
   await jest.unstable_mockModule('node:child_process', () => ({
     spawn: spawnMock,
   }));
-  await jest.unstable_mockModule(SCHEDULER_SERVICE_IMPORT, () => ({
-    startSchedulerService,
-  }));
 
   const { default: NodeAgent } = await import(NODE_AGENT_IMPORT);
-  return { NodeAgent, spawnMock, startSchedulerService };
-}
-
-/**
- * @template T
- * @param {Record<string, string | undefined>} overrides - overrides.
- * @param {() => T | Promise<T>} fn - fn.
- * @returns {Promise<T>} - Result.
- */
-async function withEnv(overrides, fn) {
-  /** @type {Record<string, string | undefined>} */
-  const previous = {};
-
-  for (const [key, value] of Object.entries(overrides)) {
-    previous[key] = process.env[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-
-  try {
-    return await fn();
-  } finally {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
+  return { NodeAgent, spawnMock };
 }
 
 afterEach(() => {
@@ -149,228 +101,205 @@ afterEach(() => {
 describe('NodeAgent orchestration', () => {
   it('derives an all-role service plan from manifest + resourcesSpec, serves /health, and shuts down children deterministically', async () => {
     const manifest = {
-      app: { name: 'node-agent-orchestration' },
+      schemaVersion: 2,
+      app: { id: 'node-agent-orchestration' },
+      cli: {
+        entrypoint: {
+          kind: 'node',
+          path: 'cli.js',
+          export: 'default',
+        },
+      },
       resources: {
         db: { adapter: 'vanilla', options: { path: '.wharfie/db' } },
       },
-      functions: [
-        {
-          name: 'alpha',
+      activities: {
+        alpha: {
           entrypoint: {
+            kind: 'node',
             path: makeEntrypoint('alpha'),
             export: 'alpha',
           },
         },
-      ],
-      scheduler: {
-        triggers: [{ actor: 'alpha', cron: '* * * * *' }],
       },
     };
     const resourcesSpec = {
       queue: { adapter: 'vanilla', options: { path: '.wharfie/queue' } },
     };
-    const schedulerStop = jest.fn(async () => {});
-    const schedulerInvoke = jest.fn(async () => {});
     /** @type {Map<string, { args: string[], options: any, child: any }>} */
     const spawned = new Map();
-    const dbPath = mkdtempSync(
-      path.join(os.tmpdir(), 'wharfie-node-agent-orchestration-'),
+    const { NodeAgent, spawnMock } = await loadNodeAgent({
+      spawnImpl: (cmd, args, options) => {
+        const serveIndex = args.indexOf('serve');
+        const name =
+          serveIndex >= 0 && typeof args[serveIndex + 1] === 'string'
+            ? args[serveIndex + 1]
+            : `unknown-${spawned.size}`;
+        const child = createChild(name, {
+          exitOnSigterm: name !== 'queue',
+        });
+        spawned.set(name, { args, options: { ...options, cmd }, child });
+        return child;
+      },
+    });
+
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const agent = new NodeAgent({
+      nodeId: 'node-all',
+      role: 'all',
+      resourcesSpec,
+      manifest,
+      cmd: '/fake/node',
+      prefixArgs: ['/fake/cli'],
+      lambdaHost: '127.0.0.1',
+      lambdaPort: 8787,
+      dbHost: '127.0.0.1',
+      dbPort: 8788,
+      queueHost: '127.0.0.1',
+      queuePort: 8789,
+      controlHost: '127.0.0.1',
+      controlPort: 0,
+      dbAddressOverride: null,
+      queueAddressOverride: null,
+      pollQueueUrls: ['queue://scheduled'],
+    });
+
+    await agent.start();
+
+    expect(spawnMock).toHaveBeenCalledTimes(3);
+
+    expect(spawned.get('db')?.args).toEqual(
+      expect.arrayContaining([
+        '/fake/cli',
+        'ctl',
+        'state',
+        'serve',
+        'db',
+        '--host',
+        '127.0.0.1',
+        '--port',
+        '8788',
+      ]),
+    );
+    expect(spawned.get('queue')?.args).toEqual(
+      expect.arrayContaining([
+        '/fake/cli',
+        'ctl',
+        'state',
+        'serve',
+        'queue',
+        '--host',
+        '127.0.0.1',
+        '--port',
+        '8789',
+      ]),
+    );
+    expect(spawned.get('lambda')?.args).toEqual(
+      expect.arrayContaining([
+        '/fake/cli',
+        'ctl',
+        'state',
+        'serve',
+        'lambda',
+        '--host',
+        '127.0.0.1',
+        '--port',
+        '8787',
+        '--db-address',
+        '127.0.0.1:8788',
+        '--queue-address',
+        '127.0.0.1:8789',
+        '--poll-queue-url',
+        'queue://scheduled',
+      ]),
     );
 
-    try {
-      const { NodeAgent, spawnMock, startSchedulerService } =
-        await loadNodeAgent({
-          spawnImpl: (cmd, args, options) => {
-            const serveIndex = args.indexOf('serve');
-            const name =
-              serveIndex >= 0 && typeof args[serveIndex + 1] === 'string'
-                ? args[serveIndex + 1]
-                : `unknown-${spawned.size}`;
-            const child = createChild(name, {
-              exitOnSigterm: name !== 'queue',
-            });
-            spawned.set(name, { args, options: { ...options, cmd }, child });
-            return child;
-          },
-          startSchedulerServiceImpl: async () => ({ stop: schedulerStop }),
-        });
+    expect(spawned.get('db')?.options.env.WHARFIE_APP_MANIFEST).toBe(
+      JSON.stringify(manifest),
+    );
 
-      jest.spyOn(console, 'log').mockImplementation(() => {});
-      jest.spyOn(console, 'error').mockImplementation(() => {});
-
-      await withEnv(
-        {
-          NODE_ENV: 'development',
-          OPERATIONS_TABLE: 'node-agent-orchestration-test',
-          WHARFIE_DB_ADAPTER: 'vanilla',
-          WHARFIE_DB_PATH: dbPath,
-        },
-        async () => {
-          const agent = new NodeAgent({
-            nodeId: 'node-all',
-            role: 'all',
-            resourcesSpec,
-            manifest,
-            cmd: '/fake/node',
-            prefixArgs: ['/fake/cli'],
-            lambdaHost: '127.0.0.1',
-            lambdaPort: 8787,
-            dbHost: '127.0.0.1',
-            dbPort: 8788,
-            queueHost: '127.0.0.1',
-            queuePort: 8789,
-            controlHost: '127.0.0.1',
-            controlPort: 0,
-            dbAddressOverride: null,
-            queueAddressOverride: null,
-            pollQueueUrls: ['queue://scheduled'],
-            schedulerInvoke,
-          });
-
-          await agent.start();
-
-          expect(spawnMock).toHaveBeenCalledTimes(3);
-          expect(startSchedulerService).toHaveBeenCalledWith(
-            expect.objectContaining({
-              role: 'all',
-              triggers: [{ actor: 'alpha', cron: '* * * * *' }],
-              invoke: expect.any(Function),
-              log: expect.any(Function),
-            }),
-          );
-
-          expect(spawned.get('db')?.args).toEqual(
-            expect.arrayContaining([
-              '/fake/cli',
-              'ctl',
-              'state',
-              'serve',
-              'db',
-              '--host',
-              '127.0.0.1',
-              '--port',
-              '8788',
-            ]),
-          );
-          expect(spawned.get('queue')?.args).toEqual(
-            expect.arrayContaining([
-              '/fake/cli',
-              'ctl',
-              'state',
-              'serve',
-              'queue',
-              '--host',
-              '127.0.0.1',
-              '--port',
-              '8789',
-            ]),
-          );
-          expect(spawned.get('lambda')?.args).toEqual(
-            expect.arrayContaining([
-              '/fake/cli',
-              'ctl',
-              'state',
-              'serve',
-              'lambda',
-              '--host',
-              '127.0.0.1',
-              '--port',
-              '8787',
-              '--db-address',
-              '127.0.0.1:8788',
-              '--queue-address',
-              '127.0.0.1:8789',
-              '--poll-queue-url',
-              'queue://scheduled',
-            ]),
-          );
-
-          expect(spawned.get('db')?.options.env.WHARFIE_APP_MANIFEST).toBe(
-            JSON.stringify(manifest),
-          );
-
-          const controlAddress = agent.control?.address();
-          if (!controlAddress || typeof controlAddress === 'string') {
-            throw new Error('control plane did not expose a usable address');
-          }
-
-          const health = await getJson(
-            `http://127.0.0.1:${controlAddress.port}/health`,
-          );
-
-          expect(health.statusCode).toBe(200);
-          expect(health.body).toEqual(
-            expect.objectContaining({
-              ok: true,
-              nodeId: 'node-all',
-              role: 'all',
-              endpoints: {
-                lambda: '127.0.0.1:8787',
-                db: '127.0.0.1:8788',
-                queue: '127.0.0.1:8789',
-              },
-            }),
-          );
-          const services = /** @type {{ name: string, running: boolean }[]} */ (
-            health.body.services
-          );
-          expect(services.map((service) => service.name)).toEqual([
-            'db',
-            'queue',
-            'lambda',
-          ]);
-          expect(services.every((service) => service.running)).toBe(true);
-
-          const waitPromise = agent.waitForever();
-          await agent.stop('SIGTERM');
-          await waitPromise;
-
-          expect(schedulerStop).toHaveBeenCalledTimes(1);
-          expect(spawned.get('db')?.child.kill).toHaveBeenCalledWith('SIGTERM');
-          expect(spawned.get('lambda')?.child.kill).toHaveBeenCalledWith(
-            'SIGTERM',
-          );
-          expect(spawned.get('queue')?.child.kill.mock.calls).toEqual([
-            ['SIGTERM'],
-            ['SIGKILL'],
-          ]);
-          expect(agent.control).toBeNull();
-        },
-      );
-    } finally {
-      rmSync(dbPath, { recursive: true, force: true });
+    const controlAddress = agent.control?.address();
+    if (!controlAddress || typeof controlAddress === 'string') {
+      throw new Error('control plane did not expose a usable address');
     }
+
+    const health = await getJson(
+      `http://127.0.0.1:${controlAddress.port}/health`,
+    );
+
+    expect(health.statusCode).toBe(200);
+    expect(health.body).toEqual(
+      expect.objectContaining({
+        ok: true,
+        nodeId: 'node-all',
+        role: 'all',
+        endpoints: {
+          lambda: '127.0.0.1:8787',
+          db: '127.0.0.1:8788',
+          queue: '127.0.0.1:8789',
+        },
+      }),
+    );
+    const services = /** @type {{ name: string, running: boolean }[]} */ (
+      health.body.services
+    );
+    expect(services.map((service) => service.name)).toEqual([
+      'db',
+      'queue',
+      'lambda',
+    ]);
+    expect(services.every((service) => service.running)).toBe(true);
+
+    const waitPromise = agent.waitForever();
+    await agent.stop('SIGTERM');
+    await waitPromise;
+
+    expect(spawned.get('db')?.child.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(spawned.get('lambda')?.child.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(spawned.get('queue')?.child.kill.mock.calls).toEqual([
+      ['SIGTERM'],
+      ['SIGKILL'],
+    ]);
+    expect(agent.control).toBeNull();
   });
 
   it('uses normalized remote state overrides for worker nodes and only spawns lambda', async () => {
     const manifest = {
-      app: { name: 'node-agent-worker' },
+      schemaVersion: 2,
+      app: { id: 'node-agent-worker' },
+      cli: {
+        entrypoint: {
+          kind: 'node',
+          path: 'cli.js',
+          export: 'default',
+        },
+      },
       resources: {
         db: { adapter: 'vanilla', options: { path: '.wharfie/db' } },
         queue: { adapter: 'vanilla', options: { path: '.wharfie/queue' } },
       },
-      functions: [
-        {
-          name: 'beta',
+      activities: {
+        beta: {
           entrypoint: {
+            kind: 'node',
             path: makeEntrypoint('beta'),
             export: 'beta',
           },
         },
-      ],
+      },
     };
     /** @type {Array<{ args: string[], child: any }>} */
     const spawned = [];
 
-    const { NodeAgent, spawnMock, startSchedulerService } = await loadNodeAgent(
-      {
-        spawnImpl: (_cmd, args) => {
-          const child = createChild('lambda');
-          spawned.push({ args, child });
-          return child;
-        },
+    const { NodeAgent, spawnMock } = await loadNodeAgent({
+      spawnImpl: (_cmd, args) => {
+        const child = createChild('lambda');
+        spawned.push({ args, child });
+        return child;
       },
-    );
+    });
 
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -397,7 +326,6 @@ describe('NodeAgent orchestration', () => {
 
     await agent.start();
 
-    expect(startSchedulerService).not.toHaveBeenCalled();
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(spawned[0].args).toEqual(
       expect.arrayContaining([
@@ -447,5 +375,55 @@ describe('NodeAgent orchestration', () => {
 
     expect(spawned[0].child.kill).toHaveBeenCalledWith('SIGTERM');
     expect(agent.control).toBeNull();
+  });
+
+  it('requires remote state addresses for worker nodes when the packaged manifest declares them', async () => {
+    const manifest = {
+      schemaVersion: 2,
+      app: { id: 'worker-demo' },
+      cli: {
+        entrypoint: {
+          kind: 'node',
+          path: 'cli.js',
+          export: 'default',
+        },
+      },
+      resources: {
+        db: { adapter: 'vanilla', options: { path: '.wharfie/db' } },
+        queue: { adapter: 'vanilla', options: { path: '.wharfie/queue' } },
+      },
+      activities: {
+        alpha: {
+          entrypoint: {
+            kind: 'node',
+            path: makeEntrypoint('alpha'),
+            export: 'alpha',
+          },
+        },
+      },
+    };
+    const { NodeAgent } = await loadNodeAgent();
+    const agent = new NodeAgent({
+      nodeId: 'node-worker-missing-state',
+      role: 'worker',
+      resourcesSpec: {},
+      manifest,
+      cmd: process.execPath,
+      prefixArgs: [],
+      lambdaHost: '127.0.0.1',
+      lambdaPort: 8787,
+      dbHost: '127.0.0.1',
+      dbPort: 8788,
+      queueHost: '127.0.0.1',
+      queuePort: 8789,
+      controlHost: '127.0.0.1',
+      controlPort: 0,
+      dbAddressOverride: null,
+      queueAddressOverride: null,
+      pollQueueUrls: [],
+      spawnServices: false,
+    });
+
+    await expect(agent.start()).rejects.toThrow(/requires --db-address/);
   });
 });

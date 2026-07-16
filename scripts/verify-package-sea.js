@@ -21,12 +21,19 @@ import {
   runCommand,
 } from './package-verification.js';
 
-if (process.platform !== 'linux') {
-  throw new Error('The real package SEA smoke test must run on Linux');
+if (!['darwin', 'linux'].includes(process.platform)) {
+  throw new Error('The real package SEA smoke test requires macOS or Linux');
 }
 if (!['arm64', 'x64'].includes(process.arch)) {
-  throw new Error(`Unsupported Linux smoke-test architecture: ${process.arch}`);
+  throw new Error(`Unsupported SEA smoke-test architecture: ${process.arch}`);
 }
+
+// Every spawned npm/bin command must use the same exact Node binary as the SEA
+// blob generator. Developer shells can otherwise resolve a newer global Node
+// for an installed `#!/usr/bin/env node` bin and silently test another target.
+process.env.PATH = [path.dirname(process.execPath), process.env.PATH]
+  .filter(Boolean)
+  .join(path.delimiter);
 
 const packaged = createPackageTarball();
 const installDirectory = mkdtempSync(
@@ -164,19 +171,25 @@ await main(process.argv);
     `import { defineApp } from '@wharfie/wharfie/app';
 
 export default defineApp({
-  name: 'portable-app',
+  schemaVersion: 2,
+  app: { id: 'portable-app' },
   cli: {
-    entrypoint: './src/cli.ts',
-    export: 'main',
+    entrypoint: {
+      kind: 'node',
+      path: './src/cli.ts',
+      export: 'main',
+    },
   },
   targets: [{
     nodeVersion: process.versions.node,
     platform: process.platform,
     architecture: process.arch,
+    ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
   }],
   activities: {
     greet: {
       entrypoint: {
+        kind: 'node',
         path: './src/activity.ts',
         export: 'greet',
       },
@@ -212,7 +225,10 @@ export default defineApp({
     { cwd: appDirectory },
   );
 
-  const artifactName = `portable-app-node${process.versions.node}-linux-${process.arch}-glibc`;
+  const targetSuffix = `${process.platform}-${process.arch}${
+    process.platform === 'linux' ? '-glibc' : ''
+  }`;
+  const artifactName = `portable-app-node${process.versions.node}-${targetSuffix}`;
   const artifactPath = path.join(outputDirectory, artifactName);
   assert.ok(
     existsSync(artifactPath),
@@ -260,24 +276,29 @@ export default defineApp({
       env: cleanEnvironment,
     }).stdout,
   );
-  assert.deepEqual(embeddedManifest.app, { name: 'portable-app' });
+  assert.equal(embeddedManifest.schemaVersion, 2);
+  assert.deepEqual(embeddedManifest.app, { id: 'portable-app' });
   assert.deepEqual(embeddedManifest.targets, [
     {
       nodeVersion: process.versions.node,
-      platform: 'linux',
+      platform: process.platform,
       architecture: process.arch,
-      libc: 'glibc',
+      ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
     },
   ]);
-  assert.equal(embeddedManifest.cli.entrypoint, 'wharfie:embedded/cli');
+  assert.deepEqual(embeddedManifest.cli.entrypoint, {
+    kind: 'node',
+    path: 'src/cli.ts',
+    export: 'main',
+  });
   assert.equal(
     embeddedManifest.activities.greet.entrypoint.path,
-    'wharfie:embedded/activity/greet',
+    'src/activity.ts',
   );
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source CLI activity, and clean generated Linux SEA activity with Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source CLI activity, and clean generated ${process.platform} SEA activity with Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();

@@ -19,7 +19,7 @@ import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
  * @property {number} [maxNumberOfMessages] - 1-10.
  * @property {number} [visibilityTimeout] - seconds
  * @property {import('../../lib/db/tables/operations.js').OperationsTableClient} [operationsStore] - operationsStore.
- * @property {string} [appName] - appName.
+ * @property {string} [appId] - Canonical application ID.
  * @property {(msg: string, extra?: any) => void} [log] - log.
  */
 
@@ -55,11 +55,7 @@ function normalizeContext(value) {
  * @returns {string | undefined} - Result.
  */
 function resolveActivityName(payload) {
-  return (
-    normalizeOptionalString(payload?.activity) ||
-    normalizeOptionalString(payload?.actor) ||
-    normalizeOptionalString(payload?.functionName)
-  );
+  return normalizeOptionalString(payload?.activity);
 }
 
 /**
@@ -69,8 +65,7 @@ function resolveActivityName(payload) {
  * - Optionally runs one or more queue poll loops that decode messages into invocations.
  *
  * Message format (Queue Message Body):
- * public: { "activity": "my-activity", "event": { ... }, "context": { ... } }
- * legacy envelopes using "actor" or "functionName" are still normalized for internal compatibility.
+ * { "activity": "my-activity", "event": { ... }, "context": { ... } }
  * @param {LambdaServiceOptions} options - options.
  * @returns {Promise<{ address: string, host: string, port: number, close: () => Promise<void> }>} - Result.
  */
@@ -181,10 +176,10 @@ export async function startLambdaService({
               };
 
               try {
-                if (poll.operationsStore && poll.appName) {
+                if (poll.operationsStore && poll.appId) {
                   await runPersistedEventActivity({
                     store: poll.operationsStore,
-                    appName: poll.appName,
+                    appName: poll.appId,
                     activity,
                     event: payload?.event,
                     context: invocationContext,

@@ -9,5 +9,6 @@ These records capture product-level decisions that should survive implementation
 | [0003 — Capability fulfillment, not general IaC](0003-capability-fulfillment.md)                       | Accepted |
 | [0004 — One authoritative terminal outcome and explicit effects](0004-logical-outcomes-and-effects.md) | Accepted |
 | [0005 — TypeScript control plane with a component boundary](0005-typescript-and-component-boundary.md) | Accepted |
+| [0006 — One strict version 2 application manifest](0006-strict-v2-app-manifest.md)                    | Accepted |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).

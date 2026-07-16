@@ -50,6 +50,47 @@ production use.
 
 The charter and accepted decisions are authoritative; the roadmap is expected to evolve, and dated checkpoints are historical snapshots. Older material under `docs/` and `llm/design/` describes prior iterations and can be stale.
 
+## Current application contract
+
+A source application is a default-exported plain object in `wharfie.app.js`.
+The v2 boundary is deliberately small and strict:
+
+```js
+import { defineApp } from '@wharfie/wharfie/app';
+
+export default defineApp({
+  schemaVersion: 2,
+  app: { id: 'my-app' },
+  cli: {
+    entrypoint: {
+      kind: 'node',
+      path: './src/cli.js',
+      export: 'main',
+    },
+  },
+  activities: {
+    greet: {
+      entrypoint: {
+        kind: 'node',
+        path: './src/activities/greet.js',
+        export: 'greet',
+      },
+    },
+  },
+});
+```
+
+Application and activity IDs are lowercase kebab identifiers matching
+`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`, with a maximum of 63 ASCII bytes. Wharfie
+does not trim or rewrite them. The CLI is required; activities, resources, and
+package targets are optional. Workflows and schedules are intentionally not in
+this schema until their durable semantics are ready. Build credentials, signing
+material, and extra asset configuration are also outside the public manifest.
+
+See the [quickstart](docs/src/assets/markdown/quickstart.md) and [application
+structure](docs/src/assets/markdown/project-structure.md) for the complete
+authoring rules.
+
 ## Current development checks
 
 Use the Node version in `engines` and the contributor npm version in
