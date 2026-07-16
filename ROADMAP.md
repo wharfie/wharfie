@@ -135,10 +135,10 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 ## Immediate queue
 
-1. Review and merge the stacked reset, inventory, packaging, and v1-deletion changes.
+1. Review and merge the stacked reset, inventory, packaging, v1-deletion, and strict-manifest changes.
 2. Restore GitHub authentication and execute the archived branch, PR, and issue cleanup decisions.
-3. Finish migrating runtime consumers and tests to the strict version 2 manifest, then run the full verification suite.
-4. Re-run the clean Linux SEA proof, inspect the production audit, and decide when the package can stop being private.
-5. Review the resulting narrow boundary before beginning the durable run/invocation/attempt/effect ledger.
+3. Run the strict stack through the clean Linux SEA proof in hosted CI and review the resulting narrow boundary.
+4. Choose one persisted-run implementation and fix operation create/replace, record-key, and cancellation semantics.
+5. Define immutable revisions and the durable run/invocation/attempt/effect ledger before adding schedules or workflows.
 
-The latest dated handoff at [llm/checkpoints/2026-07-16-v1-deletion.md](llm/checkpoints/2026-07-16-v1-deletion.md) contains exact repository state and restart instructions.
+The latest dated handoff at [llm/checkpoints/2026-07-16-strict-v2-manifest.md](llm/checkpoints/2026-07-16-strict-v2-manifest.md) contains exact repository state and restart instructions.
