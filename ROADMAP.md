@@ -33,10 +33,11 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 ### Repository and tracker
 
-- [x] Classify every non-default branch and open PR as absorb, supersede, or delete; link each decision to its archive tag.
-- [ ] Reconcile the three unpublished local `master` commits and `jvd/pr4` against the new charter.
+- [x] Classify every legacy non-default branch and PR as keep, absorb, supersede, or delete; see the [cleanup inventory](docs/project-reset/2026-07-16-cleanup-inventory.md).
+- [x] Reconcile the three unpublished local `master` commits and `jvd/pr4` against the new charter.
 - [ ] Close stale PRs with a short preservation and supersession note.
-- [ ] Classify every open issue as roadmap work, useful research, or obsolete; label/milestone the first two and close the rest.
+- [x] Classify every open issue as roadmap work, useful research, or obsolete; see the [cleanup inventory](docs/project-reset/2026-07-16-cleanup-inventory.md).
+- [ ] Create the proposed replacement issues, assign roadmap milestones, and close the old issues with preservation/supersession notes.
 - [ ] Remove stale project-board, release, and documentation promises.
 
 ### Codebase
@@ -139,7 +140,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 ## Immediate queue
 
-1. Restore GitHub authentication, recheck the archive tags, publish the current stack, and execute the archived PR/branch/issue cleanup decisions.
+1. Publish the reconciled cleanup inventory, open the umbrella draft PR, and execute the archived PR/branch/issue cleanup decisions.
 2. Make SEA external installation consume and fail-check one frozen complete transitive dependency closure.
 3. Run the current content-addressed stack through the clean Linux SEA proof in hosted CI, then prove argv/stdio/exit behavior and one real target-specific Node-API dependency.
 4. Decide the durable workflow model and define the run → invocation → attempt → effect ledger before adding schedules or workflows.
