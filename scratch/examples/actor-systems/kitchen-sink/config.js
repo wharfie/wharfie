@@ -22,7 +22,6 @@ export const kitchenSinkExternalDependencies = Object.freeze([
   'lmdb',
   'sharp@0.34.4',
   'sodium-native@5.0.9',
-  '@duckdb/node-api',
   'usb@2.13.0',
 ]);
 

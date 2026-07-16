@@ -165,7 +165,7 @@ ${result.stderr || ''}`;
 /**
  * @typedef {import('node:process')['platform']} TargetPlatform -
  * @typedef {import('node:process')['arch']} TargetArch -
- * @typedef {import('detect-libc').GLIBC|import('detect-libc').MUSL} TargetLibc
+ * @typedef {'glibc'|'musl'} TargetLibc
  */
 
 /**
@@ -345,12 +345,7 @@ class SeaBuild extends BaseResource {
       sourcemap: 'inline',
       target: `node${nodeVersion}`,
       logLevel: 'silent',
-      external: [
-        'esbuild',
-        'node-gyp/bin/node-gyp.js',
-        'lmdb',
-        '@duckdb/node-api',
-      ],
+      external: ['esbuild', 'node-gyp/bin/node-gyp.js', 'lmdb'],
       define: {
         __WILLEM_BUILD_RECONCILE_TERMINATOR: '1', // injects this variable definition into the global scope
         'import.meta.url': '__filename',

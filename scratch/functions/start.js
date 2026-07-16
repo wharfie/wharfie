@@ -1,6 +1,5 @@
 import { promises as fsp } from 'node:fs';
 
-import duckdb from '@duckdb/node-api';
 import lmdb from 'lmdb';
 
 import dep from '../lib/dep.js';
@@ -54,39 +53,6 @@ async function smokeLmdb(lmdbPath, record) {
     if (closeResult && typeof closeResult.then === 'function') {
       await closeResult;
     }
-  }
-}
-
-/**
- * @returns {Promise<{ ok: true, version: string, count: number, sum: number }>} - Result.
- */
-async function smokeDuckDb() {
-  const { DuckDBInstance } = duckdb;
-  const instance = await DuckDBInstance.create(':memory:');
-  const conn = await instance.connect();
-
-  try {
-    await conn.run('create table t(i int, s varchar)');
-    await conn.run("insert into t values (1,'a'),(2,'b'),(3,'c')");
-
-    const [countRow] = (
-      await conn.runAndReadAll('select cast(count(*) as int) as cnt from t')
-    ).getRowObjects();
-    const [sumRow] = (
-      await conn.runAndReadAll(
-        'from range(5) select cast(sum(range) as int) as total',
-      )
-    ).getRowObjects();
-
-    return {
-      ok: true,
-      version: duckdb.version(),
-      count: countRow.cnt,
-      sum: sumRow.total,
-    };
-  } finally {
-    conn.closeSync();
-    instance.closeSync();
   }
 }
 
@@ -222,13 +188,11 @@ function toNativeOptionalProbe(packageName, probe) {
  *   runId: string,
  *   who: string,
  *   lmdb: { ok: true, value: string, path: string, record: { who: string, message: string, runId: string } },
- *   duckdb: { ok: true, version: string, count: number, sum: number },
  *   sharp: { status: 'ok', bytes: number } | { status: 'skipped', reason: string },
  *   sodiumNative: { status: 'ok', opened: string } | { status: 'skipped', reason: string },
  *   usb: { status: 'ok', deviceCount: number } | { status: 'skipped', reason: string },
  *   native: {
  *     lmdbRecord: { who: string, message: string, runId: string },
- *     duckdb: { version: string, rowCount: number, rangeSum: number },
  *     optional: {
  *       sharp: { packageName: string, status: 'OK', bytes: number } | { packageName: string, status: 'SKIPPED', reason: string },
  *       sodiumNative: { packageName: string, status: 'OK', opened: string } | { packageName: string, status: 'SKIPPED', reason: string },
@@ -251,7 +215,6 @@ const start = async (event, context) => {
   };
 
   const lmdb = await smokeLmdb(lmdbPath, nativeRecord);
-  const duckdb = await smokeDuckDb();
   const sharp = await smokeSharp();
   const sodiumNative = await smokeSodiumNative();
   const usb = await smokeUsb();
@@ -263,17 +226,11 @@ const start = async (event, context) => {
     runId,
     who,
     lmdb,
-    duckdb,
     sharp,
     sodiumNative,
     usb,
     native: {
       lmdbRecord: lmdb.record,
-      duckdb: {
-        version: duckdb.version,
-        rowCount: duckdb.count,
-        rangeSum: duckdb.sum,
-      },
       optional: {
         sharp: toNativeOptionalProbe('sharp', sharp),
         sodiumNative: toNativeOptionalProbe('sodium-native', sodiumNative),

@@ -1,7 +1,5 @@
-import Resource from '../../graph/resource.js';
 import Operation from '../../graph/operation.js';
 import Action, { Status as ActionStatus } from '../../graph/action.js';
-import Query, { Status as QueryStatus } from '../../graph/query.js';
 
 import { CONDITION_TYPE, KEY_TYPE } from '../base.js';
 
@@ -13,17 +11,9 @@ const KEY_NAME = 'resource_id';
 const SORT_KEY_NAME = 'sort_key';
 
 /**
- * Partition key used to maintain a provider-neutral index of all resources.
- *
- * The operations table is partitioned by `resource_id`, so listing *all* resources
- * requires an additional index partition.
- */
-const RESOURCES_INDEX_PARTITION_KEY = '__resources__';
-
-/**
- * @param {string} propertyName - propertyName.
- * @param {string} propertyValue - propertyValue.
- * @returns {import('../base.js').KeyCondition} - Result.
+ * @param {string} propertyName - Property name.
+ * @param {string} propertyValue - Property value.
+ * @returns {import('../base.js').KeyCondition} - Primary-key equality condition.
  */
 function pkEq(propertyName, propertyValue) {
   return {
@@ -35,9 +25,9 @@ function pkEq(propertyName, propertyValue) {
 }
 
 /**
- * @param {string} propertyName - propertyName.
- * @param {string} propertyValue - propertyValue.
- * @returns {import('../base.js').KeyCondition} - Result.
+ * @param {string} propertyName - Property name.
+ * @param {string} propertyValue - Property value.
+ * @returns {import('../base.js').KeyCondition} - Sort-key prefix condition.
  */
 function skBegins(propertyName, propertyValue) {
   return {
@@ -49,9 +39,9 @@ function skBegins(propertyName, propertyValue) {
 }
 
 /**
- * @param {string} propertyName - propertyName.
- * @param {string} propertyValue - propertyValue.
- * @returns {import('../base.js').KeyCondition} - Result.
+ * @param {string} propertyName - Property name.
+ * @param {string} propertyValue - Property value.
+ * @returns {import('../base.js').KeyCondition} - Equality condition.
  */
 function eq(propertyName, propertyValue) {
   return {
@@ -62,229 +52,108 @@ function eq(propertyName, propertyValue) {
 }
 
 /**
- * @param {unknown} error - error.
- * @returns {boolean} - Result.
+ * @param {unknown} error - Error to inspect.
+ * @returns {boolean} - Whether the write lost an optimistic concurrency race.
  */
-const isConditionalCheckFailed = (error) => {
-  if (error instanceof Error) {
-    return error?.name === 'ConditionalCheckFailedException';
+function isConditionalCheckFailed(error) {
+  return (
+    error instanceof Error && error.name === 'ConditionalCheckFailedException'
+  );
+}
+
+/**
+ * @template T
+ * @param {T[]} values - Values to split.
+ * @param {number} size - Maximum chunk size.
+ * @returns {T[][]} - Chunks.
+ */
+function chunk(values, size) {
+  const chunks = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
   }
-  return false;
-};
+  return chunks;
+}
 
 /**
- * @param {unknown} error - error.
- * @returns {boolean} - Result.
+ * Some adapters use a top-level status field for conditional updates.
+ * @param {Record<string, any>} record - Record to normalize.
+ * @returns {Record<string, any>} - Normalized record.
  */
-const isResourceNotFound = (error) => {
-  if (error instanceof Error) {
-    return error?.name === 'ResourceNotFoundException';
-  }
-  return false;
-};
+function normalizeRecord(record) {
+  return { ...record, status: record.data.status };
+}
 
 /**
- * @param {any[]} arr - arr.
- * @param {number} size - size.
- * @returns {any[][]} - Result.
+ * @param {Record<string, any>} record - Persisted record.
+ * @param {string} resourceId - App resource id.
+ * @param {string} operationId - Operation id.
+ * @returns {boolean} - Whether this is the exact operation record.
  */
-const chunk = (arr, size) => {
-  const out = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-};
+function isOperationRecord(record, resourceId, operationId) {
+  return (
+    record?.data?.record_type === Operation.RecordType &&
+    record.data.resource_id === resourceId &&
+    record.data.id === operationId
+  );
+}
 
 /**
- * The adapter stores selected status fields redundantly at the top-level for some backends.
- * @param {Record<string, any>} record - record.
- * @returns {Record<string, any>} - Result.
+ * @param {Record<string, any>} record - Persisted record.
+ * @param {string} resourceId - App resource id.
+ * @param {string} operationId - Operation id.
+ * @returns {boolean} - Whether this action belongs to the exact operation.
  */
-const normalizeRecord = (record) => {
-  if (
-    record?.data?.record_type === Action.RecordType ||
-    record?.data?.record_type === Operation.RecordType
-  ) {
-    return { ...record, status: record.data.status };
-  }
-  return record;
-};
+function isActionRecord(record, resourceId, operationId) {
+  return (
+    record?.data?.record_type === Action.RecordType &&
+    record.data.resource_id === resourceId &&
+    record.data.operation_id === operationId
+  );
+}
 
 /**
- * Operations table client.
+ * Persisted operation and action API.
  * @typedef {Object} OperationsTableClient
- * @property {(resource: Resource) => Promise<void>} putResource - putResource.
- * @property {(resource_id: string) => Promise<Resource | null>} getResource - getResource.
- * @property {() => Promise<Resource[]>} getAllResources - getAllResources.
- * @property {(resource: Resource) => Promise<void>} deleteResource - deleteResource.
- * @property {(operation: Operation) => Promise<void>} putOperation - putOperation.
- * @property {(resource_id: string, operation_id: string) => Promise<Operation | null>} getOperation - getOperation.
- * @property {(operation: Operation) => Promise<void>} deleteOperation - deleteOperation.
- * @property {(resource_id: string) => Promise<Operation[]>} getOperations - getOperations.
- * @property {(operation: Operation) => Promise<Action[]>} getActions - getActions.
- * @property {(resource_id: string, operation_id: string, action_id: string) => Promise<Action | null>} getAction - getAction.
- * @property {(action: { toRecords: () => Record<string, any>[] }) => Promise<void>} putAction -
- * @property {(action: Action, new_status: string, overrideTableName?: string) => Promise<boolean>} updateActionStatus - updateActionStatus.
- * @property {(operation: Operation, new_status: import('../../graph/operation.js').WharfieOperationStatusEnum, overrideTableName?: string) => Promise<boolean>} updateOperationStatus - updateOperationStatus.
- * @property {(query: { toRecord: () => any }) => Promise<void>} putQuery -
- * @property {(queries: Array<{ toRecord: () => any }>) => Promise<void>} putQueries -
- * @property {(resource_id: string, operation_id: string, action_id: string, query_id: string) => Promise<Query | null>} getQuery - getQuery.
- * @property {(resource_id: string, operation_id: string, action_id: string) => Promise<Query[]>} getQueries - getQueries.
- * @property {(operation: Operation, action_identifier: string) => Promise<boolean>} checkActionPrerequisites - checkActionPrerequisites.
- * @property {(resource_id: string, operation_id?: string) => Promise<{ operations: Operation[]; actions: Action[]; queries: Query[] }>} getRecords -
+ * @property {(operation: Operation) => Promise<void>} putOperation - Persist an operation and its actions.
+ * @property {(resource_id: string, operation_id: string) => Promise<Operation | null>} getOperation - Load one operation.
+ * @property {(operation: Operation) => Promise<void>} deleteOperation - Delete an operation and its actions.
+ * @property {(resource_id: string) => Promise<Operation[]>} getOperations - Load an app's operations.
+ * @property {(operation: Operation) => Promise<Action[]>} getActions - Load an operation's actions.
+ * @property {(resource_id: string, operation_id: string, action_id: string) => Promise<Action | null>} getAction - Load one action.
+ * @property {(action: Action) => Promise<void>} putAction - Persist one action.
+ * @property {(action: Action, new_status: string, overrideTableName?: string) => Promise<boolean>} updateActionStatus - Optimistically update an action status.
+ * @property {(operation: Operation, new_status: import('../../graph/operation.js').WharfieOperationStatusEnum, overrideTableName?: string) => Promise<boolean>} updateOperationStatus - Optimistically update an operation status.
+ * @property {(operation: Operation, action_id: string) => Promise<boolean>} checkActionPrerequisites - Check exact action prerequisites.
+ * @property {(resource_id: string, operation_id?: string) => Promise<{ operations: Operation[]; actions: Action[] }>} getRecords - Load persisted runs.
  */
 
 /**
- * Factory: Operations table client.
- * @param {{ db?: DBClient, tableName?: string }} [params] - params.
+ * Create an operations table client.
+ * @param {{ db?: DBClient, tableName?: string }} [params] - Table configuration.
  * @throws {Error} If db or tableName are missing.
- * @returns {OperationsTableClient} - Result.
+ * @returns {OperationsTableClient} - Operations table client.
  */
 export function createOperationsTable({ db, tableName } = {}) {
   if (!db) throw new Error('createOperationsTable requires a db client');
   if (!tableName || !String(tableName).trim()) {
     throw new Error('createOperationsTable requires a tableName');
   }
-  /** @type {string} */
-  const _tableName = String(tableName).trim();
+
   /** @type {DBClient} */
   const dbClient = db;
+  const resolvedTableName = String(tableName).trim();
 
   /**
-   * @param {Resource} resource - resource.
-   * @returns {Promise<void>} - Result.
-   */
-  async function putResource(resource) {
-    const record = resource.toRecord();
-    await dbClient.batchWrite({
-      tableName: _tableName,
-      putRequests: [
-        {
-          keyName: KEY_NAME,
-          sortKeyName: SORT_KEY_NAME,
-          record,
-        },
-        {
-          keyName: KEY_NAME,
-          sortKeyName: SORT_KEY_NAME,
-          record: {
-            ...record,
-            resource_id: RESOURCES_INDEX_PARTITION_KEY,
-          },
-        },
-      ],
-    });
-  }
-
-  /**
-   * @param {string} resource_id - resource_id.
-   * @returns {Promise<Resource | null>} - Result.
-   */
-  async function getResource(resource_id) {
-    try {
-      const item = await dbClient.get({
-        tableName: _tableName,
-        keyName: KEY_NAME,
-        keyValue: resource_id,
-        sortKeyName: SORT_KEY_NAME,
-        sortKeyValue: resource_id,
-        consistentRead: true,
-      });
-
-      return item
-        ? Resource.fromRecord(
-            /** @type {import('../../graph/typedefs.js').ResourceRecord} */ (
-              item
-            ),
-          )
-        : null;
-    } catch (error) {
-      if (isResourceNotFound(error)) return null;
-      throw error;
-    }
-  }
-
-  /**
-   * Provider-neutral resource listing backed by a dedicated index partition.
-   * @returns {Promise<Resource[]>} - Result.
-   */
-  async function getAllResources() {
-    try {
-      const items =
-        (await dbClient.query({
-          tableName: _tableName,
-          consistentRead: true,
-          keyConditions: [pkEq(KEY_NAME, RESOURCES_INDEX_PARTITION_KEY)],
-        })) || [];
-
-      return items
-        .filter((item) => item?.data?.record_type === Resource.RecordType)
-        .map((item) =>
-          Resource.fromRecord(
-            /** @type {import('../../graph/typedefs.js').ResourceRecord} */ (
-              item
-            ),
-          ),
-        )
-        .sort((a, b) => a.id.localeCompare(b.id));
-    } catch (error) {
-      if (isResourceNotFound(error)) return [];
-      throw error;
-    }
-  }
-
-  /**
-   * @param {Resource} resource - resource.
-   * @returns {Promise<void>} - Result.
-   */
-  async function deleteResource(resource) {
-    try {
-      const items =
-        (await dbClient.query({
-          tableName: _tableName,
-          consistentRead: true,
-          keyConditions: [
-            pkEq(KEY_NAME, resource.id),
-            skBegins(SORT_KEY_NAME, resource.id),
-          ],
-        })) || [];
-
-      if (items.length) {
-        for (const batch of chunk(items, 25)) {
-          await dbClient.batchWrite({
-            tableName: _tableName,
-            deleteRequests: batch.map((item) => ({
-              keyName: KEY_NAME,
-              keyValue: item.resource_id,
-              sortKeyName: SORT_KEY_NAME,
-              sortKeyValue: item.sort_key,
-            })),
-          });
-        }
-      }
-
-      await dbClient.remove({
-        tableName: _tableName,
-        keyName: KEY_NAME,
-        keyValue: RESOURCES_INDEX_PARTITION_KEY,
-        sortKeyName: SORT_KEY_NAME,
-        sortKeyValue: resource.id,
-      });
-    } catch (error) {
-      if (isResourceNotFound(error)) return;
-      throw error;
-    }
-  }
-
-  /**
-   * @param {Operation} operation - operation.
-   * @returns {Promise<void>} - Result.
+   * @param {Operation} operation - Operation to persist.
+   * @returns {Promise<void>} - Resolves when all records are persisted.
    */
   async function putOperation(operation) {
     const records = operation.toRecords().map(normalizeRecord);
 
     for (const batch of chunk(records, 25)) {
       await dbClient.batchWrite({
-        tableName: _tableName,
+        tableName: resolvedTableName,
         putRequests: batch.map((record) => ({
           keyName: KEY_NAME,
           sortKeyName: SORT_KEY_NAME,
@@ -295,43 +164,43 @@ export function createOperationsTable({ db, tableName } = {}) {
   }
 
   /**
-   * @param {string} resource_id - resource_id.
-   * @param {string} operation_id - operation_id.
-   * @returns {Promise<Operation | null>} - Result.
+   * @param {string} resourceId - App resource id.
+   * @param {string} operationId - Operation id.
+   * @returns {Promise<Operation | null>} - Persisted operation, if found.
    */
-  async function getOperation(resource_id, operation_id) {
+  async function getOperation(resourceId, operationId) {
     const item = await dbClient.get({
-      tableName: _tableName,
+      tableName: resolvedTableName,
       keyName: KEY_NAME,
-      keyValue: resource_id,
+      keyValue: resourceId,
       sortKeyName: SORT_KEY_NAME,
-      sortKeyValue: `${resource_id}#${operation_id}`,
+      sortKeyValue: `${resourceId}#${operationId}`,
       consistentRead: true,
     });
 
-    return item ? Operation.fromRecord(item) : null;
+    return item && isOperationRecord(item, resourceId, operationId)
+      ? Operation.fromRecord(item)
+      : null;
   }
 
   /**
-   * Optimistic status transition for an operation record.
-   * @param {Operation} operation - operation.
-   * @param {import('../../graph/operation.js').WharfieOperationStatusEnum} new_status - new_status.
-   * @param {string} [overrideTableName] - overrideTableName.
-   * @returns {Promise<boolean>} - Result.
+   * @param {Operation} operation - Operation whose status should change.
+   * @param {import('../../graph/operation.js').WharfieOperationStatusEnum} newStatus - New status.
+   * @param {string} [overrideTableName] - Optional table override.
+   * @returns {Promise<boolean>} - Whether the transition was persisted.
    */
   async function updateOperationStatus(
     operation,
-    new_status,
-    overrideTableName = _tableName,
+    newStatus,
+    overrideTableName = resolvedTableName,
   ) {
-    const key = `${operation.resource_id}#${operation.id}`;
-
+    const sortKey = `${operation.resource_id}#${operation.id}`;
     const current = await dbClient.get({
       tableName: overrideTableName,
       keyName: KEY_NAME,
       keyValue: operation.resource_id,
       sortKeyName: SORT_KEY_NAME,
-      sortKeyValue: key,
+      sortKeyValue: sortKey,
       consistentRead: true,
     });
 
@@ -340,7 +209,7 @@ export function createOperationsTable({ db, tableName } = {}) {
     const storedStatus = current.status ?? current?.data?.status;
     if (storedStatus !== operation.status) return false;
 
-    const nextUpdatedAt = Date.now();
+    const lastUpdatedAt = Date.now();
 
     try {
       await dbClient.update({
@@ -348,14 +217,14 @@ export function createOperationsTable({ db, tableName } = {}) {
         keyName: KEY_NAME,
         keyValue: operation.resource_id,
         sortKeyName: SORT_KEY_NAME,
-        sortKeyValue: key,
+        sortKeyValue: sortKey,
         updates: [
-          { property: ['data', 'status'], propertyValue: new_status },
+          { property: ['data', 'status'], propertyValue: newStatus },
           {
             property: ['data', 'last_updated_at'],
-            propertyValue: nextUpdatedAt,
+            propertyValue: lastUpdatedAt,
           },
-          { property: ['status'], propertyValue: new_status },
+          { property: ['status'], propertyValue: newStatus },
         ],
         conditions:
           current.status !== undefined ? [eq('status', storedStatus)] : [],
@@ -365,30 +234,29 @@ export function createOperationsTable({ db, tableName } = {}) {
       throw error;
     }
 
-    const after = await dbClient.get({
+    const updated = await dbClient.get({
       tableName: overrideTableName,
       keyName: KEY_NAME,
       keyValue: operation.resource_id,
       sortKeyName: SORT_KEY_NAME,
-      sortKeyValue: key,
+      sortKeyValue: sortKey,
       consistentRead: true,
     });
 
-    const afterStatus = after?.status ?? after?.data?.status;
     return (
-      afterStatus === new_status &&
-      after?.data?.last_updated_at === nextUpdatedAt
+      (updated?.status ?? updated?.data?.status) === newStatus &&
+      updated?.data?.last_updated_at === lastUpdatedAt
     );
   }
 
   /**
-   * @param {Operation} operation - operation.
-   * @returns {Promise<void>} - Result.
+   * @param {Operation} operation - Operation to delete.
+   * @returns {Promise<void>} - Resolves when the operation and actions are deleted.
    */
   async function deleteOperation(operation) {
-    const items =
+    const candidates =
       (await dbClient.query({
-        tableName: _tableName,
+        tableName: resolvedTableName,
         consistentRead: true,
         keyConditions: [
           pkEq(KEY_NAME, operation.resource_id),
@@ -396,120 +264,125 @@ export function createOperationsTable({ db, tableName } = {}) {
         ],
       })) || [];
 
-    if (!items.length) return;
+    const records = candidates.filter(
+      (record) =>
+        isOperationRecord(record, operation.resource_id, operation.id) ||
+        isActionRecord(record, operation.resource_id, operation.id),
+    );
 
-    for (const batch of chunk(items, 25)) {
+    for (const batch of chunk(records, 25)) {
       await dbClient.batchWrite({
-        tableName: _tableName,
-        deleteRequests: batch.map((item) => ({
+        tableName: resolvedTableName,
+        deleteRequests: batch.map((record) => ({
           keyName: KEY_NAME,
-          keyValue: item.resource_id,
+          keyValue: record.resource_id,
           sortKeyName: SORT_KEY_NAME,
-          sortKeyValue: item.sort_key,
+          sortKeyValue: record.sort_key,
         })),
       });
     }
   }
 
   /**
-   * @param {string} resource_id - resource_id.
-   * @returns {Promise<Operation[]>} - Result.
+   * @param {string} resourceId - App resource id.
+   * @returns {Promise<Operation[]>} - Persisted operations.
    */
-  async function getOperations(resource_id) {
+  async function getOperations(resourceId) {
     const items =
       (await dbClient.query({
-        tableName: _tableName,
+        tableName: resolvedTableName,
         consistentRead: true,
         keyConditions: [
-          pkEq(KEY_NAME, resource_id),
-          skBegins(SORT_KEY_NAME, `${resource_id}#`),
+          pkEq(KEY_NAME, resourceId),
+          skBegins(SORT_KEY_NAME, `${resourceId}#`),
         ],
       })) || [];
 
     return items
-      .filter((item) => item?.data?.record_type === Operation.RecordType)
+      .filter(
+        (item) =>
+          item?.data?.record_type === Operation.RecordType &&
+          item.data.resource_id === resourceId,
+      )
+      .sort((left, right) => left.sort_key.localeCompare(right.sort_key))
       .map((item) => Operation.fromRecord(item));
   }
 
   /**
-   * @param {Operation} operation - operation.
-   * @returns {Promise<Action[]>} - Result.
+   * @param {Operation} operation - Operation whose actions should be loaded.
+   * @returns {Promise<Action[]>} - Persisted actions.
    */
   async function getActions(operation) {
-    const prefix = `${operation.resource_id}#${operation.id}#`;
     const items =
       (await dbClient.query({
-        tableName: _tableName,
+        tableName: resolvedTableName,
         consistentRead: true,
         keyConditions: [
           pkEq(KEY_NAME, operation.resource_id),
-          skBegins(SORT_KEY_NAME, prefix),
+          skBegins(SORT_KEY_NAME, `${operation.resource_id}#${operation.id}#`),
         ],
       })) || [];
 
     return items
-      .filter((item) => item?.data?.record_type === Action.RecordType)
+      .filter((item) =>
+        isActionRecord(item, operation.resource_id, operation.id),
+      )
+      .sort((left, right) => left.sort_key.localeCompare(right.sort_key))
       .map((item) => Action.fromRecord(item));
   }
 
   /**
-   * @param {string} resource_id - resource_id.
-   * @param {string} operation_id - operation_id.
-   * @param {string} action_id - action_id.
-   * @returns {Promise<Action | null>} - Result.
+   * @param {string} resourceId - App resource id.
+   * @param {string} operationId - Operation id.
+   * @param {string} actionId - Action id.
+   * @returns {Promise<Action | null>} - Persisted action, if found.
    */
-  async function getAction(resource_id, operation_id, action_id) {
+  async function getAction(resourceId, operationId, actionId) {
     const item = await dbClient.get({
-      tableName: _tableName,
+      tableName: resolvedTableName,
       keyName: KEY_NAME,
-      keyValue: resource_id,
+      keyValue: resourceId,
       sortKeyName: SORT_KEY_NAME,
-      sortKeyValue: `${resource_id}#${operation_id}#${action_id}`,
+      sortKeyValue: `${resourceId}#${operationId}#${actionId}`,
       consistentRead: true,
     });
 
-    return item ? Action.fromRecord(item) : null;
+    return item && isActionRecord(item, resourceId, operationId)
+      ? Action.fromRecord(item)
+      : null;
   }
 
   /**
-   * @param {{ toRecords: () => Record<string, any>[] }} action -
-   * @returns {Promise<void>} - Result.
+   * @param {Action} action - Action to persist.
+   * @returns {Promise<void>} - Resolves when the action is persisted.
    */
   async function putAction(action) {
-    const records = action.toRecords().map(normalizeRecord);
-
-    for (const batch of chunk(records, 25)) {
-      await dbClient.batchWrite({
-        tableName: _tableName,
-        putRequests: batch.map((record) => ({
-          keyName: KEY_NAME,
-          sortKeyName: SORT_KEY_NAME,
-          record,
-        })),
-      });
-    }
+    await dbClient.put({
+      tableName: resolvedTableName,
+      keyName: KEY_NAME,
+      sortKeyName: SORT_KEY_NAME,
+      record: normalizeRecord(action.toRecord()),
+    });
   }
 
   /**
-   * Optimistic status transition.
-   * @param {Action} action - action.
-   * @param {string} new_status - new_status.
-   * @param {string} [overrideTableName] - overrideTableName.
-   * @returns {Promise<boolean>} - Result.
+   * @param {Action} action - Action whose status should change.
+   * @param {string} newStatus - New status.
+   * @param {string} [overrideTableName] - Optional table override.
+   * @returns {Promise<boolean>} - Whether the transition was persisted.
    */
   async function updateActionStatus(
     action,
-    new_status,
-    overrideTableName = _tableName,
+    newStatus,
+    overrideTableName = resolvedTableName,
   ) {
-    const key = `${action.resource_id}#${action.operation_id}#${action.id}`;
-
+    const sortKey = `${action.resource_id}#${action.operation_id}#${action.id}`;
     const current = await dbClient.get({
       tableName: overrideTableName,
       keyName: KEY_NAME,
       keyValue: action.resource_id,
       sortKeyName: SORT_KEY_NAME,
-      sortKeyValue: key,
+      sortKeyValue: sortKey,
       consistentRead: true,
     });
 
@@ -518,7 +391,7 @@ export function createOperationsTable({ db, tableName } = {}) {
     const storedStatus = current.status ?? current?.data?.status;
     if (storedStatus !== action.status) return false;
 
-    const nextUpdatedAt = Date.now();
+    const lastUpdatedAt = Date.now();
 
     try {
       await dbClient.update({
@@ -526,14 +399,14 @@ export function createOperationsTable({ db, tableName } = {}) {
         keyName: KEY_NAME,
         keyValue: action.resource_id,
         sortKeyName: SORT_KEY_NAME,
-        sortKeyValue: key,
+        sortKeyValue: sortKey,
         updates: [
-          { property: ['data', 'status'], propertyValue: new_status },
+          { property: ['data', 'status'], propertyValue: newStatus },
           {
             property: ['data', 'last_updated_at'],
-            propertyValue: nextUpdatedAt,
+            propertyValue: lastUpdatedAt,
           },
-          { property: ['status'], propertyValue: new_status },
+          { property: ['status'], propertyValue: newStatus },
         ],
         conditions:
           current.status !== undefined ? [eq('status', storedStatus)] : [],
@@ -543,154 +416,50 @@ export function createOperationsTable({ db, tableName } = {}) {
       throw error;
     }
 
-    const after = await dbClient.get({
+    const updated = await dbClient.get({
       tableName: overrideTableName,
       keyName: KEY_NAME,
       keyValue: action.resource_id,
       sortKeyName: SORT_KEY_NAME,
-      sortKeyValue: key,
+      sortKeyValue: sortKey,
       consistentRead: true,
     });
 
-    const afterStatus = after?.status ?? after?.data?.status;
     return (
-      afterStatus === new_status &&
-      after?.data?.last_updated_at === nextUpdatedAt
+      (updated?.status ?? updated?.data?.status) === newStatus &&
+      updated?.data?.last_updated_at === lastUpdatedAt
     );
   }
 
   /**
-   * @param {{ toRecord: () => any }} query -
-   * @returns {Promise<void>} - Result.
+   * @param {Operation} operation - Operation containing the action graph.
+   * @param {string} actionId - Exact action id.
+   * @returns {Promise<boolean>} - Whether every prerequisite completed.
    */
-  async function putQuery(query) {
-    await dbClient.put({
-      tableName: _tableName,
-      keyName: KEY_NAME,
-      sortKeyName: SORT_KEY_NAME,
-      record: query.toRecord(),
-    });
-  }
+  async function checkActionPrerequisites(operation, actionId) {
+    if (!operation.actions.has(actionId)) return false;
 
-  /**
-   * @param {Array<{ toRecord: () => any }>} queries -
-   * @returns {Promise<void>} - Result.
-   */
-  async function putQueries(queries) {
-    const records = queries.map((q) => q.toRecord());
-
-    for (const batch of chunk(records, 25)) {
-      await dbClient.batchWrite({
-        tableName: _tableName,
-        putRequests: batch.map((record) => ({
-          keyName: KEY_NAME,
-          sortKeyName: SORT_KEY_NAME,
-          record,
-        })),
-      });
-    }
-  }
-
-  /**
-   * @param {string} resource_id - resource_id.
-   * @param {string} operation_id - operation_id.
-   * @param {string} action_id - action_id.
-   * @param {string} query_id - query_id.
-   * @returns {Promise<Query | null>} - Result.
-   */
-  async function getQuery(resource_id, operation_id, action_id, query_id) {
-    const item = await dbClient.get({
-      tableName: _tableName,
-      keyName: KEY_NAME,
-      keyValue: resource_id,
-      sortKeyName: SORT_KEY_NAME,
-      sortKeyValue: `${resource_id}#${operation_id}#${action_id}#${query_id}`,
-      consistentRead: true,
-    });
-
-    return item ? Query.fromRecord(item) : null;
-  }
-
-  /**
-   * @param {string} resource_id - resource_id.
-   * @param {string} operation_id - operation_id.
-   * @param {string} action_id - action_id.
-   * @returns {Promise<Query[]>} - Result.
-   */
-  async function getQueries(resource_id, operation_id, action_id) {
-    const prefix = `${resource_id}#${operation_id}#${action_id}#`;
-
-    const items =
-      (await dbClient.query({
-        tableName: _tableName,
+    const prerequisiteIds = operation.getUpstreamActionIds(actionId);
+    for (const prerequisiteId of prerequisiteIds) {
+      const item = await dbClient.get({
+        tableName: resolvedTableName,
+        keyName: KEY_NAME,
+        keyValue: operation.resource_id,
+        sortKeyName: SORT_KEY_NAME,
+        sortKeyValue: `${operation.resource_id}#${operation.id}#${prerequisiteId}`,
         consistentRead: true,
-        keyConditions: [
-          pkEq(KEY_NAME, resource_id),
-          skBegins(SORT_KEY_NAME, prefix),
-        ],
-      })) || [];
+      });
 
-    return items.map((item) => Query.fromRecord(item));
-  }
-
-  /**
-   * Check whether prerequisite actions for a given action have completed.
-   *
-   * The operation graph stores edges keyed by action ids. Older call-sites may
-   * still pass an action type, so this helper accepts either an id or a type and
-   * prefers exact id matches when available.
-   * @param {Operation} operation - operation.
-   * @param {string} action_identifier - action identifier.
-   * @returns {Promise<boolean>} - Result.
-   */
-  async function checkActionPrerequisites(operation, action_identifier) {
-    let actionId = action_identifier;
-    if (!operation.actions.has(actionId)) {
-      try {
-        actionId = operation.getActionIdByType(
-          /** @type {import('../../graph/action.js').WharfieActionTypeEnum} */ (
-            action_identifier
-          ),
-        );
-      } catch {
+      if (!item || !isActionRecord(item, operation.resource_id, operation.id)) {
         return false;
       }
-    }
 
-    const prerequisites = operation.getUpstreamActionIds(actionId) || [];
-    if (!prerequisites.length) return true;
-
-    for (const prerequisiteActionId of prerequisites) {
-      const prefix = `${operation.resource_id}#${operation.id}#${prerequisiteActionId}`;
-
-      const items =
-        (await dbClient.query({
-          tableName: _tableName,
-          consistentRead: true,
-          keyConditions: [
-            pkEq(KEY_NAME, operation.resource_id),
-            skBegins(SORT_KEY_NAME, prefix),
-          ],
-        })) || [];
-
-      if (!items.length) return false;
-
-      const actionRecord = items.find(
-        (i) => i?.data?.record_type === Action.RecordType,
-      );
-      if (!actionRecord) return false;
-
-      const prerequisiteAction = Action.fromRecord(actionRecord);
-      if (prerequisiteAction.status !== ActionStatus.COMPLETED) return false;
-
-      const queryRecords = items.filter(
-        (i) => i?.data?.record_type === Query.RecordType,
-      );
-      for (const queryRecord of queryRecords) {
-        const q = Query.fromRecord(queryRecord);
-        if (q.status === QueryStatus.RUNNING) {
-          // Placeholder: stale query re-enqueueing logic lives in the daemon.
-        }
+      const prerequisite = Action.fromRecord(item);
+      if (
+        prerequisite.id !== prerequisiteId ||
+        prerequisite.status !== ActionStatus.COMPLETED
+      ) {
+        return false;
       }
     }
 
@@ -698,91 +467,58 @@ export function createOperationsTable({ db, tableName } = {}) {
   }
 
   /**
-   * Load all operation/action/query records for a resource (optionally scoped to an operation id).
-   * @param {string} resource_id - resource_id.
-   * @param {string} [operation_id] - operation_id.
-   * @returns {Promise<{ operations: Operation[]; actions: Action[]; queries: Query[] }>} -
+   * @param {string} resourceId - App resource id.
+   * @param {string} [operationId] - Optional exact operation id.
+   * @returns {Promise<{ operations: Operation[]; actions: Action[] }>} - Persisted runs.
    */
-  async function getRecords(resource_id, operation_id = '') {
-    const prefix = `${resource_id}#${operation_id}`;
-
+  async function getRecords(resourceId, operationId) {
+    const prefix = operationId
+      ? `${resourceId}#${operationId}`
+      : `${resourceId}#`;
     const items =
       (await dbClient.query({
-        tableName: _tableName,
+        tableName: resolvedTableName,
         consistentRead: true,
         keyConditions: [
-          pkEq(KEY_NAME, resource_id),
+          pkEq(KEY_NAME, resourceId),
           skBegins(SORT_KEY_NAME, prefix),
         ],
       })) || [];
 
-    const filtered = items
-      .filter((i) => i?.data?.record_type !== Resource.RecordType)
-      .sort((a, b) => a.sort_key.localeCompare(b.sort_key));
+    const operationRecords = items
+      .filter(
+        (item) =>
+          item?.data?.record_type === Operation.RecordType &&
+          item.data.resource_id === resourceId &&
+          (!operationId || item.data.id === operationId),
+      )
+      .sort((left, right) => left.sort_key.localeCompare(right.sort_key));
+    const actionRecords = items
+      .filter(
+        (item) =>
+          item?.data?.record_type === Action.RecordType &&
+          item.data.resource_id === resourceId &&
+          (!operationId || item.data.operation_id === operationId),
+      )
+      .sort((left, right) => left.sort_key.localeCompare(right.sort_key));
 
-    /** @type {{ operations: Operation[]; actions: Action[]; queries: Query[] }} */
-    const records = {
-      operations: [],
-      actions: [],
-      queries: [],
+    return {
+      operations: operationRecords.map((operationRecord) =>
+        Operation.fromRecords(
+          operationRecord,
+          actionRecords.filter(
+            (actionRecord) =>
+              actionRecord.data.operation_id === operationRecord.data.id,
+          ),
+        ),
+      ),
+      actions: actionRecords.map((actionRecord) =>
+        Action.fromRecord(actionRecord),
+      ),
     };
-
-    const operationBatch = [];
-    let actionBatch = [];
-    let queryBatch = [];
-
-    const pop = () => filtered.pop();
-
-    while (filtered.length) {
-      const item = pop();
-      if (!item) break;
-
-      if (item?.data?.record_type === Query.RecordType) {
-        queryBatch.push(item);
-        continue;
-      }
-
-      if (item?.data?.record_type === Action.RecordType) {
-        actionBatch.push({ action_record: item, query_records: queryBatch });
-        queryBatch = [];
-        continue;
-      }
-
-      if (item?.data?.record_type === Operation.RecordType) {
-        operationBatch.push({
-          operation_record: item,
-          action_records: actionBatch,
-        });
-        actionBatch = [];
-        continue;
-      }
-    }
-
-    for (const operationRecords of operationBatch) {
-      const operation = Operation.fromRecords(
-        operationRecords.operation_record,
-        operationRecords.action_records,
-      );
-
-      records.operations.push(operation);
-      for (const actionRecords of operationRecords.action_records) {
-        const action = Action.fromRecords(
-          actionRecords.action_record,
-          actionRecords.query_records,
-        );
-        records.actions.push(action);
-        records.queries.push(...action.queries);
-      }
-    }
-
-    return records;
   }
 
   return {
-    putResource,
-    getResource,
-    getAllResources,
-    deleteResource,
     putOperation,
     getOperation,
     deleteOperation,
@@ -792,10 +528,6 @@ export function createOperationsTable({ db, tableName } = {}) {
     putAction,
     updateActionStatus,
     updateOperationStatus,
-    putQuery,
-    putQueries,
-    getQuery,
-    getQueries,
     checkActionPrerequisites,
     getRecords,
   };

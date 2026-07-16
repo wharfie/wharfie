@@ -60,11 +60,6 @@ describe('Function + ActorSystem demos', () => {
           value: 'Hello, World!',
           path: lmdbPath,
         },
-        duckdb: {
-          ok: true,
-          count: 3,
-          sum: 10,
-        },
       });
       expect(['ok', 'skipped']).toContain(result.sharp.status);
       expect(['ok', 'skipped']).toContain(result.sodiumNative.status);

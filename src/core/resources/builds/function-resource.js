@@ -28,7 +28,7 @@ import { buffer as streamToBuffer } from 'node:stream/consumers';
 /**
  * @typedef {import('node:process')['platform']} TargetPlatform
  * @typedef {import('node:process')['arch']} TargetArch
- * @typedef {import('detect-libc').GLIBC|import('detect-libc').MUSL} TargetLibc
+ * @typedef {'glibc'|'musl'} TargetLibc
  */
 
 /**

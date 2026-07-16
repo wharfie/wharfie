@@ -95,13 +95,11 @@ const AWS_REGIONS = [
 ];
 
 /**
- * @param {import("@aws-sdk/client-sts").STSClientConfig} options - client configuration
- * @returns {import("@aws-sdk/client-s3").S3ClientConfig} - Result.
+ * @param {Record<string, any>} options - Shared client configuration.
+ * @returns {Record<string, any>} - S3-compatible client configuration.
  */
 function formatClientOptions(options) {
-  // aws-sdk v3 has diverged in options between sdks
-  const recreatedOptions = { ...options, extensions: [] };
-  const { extensions, ...restOptions } = recreatedOptions;
+  const { extensions: _extensions, ...restOptions } = options;
   return restOptions;
 }
 
@@ -621,54 +619,6 @@ class S3 {
       );
     }
     return prefixes;
-  }
-
-  /**
-   * @param {string} Bucket - S3 bucket to inspect for partitions
-   * @param {string} Prefix - S3 prefix to use for partition inspection
-   * @param {Array<{name: string}>} partitionKeys - Partition keys that will exist in s3 paths
-   * @param {import('../../typedefs.js').PartitionValues} PartitionValues - accumulator for Partition values
-   * @param {Array<import('../typedefs.js').Partition>} partitions - accumulator for Partition objects
-   * @returns {Promise<import('../typedefs.js').Partition[]>} - list of partitions that exists in the given s3 location
-   */
-  async findPartitions(
-    Bucket,
-    Prefix,
-    partitionKeys,
-    PartitionValues = {},
-    partitions = [],
-  ) {
-    const prefixes = await this.getCommonPrefixes({ Bucket, Prefix });
-    const promises = prefixes.map(async (prefix) => {
-      const partitionValues = Object.assign(
-        {
-          [partitionKeys[0].name]: prefix
-            .replace(Prefix, '')
-            .replace('/', '')
-            .replace(`${partitionKeys[0].name}=`, '')
-            .replace(`${partitionKeys[0].name}}%3D`, ''),
-        },
-        PartitionValues,
-      );
-      // ignores kinesis firehose's failure prefix
-      if (partitionValues[partitionKeys[0].name] === 'processing_failed')
-        return;
-      partitionKeys.length > 1
-        ? await this.findPartitions(
-            Bucket,
-            prefix,
-            partitionKeys.slice(1),
-            partitionValues,
-            partitions,
-          )
-        : partitions.push({
-            partitionValues,
-            location: `s3://${Bucket}/${prefix}`,
-          });
-    });
-    await Promise.all(promises);
-
-    return partitions;
   }
 
   /**

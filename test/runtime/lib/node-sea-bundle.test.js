@@ -71,12 +71,7 @@ describe('src/core/lib/node-sea.js', () => {
           sourcemap: false,
           target: `node${process.versions.node}`,
           logLevel: 'silent',
-          external: [
-            'esbuild',
-            'node-gyp/bin/node-gyp.js',
-            'lmdb',
-            '@duckdb/node-api',
-          ],
+          external: ['esbuild', 'node-gyp/bin/node-gyp.js', 'lmdb'],
           define: {
             __WILLEM_BUILD_RECONCILE_TERMINATOR: '1',
             'import.meta.url': '__filename',

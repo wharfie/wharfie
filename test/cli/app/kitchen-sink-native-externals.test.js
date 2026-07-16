@@ -126,10 +126,6 @@ describe('kitchen-sink native externals integration', () => {
           message: 'hello native-externals',
           runId: result.runId,
         });
-        expect(result.native.duckdb).toMatchObject({
-          version: expect.any(String),
-          rangeSum: 10,
-        });
         expect(result.native.optional).toEqual({
           sharp: expect.objectContaining({
             packageName: 'sharp',

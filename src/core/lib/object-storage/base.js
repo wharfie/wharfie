@@ -56,7 +56,6 @@
 
 /**
  * @typedef {import("../typedefs.js").S3Location} S3Location
- * @typedef {import("../typedefs.js").Partition} Partition
  */
 
 /**
@@ -76,7 +75,6 @@
  * @property {(params: ListObjectsV2CommandInput) => Promise<void>} deletePath - deletePath.
  * @property {(params: ListObjectsV2CommandInput, expirationDate?: Date) => Promise<void>} expireObjects - expireObjects.
  * @property {(params: ListObjectsV2CommandInput) => Promise<string[]>} getCommonPrefixes - getCommonPrefixes.
- * @property {(Bucket: string, Prefix: string, partitionKeys: any[]) => Promise<Partition[]>} findPartitions - findPartitions.
  * @property {(params: CreateMultipartUploadCommandInput) => Promise<CreateMultipartUploadCommandOutput>} createMultipartUpload - createMultipartUpload.
  * @property {(params: CompleteMultipartUploadCommandInput) => Promise<CompleteMultipartUploadCommandOutput>} completeMultipartUpload - completeMultipartUpload.
  * @property {(params: UploadPartCopyCommandInput) => Promise<UploadPartCopyCommandOutput>} uploadPartCopy - uploadPartCopy.
@@ -215,16 +213,6 @@ async function expireObjects(_params, _expirationDate = new Date()) {}
  * @returns {Promise<string[]>} - Result.
  */
 async function getCommonPrefixes(_params) {
-  return [];
-}
-
-/**
- * @param {string} _Bucket - _Bucket.
- * @param {string} _Prefix - _Prefix.
- * @param {any[]} _partitionKeys - _partitionKeys.
- * @returns {Promise<Partition[]>} - Result.
- */
-async function findPartitions(_Bucket, _Prefix, _partitionKeys) {
   return [];
 }
 
@@ -385,7 +373,6 @@ export default function createObjectStorage() {
     deletePath,
     expireObjects,
     getCommonPrefixes,
-    findPartitions,
     createMultipartUpload,
     completeMultipartUpload,
     uploadPartCopy,

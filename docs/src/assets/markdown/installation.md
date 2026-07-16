@@ -15,11 +15,11 @@ Use the exact Node version declared in `package.json#engines` and the npm versio
 declared in `package.json#packageManager`.
 
 Wharfie's builder currently runs through Node from a source checkout or a
-locally packed npm tarball. Registry publication is deliberately blocked until
-the abandoned v1 source and dependencies are deleted. Wharfie does not publish
-a standalone builder binary yet: the existing self-hosting prototype still
-depends on build-host modules that are not embedded. Generated application SEAs
-are the portable deliverable.
+locally packed npm tarball. The abandoned v1 source and dependencies have been
+deleted, but registry publication remains deliberately blocked while the
+cleaned v2-only boundary is reviewed. No standalone builder binary is published.
+The existing self-hosting prototype still depends on build-host modules that
+are not embedded. Generated application SEAs are the portable deliverable.
 
 Local `app` and `ops` commands do not require cloud credentials or global
 Wharfie configuration. Provider-backed deployment is roadmap work. When it is

@@ -25,6 +25,5 @@
     "test/fixtures/actors/**/*.js",
     "test/types/**/*.ts",
     "types/**/*.d.ts"
-  ],
-  "exclude": ["src/core/resources/aws/**", "src/core/resources/records/**"]
+  ]
 }

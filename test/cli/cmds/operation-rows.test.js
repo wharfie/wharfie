@@ -11,7 +11,7 @@ describe('operation row formatting', () => {
     const rows = formatOperationRows([
       {
         id: 'older',
-        type: 'LOAD',
+        type: 'PIPELINE',
         status: 'RUNNING',
         started_at: 1700000000,
         last_updated_at: 1700000005,
@@ -43,7 +43,7 @@ describe('operation row formatting', () => {
         activity: '',
         workflow: '',
         trigger: '',
-        type: 'LOAD',
+        type: 'PIPELINE',
         status: 'RUNNING',
         started_at: '2023-11-14T22:13:20.000Z',
         last_updated_at: '2023-11-14T22:13:25.000Z',

@@ -1,8 +1,14 @@
 # Wharfie v2
 
-**Status:** Draft (actively iterating)  
+**Status:** Historical pre-reset design snapshot
 **Last updated:** 2026-03-27  
 **Audience:** contributors implementing the rewrite; optimized for LLM context + direct code navigation.
+
+> Superseded by [`PROJECT.md`](../../PROJECT.md),
+> [`ROADMAP.md`](../../ROADMAP.md), and the
+> [accepted architecture decisions](../../docs/architecture/decisions/README.md).
+> Code links and "repo reality" statements below describe the repository when
+> this snapshot was written and may now be stale.
 
 - Back to design index: [`README.md`](./README.md)
 - Related design note: [`wharfie-progressive-agent-application.md`](./wharfie-progressive-agent-application.md)

@@ -56,17 +56,7 @@ Packaged SEA artifacts now embed the compiled app manifest. Once you package an
 app, inspect that embedded manifest from the artifact itself with:
 
 ```bash
-./dist/<artifact-name> ctl manifest
-```
-
-Packaged artifacts can also manage Linux/systemd releases without the source
-tree. The first-class artifact-side flow is:
-
-```bash
-./dist/<artifact-name> infra deploy --dry-run --json
-./dist/<artifact-name> infra status --json
-./dist/<artifact-name> infra logs --dry-run --json
-./dist/<artifact-name> infra rollback --dry-run --json
+./dist/<artifact-name> wharfie manifest
 ```
 
 ## CLI usage

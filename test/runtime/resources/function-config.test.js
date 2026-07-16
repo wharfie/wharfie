@@ -105,7 +105,7 @@ describe('Function configuration hard edges', () => {
       name: 'hello-resources',
       entrypoint: { path: actorPath, export: 'helloResources' },
       properties: {
-        external: ['lmdb', { name: '@duckdb/node-api' }],
+        external: ['lmdb', { name: '@paralleldrive/cuid2' }],
         resources: {
           db: { adapter: 'vanilla', options: { path: tmp } },
           queue: { adapter: 'vanilla', options: { path: tmp } },
@@ -120,8 +120,8 @@ describe('Function configuration hard edges', () => {
         version: readInstalledVersion('lmdb'),
       },
       {
-        name: '@duckdb/node-api',
-        version: readInstalledVersion('@duckdb/node-api'),
+        name: '@paralleldrive/cuid2',
+        version: readInstalledVersion('@paralleldrive/cuid2'),
       },
     ]);
 
@@ -164,7 +164,7 @@ describe('Function configuration hard edges', () => {
           platform: process.platform,
           architecture: process.arch,
         },
-        external: ['lmdb', '@duckdb/node-api'],
+        external: ['lmdb', '@paralleldrive/cuid2'],
       },
     });
 
@@ -174,8 +174,8 @@ describe('Function configuration hard edges', () => {
         version: readInstalledVersion('lmdb'),
       },
       {
-        name: '@duckdb/node-api',
-        version: readInstalledVersion('@duckdb/node-api'),
+        name: '@paralleldrive/cuid2',
+        version: readInstalledVersion('@paralleldrive/cuid2'),
       },
     ]);
 

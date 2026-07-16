@@ -101,7 +101,7 @@ class SQS {
   }
 
   /**
-   * @param {import('../../typedefs.js').WharfieEvent | import('../../typedefs.js').AthenaEvent} event - event.
+   * @param {any} event - JSON-serializable queue message.
    * @param {string} queueUrl - queueUrl.
    * @param {number} [delay] - delay.
    */
@@ -115,7 +115,7 @@ class SQS {
   }
 
   /**
-   * @param {import('../../typedefs.js').WharfieEvent[]} events - events.
+   * @param {any[]} events - JSON-serializable queue messages.
    * @param {string} queueUrl - queueUrl.
    */
   async enqueueBatch(events, queueUrl) {
@@ -135,7 +135,7 @@ class SQS {
   }
 
   /**
-   * @param {import('../../typedefs.js').WharfieEvent} event - event.
+   * @param {any} event - JSON-serializable queue message.
    * @param {string} queueUrl - queueUrl.
    */
   async reenqueue(event, queueUrl) {

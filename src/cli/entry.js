@@ -46,9 +46,6 @@ export function createProgram(options = {}) {
  * @param {string[]} argv - process.argv
  */
 export async function main(argv = process.argv) {
-  process.env.LOGGING_FORMAT = 'cli';
-  process.env.LOGGING_LEVEL = 'warn';
-
   const program = createProgram();
 
   if (!argv.slice(2).length) {

@@ -10,7 +10,7 @@
   <a href="https://github.com/wharfie/wharfie/actions/workflows/ci.yml"><img src="https://github.com/wharfie/wharfie/actions/workflows/ci.yml/badge.svg" alt="Wharfie CI"></a>
 </p>
 
-> **Project reset:** Wharfie is experimental and is intentionally abandoning its v1 Athena/table APIs. Breaking changes are expected while the new application model is made coherent.
+> **Project reset:** Wharfie's v1 Athena/table implementation has been removed. Wharfie remains experimental, and breaking changes are expected while the new application model is made coherent.
 
 Wharfie is a local-first TypeScript application runtime that turns an ordinary CLI into a portable executable, then lets that same application become a durable, observable service across trusted machines without an architectural rewrite.
 
@@ -33,11 +33,11 @@ commands.
 
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
-The repository contains useful v2 runtime and Node SEA packaging foundations,
-but its release wiring and several implementation paths are still being
-consolidated. The npm package is deliberately marked private, and release
-verification stays blocked until v1 source and dependencies are deleted. It is
-not ready for production use.
+The repository contains useful runtime and Node SEA packaging foundations. The
+abandoned v1 source and dependency graph have been deleted, but the public
+manifest, durable execution model, and release boundary still need focused
+review. The npm package remains deliberately private. It is not ready for
+production use.
 
 ## Start here
 
@@ -45,7 +45,7 @@ not ready for production use.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
 - [July 2026 checkpoint](llm/checkpoints/2026-07-16-project-reset.md) — immutable historical evidence of the pre-reset state and conversation handoff.
-- [Packaging salvage checkpoint](llm/checkpoints/2026-07-16-packaging-salvage.md) — the first implementation proof, remaining release blockers, and exact resume order before v1 deletion.
+- [Packaging salvage checkpoint](llm/checkpoints/2026-07-16-packaging-salvage.md) — historical first implementation proof and the release blockers that existed before v1 deletion.
 
 The charter and accepted decisions are authoritative; the roadmap is expected to evolve, and dated checkpoints are historical snapshots. Older material under `docs/` and `llm/design/` describes prior iterations and can be stale.
 
@@ -64,5 +64,5 @@ Current source is organized as follows:
 
 - `src/cli/` — the current developer and operator CLI implementation.
 - `src/core/` — runtime, durable graph, resource, provider, and packaging foundations.
-- `apps/` — buildable reference and dogfood applications; v1 content is scheduled for removal.
+- `apps/` — buildable reference and dogfood applications.
 - `llm/` — design notes, prompt templates, and dated project checkpoints.

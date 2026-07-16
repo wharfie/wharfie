@@ -69,7 +69,7 @@ export default function createLMDBQueue(options = {}) {
   }
 
   /**
-   * @returns {import('@smithy/types').ResponseMetadata} - Result.
+   * @returns {Record<string, any>} - Empty provider-style response metadata.
    */
   function emptyMetadata() {
     return /** @type {any} */ ({});

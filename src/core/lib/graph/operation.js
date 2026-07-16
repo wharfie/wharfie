@@ -3,21 +3,13 @@ import { createId } from '../id.js';
 import { WHARFIE_VERSION } from '../version.js';
 
 /**
- * @typedef {(
- * 'BACKFILL'|
- * 'LOAD'|
- * 'MIGRATE'|
- * 'PIPELINE'
- * )} WharfieOperationTypeEnum
+ * @typedef {'PIPELINE'} WharfieOperationTypeEnum
  */
 
 /**
  * @type {Object<WharfieOperationTypeEnum,WharfieOperationTypeEnum>}
  */
 const Type = {
-  BACKFILL: 'BACKFILL',
-  LOAD: 'LOAD',
-  MIGRATE: 'MIGRATE',
   PIPELINE: 'PIPELINE',
 };
 
@@ -106,7 +98,6 @@ class Operation {
    * @property {Action[]} [dependsOn] - dependsOn.
    * @property {string} [id] - id.
    * @property {import('./action.js').WharfieActionStatusEnum} [status] - status.
-   * @property {import('./query.js').default[]} [queries] - queries.
    * @property {number} [started_at] - started_at.
    * @property {number} [last_updated_at] - last_updated_at.
    * @property {string} [wharfie_version] - wharfie_version.
@@ -129,7 +120,6 @@ class Operation {
     dependsOn = [],
     id,
     status,
-    queries,
     started_at,
     last_updated_at,
     wharfie_version,
@@ -145,7 +135,6 @@ class Operation {
       type,
       id,
       status,
-      queries,
       started_at,
       last_updated_at,
       wharfie_version,
@@ -417,7 +406,7 @@ class Operation {
   toRecords() {
     const records = [];
     for (const action of this.getActions()) {
-      records.push(...action.toRecords());
+      records.push(action.toRecord());
     }
     records.push({
       resource_id: this.resource_id,
@@ -462,19 +451,13 @@ class Operation {
   }
 
   /**
-   * @typedef ActionRecordGroup
-   * @property {Record<string, any>} action_record - action_record.
-   * @property {Record<string, any>[]} query_records - query_records.
-   */
-
-  /**
    * @param {Record<string, any>} operation_record - operation_record.
-   * @param {ActionRecordGroup[]} action_records - action_records.
+   * @param {Record<string, any>[]} action_records - action_records.
    * @returns {Operation} - Result.
    */
   static fromRecords(operation_record, action_records) {
     const operation = new Operation({
-      resource_id: operation_record.resource_id,
+      resource_id: operation_record.data.resource_id,
       resource_version: operation_record.data.resource_version,
       id: operation_record.data.id,
       type: operation_record.data.type,
@@ -486,8 +469,8 @@ class Operation {
       wharfie_version: operation_record.data.wharfie_version,
     });
 
-    action_records.forEach(({ action_record, query_records }) => {
-      const action = Action.fromRecords(action_record, query_records);
+    action_records.forEach((action_record) => {
+      const action = Action.fromRecord(action_record);
       operation._addAction(action);
     });
 

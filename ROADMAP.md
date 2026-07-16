@@ -41,11 +41,12 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 ### Codebase
 
-- [ ] Delete the v1 Athena/table application, legacy-only tests, documentation, dependencies, and compatibility paths.
-- [x] Block npm publication explicitly until the v1 source and dependency gate is clean.
+- [x] Delete the v1 Athena/table application, legacy-only tests, documentation, dependencies, and compatibility paths.
+- [x] Keep npm publication disabled and retain v1 regression checks in the release gate.
 - [ ] Choose one manifest compiler and one persisted-run implementation; delete the alternatives.
 - [x] Make package metadata, version reporting, license metadata, tarball contents, release commands, environment names, and artifact names agree.
-- [ ] Update direct dependencies, resolve the current production audit findings, and add an appropriate audit gate.
+- [x] Remove the abandoned direct dependency graph and test-only packages from the runtime package.
+- [ ] Resolve the current production audit findings and add an appropriate audit gate.
 - [x] Expand CI to validate the package tarball, build a real generated-app SEA, invoke its activity and embedded operator manifest from a clean directory, and prove Node is unavailable on `PATH`.
 - [ ] Make the remaining test, type-check, and lint exclusions explicit and temporary or remove them.
 
@@ -131,10 +132,10 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 ## Immediate queue
 
-1. Review and merge the project-reset documentation.
-2. Produce a branch/PR/issue decision table from the archived state.
-3. Reconcile the unpublished local packaging work and `jvd/pr4` into small keep-or-delete changes.
-4. Close or archive superseded GitHub work.
-5. Delete v1 and repair the release/package path before adding new distributed-runtime features.
+1. Review and merge the stacked reset, inventory, packaging, and v1-deletion changes.
+2. Restore GitHub authentication and execute the archived branch, PR, and issue cleanup decisions.
+3. Replace the permissive compatibility manifest compiler with one strict, versioned v2 schema.
+4. Re-run the clean Linux SEA proof, inspect the production audit, and decide when the package can stop being private.
+5. Review the resulting narrow boundary before beginning the durable run/invocation/attempt/effect ledger.
 
 The dated handoff at [llm/checkpoints/2026-07-16-project-reset.md](llm/checkpoints/2026-07-16-project-reset.md) contains exact repository state and restart instructions.

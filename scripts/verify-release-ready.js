@@ -17,6 +17,7 @@ if (packageMetadata.private === true) {
 }
 
 for (const relativePath of [
+  'apps/wharfie-v1',
   'src/core/lib/aws/athena',
   'src/core/lib/duckdb',
   'src/core/resources/aws/athena-workgroup.js',
@@ -43,9 +44,9 @@ for (const dependency of [
 if (blockers.length > 0) {
   throw new Error(
     [
-      'Wharfie releases are blocked until the v1 deletion milestone is complete:',
+      'Wharfie is not ready for release:',
       ...blockers.map((blocker) => `- ${blocker}`),
-      'Remove every blocker deliberately, then rerun this check before publishing a GitHub release.',
+      'Resolve every blocker deliberately, then rerun this check before publishing a GitHub release.',
     ].join('\n'),
   );
 }

@@ -690,59 +690,6 @@ export default function createVanillaObjectStorage(options = {}) {
   }
 
   /**
-   * @param {string} Bucket - Bucket.
-   * @param {string} Prefix - Prefix.
-   * @param {Array<{ name: string }>} partitionKeys -
-   * @returns {Promise<import("../../typedefs.js").Partition[]>} - Result.
-   */
-  async function findPartitions(Bucket, Prefix, partitionKeys) {
-    if (partitionKeys.length === 0) return [];
-
-    const prefixes = await getCommonPrefixes({ Bucket, Prefix });
-    /** @type {import("../../typedefs.js").Partition[]} */
-    const partitions = [];
-
-    await Promise.all(
-      prefixes.map(async (prefix) => {
-        /** @type {Record<string, string>} */
-        const partitionValues = {};
-        partitionValues[partitionKeys[0].name] = prefix
-          .replace(Prefix, '')
-          .replace('/', '')
-          .replace(`${partitionKeys[0].name}=`, '')
-          .replace(`${partitionKeys[0].name}}%3D`, '');
-
-        if (partitionKeys.length === 1) {
-          partitions.push({
-            partitionValues,
-            location: `s3://${Bucket}/${prefix}`,
-          });
-          return;
-        }
-
-        const childPartitions = await findPartitions(
-          Bucket,
-          prefix,
-          partitionKeys.slice(1),
-        );
-
-        childPartitions.forEach((childPartition) => {
-          partitions.push({
-            partitionValues: {
-              ...partitionValues,
-              ...childPartition.partitionValues,
-            },
-            location: childPartition.location,
-          });
-        });
-      }),
-    );
-
-    partitions.sort((a, b) => a.location.localeCompare(b.location));
-    return partitions;
-  }
-
-  /**
    * @param {import("@aws-sdk/client-s3").CreateMultipartUploadCommandInput} params - params.
    * @returns {Promise<import("@aws-sdk/client-s3").CreateMultipartUploadCommandOutput>} - Result.
    */
@@ -1040,7 +987,6 @@ export default function createVanillaObjectStorage(options = {}) {
     deletePath,
     expireObjects,
     getCommonPrefixes,
-    findPartitions,
     createMultipartUpload,
     completeMultipartUpload,
     uploadPartCopy,

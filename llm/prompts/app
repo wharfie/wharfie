@@ -125,9 +125,10 @@ B) Read Wharfie before implementing the app
 
 Always read these Wharfie files first:
 - `README.md`
-- `llm/design/README.md`
-- `llm/design/wharfie-progressive-agent-application.md`
-- `llm/design/wharfie-v2.md`
+- `PROJECT.md`
+- `ROADMAP.md`
+- `docs/architecture/decisions/README.md`
+- `src/app.d.ts`
 - `scripts/verify-package-sea.js`
 - `src/cli/app/load-app.js`
 - `src/cli/app/local-app.js`
@@ -137,7 +138,9 @@ Always read these Wharfie files first:
 - `src/core/runtime/resources.js`
 - `src/core/runtime/services/scheduler-service.js`
 - `src/core/runtime/services/node-agent.js`
-- `src/core/lib/graph/index.js`
+- `src/core/lib/graph/action.js`
+- `src/core/lib/graph/operation.js`
+- `src/core/lib/graph/app-run.js`
 - `src/core/lib/db/tables/operations.js`
 - `test/cli/app/load-app.test.js`
 - `test/cli/app/examples.test.js`

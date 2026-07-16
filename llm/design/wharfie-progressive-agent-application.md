@@ -1,8 +1,14 @@
 # Wharfie progressive agent application
 
-**Status:** draft design note  
+**Status:** Historical pre-reset design snapshot
 **Last updated:** 2026-03-27  
-**Audience:** maintainers refining Wharfie’s app model and packaging contract
+**Audience:** maintainers refining Wharfie's app model and packaging contract
+
+> Superseded by [`PROJECT.md`](../../PROJECT.md),
+> [`ROADMAP.md`](../../ROADMAP.md), and the
+> [accepted architecture decisions](../../docs/architecture/decisions/README.md).
+> Code links and "repo reality" statements below describe the repository when
+> this snapshot was written and may now be stale.
 
 - Related design doc: [`wharfie-v2.md`](./wharfie-v2.md)
 - Repo evidence for current app loading: [`src/cli/app/load-app.js`](../../src/cli/app/load-app.js)

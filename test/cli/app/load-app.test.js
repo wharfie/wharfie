@@ -97,7 +97,7 @@ describe('Wharfie app loader', () => {
                 export: 'helloResources',
                 debug: () => 'ignored',
               },
-              external: ['lmdb', '@duckdb/node-api'],
+              external: ['lmdb', '@paralleldrive/cuid2'],
               resources: {
                 db: {
                   adapter: 'vanilla',
@@ -154,7 +154,7 @@ describe('Wharfie app loader', () => {
           },
           external: [
             { name: 'lmdb', version: expect.any(String) },
-            { name: '@duckdb/node-api', version: expect.any(String) },
+            { name: '@paralleldrive/cuid2', version: expect.any(String) },
           ],
           resources: {
             db: {
@@ -228,7 +228,7 @@ describe('Wharfie app loader', () => {
           },
           external: [
             { name: 'lmdb', version: expect.any(String) },
-            { name: '@duckdb/node-api', version: expect.any(String) },
+            { name: '@paralleldrive/cuid2', version: expect.any(String) },
           ],
           resources: {
             db: {

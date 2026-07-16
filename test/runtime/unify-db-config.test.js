@@ -7,26 +7,17 @@ import { join } from 'node:path';
 
 import createVanillaDB from '../../src/core/lib/db/adapters/vanilla.js';
 import { createOperationsTable } from '../../src/core/lib/db/tables/operations.js';
-import Resource from '../../src/core/lib/graph/resource.js';
+import Operation from '../../src/core/lib/graph/operation.js';
 import {
   closeDB,
   resolveOperationsTableName,
   resolveStateAdapterName,
 } from '../../src/core/lib/config/db.js';
-import {
-  __setMockState as __resetOperationsStore,
-  getOperationsStore,
-} from '../../src/core/lib/db/operations/store.js';
 import { __resolveAdapterName as __resolveStateStoreAdapter } from '../../src/core/lib/db/state/store.js';
 
 describe('Unified DB config', () => {
   afterEach(async () => {
-    // Ensure we never leak a shared singleton between tests.
-    try {
-      await closeDB();
-    } finally {
-      __resetOperationsStore();
-    }
+    await closeDB();
   });
 
   test('state adapter selection never infers DynamoDB from AWS env vars', async () => {
@@ -55,51 +46,53 @@ describe('Unified DB config', () => {
     }
   });
 
-  test('operations store resolves table name at call time and isolates tables', async () => {
-    await withEnv({ OPERATIONS_TABLE: 'ops-a' }, async () => {
-      expect(resolveOperationsTableName()).toBe('ops-a');
+  test('operations table names resolve at call time and isolate runs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wharfie-ops-config-'));
+    const db = createVanillaDB({ path: dir });
 
-      const storeA = await getOperationsStore();
-      const r1 = makeResource('r1');
-      await storeA.putResource(r1);
+    try {
+      await withEnv({ OPERATIONS_TABLE: 'ops-a' }, async () => {
+        const storeA = createOperationsTable({
+          db,
+          tableName: resolveOperationsTableName(),
+        });
+        await storeA.putOperation(makeOperation('run-a'));
+        expect(
+          await storeA.getOperation('app:config-test', 'run-a'),
+        ).not.toBeNull();
 
-      const foundA = await storeA.getResource('r1');
-      expect(foundA?.id).toBe('r1');
+        await withEnv({ OPERATIONS_TABLE: 'ops-b' }, async () => {
+          const storeB = createOperationsTable({
+            db,
+            tableName: resolveOperationsTableName(),
+          });
+          expect(
+            await storeB.getOperation('app:config-test', 'run-a'),
+          ).toBeNull();
 
-      // Flip env var AFTER the module is already imported.
-      await withEnv({ OPERATIONS_TABLE: 'ops-b' }, async () => {
-        expect(resolveOperationsTableName()).toBe('ops-b');
-
-        const storeB = await getOperationsStore();
-        const foundB = await storeB.getResource('r1');
-        expect(foundB).toBe(null);
-
-        const r2 = makeResource('r2');
-        await storeB.putResource(r2);
-
-        const foundA2 = await storeA.getResource('r2');
-        expect(foundA2).toBe(null);
+          await storeB.putOperation(makeOperation('run-b'));
+          expect(
+            await storeA.getOperation('app:config-test', 'run-b'),
+          ).toBeNull();
+        });
       });
-    });
+    } finally {
+      await db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
 /**
  * @param {string} id
+ * @returns {Operation}
  */
-function makeResource(id) {
-  return new Resource({
+function makeOperation(id) {
+  return new Operation({
+    resource_id: 'app:config-test',
+    resource_version: 1,
     id,
-    region: 'us-east-1',
-    athena_workgroup: 'primary',
-    daemon_config: {
-      Role: 'arn:aws:iam::123456789012:role/test',
-    },
-    resource_properties: {},
-    // @ts-ignore
-    source_properties: { name: 'src' },
-    // @ts-ignore
-    destination_properties: { name: 'dst' },
+    type: Operation.Type.PIPELINE,
   });
 }
 
