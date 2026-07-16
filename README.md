@@ -7,76 +7,49 @@
 </h1>
 
 <p align="center">
-  <a href="https://discord.gg/QEbzFUsR"><img src="https://img.shields.io/discord/1131550721142161408" alt="discord"></a>
   <a href="https://github.com/wharfie/wharfie/actions/workflows/ci.yml"><img src="https://github.com/wharfie/wharfie/actions/workflows/ci.yml/badge.svg" alt="Wharfie CI"></a>
 </p>
 
-Wharfie is an experimental table-oriented data application framework built ontop of [AWS Athena](https://aws.amazon.com/athena/). Designed to be fast to develop, confident to modify and cheap to run.
+> **Project reset:** Wharfie is experimental and is intentionally abandoning its v1 Athena/table APIs. Breaking changes are expected while the new application model is made coherent.
 
-Unlike most data tools, Wharfie has ZERO fixed infrastructure costs. Money is only spent when data is processed. Costs are also proportional to the size of the data processed, averaging around $5 per terabyte. Wharfie can tell you how much it will cost to run your application before you run it, and also can make sure that it will output what you expect before you spend time waiting for it to run.
+Wharfie is a local-first TypeScript application runtime that turns an ordinary CLI into a portable executable, then lets that same application become a durable, observable service across trusted machines without an architectural rewrite.
 
-Wharfie can work with data sizes ranging from bytes to petabytes. There are no looming performance cliffs that require a platform switch.
+The product goal is continuity:
 
-Wharfie is serverless and relies entirely on managed AWS services. There's no need for performance tuning or an on-call rotation to keep Wharfie running. When Wharfie breaks, it's usually because of upstream outages, which when resolved, unblock Wharfie from reprocessing and catching up to a functional state.
+1. Write and run a normal CLI locally.
+2. Mark named operations as durable activities.
+3. Package the application as one approachable executable.
+4. Promote it to a persistent service on one machine.
+5. Add schedules, workflows, retries, and durable state.
+6. Enroll more trusted nodes when placement or resilience requires them.
+7. Inspect, intervene in, update, and roll back the application through the same executable.
 
-When defining tables with Wharfie, you only need to statically define your table structure or the query used to materialize, and Wharfie takes care of the rest.
+No separate service rewrite, preinstalled Node runtime, Dockerfile, Kubernetes cluster, or hosted orchestration service should be required on the target machine.
 
-"The Rest" includes:
+Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
-- Registering new partitions
-- Converting compression and data formats
-- Repartitioning
-- Managing schema changes
+The repository contains useful v2 runtime and Node SEA packaging foundations, but its release wiring and several implementation paths are still being consolidated. It is not ready for production use.
 
-### ⚡️ Quickstart
+## Start here
 
-#### Install
+- [Project charter](PROJECT.md) — the canonical problem, scope, public concepts, boundaries, and success test.
+- [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
+- [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
+- [July 2026 checkpoint](llm/checkpoints/2026-07-16-project-reset.md) — immutable historical evidence of the pre-reset state and conversation handoff.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/wharfie/wharfie/master/install.sh | bash
-```
+The charter and accepted decisions are authoritative; the roadmap is expected to evolve, and dated checkpoints are historical snapshots. Older material under `docs/` and `llm/design/` describes prior iterations and can be stale.
 
-For Windows:
+## Current development checks
 
-```ps1
-iex (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/wharfie/wharfie/master/install.ps1" -UseBasicParsing).Content
-```
-
-#### Example
-
-```bash
-wharfie config
-wharfie init my_project
-wharfie app manifest ./apps/wharfie-v1
-```
-
-The current ESM CLI ships these top-level commands: `config`, `init`, `app`, `ops`, `list`, and `build-self`.
-The legacy `deployment`, `project`, and `utils` command groups have been removed from the repo.
-
-### Reference
-
-[docs.wharfie.dev](docs.wharfie.dev)
-
-### Operation DAG inspection/execution (v2)
-
-The `wharfie ops` command group exposes local, provider-neutral tooling for inspecting and executing persisted operation DAGs.
+Use the pinned versions in `package.json` (currently Node 24.13.1 and npm 11.12.0), install dependencies, and run:
 
 ```bash
-wharfie ops list <resourceId>
-wharfie ops cancel <resourceId> --operationId <operationId>
-wharfie ops run <resourceId> <operationId>
+npm run test:ci
 ```
 
-DB selection is explicit via env vars (default: `vanilla`):
+Current source is organized as follows:
 
-```bash
-export WHARFIE_DB_ADAPTER=vanilla   # or lmdb|dynamodb
-export WHARFIE_DB_PATH=/path/to/db
-```
-
-### Repository layout
-
-- `src/cli/` contains the shipped CLI entrypoint and commands.
-- `src/core/` contains runtime code, with `actors/`, `resources/`, and `runtime/` split out from the shared `lib/` subsystems.
-- `apps/` contains buildable reference apps and dogfood manifests.
-- `llm/` contains local design docs and prompt templates.
+- `src/cli/` — the current developer and operator CLI implementation.
+- `src/core/` — runtime, durable graph, resource, provider, and packaging foundations.
+- `apps/` — buildable reference and dogfood applications; v1 content is scheduled for removal.
+- `llm/` — design notes, prompt templates, and dated project checkpoints.

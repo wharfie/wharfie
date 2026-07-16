@@ -1,0 +1,13 @@
+# Architecture decision log
+
+These records capture product-level decisions that should survive implementation rewrites. A decision can be superseded by a later record, but should not be silently edited into a different choice.
+
+| Decision                                                                                               | Status   |
+| ------------------------------------------------------------------------------------------------------ | -------- |
+| [0001 — Trusted nodes only](0001-trusted-nodes-only.md)                                                | Accepted |
+| [0002 — One recoverable authoritative coordinator](0002-one-recoverable-active-coordinator.md)         | Accepted |
+| [0003 — Capability fulfillment, not general IaC](0003-capability-fulfillment.md)                       | Accepted |
+| [0004 — One authoritative terminal outcome and explicit effects](0004-logical-outcomes-and-effects.md) | Accepted |
+| [0005 — TypeScript control plane with a component boundary](0005-typescript-and-component-boundary.md) | Accepted |
+
+The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).
