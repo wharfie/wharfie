@@ -18,18 +18,4 @@ describe('src migration smoke tests', () => {
     expect(deployScript).toContain("import('../../src/core/lib/aws/s3.js')");
     expect(deployScript).not.toContain("import('../../src/core/lib/s3.js')");
   });
-
-  it('keeps the Wharfie v1 template asset path under src/cli', async () => {
-    const wharfieApp = await fsp.readFile(
-      path.join(repoRoot, 'apps', 'wharfie-v1', 'wharfie.app.js'),
-      'utf8',
-    );
-
-    expect(wharfieApp).toMatch(
-      /path\.join\(\s*repoRoot,\s*'src',\s*'cli',\s*'project',\s*'project_structure_examples',\s*\)/m,
-    );
-    expect(wharfieApp).not.toMatch(
-      /path\.join\(\s*repoRoot,\s*'cli',\s*'project',\s*'project_structure_examples',\s*\)/m,
-    );
-  });
 });

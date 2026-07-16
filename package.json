@@ -39,15 +39,7 @@
     "src/app.js",
     "src/app.d.ts",
     "src/core/**",
-    "src/cli/**",
-    "!src/cli/assets/**",
-    "!src/cli/config.js",
-    "!src/cli/input.js",
-    "!src/cli/upgrade.js",
-    "!src/cli/cmds/config.js",
-    "!src/cli/cmds/init.js",
-    "!src/cli/cmds/list.js",
-    "!src/cli/project/project_structure_examples/**"
+    "src/cli/**"
   ],
   "scripts": {
     "typecheck": "tsc",

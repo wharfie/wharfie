@@ -12,7 +12,7 @@
 - Current packaged artifact CLI: [`src/core/resources/builds/actor-system-cli/index.js`](../../src/core/resources/builds/actor-system-cli/index.js)
 - Current runtime capability wiring: [`src/core/runtime/resources.js`](../../src/core/runtime/resources.js)
 - Current graph + operations persistence: [`src/core/lib/graph/index.js`](../../src/core/lib/graph/index.js) and [`src/core/lib/db/tables/operations.js`](../../src/core/lib/db/tables/operations.js)
-- Current custom CLI proof case: [`apps/wharfie-v1/wharfie.app.js`](../../apps/wharfie-v1/wharfie.app.js)
+- Current custom CLI proof case: [`scripts/verify-package-sea.js`](../../scripts/verify-package-sea.js)
 - Current config-dir pathing: [`src/core/lib/paths.js`](../../src/core/lib/paths.js)
 
 ---
@@ -46,7 +46,7 @@ The current repo already contains most of the runtime ingredients needed for the
 - `lambda-service` already dispatches named units of work from queue payloads and direct invoke calls.
 - `node-agent` already plans and supervises runtime services based on the manifest.
 - the graph/operations store already persists `Operation` and `Action` state for longer-lived work.
-- `apps/wharfie-v1/wharfie.app.js` already proves Wharfie can package a custom Commander-based CLI into a SEA artifact.
+- `scripts/verify-package-sea.js` proves Wharfie can package a developer-owned TypeScript CLI into a moved SEA artifact and run it without Node on `PATH`.
 
 ### What the repo still gets wrong for the product direction
 
@@ -349,4 +349,4 @@ That gives Wharfie a real “no rewrite” story:
 - [`src/core/resources/builds/actor-system-cli/index.js`](../../src/core/resources/builds/actor-system-cli/index.js) shows the current packaged artifact surface is still Wharfie-owned (`func`, `infra`, `ctl`). That is the main UX coupling this design is trying to remove for CLI apps.
 - [`src/core/runtime/resources.js`](../../src/core/runtime/resources.js) and [`src/core/lib/paths.js`](../../src/core/lib/paths.js) show why shared resource refs should start with `db`, `queue`, and `objectStorage`, and why a config-dir registry is the cleanest first backing store.
 - [`src/core/lib/graph/index.js`](../../src/core/lib/graph/index.js) and [`src/core/lib/db/tables/operations.js`](../../src/core/lib/db/tables/operations.js) already provide the substrate for persisted activity runs and longer-lived workflow state.
-- [`apps/wharfie-v1/wharfie.app.js`](../../apps/wharfie-v1/wharfie.app.js) is the strongest proof that Wharfie can already package a custom CLI without taking over `process.argv`; the missing work is productizing that path through `wharfie app package`.
+- [`scripts/verify-package-sea.js`](../../scripts/verify-package-sea.js) is the executable proof that Wharfie packages a developer-owned CLI without taking over ordinary argv and invokes its activity from a moved SEA artifact.

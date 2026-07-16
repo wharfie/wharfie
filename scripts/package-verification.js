@@ -16,14 +16,6 @@ import { WHARFIE_VERSION } from '../src/core/lib/version.js';
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 export const NPM_COMMAND = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const EXCLUDED_LEGACY_CLI_FILES = new Set([
-  'src/cli/config.js',
-  'src/cli/input.js',
-  'src/cli/upgrade.js',
-  'src/cli/cmds/config.js',
-  'src/cli/cmds/init.js',
-  'src/cli/cmds/list.js',
-]);
 
 /**
  * @param {string} filePath - JSON file to read.
@@ -98,15 +90,7 @@ function listFiles(absoluteDirectory, relativeDirectory) {
  */
 function requiredRuntimeFiles() {
   const coreFiles = listFiles(path.join(REPO_ROOT, 'src', 'core'), 'src/core');
-  const cliFiles = listFiles(
-    path.join(REPO_ROOT, 'src', 'cli'),
-    'src/cli',
-  ).filter(
-    (filePath) =>
-      !filePath.startsWith('src/cli/assets/') &&
-      !EXCLUDED_LEGACY_CLI_FILES.has(filePath) &&
-      !filePath.startsWith('src/cli/project/project_structure_examples/'),
-  );
+  const cliFiles = listFiles(path.join(REPO_ROOT, 'src', 'cli'), 'src/cli');
   const verificationFiles = listFiles(
     path.join(REPO_ROOT, 'scripts'),
     'scripts',
@@ -144,22 +128,6 @@ export function assertPackageContents(manifest) {
   }
 
   for (const packedPath of packedFiles) {
-    assert.ok(
-      !packedPath.startsWith('apps/wharfie-v1/'),
-      `npm tarball includes obsolete v1 app content: ${packedPath}`,
-    );
-    assert.ok(
-      !packedPath.startsWith('src/cli/project/project_structure_examples/'),
-      `npm tarball includes intentionally unsupported v1 init assets: ${packedPath}`,
-    );
-    assert.ok(
-      !packedPath.startsWith('src/cli/assets/'),
-      `npm tarball includes obsolete v1 init asset helpers: ${packedPath}`,
-    );
-    assert.ok(
-      !EXCLUDED_LEGACY_CLI_FILES.has(packedPath),
-      `npm tarball includes obsolete legacy CLI module: ${packedPath}`,
-    );
     assert.ok(
       !packedPath.startsWith('scratch/'),
       `npm tarball includes scratch content: ${packedPath}`,

@@ -5,7 +5,6 @@ import { jest } from '@jest/globals';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import listCommand from '../../../src/cli/cmds/list.js';
 import opsListCommand from '../../../src/cli/cmds/ops_cmds/list.js';
 import cancelCommand from '../../../src/cli/cmds/ops_cmds/cancel.js';
 import runCommand from '../../../src/cli/cmds/ops_cmds/run.js';
@@ -70,11 +69,6 @@ afterAll(() => {
 });
 
 describe.each([
-  [
-    'wharfie list',
-    () =>
-      listCommand.parseAsync(['node', 'list', 'resource-1'], { from: 'node' }),
-  ],
   [
     'wharfie ops list',
     () =>

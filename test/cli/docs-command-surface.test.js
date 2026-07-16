@@ -75,21 +75,12 @@ describe('docs command surface', () => {
     expect(packageJson.files).toContain('src/core/**');
     expect(packageJson.files).toContain('src/cli/**');
     expect(packageJson.files).not.toContain('apps/wharfie-cli/**');
-    expect(packageJson.files).toContain(
-      '!src/cli/project/project_structure_examples/**',
-    );
-    expect(packageJson.files).toContain('!src/cli/assets/**');
-    expect(packageJson.files).toContain('!src/cli/config.js');
-    expect(packageJson.files).toContain('!src/cli/input.js');
-    expect(packageJson.files).toContain('!src/cli/upgrade.js');
-    expect(packageJson.files).toContain('!src/cli/cmds/config.js');
-    expect(packageJson.files).toContain('!src/cli/cmds/init.js');
-    expect(packageJson.files).toContain('!src/cli/cmds/list.js');
     expect(packageJson.files).not.toContain('src/');
-    expect(packageJson.files).not.toContain('src/cli/project/**');
-    expect(packageJson.files).not.toContain('apps/wharfie-v1/**');
-    expect(packageJson.files).not.toContain('src/cli/cmds/project_cmds/**');
-    expect(packageJson.files).not.toContain('!src/cli/cmds/project_cmds/**');
+    expect(
+      packageJson.files.some((/** @type {string} */ entry) =>
+        entry.startsWith('!'),
+      ),
+    ).toBe(false);
   });
 
   it('documents working onboarding commands in the quickstart', async () => {

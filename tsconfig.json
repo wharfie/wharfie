@@ -26,10 +26,5 @@
     "test/types/**/*.ts",
     "types/**/*.d.ts"
   ],
-  "exclude": [
-    "src/core/udf_entrypoint.js",
-    "src/core/resources/aws/**",
-    "src/core/resources/records/**",
-    "test/legacy/**"
-  ]
+  "exclude": ["src/core/resources/aws/**", "src/core/resources/records/**"]
 }

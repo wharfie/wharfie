@@ -128,7 +128,7 @@ Always read these Wharfie files first:
 - `llm/design/README.md`
 - `llm/design/wharfie-progressive-agent-application.md`
 - `llm/design/wharfie-v2.md`
-- `apps/wharfie-v1/wharfie.app.js`
+- `scripts/verify-package-sea.js`
 - `src/cli/app/load-app.js`
 - `src/cli/app/local-app.js`
 - `src/cli/cmds/app_cmds/manifest.js`
