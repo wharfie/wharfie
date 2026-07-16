@@ -46,6 +46,7 @@ production use.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
 - [July 2026 checkpoint](llm/checkpoints/2026-07-16-project-reset.md) — immutable historical evidence of the pre-reset state and conversation handoff.
 - [Packaging salvage checkpoint](llm/checkpoints/2026-07-16-packaging-salvage.md) — historical first implementation proof and the release blockers that existed before v1 deletion.
+- [V1 deletion checkpoint](llm/checkpoints/2026-07-16-v1-deletion.md) — current restart point, verification evidence, remaining hard edges, and ordered next work.
 
 The charter and accepted decisions are authoritative; the roadmap is expected to evolve, and dated checkpoints are historical snapshots. Older material under `docs/` and `llm/design/` describes prior iterations and can be stale.
 

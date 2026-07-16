@@ -138,4 +138,4 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 4. Re-run the clean Linux SEA proof, inspect the production audit, and decide when the package can stop being private.
 5. Review the resulting narrow boundary before beginning the durable run/invocation/attempt/effect ledger.
 
-The dated handoff at [llm/checkpoints/2026-07-16-project-reset.md](llm/checkpoints/2026-07-16-project-reset.md) contains exact repository state and restart instructions.
+The latest dated handoff at [llm/checkpoints/2026-07-16-v1-deletion.md](llm/checkpoints/2026-07-16-v1-deletion.md) contains exact repository state and restart instructions.
