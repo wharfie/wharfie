@@ -182,13 +182,35 @@ export default greet;
     `import { invokeActivity } from '@wharfie/wharfie/app';
 
 export async function main(argv: string[] = process.argv) {
-  const [command, name] = argv.slice(2);
+  const [command, ...args] = argv.slice(2);
+  if (command === 'probe-cli') {
+    const [rawExitCode, ...applicationArgs] = args;
+    const exitCode = Number(rawExitCode);
+    if (!Number.isSafeInteger(exitCode) || exitCode < 0 || exitCode > 255) {
+      throw new Error('probe-cli requires an exit code between 0 and 255');
+    }
+
+    let stdin = '';
+    for await (const chunk of process.stdin) {
+      stdin += String(chunk);
+    }
+
+    process.stdout.write(JSON.stringify({
+      argvTail: argv.slice(2),
+      applicationArgs,
+      stdin,
+    }) + '\\n');
+    process.stderr.write('portable-stderr\\n');
+    process.exitCode = exitCode;
+    return;
+  }
+
   if (command !== 'greet') {
     throw new Error("Usage: portable-app greet <name>");
   }
 
   const result = await invokeActivity('greet', {
-    event: { name: name || 'world' },
+    event: { name: args[0] || 'world' },
     context: { requestId: 'portable-smoke' },
   });
   process.stdout.write(JSON.stringify(result) + '\\n');
@@ -253,6 +275,38 @@ export default defineApp({
     runtime: 'activity',
     nativeRecord: { message: 'hello source-user' },
   });
+
+  const cliProbeArgs = [
+    'probe-cli',
+    '23',
+    'alpha',
+    'two words',
+    'snowman-☃',
+    '',
+  ];
+  const cliProbeInput = 'first line\nsecond line without newline';
+  const expectedCliProbe = {
+    argvTail: cliProbeArgs,
+    applicationArgs: cliProbeArgs.slice(2),
+    stdin: cliProbeInput,
+  };
+  const sourceCliProbe = spawnSync(
+    process.execPath,
+    [path.join(appDirectory, 'source-runner.js'), ...cliProbeArgs],
+    {
+      cwd: appDirectory,
+      encoding: 'utf8',
+      env: process.env,
+      input: cliProbeInput,
+      maxBuffer: 20 * 1024 * 1024,
+    },
+  );
+  if (sourceCliProbe.error) throw sourceCliProbe.error;
+  assert.equal(sourceCliProbe.signal, null);
+  assert.equal(sourceCliProbe.status, 23);
+  assert.deepEqual(JSON.parse(sourceCliProbe.stdout), expectedCliProbe);
+  assert.equal(sourceCliProbe.stderr, 'portable-stderr\n');
+
   rmSync(path.join(appDirectory, 'lmdb-smoke'), {
     recursive: true,
     force: true,
@@ -327,6 +381,19 @@ export default defineApp({
     nativeRecord: { message: 'hello packaged-user' },
   });
 
+  const generatedCliProbe = spawnSync(cleanArtifactPath, cliProbeArgs, {
+    cwd: cleanRunDirectory,
+    encoding: 'utf8',
+    env: cleanEnvironment,
+    input: cliProbeInput,
+    maxBuffer: 20 * 1024 * 1024,
+  });
+  if (generatedCliProbe.error) throw generatedCliProbe.error;
+  assert.equal(generatedCliProbe.signal, null);
+  assert.equal(generatedCliProbe.status, 23);
+  assert.deepEqual(JSON.parse(generatedCliProbe.stdout), expectedCliProbe);
+  assert.equal(generatedCliProbe.stderr, 'portable-stderr\n');
+
   const embeddedManifest = JSON.parse(
     runCommand(cleanArtifactPath, ['wharfie', 'manifest', '--no-pretty'], {
       cwd: cleanRunDirectory,
@@ -386,7 +453,7 @@ export default defineApp({
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source CLI activity, and clean generated ${process.platform} SEA activity with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, and clean generated ${process.platform} SEA activity with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();

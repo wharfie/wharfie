@@ -64,7 +64,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 - [x] Define schemas and stable identifiers for immutable logical revisions, target-specific artifacts, and deployment profiles.
 - [x] Compile one target-independent revision from the strict contract, dependency lock, Wharfie runtime, source, and behavior assets; consume a sealed application snapshot and audit the static bundled-module graph.
 - [x] Keep build-only settings outside the runtime manifest and reject ActorSystem, workflow, and scheduler public authoring until their contracts are designed.
-- [ ] Preserve normal argv, stdio, exit codes, and CLI-library choice in local and packaged execution.
+- [x] Preserve normal argv, stdio, exit codes, and CLI-library choice in local and packaged execution; the real relocated-SEA verifier compares difficult argv, raw stdin, independent stdout/stderr, and an application-selected nonzero exit code against source execution.
 - [x] Content-address each final SEA executable, pair it with an immutable artifact-record sidecar, record exact Node/toolchain/target-closure/signing provenance, and expose embedded revision/runtime metadata through the operator CLI.
 - [x] Make target packaging and revision-backed source execution consume and fail-check one frozen complete transitive external dependency closure, with semantic, archive, SEA-asset, and revision receipts that cannot drift independently.
 - [ ] Prove the frozen-closure artifact on a clean hosted Linux target; reproducible builds are a later hardening goal.
@@ -81,8 +81,8 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 **Goal:** let the packaged application remain resident and recover work after process or machine restart.
 
-- [ ] Decide and record whether durable workflows use deterministic replay or an explicitly persisted state-machine/continuation model, including timers, signals, cancellation, side effects, and revision changes.
-- [ ] Define the run → invocation → attempt → effect ledger and state machines.
+- [x] Decide and record that durable workflows use explicitly persisted state machines and continuations rather than replaying arbitrary application code, including timers, signals, cancellation, side effects, and revision changes.
+- [x] Define the append-only run → invocation → attempt → effect ledger, rebuildable projections, and state machines in ADR 0011.
 - [x] Bind current persisted operation snapshots, claims, retries, cancellation, and result commits to one immutable revision; persist stable user activity context separately from volatile delivery-attempt metadata.
 - [ ] Persist immutable revision bindings, inputs, outputs, scheduling decisions, attempts, and operator actions in the full append-only ledger.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, cancellation, retry policy, and recovery.

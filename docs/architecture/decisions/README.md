@@ -13,5 +13,7 @@ These records capture product-level decisions that should survive implementation
 | [0007 — Atomic, fenced operation snapshots](0007-atomic-operation-snapshots.md)                            | Accepted |
 | [0008 — Immutable revision, artifact, and deployment-profile identities](0008-immutable-identity-spine.md) | Accepted |
 | [0009 — Frozen target dependency closures](0009-frozen-target-dependency-closures.md)                      | Accepted |
+| [0010 — Versioned activity-attempt protocol](0010-versioned-activity-attempt-protocol.md)                  | Accepted |
+| [0011 — Persisted state-machine execution ledger](0011-persisted-state-machine-execution-ledger.md)        | Accepted |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).
