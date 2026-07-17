@@ -21,4 +21,6 @@ jobs:
       - run: npm ci
       - run: npm run test:ci
       - name: verify packed install and real Linux SEA
+        # Keep portability evidence visible when another validation gate fails.
+        if: ${{ always() }}
         run: npm run verify:package:sea
