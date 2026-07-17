@@ -85,6 +85,10 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 - [x] Decide and record that durable workflows use explicitly persisted state machines and continuations rather than replaying arbitrary application code, including timers, signals, cancellation, side effects, and revision changes.
 - [x] Define the append-only run → invocation → attempt → effect ledger, rebuildable projections, and state machines in ADR 0011.
 - [x] Bind current persisted operation snapshots, claims, retries, cancellation, and result commits to one immutable revision; persist stable user activity context separately from volatile delivery-attempt metadata.
+- [x] Build and prove the first isolated append-only ledger vertical: one manual
+      activity with atomic event/head/projection/receipt writes, internally derived
+      attempt identities, a durable `STARTED` boundary, full Protocol-v1 evidence
+      validation, revision/fence checks, and conservative `UNCERTAIN` recovery.
 - [ ] Persist immutable revision bindings, inputs, outputs, scheduling decisions, attempts, and operator actions in the full append-only ledger.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, cancellation, retry policy, and recovery.
 - [ ] Implement substantiated `pure`, `idempotent`, and `transactional` replay properties, make begun in-process handlers `unsafe` by default, and add a durable blocked `uncertain` state with explicit reconciliation/compensation paths.
@@ -144,6 +148,8 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 ## Immediate queue
 
 1. Repair the clean-install lint dependency declaration after explicit approval, make draft PR #125 green in GitHub Actions, and review the reset stack for merge.
-2. Implement the first append-only run → invocation → attempt → effect ledger slice before adding schedules or workflows.
+2. Route one manual `ops run` activity through the proven append-only ledger,
+   then add a durable local-store/service lifecycle and payload references
+   before schedules, queues, effects, or workflows.
 
-The latest dated handoff at [llm/checkpoints/2026-07-17-hosted-linux-sea-proof.md](llm/checkpoints/2026-07-17-hosted-linux-sea-proof.md) contains exact repository state and restart instructions.
+The latest dated handoff at [llm/checkpoints/2026-07-17-execution-ledger-foundation.md](llm/checkpoints/2026-07-17-execution-ledger-foundation.md) contains exact repository state and restart instructions.

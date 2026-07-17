@@ -119,6 +119,7 @@ export const createFakeDocClient = () => {
     const knownSchemas = [
       ['pk', 'sk'],
       ['resource_id', 'sort_key'],
+      ['run_id', 'sort_key'],
       ['deployment', 'resource_key'],
       ['id'],
     ];
