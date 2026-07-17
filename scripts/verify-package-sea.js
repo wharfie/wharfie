@@ -148,14 +148,14 @@ try {
     path.join(sourceDirectory, 'activity.ts'),
     `import { open } from 'lmdb';
 
-type GreetEvent = { name?: string };
-type GreetContext = { requestId?: string };
+type GreetInput = { name?: string };
+type GreetRuntime = { caller?: { metadata?: { requestId?: string } } };
 
 export async function greet(
-  event: GreetEvent = {},
-  context: GreetContext = {},
+  input: GreetInput = {},
+  runtime: GreetRuntime = {},
 ) {
-  const message = \`hello \${event.name || 'world'}\`;
+  const message = \`hello \${input.name || 'world'}\`;
   const database = open({
     path: './lmdb-smoke',
     eventTurnBatching: false,
@@ -165,7 +165,7 @@ export async function greet(
     database.putSync('greeting', { message });
     return {
       message,
-      requestId: context.requestId || null,
+      requestId: runtime.caller?.metadata?.requestId || null,
       runtime: 'activity',
       nativeRecord: database.get('greeting'),
     };
@@ -210,8 +210,8 @@ export async function main(argv: string[] = process.argv) {
   }
 
   const result = await invokeActivity('greet', {
-    event: { name: args[0] || 'world' },
-    context: { requestId: 'portable-smoke' },
+    input: { name: args[0] || 'world' },
+    callerMetadata: { requestId: 'portable-smoke' },
   });
   process.stdout.write(JSON.stringify(result) + '\\n');
 }

@@ -179,8 +179,8 @@ function toNativeOptionalProbe(packageName, probe) {
 }
 
 /**
- * @param {{ lmdbPath?: string, who?: string } | undefined} event - event.
- * @param {{ requestId?: string | null } | undefined} context - context.
+ * @param {{ lmdbPath?: string, who?: string } | undefined} input - Activity input.
+ * @param {{ caller?: { metadata?: { requestId?: string | null } }, invocation?: { invocationId?: string } } | undefined} runtime - Activity runtime.
  * @returns {Promise<{
  *   ok: true,
  *   dependency: string,
@@ -201,13 +201,14 @@ function toNativeOptionalProbe(packageName, probe) {
  *   },
  * }>} - Result.
  */
-const start = async (event, context) => {
-  const lmdbPath = event?.lmdbPath ?? 'test-db';
+const start = async (input, runtime) => {
+  const lmdbPath = input?.lmdbPath ?? 'test-db';
   const who =
-    typeof event?.who === 'string' && event.who.trim()
-      ? event.who.trim()
+    typeof input?.who === 'string' && input.who.trim()
+      ? input.who.trim()
       : 'world';
-  const runId = context?.requestId ?? `run-${process.pid}`;
+  const requestId = runtime?.caller?.metadata?.requestId ?? null;
+  const runId = runtime?.invocation?.invocationId ?? `run-${process.pid}`;
   const nativeRecord = {
     who,
     message: `hello ${who}`,
@@ -222,7 +223,7 @@ const start = async (event, context) => {
   return {
     ok: true,
     dependency: dep(),
-    requestId: context?.requestId ?? null,
+    requestId,
     runId,
     who,
     lmdb,

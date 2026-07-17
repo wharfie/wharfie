@@ -16,7 +16,6 @@ const APP_RUNS_IMPORT = '../../../src/core/runtime/app-runs.js';
 const FUNCTION_IMPORT = '../../../src/core/resources/builds/function.js';
 const FUNCTION_RESOURCE_IMPORT =
   '../../../src/core/resources/builds/function-resource.js';
-const RUNTIME_RESOURCES_IMPORT = '../../../src/core/runtime/resources.js';
 
 const externalArchive = Buffer.from('locked external archive');
 /** @type {any[]} */
@@ -49,30 +48,25 @@ const bundleExternals = jest.fn(async () => ({
     },
   },
 }));
-const runPreparedBundle = jest.fn(
+const runPreparedActivityAttempt = jest.fn(
   /**
    * @param {string} _name
    * @param {any} _bundle
-   * @param {any} _event
-   * @param {any} _context
-   * @param {any} _options
+   * @param {any} startFrame
    */
-  async (_name, _bundle, _event, _context, _options) => ({
-    source: 'locked-closure',
+  async (_name, _bundle, startFrame) => ({
+    status: 'completed',
+    terminal: {
+      protocol: 'wharfie.activity',
+      protocolVersion: 1,
+      type: 'completed',
+      attemptId: startFrame.attemptId,
+      sequence: 1,
+      result: { source: 'locked-closure' },
+    },
+    start: startFrame,
   }),
 );
-const ambientFn = jest.fn(
-  /** @param {any} _event @param {any} _context @param {any} _options */
-  async (_event, _context, _options) => {
-    throw new Error('ambient Function.fn must not run');
-  },
-);
-const closeFunctionResources = jest.fn(async () => {});
-const closeBaseResources = jest.fn(async () => {});
-const createActorSystemResources = jest.fn(async () => ({
-  resources: { base: true },
-  close: closeBaseResources,
-}));
 
 class MockFunctionResource {
   /** @param {any} options */
@@ -92,24 +86,13 @@ class MockFunctionResource {
 class MockWharfieFunction {
   constructor() {}
 
-  /** @param {any} event @param {any} context @param {any} options */
-  async fn(event, context, options) {
-    return await ambientFn(event, context, options);
-  }
-
-  async closeRuntimeResources() {
-    await closeFunctionResources();
-  }
-
   /**
    * @param {string} name
    * @param {any} bundle
-   * @param {any} event
-   * @param {any} context
-   * @param {any} options
+   * @param {any} startFrame
    */
-  static async runPreparedBundle(name, bundle, event, context, options) {
-    return await runPreparedBundle(name, bundle, event, context, options);
+  static async runPreparedActivityAttempt(name, bundle, startFrame) {
+    return await runPreparedActivityAttempt(name, bundle, startFrame);
   }
 
   static async run() {
@@ -122,9 +105,6 @@ jest.unstable_mockModule(FUNCTION_IMPORT, () => ({
 }));
 jest.unstable_mockModule(FUNCTION_RESOURCE_IMPORT, () => ({
   default: MockFunctionResource,
-}));
-jest.unstable_mockModule(RUNTIME_RESOURCES_IMPORT, () => ({
-  createActorSystemResources,
 }));
 
 /** @param {string | Buffer | Uint8Array} value */
@@ -151,9 +131,6 @@ function makeManifest() {
           export: 'work',
         },
         externalPackages: [{ name: 'locked-package', version: '1.2.3' }],
-        resources: {
-          db: { adapter: 'vanilla', options: { path: 'tmp/source-test' } },
-        },
       },
     },
   };
@@ -175,13 +152,21 @@ function makeRevision(manifest = makeManifest()) {
   });
 }
 
-function makeSourceRevision(revision = makeRevision()) {
+function makePrepared(
+  manifest = makeManifest(),
+  revision = makeRevision(manifest),
+) {
   return {
     revision,
+    appDir: path.resolve('/tmp/source-external-app'),
+    manifest,
+    assets: {},
     dependencyLock: {
       path: path.resolve('/tmp/source-external-package-lock.json'),
       input: revision.inputs.dependencies,
     },
+    verifyRuntime: async () => {},
+    cleanup: async () => {},
   };
 }
 
@@ -190,31 +175,23 @@ beforeEach(() => {
   receiptDependencyLockInput = makeRevision().inputs.dependencies;
   esbuild.mockClear();
   bundleExternals.mockClear();
-  runPreparedBundle.mockClear();
-  ambientFn.mockClear();
-  closeFunctionResources.mockClear();
-  closeBaseResources.mockClear();
-  createActorSystemResources.mockClear();
+  runPreparedActivityAttempt.mockClear();
 });
 
 describe('revision-backed source externals', () => {
-  it('fails closed before ambient resolution when sourceRevision is absent', async () => {
+  it('fails closed before bundling when a complete prepared execution handle is absent', async () => {
     const { invokeManifestActivity } = await import(APP_RUNS_IMPORT);
 
     await expect(
       invokeManifestActivity({
-        manifest: makeManifest(),
-        appDir: path.resolve('/tmp/source-external-app'),
         activityName: 'work',
-        event: {},
-        context: {},
-        executionMode: 'source',
+        input: {},
+        callerMetadata: {},
+        execution: { kind: 'prepared-source' },
       }),
-    ).rejects.toThrow(/requires a prepared sourceRevision/i);
+    ).rejects.toThrow(/prepared application revision/i);
 
     expect(functionResourceOptions).toHaveLength(0);
-    expect(ambientFn).not.toHaveBeenCalled();
-    expect(createActorSystemResources).not.toHaveBeenCalled();
   });
 
   it('builds only the selected activity from the sealed lock and never invokes ambient Function.fn', async () => {
@@ -223,18 +200,16 @@ describe('revision-backed source externals', () => {
     );
     const manifest = makeManifest();
     const revision = makeRevision(manifest);
-    const sourceRevision = makeSourceRevision(revision);
+    const prepared = makePrepared(manifest, revision);
+    prepared.appDir = path.resolve('/tmp/sealed-source-external-app');
     receiptDependencyLockInput = revision.inputs.dependencies;
 
     await expect(
       invokeManifestActivity({
-        manifest,
-        appDir: path.resolve('/tmp/sealed-source-external-app'),
-        sourceRevision,
         activityName: 'work',
-        event: { value: 1 },
-        context: { trace: 'source' },
-        executionMode: 'source',
+        input: { value: 1 },
+        callerMetadata: { trace: 'source' },
+        execution: { kind: 'prepared-source', prepared },
       }),
     ).resolves.toEqual({ source: 'locked-closure' });
 
@@ -249,61 +224,58 @@ describe('revision-backed source externals', () => {
         external: [{ name: 'locked-package', version: '1.2.3' }],
         buildTarget: getHostSourceBuildTarget(),
       },
-      dependencyLock: sourceRevision.dependencyLock,
+      dependencyLock: prepared.dependencyLock,
     });
     expect(esbuild).toHaveBeenCalledTimes(1);
     expect(bundleExternals).toHaveBeenCalledTimes(1);
-    expect(ambientFn).not.toHaveBeenCalled();
-    expect(runPreparedBundle).toHaveBeenCalledWith(
+    expect(runPreparedActivityAttempt).toHaveBeenCalledWith(
       'work',
       expect.objectContaining({
         codeString: 'prepared locked bundle',
         externalsTar: externalArchive,
         externalArchiveDigest: digest(externalArchive),
-        resourceSpecs: manifest.activities.work.resources,
       }),
-      { value: 1 },
-      { trace: 'source' },
-      { resources: { base: true } },
+      expect.objectContaining({
+        revisionId: revision.revisionId,
+        activityId: 'work',
+        input: { value: 1 },
+        caller: { metadata: { trace: 'source' } },
+      }),
     );
-    expect(closeBaseResources).toHaveBeenCalledTimes(1);
   });
 
   it('rejects manifest, lock-handle, and materialization-receipt drift', async () => {
     const { invokeManifestActivity } = await import(APP_RUNS_IMPORT);
     const manifest = makeManifest();
     const revision = makeRevision(manifest);
-    const sourceRevision = makeSourceRevision(revision);
+    const prepared = makePrepared(manifest, revision);
 
     const changedManifest = makeManifest();
     changedManifest.activities.work.externalPackages[0].version = '1.2.4';
     await expect(
       invokeManifestActivity({
-        manifest: changedManifest,
-        appDir: path.resolve('/tmp/source-external-app'),
-        sourceRevision,
         activityName: 'work',
-        executionMode: 'source',
+        execution: {
+          kind: 'prepared-source',
+          prepared: { ...prepared, manifest: changedManifest },
+        },
       }),
     ).rejects.toThrow(/does not match.*revision contract/i);
 
     const wrongLock = {
-      revision,
+      ...prepared,
       dependencyLock: {
-        path: sourceRevision.dependencyLock.path,
+        path: prepared.dependencyLock.path,
         input: {
-          ...sourceRevision.dependencyLock.input,
+          ...prepared.dependencyLock.input,
           digest: digest('wrong-lock'),
         },
       },
     };
     await expect(
       invokeManifestActivity({
-        manifest,
-        appDir: path.resolve('/tmp/source-external-app'),
-        sourceRevision: wrongLock,
         activityName: 'work',
-        executionMode: 'source',
+        execution: { kind: 'prepared-source', prepared: wrongLock },
       }),
     ).rejects.toThrow(/lock descriptor does not match/i);
 
@@ -313,15 +285,11 @@ describe('revision-backed source externals', () => {
     };
     await expect(
       invokeManifestActivity({
-        manifest,
-        appDir: path.resolve('/tmp/source-external-app'),
-        sourceRevision,
         activityName: 'work',
-        executionMode: 'source',
+        execution: { kind: 'prepared-source', prepared },
       }),
     ).rejects.toThrow(/receipt does not match/i);
-    expect(runPreparedBundle).not.toHaveBeenCalled();
-    expect(closeBaseResources).toHaveBeenCalledTimes(1);
+    expect(runPreparedActivityAttempt).not.toHaveBeenCalled();
   });
 
   it('requires positive glibc detection for Linux source targets', async () => {

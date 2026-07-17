@@ -9,12 +9,29 @@ import {
 
 export const DEFAULT_ACTIVITY_CANCELLATION_GRACE_MS = 250;
 export const DEFAULT_ACTIVITY_HOST_OPERATION_TIMEOUT_MS = 250;
+// This is an internal bundle/worker lookup key, not a public application API.
+// Keeping it here lets runtime execution derive the same symbol name without
+// importing build-only FunctionResource code into a packaged executable.
+export const ACTIVITY_ATTEMPT_PROTOCOL_SYMBOL_PREFIX =
+  'wharfie.activity-attempt.v1/';
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 const MAX_ACTIVITY_ERROR_MESSAGE_LENGTH = 16 * 1024;
 const MAX_ACTIVITY_ERROR_NAME_LENGTH = 256;
 const MAX_ACTIVITY_ERROR_DETAILS_BYTES = 64 * 1024;
 const UTF8_ENCODER = new TextEncoder();
+
+/**
+ * Return the private bundle entrypoint symbol name for one declared activity.
+ * The name is deterministic so the host can select the protocol wrapper
+ * without changing the worker cache identity for the activity bundle.
+ * @param {string} activityId - Declared activity logical ID.
+ * @returns {string} - Private global symbol registry key.
+ */
+export function getActivityAttemptProtocolSymbol(activityId) {
+  assertLogicalId(activityId, 'activityId');
+  return `${ACTIVITY_ATTEMPT_PROTOCOL_SYMBOL_PREFIX}${activityId}`;
+}
 
 /**
  * @typedef ActivityAttemptEvidenceSnapshot
@@ -1008,8 +1025,10 @@ export default {
   ActivityAttemptProtocolError,
   ActivityEffectError,
   ActivityEffectUnavailableError,
+  ACTIVITY_ATTEMPT_PROTOCOL_SYMBOL_PREFIX,
   DEFAULT_ACTIVITY_CANCELLATION_GRACE_MS,
   DEFAULT_ACTIVITY_HOST_OPERATION_TIMEOUT_MS,
+  getActivityAttemptProtocolSymbol,
   runNodeActivityAttempt,
   serializeActivityAttemptError,
 };

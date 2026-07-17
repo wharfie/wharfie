@@ -11,14 +11,66 @@ export interface JsonObject {
 export type LogicalId = string;
 
 export interface InvokeActivityOptions<
-  Event extends JsonValue = JsonValue,
-  Context extends JsonObject = JsonObject,
+  Input extends JsonValue = JsonValue,
+  CallerMetadata extends JsonObject = JsonObject,
 > {
-  event?: Event;
-  context?: Context;
+  /** JSON input delivered to the named activity. */
+  input?: Input;
+  /** JSON metadata identifying the caller without becoming activity input. */
+  callerMetadata?: CallerMetadata;
+  /** Positive safe Unix epoch milliseconds at which the attempt must stop. */
+  deadlineUnixMs?: number;
   /** Source application directory. Ignored inside a packaged SEA. */
   dir?: string;
 }
+
+/** Stable identity for one physical activity attempt. */
+export interface ActivityInvocation {
+  readonly revisionId: string;
+  readonly activityId: LogicalId;
+  readonly runId: string;
+  readonly invocationId: string;
+  readonly attemptId: string;
+  readonly fencingToken: string;
+  readonly deadlineUnixMs?: number;
+}
+
+/** Trusted caller information carried separately from activity input. */
+export interface ActivityCaller<Metadata extends JsonObject = JsonObject> {
+  readonly metadata: Readonly<Metadata>;
+}
+
+export type ActivityLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
+
+/** Structured activity logger. Log messages and fields must be JSON-safe. */
+export interface ActivityLogger {
+  log(level: ActivityLogLevel, message: string, fields?: JsonObject): void;
+  trace(message: string, fields?: JsonObject): void;
+  debug(message: string, fields?: JsonObject): void;
+  info(message: string, fields?: JsonObject): void;
+  warn(message: string, fields?: JsonObject): void;
+  error(message: string, fields?: JsonObject): void;
+}
+
+/** Runtime values supplied to an Activity Protocol v1 Node handler. */
+export interface ActivityRuntime<
+  CallerMetadata extends JsonObject = JsonObject,
+> {
+  readonly invocation: ActivityInvocation;
+  readonly caller: ActivityCaller<CallerMetadata>;
+  readonly signal: AbortSignal;
+  readonly logger: ActivityLogger;
+}
+
+/** A named activity export: JSON input plus immutable invocation runtime. */
+export type ActivityHandler<
+  Input extends JsonValue = JsonValue,
+  Result extends JsonValue = JsonValue,
+  CallerMetadata extends JsonObject = JsonObject,
+> = (
+  input: Readonly<Input>,
+  runtime: ActivityRuntime<CallerMetadata>,
+) => Result | Promise<Result>;
 
 export interface NodeEntrypoint {
   kind: 'node';
@@ -77,6 +129,10 @@ export interface ActivityDefinition {
   entrypoint: NodeEntrypoint;
   /** Unique exact packages in ascending name order. */
   externalPackages?: readonly ExternalPackage[];
+  /**
+   * Reserved legacy schema field. Activity Protocol v1 rejects nonempty
+   * resource declarations until managed durable effects exist.
+   */
   resources?: AppResources;
 }
 
@@ -105,6 +161,10 @@ export interface WharfieAppDefinition {
   app: AppIdentity;
   cli: AppCliDefinition;
   targets?: readonly AppTarget[];
+  /**
+   * Reserved legacy schema field. Activity Protocol v1 rejects nonempty
+   * resource declarations until managed durable effects exist.
+   */
   resources?: AppResources;
   activities?: Readonly<Record<LogicalId, ActivityDefinition>>;
 }
@@ -137,11 +197,11 @@ export declare function defineApp<const App>(
 
 export declare function invokeActivity<
   Result extends JsonValue = JsonValue,
-  Event extends JsonValue = JsonValue,
-  Context extends JsonObject = JsonObject,
+  Input extends JsonValue = JsonValue,
+  CallerMetadata extends JsonObject = JsonObject,
 >(
   activityName: string,
-  options?: InvokeActivityOptions<Event, Context>,
+  options?: InvokeActivityOptions<Input, CallerMetadata>,
 ): Promise<Result>;
 
 declare const appApi: {

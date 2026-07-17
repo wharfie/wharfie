@@ -222,7 +222,7 @@ interface GreetResult extends JsonObject {
 }
 
 const result = await invokeActivity<GreetResult, { name: string }>('greet', {
-  event: { name: 'typed-user' },
+  input: { name: 'typed-user' },
 });
 
 const message: string = result.message;

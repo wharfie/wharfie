@@ -66,8 +66,10 @@ describe('wharfie ops run', () => {
           operationId,
           '--dir',
           helloWorldDir,
-          '--event',
+          '--input',
           '{"who":"ops-run"}',
+          '--caller-metadata',
+          '{"requestId":"ops-request"}',
         ],
         {
           ...process.env,
@@ -117,10 +119,13 @@ describe('wharfie ops run', () => {
         ok: true,
         who: 'ops-run',
         message: 'hello ops-run',
-        requestId: null,
+        requestId: 'ops-request',
       });
       expect(storedOperation.status).toBe(OperationStatus.COMPLETED);
       expect(storedOperation.revision_id).toBe(expectedRevision.revisionId);
+      expect(storedOperation.operation_config.context).toEqual({
+        requestId: 'ops-request',
+      });
     } finally {
       await inspectDb?.close?.();
       rmSync(dbPath, { recursive: true, force: true });
@@ -146,11 +151,11 @@ describe('wharfie ops run', () => {
     const writeActivity = (marker) => {
       writeFileSync(
         path.join(appDir, 'activity.js'),
-        `export async function work(event, context) {
+        `export async function work(input, runtime) {
           return {
             marker: ${JSON.stringify(marker)},
-            revisionId: context.operation.revisionId,
-            value: event.value,
+            revisionId: runtime.caller.metadata.operation.revisionId,
+            value: input.value,
           };
         }\n`,
       );
@@ -217,7 +222,7 @@ describe('wharfie ops run', () => {
         operationId,
         '--dir',
         appDir,
-        '--event',
+        '--input',
         '{"value":1}',
       ];
       const firstRun = runCli(args, env);

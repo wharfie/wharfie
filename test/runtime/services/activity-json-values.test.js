@@ -2,36 +2,76 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { createHash } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 
 import {
   cloneJsonObject,
   cloneJsonValue,
 } from '../../../src/core/runtime/json-value.js';
+import {
+  createApplicationRevision,
+  DEPENDENCY_LOCK_INPUT_FORMAT,
+  RUNTIME_INPUT_FORMAT,
+  SOURCE_TREE_INPUT_FORMAT,
+} from '../../../src/core/runtime/application-revision.js';
+import {
+  ARTIFACT_RUNTIME_KIND,
+  ARTIFACT_RUNTIME_SCHEMA_VERSION,
+} from '../../../src/core/resources/builds/lib/revision-runtime-assets.js';
 
 const APP_RUNS_IMPORT = '../../../src/core/runtime/app-runs.js';
 const FUNCTION_IMPORT = '../../../src/core/resources/builds/function.js';
-const RUNTIME_RESOURCES_IMPORT = '../../../src/core/runtime/resources.js';
 
-/** @type {{ mode: string, event: any, context: any, resources: any }[]} */
+/** @type {{ mode: string, input: any, runtime: any }[]} */
 const invocationCalls = [];
 /** @type {any[]} */
 const rawResults = [];
-/** @type {(event: any, context: any) => any} */
-let resultFactory = (event, context) => ({ event, context });
+/** @type {(input: any, runtime: any) => any} */
+let resultFactory = (input, runtime) => ({ input, runtime });
 
 /**
  * @param {string} mode - Execution path.
- * @param {any} event - Activity event.
- * @param {any} context - Activity context.
- * @param {any} resources - Runtime resources.
+ * @param {Readonly<Record<string, any>>} start - Start frame.
  * @returns {Promise<any>} - Activity result.
  */
-async function executeActivity(mode, event, context, resources) {
-  invocationCalls.push({ mode, event, context, resources });
-  const result = await resultFactory(event, context);
+async function executeActivity(mode, start) {
+  const runtime = {
+    invocation: {
+      revisionId: start.revisionId,
+      activityId: start.activityId,
+      runId: start.runId,
+      invocationId: start.invocationId,
+      attemptId: start.attemptId,
+      fencingToken: start.fencingToken,
+    },
+    caller: start.caller,
+  };
+  invocationCalls.push({ mode, input: start.input, runtime });
+  const result = await resultFactory(start.input, runtime);
   rawResults.push(result);
-  return result;
+  const terminal = {
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'completed',
+    attemptId: start.attemptId,
+    sequence: 1,
+    result,
+  };
+  return {
+    status: 'completed',
+    start,
+    terminal,
+    frames: [start, terminal],
+    transcript: {
+      started: true,
+      attemptId: start.attemptId,
+      nextComponentSequence: 2,
+      cancelRequested: false,
+      pendingEffectIds: [],
+      terminalType: 'completed',
+    },
+  };
 }
 
 class MockWharfieFunction {
@@ -39,44 +79,25 @@ class MockWharfieFunction {
   constructor(_options) {}
 
   /**
-   * @param {any} event - Activity event.
-   * @param {any} context - Activity context.
-   * @param {any} options - Invocation options.
-   * @returns {Promise<any>} - Activity result.
+   * @param {Readonly<Record<string, any>>} start - Start frame.
+   * @returns {Promise<any>} - Activity evidence.
    */
-  async fn(event, context, options) {
-    return await executeActivity(
-      'source',
-      event,
-      context,
-      options.baseResources,
-    );
+  async runActivityAttempt(start) {
+    return await executeActivity('source', start);
   }
-
-  async closeRuntimeResources() {}
 
   /**
    * @param {string} _name - Activity name.
-   * @param {any} event - Activity event.
-   * @param {any} context - Activity context.
-   * @param {any} options - Invocation options.
-   * @returns {Promise<any>} - Activity result.
+   * @param {Readonly<Record<string, any>>} start - Start frame.
+   * @returns {Promise<any>} - Activity evidence.
    */
-  static async run(_name, event, context, options) {
-    return await executeActivity('embedded', event, context, options.resources);
+  static async runActivityAttempt(_name, start) {
+    return await executeActivity('embedded', start);
   }
 }
 
-const createActorSystemResources = jest.fn(async () => ({
-  resources: { boundaryTestResource: true },
-  close: jest.fn(async () => {}),
-}));
-
 jest.unstable_mockModule(FUNCTION_IMPORT, () => ({
   default: MockWharfieFunction,
-}));
-jest.unstable_mockModule(RUNTIME_RESOURCES_IMPORT, () => ({
-  createActorSystemResources,
 }));
 
 const activityManifest = {
@@ -100,11 +121,77 @@ const activityManifest = {
   },
 };
 
+/** @param {string} value */
+function digest(value) {
+  return {
+    algorithm: /** @type {const} */ ('sha256'),
+    value: createHash('sha256').update(value).digest('base64url'),
+  };
+}
+
+function revisionForManifest() {
+  return createApplicationRevision({
+    contract: activityManifest,
+    inputs: {
+      source: { format: SOURCE_TREE_INPUT_FORMAT, digest: digest('source') },
+      dependencies: {
+        format: DEPENDENCY_LOCK_INPUT_FORMAT,
+        digest: digest('dependencies'),
+      },
+      runtime: { format: RUNTIME_INPUT_FORMAT, digest: digest('runtime') },
+    },
+  });
+}
+
+/**
+ * @param {{ verifyRuntime?: () => Promise<void> }} [options] - Source verification override.
+ */
+function sourceExecution(options = {}) {
+  const revision = revisionForManifest();
+  return {
+    kind: 'prepared-source',
+    prepared: {
+      revision,
+      appDir: process.cwd(),
+      manifest: activityManifest,
+      assets: {},
+      dependencyLock: {
+        path: '/tmp/wharfie-json-boundary-package-lock.json',
+        input: revision.inputs.dependencies,
+      },
+      verifyRuntime: options.verifyRuntime || (async () => {}),
+      cleanup: async () => {},
+    },
+  };
+}
+
+function embeddedExecution() {
+  const revision = revisionForManifest();
+  return {
+    kind: 'embedded',
+    manifest: activityManifest,
+    embeddedRevision: {
+      revision,
+      runtime: {
+        schemaVersion: ARTIFACT_RUNTIME_SCHEMA_VERSION,
+        kind: ARTIFACT_RUNTIME_KIND,
+        appId: activityManifest.app.id,
+        revisionId: revision.revisionId,
+        target: {
+          nodeVersion: process.versions.node,
+          platform: process.platform,
+          architecture: process.arch,
+          ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+        },
+      },
+    },
+  };
+}
+
 beforeEach(() => {
   invocationCalls.length = 0;
   rawResults.length = 0;
-  resultFactory = (event, context) => ({ event, context });
-  createActorSystemResources.mockClear();
+  resultFactory = (input, runtime) => ({ input, runtime });
 });
 
 describe('JSON activity values', () => {
@@ -158,73 +245,159 @@ describe('JSON activity values', () => {
     });
   });
 
-  it('uses identical cloned event, context, and result semantics in source and embedded modes', async () => {
+  it('uses identical cloned input, caller metadata, and result semantics in source and embedded modes', async () => {
     const { invokeManifestActivity } = await import(APP_RUNS_IMPORT);
-    const event = { nested: { count: 1 } };
-    const context = { trace: { id: 'trace-1' } };
-    resultFactory = (receivedEvent, receivedContext) => {
-      receivedEvent.nested.count += 1;
-      receivedContext.trace.seen = true;
+    const input = { nested: { count: 1 } };
+    const callerMetadata = { trace: { id: 'trace-1' } };
+    resultFactory = (receivedInput, runtime) => {
+      expect(Object.isFrozen(receivedInput)).toBe(true);
+      expect(Object.isFrozen(runtime.caller.metadata)).toBe(true);
       return {
-        event: receivedEvent,
-        context: receivedContext,
+        input: receivedInput,
+        callerMetadata: runtime.caller.metadata,
       };
     };
 
     const sourceResult = await invokeManifestActivity({
-      manifest: activityManifest,
-      appDir: '/unused',
       activityName: 'echo',
-      event,
-      context,
-      executionMode: 'source',
+      input,
+      callerMetadata,
+      execution: sourceExecution(),
     });
     const embeddedResult = await invokeManifestActivity({
-      manifest: activityManifest,
       activityName: 'echo',
-      event,
-      context,
-      executionMode: 'embedded',
+      input,
+      callerMetadata,
+      execution: embeddedExecution(),
     });
 
     expect(sourceResult).toEqual(embeddedResult);
-    expect(event).toEqual({ nested: { count: 1 } });
-    expect(context).toEqual({ trace: { id: 'trace-1' } });
+    expect(input).toEqual({ nested: { count: 1 } });
+    expect(callerMetadata).toEqual({ trace: { id: 'trace-1' } });
     expect(invocationCalls.map(({ mode }) => mode)).toEqual([
       'source',
       'embedded',
     ]);
-    expect(invocationCalls[0].event).not.toBe(event);
-    expect(invocationCalls[0].context).not.toBe(context);
-    expect(invocationCalls[0].event).not.toBe(invocationCalls[1].event);
+    expect(invocationCalls[0].input).not.toBe(input);
+    expect(invocationCalls[0].runtime.caller.metadata).not.toBe(callerMetadata);
+    expect(invocationCalls[0].input).not.toBe(invocationCalls[1].input);
     expect(sourceResult).not.toBe(rawResults[0]);
     expect(embeddedResult).not.toBe(rawResults[1]);
   });
 
   it.each(['source', 'embedded'])(
-    'enforces event, context, and result validation in %s mode',
+    'enforces input, caller metadata, and result validation in %s mode',
     async (executionMode) => {
       const { invokeManifestActivity } = await import(APP_RUNS_IMPORT);
       const invoke = (overrides = {}) =>
         invokeManifestActivity({
-          manifest: activityManifest,
-          ...(executionMode === 'source' ? { appDir: '/unused' } : {}),
           activityName: 'echo',
-          event: {},
-          context: {},
-          executionMode,
+          input: {},
+          callerMetadata: {},
+          execution:
+            executionMode === 'source'
+              ? sourceExecution()
+              : embeddedExecution(),
           ...overrides,
         });
 
-      await expect(invoke({ event: { invalid: 1n } })).rejects.toThrow(
-        /activity event/i,
+      await expect(invoke({ input: { invalid: 1n } })).rejects.toThrow(
+        /activity input/i,
       );
-      await expect(invoke({ context: [] })).rejects.toThrow(
-        /activity context.*JSON object/i,
+      await expect(invoke({ callerMetadata: [] })).rejects.toThrow(
+        /activity caller metadata.*JSON object/i,
       );
 
       resultFactory = () => undefined;
-      await expect(invoke()).rejects.toThrow(/activity result/i);
+      await expect(invoke()).rejects.toThrow(/result/i);
     },
   );
+
+  it('allocates fresh local attempt identity while binding every source attempt to its prepared revision', async () => {
+    const { invokeManifestActivityAttempt } = await import(APP_RUNS_IMPORT);
+    const execution = sourceExecution();
+
+    const [first, second] = await Promise.all([
+      invokeManifestActivityAttempt({
+        activityName: 'echo',
+        input: { call: 1 },
+        execution,
+      }),
+      invokeManifestActivityAttempt({
+        activityName: 'echo',
+        input: { call: 2 },
+        execution,
+      }),
+    ]);
+
+    expect(first.start.revisionId).toBe(execution.prepared.revision.revisionId);
+    expect(second.start.revisionId).toBe(
+      execution.prepared.revision.revisionId,
+    );
+    expect(first.start.runId).not.toBe(second.start.runId);
+    expect(first.start.invocationId).not.toBe(second.start.invocationId);
+    expect(first.start.attemptId).not.toBe(second.start.attemptId);
+    expect(first.start.fencingToken).not.toBe(second.start.fencingToken);
+  });
+
+  it('does not accept a source outcome when the prepared revision changes while it runs', async () => {
+    const { invokeManifestActivity } = await import(APP_RUNS_IMPORT);
+    let verificationCount = 0;
+    const verifyRuntime = jest.fn(async () => {
+      verificationCount += 1;
+      if (verificationCount === 2) {
+        throw new Error('sealed source changed');
+      }
+    });
+
+    await expect(
+      invokeManifestActivity({
+        activityName: 'echo',
+        input: { value: 'drift' },
+        execution: sourceExecution({ verifyRuntime }),
+      }),
+    ).rejects.toThrow('sealed source changed');
+
+    expect(verifyRuntime).toHaveBeenCalledTimes(2);
+    expect(invocationCalls).toHaveLength(1);
+  });
+
+  it('turns genuine failed terminals into structured outcome errors', async () => {
+    const { ActivityAttemptOutcomeError, unwrapCompletedActivityAttempt } =
+      await import(APP_RUNS_IMPORT);
+    const evidence = {
+      status: 'failed',
+      terminal: {
+        protocol: 'wharfie.activity',
+        protocolVersion: 1,
+        type: 'failed',
+        attemptId: 'failed-attempt',
+        sequence: 1,
+        error: {
+          code: 'application-failed',
+          name: 'ApplicationFailure',
+          message: 'expected failure',
+          details: { reason: 'test' },
+        },
+      },
+      frames: [],
+      transcript: {},
+    };
+
+    try {
+      unwrapCompletedActivityAttempt(evidence);
+      throw new Error('Expected an ActivityAttemptOutcomeError.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ActivityAttemptOutcomeError);
+      expect(error).toMatchObject({
+        name: 'ApplicationFailure',
+        code: 'application-failed',
+        terminalType: 'failed',
+        details: { reason: 'test' },
+      });
+      const outcome = /** @type {any} */ (error);
+      expect(Object.isFrozen(outcome.evidence)).toBe(true);
+      expect(Object.isFrozen(outcome.evidence.terminal.error)).toBe(true);
+    }
+  });
 });

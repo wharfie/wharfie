@@ -32,7 +32,7 @@ describe('kitchen-sink native externals integration', () => {
         const { manifest, result } = await runLocalApp({
           dir: kitchenSinkDir,
           activityName: 'start',
-          eventInput: JSON.stringify({
+          inputInput: JSON.stringify({
             who: 'native-externals',
             iterations: 32,
             lmdbPath: nativeLmdbPath,
@@ -47,26 +47,6 @@ describe('kitchen-sink native externals integration', () => {
             export: 'start',
           },
           externalPackages: kitchenSinkExternalDependencies,
-          resources: {
-            db: {
-              adapter: 'vanilla',
-              options: {
-                path: 'tmp/wharfie-examples/kitchen-sink/activity',
-              },
-            },
-            queue: {
-              adapter: 'vanilla',
-              options: {
-                path: 'tmp/wharfie-examples/kitchen-sink/activity',
-              },
-            },
-            objectStorage: {
-              adapter: 'vanilla',
-              options: {
-                path: 'tmp/wharfie-examples/kitchen-sink/activity',
-              },
-            },
-          },
         });
         expect(result.ok).toBe(true);
         expect(result.native.lmdbRecord).toMatchObject({

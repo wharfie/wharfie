@@ -10,6 +10,7 @@ import {
   jest,
 } from '@jest/globals';
 import { promises as fsp } from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { brotliCompressSync } from 'node:zlib';
@@ -18,6 +19,16 @@ import {
   FUNCTION_ASSET_SCHEMA_VERSION,
   serializeFunctionAssetDescription,
 } from '../../../src/core/resources/builds/lib/function-asset.js';
+import {
+  createApplicationRevision,
+  DEPENDENCY_LOCK_INPUT_FORMAT,
+  RUNTIME_INPUT_FORMAT,
+  SOURCE_TREE_INPUT_FORMAT,
+} from '../../../src/core/runtime/application-revision.js';
+import {
+  ARTIFACT_RUNTIME_KIND,
+  ARTIFACT_RUNTIME_SCHEMA_VERSION,
+} from '../../../src/core/resources/builds/lib/revision-runtime-assets.js';
 
 const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
 const EMBEDDED_ACTIVITY_TIMEOUT_MS = 15_000;
@@ -63,6 +74,46 @@ const embeddedRunnableManifest = {
     },
   },
 };
+
+/** @param {string} value */
+function digest(value) {
+  return {
+    algorithm: /** @type {const} */ ('sha256'),
+    value: createHash('sha256').update(value).digest('base64url'),
+  };
+}
+
+/** @param {Record<string, any>} manifest */
+function embeddedRevisionAssets(manifest) {
+  const contract = structuredClone(manifest);
+  delete contract.targets;
+  const revision = createApplicationRevision({
+    contract,
+    inputs: {
+      source: { format: SOURCE_TREE_INPUT_FORMAT, digest: digest('source') },
+      dependencies: {
+        format: DEPENDENCY_LOCK_INPUT_FORMAT,
+        digest: digest('dependencies'),
+      },
+      runtime: { format: RUNTIME_INPUT_FORMAT, digest: digest('runtime') },
+    },
+  });
+  return {
+    revision,
+    runtime: {
+      schemaVersion: ARTIFACT_RUNTIME_SCHEMA_VERSION,
+      kind: ARTIFACT_RUNTIME_KIND,
+      appId: revision.contract.app.id,
+      revisionId: revision.revisionId,
+      target: {
+        nodeVersion: process.versions.node,
+        platform: process.platform,
+        architecture: process.arch,
+        ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+      },
+    },
+  };
+}
 
 /**
  * @param {Promise<unknown>} promise - Promise expected to reject.
@@ -287,17 +338,49 @@ describe('embedded app manifest asset helpers', () => {
     async () => {
       /** @type {Map<string, any>} */
       const seaAssets = new Map();
+      const identity = embeddedRevisionAssets(embeddedRunnableManifest);
       const functionSource = `
-        global[Symbol.for('start')] = async (event, context) => ({
-          ok: true,
-          who: event?.who || 'world',
-          requestId: context?.requestId || null,
-        });
+        globalThis[Symbol.for('wharfie.activity-attempt.v1/start')] = ({ startFrame }) => {
+          const terminal = {
+            protocol: 'wharfie.activity',
+            protocolVersion: 1,
+            type: 'completed',
+            attemptId: startFrame.attemptId,
+            sequence: 1,
+            result: {
+              ok: true,
+              who: startFrame.input?.who || 'world',
+              requestId: startFrame.caller?.metadata?.requestId || null,
+            },
+          };
+          return {
+            status: 'completed',
+            start: startFrame,
+            terminal,
+            frames: [startFrame, terminal],
+            transcript: {
+              started: true,
+              attemptId: startFrame.attemptId,
+              nextComponentSequence: 2,
+              cancelRequested: false,
+              pendingEffectIds: [],
+              terminalType: 'completed',
+            },
+          };
+        };
       `;
 
       seaAssets.set(
         '<WHARFIE_APP>/manifest.json',
         JSON.stringify(embeddedRunnableManifest),
+      );
+      seaAssets.set(
+        '<WHARFIE_APP>/revision.json',
+        JSON.stringify(identity.revision),
+      );
+      seaAssets.set(
+        '<WHARFIE_APP>/runtime.json',
+        JSON.stringify(identity.runtime),
       );
       seaAssets.set(
         'start',
@@ -344,8 +427,8 @@ describe('embedded app manifest asset helpers', () => {
       try {
         const { manifest, result } = await runLocalApp({
           activityName: 'start',
-          eventInput: '{"who":"embedded"}',
-          contextInput: '{"requestId":"req-1"}',
+          inputInput: '{"who":"embedded"}',
+          callerMetadataInput: '{"requestId":"req-1"}',
           allowEmbedded: true,
         });
 
@@ -359,8 +442,8 @@ describe('embedded app manifest asset helpers', () => {
         await expect(
           invokeActivity('start', {
             dir: tmpDir,
-            event: { who: 'immutable-embedded-revision' },
-            context: { requestId: 'req-2' },
+            input: { who: 'immutable-embedded-revision' },
+            callerMetadata: { requestId: 'req-2' },
           }),
         ).resolves.toEqual({
           ok: true,

@@ -27,7 +27,7 @@ const MODULE_DIR = path.dirname(MODULE_PATH);
  *  1) node ./apps/wharfie-cli/wharfie.app.js
  *  2) ./dist/wharfie-cli-node<version>-<platform>-<arch> --help
  *  3) ./dist/wharfie-cli-node<version>-<platform>-<arch> app manifest ./scratch/examples/apps/kitchen-sink
- *  4) ./dist/wharfie-cli-node<version>-<platform>-<arch> app run start --dir ./scratch/examples/apps/kitchen-sink --event '{"who":"smoke"}'
+ *  4) ./dist/wharfie-cli-node<version>-<platform>-<arch> app run start --dir ./scratch/examples/apps/kitchen-sink --input '{"who":"smoke"}'
  */
 
 /**

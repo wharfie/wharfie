@@ -88,10 +88,12 @@ export default defineApp({
 
 Application and activity IDs are lowercase kebab identifiers matching
 `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`, with a maximum of 63 ASCII bytes. Wharfie
-does not trim or rewrite them. The CLI is required; activities, resources, and
-package targets are optional. Workflows and schedules are intentionally not in
-this schema until their durable semantics are ready. Build credentials, signing
-material, and extra asset configuration are also outside the public manifest.
+does not trim or rewrite them. The CLI is required; activities and package
+targets are optional. Activity resource injection is intentionally unsupported
+until it can be expressed as durable managed effects. Workflows and schedules
+are intentionally not in this schema until their durable semantics are ready.
+Build credentials, signing material, and extra asset configuration are also
+outside the public manifest.
 
 See the [quickstart](docs/src/assets/markdown/quickstart.md) and [application
 structure](docs/src/assets/markdown/project-structure.md) for the complete

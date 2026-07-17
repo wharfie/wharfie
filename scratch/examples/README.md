@@ -1,37 +1,23 @@
 # Wharfie application demos
 
 These small applications exercise the strict schemaVersion 2 authoring model:
-a developer-owned CLI, named activities, portable resources, and exact package
+a developer-owned CLI, named activities, strict JSON input, and exact package
 targets. They intentionally do not expose Wharfie's internal `ActorSystem`
-implementation as an authoring API.
+or legacy resource-injection implementation as an authoring API.
 
 ## Included handlers
 
-### `apps/hello-world/functions/echo-event.js`
+### `apps/hello-world/activities.js`
 
-The smallest activity handler. It accepts a JSON event, reads ordinary context,
-and returns a JSON result.
-
-### `apps/hello-world/functions/hello-resources.js`
-
-A resource-backed handler that exercises
-`context.resources.{db, queue, objectStorage}`.
-
-### `apps/context-override/activity.js`
-
-A handler that reports the context and resource overrides it receives.
+The smallest activity handler. It accepts JSON `input`, reads immutable caller
+metadata from `runtime.caller.metadata`, and returns a JSON result.
 
 ## Included applications
 
 ### `apps/hello-world/wharfie.app.js`
 
-The primary approachable example. It defines a normal CLI, two activities,
-portable vanilla resources, and exact SEA targets.
-
-### `apps/context-override/wharfie.app.js`
-
-A minimal example showing that caller-provided resource values override the
-application's base resources for one activity invocation.
+The primary approachable example. It defines a normal CLI, one named activity,
+and exact SEA targets.
 
 ### `apps/kitchen-sink/wharfie.app.js`
 
@@ -48,11 +34,7 @@ node ./bin/wharfie app manifest ./scratch/examples/apps/hello-world
 
 node ./bin/wharfie app run echo-event \
   --dir ./scratch/examples/apps/hello-world \
-  --event '{"who":"wharfie"}'
-
-node ./bin/wharfie app run hello-resources \
-  --dir ./scratch/examples/apps/hello-world \
-  --event '{"who":"wharfie"}'
+  --input '{"who":"wharfie"}'
 
 node ./bin/wharfie app package ./scratch/examples/apps/hello-world
 
@@ -60,7 +42,7 @@ node ./bin/wharfie app manifest ./scratch/examples/apps/kitchen-sink
 
 node ./bin/wharfie app run start \
   --dir ./scratch/examples/apps/kitchen-sink \
-  --event '{"who":"wharfie","iterations":32}'
+  --input '{"who":"wharfie","iterations":32}'
 ```
 
 `app package` writes artifacts to `<app dir>/dist` by default. A packaged

@@ -7,6 +7,6 @@ import { invokeActivity } from '@wharfie/wharfie/app';
  */
 export async function main(argv = process.argv) {
   const who = argv[2] || 'world';
-  const result = await invokeActivity('echo-event', { event: { who } });
+  const result = await invokeActivity('echo-event', { input: { who } });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }

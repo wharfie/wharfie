@@ -1,5 +1,6 @@
 import { isSea } from './core/lib/node-sea.js';
 import { readEmbeddedAppManifest } from './core/resources/builds/lib/app-manifest-asset.js';
+import { readEmbeddedRevisionRuntimePair } from './core/resources/builds/lib/revision-runtime-assets.js';
 import { invokeManifestActivity } from './core/runtime/app-runs.js';
 
 const SOURCE_APP_LOADER_PATH = './cli/app/load-app.js';
@@ -23,14 +24,16 @@ export function defineApp(definition) {
  * prevents packaging-only dependencies from entering the generated runtime's
  * eager module graph.
  * @param {string | undefined} dir - Source application directory.
- * @returns {Promise<{ manifest: any, appDir?: string, executionMode: 'source' | 'embedded', sourceRevision?: { revision: unknown, dependencyLock: unknown }, verifyRuntime?: () => Promise<void>, cleanup?: () => Promise<void> }>} - Loaded runtime manifest.
+ * @returns {Promise<{ execution: Record<string, any>, cleanup?: () => Promise<void> }>} - Loaded immutable runtime identity.
  */
 async function loadRuntimeManifest(dir) {
   if (isSea()) {
-    const manifest = await readEmbeddedAppManifest();
+    const [manifest, embeddedRevision] = await Promise.all([
+      readEmbeddedAppManifest(),
+      readEmbeddedRevisionRuntimePair(),
+    ]);
     return {
-      manifest,
-      executionMode: 'embedded',
+      execution: { kind: 'embedded', manifest, embeddedRevision },
     };
   }
 
@@ -44,14 +47,7 @@ async function loadRuntimeManifest(dir) {
     manifest: loaded.manifest,
   });
   return {
-    manifest: prepared.manifest,
-    appDir: prepared.appDir,
-    executionMode: 'source',
-    sourceRevision: {
-      revision: prepared.revision,
-      dependencyLock: prepared.dependencyLock,
-    },
-    verifyRuntime: prepared.verifyRuntime,
+    execution: { kind: 'prepared-source', prepared },
     cleanup: prepared.cleanup,
   };
 }
@@ -63,32 +59,39 @@ async function loadRuntimeManifest(dir) {
  * Inputs must be JSON-serializable because activities are durable boundaries.
  * @param {string} activityName - Declared activity name.
  * @param {object} [options] - Invocation options.
- * @param {any} [options.event] - JSON-serializable activity event.
- * @param {Record<string, any>} [options.context] - JSON-serializable activity context.
+ * @param {any} [options.input] - JSON-serializable activity input.
+ * @param {Record<string, any>} [options.callerMetadata] - JSON-serializable caller metadata.
+ * @param {number} [options.deadlineUnixMs] - Absolute attempt deadline in Unix milliseconds.
  * @param {string} [options.dir] - Source app directory; ignored inside a SEA.
  * @returns {Promise<any>} - Activity result.
  */
 export async function invokeActivity(activityName, options = {}) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError(
+      'invokeActivity options must be an object when provided.',
+    );
+  }
+  const allowed = new Set(['input', 'callerMetadata', 'deadlineUnixMs', 'dir']);
+  for (const key of Object.keys(options)) {
+    if (!allowed.has(key)) {
+      throw new TypeError(`invokeActivity.${key} is not supported.`);
+    }
+  }
   const loaded = await loadRuntimeManifest(options.dir);
   try {
-    if (loaded.verifyRuntime) await loaded.verifyRuntime();
-    const result = await invokeManifestActivity({
-      manifest: loaded.manifest,
-      appDir: loaded.appDir,
-      ...(loaded.sourceRevision
-        ? { sourceRevision: loaded.sourceRevision }
-        : {}),
+    return await invokeManifestActivity({
       activityName,
-      ...(Object.prototype.hasOwnProperty.call(options, 'event')
-        ? { event: options.event }
+      execution: loaded.execution,
+      ...(Object.prototype.hasOwnProperty.call(options, 'input')
+        ? { input: options.input }
         : {}),
-      ...(Object.prototype.hasOwnProperty.call(options, 'context')
-        ? { context: options.context }
+      ...(Object.prototype.hasOwnProperty.call(options, 'callerMetadata')
+        ? { callerMetadata: options.callerMetadata }
         : {}),
-      executionMode: loaded.executionMode,
+      ...(Object.prototype.hasOwnProperty.call(options, 'deadlineUnixMs')
+        ? { deadlineUnixMs: options.deadlineUnixMs }
+        : {}),
     });
-    if (loaded.verifyRuntime) await loaded.verifyRuntime();
-    return result;
   } finally {
     if (loaded.cleanup) await loaded.cleanup();
   }

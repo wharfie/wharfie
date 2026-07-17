@@ -26,6 +26,7 @@ const seaAssets = new Map();
 
 // Mock SEA asset lookup to serve our in-memory bundles.
 jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
+  isSea: () => false,
   getAsset: async (/** @type {string} */ name) => {
     const assetBytes = seaAssets.get(name);
     if (!assetBytes) {

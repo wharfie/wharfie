@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -22,9 +22,15 @@ import {
   validateApplicationRevision,
   validateDependencyLockInput,
 } from './application-revision.js';
+import {
+  ACTIVITY_PROTOCOL_NAME,
+  ACTIVITY_PROTOCOL_VERSION,
+  validateActivityProtocolComponentFrame,
+  validateActivityProtocolHostFrame,
+} from './activity-protocol.js';
 import { cloneJsonObject, cloneJsonValue } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
-import { createActorSystemResources } from './resources.js';
+import { validateEmbeddedRevisionRuntimePair } from '../resources/builds/lib/revision-runtime-assets.js';
 
 /**
  * @param {unknown} value - value.
@@ -32,6 +38,18 @@ import { createActorSystemResources } from './resources.js';
  */
 function isObjectRecord(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * @param {any} value - JSON-compatible value to freeze recursively.
+ * @returns {any} - The same deeply frozen value.
+ */
+function deepFreeze(value) {
+  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
 }
 
 /**
@@ -213,20 +231,110 @@ function assertSourceRuntimeResolution(entrypointPath) {
 }
 
 /**
- * Clone caller-owned values before they cross an activity boundary.
- * @param {{ event?: any, context?: any }} options - Invocation options.
- * @returns {{ event: any, context: Record<string, any> }} - JSON-only inputs.
+ * @param {Record<string, any>} value - Candidate object.
+ * @param {string[]} keys - Exact supported keys.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {void}
  */
-function cloneActivityInputs(options) {
-  const hasEvent = Object.prototype.hasOwnProperty.call(options, 'event');
-  const hasContext = Object.prototype.hasOwnProperty.call(options, 'context');
+function assertExactKeys(value, keys, label) {
+  const allowed = new Set(keys);
+  if (
+    Object.keys(value).length !== keys.length ||
+    Object.keys(value).some((key) => !allowed.has(key))
+  ) {
+    throw new TypeError(`${label} has unsupported or missing fields.`);
+  }
+}
+
+/**
+ * Validate and clone the author-facing invocation values. In particular,
+ * callerMetadata is not a legacy mutable context: it becomes only
+ * runtime.caller.metadata inside the Activity Protocol adapter.
+ * @param {{ input?: any, callerMetadata?: any, deadlineUnixMs?: unknown }} options - Invocation values.
+ * @returns {{ input: any, callerMetadata: Record<string, any>, deadlineUnixMs?: number }} - Strict JSON inputs.
+ */
+function cloneActivityAttemptInputs(options) {
+  const input = cloneJsonValue(
+    Object.prototype.hasOwnProperty.call(options, 'input') ? options.input : {},
+    'Activity input',
+  );
+  const callerMetadata = cloneJsonObject(
+    Object.prototype.hasOwnProperty.call(options, 'callerMetadata')
+      ? options.callerMetadata
+      : {},
+    'Activity caller metadata',
+  );
+  if (Object.prototype.hasOwnProperty.call(callerMetadata, 'resources')) {
+    throw new TypeError(
+      'Activity caller metadata cannot supply resources; managed capabilities are not available yet.',
+    );
+  }
+  if (!Object.prototype.hasOwnProperty.call(options, 'deadlineUnixMs')) {
+    return { input, callerMetadata };
+  }
+  if (
+    !Number.isSafeInteger(options.deadlineUnixMs) ||
+    Number(options.deadlineUnixMs) <= 0
+  ) {
+    throw new TypeError(
+      'deadlineUnixMs must be a positive safe integer when provided.',
+    );
+  }
   return {
-    event: cloneJsonValue(hasEvent ? options.event : {}, 'Activity event'),
-    context: cloneJsonObject(
-      hasContext ? options.context : {},
-      'Activity context',
-    ),
+    input,
+    callerMetadata,
+    deadlineUnixMs: Number(options.deadlineUnixMs),
   };
+}
+
+/**
+ * Allocate fresh local-only identity for one physical activity attempt. These
+ * values deliberately do not borrow the transitional Operation snapshot ID or
+ * generation: until the ledger exists they carry no recovery claim.
+ * @param {{ revisionId: string, activityName: string, input: any, callerMetadata: Record<string, any>, deadlineUnixMs?: number }} options - Bound invocation inputs.
+ * @returns {Readonly<Record<string, any>>} - Validated immutable start frame.
+ */
+function createEphemeralActivityAttemptStart(options) {
+  return validateActivityProtocolHostFrame(
+    {
+      protocol: ACTIVITY_PROTOCOL_NAME,
+      protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+      type: 'start',
+      revisionId: options.revisionId,
+      activityId: options.activityName,
+      runId: `local-run-${randomUUID()}`,
+      invocationId: `local-invocation-${randomUUID()}`,
+      attemptId: `local-attempt-${randomUUID()}`,
+      fencingToken: `local-fence-${randomUUID()}`,
+      input: options.input,
+      caller: { metadata: options.callerMetadata },
+      ...(options.deadlineUnixMs === undefined
+        ? {}
+        : { deadlineUnixMs: options.deadlineUnixMs }),
+    },
+    'local activity attempt start',
+  );
+}
+
+/**
+ * A protocol attempt reached a genuine non-completed terminal. It is not a
+ * transport crash or delivery uncertainty, both of which continue to reject
+ * without inventing a user-visible application outcome.
+ */
+export class ActivityAttemptOutcomeError extends Error {
+  /**
+   * @param {Readonly<Record<string, any>>} evidence - Valid physical attempt evidence.
+   */
+  constructor(evidence) {
+    const terminal = evidence.terminal;
+    const error = terminal.error;
+    super(error.message);
+    this.name = error.name;
+    this.code = error.code;
+    this.details = error.details;
+    this.terminalType = terminal.type;
+    this.evidence = evidence;
+  }
 }
 
 /**
@@ -265,6 +373,141 @@ export function getManifestResourcesSpec(manifest) {
 }
 
 /**
+ * Reject the legacy resource injection surface on the new protocol path. A
+ * resource object or arbitrary RPC proxy is not a managed effect and cannot
+ * honestly carry replay or recovery guarantees.
+ * @param {Record<string, any>} manifest - Valid app manifest.
+ * @param {Record<string, any>} definition - Selected activity definition.
+ * @returns {void}
+ */
+function assertNoLegacyAttemptResources(manifest, definition) {
+  if (Object.keys(getManifestResourcesSpec(manifest)).length > 0) {
+    throw new Error(
+      'Activity Protocol v1 invocation does not yet support manifest resources; use no resources until managed effects are implemented.',
+    );
+  }
+  if (
+    isObjectRecord(definition.resources) &&
+    Object.keys(definition.resources).length > 0
+  ) {
+    throw new Error(
+      'Activity Protocol v1 invocation does not yet support activity resources; use no resources until managed effects are implemented.',
+    );
+  }
+}
+
+/**
+ * @param {unknown} value - Candidate complete source execution identity.
+ * @returns {{ manifest: Record<string, any>, revision: import('./application-revision.js').ApplicationRevision, dependencyLock: { path: string, input: import('./application-revision.js').LockedInputDescriptor }, appDir: string, verifyRuntime: () => Promise<void> }} - Validated sealed source identity.
+ */
+function validatePreparedSourceExecution(value) {
+  if (!isObjectRecord(value)) {
+    throw new TypeError('Activity execution must be a prepared source handle.');
+  }
+  if (value.kind !== 'prepared-source') {
+    throw new TypeError(
+      "activity execution.kind must be 'prepared-source' for source execution.",
+    );
+  }
+  if (!Object.prototype.hasOwnProperty.call(value, 'prepared')) {
+    throw new TypeError(
+      'activity execution.prepared must be a complete prepared application revision.',
+    );
+  }
+  assertExactKeys(value, ['kind', 'prepared'], 'activity execution');
+  if (!isObjectRecord(value.prepared)) {
+    throw new TypeError(
+      'activity execution.prepared must be a complete prepared application revision.',
+    );
+  }
+  const prepared = value.prepared;
+  for (const key of [
+    'revision',
+    'appDir',
+    'manifest',
+    'assets',
+    'dependencyLock',
+    'verifyRuntime',
+    'cleanup',
+  ]) {
+    if (!Object.prototype.hasOwnProperty.call(prepared, key)) {
+      throw new TypeError(
+        `activity execution.prepared.${key} is required on a prepared application revision.`,
+      );
+    }
+  }
+  if (
+    typeof prepared.appDir !== 'string' ||
+    !prepared.appDir ||
+    !path.isAbsolute(prepared.appDir)
+  ) {
+    throw new TypeError(
+      'activity execution.prepared.appDir must be an absolute sealed snapshot path.',
+    );
+  }
+  if (
+    typeof prepared.verifyRuntime !== 'function' ||
+    typeof prepared.cleanup !== 'function'
+  ) {
+    throw new TypeError(
+      'activity execution.prepared must retain its runtime verification and cleanup handles.',
+    );
+  }
+  const source = validateSourceRevisionContext({
+    manifest: prepared.manifest,
+    appDir: prepared.appDir,
+    sourceRevision: {
+      revision: prepared.revision,
+      dependencyLock: prepared.dependencyLock,
+    },
+  });
+  return {
+    ...source,
+    appDir: prepared.appDir,
+    verifyRuntime: prepared.verifyRuntime,
+  };
+}
+
+/**
+ * @param {unknown} value - Candidate embedded execution identity.
+ * @returns {{ manifest: Record<string, any>, revision: import('./application-revision.js').ApplicationRevision }} - Validated embedded manifest/revision pair.
+ */
+function validateEmbeddedExecution(value) {
+  if (!isObjectRecord(value)) {
+    throw new TypeError('Activity execution must be an embedded identity.');
+  }
+  assertExactKeys(
+    value,
+    ['kind', 'manifest', 'embeddedRevision'],
+    'activity execution',
+  );
+  if (value.kind !== 'embedded') {
+    throw new TypeError(
+      "activity execution.kind must be 'embedded' for packaged execution.",
+    );
+  }
+  if (!isObjectRecord(value.embeddedRevision)) {
+    throw new TypeError(
+      'activity execution.embeddedRevision must contain embedded revision/runtime metadata.',
+    );
+  }
+  const pair = validateEmbeddedRevisionRuntimePair(
+    value.embeddedRevision.revision,
+    value.embeddedRevision.runtime,
+    'embedded activity execution',
+  );
+  const manifest = validateAppManifest(value.manifest, 'embedded manifest');
+  const targetFreeManifest = { ...manifest };
+  delete targetFreeManifest.targets;
+  if (!hasSameCanonicalJson(targetFreeManifest, pair.revision.contract)) {
+    throw new Error(
+      'Embedded manifest does not match the immutable embedded application revision contract.',
+    );
+  }
+  return { manifest, revision: pair.revision };
+}
+
+/**
  * @param {{ manifest: any, activityName: string, appDir: string }} options - options.
  * @returns {WharfieFunction} - Result.
  */
@@ -289,20 +532,16 @@ export function createManifestActivityFunction(options) {
       ...(Array.isArray(definition.externalPackages)
         ? { external: definition.externalPackages }
         : {}),
-      ...(isObjectRecord(definition.resources)
-        ? { resources: definition.resources }
-        : {}),
     },
   });
 }
 
 /**
- * Build and invoke one external-bearing activity from the sealed source and
- * dependency lock owned by its revision. This intentionally calls the public
- * FunctionResource bundle primitives directly; it does not reconcile a build
- * graph, write a SEA asset, or select any manifest packaging target.
- * @param {{ manifest: Record<string, any>, revision: import('./application-revision.js').ApplicationRevision, dependencyLock: { path: string, input: import('./application-revision.js').LockedInputDescriptor }, appDir: string, activityName: string, event: any, context: Record<string, any>, baseResources: Record<string, any> }} options - Prepared invocation inputs.
- * @returns {Promise<any>} - Activity result.
+ * Build and execute one external-bearing activity from its sealed source
+ * snapshot and dependency lock. The bundle runs the private attempt wrapper;
+ * no legacy context or resource RPC is assembled on this path.
+ * @param {{ manifest: Record<string, any>, revision: import('./application-revision.js').ApplicationRevision, dependencyLock: { path: string, input: import('./application-revision.js').LockedInputDescriptor }, appDir: string, activityName: string, startFrame: Readonly<Record<string, any>> }} options - Bound source attempt inputs.
+ * @returns {Promise<Readonly<import('./activity-attempt.js').ActivityAttemptEvidence>>} - Revalidated physical attempt evidence.
  */
 async function invokePreparedSourceExternalActivity(options) {
   const definition = getManifestActivityDefinition(options);
@@ -390,133 +629,215 @@ async function invokePreparedSourceExternalActivity(options) {
     algorithm: /** @type {const} */ ('sha256'),
     value: createHash('sha256').update(externalsTar).digest('base64url'),
   };
-  return await WharfieFunction.runPreparedBundle(
+  return await WharfieFunction.runPreparedActivityAttempt(
     options.activityName,
-    {
-      codeString,
-      externalsTar,
-      externalArchiveDigest,
-      ...(isObjectRecord(definition.resources)
-        ? { resourceSpecs: definition.resources }
-        : {}),
-    },
-    options.event,
-    options.context,
-    { resources: options.baseResources },
+    { codeString, externalsTar, externalArchiveDigest },
+    options.startFrame,
   );
 }
 
 /**
- * @param {{ manifest: any, activityName: string, event?: any, context?: any, resourceResolution?: { registryPath?: string } }} options - options.
- * @returns {Promise<any>} - Result.
+ * @param {Record<string, any>} manifest - Valid manifest.
+ * @param {string} activityName - Declared activity ID.
+ * @returns {Record<string, any>} - Valid selected activity definition.
  */
-export async function invokeEmbeddedManifestActivity(options) {
-  const activityName = options.activityName;
-  const definition = getManifestActivityDefinition(options);
-
+function requireManifestActivityDefinition(manifest, activityName) {
+  const definition = getManifestActivityDefinition({ manifest, activityName });
   if (!definition || !isObjectRecord(definition.entrypoint)) {
-    const available = getManifestActivityNames(options.manifest);
+    const available = getManifestActivityNames(manifest);
     throw new Error(
       `Unknown activity '${activityName}'. Available activities: ${available.join(', ') || '(none)'}`,
     );
   }
-
-  const { event, context } = cloneActivityInputs(options);
-
-  const { resources: baseResources, close } = await createActorSystemResources(
-    getManifestResourcesSpec(options.manifest),
-    options.resourceResolution,
-  );
-
-  try {
-    const result = await WharfieFunction.run(activityName, event, context, {
-      resources: baseResources,
-    });
-    return cloneJsonValue(result, 'Activity result');
-  } finally {
-    await close();
-  }
+  return definition;
 }
 
 /**
- * @param {{ manifest: any, appDir?: string, activityName: string, event?: any, context?: any, resourceResolution?: { registryPath?: string }, executionMode?: 'source' | 'embedded', sourceRevision?: { revision: unknown, dependencyLock: unknown } }} options - options.
- * @returns {Promise<any>} - Result.
+ * @param {Record<string, any>} options - Candidate invocation options.
+ * @returns {void}
  */
-export async function invokeManifestActivity(options) {
-  if (options.executionMode === 'embedded') {
-    return await invokeEmbeddedManifestActivity(options);
+function validateManifestActivityAttemptOptions(options) {
+  if (!isObjectRecord(options)) {
+    throw new TypeError('invokeManifestActivityAttempt requires options.');
   }
+  const allowed = new Set([
+    'activityName',
+    'input',
+    'callerMetadata',
+    'deadlineUnixMs',
+    'execution',
+  ]);
+  for (const key of Object.keys(options)) {
+    if (!allowed.has(key)) {
+      throw new TypeError(
+        `invokeManifestActivityAttempt.${key} is not supported.`,
+      );
+    }
+  }
+  if (!Object.prototype.hasOwnProperty.call(options, 'activityName')) {
+    throw new TypeError(
+      'invokeManifestActivityAttempt.activityName is required.',
+    );
+  }
+  if (!Object.prototype.hasOwnProperty.call(options, 'execution')) {
+    throw new TypeError('invokeManifestActivityAttempt.execution is required.');
+  }
+  assertLogicalId(options.activityName, 'activityName');
+}
 
-  if (typeof options.appDir !== 'string' || !options.appDir) {
-    throw new Error(
-      'Source activity execution requires the application directory.',
-    );
-  }
-  const initialDefinition = getManifestActivityDefinition(options);
-  const hasExternalPackages =
-    Array.isArray(initialDefinition?.externalPackages) &&
-    initialDefinition.externalPackages.length > 0;
-  if (hasExternalPackages && !options.sourceRevision) {
-    throw new Error(
-      `Source activity '${options.activityName}' declares external packages and requires a prepared sourceRevision; ambient node_modules are not execution inputs.`,
-    );
-  }
-  const sourceIdentity = options.sourceRevision
-    ? validateSourceRevisionContext({
-        manifest: options.manifest,
-        appDir: options.appDir,
-        sourceRevision: options.sourceRevision,
-      })
-    : null;
-  const manifest = sourceIdentity?.manifest || options.manifest;
-  if (sourceIdentity && isObjectRecord(initialDefinition?.entrypoint)) {
-    assertSourceRuntimeResolution(
-      path.resolve(options.appDir, initialDefinition.entrypoint.path),
-    );
-  }
-  const fn = hasExternalPackages
-    ? null
-    : createManifestActivityFunction({
-        manifest,
-        activityName: options.activityName,
-        appDir: options.appDir,
-      });
-  const { event, context } = cloneActivityInputs(options);
-  const { resources: baseResources, close } = await createActorSystemResources(
-    getManifestResourcesSpec(manifest),
-    options.resourceResolution,
+/**
+ * Execute one embedded manifest activity as a physical Protocol v1 attempt.
+ * @param {Record<string, any>} options - Invocation options with embedded execution identity.
+ * @returns {Promise<Readonly<import('./activity-attempt.js').ActivityAttemptEvidence>>} - Physical attempt evidence.
+ */
+export async function invokeEmbeddedManifestActivityAttempt(options) {
+  validateManifestActivityAttemptOptions(options);
+  const embedded = validateEmbeddedExecution(options.execution);
+  const definition = requireManifestActivityDefinition(
+    embedded.manifest,
+    options.activityName,
   );
+  assertNoLegacyAttemptResources(embedded.manifest, definition);
+  const invocation = cloneActivityAttemptInputs(options);
+  const startFrame = createEphemeralActivityAttemptStart({
+    revisionId: embedded.revision.revisionId,
+    activityName: options.activityName,
+    ...invocation,
+  });
+  return await WharfieFunction.runActivityAttempt(
+    options.activityName,
+    startFrame,
+  );
+}
+
+/**
+ * Execute one prepared source attempt between two source-revision checks.
+ * A local source snapshot is not immutable by itself: accepting an outcome
+ * after its bytes drifted would falsely bind that work to the old revision.
+ * @template T
+ * @param {{ verifyRuntime: () => Promise<void> }} source - Sealed source handle.
+ * @param {() => Promise<T>} execute - Attempt operation.
+ * @returns {Promise<T>} - Verified operation result.
+ */
+async function executeVerifiedPreparedSourceAttempt(source, execute) {
+  await source.verifyRuntime();
+
+  /** @type {T | undefined} */
+  let result;
+  /** @type {unknown} */
+  let executionFailure;
+  try {
+    result = await execute();
+  } catch (cause) {
+    executionFailure = cause;
+  }
 
   try {
-    let result;
-    if (sourceIdentity && hasExternalPackages) {
-      result = await invokePreparedSourceExternalActivity({
-        manifest: sourceIdentity.manifest,
-        revision: sourceIdentity.revision,
-        dependencyLock: sourceIdentity.dependencyLock,
-        appDir: options.appDir,
-        activityName: options.activityName,
-        event,
-        context,
-        baseResources,
-      });
-    } else {
-      if (!fn) {
-        throw new Error(
-          `Source activity '${options.activityName}' was not prepared for execution.`,
-        );
-      }
-      result = await fn.fn(event, context, { baseResources });
+    await source.verifyRuntime();
+  } catch (verificationFailure) {
+    if (executionFailure) {
+      throw new AggregateError(
+        [executionFailure, verificationFailure],
+        'The activity attempt failed and its prepared source revision changed while it ran.',
+      );
     }
-    return cloneJsonValue(result, 'Activity result');
-  } finally {
-    await Promise.allSettled([
-      close(),
-      fn && typeof fn.closeRuntimeResources === 'function'
-        ? fn.closeRuntimeResources()
-        : Promise.resolve(),
-    ]);
+    throw verificationFailure;
   }
+  if (executionFailure) throw executionFailure;
+  return /** @type {T} */ (result);
+}
+
+/**
+ * Execute one source or packaged activity as exactly one bounded physical
+ * Activity Protocol attempt. The returned evidence is not a durable result;
+ * callers that want a value must explicitly unwrap only a completed terminal.
+ * @param {{ activityName: string, input?: any, callerMetadata?: Record<string, any>, deadlineUnixMs?: number, execution: { kind: 'prepared-source', prepared: import('../../cli/app/compile-application-revision.js').PreparedApplicationRevision } | { kind: 'embedded', manifest: any, embeddedRevision: import('../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair } }} options - Bound invocation options.
+ * @returns {Promise<Readonly<import('./activity-attempt.js').ActivityAttemptEvidence>>} - Physical attempt evidence.
+ */
+export async function invokeManifestActivityAttempt(options) {
+  validateManifestActivityAttemptOptions(options);
+  if (
+    isObjectRecord(options.execution) &&
+    options.execution.kind === 'embedded'
+  ) {
+    return await invokeEmbeddedManifestActivityAttempt(options);
+  }
+
+  const source = validatePreparedSourceExecution(options.execution);
+  return await executeVerifiedPreparedSourceAttempt(source, async () => {
+    const definition = requireManifestActivityDefinition(
+      source.manifest,
+      options.activityName,
+    );
+    assertNoLegacyAttemptResources(source.manifest, definition);
+    assertSourceRuntimeResolution(
+      path.resolve(source.appDir, definition.entrypoint.path),
+    );
+    const invocation = cloneActivityAttemptInputs(options);
+    const startFrame = createEphemeralActivityAttemptStart({
+      revisionId: source.revision.revisionId,
+      activityName: options.activityName,
+      ...invocation,
+    });
+    const hasExternalPackages =
+      Array.isArray(definition.externalPackages) &&
+      definition.externalPackages.length > 0;
+    if (hasExternalPackages) {
+      return await invokePreparedSourceExternalActivity({
+        ...source,
+        activityName: options.activityName,
+        startFrame,
+      });
+    }
+    const fn = createManifestActivityFunction({
+      manifest: source.manifest,
+      activityName: options.activityName,
+      appDir: source.appDir,
+    });
+    return await fn.runActivityAttempt(startFrame);
+  });
+}
+
+/**
+ * Return only a successful physical attempt result. All other protocol
+ * terminals remain structured errors, preserving their status and evidence.
+ * @param {Readonly<Record<string, any>>} evidence - Physical attempt evidence.
+ * @returns {any} - Independently cloned completed result.
+ */
+export function unwrapCompletedActivityAttempt(evidence) {
+  if (!isObjectRecord(evidence) || !isObjectRecord(evidence.terminal)) {
+    throw new TypeError('Activity attempt evidence has no terminal frame.');
+  }
+  const terminal = validateActivityProtocolComponentFrame(
+    evidence.terminal,
+    'Activity attempt terminal',
+  );
+  if (terminal.type === 'completed') {
+    return cloneJsonValue(terminal.result, 'Activity result');
+  }
+  if (
+    !['failed', 'cancelled', 'deadline-exceeded', 'protocol-failed'].includes(
+      terminal.type,
+    )
+  ) {
+    throw new TypeError('Activity attempt evidence has an invalid terminal.');
+  }
+  const frozenEvidence = deepFreeze({
+    ...evidence,
+    terminal,
+  });
+  throw new ActivityAttemptOutcomeError(frozenEvidence);
+}
+
+/**
+ * Value-returning convenience API for one local physical attempt.
+ * @param {Parameters<typeof invokeManifestActivityAttempt>[0]} options - Bound invocation options.
+ * @returns {Promise<any>} - Completed JSON result.
+ */
+export async function invokeManifestActivity(options) {
+  return unwrapCompletedActivityAttempt(
+    await invokeManifestActivityAttempt(options),
+  );
 }
 
 /**
@@ -936,7 +1257,10 @@ export default {
   getManifestActivityNames,
   getManifestResourcesSpec,
   getQueueOperationId,
-  invokeEmbeddedManifestActivity,
+  ActivityAttemptOutcomeError,
+  invokeEmbeddedManifestActivityAttempt,
   invokeManifestActivity,
+  invokeManifestActivityAttempt,
   runPersistedActivity,
+  unwrapCompletedActivityAttempt,
 };

@@ -57,7 +57,8 @@ const runCommand = new Command('run')
     '--activity <activityName>',
     'Activity name declared in wharfie.app.js',
   )
-  .option('--event <json>', 'Activity event JSON (default: {})')
+  .option('--input <json>', 'Activity input JSON (default: {})')
+  .option('--caller-metadata <json>', 'Caller metadata JSON (default: {})')
   .option('--operation-id <operationId>', 'Override generated operation id')
   .action(async (options) => {
     try {
@@ -74,6 +75,23 @@ const runCommand = new Command('run')
         const { manifest } = loadedApp;
         const appId = manifest.app.id;
         const resourceId = getAppResourceId(appId);
+        const callerMetadata = parseJsonInput(
+          options.callerMetadata,
+          'caller metadata',
+          {},
+        );
+        if (
+          !callerMetadata ||
+          typeof callerMetadata !== 'object' ||
+          Array.isArray(callerMetadata)
+        ) {
+          throw new Error('Caller metadata JSON must be an object.');
+        }
+        if (Object.prototype.hasOwnProperty.call(callerMetadata, 'resources')) {
+          throw new Error(
+            'Caller metadata cannot supply resources; managed capabilities are not available yet.',
+          );
+        }
 
         /** @type {import('../../../core/lib/graph/operation.js').default} */
         let operation;
@@ -98,7 +116,8 @@ const runCommand = new Command('run')
             appId,
             revisionId,
             activityName,
-            event: parseJsonInput(options.event, 'event', {}),
+            event: parseJsonInput(options.input, 'input', {}),
+            context: callerMetadata,
             operationId: options.operationId,
             trigger: { source: 'manual' },
           });
@@ -165,17 +184,17 @@ const runCommand = new Command('run')
               `- ${action.id} (${action.type}:${action.function_name} attempt=${attemptCount})`,
             );
 
-            await preparedRevision.verifyRuntime();
+            const persistedOperation = await store.getOperation(
+              action.resource_id,
+              action.operation_id,
+            );
+            const persistedCallerMetadata =
+              persistedOperation?.operation_config?.context || callerMetadata;
             const outputs = await invokeManifestActivity({
-              manifest: preparedRevision.manifest,
-              appDir: preparedRevision.appDir,
-              sourceRevision: {
-                revision: preparedRevision.revision,
-                dependencyLock: preparedRevision.dependencyLock,
-              },
               activityName: action.function_name,
-              event: action.inputs ?? {},
-              context: {
+              input: action.inputs ?? {},
+              callerMetadata: {
+                ...persistedCallerMetadata,
                 operation: {
                   resourceId: action.resource_id,
                   operationId: action.operation_id,
@@ -186,8 +205,11 @@ const runCommand = new Command('run')
                   placement: action.placement,
                 },
               },
+              execution: {
+                kind: 'prepared-source',
+                prepared: preparedRevision,
+              },
             });
-            await preparedRevision.verifyRuntime();
 
             return {
               ok: true,

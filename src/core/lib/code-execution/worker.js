@@ -802,6 +802,7 @@ async function materializeExternalBundle(externalsTar) {
  * @property {string} [externalBundleDigest] - Expected external bundle content digest.
  * @property {Object<string,string>} [env] - env.
  * @property {ResourceRPCOptions} [rpc] - Optional RPC wiring for `context.resources.*`
+ * @property {string} [entrypointSymbol] - Private global symbol registry key to invoke while retaining the activity cache identity.
  */
 
 /**
@@ -815,8 +816,22 @@ async function runInSandbox(
   name,
   codeString,
   params,
-  { externalsTar, externalBundleDigest: expectedDigest, env = {}, rpc } = {},
+  {
+    externalsTar,
+    externalBundleDigest: expectedDigest,
+    env = {},
+    rpc,
+    entrypointSymbol,
+  } = {},
 ) {
+  if (
+    entrypointSymbol !== undefined &&
+    (typeof entrypointSymbol !== 'string' || entrypointSymbol.length === 0)
+  ) {
+    throw new TypeError(
+      'entrypointSymbol must be a nonempty string when provided.',
+    );
+  }
   const materializedExternals = await materializeExternalBundle(externalsTar);
   const externalBundleDigest = getExternalBundleDigest(materializedExternals);
   if (expectedDigest !== undefined && expectedDigest !== externalBundleDigest) {
@@ -921,7 +936,7 @@ async function runInSandbox(
         pkgFile: sb.pkgFile,
         env,
         __ENTRY_ARGS__,
-        functionName: name,
+        functionName: entrypointSymbol || name,
       });
     });
 

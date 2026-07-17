@@ -15,6 +15,7 @@ import {
   getBuildTargetId,
   validateBuildTarget,
 } from '../../runtime/build-target.js';
+import { getActivityAttemptProtocolSymbol } from '../../runtime/activity-attempt.js';
 import { cloneJsonObject } from '../../runtime/json-value.js';
 import { assertLogicalId } from '../../runtime/logical-id.js';
 
@@ -41,6 +42,23 @@ function getWharfiePublicAppEntrypoint() {
     );
   }
   return fileURLToPath(new URL('../../../app.js', moduleUrl));
+}
+
+/**
+ * Resolve the source-tree attempt adapter only while building a nested
+ * function bundle. As with the public app entrypoint above, doing this at
+ * module initialization would make packaged CommonJS/SEA boot depend on a
+ * filesystem-style file URL.
+ * @returns {string} - Absolute source module path.
+ */
+function getWharfieActivityAttemptEntrypoint() {
+  const moduleUrl = import.meta.url;
+  if (typeof moduleUrl !== 'string' || !moduleUrl.startsWith('file:')) {
+    throw new Error(
+      'This packaged Wharfie runtime cannot resolve source activity-attempt modules.',
+    );
+  }
+  return fileURLToPath(new URL('../../runtime/activity-attempt.js', moduleUrl));
 }
 
 /**
@@ -185,15 +203,48 @@ class FunctionResource extends BuildResource {
   async esbuild(inputs = this.captureBuildInputs()) {
     const functionName = inputs.functionName;
     const exportName = String(inputs.entrypoint.export || 'default');
+    const activityAttemptSymbol =
+      getActivityAttemptProtocolSymbol(functionName);
     const entryCode = `
       import * as activityModule from ${JSON.stringify(inputs.entrypoint.path)};
+      import { runNodeActivityAttempt } from ${JSON.stringify(
+        getWharfieActivityAttemptEntrypoint(),
+      )};
       const entrypoint = activityModule[${JSON.stringify(exportName)}];
       if (typeof entrypoint !== 'function') {
         throw new TypeError(${JSON.stringify(
           `Activity '${functionName}' export '${exportName}' is not a function.`,
         )});
       }
+      const runActivityAttempt = (request) => {
+        if (
+          request === null ||
+          typeof request !== 'object' ||
+          Array.isArray(request) ||
+          !Object.prototype.hasOwnProperty.call(request, 'startFrame') ||
+          Object.keys(request).length !== 1
+        ) {
+          throw new TypeError(${JSON.stringify(
+            `Activity '${functionName}' protocol wrapper expects exactly { startFrame }.`,
+          )});
+        }
+        if (
+          request.startFrame === null ||
+          typeof request.startFrame !== 'object' ||
+          Array.isArray(request.startFrame) ||
+          request.startFrame.activityId !== ${JSON.stringify(functionName)}
+        ) {
+          throw new TypeError(${JSON.stringify(
+            `Activity '${functionName}' protocol wrapper requires startFrame.activityId to match its selected entrypoint.`,
+          )});
+        }
+        return runNodeActivityAttempt({
+          startFrame: request.startFrame,
+          handler: entrypoint,
+        });
+      };
       globalThis[Symbol.for(${JSON.stringify(functionName)})] = entrypoint;
+      globalThis[Symbol.for(${JSON.stringify(activityAttemptSymbol)})] = runActivityAttempt;
     `;
     const resolveDir = dirname(inputs.entrypoint.path);
     const { outputFiles, errors, warnings } = await build({

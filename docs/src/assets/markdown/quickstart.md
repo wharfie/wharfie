@@ -20,10 +20,10 @@ the project reset. The examples below use `wharfie` as shorthand for
 ## Create an app
 
 Create a `wharfie.app.js` beside your TypeScript or JavaScript sources. The
-manifest identifies the developer-owned CLI, named activities, runtime
-resources, and package targets. Its default export must be a plain object using
-the exact v2 schema; unknown or malformed fields are errors. Wharfie does not
-require a generated project tree. See [Application
+manifest identifies the developer-owned CLI, named activities, and package
+targets. Its default export must be a plain object using the exact v2
+schema; unknown or malformed fields are errors. Wharfie does not require a
+generated project tree. See [Application
 Structure](./project-structure) for a minimal layout. The
 `@wharfie/wharfie/app` subpath ships TypeScript declarations for the manifest
 helper and activity invocation API.
@@ -66,19 +66,60 @@ case: `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`, with at most 63 ASCII bytes. Wharfie
 rejects whitespace, uppercase letters, underscores, dots, and leading digits;
 it never trims or case-folds an ID.
 
+An activity export has the `(input, runtime)` ABI. `input` is the strict JSON
+value supplied by its caller; `runtime.caller.metadata` is separate trusted
+caller metadata; and `runtime.invocation` identifies the immutable revision,
+run, invocation, physical attempt, and fencing token. Activity code should use
+`runtime.logger` for structured logs. `runtime.signal` is reserved for host
+cancellation; public source/SEA invocation does not yet expose cancellation
+until the worker transport is framed. The initial Activity Protocol v1
+execution path does not inject resource handles or managed effects.
+
+```ts
+import type { ActivityHandler } from '@wharfie/wharfie/app';
+
+type Greeting = { name: string };
+type GreetingResult = { message: string };
+type CallerMetadata = { requestId: string };
+
+export const greet: ActivityHandler<
+  Greeting,
+  GreetingResult,
+  CallerMetadata
+> = async (input, runtime) => {
+  runtime.logger.info('Greeting requested', {
+    requestId: runtime.caller.metadata.requestId,
+    invocationId: runtime.invocation.invocationId,
+  });
+  return { message: `Hello, ${input.name}!` };
+};
+```
+
 From the developer-owned CLI, invoke the same named activity locally and in the
 packaged executable:
 
 ```ts
 import { invokeActivity } from '@wharfie/wharfie/app';
+import { randomUUID } from 'node:crypto';
 
 export async function launch(argv: string[] = process.argv) {
-  const result = await invokeActivity('greet', {
-    event: { name: argv[2] ?? 'world' },
+  const result = await invokeActivity<
+    { message: string },
+    { name: string },
+    { requestId: string }
+  >('greet', {
+    input: { name: argv[2] ?? 'world' },
+    callerMetadata: { requestId: randomUUID() },
+    deadlineUnixMs: Date.now() + 30_000,
   });
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 ```
+
+`input` and `callerMetadata` must be JSON values (with metadata specifically a
+JSON object). `deadlineUnixMs`, when supplied, is a positive safe Unix epoch
+millisecond value. The former `event` and `context` option names are not part
+of the v2 activity API.
 
 ## Inspect the app manifest
 
@@ -91,13 +132,13 @@ wharfie app manifest ./path/to/app
 ## Run a local activity
 
 ```bash
-wharfie app run <activity-id> --dir ./path/to/app --event '{"who":"cli-user"}'
+wharfie app run <activity-id> --dir ./path/to/app --input '{"who":"cli-user"}'
 ```
 
 To create a persisted local operation for an activity, use `wharfie ops`:
 
 ```bash
-wharfie ops run --activity <activity-id> --dir ./path/to/app --event '{"who":"cli-user"}'
+wharfie ops run --activity <activity-id> --dir ./path/to/app --input '{"who":"cli-user"}'
 wharfie ops list --dir ./path/to/app
 ```
 

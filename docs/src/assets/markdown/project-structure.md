@@ -48,31 +48,23 @@ export default {
 };
 ```
 
-`schemaVersion`, `app`, and `cli` are required. `activities`, `resources`, and
-`targets` are optional, although packaging requires a nonempty target list. All
-entrypoints currently use `{ kind: 'node', path, export }`; both `path` and the
-named `export` are required.
+`schemaVersion`, `app`, and `cli` are required. `activities` and `targets` are
+optional, although packaging requires a nonempty target list. All entrypoints
+currently use `{ kind: 'node', path, export }`; both `path` and the named
+`export` are required.
 
 Logical IDs match `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$` and contain at most 63
 ASCII bytes. The compiler rejects aliases and unknown fields instead of
 normalizing them. The v2 schema has no `ActorSystem`, `functions`,
 `capabilities`, workflows, scheduler, or public packaging/signing section.
 
-Only these portable resource bindings are public today:
+The schema still recognizes historical `resources` fields so existing sealed
+artifacts can be inspected safely, but Activity Protocol v1 rejects every
+nonempty application or activity resource declaration. Do not author resource
+injection for new applications: it will return no durable-effect guarantee.
+Managed capability effects will replace that surface in a later milestone.
 
-```js
-resources: {
-  db: { adapter: 'vanilla', options: { path: './data/db' } },
-  queue: { adapter: 'sqs', options: { region: 'us-east-1' } },
-  objectStorage: { adapter: 's3', options: { region: 'us-east-1' } },
-},
-```
-
-Database adapters are `vanilla` or `dynamodb`, queue adapters are `vanilla` or
-`sqs`, and object-storage adapters are `vanilla` or `s3`. Resource options are
-limited to the documented `path` and `region` fields and must not contain
-credentials or secrets. An activity may declare the same `resources` map and
-may pin target-specific dependencies with exact published versions:
+An activity may pin target-specific dependencies with exact published versions:
 
 ```js
 externalPackages: [{ name: 'sharp', version: '0.34.4' }],
@@ -80,6 +72,13 @@ externalPackages: [{ name: 'sharp', version: '0.34.4' }],
 
 External package entries use lowercase npm registry names and must be unique
 and sorted by name.
+
+Activity exports use `(input, runtime)`, rather than the former `(event,
+context)` convention. `runtime.caller.metadata` carries caller-supplied JSON
+metadata separately from `input`, while `runtime.invocation` supplies immutable
+revision, run, invocation, attempt, and fencing identities. The initial
+Activity Protocol v1 path deliberately provides neither injected resource
+handles nor managed effects.
 
 Use `wharfie app manifest ./path/to/app` to inspect the compiled manifest,
 `wharfie app run sync --dir ./path/to/app` to invoke an activity locally, and

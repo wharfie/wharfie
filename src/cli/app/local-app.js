@@ -17,6 +17,7 @@ import {
   ARTIFACT_RUNTIME_KIND,
   ARTIFACT_RUNTIME_SCHEMA_VERSION,
   createEmbeddedRevisionRuntimeAssets,
+  readEmbeddedRevisionRuntimePair,
   stringifyEmbeddedApplicationRevision,
   stringifyEmbeddedArtifactRuntime,
 } from '../../core/resources/builds/lib/revision-runtime-assets.js';
@@ -51,8 +52,8 @@ import { loadApp } from './load-app.js';
  * @property {string} [dir] - App directory.
  * @property {boolean} [allowEmbedded] - Fall back to the embedded SEA app manifest when no local app exists.
  * @property {string} [activityName] - Activity name.
- * @property {string | undefined} [eventInput] - Event JSON string.
- * @property {string | undefined} [contextInput] - Context JSON string.
+ * @property {string | undefined} [inputInput] - Activity input JSON string.
+ * @property {string | undefined} [callerMetadataInput] - Caller metadata JSON string.
  * @property {string | undefined} [stdinInput] - STDIN payload.
  */
 
@@ -61,6 +62,7 @@ import { loadApp } from './load-app.js';
  * @property {string} [appDir] - Source application directory.
  * @property {any} manifest - manifest.
  * @property {'disk' | 'embedded'} source - source.
+ * @property {import('../../core/resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair} [embeddedRevision] - SEA revision/runtime identity.
  */
 
 /**
@@ -199,10 +201,14 @@ function isMissingEmbeddedAppError(error) {
  * @returns {Promise<LoadedAppForCommand>} - Result.
  */
 async function loadEmbeddedAppForCommand() {
-  const manifest = await readEmbeddedAppManifest();
+  const [manifest, embeddedRevision] = await Promise.all([
+    readEmbeddedAppManifest(),
+    readEmbeddedRevisionRuntimePair(),
+  ]);
   return {
     manifest,
     source: 'embedded',
+    embeddedRevision,
   };
 }
 
@@ -1245,21 +1251,33 @@ export async function runLocalApp(options) {
   });
   const { manifest } = loaded;
   const activityName = resolveActivityName(options, manifest);
-  const eventSource = options.eventInput ?? options.stdinInput;
-  const event = parseJsonInput(eventSource, 'event', {});
-  const context = parseJsonInput(options.contextInput, 'context', {});
+  const inputSource = options.inputInput ?? options.stdinInput;
+  const input = parseJsonInput(inputSource, 'input', {});
+  const callerMetadata = parseJsonInput(
+    options.callerMetadataInput,
+    'caller metadata',
+    {},
+  );
 
-  if (!isObjectRecord(context)) {
-    throw new Error('Context JSON must be an object.');
+  if (!isObjectRecord(callerMetadata)) {
+    throw new Error('Caller metadata JSON must be an object.');
   }
 
   if (loaded.source === 'embedded') {
+    if (!loaded.embeddedRevision) {
+      throw new Error(
+        'Embedded app loading did not return immutable revision metadata.',
+      );
+    }
     const result = await invokeManifestActivity({
-      manifest,
       activityName,
-      event,
-      context,
-      executionMode: 'embedded',
+      input,
+      callerMetadata,
+      execution: {
+        kind: 'embedded',
+        manifest,
+        embeddedRevision: loaded.embeddedRevision,
+      },
     });
     return { manifest, result };
   }
@@ -1273,20 +1291,12 @@ export async function runLocalApp(options) {
     manifest,
   });
   try {
-    await preparedRevision.verifyRuntime();
     const result = await invokeManifestActivity({
-      manifest: preparedRevision.manifest,
-      appDir: preparedRevision.appDir,
-      sourceRevision: {
-        revision: preparedRevision.revision,
-        dependencyLock: preparedRevision.dependencyLock,
-      },
       activityName,
-      event,
-      context,
-      executionMode: 'source',
+      input,
+      callerMetadata,
+      execution: { kind: 'prepared-source', prepared: preparedRevision },
     });
-    await preparedRevision.verifyRuntime();
     return {
       manifest: preparedRevision.manifest,
       result,

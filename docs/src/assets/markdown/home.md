@@ -28,7 +28,7 @@ roadmap work; Wharfie is not production ready.
 
 ```bash
 wharfie app manifest ./path/to/app
-wharfie app run <activity-id> --dir ./path/to/app --event '{"who":"cli-user"}'
+wharfie app run <activity-id> --dir ./path/to/app --input '{"who":"cli-user"}'
 wharfie app package ./path/to/app
 ```
 

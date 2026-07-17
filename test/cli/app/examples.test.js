@@ -1,6 +1,8 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,8 +19,8 @@ describe('schemaVersion 2 app demos', () => {
     const { manifest, result } = await runLocalApp({
       dir,
       activityName: 'echo-event',
-      eventInput: JSON.stringify({ who: 'jest', message: 'demo' }),
-      contextInput: JSON.stringify({ requestId: 'req-123' }),
+      inputInput: JSON.stringify({ who: 'jest', message: 'demo' }),
+      callerMetadataInput: JSON.stringify({ requestId: 'req-123' }),
     });
 
     expect(manifest).toEqual({
@@ -40,33 +42,12 @@ describe('schemaVersion 2 app demos', () => {
           libc: 'glibc',
         },
       ],
-      resources: {
-        db: {
-          adapter: 'vanilla',
-          options: { path: 'tmp/wharfie-examples/hello-world' },
-        },
-        queue: {
-          adapter: 'vanilla',
-          options: { path: 'tmp/wharfie-examples/hello-world' },
-        },
-        objectStorage: {
-          adapter: 'vanilla',
-          options: { path: 'tmp/wharfie-examples/hello-world' },
-        },
-      },
       activities: {
         'echo-event': {
           entrypoint: {
             kind: 'node',
             path: 'activities.js',
             export: 'echoEvent',
-          },
-        },
-        'hello-resources': {
-          entrypoint: {
-            kind: 'node',
-            path: 'activities.js',
-            export: 'helloResources',
           },
         },
       },
@@ -79,24 +60,48 @@ describe('schemaVersion 2 app demos', () => {
     });
   });
 
-  it('runs the resource-backed hello-world activity through the local runner', async () => {
-    const dir = path.join(examplesDir, 'apps', 'hello-world');
-    const { result } = await runLocalApp({
-      dir,
-      activityName: 'hello-resources',
-      eventInput: JSON.stringify({ who: 'demo-user' }),
-    });
+  it('rejects legacy resource declarations on the Activity Protocol path', async () => {
+    const dir = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-resource-rejection-example-'),
+    );
+    try {
+      writeFileSync(
+        path.join(dir, 'package.json'),
+        JSON.stringify({ private: true, type: 'module' }),
+      );
+      writeFileSync(
+        path.join(dir, 'cli.js'),
+        'export async function main() {}\n',
+      );
+      writeFileSync(
+        path.join(dir, 'activity.js'),
+        'export async function inspect() { return { ok: true }; }\n',
+      );
+      writeFileSync(
+        path.join(dir, 'wharfie.app.js'),
+        `export default {
+  schemaVersion: 2,
+  app: { id: 'resource-rejection-example' },
+  cli: { entrypoint: { kind: 'node', path: './cli.js', export: 'main' } },
+  resources: { db: { adapter: 'vanilla' } },
+  activities: {
+    inspect: {
+      entrypoint: { kind: 'node', path: './activity.js', export: 'inspect' },
+    },
+  },
+};\n`,
+      );
 
-    expect(result).toMatchObject({
-      who: 'demo-user',
-      dbRecord: {
-        id: 'greeting',
-        who: 'demo-user',
-        message: 'hello demo-user',
-      },
-      queueBody: JSON.stringify({ hello: 'demo-user' }),
-      objectBody: 'hello demo-user',
-    });
+      await expect(
+        runLocalApp({
+          dir,
+          activityName: 'inspect',
+          inputInput: JSON.stringify({ who: 'demo-user' }),
+        }),
+      ).rejects.toThrow(/does not yet support manifest resources/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('invokes a named source activity through the public app API', async () => {
@@ -105,8 +110,8 @@ describe('schemaVersion 2 app demos', () => {
     await expect(
       invokeActivity('echo-event', {
         dir,
-        event: { who: 'public-api' },
-        context: { requestId: 'req-public-api' },
+        input: { who: 'public-api' },
+        callerMetadata: { requestId: 'req-public-api' },
       }),
     ).resolves.toEqual({
       ok: true,
@@ -116,33 +121,32 @@ describe('schemaVersion 2 app demos', () => {
     });
   });
 
-  it('merges caller context over canonical app resources', async () => {
-    const dir = path.join(examplesDir, 'apps', 'context-override');
-    const { manifest, result } = await runLocalApp({
-      dir,
-      activityName: 'inspect-context',
-      contextInput: JSON.stringify({
-        requestId: 'req-456',
-        resources: {
-          queue: { adapter: 'injected-queue' },
-          extra: { note: 'user-provided' },
-        },
-      }),
-    });
+  it('rejects the obsolete event/context public invocation fields', async () => {
+    const dir = path.join(examplesDir, 'apps', 'hello-world');
 
-    expect(manifest.app).toEqual({ id: 'context-override-demo' });
-    expect(manifest.resources).toEqual({
-      db: {
-        adapter: 'vanilla',
-        options: { path: 'tmp/wharfie-examples/context-override' },
-      },
-    });
-    expect(result).toEqual({
-      requestId: 'req-456',
-      resourceKeys: ['db', 'extra', 'queue'],
-      dbPresent: true,
-      queueAdapter: 'injected-queue',
-      extraNote: 'user-provided',
-    });
+    await expect(
+      invokeActivity(
+        'echo-event',
+        /** @type {any} */ ({ dir, event: { who: 'legacy' } }),
+      ),
+    ).rejects.toThrow('invokeActivity.event is not supported');
+  });
+
+  it('rejects caller-supplied legacy resources instead of merging them', async () => {
+    const dir = path.join(examplesDir, 'apps', 'hello-world');
+
+    await expect(
+      runLocalApp({
+        dir,
+        activityName: 'echo-event',
+        callerMetadataInput: JSON.stringify({
+          requestId: 'req-456',
+          resources: {
+            queue: { adapter: 'injected-queue' },
+            extra: { note: 'user-provided' },
+          },
+        }),
+      }),
+    ).rejects.toThrow(/caller metadata cannot supply resources/i);
   });
 });

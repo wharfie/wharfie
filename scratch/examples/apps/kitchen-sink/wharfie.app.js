@@ -5,12 +5,6 @@ import {
   kitchenSinkExternalDependencies,
 } from './config.js';
 
-const createVanillaResources = (resourcePath) => ({
-  db: { adapter: 'vanilla', options: { path: resourcePath } },
-  queue: { adapter: 'vanilla', options: { path: resourcePath } },
-  objectStorage: { adapter: 'vanilla', options: { path: resourcePath } },
-});
-
 export default defineApp({
   schemaVersion: 2,
   app: { id: 'kitchen-sink-demo' },
@@ -22,7 +16,6 @@ export default defineApp({
     },
   },
   targets: kitchenSinkDefaultTargets,
-  resources: createVanillaResources('tmp/wharfie-examples/kitchen-sink/system'),
   activities: {
     start: {
       entrypoint: {
@@ -31,9 +24,6 @@ export default defineApp({
         export: 'start',
       },
       externalPackages: kitchenSinkExternalDependencies,
-      resources: createVanillaResources(
-        'tmp/wharfie-examples/kitchen-sink/activity',
-      ),
     },
   },
 });

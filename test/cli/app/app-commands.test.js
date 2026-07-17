@@ -43,15 +43,17 @@ function runCli(args, options = {}) {
 }
 
 describe('wharfie app commands', () => {
-  it('runs a demo activity from the CLI with --event JSON', () => {
+  it('runs a demo activity from the CLI with --input JSON', () => {
     const result = runCli([
       'app',
       'run',
       'echo-event',
       '--dir',
       helloWorldDir,
-      '--event',
+      '--input',
       '{"who":"cli-user"}',
+      '--caller-metadata',
+      '{"requestId":"cli-request"}',
       '--no-pretty',
     ]);
 
@@ -61,26 +63,23 @@ describe('wharfie app commands', () => {
       ok: true,
       who: 'cli-user',
       message: 'hello cli-user',
-      requestId: null,
+      requestId: 'cli-request',
     });
   });
 
-  it('runs a demo activity from the CLI using stdin JSON as the event', () => {
+  it('runs a demo activity from the CLI using stdin JSON as input', () => {
     const result = runCli(
-      ['app', 'run', 'hello-resources', '--dir', helloWorldDir, '--no-pretty'],
+      ['app', 'run', 'echo-event', '--dir', helloWorldDir, '--no-pretty'],
       { input: '{"who":"stdin-user"}' },
     );
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe('');
-    expect(JSON.parse(result.stdout)).toMatchObject({
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: true,
       who: 'stdin-user',
-      dbRecord: {
-        id: 'greeting',
-        message: 'hello stdin-user',
-      },
-      queueBody: JSON.stringify({ hello: 'stdin-user' }),
-      objectBody: 'hello stdin-user',
+      message: 'hello stdin-user',
+      requestId: null,
     });
   });
 
@@ -100,11 +99,6 @@ describe('wharfie app commands', () => {
           export: 'start',
           path: 'activity.js',
         },
-        resources: expect.objectContaining({
-          db: expect.objectContaining({ adapter: 'vanilla' }),
-          queue: expect.objectContaining({ adapter: 'vanilla' }),
-          objectStorage: expect.objectContaining({ adapter: 'vanilla' }),
-        }),
         externalPackages: kitchenSinkExternalDependencies,
       }),
     });
