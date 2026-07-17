@@ -33,11 +33,11 @@ commands.
 
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
-The repository contains useful runtime and Node SEA packaging foundations. The
-abandoned v1 source and dependency graph have been deleted, but the public
-manifest, durable execution model, and release boundary still need focused
-review. The npm package remains deliberately private. It is not ready for
-production use.
+The abandoned v1 source and dependency graph have been deleted. The strict v2
+manifest and an atomic, fenced named-activity snapshot store are now defined,
+but the final run → invocation → attempt → effect ledger, recovery semantics,
+and release boundary still need focused review. The npm package remains
+deliberately private. It is not ready for production use.
 
 ## Start here
 
@@ -47,7 +47,8 @@ production use.
 - [July 2026 checkpoint](llm/checkpoints/2026-07-16-project-reset.md) — immutable historical evidence of the pre-reset state and conversation handoff.
 - [Packaging salvage checkpoint](llm/checkpoints/2026-07-16-packaging-salvage.md) — historical first implementation proof and the release blockers that existed before v1 deletion.
 - [V1 deletion checkpoint](llm/checkpoints/2026-07-16-v1-deletion.md) — historical deletion boundary and evidence.
-- [Strict v2 manifest checkpoint](llm/checkpoints/2026-07-16-strict-v2-manifest.md) — current restart point, verification evidence, remaining hard edges, and ordered next work.
+- [Strict v2 manifest checkpoint](llm/checkpoints/2026-07-16-strict-v2-manifest.md) — historical strict public-boundary handoff.
+- [Atomic operation-store checkpoint](llm/checkpoints/2026-07-16-atomic-operation-store.md) — current restart point, verification evidence, remaining hard edges, and ordered next work.
 
 The charter and accepted decisions are authoritative; the roadmap is expected to evolve, and dated checkpoints are historical snapshots. Older material under `docs/` and `llm/design/` describes prior iterations and can be stale.
 

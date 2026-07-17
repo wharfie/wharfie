@@ -135,10 +135,10 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 ## Immediate queue
 
-1. Review and merge the stacked reset, inventory, packaging, v1-deletion, and strict-manifest changes.
+1. Review and merge the stacked reset, inventory, packaging, v1-deletion, strict-manifest, and atomic-operation-store changes.
 2. Restore GitHub authentication and execute the archived branch, PR, and issue cleanup decisions.
-3. Run the strict stack through the clean Linux SEA proof in hosted CI and review the resulting narrow boundary.
+3. Run the current stack through the clean Linux SEA proof in hosted CI and review the resulting narrow boundary.
 4. Define schemas and stable identifiers for immutable logical revisions, target-specific artifacts, and deployment profiles.
 5. Decide the durable workflow model and define the run → invocation → attempt → effect ledger before adding schedules or workflows.
 
-The latest dated handoff at [llm/checkpoints/2026-07-16-strict-v2-manifest.md](llm/checkpoints/2026-07-16-strict-v2-manifest.md) contains exact repository state and restart instructions.
+The latest dated handoff at [llm/checkpoints/2026-07-16-atomic-operation-store.md](llm/checkpoints/2026-07-16-atomic-operation-store.md) contains exact repository state and restart instructions.
