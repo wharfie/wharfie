@@ -1,10 +1,10 @@
 # Cleanup inventory and execution plan
 
-**Status:** approved and partially executed · **Captured:** 2026-07-16 · **Execution update:** 2026-07-17
+**Status:** cleanup executed; umbrella PR open · **Captured:** 2026-07-16 · **Execution update:** 2026-07-17
 
-This document turns the preserved pre-reset repository and tracker state into explicit keep, supersede, replace, and delete decisions. It is deliberately non-destructive: no legacy PR or issue was closed and no remote branch was deleted while producing it.
+This document turned the preserved pre-reset repository and tracker state into explicit keep, supersede, replace, and delete decisions. It was produced non-destructively; the execution record below now documents the separately authorized mutations that followed.
 
-This inventory records proposed actions; it grants no authority to a future session. Confirm that the current user request authorizes external GitHub mutations before executing them.
+The decisions below are an audit record, not standing authority for future GitHub mutations. Confirm that a current user request authorizes any new external cleanup before acting.
 
 ## Execution update — 2026-07-17
 
@@ -12,12 +12,17 @@ The user authorized the current session to commit, push, and work through this c
 
 - All 15 remote archive tags were reverified immediately before publication; every peeled target still matches the preservation checkpoint.
 - The three unpublished packaging commits were salvaged and cleaned, the useful `jvd/pr4` behavior was reimplemented, v1 was deleted, and the strict manifest, atomic operation boundary, type-safety salvage, and immutable identity/provenance spine were completed on `agent/strict-manifest`.
-- `agent/strict-manifest` was published through checkpoint commit `692b198` before this inventory was reconciled into the stack.
-- The legacy PRs/issues and remote branches had not yet been closed or deleted at the moment of this update. Create replacement issues before closing their predecessors, and verify each live branch against its archive tag immediately before deletion.
+- `agent/strict-manifest` was published through cleanup commit `25d40d4` in umbrella draft PR [#125](https://github.com/wharfie/wharfie/pull/125).
+- The reset and inventory staging tips were preserved under verified annotated `archive/2026-07-17/staging/...` tags. PRs #123 and #124 were then closed as superseded and both staging branches were deleted.
+- PRs #100, #99, and #25 were closed with exact archive and supersession notes. PR #125 is the only open pull request.
+- Four roadmap milestones were created. Replacement issues #126–#132 were created first; all 24 legacy issues were then closed with duplicate or not-planned reasons and preservation context. The seven replacements are the only open issues.
+- Every superseded branch was compared with its peeled archive target immediately before deletion. The only live remote head names are `master` and `agent/strict-manifest`; cleanup commit `25d40d4` is on the active branch.
+- The local-only unpublished-master and stash tags remain local and were not pushed.
 
 - Reset base: `f31595a6048a2aa1593a4d9023c6d82cff01a823`
 - Project-reset commit: `0ac89a181114c1e3c6bd2130b0cef08145dbc7c2`
-- Reset PR: [#123](https://github.com/wharfie/wharfie/pull/123)
+- Umbrella reset PR: [#125](https://github.com/wharfie/wharfie/pull/125)
+- Historical reset PR: [#123](https://github.com/wharfie/wharfie/pull/123) (closed; staged tip archived)
 - Preservation record: [the July project checkpoint](../../llm/checkpoints/2026-07-16-project-reset.md)
 - Remote archive namespace: `archive/2026-07-16/remote/...`
 
@@ -114,12 +119,14 @@ Do not remove this checkout's local archive tags until the salvaged implementati
 
 ## Pull request decisions
 
-| PR                                                                                  | Decision                                           | Evidence and closure action                                                                                                                                                                                             |
-| ----------------------------------------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [#123](https://github.com/wharfie/wharfie/pull/123) — project reset                 | **Keep; resolve checks, then merge after review.** | Clean one-commit scope and mergeable. The GitHub Actions `build` passes; external `RWX: push.yaml (push)` currently fails, and its logs are not available through GitHub. This plan is stacked on it.                   |
-| [#100](https://github.com/wharfie/wharfie/pull/100) — actor system / graph refactor | **Close superseded.**                              | Conflicted 166-commit/570-file parallel history; 133 patch-equivalent commits and the useful tail was subsequently moved/hardened by #101, #105, #121, and #122. Archive: `archive/2026-07-16/remote/jvd/side-effects`. |
-| [#99](https://github.com/wharfie/wharfie/pull/99) — Node entitlements               | **Close already absorbed/superseded.**             | Its deleted-`build.js` change is already present in the current macOS signer. Archive: `archive/2026-07-16/remote/jvd/entitlements`.                                                                                    |
-| [#25](https://github.com/wharfie/wharfie/pull/25) — Rust ANTLR                      | **Close obsolete/DNM.**                            | Entirely abandoned Athena parser code; ADR 0005 preserves the valid component-boundary idea without this implementation. Archive: `archive/2026-07-16/remote/jvd/rust-antlr`.                                           |
+| PR                                                                                  | Decision                                      | Evidence and closure action                                                                                                                                                                                             |
+| ----------------------------------------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [#125](https://github.com/wharfie/wharfie/pull/125) — umbrella reset                | **Keep open; repair CI, review, then merge.** | Sole open draft PR, containing the reset documentation and implementation stack. GitHub Actions currently exposes the undeclared TypeScript-ESLint parser; the external RWX failure has no actionable GitHub log.       |
+| [#123](https://github.com/wharfie/wharfie/pull/123) — project reset                 | **Closed; incorporated into #125.**           | Its exact tip is preserved at `archive/2026-07-17/staging/agent-project-reset`; the reset documentation now travels with the implementation stack in umbrella draft PR #125.                                            |
+| [#124](https://github.com/wharfie/wharfie/pull/124) — cleanup inventory             | **Closed; incorporated into #125.**           | Its exact tip is preserved at `archive/2026-07-17/staging/agent-cleanup-inventory`; commit `25d40d4` reconciles the inventory into the umbrella stack.                                                                  |
+| [#100](https://github.com/wharfie/wharfie/pull/100) — actor system / graph refactor | **Closed superseded.**                        | Conflicted 166-commit/570-file parallel history; 133 patch-equivalent commits and the useful tail was subsequently moved/hardened by #101, #105, #121, and #122. Archive: `archive/2026-07-16/remote/jvd/side-effects`. |
+| [#99](https://github.com/wharfie/wharfie/pull/99) — Node entitlements               | **Closed absorbed/superseded.**               | Its deleted-`build.js` change is already present in the current macOS signer. Archive: `archive/2026-07-16/remote/jvd/entitlements`.                                                                                    |
+| [#25](https://github.com/wharfie/wharfie/pull/25) — Rust ANTLR                      | **Closed obsolete/DNM.**                      | Entirely abandoned Athena parser code; ADR 0005 preserves the valid component-boundary idea without this implementation. Archive: `archive/2026-07-16/remote/jvd/rust-antlr`.                                           |
 
 Suggested PR closure notes:
 
@@ -131,7 +138,7 @@ For #25, replace the final sentence with:
 
 ## Issue decisions
 
-The tracker contained 24 open issues with no labels or milestones. The proposed result is seven new scope-correct issues and no remaining v1 issues.
+Before execution, the tracker contained 24 open issues with no labels or milestones. The resulting tracker has seven scope-correct issues, each labeled and assigned to a roadmap milestone, and no remaining open v1 issue.
 
 | Old issue                                                                     | Decision       | Destination or rationale                                                                       |
 | ----------------------------------------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------- |
@@ -164,43 +171,43 @@ The tracker contained 24 open issues with no labels or milestones. The proposed 
 
 Create replacements before closing any issue that points to them.
 
-### N1 — Make provider identity bootstrap and credential refresh resilient
+### N1 — [Make provider identity bootstrap and credential refresh resilient](https://github.com/wharfie/wharfie/issues/126)
 
 - **Milestone:** M4 — self-deployment and capability fulfillment
 - **Replaces:** #83 and #84
 - **Acceptance:** operator credentials come only from normal provider chains and are never embedded; runtime identity is least-privilege and refreshable; reconciliation handles identity propagation with bounded observable retries; expiry/rotation tests prove recovery without duplicate provisioning.
 
-### N2 — Define canonical logical IDs and collision-free managed namespaces
+### N2 — [Define collision-free managed namespaces around canonical logical IDs](https://github.com/wharfie/wharfie/issues/127)
 
-- **Milestone:** M2 — one portable application
+- **Milestone:** M4 — self-deployment and capability fulfillment
 - **Replaces:** #64, #49, and #17
-- **Acceptance:** define grammar, normalization, scope, and uniqueness for application/activity/deployment IDs; reject duplicates; separate logical IDs from provider physical names; make managed artifact/control-state keys provably disjoint from user-owned namespaces; test collisions and stable serialization round trips.
+- **Acceptance:** build on the canonical application, activity, and deployment-profile IDs now established in M2; define collision-resistant provider physical-name derivation and scope; make managed artifact/control-state keys provably disjoint from user-owned namespaces; test truncation, normalization, collision, and stable serialization behavior across providers.
 
-### N3 — Make managed-resource ownership and destroy behavior data-safe
+### N3 — [Make managed-resource ownership and destroy behavior data-safe](https://github.com/wharfie/wharfie/issues/128)
 
 - **Milestone:** M4 — self-deployment and capability fulfillment
 - **Replaces:** #51, #33, and #23
 - **Acceptance:** record ownership receipts and provider markings; distinguish managed from external resources; never destroy unproven/external resources; make reconcile/destroy retry-safe; require explicit retention or purge policy for non-empty state; verify cleanup without silent data loss.
 
-### N4 — Deploy immutable application revision artifacts without rebuilding
+### N4 — [Deploy immutable application revision artifacts without rebuilding](https://github.com/wharfie/wharfie/issues/132)
 
 - **Milestone:** M4 — self-deployment and capability fulfillment, with an M2 artifact-identity prerequisite
 - **Replaces:** #50
 - **Acceptance:** M2 produces one content-addressed artifact per revision/target, binds digest/provenance to revision metadata, and verifies it locally. M4 package/deploy/install consumes and verifies that exact digest without rebuilding; changed inputs require a new revision/artifact.
 
-### N5 — Prove durable failure, retry, and uncertain-effect recovery
+### N5 — [Prove durable failure, retry, and uncertain-effect recovery](https://github.com/wharfie/wharfie/issues/129)
 
 - **Milestone:** M3 — one durable node
 - **Replaces:** #7; subsumes the general durable-failure concern behind #10
 - **Acceptance:** deterministic crash/lease-loss tests cover every commit boundary; replay-safe work retries by policy; begun unsafe work blocks as `uncertain`; no durably accepted invocation is lost and no conflicting terminal outcome commits; human and JSON operations expose retry/reconciliation decisions.
 
-### N6 — Add a clean-account self-deployment end-to-end test
+### N6 — [Add a clean-account self-deployment end-to-end test](https://github.com/wharfie/wharfie/issues/131)
 
 - **Milestone:** M4 — self-deployment and capability fulfillment
 - **Replaces:** #8
 - **Acceptance:** in a real golden-provider account, build the SEA, plan/apply, install and boot the service, execute and inspect durable work, prove restart recovery, exercise quiescent upgrade/rollback, destroy, and assert that only owned resources changed. There are no unexpected leftovers; under an explicit purge profile, no owned resources remain.
 
-### N7 — Publish version-aligned Wharfie SEA assets with npm releases
+### N7 — [Publish version-aligned Wharfie SEA assets with npm releases](https://github.com/wharfie/wharfie/issues/130)
 
 - **Milestone:** M1 — remove ambiguity and loose ends
 - **Replaces:** #2
@@ -226,19 +233,25 @@ For a replacement, create the new issue first and close the old issue as a dupli
 
 > Superseded by #NEW, which preserves the valid concern in Wharfie's new application model and defines current acceptance criteria. This issue's v1-specific implementation is being removed, so further work should be tracked on #NEW.
 
-## Execution order
+## Execution result and remaining handoff
 
-1. Review and merge project-reset PR #123.
-2. Review this inventory, correct it, and confirm that the current task authorizes each external mutation.
-3. Create or verify GitHub milestones corresponding to the roadmap stages used by N1–N7.
-4. Create N1–N7 with those milestones, then close the 24 old issues using the mapped reason and note.
-5. Close PRs #100, #99, and #25 with archive links.
-6. Verify each live branch tip still equals its peeled archive target, then delete every legacy branch except `jvd/pr4` and, temporarily, `jvd/tsc-lint`.
-7. Create a packaging-salvage branch from reset `master`, cherry-pick the three local commits, apply the required cleanup, and manually reimplement the named `jvd/pr4` pieces.
-8. After all salvage validation gates pass and the work is pushed, delete `jvd/pr4` and retain the local archive refs until the implementation is merged.
-9. Delete v1 and its dependency/test/documentation surface, including the self-build template dependency addressed during salvage.
-10. Re-evaluate the three narrow `jvd/tsc-lint` ideas against the surviving provider code, port only justified changes, then delete that branch.
-11. Regenerate the dependency graph, enforce the production audit policy, and repair release distribution before adding new durable-runtime features.
+The implementation sequence was consolidated into umbrella PR #125 rather than
+merging the two staging PRs independently. The authorized cleanup completed the
+following outcomes:
+
+1. preserve and reverify every original remote tip, plus both staging tips;
+2. salvage the packaging line, reimplement the useful `jvd/pr4` behavior,
+   delete v1, and selectively port the justified type-safety work;
+3. create the four roadmap milestones and replacement issues #126–#132 before
+   closing all 24 legacy issues;
+4. close PRs #123, #124, #100, #99, and #25 with preservation context; and
+5. delete 16 staging and legacy remote branches only after comparing each tip
+   with its archive tag.
+
+PR #125 still requires the clean-install lint dependency repair, green hosted
+GitHub Actions, and review before merge. Production audit policy, explicit test
+and lint exclusions, release distribution, and the frozen external dependency
+closure remain roadmap work rather than cleanup actions.
 
 ## Mutation verification gates
 
@@ -247,4 +260,11 @@ For a replacement, create the new issue first and close the old issue as a dupli
 - Create replacement issues before closing their predecessors so closure notes can link a real issue number.
 - After tracker cleanup, expect no open v1 issue and no open legacy PR; N1–N7 become the implementation tracker beneath `ROADMAP.md`.
 - After branch cleanup, expect only `master`, current active work branches, and any deliberately retained salvage branch.
-- Run the full validation sequence again after v1 removal; the current green suite does not prove that the reduced package, release workflow, or real SEA artifact works.
+- Re-run the full validation sequence from a true `npm ci` after repairing the undeclared TypeScript-ESLint parser; the earlier local pass was masked by an extraneous package and is not clean-install evidence.
+
+The preservation and tracker/branch cleanup expectations are now observed:
+archive targets were verified before deletion, the local-only refs remain
+unpublished, only #125 is open among pull requests, only #126–#132 are open
+among issues, and only `master` plus `agent/strict-manifest` remain as remote
+heads. The remaining validation and release work is tracked by `ROADMAP.md` and
+PR #125.

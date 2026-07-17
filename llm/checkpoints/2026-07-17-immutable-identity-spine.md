@@ -5,7 +5,13 @@
 **Implementation commit:** `5c2516cb58a9f8fe0c051edd9bf830bdeec5a9ce`
 (`Establish immutable revision and artifact identity`)
 
+**Cleanup inventory commit:** `25d40d44e93cf4630debb94fa35af29f910b6ca8`
+(`Record repository cleanup decisions`)
+
 **Branch at checkpoint:** `agent/strict-manifest`
+
+**Umbrella review:** draft PR
+[#125](https://github.com/wharfie/wharfie/pull/125)
 
 **Base:** `5ed3988` (`Finish the archived type-safety salvage`)
 
@@ -27,9 +33,11 @@ git log -1 --format=%H -- llm/checkpoints/2026-07-17-immutable-identity-spine.md
 > `llm/checkpoints/2026-07-17-immutable-identity-spine.md`. Read `PROJECT.md`,
 > `ROADMAP.md`, and all accepted ADRs before changing code. Breaking changes
 > are allowed, v1 is abandoned, and there are no known downstream users.
-> Verify the `archive/2026-07-16/remote/...` tags before any destructive GitHub
-> cleanup. First restore GitHub authentication and publish the local stack if
-> that is now possible. The next release-blocking code task is to make target
+> Fetch `origin`, confirm draft PR #125 still points at
+> `agent/strict-manifest`, and inspect its current checks. At this checkpoint,
+> clean-install lint fails because `@typescript-eslint/parser` is used but not
+> declared; the local checkout masked that error with an extraneous install.
+> Once CI is repaired, the next release-blocking code task is to make target
 > external installation consume and fail-check one frozen complete transitive
 > dependency closure. Create a new dated checkpoint rather than rewriting old
 > ones.
@@ -97,25 +105,33 @@ The following decisions remain binding:
   this checkout as `archive/2026-07-16/local/unpublished-master` and
   `archive/2026-07-16/local/stash`. They were deliberately not pushed because
   never-published local material may be private.
-- Reset documentation is published on `agent/project-reset` at `0ac89a1` in
-  draft PR #123. The cleanup inventory is published on
-  `agent/cleanup-inventory` at `80c42a1` in draft PR #124.
+- The former reset and inventory staging tips remain recoverable through the
+  verified annotated tags
+  `archive/2026-07-17/staging/agent-project-reset` (`0ac89a1`) and
+  `archive/2026-07-17/staging/agent-cleanup-inventory` (`80c42a1`). Their draft
+  PRs #123 and #124 were closed as superseded by #125, and their source branches
+  were deleted only after those tags were pushed and verified.
 - The packaging, v1 deletion, strict-manifest, atomic-operation, type-safety,
-  and immutable-identity stack is local through `5c2516c` on
-  `agent/strict-manifest`.
-- GitHub writes remain blocked because the injected `GITHUB_TOKEN` and stored
-  `gh` authentication were invalid at the last attempt. Restore authentication
-  before pushing or changing the tracker:
+  immutable-identity, checkpoint, and cleanup-inventory stack is published on
+  `agent/strict-manifest` in draft PR #125. Commit `25d40d4` records the cleanup
+  inventory; resolve the latest checkpoint refresh with the command near the
+  top of this file.
+- GitHub authentication was restored. All legacy PR and issue closure notes,
+  replacement issues, milestones, and archived branch deletions were applied.
+- Sixteen staging and legacy remote branches were removed after verification.
+  No unarchived remote tip was deleted.
+- PR #125 is the sole open pull request. Issues #126–#132 are the sole open
+  issues and are assigned to the M1–M4 roadmap milestones. All 24 legacy issues
+  are closed with duplicate or not-planned reasons and preservation context.
+- The only live remote head names are `master` and `agent/strict-manifest`.
+  `master` remains at archived reset base `f31595a`; the active branch contains
+  cleanup commit `25d40d4` plus subsequent checkpoint work. The original 15
+  archived branch tips and the two staging tips remain published as annotated
+  archive tags.
 
-  ~~~bash
-  unset GITHUB_TOKEN
-  gh auth login -h github.com
-  gh auth status -h github.com
-  ~~~
-
-Do not delete remote branches, close PRs or issues, or rewrite the preserved
-stack until authentication is restored and the remote archive tags are
-rechecked against the preserved table.
+The local-only stash and unpublished-master archive tags remain intentionally
+unpublished. Do not push them without a separate content review and current
+authorization.
 
 ## What `5c2516c` establishes
 
@@ -255,22 +271,26 @@ Darwin. The clean hosted-Linux target remains an explicit roadmap item.
 7. **Deployment profiles are identity scaffolding only.** Managed capability
    fulfillment, ownership receipts, provider credential use, deployment state,
    rollout, rollback, and service installation are future milestones.
-8. **Repository cleanup remains externally blocked.** The implementation stack
-   is not published and the stale GitHub PR/issue/branch cleanup has not run
-   because authentication is invalid.
+8. **The umbrella PR currently fails clean-install lint.** GitHub Actions runs
+   `npm ci`, which correctly omits undeclared `@typescript-eslint/parser`; the
+   `plugin:import/typescript` lint configuration then produces 41 parser-backed
+   import errors. Local lint passed only because parser 8.50.0 was extraneously
+   installed. The narrow repair is to declare the parser and align ESLint's
+   declared minimum with its `^8.57.0` peer requirement, then reproduce all
+   gates from a clean install. The separate external RWX check also fails but
+   exposes no actionable GitHub log.
 9. **Milestone 1 hygiene remains open.** Production dependency-audit policy,
-   explicit lint/type/test exclusions, hosted Linux verification, and tracker
-   truth still need closure.
+   explicit lint/type/test exclusions, hosted Linux verification, and release
+   distribution still need closure.
 
 ## Next work, in order
 
-1. Restore GitHub authentication, fetch remote state, verify all 15 remote
-   archive tags against the table in the project-reset checkpoint, and publish
-   the current stack without rewriting preserved refs.
-2. Update or open the draft PR for the full stack, then execute the cleanup
-   inventory: leave preservation notes, close obsolete PRs/issues, rewrite only
-   genuinely surviving concerns, and delete remote branches only after checking
-   their archive tag targets.
+1. Repair the clean-install lint dependency declaration, run all local gates
+   from the pinned Node/npm toolchain, push the result, and make GitHub Actions
+   green on draft PR #125. Treat the external RWX result as report-only unless
+   its provider exposes actionable diagnostics.
+2. Review and merge the reset stack in PR #125 when its actionable checks and
+   review are complete.
 3. Make target external installation consume and fail-check one frozen complete
    transitive dependency closure. Add adversarial tests that the lock, declared
    externals, installed closure, archive digest, and revision association cannot
@@ -284,36 +304,28 @@ Darwin. The clean hosted-Linux target remains an explicit roadmap item.
 6. Add leases, recovery, effect reconciliation, and coordinator fencing only on
    top of that ledger.
 
-## GitHub cleanup sequence after authentication
+## Completed GitHub cleanup evidence
 
-~~~bash
-unset GITHUB_TOKEN
-gh auth login -h github.com
-gh auth status -h github.com
-git fetch --prune origin
-git ls-remote --tags origin 'archive/2026-07-16/remote/*'
-~~~
+The cleanup was executed only after rechecking every original live branch tip
+against its peeled `archive/2026-07-16/remote/...` target. The two staging branch
+tips were additionally tagged and verified before deletion. The authoritative
+post-cleanup invariants are:
 
-Compare every peeled remote tag target with
-`llm/checkpoints/2026-07-16-project-reset.md`. Then push
-`agent/strict-manifest` and update/open a draft PR. Do not publish the local-only
-stash or unpublished-master archive tags without separately reviewing their
-contents and obtaining explicit approval.
+1. `git ls-remote --heads origin` reports only `master` and
+   `agent/strict-manifest`;
+2. GitHub reports only draft PR #125 open;
+3. GitHub reports only replacement issues #126–#132 open; and
+4. milestones M1, M2, M3, and M4 contain those replacement issues.
 
-Only after the implementation stack is safely published:
-
-1. close stale PRs with a short supersession note and their exact archive link;
-2. classify each issue as current roadmap work, useful research, or obsolete;
-3. rewrite surviving v1 concerns into the new product language and close the
-   misleading originals;
-4. delete a remote branch only after confirming its archived peeled target; and
-5. update the roadmap when tracker state, not merely the intended decision, has
-   changed.
+The decision mapping and exact closure policy are retained in
+`docs/project-reset/2026-07-16-cleanup-inventory.md`. The full original tag table
+remains in `llm/checkpoints/2026-07-16-project-reset.md`.
 
 ## Clean restart procedure
 
 ~~~bash
 git switch agent/strict-manifest
+git fetch --prune origin
 git status --short --branch
 git log --oneline --decorate -12
 git show --stat 5c2516c
@@ -324,6 +336,8 @@ npm run verify:package:sea
 ~~~
 
 The full test and real SEA commands need normal localhost/process/filesystem
-permissions and may need network access for exact target dependencies. If this
-branch is absent in a future clone, recover the stack from its published draft
-PR once authentication has been repaired; until then, retain this checkout.
+permissions and may need network access for exact target dependencies. Before
+the declared-parser repair lands, a true `npm ci` reproduces the GitHub Actions
+lint failure described above; do not mistake the current extraneous local parser
+for a green clean install. If this branch is absent in a future clone, recover
+the stack from draft PR #125 or the published commits and archive tags.
