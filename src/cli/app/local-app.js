@@ -1,4 +1,5 @@
 import { promises as fsp } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 import ActorSystem from '../../core/resources/builds/actor-system.js';
@@ -8,11 +9,16 @@ import {
   APP_MANIFEST_ASSET_NAME,
   createEmbeddedAppManifestAsset,
   readEmbeddedAppManifest,
+  stringifyEmbeddedAppManifest,
 } from '../../core/resources/builds/lib/app-manifest-asset.js';
 import {
+  APPLICATION_REVISION_ASSET_NAME,
+  ARTIFACT_RUNTIME_ASSET_NAME,
   ARTIFACT_RUNTIME_KIND,
   ARTIFACT_RUNTIME_SCHEMA_VERSION,
   createEmbeddedRevisionRuntimeAssets,
+  stringifyEmbeddedApplicationRevision,
+  stringifyEmbeddedArtifactRuntime,
 } from '../../core/resources/builds/lib/revision-runtime-assets.js';
 import FunctionResource from '../../core/resources/builds/function-resource.js';
 import { assertSeaNodeVersionCompatible } from '../../core/resources/builds/lib/sea-node-version.js';
@@ -357,7 +363,7 @@ function assertPortableManifestContract(manifest) {
 }
 
 /**
- * @param {{ appDir: string, manifest: any }} loaded - loaded.
+ * @param {{ appDir: string, manifest: any, dependencyLock: { path: string, input: import('../../core/runtime/application-revision.js').LockedInputDescriptor } }} loaded - loaded.
  * @returns {ActorSystem} - Result.
  */
 function toPackageableActorSystem(loaded) {
@@ -400,6 +406,7 @@ function toPackageableActorSystem(loaded) {
     name: manifest.app.id,
     functions,
     properties,
+    dependencyLock: loaded.dependencyLock,
   });
 }
 
@@ -700,6 +707,7 @@ async function stagePackageArtifacts(options) {
         actorSystem,
         revision,
         builderVersion: WHARFIE_VERSION,
+        artifactBytes,
       });
       const record = createArtifactRecord({
         bytes: artifactBytes,
@@ -719,7 +727,10 @@ async function stagePackageArtifacts(options) {
       const finalPath = path.join(outputDir, fileName);
       const stagedRecordPath = `${stagedPath}.artifact.json`;
       const finalRecordPath = `${finalPath}.artifact.json`;
-      await fsp.copyFile(sourcePath, stagedPath);
+      await fsp.writeFile(stagedPath, artifactBytes, {
+        flag: 'wx',
+        mode: build.get('platform') === 'win32' ? 0o600 : 0o755,
+      });
       if (build.get('platform') !== 'win32') {
         await fsp.chmod(stagedPath, 0o755);
       }
@@ -1098,50 +1109,110 @@ function resolveBuildAssets(build, assetSource) {
 }
 
 /**
+ * @param {SeaBuild} build - build.
+ * @param {unknown} source - Digest mapping or dynamic mapping.
+ * @returns {Record<string, import('../../core/runtime/application-revision.js').Sha256Digest>} - Digest mapping.
+ */
+function resolveBuildAssetDigests(build, source) {
+  if (typeof source === 'function') {
+    return resolveBuildAssetDigests(build, source.call(build));
+  }
+  return isObjectRecord(source)
+    ? /** @type {Record<string, import('../../core/runtime/application-revision.js').Sha256Digest>} */ (
+        source
+      )
+    : {};
+}
+
+/**
+ * @param {string | Buffer | Uint8Array} bytes - Exact asset bytes.
+ * @returns {import('../../core/runtime/application-revision.js').Sha256Digest} - SHA-256 digest.
+ */
+function digestAssetBytes(bytes) {
+  return {
+    algorithm: 'sha256',
+    value: createHash('sha256').update(bytes).digest('base64url'),
+  };
+}
+
+/**
  * @param {SeaBuild[]} builds - builds.
- * @param {Record<string, any>} manifest - manifest.
  * @param {import('../../core/runtime/application-revision.js').ApplicationRevision} revision - Target-independent application revision.
  * @param {Record<string, string>} [additionalAssets] - additionalAssets.
  * @returns {Promise<Array<{ cleanup: () => Promise<void> }>>} - Temporary asset handles.
  */
 async function attachEmbeddedManifestAssets(
   builds,
-  manifest,
   revision,
   additionalAssets = {},
 ) {
   /** @type {Array<{ cleanup: () => Promise<void> }>} */
   const temporaryAssets = [];
+  const revisionAssets = Object.fromEntries(
+    (revision.inputs.assets || []).map((asset) => [asset.name, asset.digest]),
+  );
+  const additionalNames = Object.keys(additionalAssets).sort();
+  const revisionAssetNames = Object.keys(revisionAssets).sort();
+  if (
+    additionalNames.length !== revisionAssetNames.length ||
+    additionalNames.some((name, index) => name !== revisionAssetNames[index])
+  ) {
+    throw new Error(
+      'Prepared behavior assets do not exactly match the owning revision inputs.',
+    );
+  }
 
   try {
     for (const build of builds) {
       const buildTarget = getBuildTarget(build);
       const embeddedManifest = {
-        ...cloneJson(manifest),
-        ...(Array.isArray(manifest.targets)
-          ? { targets: [cloneTarget(buildTarget)] }
-          : {}),
+        ...cloneJson(revision.contract),
+        targets: [cloneTarget(buildTarget)],
       };
+      const runtime = {
+        schemaVersion: ARTIFACT_RUNTIME_SCHEMA_VERSION,
+        kind: ARTIFACT_RUNTIME_KIND,
+        appId: revision.contract.app.id,
+        revisionId: revision.revisionId,
+        target: buildTarget,
+      };
+      const manifestBytes = `${stringifyEmbeddedAppManifest(embeddedManifest, {
+        pretty: true,
+      })}\n`;
+      const revisionBytes = `${stringifyEmbeddedApplicationRevision(revision, {
+        pretty: true,
+      })}\n`;
+      const runtimeBytes = `${stringifyEmbeddedArtifactRuntime(runtime, {
+        pretty: true,
+      })}\n`;
       const manifestAsset =
         await createEmbeddedAppManifestAsset(embeddedManifest);
       temporaryAssets.push(manifestAsset);
       const revisionRuntimeAssets = await createEmbeddedRevisionRuntimeAssets({
         revision,
-        runtime: {
-          schemaVersion: ARTIFACT_RUNTIME_SCHEMA_VERSION,
-          kind: ARTIFACT_RUNTIME_KIND,
-          appId: revision.contract.app.id,
-          revisionId: revision.revisionId,
-          target: buildTarget,
-        },
+        runtime,
       });
       temporaryAssets.push(revisionRuntimeAssets);
       const originalAssets = build.properties?.assets;
+      const originalAssetDigests = build.properties?.assetDigests;
+      const reservedAssets = {
+        [APP_MANIFEST_ASSET_NAME]: manifestAsset.path,
+        ...revisionRuntimeAssets.assets,
+      };
+      const reservedAssetDigests = {
+        [APP_MANIFEST_ASSET_NAME]: digestAssetBytes(manifestBytes),
+        [APPLICATION_REVISION_ASSET_NAME]: digestAssetBytes(revisionBytes),
+        [ARTIFACT_RUNTIME_ASSET_NAME]: digestAssetBytes(runtimeBytes),
+      };
       build._setUNSAFE('assets', () => ({
         ...resolveBuildAssets(build, originalAssets),
         ...additionalAssets,
-        [APP_MANIFEST_ASSET_NAME]: manifestAsset.path,
-        ...revisionRuntimeAssets.assets,
+        ...reservedAssets,
+      }));
+      build._setUNSAFE('assetDigests', () => ({
+        ...resolveBuildAssetDigests(build, originalAssetDigests),
+        ...revisionAssets,
+        ...reservedAssetDigests,
       }));
     }
   } catch (error) {
@@ -1182,19 +1253,47 @@ export async function runLocalApp(options) {
     throw new Error('Context JSON must be an object.');
   }
 
-  const result = await invokeManifestActivity({
-    manifest,
-    appDir: loaded.appDir,
-    activityName,
-    event,
-    context,
-    executionMode: loaded.source === 'embedded' ? 'embedded' : 'source',
-  });
+  if (loaded.source === 'embedded') {
+    const result = await invokeManifestActivity({
+      manifest,
+      activityName,
+      event,
+      context,
+      executionMode: 'embedded',
+    });
+    return { manifest, result };
+  }
 
-  return {
+  if (typeof loaded.appDir !== 'string' || !loaded.appDir) {
+    throw new Error('Source application loading did not return an appDir.');
+  }
+
+  const preparedRevision = await prepareApplicationRevision({
+    appDir: loaded.appDir,
     manifest,
-    result,
-  };
+  });
+  try {
+    await preparedRevision.verifyRuntime();
+    const result = await invokeManifestActivity({
+      manifest: preparedRevision.manifest,
+      appDir: preparedRevision.appDir,
+      sourceRevision: {
+        revision: preparedRevision.revision,
+        dependencyLock: preparedRevision.dependencyLock,
+      },
+      activityName,
+      event,
+      context,
+      executionMode: 'source',
+    });
+    await preparedRevision.verifyRuntime();
+    return {
+      manifest: preparedRevision.manifest,
+      result,
+    };
+  } finally {
+    await preparedRevision.cleanup();
+  }
 }
 
 /**
@@ -1261,6 +1360,7 @@ export async function packageLocalApp(options) {
     actorSystem = toPackageableActorSystem({
       appDir: preparedRevision.appDir,
       manifest: preparedRevision.manifest,
+      dependencyLock: preparedRevision.dependencyLock,
     });
     applyPackagingSigningConfig(actorSystem, options.build);
     applyTargetSelection(actorSystem, selectedTargets);
@@ -1292,9 +1392,9 @@ export async function packageLocalApp(options) {
     if (typeof actorSystem.initializeEnvironment === 'function') {
       await actorSystem.initializeEnvironment();
     }
+    await preparedRevision.verifyRuntime();
     manifestAssets = await attachEmbeddedManifestAssets(
       builds,
-      manifest,
       revision,
       preparedRevision.assets,
     );

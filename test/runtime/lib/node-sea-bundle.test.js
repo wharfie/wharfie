@@ -88,6 +88,11 @@ describe('src/core/lib/node-sea.js', () => {
           },
         });
 
+        if (result.status !== 0) {
+          throw new Error(
+            `Bundled CLI exited ${String(result.status)}: ${result.stderr || result.error?.message || 'no diagnostic'}`,
+          );
+        }
         expect(result.status).toBe(0);
         expect(result.stderr).toBe('');
         expect(result.stdout).toContain('Usage: wharfie');

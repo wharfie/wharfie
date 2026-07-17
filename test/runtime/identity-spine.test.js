@@ -100,7 +100,7 @@ function makeInputs() {
       digest: digest('source-tree'),
     },
     dependencies: {
-      format: 'npm-package-lock-v3',
+      format: 'wharfie-npm-package-lock-v3-closure-v1',
       digest: digest('dependency-lock'),
     },
     runtime: {
@@ -143,7 +143,10 @@ function makeProvenance(revision, target = linuxTarget) {
       },
       binary: { digest: digest('node-binary') },
     },
-    dependencies: { digest: digest('target-dependency-closure') },
+    dependencies: {
+      lock: clone(revision.inputs.dependencies),
+      digest: digest('target-dependency-closure'),
+    },
     signing: { mode: 'unsigned' },
   };
 }

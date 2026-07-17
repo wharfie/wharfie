@@ -1,4 +1,4 @@
-import { defineApp } from '../../../../src/app.js';
+import { defineApp } from '@wharfie/wharfie/app';
 
 import {
   kitchenSinkDefaultTargets,

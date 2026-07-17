@@ -2,6 +2,7 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { createHash } from 'node:crypto';
 import { existsSync, promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,6 +10,11 @@ import path from 'node:path';
 const CHILD_PROCESS_IMPORT = 'node:child_process';
 const MISMATCHED_NODE_VERSION =
   process.versions.node === '0.0.0' ? '0.0.1' : '0.0.0';
+
+const emptySeaEvidence = () => ({
+  assetEvidence: {},
+  functionAssetEvidence: {},
+});
 
 describe('SeaBuild', () => {
   afterEach(() => {
@@ -127,6 +133,7 @@ describe('SeaBuild', () => {
     });
     jest.spyOn(build, 'seaBuild').mockImplementation(async () => {
       if (shouldFail) throw new Error('sea-build-failure-sentinel');
+      return emptySeaEvidence();
     });
 
     try {
@@ -191,6 +198,7 @@ describe('SeaBuild', () => {
         .spyOn(build, 'seaBuild')
         .mockImplementation(async (_buildDir, nodeBinaryPath) => {
           await fsp.writeFile(nodeBinaryPath, `built-${marker}`, 'utf8');
+          return emptySeaEvidence();
         });
       return build;
     };
@@ -251,7 +259,9 @@ describe('SeaBuild', () => {
       },
     });
     jest.spyOn(build, 'esbuild').mockImplementation(async () => {});
-    jest.spyOn(build, 'seaBuild').mockImplementation(async () => {});
+    jest
+      .spyOn(build, 'seaBuild')
+      .mockImplementation(async () => emptySeaEvidence());
 
     const copyFile = fsp.copyFile.bind(fsp);
     jest
@@ -278,4 +288,581 @@ describe('SeaBuild', () => {
       await fsp.rm(tmpRoot, { force: true, recursive: true });
     }
   });
+
+  it('binds successful-build evidence to the exact final artifact bytes', async () => {
+    jest.unstable_mockModule(CHILD_PROCESS_IMPORT, () => ({
+      execFile: jest.fn(),
+      spawn: jest.fn(),
+      spawnSync: jest.fn(() => ({
+        stdout: 'Usage: node\n  --experimental-sea-config=...\n',
+        stderr: '',
+        status: 0,
+      })),
+    }));
+
+    const { default: SeaBuild } =
+      await import('../../../src/core/resources/builds/sea-build.js');
+    const originalBuildDir = SeaBuild.BUILD_DIR;
+    const originalBinariesDir = SeaBuild.BINARIES_DIR;
+    const tmpRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-sea-evidence-bytes-'),
+    );
+    const sourceBinary = path.join(tmpRoot, 'source-node');
+    await fsp.writeFile(sourceBinary, 'source-node-bytes', 'utf8');
+    SeaBuild.BUILD_DIR = path.join(tmpRoot, 'builds');
+    SeaBuild.BINARIES_DIR = path.join(tmpRoot, 'binaries');
+    const build = new SeaBuild({
+      name: 'bind-final-artifact',
+      properties: {
+        entryCode: 'void 0;',
+        resolveDir: process.cwd(),
+        nodeBinaryPath: sourceBinary,
+        nodeVersion: process.versions.node,
+        platform: process.platform,
+        architecture: process.arch,
+        ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+      },
+    });
+    jest.spyOn(build, 'esbuild').mockImplementation(async () => {});
+    jest
+      .spyOn(build, 'seaBuild')
+      .mockImplementation(async (_buildDir, nodeBinaryPath) => {
+        await fsp.writeFile(nodeBinaryPath, 'completed-sea-bytes', 'utf8');
+        return emptySeaEvidence();
+      });
+
+    try {
+      await build.build();
+      const artifactBytes = await fsp.readFile(build.get('binaryPath'));
+      const evidence = build.getSuccessfulBuildEvidence(artifactBytes);
+
+      expect(evidence.binaryPath).toBe(build.get('binaryPath'));
+      expect(evidence.signing).toEqual({ mode: 'unsigned' });
+      expect(() =>
+        build.getSuccessfulBuildEvidence(Buffer.from('different-sea-bytes')),
+      ).toThrow(/artifact bytes do not match.*build generation/i);
+    } finally {
+      SeaBuild.BUILD_DIR = originalBuildDir;
+      SeaBuild.BINARIES_DIR = originalBinariesDir;
+      await fsp.rm(tmpRoot, { force: true, recursive: true });
+    }
+  });
+
+  it('seals Node archive receipt evidence with the source bytes generation', async () => {
+    jest.unstable_mockModule(CHILD_PROCESS_IMPORT, () => ({
+      execFile: jest.fn(),
+      spawn: jest.fn(),
+      spawnSync: jest.fn(() => ({
+        stdout: 'Usage: node\n  --experimental-sea-config=...\n',
+        stderr: '',
+        status: 0,
+      })),
+    }));
+
+    const { default: SeaBuild } =
+      await import('../../../src/core/resources/builds/sea-build.js');
+    const { default: NodeBinary } =
+      await import('../../../src/core/resources/builds/node-binary.js');
+    const originalBuildDir = SeaBuild.BUILD_DIR;
+    const originalBinariesDir = SeaBuild.BINARIES_DIR;
+    const tmpRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-sea-node-receipt-evidence-'),
+    );
+    const sourceBinary = path.join(tmpRoot, 'source-node');
+    const sourceBytes = Buffer.from('receipt-bound-node-source');
+    await fsp.writeFile(sourceBinary, sourceBytes);
+    SeaBuild.BUILD_DIR = path.join(tmpRoot, 'builds');
+    SeaBuild.BINARIES_DIR = path.join(tmpRoot, 'binaries');
+
+    const nodeBinary = new NodeBinary({
+      name: 'receipt-node',
+      properties: {
+        version: process.versions.node,
+        platform: process.platform,
+        architecture: process.arch,
+      },
+    });
+    nodeBinary._setUNSAFE('binaryPath', sourceBinary);
+    nodeBinary._setUNSAFE('exactVersion', `v${process.versions.node}`);
+    const { normPlatform, normArch, ext } = NodeBinary.resolveTargetSpec(
+      process.platform,
+      process.arch,
+    );
+    const archiveSha256 = 'ab'.repeat(32);
+    const receiptPath = await nodeBinary.getIntegrityReceiptPath(sourceBinary);
+    await fsp.writeFile(
+      receiptPath,
+      JSON.stringify({
+        version: 1,
+        target: {
+          nodeVersion: `v${process.versions.node}`,
+          platform: process.platform,
+          architecture: process.arch,
+        },
+        archive: {
+          fileName: `node-v${process.versions.node}-${normPlatform}-${normArch}${ext}`,
+          sha256: archiveSha256,
+        },
+        binary: {
+          sha256: createHash('sha256').update(sourceBytes).digest('hex'),
+          size: sourceBytes.length,
+        },
+      }),
+    );
+    const build = new SeaBuild({
+      name: 'seal-node-receipt',
+      dependsOn: [nodeBinary],
+      properties: {
+        entryCode: 'void 0;',
+        resolveDir: process.cwd(),
+        nodeBinaryPath: sourceBinary,
+        nodeVersion: process.versions.node,
+        platform: process.platform,
+        architecture: process.arch,
+        ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+      },
+    });
+    jest.spyOn(build, 'esbuild').mockImplementation(async () => {});
+    jest
+      .spyOn(build, 'seaBuild')
+      .mockImplementation(async (_buildDir, nodeBinaryPath) => {
+        await fsp.writeFile(nodeBinaryPath, 'completed-sea-bytes', 'utf8');
+        return emptySeaEvidence();
+      });
+
+    try {
+      await build.build();
+      const artifactBytes = await fsp.readFile(build.get('binaryPath'));
+      const beforeMutation = build.getSuccessfulBuildEvidence(artifactBytes);
+      expect(beforeMutation.nodeSource.archive).toEqual({
+        fileName: `node-v${process.versions.node}-${normPlatform}-${normArch}${ext}`,
+        digest: {
+          algorithm: 'sha256',
+          value: Buffer.from(archiveSha256, 'hex').toString('base64url'),
+        },
+      });
+
+      await fsp.writeFile(receiptPath, '{"replaced":true}');
+      expect(build.getSuccessfulBuildEvidence(artifactBytes)).toBe(
+        beforeMutation,
+      );
+      expect(beforeMutation.nodeSource.archive).toEqual({
+        fileName: `node-v${process.versions.node}-${normPlatform}-${normArch}${ext}`,
+        digest: {
+          algorithm: 'sha256',
+          value: Buffer.from(archiveSha256, 'hex').toString('base64url'),
+        },
+      });
+      await expect(build.build()).rejects.toThrow(
+        /receipt does not match the exact target binary selected for SEA generation/i,
+      );
+    } finally {
+      SeaBuild.BUILD_DIR = originalBuildDir;
+      SeaBuild.BINARIES_DIR = originalBinariesDir;
+      await fsp.rm(tmpRoot, { force: true, recursive: true });
+    }
+  });
+
+  it('does not let public asset preparation replace committed generation evidence', async () => {
+    jest.unstable_mockModule(CHILD_PROCESS_IMPORT, () => ({
+      execFile: jest.fn(),
+      spawn: jest.fn(),
+      spawnSync: jest.fn(() => ({
+        stdout: 'Usage: node\n  --experimental-sea-config=...\n',
+        stderr: '',
+        status: 0,
+      })),
+    }));
+
+    const { default: SeaBuild } =
+      await import('../../../src/core/resources/builds/sea-build.js');
+    const originalBuildDir = SeaBuild.BUILD_DIR;
+    const originalBinariesDir = SeaBuild.BINARIES_DIR;
+    const tmpRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-sea-evidence-inspection-'),
+    );
+    const sourceBinary = path.join(tmpRoot, 'source-node');
+    const inspectionAsset = path.join(tmpRoot, 'inspection.asset');
+    const inspectionBytes = Buffer.from('inspection-only-asset');
+    await Promise.all([
+      fsp.writeFile(sourceBinary, 'source-node-bytes', 'utf8'),
+      fsp.writeFile(inspectionAsset, inspectionBytes),
+    ]);
+    SeaBuild.BUILD_DIR = path.join(tmpRoot, 'builds');
+    SeaBuild.BINARIES_DIR = path.join(tmpRoot, 'binaries');
+    const inspectionDigest = createHash('sha256')
+      .update(inspectionBytes)
+      .digest('base64url');
+    const committedDigest = {
+      algorithm: /** @type {'sha256'} */ ('sha256'),
+      value: createHash('sha256')
+        .update('committed-generation-asset')
+        .digest('base64url'),
+    };
+    const build = new SeaBuild({
+      name: 'preserve-generation-evidence',
+      properties: {
+        entryCode: 'void 0;',
+        resolveDir: process.cwd(),
+        nodeBinaryPath: sourceBinary,
+        nodeVersion: process.versions.node,
+        platform: process.platform,
+        architecture: process.arch,
+        ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+        assets: { inspection: inspectionAsset },
+        assetDigests: {
+          inspection: { algorithm: 'sha256', value: inspectionDigest },
+        },
+      },
+    });
+    jest.spyOn(build, 'esbuild').mockImplementation(async () => {});
+    jest.spyOn(build, 'seaBuild').mockImplementation(async () => ({
+      assetEvidence: { committed: committedDigest },
+      functionAssetEvidence: {},
+    }));
+
+    try {
+      await build.build();
+      const artifactBytes = await fsp.readFile(build.get('binaryPath'));
+      const committed = build.getSuccessfulBuildEvidence(artifactBytes);
+      const inspectionDir = path.join(tmpRoot, 'inspection-build');
+      await fsp.mkdir(inspectionDir, { mode: 0o700 });
+
+      await build.prepareSeaAssets(inspectionDir);
+      const afterInspection = build.getSuccessfulBuildEvidence(artifactBytes);
+
+      expect(afterInspection).toBe(committed);
+      expect(afterInspection.assets).toEqual({ committed: committedDigest });
+      expect(build.get('embeddedAssetDigests')).toEqual({
+        inspection: { algorithm: 'sha256', value: inspectionDigest },
+      });
+    } finally {
+      SeaBuild.BUILD_DIR = originalBuildDir;
+      SeaBuild.BINARIES_DIR = originalBinariesDir;
+      await fsp.rm(tmpRoot, { force: true, recursive: true });
+    }
+  });
+
+  it('advances a Darwin generation only from exact unsigned bytes to signed bytes', async () => {
+    jest.unstable_mockModule(CHILD_PROCESS_IMPORT, () => ({
+      execFile: jest.fn(),
+      spawn: jest.fn(),
+      spawnSync: jest.fn(() => ({
+        stdout: 'Usage: node\n  --experimental-sea-config=...\n',
+        stderr: '',
+        status: 0,
+      })),
+    }));
+
+    const { default: SeaBuild } =
+      await import('../../../src/core/resources/builds/sea-build.js');
+    const originalBuildDir = SeaBuild.BUILD_DIR;
+    const originalBinariesDir = SeaBuild.BINARIES_DIR;
+    const tmpRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-sea-signing-evidence-'),
+    );
+    const sourceBinary = path.join(tmpRoot, 'source-node');
+    await fsp.writeFile(sourceBinary, 'source-node-bytes', 'utf8');
+    SeaBuild.BUILD_DIR = path.join(tmpRoot, 'builds');
+    SeaBuild.BINARIES_DIR = path.join(tmpRoot, 'binaries');
+    const build = new SeaBuild({
+      name: 'advance-signing-evidence',
+      properties: {
+        entryCode: 'void 0;',
+        resolveDir: process.cwd(),
+        nodeBinaryPath: sourceBinary,
+        nodeVersion: process.versions.node,
+        platform: 'darwin',
+        architecture: process.arch,
+      },
+    });
+    jest.spyOn(build, 'esbuild').mockImplementation(async () => {});
+    jest
+      .spyOn(build, 'seaBuild')
+      .mockImplementation(async (_buildDir, nodeBinaryPath) => {
+        await fsp.writeFile(nodeBinaryPath, 'unsigned-sea-bytes', 'utf8');
+        return emptySeaEvidence();
+      });
+
+    try {
+      await build.build();
+      const unsignedBytes = await fsp.readFile(build.get('binaryPath'));
+      const signedBytes = Buffer.from('signed-sea-bytes');
+
+      expect(() =>
+        build.advanceSuccessfulBuildEvidence(
+          Buffer.from('wrong-unsigned-bytes'),
+          signedBytes,
+          { mode: 'ad-hoc' },
+        ),
+      ).toThrow(/artifact bytes do not match.*build generation/i);
+      build.advanceSuccessfulBuildEvidence(unsignedBytes, signedBytes, {
+        mode: 'ad-hoc',
+      });
+
+      expect(() => build.getSuccessfulBuildEvidence(unsignedBytes)).toThrow(
+        /artifact bytes do not match.*build generation/i,
+      );
+      expect(build.getSuccessfulBuildEvidence(signedBytes).signing).toEqual({
+        mode: 'ad-hoc',
+      });
+      expect(() =>
+        build.advanceSuccessfulBuildEvidence(signedBytes, signedBytes, {
+          mode: 'ad-hoc',
+        }),
+      ).toThrow(/already been signed/i);
+    } finally {
+      SeaBuild.BUILD_DIR = originalBuildDir;
+      SeaBuild.BINARIES_DIR = originalBinariesDir;
+      await fsp.rm(tmpRoot, { force: true, recursive: true });
+    }
+  });
+
+  it('bundles the running Wharfie app API instead of an app-local copy', async () => {
+    const { default: SeaBuild } =
+      await import('../../../src/core/resources/builds/sea-build.js');
+    const tmpRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-sea-runtime-alias-'),
+    );
+    const buildDir = path.join(tmpRoot, 'build');
+    const localWharfie = path.join(
+      tmpRoot,
+      'node_modules',
+      '@wharfie',
+      'wharfie',
+    );
+
+    try {
+      await Promise.all([
+        fsp.mkdir(buildDir, { recursive: true }),
+        fsp.mkdir(localWharfie, { recursive: true }),
+      ]);
+      await Promise.all([
+        fsp.writeFile(
+          path.join(localWharfie, 'package.json'),
+          JSON.stringify({
+            name: '@wharfie/wharfie',
+            version: '0.0.0-poisoned',
+            type: 'module',
+            exports: { './app': './app.js' },
+          }),
+        ),
+        fsp.writeFile(
+          path.join(localWharfie, 'app.js'),
+          "export const defineApp = () => ({ source: 'poisoned-app-local-runtime' });\n",
+        ),
+      ]);
+      const build = new SeaBuild({
+        name: 'sea-runtime-alias',
+        properties: {
+          entryCode: [
+            "import { defineApp } from '@wharfie/wharfie/app';",
+            "globalThis.__runtimeAlias = defineApp({ source: 'revision-runtime' });",
+          ].join('\n'),
+          resolveDir: tmpRoot,
+          nodeBinaryPath: process.execPath,
+          nodeVersion: process.versions.node,
+          platform: process.platform,
+          architecture: process.arch,
+        },
+      });
+
+      await build.esbuild(buildDir);
+      const code = await fsp.readFile(build.get('codeBundlePath'), 'utf8');
+      expect(code).toContain('revision-runtime');
+      expect(code).not.toContain('poisoned-app-local-runtime');
+    } finally {
+      await fsp.rm(tmpRoot, { force: true, recursive: true });
+    }
+  });
+
+  it('seals assets in canonical order and records their exact digests', async () => {
+    const { default: SeaBuild } =
+      await import('../../../src/core/resources/builds/sea-build.js');
+    const tmpRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-sea-assets-'),
+    );
+    const buildDir = path.join(tmpRoot, 'build');
+    const alphaPath = path.join(tmpRoot, 'alpha.asset');
+    const zetaPath = path.join(tmpRoot, 'zeta.asset');
+    const alphaBytes = Buffer.from('sealed alpha bytes');
+    const zetaBytes = Buffer.from('sealed zeta bytes');
+    await fsp.mkdir(buildDir, { mode: 0o700 });
+    await Promise.all([
+      fsp.writeFile(alphaPath, alphaBytes),
+      fsp.writeFile(zetaPath, zetaBytes),
+    ]);
+    const alphaDigest = createHash('sha256')
+      .update(alphaBytes)
+      .digest('base64url');
+    const zetaDigest = createHash('sha256')
+      .update(zetaBytes)
+      .digest('base64url');
+    const build = new SeaBuild({
+      name: 'seal-assets',
+      properties: {
+        entryCode: 'void 0;',
+        resolveDir: process.cwd(),
+        nodeBinaryPath: process.execPath,
+        nodeVersion: process.versions.node,
+        platform: process.platform,
+        architecture: process.arch,
+        assets: {
+          zeta: zetaPath,
+          alpha: alphaPath,
+        },
+        assetDigests: {
+          zeta: { algorithm: 'sha256', value: zetaDigest },
+          alpha: { algorithm: 'sha256', value: alphaDigest },
+        },
+      },
+    });
+
+    try {
+      const sealed = await build.prepareSeaAssets(buildDir);
+
+      expect(Object.keys(sealed)).toEqual(['alpha', 'zeta']);
+      expect(path.basename(sealed.alpha)).toBe('00000000.asset');
+      expect(path.basename(sealed.zeta)).toBe('00000001.asset');
+      expect(path.dirname(sealed.alpha)).toBe(path.join(buildDir, 'assets'));
+      await expect(fsp.readFile(sealed.alpha)).resolves.toEqual(alphaBytes);
+      await expect(fsp.readFile(sealed.zeta)).resolves.toEqual(zetaBytes);
+      expect((await fsp.stat(path.dirname(sealed.alpha))).mode & 0o777).toBe(
+        0o700,
+      );
+      expect((await fsp.stat(sealed.alpha)).mode & 0o777).toBe(0o400);
+      expect(build.get('embeddedAssetDigests')).toEqual({
+        alpha: { algorithm: 'sha256', value: alphaDigest },
+        zeta: { algorithm: 'sha256', value: zetaDigest },
+      });
+    } finally {
+      await fsp.rm(tmpRoot, { force: true, recursive: true });
+    }
+  });
+
+  it('rejects an asset mutated after its expected digest was recorded', async () => {
+    const { default: SeaBuild } =
+      await import('../../../src/core/resources/builds/sea-build.js');
+    const tmpRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-sea-asset-mutation-'),
+    );
+    const buildDir = path.join(tmpRoot, 'build');
+    const assetPath = path.join(tmpRoot, 'activity.asset');
+    const originalBytes = Buffer.from('original activity bytes');
+    await fsp.mkdir(buildDir, { mode: 0o700 });
+    await fsp.writeFile(assetPath, originalBytes);
+    const originalDigest = createHash('sha256')
+      .update(originalBytes)
+      .digest('base64url');
+    await fsp.writeFile(assetPath, 'mutated activity bytes');
+    const build = new SeaBuild({
+      name: 'reject-mutated-asset',
+      properties: {
+        entryCode: 'void 0;',
+        resolveDir: process.cwd(),
+        nodeBinaryPath: process.execPath,
+        nodeVersion: process.versions.node,
+        platform: process.platform,
+        architecture: process.arch,
+        assets: { activity: assetPath },
+        assetDigests: {
+          activity: { algorithm: 'sha256', value: originalDigest },
+        },
+      },
+    });
+
+    try {
+      await expect(build.prepareSeaAssets(buildDir)).rejects.toThrow(
+        /does not match its expected SHA-256 digest/i,
+      );
+      expect(build.has('embeddedAssetDigests')).toBe(false);
+    } finally {
+      await fsp.rm(tmpRoot, { force: true, recursive: true });
+    }
+  });
+
+  it('rejects symbolic-link asset sources', async () => {
+    const { default: SeaBuild } =
+      await import('../../../src/core/resources/builds/sea-build.js');
+    const tmpRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-sea-asset-symlink-'),
+    );
+    const buildDir = path.join(tmpRoot, 'build');
+    const sourcePath = path.join(tmpRoot, 'source.asset');
+    const linkPath = path.join(tmpRoot, 'linked.asset');
+    await fsp.mkdir(buildDir, { mode: 0o700 });
+    await fsp.writeFile(sourcePath, 'linked activity bytes');
+    await fsp.symlink(sourcePath, linkPath);
+    const build = new SeaBuild({
+      name: 'reject-symlink-asset',
+      properties: {
+        entryCode: 'void 0;',
+        resolveDir: process.cwd(),
+        nodeBinaryPath: process.execPath,
+        nodeVersion: process.versions.node,
+        platform: process.platform,
+        architecture: process.arch,
+        assets: { activity: linkPath },
+      },
+    });
+
+    try {
+      await expect(build.prepareSeaAssets(buildDir)).rejects.toThrow(
+        /regular non-symbolic file/i,
+      );
+      expect(build.has('embeddedAssetDigests')).toBe(false);
+    } finally {
+      await fsp.rm(tmpRoot, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    [
+      'an unexpected digest name',
+      { activity: '/unused' },
+      {
+        other: {
+          algorithm: 'sha256',
+          value: createHash('sha256').update('unused').digest('base64url'),
+        },
+      },
+      /does not name a configured asset/i,
+    ],
+    [
+      'a malformed digest',
+      { activity: '/unused' },
+      { activity: { algorithm: 'sha1', value: 'not-a-sha256' } },
+      /algorithm must be 'sha256'/i,
+    ],
+    ['a malformed asset mapping', [], {}, /assets must be an object/i],
+  ])(
+    'rejects %s before reading asset bytes',
+    async (_label, assets, digests, error) => {
+      const { default: SeaBuild } =
+        await import('../../../src/core/resources/builds/sea-build.js');
+      const tmpRoot = await fsp.mkdtemp(
+        path.join(os.tmpdir(), 'wharfie-sea-asset-invalid-'),
+      );
+      const build = new SeaBuild({
+        name: 'reject-invalid-asset-metadata',
+        properties: {
+          entryCode: 'void 0;',
+          resolveDir: process.cwd(),
+          nodeBinaryPath: process.execPath,
+          nodeVersion: process.versions.node,
+          platform: process.platform,
+          architecture: process.arch,
+          assets: /** @type {any} */ (assets),
+          assetDigests: /** @type {any} */ (digests),
+        },
+      });
+
+      try {
+        await expect(build.prepareSeaAssets(tmpRoot)).rejects.toThrow(error);
+        expect(build.has('embeddedAssetDigests')).toBe(false);
+      } finally {
+        await fsp.rm(tmpRoot, { force: true, recursive: true });
+      }
+    },
+  );
 });

@@ -351,7 +351,10 @@ describe('compileApplicationRevision', () => {
       lockPath,
       JSON.stringify({
         lockfileVersion: 3,
-        packages: { 'node_modules/sharp': { version: '1.2.2' } },
+        packages: {
+          '': { dependencies: { sharp: '^1.0.0' } },
+          'node_modules/sharp': { version: '1.2.2' },
+        },
       }),
     );
     await expect(createDependencyLockInput(appDir, contract)).rejects.toThrow(
@@ -362,12 +365,64 @@ describe('compileApplicationRevision', () => {
       lockPath,
       JSON.stringify({
         lockfileVersion: 3,
-        packages: { 'node_modules/sharp': { version: '1.2.3' } },
+        packages: {
+          '': { devDependencies: { sharp: '1.2.3' } },
+          'node_modules/sharp': { version: '1.2.3' },
+        },
+      }),
+    );
+    await expect(createDependencyLockInput(appDir, contract)).rejects.toThrow(
+      "must declare external 'sharp' as a production or optional dependency",
+    );
+
+    await fsp.writeFile(
+      lockPath,
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          '': { dependencies: { sharp: '^1.0.0' } },
+          'node_modules/sharp': { version: '1.2.3' },
+        },
       }),
     );
     await expect(createDependencyLockInput(appDir, contract)).resolves.toEqual(
-      expect.objectContaining({ format: 'npm-package-lock-v3' }),
+      expect.objectContaining({
+        format: 'wharfie-npm-package-lock-v3-closure-v1',
+      }),
     );
+  });
+
+  it('rejects an enclosing workspace lock until its package root is explicit', async () => {
+    const workspaceDir = await makeDirectory('wharfie-workspace-lock-');
+    const appDir = path.join(workspaceDir, 'apps', 'revision-demo');
+    await fsp.mkdir(appDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(
+        path.join(appDir, 'package.json'),
+        JSON.stringify({
+          name: 'revision-demo',
+          private: true,
+          dependencies: { sharp: '1.2.3' },
+        }),
+      ),
+      fsp.writeFile(
+        path.join(workspaceDir, 'package-lock.json'),
+        JSON.stringify({
+          lockfileVersion: 3,
+          packages: {
+            '': { dependencies: { sharp: '1.2.3' } },
+            'node_modules/sharp': { version: '1.2.3' },
+          },
+        }),
+      ),
+    ]);
+
+    await expect(
+      createDependencyLockInput(
+        appDir,
+        getTargetIndependentAppContract(makeManifest()),
+      ),
+    ).rejects.toThrow(/require a package-lock\.json/i);
   });
 
   it('rejects source symlinks and noncanonical behavior asset names', async () => {

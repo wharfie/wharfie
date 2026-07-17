@@ -14,6 +14,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { brotliCompressSync } from 'node:zlib';
 
+import {
+  FUNCTION_ASSET_SCHEMA_VERSION,
+  serializeFunctionAssetDescription,
+} from '../../../src/core/resources/builds/lib/function-asset.js';
+
 const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
 const EMBEDDED_ACTIVITY_TIMEOUT_MS = 15_000;
 
@@ -296,11 +301,21 @@ describe('embedded app manifest asset helpers', () => {
       );
       seaAssets.set(
         'start',
-        JSON.stringify({
+        serializeFunctionAssetDescription({
+          schemaVersion: FUNCTION_ASSET_SCHEMA_VERSION,
+          activity: 'start',
+          target: {
+            nodeVersion: process.versions.node,
+            platform: process.platform,
+            architecture: process.arch,
+            ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+          },
+          externals: [],
           codeBundle: brotliCompressSync(
             Buffer.from(functionSource, 'utf8'),
           ).toString('base64'),
           externalsTar: '',
+          externalDependencyReceipt: null,
           resourceSpecs: {},
         }),
       );

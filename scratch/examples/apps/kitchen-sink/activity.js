@@ -1,1 +1,1 @@
-export { start } from '../../../functions/start.js';
+export { start } from './start.js';

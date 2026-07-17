@@ -165,9 +165,14 @@ const runCommand = new Command('run')
               `- ${action.id} (${action.type}:${action.function_name} attempt=${attemptCount})`,
             );
 
+            await preparedRevision.verifyRuntime();
             const outputs = await invokeManifestActivity({
               manifest: preparedRevision.manifest,
               appDir: preparedRevision.appDir,
+              sourceRevision: {
+                revision: preparedRevision.revision,
+                dependencyLock: preparedRevision.dependencyLock,
+              },
               activityName: action.function_name,
               event: action.inputs ?? {},
               context: {
@@ -182,6 +187,7 @@ const runCommand = new Command('run')
                 },
               },
             });
+            await preparedRevision.verifyRuntime();
 
             return {
               ok: true,

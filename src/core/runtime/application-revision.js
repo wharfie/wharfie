@@ -18,7 +18,8 @@ export const APPLICATION_REVISION_KIND = 'applicationRevision';
 export const APPLICATION_REVISION_ID_DOMAIN = 'wharfie:revision:v1';
 export const APPLICATION_REVISION_ID_PREFIX = 'wrv1';
 export const SOURCE_TREE_INPUT_FORMAT = 'wharfie-source-tree-v1';
-export const DEPENDENCY_LOCK_INPUT_FORMAT = 'npm-package-lock-v3';
+export const DEPENDENCY_LOCK_INPUT_FORMAT =
+  'wharfie-npm-package-lock-v3-closure-v1';
 export const RUNTIME_INPUT_FORMAT = 'wharfie-runtime-v1';
 
 const REVISION_KEYS = new Set([
@@ -148,6 +149,21 @@ function validateInputDescriptor(value, expectedFormat, valuePath) {
 }
 
 /**
+ * Validate the versioned dependency-lock descriptor used by revision and
+ * artifact boundaries.
+ * @param {unknown} value - Candidate dependency-lock descriptor.
+ * @param {string} [valuePath] - Human-readable value path.
+ * @returns {LockedInputDescriptor} - Validated dependency-lock descriptor.
+ */
+export function validateDependencyLockInput(value, valuePath = 'dependencies') {
+  return validateInputDescriptor(
+    value,
+    DEPENDENCY_LOCK_INPUT_FORMAT,
+    valuePath,
+  );
+}
+
+/**
  * Validate the complete target-independent input lock for a revision.
  * @param {unknown} value - Candidate input lock.
  * @param {string} [valuePath] - Human-readable value path.
@@ -163,9 +179,8 @@ export function validateRevisionInputs(value, valuePath = 'inputs') {
       SOURCE_TREE_INPUT_FORMAT,
       `${valuePath}.source`,
     ),
-    dependencies: validateInputDescriptor(
+    dependencies: validateDependencyLockInput(
       inputs.dependencies,
-      DEPENDENCY_LOCK_INPUT_FORMAT,
       `${valuePath}.dependencies`,
     ),
     runtime: validateInputDescriptor(
@@ -342,6 +357,7 @@ export default {
   createApplicationRevision,
   getApplicationRevisionId,
   validateApplicationRevision,
+  validateDependencyLockInput,
   validateRevisionContract,
   validateRevisionInputs,
   validateSha256Digest,

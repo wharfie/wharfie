@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { SHARED_RESOURCE_REGISTRY_FILE_NAME } from '../../../src/core/runtime/shared-resource-registry.js';
 import Function from '../../../src/core/resources/builds/function.js';
 import ActorSystem from '../../../src/core/resources/builds/actor-system.js';
+import FunctionResource from '../../../src/core/resources/builds/function-resource.js';
 import MacOSBinarySignature from '../../../src/core/resources/builds/macos-binary-signature.js';
 import SeaBuild from '../../../src/core/resources/builds/sea-build.js';
 import { createActorSystemResources } from '../../../src/core/runtime/resources.js';
@@ -331,6 +332,58 @@ describe('ActorSystem runtime resources', () => {
     ]);
     expect(build).toBeInstanceOf(SeaBuild);
     expect(build?.get('libc')).toBe('glibc');
+  });
+
+  it('omits libc from Darwin function build targets', () => {
+    const activityPath = fileURLToPath(
+      new URL('../../fixtures/actors/hello-resources.js', import.meta.url),
+    );
+    const activity = new Function({
+      name: 'darwin-activity',
+      entrypoint: { path: activityPath, export: 'helloResources' },
+      properties: {
+        external: [{ name: 'lmdb', version: '3.4.4' }],
+      },
+    });
+    const system = new ActorSystem({
+      name: 'darwin-target-system',
+      functions: [activity],
+      properties: {
+        targets: [
+          {
+            nodeVersion: process.versions.node,
+            platform: 'darwin',
+            architecture: 'arm64',
+          },
+        ],
+        resources: {},
+      },
+    });
+    const functionResource = system
+      .getResources()
+      .find((resource) => resource instanceof FunctionResource);
+    const build = system
+      .getResources()
+      .find((resource) => resource instanceof SeaBuild);
+
+    expect(functionResource).toBeInstanceOf(FunctionResource);
+    expect(functionResource?.get('buildTarget')).toEqual({
+      nodeVersion: process.versions.node,
+      platform: 'darwin',
+      architecture: 'arm64',
+    });
+    const assetDigest = {
+      algorithm: /** @type {const} */ ('sha256'),
+      value: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    };
+    functionResource?._setUNSAFE('singleExecutableAssetPath', '/tmp/asset');
+    functionResource?._setUNSAFE('singleExecutableAssetDigest', assetDigest);
+    expect(build?.get('assets')).toEqual({
+      'darwin-activity': '/tmp/asset',
+    });
+    expect(build?.get('functionAssetDigests')).toEqual({
+      'darwin-activity': assetDigest,
+    });
   });
 
   it('worker sandbox: context.resources proxies use an RPC bridge to host resources', async () => {

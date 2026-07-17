@@ -5,6 +5,7 @@ import semver from 'semver';
 import {
   assertApplicationRevisionId,
   validateApplicationRevision,
+  validateDependencyLockInput,
   validateSha256Digest,
 } from './application-revision.js';
 import { getBuildTargetId, validateBuildTarget } from './build-target.js';
@@ -52,7 +53,7 @@ const BUILDER_KEYS = new Set([
 const NODE_KEYS = new Set(['version', 'archive', 'binary']);
 const NODE_ARCHIVE_KEYS = new Set(['fileName', 'digest']);
 const NODE_BINARY_KEYS = new Set(['digest']);
-const DEPENDENCIES_KEYS = new Set(['digest']);
+const DEPENDENCIES_KEYS = new Set(['lock', 'digest']);
 const UNSIGNED_SIGNING_KEYS = new Set(['mode']);
 const IDENTITY_SIGNING_KEYS = new Set(['mode', 'signer']);
 
@@ -61,7 +62,7 @@ const IDENTITY_SIGNING_KEYS = new Set(['mode', 'signer']);
  * @property {1} schemaVersion - Provenance schema version.
  * @property {{ name: string, version: string, runtimeDigest: import('./application-revision.js').Sha256Digest, toolchainDigest: import('./application-revision.js').Sha256Digest }} builder - Builder identity and immutable inputs.
  * @property {{ version: string, archive?: { fileName: string, digest: import('./application-revision.js').Sha256Digest }, binary: { digest: import('./application-revision.js').Sha256Digest } }} node - Verified Node binary and optional official archive provenance.
- * @property {{ digest: import('./application-revision.js').Sha256Digest }} dependencies - Target-specific installed dependency closure.
+ * @property {{ lock: import('./application-revision.js').LockedInputDescriptor, digest: import('./application-revision.js').Sha256Digest }} dependencies - Owning revision lock and target-specific installed closure.
  * @property {{ mode: 'unsigned'|'ad-hoc' } | { mode: 'identity', signer: string }} signing - Non-secret signing assertion.
  */
 
@@ -286,6 +287,20 @@ export function validateArtifactProvenance(
     `${valuePath}.dependencies`,
   );
   assertExactKeys(dependencies, DEPENDENCIES_KEYS, `${valuePath}.dependencies`);
+  const dependencyLock = validateDependencyLockInput(
+    dependencies.lock,
+    `${valuePath}.dependencies.lock`,
+  );
+  if (
+    dependencyLock.format !== revision.inputs.dependencies.format ||
+    dependencyLock.digest.algorithm !==
+      revision.inputs.dependencies.digest.algorithm ||
+    dependencyLock.digest.value !== revision.inputs.dependencies.digest.value
+  ) {
+    throw new Error(
+      `${valuePath}.dependencies.lock must match the owning revision dependency lock.`,
+    );
+  }
 
   return {
     schemaVersion: ARTIFACT_PROVENANCE_SCHEMA_VERSION,
@@ -316,6 +331,7 @@ export function validateArtifactProvenance(
       },
     },
     dependencies: {
+      lock: dependencyLock,
       digest: validateSha256Digest(
         dependencies.digest,
         `${valuePath}.dependencies.digest`,

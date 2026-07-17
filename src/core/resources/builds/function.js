@@ -1,4 +1,5 @@
 import { getAsset } from '../../lib/node-sea.js';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { brotliDecompressSync } from 'node:zlib';
@@ -6,10 +7,9 @@ import { brotliDecompressSync } from 'node:zlib';
 import worker from '../../lib/code-execution/worker.js';
 import { createActorSystemResources } from '../../runtime/resources.js';
 import { assertNoActivityEnvironmentVariables } from './lib/activity-environment.js';
-import {
-  assertInstalledExternalDependencies,
-  normalizeExternalDependencies,
-} from './lib/resolve-externals.js';
+import { parseFunctionAssetDescription } from './lib/function-asset.js';
+import { validateSha256Digest } from '../../runtime/application-revision.js';
+import { normalizeExternalDependencies } from './lib/resolve-externals.js';
 
 /**
  * @typedef ExternalDependencyDescription
@@ -20,7 +20,7 @@ import {
 /**
  * @typedef ExternalDependencyInput
  * @property {string} name - name.
- * @property {string} [version] - version.
+ * @property {string} version - Exact canonical semantic version.
  */
 
 /**
@@ -45,6 +45,14 @@ import {
 /**
  * @typedef FunctionRunOptions
  * @property {Record<string, any>} [resources] - In-process resource instances to expose to the sandbox via RPC.
+ */
+
+/**
+ * @typedef PreparedFunctionBundle
+ * @property {string} codeString - Exact bundled activity source.
+ * @property {Buffer | Uint8Array | null} [externalsTar] - Exact frozen external archive bytes.
+ * @property {import('../../runtime/application-revision.js').Sha256Digest} [externalArchiveDigest] - Expected raw archive digest.
+ * @property {Record<string, any>} [resourceSpecs] - Function-scoped resource declarations.
  */
 
 /**
@@ -136,7 +144,6 @@ class Function {
     };
     /** @type {Promise<{ resources: Record<string, any>, close: () => Promise<void> }> | null} */
     this._runtimeResourcesPromise = null;
-    this._sourceExternalsVerified = false;
   }
 
   /**
@@ -226,25 +233,64 @@ class Function {
    * Bundled functions can also embed `resourceSpecs`; Wharfie will instantiate those
    * resources per invocation and merge them between host resources and caller overrides.
    * @param {string} name - name.
+   * @param {PreparedFunctionBundle} bundle - Exact in-memory runtime bundle.
    * @param {any} event - event.
    * @param {any} context - context.
    * @param {FunctionRunOptions} [options] - options.
    * @returns {Promise<any>} - Result.
    */
-  static async run(name, event, context = {}, options = {}) {
-    const functionAssetBuffer = await getAsset(name);
-    const functionDescriptionBuffer = Buffer.from(functionAssetBuffer);
-    const assetDescription = JSON.parse(functionDescriptionBuffer.toString());
-    const functionBuffer = brotliDecompressSync(
-      Buffer.from(assetDescription.codeBundle, 'base64'),
-    );
-    const functionCodeString = functionBuffer.toString();
-
-    const externalsTarB64 = assetDescription.externalsTar;
+  static async runPreparedBundle(
+    name,
+    bundle,
+    event,
+    context = {},
+    options = {},
+  ) {
+    if (
+      !bundle ||
+      typeof bundle !== 'object' ||
+      Array.isArray(bundle) ||
+      typeof bundle.codeString !== 'string' ||
+      bundle.codeString.length === 0
+    ) {
+      throw new TypeError(
+        'Prepared function bundle requires a nonempty codeString.',
+      );
+    }
+    const functionCodeString = bundle.codeString;
     const externalsTar =
-      typeof externalsTarB64 === 'string' && externalsTarB64.length > 0
-        ? Buffer.from(externalsTarB64, 'base64')
-        : null;
+      bundle.externalsTar === undefined || bundle.externalsTar === null
+        ? null
+        : Buffer.from(bundle.externalsTar);
+    if (externalsTar && externalsTar.length === 0) {
+      throw new TypeError(
+        'Prepared function bundle externalsTar must not be empty when provided.',
+      );
+    }
+    if (externalsTar) {
+      const expectedArchiveDigest = validateSha256Digest(
+        bundle.externalArchiveDigest,
+        'prepared function bundle externalArchiveDigest',
+      );
+      const actualArchiveDigest = {
+        algorithm: 'sha256',
+        value: createHash('sha256').update(externalsTar).digest('base64url'),
+      };
+      if (
+        actualArchiveDigest.algorithm !== expectedArchiveDigest.algorithm ||
+        actualArchiveDigest.value !== expectedArchiveDigest.value
+      ) {
+        throw new Error(
+          'Bundled external archive does not match its embedded build digest.',
+        );
+      }
+    } else if (
+      Object.prototype.hasOwnProperty.call(bundle, 'externalArchiveDigest')
+    ) {
+      throw new Error(
+        'Prepared function bundle declares an external archive digest without archive bytes.',
+      );
+    }
     const externalBundleDigest = worker.getExternalBundleDigest(externalsTar);
 
     const split = splitContextForWorker(context);
@@ -253,8 +299,8 @@ class Function {
 
     /** @type {{ resources: Record<string, any>, close: () => Promise<void> } | null} */
     let scopedResources = null;
-    const bundledResourceSpecs = isObject(assetDescription.resourceSpecs)
-      ? assetDescription.resourceSpecs
+    const bundledResourceSpecs = isObject(bundle.resourceSpecs)
+      ? bundle.resourceSpecs
       : null;
 
     try {
@@ -299,6 +345,73 @@ class Function {
   }
 
   /**
+   * Run one activity embedded in a packaged SEA asset.
+   * @param {string} name - name.
+   * @param {any} event - event.
+   * @param {any} context - context.
+   * @param {FunctionRunOptions} [options] - options.
+   * @returns {Promise<any>} - Result.
+   */
+  static async run(name, event, context = {}, options = {}) {
+    const functionAssetBuffer = await getAsset(name);
+    const functionDescriptionBuffer = Buffer.from(functionAssetBuffer);
+    const {
+      description: assetDescription,
+      codeBundleBytes,
+      externalArchiveBytes,
+    } = parseFunctionAssetDescription(
+      functionDescriptionBuffer,
+      `Packaged activity '${name}' function asset`,
+    );
+    const functionBuffer = brotliDecompressSync(codeBundleBytes);
+    if (assetDescription.activity !== name) {
+      throw new Error(
+        `Packaged activity '${name}' does not match function asset activity '${assetDescription.activity}'.`,
+      );
+    }
+    const target = assetDescription.target;
+    if (
+      target.nodeVersion !== process.versions.node ||
+      target.platform !== process.platform ||
+      target.architecture !== process.arch
+    ) {
+      throw new Error(
+        `Packaged activity '${name}' function asset target does not match the running executable.`,
+      );
+    }
+    const runtimeReport = /** @type {any} */ (process.report?.getReport?.());
+    if (
+      target.platform === 'linux' &&
+      !runtimeReport?.header?.glibcVersionRuntime
+    ) {
+      throw new Error(
+        `Packaged activity '${name}' requires a positively identified glibc runtime.`,
+      );
+    }
+    const externalsTar =
+      externalArchiveBytes.length > 0 ? externalArchiveBytes : null;
+    const externalDependencyReceipt =
+      assetDescription.externalDependencyReceipt;
+
+    return await Function.runPreparedBundle(
+      name,
+      {
+        codeString: functionBuffer.toString(),
+        ...(externalsTar ? { externalsTar } : {}),
+        ...(externalDependencyReceipt
+          ? {
+              externalArchiveDigest: externalDependencyReceipt.archiveDigest,
+            }
+          : {}),
+        resourceSpecs: assetDescription.resourceSpecs,
+      },
+      event,
+      context,
+      options,
+    );
+  }
+
+  /**
    * Load the function entrypoint and invoke it in-process.
    *
    * This is primarily used by the (single-process) ActorSystem runtime.
@@ -308,6 +421,14 @@ class Function {
    * @returns {Promise<any>} - Result.
    */
   async fn(event = {}, context = {}, options = {}) {
+    if (
+      Array.isArray(this.properties.external) &&
+      this.properties.external.length > 0
+    ) {
+      throw new Error(
+        `Source activity '${this.name}' declares external packages and must run through a prepared application revision; ambient node_modules are not execution inputs.`,
+      );
+    }
     const entryPath = path.isAbsolute(this.entrypoint.path)
       ? this.entrypoint.path
       : path.resolve(this.entrypoint.path);
@@ -315,11 +436,6 @@ class Function {
       context,
       options.baseResources || {},
     );
-
-    if (!this._sourceExternalsVerified) {
-      assertInstalledExternalDependencies(this.properties.external, entryPath);
-      this._sourceExternalsVerified = true;
-    }
 
     // CJS: require() exists. ESM: use dynamic import().
     const handler =

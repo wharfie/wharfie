@@ -1,14 +1,24 @@
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { pipeline } from 'node:stream/promises';
 
 import FunctionResource from '../../core/resources/builds/function-resource.js';
 import MacOSBinarySignature from '../../core/resources/builds/macos-binary-signature.js';
 import NodeBinary from '../../core/resources/builds/node-binary.js';
 import {
+  APP_MANIFEST_ASSET_NAME,
+  stringifyEmbeddedAppManifest,
+} from '../../core/resources/builds/lib/app-manifest-asset.js';
+import {
+  APPLICATION_REVISION_ASSET_NAME,
+  ARTIFACT_RUNTIME_ASSET_NAME,
+  ARTIFACT_RUNTIME_KIND,
+  ARTIFACT_RUNTIME_SCHEMA_VERSION,
+  stringifyEmbeddedApplicationRevision,
+  stringifyEmbeddedArtifactRuntime,
+} from '../../core/resources/builds/lib/revision-runtime-assets.js';
+import {
   validateApplicationRevision,
+  validateDependencyLockInput,
   validateSha256Digest,
 } from '../../core/runtime/application-revision.js';
 import { validateArtifactProvenance } from '../../core/runtime/artifact-record.js';
@@ -24,30 +34,24 @@ import { cloneJsonValue } from '../../core/runtime/json-value.js';
 
 export const ARTIFACT_TOOLCHAIN_DIGEST_DOMAIN = 'wharfie:artifact-toolchain:v1';
 export const ARTIFACT_DEPENDENCY_CLOSURE_DIGEST_DOMAIN =
-  'wharfie:artifact-dependency-closure:v1';
+  'wharfie:artifact-dependency-closure:v2';
 export const ARTIFACT_PROVENANCE_BUILDER_NAME = '@wharfie/wharfie';
 
-const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
 const require = createRequire(import.meta.url);
 const TOOLCHAIN_PACKAGE_NAMES = Object.freeze([
   '@npmcli/arborist',
   'esbuild',
   'pacote',
   'postject',
+  'semver',
   'tar',
 ]);
-
-/**
- * @typedef FileDigest
- * @property {string} hex - Lowercase hexadecimal SHA-256.
- * @property {string} base64url - Unpadded base64url SHA-256.
- * @property {number} size - Exact file size.
- */
 
 /**
  * @typedef DependencyClosureActivity
  * @property {string} activity - Canonical activity name.
  * @property {{name: string, version: string}[]} externals - Exact direct external declarations.
+ * @property {import('../../core/runtime/application-revision.js').Sha256Digest} closureDigest - Exact semantic target closure digest.
  * @property {import('../../core/runtime/application-revision.js').Sha256Digest} archiveDigest - Exact embedded target archive digest.
  */
 
@@ -70,6 +74,111 @@ function createCanonicalDigest(domain, value, valuePath) {
       .update(canonicalJson, 'utf8')
       .digest('base64url'),
   };
+}
+
+/**
+ * @param {unknown} left - First JSON value.
+ * @param {unknown} right - Second JSON value.
+ * @returns {boolean} - Whether both values have one canonical JSON encoding.
+ */
+function hasSameCanonicalJson(left, right) {
+  return (
+    JSON.stringify(
+      sortCanonicalJsonValue(cloneJsonValue(left, 'left value')),
+    ) ===
+    JSON.stringify(sortCanonicalJsonValue(cloneJsonValue(right, 'right value')))
+  );
+}
+
+/**
+ * @param {string | Buffer} bytes - Exact bytes.
+ * @returns {import('../../core/runtime/application-revision.js').Sha256Digest} - Digest.
+ */
+function digestBytes(bytes) {
+  return {
+    algorithm: 'sha256',
+    value: createHash('sha256').update(bytes).digest('base64url'),
+  };
+}
+
+/**
+ * Cross-check every behavior-bearing SEA asset against the immutable revision
+ * and deterministic reserved metadata encodings.
+ * @param {Record<string, any>} generation - Successful build generation.
+ * @param {import('../../core/runtime/application-revision.js').ApplicationRevision} revision - Owning revision.
+ * @param {import('../../core/runtime/build-target.js').BuildTarget} target - Artifact target.
+ * @returns {void}
+ */
+function validateGenerationAssets(generation, revision, target) {
+  const actualAssets = generation.assets;
+  if (
+    !actualAssets ||
+    typeof actualAssets !== 'object' ||
+    Array.isArray(actualAssets)
+  ) {
+    throw new TypeError('SEA build generation has no exact asset evidence.');
+  }
+  const embeddedManifest = {
+    ...revision.contract,
+    targets: [{ ...target }],
+  };
+  const runtime = {
+    schemaVersion: ARTIFACT_RUNTIME_SCHEMA_VERSION,
+    kind: ARTIFACT_RUNTIME_KIND,
+    appId: revision.contract.app.id,
+    revisionId: revision.revisionId,
+    target,
+  };
+  /** @type {Record<string, import('../../core/runtime/application-revision.js').Sha256Digest>} */
+  const expectedAssets = {
+    ...Object.fromEntries(
+      (revision.inputs.assets || []).map((asset) => [asset.name, asset.digest]),
+    ),
+    [APP_MANIFEST_ASSET_NAME]: digestBytes(
+      `${stringifyEmbeddedAppManifest(embeddedManifest, { pretty: true })}\n`,
+    ),
+    [APPLICATION_REVISION_ASSET_NAME]: digestBytes(
+      `${stringifyEmbeddedApplicationRevision(revision, { pretty: true })}\n`,
+    ),
+    [ARTIFACT_RUNTIME_ASSET_NAME]: digestBytes(
+      `${stringifyEmbeddedArtifactRuntime(runtime, { pretty: true })}\n`,
+    ),
+  };
+  for (const [activity, evidence] of Object.entries(
+    generation.functionAssets || {},
+  )) {
+    expectedAssets[activity] = validateSha256Digest(
+      evidence.assetDigest,
+      `Activity '${activity}' sealed asset digest`,
+    );
+  }
+  const actualNames = Object.keys(actualAssets).sort(compareCanonicalStrings);
+  const expectedNames = Object.keys(expectedAssets).sort(
+    compareCanonicalStrings,
+  );
+  if (
+    actualNames.length !== expectedNames.length ||
+    actualNames.some((name, index) => name !== expectedNames[index])
+  ) {
+    throw new Error(
+      'SEA build generation assets do not exactly match its revision, activities, and reserved metadata.',
+    );
+  }
+  for (const name of expectedNames) {
+    const actual = validateSha256Digest(
+      actualAssets[name],
+      `SEA generation asset '${name}'`,
+    );
+    const expected = validateSha256Digest(
+      expectedAssets[name],
+      `Expected SEA asset '${name}'`,
+    );
+    if (actual.value !== expected.value) {
+      throw new Error(
+        `SEA generation asset '${name}' does not match its immutable input.`,
+      );
+    }
+  }
 }
 
 /**
@@ -148,47 +257,6 @@ export function getArtifactBuildTarget(build) {
 }
 
 /**
- * Hash one exact file without buffering a Node executable into memory.
- * @param {string} filePath - Exact file path.
- * @param {string} valuePath - Human-readable path label.
- * @returns {Promise<FileDigest>} - Exact file digest and size.
- */
-async function digestFile(filePath, valuePath) {
-  if (typeof filePath !== 'string' || !filePath) {
-    throw new TypeError(`${valuePath} must be a nonempty file path.`);
-  }
-  const fileStat = await stat(filePath);
-  if (!fileStat.isFile()) {
-    throw new TypeError(`${valuePath} must identify a regular file.`);
-  }
-
-  const hash = createHash('sha256');
-  await pipeline(createReadStream(filePath), hash);
-  const digestBytes = hash.digest();
-  return {
-    hex: digestBytes.toString('hex'),
-    base64url: digestBytes.toString('base64url'),
-    size: fileStat.size,
-  };
-}
-
-/**
- * Convert a validated hexadecimal digest into the durable digest shape.
- * @param {unknown} value - Candidate hexadecimal SHA-256.
- * @param {string} valuePath - Human-readable path.
- * @returns {import('../../core/runtime/application-revision.js').Sha256Digest} - Durable digest.
- */
-function digestFromHex(value, valuePath) {
-  if (typeof value !== 'string' || !SHA256_HEX_PATTERN.test(value)) {
-    throw new TypeError(`${valuePath} must be a hexadecimal SHA-256 digest.`);
-  }
-  return {
-    algorithm: 'sha256',
-    value: Buffer.from(value, 'hex').toString('base64url'),
-  };
-}
-
-/**
  * Return the official archive name for a canonical Node target.
  * @param {import('../../core/runtime/build-target.js').BuildTarget} target - Canonical target.
  * @returns {string} - Official Node distribution filename.
@@ -202,46 +270,33 @@ function getOfficialNodeArchiveName(target) {
 }
 
 /**
- * Read a receipt if it exists; malformed or unreadable present receipts fail.
- * @param {string} receiptPath - Receipt path.
- * @returns {Promise<Record<string, any> | null>} - Parsed receipt or null.
- */
-async function readOptionalIntegrityReceipt(receiptPath) {
-  let contents;
-  try {
-    contents = await readFile(receiptPath, 'utf8');
-  } catch (error) {
-    if (
-      error &&
-      typeof error === 'object' &&
-      'code' in error &&
-      error.code === 'ENOENT'
-    ) {
-      return null;
-    }
-    throw error;
-  }
-
-  try {
-    const receipt = JSON.parse(contents);
-    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) {
-      throw new TypeError('receipt root must be an object');
-    }
-    return receipt;
-  } catch {
-    throw new Error(`Invalid Node binary integrity receipt ${receiptPath}.`);
-  }
-}
-
-/**
  * Build exact Node binary provenance and cross-check any official receipt.
  * @param {any} build - SEA build resource.
  * @param {import('../../core/runtime/build-target.js').BuildTarget} target - Canonical target.
+ * @param {Record<string, any>} generation - Successful SEA build evidence.
  * @returns {Promise<import('../../core/runtime/artifact-record.js').ArtifactProvenance['node']>} - Node provenance.
  */
-async function createNodeProvenance(build, target) {
+async function createNodeProvenance(build, target, generation) {
+  const nodeSource = generation.nodeSource;
   const nodeBinaryPath = build.get('nodeBinaryPath');
-  const actualBinary = await digestFile(nodeBinaryPath, 'build.nodeBinaryPath');
+  if (
+    !nodeSource ||
+    nodeBinaryPath !== nodeSource.path ||
+    typeof nodeSource.size !== 'number'
+  ) {
+    throw new Error(
+      'SEA build Node source does not match its committed build generation.',
+    );
+  }
+  const nodeSourceDigest = validateSha256Digest(
+    nodeSource.digest,
+    'SEA build Node source digest',
+  );
+  const actualBinary = {
+    hex: Buffer.from(nodeSourceDigest.value, 'base64url').toString('hex'),
+    base64url: nodeSourceDigest.value,
+    size: nodeSource.size,
+  };
   const nodeDependencies = Array.isArray(build.dependsOn)
     ? build.dependsOn.filter(
         (/** @type {any} */ dependency) => dependency instanceof NodeBinary,
@@ -250,6 +305,14 @@ async function createNodeProvenance(build, target) {
   if (nodeDependencies.length > 1) {
     throw new Error('SEA build has more than one NodeBinary dependency.');
   }
+  if (
+    nodeDependencies.length === 1 &&
+    nodeDependencies[0].get('binaryPath') !== nodeSource.path
+  ) {
+    throw new Error(
+      'NodeBinary output path does not match the Node source sealed into the SEA build generation.',
+    );
+  }
 
   const binary = {
     digest: {
@@ -257,48 +320,39 @@ async function createNodeProvenance(build, target) {
       value: actualBinary.base64url,
     },
   };
-  if (nodeDependencies.length === 0) {
-    return { version: target.nodeVersion, binary };
-  }
-
-  const receiptPath =
-    await nodeDependencies[0].getIntegrityReceiptPath(nodeBinaryPath);
-  const receipt = await readOptionalIntegrityReceipt(receiptPath);
-  if (!receipt) {
-    return { version: target.nodeVersion, binary };
-  }
-
-  const receiptNodeVersion = String(receipt.target?.nodeVersion || '').replace(
-    /^v/,
-    '',
-  );
-  const receiptBinarySha256 = String(
-    receipt.binary?.sha256 || '',
-  ).toLowerCase();
-  const receiptArchiveSha256 = String(receipt.archive?.sha256 || '');
-  if (
-    receipt.version !== 1 ||
-    receiptNodeVersion !== target.nodeVersion ||
-    receipt.target?.platform !== target.platform ||
-    receipt.target?.architecture !== target.architecture ||
-    receipt.archive?.fileName !== getOfficialNodeArchiveName(target) ||
-    !SHA256_HEX_PATTERN.test(receiptBinarySha256) ||
-    receiptBinarySha256 !== actualBinary.hex ||
-    receipt.binary?.size !== actualBinary.size
-  ) {
+  if (!Object.prototype.hasOwnProperty.call(nodeSource, 'archive')) {
     throw new Error(
-      'Node binary integrity receipt does not match the exact target binary.',
+      'SEA build Node source has no same-generation archive evidence state.',
     );
   }
+  const archive = nodeSource.archive;
+  if (nodeDependencies.length === 0 && archive !== null) {
+    throw new Error(
+      'SEA build exposes Node archive evidence without a NodeBinary dependency.',
+    );
+  }
+  if (archive === null) {
+    return { version: target.nodeVersion, binary };
+  }
+  if (
+    !archive ||
+    typeof archive !== 'object' ||
+    archive.fileName !== getOfficialNodeArchiveName(target)
+  ) {
+    throw new Error(
+      'SEA build Node archive evidence does not match the exact target.',
+    );
+  }
+  const archiveDigest = validateSha256Digest(
+    archive.digest,
+    'SEA build Node archive digest',
+  );
 
   return {
     version: target.nodeVersion,
     archive: {
-      fileName: receipt.archive.fileName,
-      digest: digestFromHex(
-        receiptArchiveSha256,
-        'Node integrity receipt archive.sha256',
-      ),
+      fileName: archive.fileName,
+      digest: archiveDigest,
     },
     binary,
   };
@@ -355,9 +409,22 @@ function getDeclaredExternals(resource) {
  * Digest the exact target external archives embedded by this SEA build.
  * @param {any} build - SEA build resource.
  * @param {import('../../core/runtime/build-target.js').BuildTarget} target - Canonical target.
+ * @param {unknown} revision - Owning immutable application revision.
+ * @param {Record<string, any>} generation - Successful SEA build generation evidence.
  * @returns {import('../../core/runtime/application-revision.js').Sha256Digest} - Canonical dependency closure digest.
  */
-export function createArtifactDependencyClosureDigest(build, target) {
+export function createArtifactDependencyClosureDigest(
+  build,
+  target,
+  revision,
+  generation,
+) {
+  const validatedRevision = validateApplicationRevision(
+    revision,
+    'artifact application revision',
+  );
+  const expectedLock = validatedRevision.inputs.dependencies;
+  const contractActivities = validatedRevision.contract.activities || {};
   const functionResources = /** @type {FunctionResource[]} */ (
     Array.isArray(build.dependsOn)
       ? build.dependsOn.filter(
@@ -366,48 +433,243 @@ export function createArtifactDependencyClosureDigest(build, target) {
         )
       : []
   );
+  const functionEvidence = generation?.functionAssets;
+  if (
+    !functionEvidence ||
+    typeof functionEvidence !== 'object' ||
+    Array.isArray(functionEvidence)
+  ) {
+    throw new TypeError(
+      'SEA build generation does not expose sealed function asset evidence.',
+    );
+  }
+
+  const resourcesByActivity = new Map();
+  for (const resource of functionResources) {
+    const activity = String(resource.get('functionName'));
+    if (resourcesByActivity.has(activity)) {
+      throw new Error(
+        `SEA build has duplicate FunctionResource activity '${activity}'.`,
+      );
+    }
+    resourcesByActivity.set(activity, resource);
+  }
+  const resourceNames = [...resourcesByActivity.keys()].sort(
+    compareCanonicalStrings,
+  );
+  const evidenceNames = Object.keys(functionEvidence).sort(
+    compareCanonicalStrings,
+  );
+  const contractNames = Object.keys(contractActivities).sort(
+    compareCanonicalStrings,
+  );
+  if (
+    resourceNames.length !== evidenceNames.length ||
+    resourceNames.some((name, index) => name !== evidenceNames[index]) ||
+    resourceNames.length !== contractNames.length ||
+    resourceNames.some((name, index) => name !== contractNames[index])
+  ) {
+    throw new Error(
+      'SEA sealed function assets, FunctionResource dependencies, and revision contract activities do not exactly match.',
+    );
+  }
+
+  for (const [activity, resource] of resourcesByActivity) {
+    if (!resource.has('singleExecutableAssetDigest')) {
+      throw new Error(
+        `Activity '${activity}' has no reconciled function asset digest.`,
+      );
+    }
+    const expectedAssetDigest = validateSha256Digest(
+      resource.get('singleExecutableAssetDigest'),
+      `Activity '${activity}' function asset digest`,
+    );
+    const sealedEvidence = functionEvidence[activity];
+    if (sealedEvidence?.activity !== activity) {
+      throw new Error(
+        `Activity '${activity}' does not match its sealed function asset identity.`,
+      );
+    }
+    const embeddedAssetDigest = validateSha256Digest(
+      sealedEvidence.assetDigest,
+      `SEA sealed function asset digest for activity '${activity}'`,
+    );
+    if (
+      embeddedAssetDigest.algorithm !== expectedAssetDigest.algorithm ||
+      embeddedAssetDigest.value !== expectedAssetDigest.value
+    ) {
+      throw new Error(
+        `Activity '${activity}' function asset does not match the bytes embedded in its SEA build.`,
+      );
+    }
+
+    const sealedTarget = validateBuildTarget(
+      sealedEvidence.target,
+      `Activity '${activity}' sealed build target`,
+    );
+    const resourceTargetValue = resource.get('buildTarget');
+    const resourceTarget = validateBuildTarget(
+      {
+        nodeVersion: String(resourceTargetValue?.nodeVersion).replace(/^v/, ''),
+        platform: resourceTargetValue?.platform,
+        architecture: resourceTargetValue?.architecture,
+        ...(resourceTargetValue?.platform === 'linux' ||
+        resourceTargetValue?.libc !== undefined
+          ? { libc: resourceTargetValue?.libc }
+          : {}),
+      },
+      `Activity '${activity}' reconciled build target`,
+    );
+    if (getBuildTargetId(sealedTarget) !== getBuildTargetId(target)) {
+      throw new Error(
+        `Activity '${activity}' sealed target does not match its SEA build.`,
+      );
+    }
+    if (getBuildTargetId(resourceTarget) !== getBuildTargetId(sealedTarget)) {
+      throw new Error(
+        `Activity '${activity}' reconciled build target does not match its sealed function asset.`,
+      );
+    }
+
+    const resourceExternals = getDeclaredExternals(resource);
+    const sealedExternals = sealedEvidence.externals;
+    const contractDefinition = contractActivities[activity];
+    const contractExternals = Array.isArray(contractDefinition.externalPackages)
+      ? contractDefinition.externalPackages
+      : [];
+    if (
+      !hasSameCanonicalJson(resourceExternals, sealedExternals) ||
+      !hasSameCanonicalJson(sealedExternals, contractExternals)
+    ) {
+      throw new Error(
+        `Activity '${activity}' external packages do not match its sealed function asset and revision contract.`,
+      );
+    }
+    const resourceSpecs = resource.get('resources', {});
+    const contractResourceSpecs = contractDefinition.resources || {};
+    if (
+      !hasSameCanonicalJson(resourceSpecs, sealedEvidence.resourceSpecs) ||
+      !hasSameCanonicalJson(sealedEvidence.resourceSpecs, contractResourceSpecs)
+    ) {
+      throw new Error(
+        `Activity '${activity}' resource specs do not match its sealed function asset and revision contract.`,
+      );
+    }
+  }
   const activities = functionResources.reduce(
     (
       /** @type {DependencyClosureActivity[]} */ entries,
       /** @type {FunctionResource} */ resource,
     ) => {
+      const activity = String(resource.get('functionName'));
       const externals = getDeclaredExternals(resource);
-      if (externals.length === 0) return entries;
-
-      const resourceTargetValue = resource.get('buildTarget');
-      const resourceTarget = validateBuildTarget(
-        {
-          nodeVersion: String(resourceTargetValue?.nodeVersion).replace(
-            /^v/,
-            '',
-          ),
-          platform: resourceTargetValue?.platform,
-          architecture: resourceTargetValue?.architecture,
-          ...(resourceTargetValue?.platform === 'linux' ||
-          resourceTargetValue?.libc !== undefined
-            ? { libc: resourceTargetValue?.libc }
-            : {}),
-        },
-        `Activity '${resource.get('functionName')}' build target`,
-      );
-      if (getBuildTargetId(resourceTarget) !== getBuildTargetId(target)) {
+      const sealedEvidence = functionEvidence[activity];
+      const embeddedReceipt = sealedEvidence.externalDependencyReceipt;
+      if (externals.length === 0) {
+        if (embeddedReceipt !== null) {
+          throw new Error(
+            `Activity '${activity}' embeds an external dependency receipt without declaring externals.`,
+          );
+        }
+        if (
+          resource.has('externalArchiveDigest') ||
+          resource.has('externalClosureDigest') ||
+          resource.has('externalDependencyLockInput')
+        ) {
+          throw new Error(
+            `Activity '${activity}' has stale external dependency output fields without declared externals.`,
+          );
+        }
+        return entries;
+      }
+      if (!embeddedReceipt) {
         throw new Error(
-          `Activity '${resource.get('functionName')}' external archive target does not match its SEA build.`,
+          `Activity '${activity}' declares external dependencies but its SEA asset has no sealed dependency receipt.`,
         );
       }
 
       if (!resource.has('externalArchiveDigest')) {
         throw new Error(
-          `Activity '${resource.get('functionName')}' declares external dependencies but has no reconciled external archive digest.`,
+          `Activity '${activity}' declares external dependencies but has no reconciled external archive digest.`,
+        );
+      }
+      if (!resource.has('externalClosureDigest')) {
+        throw new Error(
+          `Activity '${activity}' has no reconciled frozen closure digest.`,
+        );
+      }
+      if (!resource.has('externalDependencyLockInput')) {
+        throw new Error(
+          `Activity '${activity}' has no reconciled dependency lock input.`,
+        );
+      }
+      const embeddedLock = validateDependencyLockInput(
+        embeddedReceipt.dependencyLockInput,
+        `Activity '${activity}' sealed dependency lock`,
+      );
+      const resourceLock = validateDependencyLockInput(
+        resource.get('externalDependencyLockInput'),
+        `Activity '${activity}' reconciled dependency lock`,
+      );
+      if (
+        embeddedLock.format !== expectedLock.format ||
+        embeddedLock.digest.algorithm !== expectedLock.digest.algorithm ||
+        embeddedLock.digest.value !== expectedLock.digest.value
+      ) {
+        throw new Error(
+          `Activity '${activity}' sealed dependency lock does not match the owning revision.`,
+        );
+      }
+      if (
+        resourceLock.format !== embeddedLock.format ||
+        resourceLock.digest.algorithm !== embeddedLock.digest.algorithm ||
+        resourceLock.digest.value !== embeddedLock.digest.value
+      ) {
+        throw new Error(
+          `Activity '${activity}' reconciled dependency lock does not match its sealed SEA receipt.`,
+        );
+      }
+      const embeddedClosureDigest = validateSha256Digest(
+        embeddedReceipt.closureDigest,
+        `Activity '${activity}' sealed frozen closure digest`,
+      );
+      const resourceClosureDigest = validateSha256Digest(
+        resource.get('externalClosureDigest'),
+        `Activity '${activity}' reconciled frozen closure digest`,
+      );
+      if (
+        resourceClosureDigest.algorithm !== embeddedClosureDigest.algorithm ||
+        resourceClosureDigest.value !== embeddedClosureDigest.value
+      ) {
+        throw new Error(
+          `Activity '${activity}' reconciled frozen closure digest does not match its sealed SEA receipt.`,
+        );
+      }
+      const embeddedArchiveDigest = validateSha256Digest(
+        embeddedReceipt.archiveDigest,
+        `Activity '${activity}' sealed external archive digest`,
+      );
+      const resourceArchiveDigest = validateSha256Digest(
+        resource.get('externalArchiveDigest'),
+        `Activity '${activity}' reconciled external archive digest`,
+      );
+      if (
+        resourceArchiveDigest.algorithm !== embeddedArchiveDigest.algorithm ||
+        resourceArchiveDigest.value !== embeddedArchiveDigest.value
+      ) {
+        throw new Error(
+          `Activity '${activity}' reconciled external archive digest does not match its sealed SEA receipt.`,
         );
       }
       entries.push({
-        activity: String(resource.get('functionName')),
-        externals,
-        archiveDigest: validateSha256Digest(
-          resource.get('externalArchiveDigest'),
-          `Activity '${resource.get('functionName')}' external archive digest`,
+        activity,
+        externals: sealedEvidence.externals.map(
+          (/** @type {{name: string, version: string}} */ external) => ({
+            ...external,
+          }),
         ),
+        closureDigest: embeddedClosureDigest,
+        archiveDigest: embeddedArchiveDigest,
       });
       return entries;
     },
@@ -427,7 +689,7 @@ export function createArtifactDependencyClosureDigest(build, target) {
 
   return createCanonicalDigest(
     ARTIFACT_DEPENDENCY_CLOSURE_DIGEST_DOMAIN,
-    { schemaVersion: 1, target, activities },
+    { schemaVersion: 2, lock: expectedLock, target, activities },
     'artifact dependency closure',
   );
 }
@@ -477,7 +739,7 @@ function getArtifactSigning(actorSystem, build, target) {
 
 /**
  * Construct truthful package-time provenance from reconciled build resources.
- * @param {{build: any, actorSystem: any, revision: unknown, builderVersion: string}} options - Packaging inputs.
+ * @param {{build: any, actorSystem: any, revision: unknown, builderVersion: string, artifactBytes: Buffer | Uint8Array}} options - Packaging inputs.
  * @returns {Promise<import('../../core/runtime/artifact-record.js').ArtifactProvenance>} - Validated artifact provenance.
  */
 export async function createArtifactProvenance({
@@ -485,12 +747,26 @@ export async function createArtifactProvenance({
   actorSystem,
   revision,
   builderVersion,
+  artifactBytes,
 }) {
   const validatedRevision = validateApplicationRevision(
     revision,
     'application revision',
   );
   const target = getArtifactBuildTarget(build);
+  if (typeof build.getSuccessfulBuildEvidence !== 'function') {
+    throw new TypeError(
+      'SEA build does not expose successful generation evidence.',
+    );
+  }
+  const generation = build.getSuccessfulBuildEvidence(artifactBytes);
+  validateGenerationAssets(generation, validatedRevision, target);
+  const signing = getArtifactSigning(actorSystem, build, target);
+  if (!hasSameCanonicalJson(signing, generation.signing)) {
+    throw new Error(
+      'SEA signing result does not match its committed build generation.',
+    );
+  }
   const provenance = {
     schemaVersion: 1,
     builder: {
@@ -499,11 +775,17 @@ export async function createArtifactProvenance({
       runtimeDigest: validatedRevision.inputs.runtime.digest,
       toolchainDigest: createArtifactToolchainDigest(builderVersion),
     },
-    node: await createNodeProvenance(build, target),
+    node: await createNodeProvenance(build, target, generation),
     dependencies: {
-      digest: createArtifactDependencyClosureDigest(build, target),
+      lock: validatedRevision.inputs.dependencies,
+      digest: createArtifactDependencyClosureDigest(
+        build,
+        target,
+        validatedRevision,
+        generation,
+      ),
     },
-    signing: getArtifactSigning(actorSystem, build, target),
+    signing,
   };
 
   return validateArtifactProvenance(

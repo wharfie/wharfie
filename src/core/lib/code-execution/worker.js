@@ -1,6 +1,14 @@
 import { join } from 'node:path';
-import { access, mkdir, writeFile } from 'node:fs/promises';
-import { constants as FS, readFileSync } from 'node:fs';
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { Worker } from 'node:worker_threads';
 import { x } from 'tar';
 import { Readable } from 'node:stream';
@@ -17,7 +25,7 @@ import { createRequire } from 'node:module';
 import workerSource from './runner.worker.js';
 
 import paths from '../paths.js';
-const VM_PATH = join(paths.data, 'vms');
+const VM_PATH = join(paths.temp, 'vms');
 const require = createRequire(import.meta.url);
 
 // --- bundle-isolated workers + response routing ---
@@ -35,6 +43,7 @@ let nextId = 1;
  * @property {string} activityKey - Stable activity name/source key.
  * @property {string} externalBundleDigest - External bundle content digest.
  * @property {string} name - Activity name.
+ * @property {Sandbox} sandbox - Private filesystem root owned by this worker.
  * @property {Worker} worker - Worker instance.
  * @property {Map<number, PendingExecution>} pending - Executions awaiting responses.
  * @property {Set<string>} rpcSessionIds - RPC sessions owned by this worker.
@@ -42,7 +51,7 @@ let nextId = 1;
  * @property {boolean} destroyRequested - Whether to terminate once idle.
  * @property {boolean} terminating - Whether termination has started.
  * @property {boolean} exited - Whether the worker has exited.
- * @property {Promise<number> | null} terminationPromise - Active termination.
+ * @property {Promise<void> | null} terminationPromise - Active termination.
  */
 
 /** @type {Map<string, WorkerState>} */
@@ -325,6 +334,58 @@ function removeWorkerState(state) {
 }
 
 /**
+ * Stop a sandbox from being acquired by a new invocation before its worker is
+ * terminated or its filesystem root is removed.
+ * @param {Sandbox} sandbox - Sandbox to detach.
+ * @returns {void}
+ */
+function detachSandbox(sandbox) {
+  if (sandboxes.get(sandbox.key) === sandbox) {
+    sandboxes.delete(sandbox.key);
+  }
+}
+
+/**
+ * Remove one private sandbox root. Cleanup is idempotent so worker exit and an
+ * explicit destroy can safely converge on the same operation.
+ * @param {Sandbox} sandbox - Sandbox to clean.
+ * @returns {Promise<void>}
+ */
+async function cleanupSandbox(sandbox) {
+  if (!sandbox.cleanupPromise) {
+    sandbox.cleanupPromise = rm(sandbox.root, {
+      force: true,
+      recursive: true,
+      maxRetries: 3,
+      retryDelay: 10,
+    });
+  }
+  await sandbox.cleanupPromise;
+}
+
+/**
+ * Detach and remove the filesystem root owned by a worker.
+ * @param {WorkerState} state - Worker state.
+ * @returns {Promise<void>}
+ */
+async function cleanupWorkerSandbox(state) {
+  detachSandbox(state.sandbox);
+  await cleanupSandbox(state.sandbox);
+}
+
+/**
+ * Run worker cleanup from an event callback without creating an unhandled
+ * rejection.
+ * @param {WorkerState} state - Worker state.
+ * @returns {void}
+ */
+function cleanupWorkerSandboxInBackground(state) {
+  cleanupWorkerSandbox(state).catch((error) => {
+    console.error('[worker:cleanup]', error);
+  });
+}
+
+/**
  * @param {WorkerState} state - Worker state.
  * @param {{ force?: boolean }} [options] - Termination options.
  * @returns {Promise<void>}
@@ -343,16 +404,24 @@ async function terminateWorkerState(state, options = {}) {
   state.terminating = true;
   removeWorkerState(state);
   clearWorkerRpcSessions(state);
+  detachSandbox(state.sandbox);
 
   if (state.pending.size > 0) {
     rejectPendingExecutions(state, new Error('Sandbox worker was terminated.'));
   }
 
   if (state.exited) {
+    await cleanupSandbox(state.sandbox);
     return;
   }
 
-  state.terminationPromise = state.worker.terminate();
+  state.terminationPromise = (async () => {
+    try {
+      await state.worker.terminate();
+    } finally {
+      await cleanupSandbox(state.sandbox);
+    }
+  })();
   await state.terminationPromise;
 }
 
@@ -360,14 +429,17 @@ async function terminateWorkerState(state, options = {}) {
  * @param {string} name - name.
  * @param {string} codeString - Bundled activity source.
  * @param {string} externalBundleDigest - External bundle content digest.
- * @returns {WorkerState} - Result.
+ * @param {Sandbox} sandbox - Prepared private sandbox.
+ * @returns {WorkerState | null} - Worker state, or null when the sandbox was invalidated.
  */
-function ensureWorker(name, codeString, externalBundleDigest) {
+function ensureWorker(name, codeString, externalBundleDigest, sandbox) {
   const activityKey = getActivityKey(name, codeString);
   const key = getBundleKey(activityKey, externalBundleDigest);
+  if (sandboxes.get(key) !== sandbox) return null;
+
   const existing = workers.get(key);
   if (existing && !existing.terminating && !existing.exited) {
-    return existing;
+    return existing.sandbox === sandbox ? existing : null;
   }
 
   const src = getWorkerSourceText();
@@ -386,6 +458,7 @@ function ensureWorker(name, codeString, externalBundleDigest) {
     activityKey,
     externalBundleDigest,
     name,
+    sandbox,
     worker: w,
     pending: new Map(),
     rpcSessionIds: new Set(),
@@ -432,6 +505,8 @@ function ensureWorker(name, codeString, externalBundleDigest) {
     rejectPendingExecutions(state, err);
     clearWorkerRpcSessions(state);
     removeWorkerState(state);
+    detachSandbox(state.sandbox);
+    cleanupWorkerSandboxInBackground(state);
   });
 
   w.on('exit', (code) => {
@@ -444,6 +519,8 @@ function ensureWorker(name, codeString, externalBundleDigest) {
     }
     clearWorkerRpcSessions(state);
     removeWorkerState(state);
+    detachSandbox(state.sandbox);
+    cleanupWorkerSandboxInBackground(state);
   });
 
   return state;
@@ -451,17 +528,19 @@ function ensureWorker(name, codeString, externalBundleDigest) {
 
 // --- per-bundle sandbox cache: avoids recreating/extracting per call ---
 /**
- * Map<bundleKey, { root, nodeModules, pkgFile, entryFile, prepared: boolean, codeString }>
+ * Every cached root is fresh for this process. The deterministic bundle key is
+ * only a lookup key and a mkdtemp prefix; it is never used as a reusable path.
  */
 
 /**
  * @typedef Sandbox
+ * @property {string} key - Stable in-process lookup key.
  * @property {string} root - root.
  * @property {string} nodeModules - nodeModules.
  * @property {string} pkgFile - pkgFile.
  * @property {string} entryFile - entryFile.
- * @property {boolean} prepared - prepared.
  * @property {string} codeString - codeString.
+ * @property {Promise<void> | null} cleanupPromise - Active root cleanup.
  */
 
 /**
@@ -470,18 +549,106 @@ function ensureWorker(name, codeString, externalBundleDigest) {
 const sandboxes = new Map();
 /** @type {Map<string, Promise<Sandbox>>} */
 const sandboxPreparations = new Map();
+let sandboxCacheGeneration = 0;
+/** @type {Promise<void> | null} */
+let sandboxClearPromise = null;
+
+class SandboxPreparationInvalidatedError extends Error {}
 
 /**
- * @param {import("fs").PathLike} p - p.
- * @returns {Promise<boolean>} - Result.
+ * Assert that a filesystem path is a private, non-symbolic-link directory.
+ * @param {string} directory - Directory to validate.
+ * @param {string} label - Human-readable path label.
+ * @returns {Promise<import('node:fs').Stats>} - Directory identity.
  */
-async function pathExists(p) {
-  try {
-    await access(p, FS.F_OK);
-    return true;
-  } catch {
-    return false;
+async function assertPrivateDirectory(directory, label) {
+  const stats = await lstat(directory);
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    throw new Error(`${label} must be a non-symbolic-link directory.`);
   }
+  if ((stats.mode & 0o777) !== 0o700) {
+    throw new Error(`${label} must have mode 0700.`);
+  }
+  return stats;
+}
+
+/**
+ * Create and validate the process-independent parent for fresh VM roots.
+ * @returns {Promise<import('node:fs').Stats>} - Validated parent identity.
+ */
+async function ensurePrivateVmParent() {
+  await mkdir(VM_PATH, { recursive: true, mode: 0o700 });
+  const before = await lstat(VM_PATH);
+  if (before.isSymbolicLink() || !before.isDirectory()) {
+    throw new Error('Wharfie VM parent must be a non-symbolic-link directory.');
+  }
+  await chmod(VM_PATH, 0o700);
+  const after = await assertPrivateDirectory(VM_PATH, 'Wharfie VM parent');
+  if (before.dev !== after.dev || before.ino !== after.ino) {
+    throw new Error('Wharfie VM parent changed while it was being validated.');
+  }
+  return after;
+}
+
+/**
+ * Create a never-before-used private root beneath the validated VM parent.
+ * @param {string} key - Stable bundle key used only as a readable prefix.
+ * @returns {Promise<string>} - Fresh private root.
+ */
+async function createFreshSandboxRoot(key) {
+  const parent = await ensurePrivateVmParent();
+  const root = await mkdtemp(join(VM_PATH, `${key}-`));
+  try {
+    await chmod(root, 0o700);
+    await assertPrivateDirectory(root, 'Wharfie sandbox root');
+    const currentParent = await assertPrivateDirectory(
+      VM_PATH,
+      'Wharfie VM parent',
+    );
+    if (parent.dev !== currentParent.dev || parent.ino !== currentParent.ino) {
+      throw new Error(
+        'Wharfie VM parent changed while a sandbox root was being created.',
+      );
+    }
+    return root;
+  } catch (error) {
+    await rm(root, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/**
+ * Reject every extracted path that is not a regular file or directory. The
+ * walk uses lstat and never follows a symbolic link.
+ * @param {string} root - Fresh extraction root.
+ * @returns {Promise<void>}
+ */
+async function assertRegularSandboxTree(root) {
+  await assertPrivateDirectory(root, 'Wharfie sandbox root');
+
+  /** @param {string} directory - Directory to inspect. */
+  async function visit(directory) {
+    const names = await readdir(directory);
+    names.sort();
+    for (const name of names) {
+      const entryPath = join(directory, name);
+      const stats = await lstat(entryPath);
+      if (stats.isSymbolicLink()) {
+        throw new Error(
+          `External archive produced symbolic link '${entryPath}'.`,
+        );
+      }
+      if (stats.isDirectory()) {
+        await visit(entryPath);
+      } else if (!stats.isFile()) {
+        throw new Error(
+          `External archive produced unsupported special path '${entryPath}'.`,
+        );
+      }
+    }
+  }
+
+  await visit(root);
 }
 
 /**
@@ -497,6 +664,10 @@ async function ensureSandboxForName(
   externalsTar,
   externalBundleDigest,
 ) {
+  if (sandboxClearPromise) {
+    await sandboxClearPromise;
+  }
+
   const activityKey = getActivityKey(name, codeString);
   const key = getBundleKey(activityKey, externalBundleDigest);
   const cached = sandboxes.get(key);
@@ -505,18 +676,56 @@ async function ensureSandboxForName(
   const existingPreparation = sandboxPreparations.get(key);
   if (existingPreparation) return await existingPreparation;
 
+  const generation = sandboxCacheGeneration;
   const preparation = (async () => {
-    await mkdir(VM_PATH, { recursive: true });
-
-    const root = join(VM_PATH, key);
+    const root = await createFreshSandboxRoot(key);
     const nodeModules = join(root, 'node_modules');
     const pkgFile = join(root, 'package.json');
     const entryFile = join(root, 'entry.js');
+    /** @type {Sandbox} */
+    const sandbox = {
+      key,
+      root,
+      nodeModules,
+      pkgFile,
+      entryFile,
+      codeString,
+      cleanupPromise: null,
+    };
 
-    await mkdir(root, { recursive: true });
-    await mkdir(nodeModules, { recursive: true });
+    try {
+      await mkdir(nodeModules, { mode: 0o700 });
 
-    if (!(await pathExists(pkgFile))) {
+      if (externalsTar && externalsTar.length > 0) {
+        let unsupportedEntryType = null;
+        const src = Readable.from([externalsTar]);
+        const extractor = x({
+          C: root,
+          preserveOwner: false,
+          preservePaths: false,
+          strict: true,
+          filter: (_entryPath, entry) => {
+            const entryType = 'type' in entry ? String(entry.type) : 'unknown';
+            if (!['Directory', 'File', 'OldFile'].includes(entryType)) {
+              unsupportedEntryType ||= entryType;
+              return false;
+            }
+            return true;
+          },
+        });
+        await pipeline(src, extractor);
+        if (unsupportedEntryType) {
+          throw new Error(
+            `External archive contains unsupported entry type '${unsupportedEntryType}'.`,
+          );
+        }
+      }
+
+      // An archive may contain a root directory record with wider mode bits.
+      await chmod(root, 0o700);
+      await assertRegularSandboxTree(root);
+
+      // The archive cannot choose the manifest used as createRequire's base.
       await writeFile(
         pkgFile,
         JSON.stringify(
@@ -524,26 +733,23 @@ async function ensureSandboxForName(
           null,
           2,
         ),
+        { mode: 0o600 },
       );
-    }
+      await chmod(pkgFile, 0o600);
 
-    // Extract externals only once per bundle.
-    if (externalsTar && externalsTar.length > 0) {
-      const src = Readable.from([externalsTar]);
-      const extractor = x({ C: root, preserveOwner: false, unlink: true });
-      await pipeline(src, extractor);
-    }
+      if (generation !== sandboxCacheGeneration) {
+        throw new SandboxPreparationInvalidatedError(
+          'Sandbox preparation was invalidated by a cache clear.',
+        );
+      }
 
-    const sandbox = {
-      root,
-      nodeModules,
-      pkgFile,
-      entryFile,
-      prepared: true,
-      codeString,
-    };
-    sandboxes.set(key, sandbox);
-    return sandbox;
+      sandboxes.set(key, sandbox);
+      return sandbox;
+    } catch (error) {
+      detachSandbox(sandbox);
+      await cleanupSandbox(sandbox);
+      throw error;
+    }
   })();
 
   sandboxPreparations.set(key, preparation);
@@ -619,15 +825,43 @@ async function runInSandbox(
     );
   }
 
-  // Prepare once per bundle (no repeated extraction/packaging or pkg writes).
-  const sb = await ensureSandboxForName(
-    name,
-    codeString,
-    materializedExternals,
-    externalBundleDigest,
-  );
-  const state = ensureWorker(name, codeString, externalBundleDigest);
-  state.activeExecutions += 1;
+  // Prepare once per live worker. Teardown can invalidate a preparation after
+  // this invocation starts, so retry until the worker and sandbox are bound to
+  // the same currently cached instance.
+  /** @type {Sandbox} */
+  let sb;
+  /** @type {WorkerState} */
+  let state;
+  for (;;) {
+    try {
+      sb = await ensureSandboxForName(
+        name,
+        codeString,
+        materializedExternals,
+        externalBundleDigest,
+      );
+    } catch (error) {
+      if (error instanceof SandboxPreparationInvalidatedError) continue;
+      throw error;
+    }
+
+    try {
+      const candidate = ensureWorker(
+        name,
+        codeString,
+        externalBundleDigest,
+        sb,
+      );
+      if (!candidate) continue;
+      state = candidate;
+      state.activeExecutions += 1;
+      break;
+    } catch (error) {
+      detachSandbox(sb);
+      await cleanupSandbox(sb);
+      throw error;
+    }
+  }
 
   /** @type {any[]} */
   const __ENTRY_ARGS__ = Array.isArray(params) ? [...params] : [params];
@@ -741,12 +975,50 @@ async function destroyWorker(name, codeString, externalBundleDigest) {
   );
 }
 
+/**
+ * Invalidate every cached/preparing sandbox, terminate its worker, and wait
+ * until every filesystem root from the old generation is gone.
+ * @returns {Promise<void>}
+ */
+async function clearSandboxCache() {
+  if (sandboxClearPromise) {
+    await sandboxClearPromise;
+    return;
+  }
+
+  const operation = (async () => {
+    sandboxCacheGeneration += 1;
+    const cachedSandboxes = [...sandboxes.values()];
+    const preparations = [...sandboxPreparations.values()];
+    sandboxes.clear();
+    sandboxPreparations.clear();
+
+    await destroyWorker();
+    const preparedResults = await Promise.allSettled(preparations);
+    for (const result of preparedResults) {
+      if (result.status === 'fulfilled') {
+        cachedSandboxes.push(result.value);
+      }
+    }
+
+    await Promise.all(
+      [...new Set(cachedSandboxes)].map((sandbox) => cleanupSandbox(sandbox)),
+    );
+  })();
+
+  sandboxClearPromise = operation;
+  try {
+    await operation;
+  } finally {
+    if (sandboxClearPromise === operation) {
+      sandboxClearPromise = null;
+    }
+  }
+}
+
 export default {
   runInSandbox,
   getExternalBundleDigest,
   _destroyWorker: destroyWorker,
-  _clearSandboxCache: () => {
-    sandboxes.clear();
-    sandboxPreparations.clear();
-  },
+  _clearSandboxCache: clearSandboxCache,
 };

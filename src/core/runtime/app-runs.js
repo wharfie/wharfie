@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 import Action, { Status as ActionStatus } from '../lib/graph/action.js';
@@ -8,11 +10,18 @@ import Operation, {
 } from '../lib/graph/operation.js';
 import { runOperation } from '../lib/graph/runner.js';
 import WharfieFunction from '../resources/builds/function.js';
+import FunctionResource from '../resources/builds/function-resource.js';
+import { validateAppManifest } from './app-manifest.js';
+import { getBuildTargetId, validateBuildTarget } from './build-target.js';
 import {
   compareCanonicalStrings,
   sortCanonicalJsonValue,
 } from './canonical-order.js';
-import { assertApplicationRevisionId } from './application-revision.js';
+import {
+  assertApplicationRevisionId,
+  validateApplicationRevision,
+  validateDependencyLockInput,
+} from './application-revision.js';
 import { cloneJsonObject, cloneJsonValue } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
 import { createActorSystemResources } from './resources.js';
@@ -23,6 +32,184 @@ import { createActorSystemResources } from './resources.js';
  */
 function isObjectRecord(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * @param {unknown} left - First canonical JSON value.
+ * @param {unknown} right - Second canonical JSON value.
+ * @returns {boolean} - Whether both values have identical canonical JSON.
+ */
+function hasSameCanonicalJson(left, right) {
+  return (
+    JSON.stringify(sortCanonicalJsonValue(left)) ===
+    JSON.stringify(sortCanonicalJsonValue(right))
+  );
+}
+
+/**
+ * Derive the exact target executing a source activity. Linux source execution
+ * must positively identify glibc because labelling an unknown or musl host as
+ * glibc could select incompatible native packages from the frozen closure.
+ * Optional overrides exist only to make the platform boundary deterministic in
+ * tests; production callers pass no argument.
+ * @param {{ nodeVersion?: string, platform?: string, architecture?: string, glibcVersionRuntime?: string | undefined }} [overrides] - Host observations.
+ * @returns {{ nodeVersion: string, platform: 'darwin'|'linux'|'win32', architecture: 'arm64'|'x64', libc?: 'glibc' }} - Exact canonical host target.
+ */
+export function getHostSourceBuildTarget(overrides = {}) {
+  const nodeVersion = overrides.nodeVersion ?? process.versions.node;
+  const platform = overrides.platform ?? process.platform;
+  const architecture = overrides.architecture ?? process.arch;
+  let glibcVersionRuntime;
+
+  if (platform === 'linux') {
+    if (
+      Object.prototype.hasOwnProperty.call(overrides, 'glibcVersionRuntime')
+    ) {
+      glibcVersionRuntime = overrides.glibcVersionRuntime;
+    } else {
+      try {
+        const report = /** @type {any} */ (process.report?.getReport?.());
+        glibcVersionRuntime = report?.header?.glibcVersionRuntime;
+      } catch {
+        glibcVersionRuntime = undefined;
+      }
+    }
+    if (
+      typeof glibcVersionRuntime !== 'string' ||
+      !glibcVersionRuntime.trim()
+    ) {
+      throw new Error(
+        'Source external execution on Linux requires a positively identified glibc host; musl and unknown libc hosts are not supported.',
+      );
+    }
+  }
+
+  return validateBuildTarget(
+    {
+      nodeVersion,
+      platform,
+      architecture,
+      ...(platform === 'linux' ? { libc: 'glibc' } : {}),
+    },
+    'source host target',
+  );
+}
+
+/**
+ * Validate that a sealed lock handle and manifest belong to one complete
+ * immutable revision before any activity resource or package operation starts.
+ * @param {{ manifest: unknown, appDir: string, sourceRevision: unknown }} options - Source identity inputs.
+ * @returns {{ manifest: Record<string, any>, revision: import('./application-revision.js').ApplicationRevision, dependencyLock: { path: string, input: import('./application-revision.js').LockedInputDescriptor } }} - Validated source identity.
+ */
+function validateSourceRevisionContext(options) {
+  if (!isObjectRecord(options.sourceRevision)) {
+    throw new TypeError(
+      'Source activity execution requires sourceRevision with an immutable revision and sealed dependency lock.',
+    );
+  }
+  for (const key of Object.keys(options.sourceRevision)) {
+    if (key !== 'revision' && key !== 'dependencyLock') {
+      throw new TypeError(`sourceRevision.${key} is not supported.`);
+    }
+  }
+
+  const revision = validateApplicationRevision(
+    options.sourceRevision.revision,
+    'sourceRevision.revision',
+  );
+  const manifest = validateAppManifest(options.manifest, 'source manifest');
+  const targetFreeManifest = { ...manifest };
+  delete targetFreeManifest.targets;
+  if (!hasSameCanonicalJson(targetFreeManifest, revision.contract)) {
+    throw new Error(
+      'Source manifest does not match the immutable application revision contract.',
+    );
+  }
+
+  const dependencyLock = options.sourceRevision.dependencyLock;
+  if (!isObjectRecord(dependencyLock)) {
+    throw new TypeError(
+      'sourceRevision.dependencyLock must be a sealed lock handle.',
+    );
+  }
+  for (const key of Object.keys(dependencyLock)) {
+    if (key !== 'path' && key !== 'input') {
+      throw new TypeError(
+        `sourceRevision.dependencyLock.${key} is not supported.`,
+      );
+    }
+  }
+  if (
+    typeof dependencyLock.path !== 'string' ||
+    !dependencyLock.path ||
+    !path.isAbsolute(dependencyLock.path)
+  ) {
+    throw new TypeError(
+      'sourceRevision.dependencyLock.path must be an absolute file path.',
+    );
+  }
+  const input = validateDependencyLockInput(
+    dependencyLock.input,
+    'sourceRevision.dependencyLock.input',
+  );
+  if (!hasSameCanonicalJson(input, revision.inputs.dependencies)) {
+    throw new Error(
+      'Source dependency lock descriptor does not match the immutable application revision.',
+    );
+  }
+
+  return {
+    manifest,
+    revision,
+    dependencyLock: { path: dependencyLock.path, input },
+  };
+}
+
+/**
+ * Decode one canonical base64 external archive.
+ * @param {unknown} value - Candidate base64 archive.
+ * @returns {Buffer} - Exact archive bytes.
+ */
+function decodeExternalArchive(value) {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(
+      'Prepared source external closure did not produce an archive.',
+    );
+  }
+  const bytes = Buffer.from(value, 'base64');
+  if (bytes.length === 0 || bytes.toString('base64') !== value) {
+    throw new Error(
+      'Prepared source external closure produced a noncanonical archive encoding.',
+    );
+  }
+  return bytes;
+}
+
+/**
+ * Ensure a source entrypoint cannot resolve a different app-local Wharfie copy
+ * than the runtime whose bytes are locked by the prepared revision. A missing
+ * resolution is allowed here because activities need not import Wharfie; an
+ * actual unresolved import still fails in the normal module/bundle boundary.
+ * @param {string} entrypointPath - Absolute sealed activity entrypoint.
+ * @returns {void}
+ */
+function assertSourceRuntimeResolution(entrypointPath) {
+  const runningWharfiePackagePath = realpathSync(
+    createRequire(import.meta.url).resolve('@wharfie/wharfie/package.json'),
+  );
+  let resolvedPackagePath;
+  try {
+    resolvedPackagePath = realpathSync(
+      createRequire(entrypointPath).resolve('@wharfie/wharfie/package.json'),
+    );
+  } catch {
+    return;
+  }
+  if (resolvedPackagePath !== runningWharfiePackagePath) {
+    throw new Error(
+      'Source activity resolves a different @wharfie/wharfie runtime than the runtime locked by its prepared application revision.',
+    );
+  }
 }
 
 /**
@@ -110,6 +297,116 @@ export function createManifestActivityFunction(options) {
 }
 
 /**
+ * Build and invoke one external-bearing activity from the sealed source and
+ * dependency lock owned by its revision. This intentionally calls the public
+ * FunctionResource bundle primitives directly; it does not reconcile a build
+ * graph, write a SEA asset, or select any manifest packaging target.
+ * @param {{ manifest: Record<string, any>, revision: import('./application-revision.js').ApplicationRevision, dependencyLock: { path: string, input: import('./application-revision.js').LockedInputDescriptor }, appDir: string, activityName: string, event: any, context: Record<string, any>, baseResources: Record<string, any> }} options - Prepared invocation inputs.
+ * @returns {Promise<any>} - Activity result.
+ */
+async function invokePreparedSourceExternalActivity(options) {
+  const definition = getManifestActivityDefinition(options);
+  if (
+    !definition ||
+    !isObjectRecord(definition.entrypoint) ||
+    !Array.isArray(definition.externalPackages) ||
+    definition.externalPackages.length === 0
+  ) {
+    throw new Error(
+      `Source activity '${options.activityName}' has no external package closure to prepare.`,
+    );
+  }
+
+  const buildTarget = getHostSourceBuildTarget();
+  const resource = new FunctionResource({
+    name: `source-${options.revision.revisionId}-${options.activityName}`,
+    properties: {
+      functionName: options.activityName,
+      entrypoint: {
+        path: path.resolve(options.appDir, definition.entrypoint.path),
+        export: definition.entrypoint.export,
+      },
+      external: definition.externalPackages,
+      buildTarget,
+    },
+    dependencyLock: options.dependencyLock,
+  });
+
+  const [codeString, bundledExternals] = await Promise.all([
+    resource.esbuild(),
+    resource.bundleExternals(),
+  ]);
+  if (!bundledExternals.receipt) {
+    throw new Error(
+      `Source activity '${options.activityName}' produced no frozen dependency receipt.`,
+    );
+  }
+  const closurePlan = bundledExternals.receipt.plan;
+  const planExternals = Array.isArray(closurePlan?.roots)
+    ? closurePlan.roots.map(
+        (/** @type {{name: string, version: string}} */ root) => ({
+          name: root.name,
+          version: root.version,
+        }),
+      )
+    : undefined;
+  if (
+    !closurePlan ||
+    closurePlan.activity !== options.activityName ||
+    getBuildTargetId(closurePlan.target) !== getBuildTargetId(buildTarget) ||
+    !hasSameCanonicalJson(planExternals, definition.externalPackages)
+  ) {
+    throw new Error(
+      `Source activity '${options.activityName}' frozen closure plan does not match its prepared revision inputs.`,
+    );
+  }
+  const receiptDependencyLockInput = validateDependencyLockInput(
+    closurePlan.lock,
+    'prepared source dependency receipt',
+  );
+  if (
+    !hasSameCanonicalJson(
+      bundledExternals.receipt.dependencyLockInput,
+      receiptDependencyLockInput,
+    )
+  ) {
+    throw new Error(
+      'Prepared source dependency receipt fields do not name one frozen lock.',
+    );
+  }
+  if (
+    !hasSameCanonicalJson(
+      receiptDependencyLockInput,
+      options.revision.inputs.dependencies,
+    )
+  ) {
+    throw new Error(
+      'Prepared source dependency receipt does not match the immutable application revision.',
+    );
+  }
+
+  const externalsTar = decodeExternalArchive(bundledExternals.externalsTar);
+  const externalArchiveDigest = {
+    algorithm: /** @type {const} */ ('sha256'),
+    value: createHash('sha256').update(externalsTar).digest('base64url'),
+  };
+  return await WharfieFunction.runPreparedBundle(
+    options.activityName,
+    {
+      codeString,
+      externalsTar,
+      externalArchiveDigest,
+      ...(isObjectRecord(definition.resources)
+        ? { resourceSpecs: definition.resources }
+        : {}),
+    },
+    options.event,
+    options.context,
+    { resources: options.baseResources },
+  );
+}
+
+/**
  * @param {{ manifest: any, activityName: string, event?: any, context?: any, resourceResolution?: { registryPath?: string } }} options - options.
  * @returns {Promise<any>} - Result.
  */
@@ -142,7 +439,7 @@ export async function invokeEmbeddedManifestActivity(options) {
 }
 
 /**
- * @param {{ manifest: any, appDir?: string, activityName: string, event?: any, context?: any, resourceResolution?: { registryPath?: string }, executionMode?: 'source' | 'embedded' }} options - options.
+ * @param {{ manifest: any, appDir?: string, activityName: string, event?: any, context?: any, resourceResolution?: { registryPath?: string }, executionMode?: 'source' | 'embedded', sourceRevision?: { revision: unknown, dependencyLock: unknown } }} options - options.
  * @returns {Promise<any>} - Result.
  */
 export async function invokeManifestActivity(options) {
@@ -155,26 +452,67 @@ export async function invokeManifestActivity(options) {
       'Source activity execution requires the application directory.',
     );
   }
-  const fn = createManifestActivityFunction({
-    manifest: options.manifest,
-    activityName: options.activityName,
-    appDir: options.appDir,
-  });
+  const initialDefinition = getManifestActivityDefinition(options);
+  const hasExternalPackages =
+    Array.isArray(initialDefinition?.externalPackages) &&
+    initialDefinition.externalPackages.length > 0;
+  if (hasExternalPackages && !options.sourceRevision) {
+    throw new Error(
+      `Source activity '${options.activityName}' declares external packages and requires a prepared sourceRevision; ambient node_modules are not execution inputs.`,
+    );
+  }
+  const sourceIdentity = options.sourceRevision
+    ? validateSourceRevisionContext({
+        manifest: options.manifest,
+        appDir: options.appDir,
+        sourceRevision: options.sourceRevision,
+      })
+    : null;
+  const manifest = sourceIdentity?.manifest || options.manifest;
+  if (sourceIdentity && isObjectRecord(initialDefinition?.entrypoint)) {
+    assertSourceRuntimeResolution(
+      path.resolve(options.appDir, initialDefinition.entrypoint.path),
+    );
+  }
+  const fn = hasExternalPackages
+    ? null
+    : createManifestActivityFunction({
+        manifest,
+        activityName: options.activityName,
+        appDir: options.appDir,
+      });
   const { event, context } = cloneActivityInputs(options);
   const { resources: baseResources, close } = await createActorSystemResources(
-    getManifestResourcesSpec(options.manifest),
+    getManifestResourcesSpec(manifest),
     options.resourceResolution,
   );
 
   try {
-    const result = await fn.fn(event, context, {
-      baseResources,
-    });
+    let result;
+    if (sourceIdentity && hasExternalPackages) {
+      result = await invokePreparedSourceExternalActivity({
+        manifest: sourceIdentity.manifest,
+        revision: sourceIdentity.revision,
+        dependencyLock: sourceIdentity.dependencyLock,
+        appDir: options.appDir,
+        activityName: options.activityName,
+        event,
+        context,
+        baseResources,
+      });
+    } else {
+      if (!fn) {
+        throw new Error(
+          `Source activity '${options.activityName}' was not prepared for execution.`,
+        );
+      }
+      result = await fn.fn(event, context, { baseResources });
+    }
     return cloneJsonValue(result, 'Activity result');
   } finally {
     await Promise.allSettled([
       close(),
-      typeof fn.closeRuntimeResources === 'function'
+      fn && typeof fn.closeRuntimeResources === 'function'
         ? fn.closeRuntimeResources()
         : Promise.resolve(),
     ]);

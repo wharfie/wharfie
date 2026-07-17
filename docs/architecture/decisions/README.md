@@ -12,5 +12,6 @@ These records capture product-level decisions that should survive implementation
 | [0006 — One strict version 2 application manifest](0006-strict-v2-app-manifest.md)                         | Accepted |
 | [0007 — Atomic, fenced operation snapshots](0007-atomic-operation-snapshots.md)                            | Accepted |
 | [0008 — Immutable revision, artifact, and deployment-profile identities](0008-immutable-identity-spine.md) | Accepted |
+| [0009 — Frozen target dependency closures](0009-frozen-target-dependency-closures.md)                      | Accepted |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).

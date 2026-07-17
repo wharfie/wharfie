@@ -7,17 +7,17 @@ implementation as an authoring API.
 
 ## Included handlers
 
-### `functions/echo-event.js`
+### `apps/hello-world/functions/echo-event.js`
 
 The smallest activity handler. It accepts a JSON event, reads ordinary context,
 and returns a JSON result.
 
-### `functions/hello-resources.js`
+### `apps/hello-world/functions/hello-resources.js`
 
 A resource-backed handler that exercises
 `context.resources.{db, queue, objectStorage}`.
 
-### `functions/inspect-context.js`
+### `apps/context-override/activity.js`
 
 A handler that reports the context and resource overrides it receives.
 

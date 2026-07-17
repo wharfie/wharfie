@@ -12,6 +12,10 @@ import { startQueueService } from '../../../src/core/runtime/services/queue-serv
 import { createGrpcRpcClient } from '../../../src/core/runtime/services/rpc-grpc.js';
 import createOperationsStore from '../../../src/core/lib/graph/operations-store.js';
 import createVanillaDB from '../../../src/core/lib/db/adapters/vanilla.js';
+import {
+  FUNCTION_ASSET_SCHEMA_VERSION,
+  serializeFunctionAssetDescription,
+} from '../../../src/core/resources/builds/lib/function-asset.js';
 
 const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
 const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
@@ -23,11 +27,11 @@ const seaAssets = new Map();
 // Mock SEA asset lookup to serve our in-memory bundles.
 jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
   getAsset: async (/** @type {string} */ name) => {
-    const assetDescription = seaAssets.get(name);
-    if (!assetDescription) {
+    const assetBytes = seaAssets.get(name);
+    if (!assetBytes) {
       throw new Error(`Unexpected asset request: ${name}`);
     }
-    return Buffer.from(JSON.stringify(assetDescription), 'utf8');
+    return assetBytes;
   },
 }));
 
@@ -674,12 +678,23 @@ describe('Lambda service queue poll loop (gRPC)', () => {
       };
     `;
 
-    const assetDescription = {
+    const assetDescription = serializeFunctionAssetDescription({
+      schemaVersion: FUNCTION_ASSET_SCHEMA_VERSION,
+      activity: fnName,
+      target: {
+        nodeVersion: process.versions.node,
+        platform: process.platform,
+        architecture: process.arch,
+        ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+      },
+      externals: [],
       codeBundle: brotliCompressSync(Buffer.from(bundleCode, 'utf8')).toString(
         'base64',
       ),
       externalsTar: '',
-    };
+      externalDependencyReceipt: null,
+      resourceSpecs: {},
+    });
 
     seaAssets.set(fnName, assetDescription);
 

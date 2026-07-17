@@ -1,60 +1,66 @@
 /* eslint-env jest */
 
-import {
-  assertInstalledExternalDependencies,
-  normalizeExternalDependencies,
-} from '../../../src/core/resources/builds/lib/resolve-externals.js';
+import { normalizeExternalDependencies } from '../../../src/core/resources/builds/lib/resolve-externals.js';
 
 describe('external dependency normalization', () => {
-  it('canonicalizes exact semantic versions', () => {
+  it('accepts only exact descriptors and returns one canonical order', () => {
     expect(
       normalizeExternalDependencies(
         [
-          'example-package@v1.2.3',
+          'example-package@1.2.3',
           { name: '@scope/example', version: '2.0.0-beta.1' },
         ],
         undefined,
       ),
     ).toEqual([
-      { name: 'example-package', version: '1.2.3' },
       { name: '@scope/example', version: '2.0.0-beta.1' },
+      { name: 'example-package', version: '1.2.3' },
     ]);
   });
 
-  it.each(['^1.2.3', '~1.2.3', 'latest', 'git+https://example.invalid/x'])(
-    'rejects mutable or non-registry version spec %s',
-    (version) => {
-      expect(() =>
-        normalizeExternalDependencies(
-          [{ name: 'example-package', version }],
-          undefined,
-        ),
-      ).toThrow(/requires an exact semantic version/i);
-    },
-  );
-
-  it('resolves a bare installed dependency to its exact installed version', () => {
-    const [resolved] =
-      normalizeExternalDependencies(['semver'], undefined) || [];
-
-    expect(resolved).toEqual({
-      name: 'semver',
-      version: expect.stringMatching(/^\d+\.\d+\.\d+/),
-    });
-  });
-
-  it('requires source execution to resolve each exact pinned version', () => {
-    const [installed] =
-      normalizeExternalDependencies(['semver'], undefined) || [];
-
+  it.each([
+    '^1.2.3',
+    '~1.2.3',
+    'latest',
+    'v1.2.3',
+    'git+https://example.invalid/x',
+  ])('rejects noncanonical or mutable version spec %s', (version) => {
     expect(() =>
-      assertInstalledExternalDependencies([installed], undefined),
-    ).not.toThrow();
-    expect(() =>
-      assertInstalledExternalDependencies(
-        [{ name: 'semver', version: '0.0.1' }],
+      normalizeExternalDependencies(
+        [{ name: 'example-package', version }],
         undefined,
       ),
-    ).toThrow(/pinned to 0\.0\.1, but local resolution found/i);
+    ).toThrow(/requires an exact canonical semantic version/i);
+  });
+
+  it('rejects an external without an exact authored version', () => {
+    for (const externals of [['semver'], [{ name: 'semver' }]]) {
+      expect(() =>
+        normalizeExternalDependencies(
+          /** @type {any} */ (externals),
+          undefined,
+        ),
+      ).toThrow(/version|package@version/i);
+    }
+  });
+
+  it('rejects aliases, duplicate names, and unsupported descriptor fields', () => {
+    expect(() =>
+      normalizeExternalDependencies(['alias@npm:semver@7.7.3'], undefined),
+    ).toThrow(/package name|canonical semantic version/i);
+    expect(() =>
+      normalizeExternalDependencies(
+        ['semver@7.7.3', { name: 'semver', version: '7.7.3' }],
+        undefined,
+      ),
+    ).toThrow(/declared more than once/i);
+    expect(() =>
+      normalizeExternalDependencies(
+        /** @type {any} */ ([
+          { name: 'semver', version: '7.7.3', source: 'ambient' },
+        ]),
+        undefined,
+      ),
+    ).toThrow(/source is not supported/i);
   });
 });

@@ -2,7 +2,7 @@ import { promises as fsp } from 'node:fs';
 
 import lmdb from 'lmdb';
 
-import dep from '../lib/dep.js';
+import dep from './dep.js';
 
 /**
  * @param {unknown} error - error.

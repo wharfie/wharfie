@@ -2,44 +2,13 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { describe, expect, it } from '@jest/globals';
-import { promises as fsp, existsSync, readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createContext, runInContext } from 'node:vm';
 
 import Function from '../../../src/core/resources/builds/function.js';
 import FunctionResource from '../../../src/core/resources/builds/function-resource.js';
-
-const require = createRequire(import.meta.url);
-
-/**
- * @param {string} packageName - packageName.
- * @returns {string} - Result.
- */
-function readInstalledVersion(packageName) {
-  const entryPath = require.resolve(packageName);
-  let currentDir = path.dirname(entryPath);
-
-  while (true) {
-    const packageJsonPath = path.join(currentDir, 'package.json');
-    if (existsSync(packageJsonPath)) {
-      const manifest = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
-      if (manifest?.name === packageName && manifest?.version) {
-        return manifest.version;
-      }
-    }
-
-    const parentDir = path.dirname(currentDir);
-    if (parentDir === currentDir) {
-      break;
-    }
-    currentDir = parentDir;
-  }
-
-  throw new Error(`Could not resolve installed version for ${packageName}`);
-}
 
 describe('Function configuration hard edges', () => {
   it('rejects activity environment declarations at authoring and build boundaries', () => {
@@ -93,7 +62,7 @@ describe('Function configuration hard edges', () => {
     expect(fn.properties).not.toHaveProperty('environmentVariables');
   });
 
-  it('supports function-scoped resources and auto-resolves bare externals', async () => {
+  it('supports function-scoped resources and rejects ambient external invocation', async () => {
     const tmp = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-function-config-'),
     );
@@ -101,11 +70,35 @@ describe('Function configuration hard edges', () => {
       new URL('../../fixtures/actors/hello-resources.js', import.meta.url),
     );
 
+    const externalFn = new Function({
+      name: 'hello-resources',
+      entrypoint: { path: actorPath, export: 'helloResources' },
+      properties: {
+        external: [
+          'lmdb@3.4.4',
+          { name: '@paralleldrive/cuid2', version: '2.2.2' },
+        ],
+      },
+    });
+
+    expect(externalFn.properties.external).toEqual([
+      {
+        name: '@paralleldrive/cuid2',
+        version: '2.2.2',
+      },
+      {
+        name: 'lmdb',
+        version: '3.4.4',
+      },
+    ]);
+    await expect(externalFn.fn({ who: 'function-scope' })).rejects.toThrow(
+      /prepared application revision/i,
+    );
+
     const fn = new Function({
       name: 'hello-resources',
       entrypoint: { path: actorPath, export: 'helloResources' },
       properties: {
-        external: ['lmdb', { name: '@paralleldrive/cuid2' }],
         resources: {
           db: { adapter: 'vanilla', options: { path: tmp } },
           queue: { adapter: 'vanilla', options: { path: tmp } },
@@ -113,17 +106,6 @@ describe('Function configuration hard edges', () => {
         },
       },
     });
-
-    expect(fn.properties.external).toEqual([
-      {
-        name: 'lmdb',
-        version: readInstalledVersion('lmdb'),
-      },
-      {
-        name: '@paralleldrive/cuid2',
-        version: readInstalledVersion('@paralleldrive/cuid2'),
-      },
-    ]);
 
     const result = await fn.fn({ who: 'function-scope' });
 
@@ -142,7 +124,7 @@ describe('Function configuration hard edges', () => {
     await fn.closeRuntimeResources();
   });
 
-  it('normalizes bare external dependencies for FunctionResource builds too', async () => {
+  it('requires exact external dependencies for FunctionResource builds too', async () => {
     const tmp = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-function-resource-config-'),
     );
@@ -154,41 +136,115 @@ describe('Function configuration hard edges', () => {
       'utf8',
     );
 
+    expect(
+      () =>
+        new FunctionResource({
+          name: 'ambient-resource-config',
+          properties: {
+            functionName: 'ambient-resource-config',
+            entrypoint: { path: entryPath, export: 'handler' },
+            buildTarget: {
+              nodeVersion: process.versions.node,
+              platform: process.platform,
+              architecture: process.arch,
+            },
+            external: ['lmdb'],
+          },
+        }),
+    ).toThrow(/must include an exact version/i);
+
     const resource = new FunctionResource({
       name: 'resource-config',
       properties: {
         functionName: 'resource-config',
         entrypoint: { path: entryPath, export: 'handler' },
         buildTarget: {
-          nodeVersion: process.versions.node.split('.')[0],
+          nodeVersion: process.versions.node,
           platform: process.platform,
           architecture: process.arch,
+          ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
         },
-        external: ['lmdb', '@paralleldrive/cuid2'],
+        external: [
+          'lmdb@3.4.4',
+          { name: '@paralleldrive/cuid2', version: '2.2.2' },
+        ],
       },
     });
 
     expect(resource.get('external')).toEqual([
       {
-        name: 'lmdb',
-        version: readInstalledVersion('lmdb'),
+        name: '@paralleldrive/cuid2',
+        version: '2.2.2',
       },
       {
-        name: '@paralleldrive/cuid2',
-        version: readInstalledVersion('@paralleldrive/cuid2'),
+        name: 'lmdb',
+        version: '3.4.4',
       },
     ]);
 
     await fsp.rm(tmp, { recursive: true, force: true });
   });
 
-  it('quotes activity names and resolves non-identifier exports safely', async () => {
+  it('bundles the running Wharfie app API instead of an app-local copy', async () => {
+    const tmp = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-runtime-alias-'),
+    );
+    const localWharfie = path.join(tmp, 'node_modules', '@wharfie', 'wharfie');
+    const entryPath = path.join(tmp, 'handler.js');
+
+    try {
+      await fsp.mkdir(localWharfie, { recursive: true });
+      await Promise.all([
+        fsp.writeFile(
+          path.join(localWharfie, 'package.json'),
+          JSON.stringify({
+            name: '@wharfie/wharfie',
+            version: '0.0.0-poisoned',
+            type: 'module',
+            exports: { './app': './app.js' },
+          }),
+        ),
+        fsp.writeFile(
+          path.join(localWharfie, 'app.js'),
+          "export const defineApp = () => ({ source: 'poisoned-app-local-runtime' });\n",
+        ),
+        fsp.writeFile(
+          entryPath,
+          [
+            "import { defineApp } from '@wharfie/wharfie/app';",
+            "export function handler() { return defineApp({ source: 'revision-runtime' }); }",
+          ].join('\n'),
+        ),
+      ]);
+
+      const resource = new FunctionResource({
+        name: 'runtime-alias',
+        properties: {
+          functionName: 'runtime-alias',
+          entrypoint: { path: entryPath, export: 'handler' },
+          buildTarget: {
+            nodeVersion: process.versions.node,
+            platform: process.platform,
+            architecture: process.arch,
+            ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+          },
+        },
+      });
+
+      const code = await resource.esbuild();
+      expect(code).toContain('revision-runtime');
+      expect(code).not.toContain('poisoned-app-local-runtime');
+    } finally {
+      await fsp.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects noncanonical activity identities before building code', async () => {
     const tmp = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-function-entry-code-'),
     );
     const entryPath = path.join(tmp, 'handler.js');
     const functionName = "activity'); globalThis.__wharfieInjected = true; //";
-    const runtimeGlobal = /** @type {any} */ ({ Symbol });
 
     try {
       await fsp.writeFile(
@@ -213,16 +269,7 @@ describe('Function configuration hard edges', () => {
         },
       });
 
-      const code = await resource.esbuild();
-      const runtimeContext = createContext(runtimeGlobal);
-      runInContext(code, runtimeContext);
-      const registeredActivity = runInContext(
-        `globalThis[Symbol.for(${JSON.stringify(functionName)})]`,
-        runtimeContext,
-      );
-
-      expect(runtimeGlobal.__wharfieInjected).toBeUndefined();
-      expect(registeredActivity()).toBe('safe-result');
+      await expect(resource.esbuild()).rejects.toThrow(/canonical logical ID/i);
     } finally {
       await fsp.rm(tmp, { recursive: true, force: true });
     }

@@ -203,6 +203,30 @@ class MacOSBinarySignature extends BaseResource {
       );
     }
     const hasSigningCredentials = suppliedCredentialCount === 3;
+    const generationBuild = /** @type {any | undefined} */ (
+      Array.isArray(this.dependsOn)
+        ? this.dependsOn.find((dependency) => {
+            const candidate = /** @type {any} */ (dependency);
+            return (
+              typeof candidate?.getSuccessfulBuildEvidence === 'function' &&
+              typeof candidate?.advanceSuccessfulBuildEvidence === 'function'
+            );
+          })
+        : undefined
+    );
+    if (!generationBuild) {
+      throw new Error(
+        'macOS signing requires a SEA build with committed generation evidence.',
+      );
+    }
+    const binaryPath = this.get('binaryPath');
+    if (binaryPath !== generationBuild.get('binaryPath')) {
+      throw new Error(
+        'macOS signing binaryPath does not match its SEA build generation.',
+      );
+    }
+    const beforeSigningBytes = await promises.readFile(binaryPath);
+    generationBuild.getSuccessfulBuildEvidence(beforeSigningBytes);
     const signingDir = await promises.mkdtemp(
       join(tmpdir(), 'wharfie-macos-signing-'),
     );
@@ -230,7 +254,7 @@ class MacOSBinarySignature extends BaseResource {
           '-',
           '--entitlements',
           entitlementsPath,
-          this.get('binaryPath'),
+          binaryPath,
         ]);
         signingResult = { mode: 'ad-hoc' };
       } else {
@@ -254,7 +278,7 @@ class MacOSBinarySignature extends BaseResource {
           entitlementsPath,
           '--keychain',
           keychainPath,
-          this.get('binaryPath'),
+          binaryPath,
         ]);
         signingResult = {
           mode: 'identity',
@@ -298,6 +322,14 @@ class MacOSBinarySignature extends BaseResource {
         'macOS signing completed but temporary credential cleanup was incomplete.',
       );
     }
+    if (!signingResult) {
+      throw new Error('macOS signing completed without a signing result.');
+    }
+    generationBuild.advanceSuccessfulBuildEvidence(
+      beforeSigningBytes,
+      await promises.readFile(binaryPath),
+      signingResult,
+    );
     this._setUNSAFE('signingResult', signingResult);
   }
 

@@ -459,11 +459,7 @@ async function auditBehaviorModuleGraph(snapshotAppDir, manifest) {
         platform: 'node',
         format: 'esm',
         logLevel: 'silent',
-        external: [
-          WHARFIE_PACKAGE_NAME,
-          `${WHARFIE_PACKAGE_NAME}/*`,
-          ...entrypoint.external,
-        ],
+        external: [`${WHARFIE_PACKAGE_NAME}/app`, ...entrypoint.external],
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -611,31 +607,28 @@ export async function createSourceTreeInput(appDir, options = {}) {
 }
 
 /**
- * Find the npm lock governing an app, including an enclosing workspace lock.
+ * Find the app-local npm lock governing an app. Closure v1 interprets
+ * `packages[""]` as the application root, so accepting an enclosing workspace
+ * lock without also naming its workspace package would bind the wrong graph.
+ * Workspace lock selection requires a future explicit contract.
  * @param {string} appDir - Application root.
- * @returns {Promise<string | undefined>} - Nearest package-lock path.
+ * @returns {Promise<string | undefined>} - App-local package-lock path.
  */
 async function findDependencyLockPath(appDir) {
-  let current = path.resolve(appDir);
-  while (true) {
-    const candidate = path.join(current, 'package-lock.json');
-    try {
-      const stats = await fsp.stat(candidate);
-      if (stats.isFile()) return candidate;
-    } catch (error) {
-      if (
-        !error ||
-        typeof error !== 'object' ||
-        !('code' in error) ||
-        error.code !== 'ENOENT'
-      ) {
-        throw error;
-      }
+  const candidate = path.join(path.resolve(appDir), 'package-lock.json');
+  try {
+    const stats = await fsp.stat(candidate);
+    return stats.isFile() ? candidate : undefined;
+  } catch (error) {
+    if (
+      !error ||
+      typeof error !== 'object' ||
+      !('code' in error) ||
+      error.code !== 'ENOENT'
+    ) {
+      throw error;
     }
-
-    const parent = path.dirname(current);
-    if (parent === current) return undefined;
-    current = parent;
+    return undefined;
   }
 }
 
@@ -713,7 +706,35 @@ function assertExternalPackagesLocked(lock, requests, valuePath) {
   if (!packages || typeof packages !== 'object' || Array.isArray(packages)) {
     throw new TypeError(`${valuePath}.packages must be an object.`);
   }
+  if (requests.length === 0) return;
+  const root = packages[''];
+  if (!root || typeof root !== 'object' || Array.isArray(root)) {
+    throw new TypeError(`${valuePath}.packages[""] must be an object.`);
+  }
+  const productionDependencies =
+    root.dependencies &&
+    typeof root.dependencies === 'object' &&
+    !Array.isArray(root.dependencies)
+      ? root.dependencies
+      : {};
+  const optionalDependencies =
+    root.optionalDependencies &&
+    typeof root.optionalDependencies === 'object' &&
+    !Array.isArray(root.optionalDependencies)
+      ? root.optionalDependencies
+      : {};
   for (const request of requests) {
+    if (
+      !Object.prototype.hasOwnProperty.call(
+        productionDependencies,
+        request.name,
+      ) &&
+      !Object.prototype.hasOwnProperty.call(optionalDependencies, request.name)
+    ) {
+      throw new TypeError(
+        `${valuePath}.packages[""] must declare external '${request.name}' as a production or optional dependency.`,
+      );
+    }
     const packagePath = `node_modules/${request.name}`;
     const locked = packages[packagePath];
     if (
@@ -860,6 +881,7 @@ export async function createBehaviorAssetInputs(assets) {
  * @property {string} appDir - Sealed source snapshot root consumed by execution/build.
  * @property {Record<string, any>} manifest - Canonical app manifest for the snapshot.
  * @property {Record<string, string>} assets - Sealed named behavior assets.
+ * @property {{ path: string, input: import('../../core/runtime/application-revision.js').LockedInputDescriptor }} dependencyLock - Sealed dependency lock consumed by target packaging.
  * @property {() => Promise<void>} verifyRuntime - Recheck the live Wharfie runtime lock after consumption.
  * @property {() => Promise<void>} cleanup - Idempotently remove the snapshot.
  */
@@ -917,9 +939,8 @@ export async function prepareApplicationRevision(options) {
       typeof options.dependencyLockPath === 'string'
         ? path.resolve(options.dependencyLockPath)
         : await findDependencyLockPath(authoredAppDir);
-    let snapshotLockPath;
+    const snapshotLockPath = path.join(snapshotRoot, 'package-lock.json');
     if (authoredLockPath) {
-      snapshotLockPath = path.join(snapshotRoot, 'package-lock.json');
       await fsp.writeFile(
         snapshotLockPath,
         await readStableRegularFile(
@@ -928,13 +949,19 @@ export async function prepareApplicationRevision(options) {
         ),
         { flag: 'wx', mode: 0o600 },
       );
+    } else {
+      await fsp.writeFile(
+        snapshotLockPath,
+        `${stringifyCanonicalJson({ lockfileVersion: 3, packages: {} })}\n`,
+        { flag: 'wx', mode: 0o600 },
+      );
     }
 
     await auditBehaviorModuleGraph(snapshotAppDir, manifest);
     const [source, dependencies, runtime, assetInputs] = await Promise.all([
       createSourceTreeInput(snapshotAppDir),
       createDependencyLockInput(snapshotAppDir, contract, {
-        dependencyLockPath: snapshotLockPath || null,
+        dependencyLockPath: snapshotLockPath,
       }),
       createRuntimeInput(runtimeRoot),
       createBehaviorAssetInputs(snapshotAssets),
@@ -956,6 +983,10 @@ export async function prepareApplicationRevision(options) {
       appDir: snapshotAppDir,
       manifest,
       assets: Object.freeze({ ...snapshotAssets }),
+      dependencyLock: Object.freeze({
+        path: snapshotLockPath,
+        input: revision.inputs.dependencies,
+      }),
       verifyRuntime: async () => {
         const currentRuntime = await createRuntimeInput(runtimeRoot);
         if (

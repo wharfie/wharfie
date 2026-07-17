@@ -66,12 +66,13 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 - [x] Keep build-only settings outside the runtime manifest and reject ActorSystem, workflow, and scheduler public authoring until their contracts are designed.
 - [ ] Preserve normal argv, stdio, exit codes, and CLI-library choice in local and packaged execution.
 - [x] Content-address each final SEA executable, pair it with an immutable artifact-record sidecar, record exact Node/toolchain/target-closure/signing provenance, and expose embedded revision/runtime metadata through the operator CLI.
-- [ ] Make target packaging consume and fail-check one frozen complete transitive external dependency closure, then prove the resulting artifact on a clean Linux target; reproducible builds are a later hardening goal.
+- [x] Make target packaging and revision-backed source execution consume and fail-check one frozen complete transitive external dependency closure, with semantic, archive, SEA-asset, and revision receipts that cannot drift independently.
+- [ ] Prove the frozen-closure artifact on a clean hosted Linux target; reproducible builds are a later hardening goal.
 - [x] Define a reserved, non-colliding dispatch mechanism for Wharfie operator commands inside an application-owned executable: `<app> wharfie <command>`.
 - [ ] Define the versioned activity protocol and test its serialization, cancellation, deadline, log, error, and host-effect boundaries without requiring a second language implementation yet.
 - [ ] Define an explicit declaration or rejection rule for runtime-computed module paths that cannot be proven by the static bundle graph.
 - [x] Build one executable example and an end-to-end test from authored TypeScript through a clean generated-SEA execution.
-- [ ] Prove one real target-specific Node-API activity dependency from a moved SEA; do not treat text fixtures with a `.node` suffix as native-addon evidence.
+- [x] Prove one real target-specific Node-API activity dependency from a moved Darwin SEA by opening, writing, and reading LMDB with Node absent from `PATH`; repeat the portable proof on hosted Linux above.
 - [ ] Add signed Windows and Developer-ID-signed, notarized macOS release targets after the Linux release path is stable.
 
 **Exit:** a TypeScript CLI runs locally, produces a content-addressed artifact, and runs on a clean machine without a preinstalled Node runtime.
@@ -141,9 +142,9 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 ## Immediate queue
 
-1. Repair the clean-install lint dependency declaration, make draft PR #125 green in GitHub Actions, and review the reset stack for merge.
-2. Make SEA external installation consume and fail-check one frozen complete transitive dependency closure.
-3. Run the current content-addressed stack through the clean Linux SEA proof in hosted CI, then prove argv/stdio/exit behavior and one real target-specific Node-API dependency.
+1. Run the frozen-closure content-addressed stack through the clean hosted-Linux SEA proof.
+2. Repair the clean-install lint dependency declaration after explicit approval, make draft PR #125 green in GitHub Actions, and review the reset stack for merge.
+3. Prove normal argv, stdio, and exit behavior, then formalize the versioned activity protocol and its cancellation, deadline, log, error, and host-effect boundaries.
 4. Decide the durable workflow model and define the run → invocation → attempt → effect ledger before adding schedules or workflows.
 
-The latest dated handoff at [llm/checkpoints/2026-07-17-immutable-identity-spine.md](llm/checkpoints/2026-07-17-immutable-identity-spine.md) contains exact repository state and restart instructions.
+The latest dated handoff at [llm/checkpoints/2026-07-17-frozen-dependency-closure.md](llm/checkpoints/2026-07-17-frozen-dependency-closure.md) contains exact repository state and restart instructions.

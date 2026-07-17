@@ -185,6 +185,7 @@ function resolveNodeBinaryVersion(nodeBinary, configuredVersion) {
  * @property {any} [stateDB] - Compatibility alias for the scoped state store.
  * @property {import('node:events').EventEmitter} [emitter] - Compatibility alias for the scoped telemetry emitter.
  * @property {import('../runtime-config.js').WharfieRuntimeConfig} [runtime] - Structured runtime configuration.
+ * @property {{ path: string, input: import('../../runtime/application-revision.js').LockedInputDescriptor }} [dependencyLock] - Transient sealed dependency lock for target packaging.
  */
 
 class ActorSystem extends BuildResourceGroup {
@@ -203,6 +204,7 @@ class ActorSystem extends BuildResourceGroup {
     stateDB,
     emitter,
     runtime,
+    dependencyLock,
   }) {
     const propertiesWithDefaults = /** @type {Record<string, any>} */ (
       Object.assign({}, ActorSystem.DefaultProperties, properties)
@@ -234,6 +236,7 @@ class ActorSystem extends BuildResourceGroup {
       runtime,
     });
     this.functions = functions;
+    this._dependencyLock = dependencyLock;
     setMacOSSigningCredentials(this, macosSigningCredentials);
     /** @type {Promise<{ resources: any, close: () => Promise<void> }> | null} */
     this._runtimeResourcesPromise = null;
@@ -393,9 +396,10 @@ class ActorSystem extends BuildResourceGroup {
               nodeVersion: resolveNodeBinaryVersion(node_binary, nodeVersion),
               platform,
               architecture,
-              libc,
+              ...(platform === 'linux' ? { libc } : {}),
             }),
           },
+          dependencyLock: this._dependencyLock,
         });
       },
     );
@@ -507,12 +511,23 @@ class ActorSystem extends BuildResourceGroup {
               /** @type {{ [x: string]: string; }} */ acc,
               /** @type {import('./function-resource.js').default} */ func,
             ) => {
-              acc[
-                func.name.replace(
-                  `-${nodeVersion}-${platform}-${architecture}`,
-                  '',
-                )
-              ] = func.get('singleExecutableAssetPath');
+              acc[String(func.get('functionName'))] = func.get(
+                'singleExecutableAssetPath',
+              );
+              return acc;
+            },
+            {},
+          );
+        },
+        functionAssetDigests: () => {
+          return targetFunctions.reduce(
+            (
+              /** @type {{ [x: string]: import('../../runtime/application-revision.js').Sha256Digest; }} */ acc,
+              /** @type {import('./function-resource.js').default} */ func,
+            ) => {
+              acc[String(func.get('functionName'))] = func.get(
+                'singleExecutableAssetDigest',
+              );
               return acc;
             },
             {},

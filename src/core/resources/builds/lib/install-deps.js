@@ -1,467 +1,469 @@
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile, rm, readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-// eslint-disable-next-line import/no-named-as-default
-import Arborist from '@npmcli/arborist';
+import {
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
+import path from 'node:path';
+
 import pacote from 'pacote';
+import { extract as extractTar, list as listTar } from 'tar';
+
+import { compareCanonicalStrings } from '../../../runtime/canonical-order.js';
+import {
+  createFrozenDependencyClosurePlan,
+  verifyExtractedPackageManifest,
+} from './frozen-dependency-closure.js';
 
 /**
  * @typedef {import('node:process')['platform']} TargetPlatform
  * @typedef {import('node:process')['arch']} TargetArch
  * @typedef {'glibc' | 'musl'} TargetLibc
  * @typedef BuildTarget
- * @property {string} nodeVersion - nodeVersion.
- * @property {TargetPlatform} platform - platform.
- * @property {TargetArch} architecture - architecture.
- * @property {TargetLibc} [libc] - libc.
+ * @property {string} nodeVersion - Exact target Node version.
+ * @property {TargetPlatform} platform - Target platform.
+ * @property {TargetArch} architecture - Target architecture.
+ * @property {TargetLibc} [libc] - Target Linux libc.
  * @typedef ExternalDep
- * @property {string} name - name.
- * @property {string} version - version.
- * @typedef NpmConfigShim
- * @property {(k: string) => unknown} get - get.
+ * @property {string} name - Exact npm name.
+ * @property {string} version - Exact semantic version.
  */
 
 /**
- * Install externals for a specific build target into a temp workspace.
+ * Remove a path without treating absence as an error.
+ * @param {string} value - Path to remove.
+ * @param {import('node:fs').RmOptions} options - Removal options.
+ * @returns {Promise<void>}
+ */
+async function rmSafe(value, options) {
+  try {
+    await rm(value, options);
+  } catch (error) {
+    if (
+      !error ||
+      typeof error !== 'object' ||
+      !('code' in error) ||
+      error.code !== 'ENOENT'
+    ) {
+      throw error;
+    }
+  }
+}
+
+/**
+ * Assert a plan location remains beneath this private materialization root.
+ * @param {string} root - Private build root.
+ * @param {string} location - Canonical lock location.
+ * @returns {string} - Absolute destination.
+ */
+function resolvePackageDestination(root, location) {
+  const destination = path.resolve(root, ...location.split('/'));
+  const nodeModulesRoot = path.resolve(root, 'node_modules');
+  const relative = path.relative(nodeModulesRoot, destination);
+  if (
+    relative === '' ||
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error(
+      `Frozen dependency location '${location}' escapes node_modules.`,
+    );
+  }
+  return destination;
+}
+
+/**
+ * Reject links, devices, sockets, and other filesystem behavior that cannot be
+ * represented by closure v1.
+ * @param {string} root - Materialized node_modules root.
+ * @returns {Promise<void>}
+ */
+async function assertRegularMaterializedTree(root) {
+  /** @param {string} directory - Directory to inspect. */
+  async function visit(directory) {
+    const entries = await readdir(directory, { withFileTypes: true });
+    entries.sort((left, right) =>
+      compareCanonicalStrings(left.name, right.name),
+    );
+    for (const entry of entries) {
+      const entryPath = path.join(directory, entry.name);
+      const stats = await lstat(entryPath);
+      if (stats.isSymbolicLink()) {
+        throw new Error(
+          `Frozen dependency materialization produced symbolic link '${entryPath}'.`,
+        );
+      }
+      if (stats.isDirectory()) {
+        await visit(entryPath);
+      } else if (!stats.isFile()) {
+        throw new Error(
+          `Frozen dependency materialization produced unsupported special path '${entryPath}'.`,
+        );
+      }
+    }
+  }
+
+  await visit(root);
+}
+
+/**
+ * Feed exact in-memory tar bytes through one tar parser and await completion.
+ * @param {any} stream - Tar parser/unpacker.
+ * @param {Buffer} bytes - Exact integrity-checked archive.
+ * @param {'end'|'close'} completionEvent - Successful terminal event.
+ * @returns {Promise<void>}
+ */
+async function consumeTarBytes(stream, bytes, completionEvent) {
+  await new Promise((resolve, reject) => {
+    stream.once('error', reject);
+    stream.once(completionEvent, resolve);
+    try {
+      stream.end(bytes);
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+/**
+ * Validate the effective entries in exact package tar bytes before any path is
+ * materialized. npm package archives must contain one canonical `package/`
+ * tree composed only of regular files and directories.
+ * @param {Buffer} bytes - Exact integrity-checked archive.
+ * @param {string} location - Planned package location.
+ * @returns {Promise<void>}
+ */
+async function validatePackageTarball(bytes, location) {
+  /** @type {Map<string, 'file'|'directory'>} */
+  const entries = new Map();
+  let packageJsonSeen = false;
+  const parser = listTar({
+    strict: true,
+    onReadEntry(entry) {
+      const rawPath = entry.path;
+      if (
+        typeof rawPath !== 'string' ||
+        !rawPath ||
+        rawPath.includes('\\') ||
+        rawPath.includes('\0') ||
+        path.posix.isAbsolute(rawPath)
+      ) {
+        throw new Error(
+          `Frozen dependency '${location}' archive contains a non-canonical path.`,
+        );
+      }
+      const entryPath = rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath;
+      if (
+        !entryPath ||
+        path.posix.normalize(entryPath) !== entryPath ||
+        (entryPath !== 'package' && !entryPath.startsWith('package/'))
+      ) {
+        throw new Error(
+          `Frozen dependency '${location}' archive path '${rawPath}' is outside its canonical package/ root.`,
+        );
+      }
+      const logicalPath =
+        entryPath === 'package' ? '' : entryPath.slice('package/'.length);
+      if (
+        logicalPath &&
+        logicalPath
+          .split('/')
+          .some(
+            (component) =>
+              !component || component === '.' || component === '..',
+          )
+      ) {
+        throw new Error(
+          `Frozen dependency '${location}' archive path '${rawPath}' is not canonical.`,
+        );
+      }
+      if (logicalPath.split('/').includes('node_modules')) {
+        throw new Error(
+          `Frozen dependency '${location}' archive contains an embedded node_modules tree.`,
+        );
+      }
+      if (entry.type !== 'File' && entry.type !== 'Directory') {
+        throw new Error(
+          `Frozen dependency '${location}' archive contains unsupported ${entry.type} entry '${rawPath}'.`,
+        );
+      }
+      if (entryPath === 'package' && entry.type !== 'Directory') {
+        throw new Error(
+          `Frozen dependency '${location}' archive package root must be a directory.`,
+        );
+      }
+      if (entries.has(logicalPath)) {
+        throw new Error(
+          `Frozen dependency '${location}' archive contains duplicate path '${rawPath}'.`,
+        );
+      }
+      entries.set(logicalPath, entry.type === 'File' ? 'file' : 'directory');
+      if (logicalPath === 'package.json') {
+        if (entry.type !== 'File') {
+          throw new Error(
+            `Frozen dependency '${location}' archive package.json must be a regular file.`,
+          );
+        }
+        packageJsonSeen = true;
+      }
+    },
+  });
+  await consumeTarBytes(parser, bytes, 'end');
+
+  if (!packageJsonSeen) {
+    throw new Error(
+      `Frozen dependency '${location}' archive has no regular package/package.json.`,
+    );
+  }
+  for (const logicalPath of entries.keys()) {
+    if (!logicalPath) continue;
+    const components = logicalPath.split('/');
+    for (let index = 1; index < components.length; index += 1) {
+      const parent = components.slice(0, index).join('/');
+      if (entries.get(parent) === 'file') {
+        throw new Error(
+          `Frozen dependency '${location}' archive places '${logicalPath}' beneath regular file '${parent}'.`,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Extract the same already-validated bytes into a new exact package root.
+ * @param {Buffer} bytes - Exact integrity-checked archive.
+ * @param {string} destination - Exact physical package destination.
+ * @returns {Promise<void>}
+ */
+async function extractPackageTarball(bytes, destination) {
+  await mkdir(destination, { recursive: true, mode: 0o700 });
+  const unpacker = extractTar({
+    cwd: destination,
+    strip: 1,
+    strict: true,
+    preserveOwner: false,
+    unlink: true,
+    noMtime: true,
+  });
+  await consumeTarBytes(unpacker, bytes, 'close');
+}
+
+/**
+ * Discover physical npm package roots using only node_modules boundaries.
+ * @param {string} buildRoot - Private build root.
+ * @returns {Promise<string[]>} - Canonical installed lock locations.
+ */
+async function discoverInstalledPackageLocations(buildRoot) {
+  /** @type {string[]} */
+  const found = [];
+
+  /**
+   * @param {string} nodeModulesPath - Absolute node_modules path.
+   * @param {string} logicalNodeModulesPath - Canonical lock prefix.
+   * @returns {Promise<void>}
+   */
+  async function scanNodeModules(nodeModulesPath, logicalNodeModulesPath) {
+    const entries = await readdir(nodeModulesPath, { withFileTypes: true });
+    entries.sort((left, right) =>
+      compareCanonicalStrings(left.name, right.name),
+    );
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        throw new Error(
+          `Frozen dependency node_modules contains unexpected non-directory '${path.join(nodeModulesPath, entry.name)}'.`,
+        );
+      }
+      if (entry.name.startsWith('@')) {
+        const scopePath = path.join(nodeModulesPath, entry.name);
+        const scopedEntries = await readdir(scopePath, {
+          withFileTypes: true,
+        });
+        scopedEntries.sort((left, right) =>
+          compareCanonicalStrings(left.name, right.name),
+        );
+        if (scopedEntries.length === 0) {
+          throw new Error(
+            `Frozen dependency node_modules contains empty scope '${entry.name}'.`,
+          );
+        }
+        for (const scopedEntry of scopedEntries) {
+          if (!scopedEntry.isDirectory()) {
+            throw new Error(
+              `Frozen dependency scope '${entry.name}' contains a non-directory entry.`,
+            );
+          }
+          await recordPackage(
+            path.join(scopePath, scopedEntry.name),
+            `${logicalNodeModulesPath}/${entry.name}/${scopedEntry.name}`,
+          );
+        }
+      } else {
+        await recordPackage(
+          path.join(nodeModulesPath, entry.name),
+          `${logicalNodeModulesPath}/${entry.name}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * @param {string} packagePath - Absolute package root.
+   * @param {string} location - Canonical lock location.
+   * @returns {Promise<void>}
+   */
+  async function recordPackage(packagePath, location) {
+    found.push(location);
+    const nestedNodeModules = path.join(packagePath, 'node_modules');
+    if (existsSync(nestedNodeModules)) {
+      const stats = await lstat(nestedNodeModules);
+      if (!stats.isDirectory() || stats.isSymbolicLink()) {
+        throw new Error(
+          `Frozen dependency package '${location}' has an invalid node_modules boundary.`,
+        );
+      }
+      await scanNodeModules(nestedNodeModules, `${location}/node_modules`);
+    }
+  }
+
+  const root = path.join(buildRoot, 'node_modules');
+  await scanNodeModules(root, 'node_modules');
+  return found.sort(compareCanonicalStrings);
+}
+
+/**
+ * Verify every planned package and reject any unplanned physical root.
+ * @param {string} buildRoot - Private materialization root.
+ * @param {Readonly<Record<string, any>>} plan - Frozen closure plan.
+ * @returns {Promise<void>}
+ */
+async function verifyMaterializedClosure(buildRoot, plan) {
+  const expectedLocations = plan.packages.map(
+    (/** @type {any} */ entry) => entry.location,
+  );
+  for (const packageEntry of plan.packages) {
+    const destination = resolvePackageDestination(
+      buildRoot,
+      packageEntry.location,
+    );
+    let packageManifest;
+    try {
+      packageManifest = JSON.parse(
+        await readFile(path.join(destination, 'package.json'), 'utf8'),
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? ` ${error.message}` : '';
+      throw new Error(
+        `Frozen dependency '${packageEntry.location}' has no valid package.json.${detail}`,
+      );
+    }
+    verifyExtractedPackageManifest(packageManifest, packageEntry);
+  }
+
+  const nodeModulesRoot = path.join(buildRoot, 'node_modules');
+  await assertRegularMaterializedTree(nodeModulesRoot);
+  const actualLocations = await discoverInstalledPackageLocations(buildRoot);
+  if (
+    actualLocations.length !== expectedLocations.length ||
+    actualLocations.some(
+      (location, index) => location !== expectedLocations[index],
+    )
+  ) {
+    throw new Error(
+      `Frozen dependency materialization does not match its exact planned package roots. Expected ${JSON.stringify(expectedLocations)}, received ${JSON.stringify(actualLocations)}.`,
+    );
+  }
+}
+
+/**
+ * Materialize one exact activity/target closure. This function performs no
+ * manifest lookup, tag/range resolution, ideal-tree update, lifecycle script,
+ * or optional-package heuristic. Every fetched byte is named by the sealed
+ * lock URL and checked against its SHA-512 SRI.
  * @param {{
+ *   activity: string,
  *   buildTarget: BuildTarget,
+ *   dependencyLock: unknown,
  *   externals: ExternalDep[] | undefined,
  *   tmpBuildDir: string
- * }} params - params.
- * @returns {Promise<void>} - Result.
+ * }} params - Exact closure inputs.
+ * @returns {Promise<{ dependencyLockInput: import('../../../runtime/application-revision.js').LockedInputDescriptor, closureDigest: import('../../../runtime/application-revision.js').Sha256Digest, plan: Readonly<Record<string, any>> } | null>} - Materialized closure receipt.
  */
-async function installForTarget({ buildTarget, externals, tmpBuildDir }) {
-  if (!externals?.length) return;
+async function installForTarget({
+  activity,
+  buildTarget,
+  dependencyLock,
+  externals,
+  tmpBuildDir,
+}) {
+  if (!externals?.length) return null;
 
-  // fresh workspace
-  await rmSafe(join(tmpBuildDir, 'node_modules'), {
+  const closure = await createFrozenDependencyClosurePlan({
+    activity,
+    buildTarget,
+    dependencyLock,
+    externals,
+  });
+  await rmSafe(path.join(tmpBuildDir, 'node_modules'), {
     recursive: true,
     force: true,
   });
-  await rmSafe(join(tmpBuildDir, 'package-lock.json'), { force: true });
+  await rmSafe(path.join(tmpBuildDir, 'package-lock.json'), { force: true });
+  await rmSafe(path.join(tmpBuildDir, '.npmrc'), { force: true });
   await mkdir(tmpBuildDir, { recursive: true });
   await writeFile(
-    join(tmpBuildDir, 'package.json'),
-    JSON.stringify({ name: 'install-sandbox', private: true }, null, 2),
+    path.join(tmpBuildDir, 'package.json'),
+    `${JSON.stringify(
+      {
+        name: 'wharfie-frozen-dependency-closure',
+        private: true,
+        dependencies: Object.fromEntries(
+          closure.plan.roots.map((/** @type {any} */ root) => [
+            root.name,
+            root.version,
+          ]),
+        ),
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600 },
   );
 
-  // .npmrc for the target triplet; omit optionals in main pass; don’t run scripts
-  await writeFile(
-    join(tmpBuildDir, '.npmrc'),
-    [
-      `platform=${buildTarget.platform}`,
-      `arch=${buildTarget.architecture}`,
-      `os=${buildTarget.platform}`,
-      `cpu=${buildTarget.architecture}`,
-      ...(buildTarget.platform === 'linux' && buildTarget.libc
-        ? [`libc=${buildTarget.libc}`]
-        : []),
-      'include=prod',
-      'optional=false',
-      'omit=optional',
-      'ignore-scripts=true',
-    ].join('\n'),
-  );
-
-  /** @type {NpmConfigShim} */
-  // npmConfig shim (constructor only)
-  const npmConfig = {
-    get: (k) => {
-      switch (k) {
-        case 'platform':
-        case 'os':
-          return buildTarget.platform;
-        case 'arch':
-        case 'cpu':
-          return buildTarget.architecture;
-        case 'libc':
-          return buildTarget.platform === 'linux'
-            ? buildTarget.libc
-            : undefined;
-        case 'include':
-          return ['prod'];
-        case 'optional':
-          return false;
-        case 'omit':
-          return ['optional'];
-        case 'ignore-scripts':
-          return true;
-        case 'audit':
-          return false;
-        case 'fund':
-          return false;
-        default:
-          return undefined;
-      }
-    },
-  };
-
-  // Split user specs: normal vs platform-gated “prebuilt” specs that would EBADPLATFORM
-  const specs = (externals || []).map((e) => `${e.name}@${e.version}`);
-  const { normalSpecs, prebuiltSpecs } = await splitPrebuiltSpecs(
-    specs,
-    npmConfig,
-  );
-
-  // Build + reify normal specs (no optionals in this pass)
-  // eslint-disable-next-line no-console
-  console.log('INSTALLING(normal), ', JSON.stringify(normalSpecs));
-
-  const arb = new Arborist({
-    path: tmpBuildDir,
-    npmConfig,
-    ignoreScripts: true,
-  });
-
-  await arb.buildIdealTree({
-    add: normalSpecs,
-    saveType: 'prod',
-    update: { all: true },
-  });
-
-  await arb.reify({
-    save: true,
-    omit: ['optional'], // no optionals in this pass
-  });
-
-  // eslint-disable-next-line no-console
-  console.log('installed', JSON.stringify(normalSpecs), 'in', tmpBuildDir);
-
-  // Explicit user-requested prebuilds (e.g. @img/sharp-linux-x64@0.34.4): extract directly
-  if (prebuiltSpecs.length) {
-    await extractPrebuiltSpecs(
+  for (const packageEntry of closure.plan.packages) {
+    const destination = resolvePackageDestination(
       tmpBuildDir,
-      prebuiltSpecs,
-      npmConfig,
-      /* _buildTarget: */ buildTarget,
+      packageEntry.location,
     );
-  }
-
-  // OPTIONAL: now scan and add only target-matching optional deps (general)
-  const optionals = await discoverOptionalDeps(
-    join(tmpBuildDir, 'node_modules'),
-  );
-
-  await installMatchingOptionals({
-    tmpBuildDir,
-    optionals,
-    target: {
-      os: buildTarget.platform,
-      cpu: buildTarget.architecture,
-      libc: buildTarget.platform === 'linux' ? buildTarget.libc : undefined,
-    },
-    npmConfig,
-  });
-}
-
-/* ---------------- helpers ---------------- */
-
-/**
- * rm but ignore "not exists" and similar errors.
- * @param {string} p - p.
- * @param {import('node:fs').RmOptions} opts - opts.
- * @returns {Promise<void>} - Result.
- */
-async function rmSafe(p, opts) {
-  try {
-    await rm(p, opts);
-  } catch {
-    // intentionally ignore errors from rm (e.g., ENOENT)
-  }
-}
-
-/**
- * Decide which specs are “platform-gated” and should be extracted (not added).
- * @param {string[]} specs - specs.
- * @param {NpmConfigShim} npmConfig - npmConfig.
- * @returns {Promise<{ normalSpecs: string[], prebuiltSpecs: Array<{ name: string, spec: string }> }>} -
- */
-async function splitPrebuiltSpecs(specs, npmConfig) {
-  /** @type {string[]} */
-  const normalSpecs = [];
-  /** @type {Array<{ name: string, spec: string }>} */
-  const prebuiltSpecs = [];
-
-  for (const spec of specs) {
-    /** @type {any} */
-    let mani;
+    await mkdir(path.dirname(destination), { recursive: true });
     try {
       // eslint-disable-next-line import/no-named-as-default-member
-      mani = await pacote.manifest(spec, { npmConfig });
-    } catch {
-      normalSpecs.push(spec);
-      continue;
-    }
-
-    const os = Array.isArray(mani.os) ? mani.os : [];
-    const cpu = Array.isArray(mani.cpu) ? mani.cpu : [];
-    const hasPlatformConstraints =
-      os.length ||
-      cpu.length ||
-      /-(linux|darwin|win|musl|glibc)/i.test(String(mani.name));
-
-    if (hasPlatformConstraints) prebuiltSpecs.push({ name: mani.name, spec });
-    else normalSpecs.push(spec);
-  }
-  return { normalSpecs, prebuiltSpecs };
-}
-
-/**
- * Extract user-requested platform packages directly to node_modules (bypasses EBADPLATFORM).
- * @param {string} tmpBuildDir - tmpBuildDir.
- * @param {Array<{ name: string, spec: string }>} prebuiltSpecs -
- * @param {NpmConfigShim} npmConfig - npmConfig.
- * @param {BuildTarget} _buildTarget - unused; reserved for future logic
- * @returns {Promise<void>} - Result.
- */
-async function extractPrebuiltSpecs(
-  tmpBuildDir,
-  prebuiltSpecs,
-  npmConfig,
-  _buildTarget,
-) {
-  for (const { name, spec } of prebuiltSpecs) {
-    // sanity: if present already, skip
-    const dest = join(tmpBuildDir, 'node_modules', name);
-    if (existsSync(dest)) continue;
-    await mkdir(dest, { recursive: true });
-    // eslint-disable-next-line import/no-named-as-default-member
-    await pacote.extract(spec, dest, { npmConfig });
-    // eslint-disable-next-line no-console
-    console.log(`[prebuilt+] ${spec}`);
-  }
-}
-
-/**
- * Recursively merge optionalDependencies from installed packages.
- * @param {string} nodeModulesRoot - nodeModulesRoot.
- * @returns {Promise<Map<string, string>>} - Result.
- */
-async function discoverOptionalDeps(nodeModulesRoot) {
-  /** @type {Map<string, string>} */
-  const merged = new Map();
-  /** @type {string[]} */
-  const q = [nodeModulesRoot];
-
-  while (q.length) {
-    const dir = q.shift();
-    if (!dir) break;
-
-    /** @type {import('node:fs').Dirent[]} */
-    let ents;
-    try {
-      ents = await readdir(dir, { withFileTypes: true });
-    } catch {
-      // intentionally ignore unreadable directories
-      continue;
-    }
-
-    for (const ent of ents) {
-      if (!ent.isDirectory()) continue;
-      const full = join(dir, ent.name);
-
-      if (ent.name.startsWith('@')) {
-        q.push(full);
-        continue;
+      const tarball = await pacote.tarball(packageEntry.resolved, {
+        integrity: packageEntry.integrity,
+      });
+      if (!Buffer.isBuffer(tarball) || tarball.length === 0) {
+        throw new TypeError('Locked package URL did not return tar bytes.');
       }
-
-      const pkgJson = join(full, 'package.json');
-      if (existsSync(pkgJson)) {
-        try {
-          /** @type {any} */
-          const pkg = JSON.parse(await readFile(pkgJson, 'utf8'));
-          if (
-            pkg &&
-            pkg.optionalDependencies &&
-            typeof pkg.optionalDependencies === 'object'
-          ) {
-            /** @type {Record<string, unknown>} */
-            const opt = pkg.optionalDependencies;
-            for (const [n, r] of Object.entries(opt)) {
-              if (!merged.has(n)) merged.set(n, String(r));
-            }
-          }
-        } catch {
-          // intentionally ignore invalid package.json
-        }
-        const nested = join(full, 'node_modules');
-        if (existsSync(nested)) q.push(nested);
-      } else {
-        q.push(full);
-      }
+      await validatePackageTarball(tarball, packageEntry.location);
+      await extractPackageTarball(tarball, destination);
+    } catch (error) {
+      await rmSafe(destination, { recursive: true, force: true });
+      const detail = error instanceof Error ? ` ${error.message}` : '';
+      throw new Error(
+        `Failed to validate and extract frozen dependency '${packageEntry.location}' from its locked URL and integrity.${detail}`,
+      );
     }
   }
 
-  return merged;
-}
-
-/**
- * npm semantics helpers for os/cpu/libc lists.
- * @param {string} value - value.
- * @param {unknown[]} list - list.
- * @returns {boolean} - Result.
- */
-function listMatches(value, list) {
-  if (!Array.isArray(list) || list.length === 0) return true;
-  if (list.includes('!' + value)) return false;
-  const positives = list.filter((x) => !String(x).startsWith('!'));
-  return positives.length ? positives.includes(value) : true;
-}
-
-/**
- * libc matcher variant.
- * @param {TargetLibc | undefined} value - value.
- * @param {unknown[]} list - list.
- * @returns {boolean} - Result.
- */
-function libcMatches(value, list) {
-  if (!value) return true;
-  if (!Array.isArray(list) || list.length === 0) return true;
-  if (list.includes('!' + value)) return false;
-  const positives = list.filter((x) => !String(x).startsWith('!'));
-  return positives.length ? positives.includes(value) : true;
-}
-
-/**
- * Heuristic name check for target (@img/sharp-linux-x64, etc.).
- * @param {string} name - name.
- * @param {{ os: TargetPlatform, cpu: TargetArch, libc?: TargetLibc }} target -
- * @returns {boolean} - Result.
- */
-function nameMatchesTarget(name, { os, cpu, libc }) {
-  const n = name.toLowerCase();
-  const osOk =
-    (os === 'linux' && n.includes('linux')) ||
-    (os === 'darwin' && (n.includes('darwin') || n.includes('mac'))) ||
-    (os === 'win32' && (n.includes('win32') || n.includes('windows'))) ||
-    (!n.includes('linux') &&
-      !n.includes('darwin') &&
-      !n.includes('mac') &&
-      !n.includes('win'));
-
-  const cpuOk =
-    (cpu === 'x64' && (n.includes('x64') || n.includes('amd64'))) ||
-    (cpu === 'arm64' && n.includes('arm64')) ||
-    (cpu === 'arm' && /\barm(?!64)\b/.test(n)) ||
-    (!n.includes('x64') && !n.includes('amd64') && !n.includes('arm'));
-
-  if (!osOk || !cpuOk) return false;
-
-  if (os === 'linux') {
-    const hasMusl = n.includes('musl');
-    const hasGlibc = n.includes('glibc') || n.includes('gnu');
-    if (libc === 'musl') return hasMusl; // require musl
-    // glibc: reject musl variants
-    return !hasMusl || hasGlibc;
-  }
-
-  return true;
-}
-
-/**
- * Add only optionals that match the TARGET; then prune build/ dirs for their bases.
- * @param {{
- *   tmpBuildDir: string,
- *   optionals: Map<string, string> | undefined,
- *   target: { os: TargetPlatform, cpu: TargetArch, libc?: TargetLibc },
- *   npmConfig: NpmConfigShim
- * }} args - args.
- * @returns {Promise<void>} - Result.
- */
-async function installMatchingOptionals({
-  tmpBuildDir,
-  optionals,
-  target,
-  npmConfig,
-}) {
-  if (!optionals || optionals.size === 0) return;
-
-  /** @type {string[]} */
-  const extracted = [];
-
-  for (const [name, range] of optionals.entries()) {
-    /** @type {any} */
-    let mani;
-    try {
-      // eslint-disable-next-line import/no-named-as-default-member
-      mani = await pacote.manifest(`${name}@${range}`, { npmConfig });
-    } catch {
-      // skip unresolved optional
-      continue;
-    }
-
-    const os = Array.isArray(mani.os) ? mani.os.map(String) : [];
-    const cpu = Array.isArray(mani.cpu) ? mani.cpu.map(String) : [];
-    const libc = Array.isArray(mani.libc) ? mani.libc.map(String) : [];
-
-    const matches =
-      listMatches(target.os, os) &&
-      listMatches(target.cpu, cpu) &&
-      libcMatches(target.libc, libc) &&
-      nameMatchesTarget(name, target);
-
-    if (!matches) continue;
-
-    const dest = join(tmpBuildDir, 'node_modules', name);
-    if (existsSync(dest)) continue;
-
-    await mkdir(dest, { recursive: true });
-    // eslint-disable-next-line import/no-named-as-default-member
-    await pacote.extract(`${name}@${range}`, dest, { npmConfig });
-    extracted.push(name);
-    // eslint-disable-next-line no-console
-    console.log(`[optional+] ${name}@${range}`);
-  }
-
-  await pruneBuildDirsForInstalledOptionals(tmpBuildDir, extracted);
-}
-
-/**
- * Infer a base package from an optional’s platform-specific name.
- * @param {string} pkgName - pkgName.
- * @returns {string | null} - Result.
- */
-function inferBaseFromOptional(pkgName) {
-  const m = pkgName.match(
-    /^(@[^/]+\/)?([^/]+?)(?:[-_](?:linux|linuxmusl|darwin|mac|win|win32).*)$/i,
-  );
-  if (!m) return null;
-  const scope = m[1] || '';
-  const base = m[2];
-
-  // e.g. @lmdb/lmdb (scope equals base)
-  if (scope && base && scope.toLowerCase() === `@${base}`) return base;
-
-  return scope && pkgName.startsWith('@parcel/watcher')
-    ? '@parcel/watcher'
-    : base;
-}
-
-/**
- * Remove build/ directories from the base packages of installed optionals.
- * @param {string} tmpBuildDir - tmpBuildDir.
- * @param {string[]} installedOptionals - installedOptionals.
- * @returns {Promise<void>} - Result.
- */
-async function pruneBuildDirsForInstalledOptionals(
-  tmpBuildDir,
-  installedOptionals,
-) {
-  const bases = new Set(/** @type {string[]} */ ([]));
-
-  for (const name of installedOptionals) {
-    const base = inferBaseFromOptional(name);
-    if (base) bases.add(base);
-  }
-
-  for (const base of bases) {
-    const buildDir = join(tmpBuildDir, 'node_modules', base, 'build');
-    try {
-      await rm(buildDir, { recursive: true, force: true });
-    } catch {
-      // ignore failures removing build dir
-    }
-  }
+  await verifyMaterializedClosure(tmpBuildDir, closure.plan);
+  return {
+    dependencyLockInput: closure.plan.lock,
+    closureDigest: closure.digest,
+    plan: closure.plan,
+  };
 }
 
 export { installForTarget };

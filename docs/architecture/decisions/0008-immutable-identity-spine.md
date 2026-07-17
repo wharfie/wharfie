@@ -279,3 +279,10 @@ This decision does not define or implement:
   has not yet been proven; or
 - a remote artifact/provenance registry or multi-statement provenance storage
   model.
+
+## Follow-up
+
+[ADR 0009](0009-frozen-target-dependency-closures.md) closes the release-blocking
+external-closure gap recorded in this decision's initial implementation
+boundary. That earlier section remains as historical implementation context;
+ADR 0009 defines the accepted frozen-lock interpretation and receipt boundary.

@@ -1,235 +1,138 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import path from 'node:path';
 import semver from 'semver';
+
+import { compareCanonicalStrings } from '../../../runtime/canonical-order.js';
+
+const EXTERNAL_KEYS = new Set(['name', 'version']);
+const NPM_PACKAGE_NAME_PATTERN =
+  /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
 
 /**
  * @typedef ExternalDependencyInputObject
- * @property {string} name - name.
- * @property {string} [version] - version.
+ * @property {string} name - Exact lowercase npm package name.
+ * @property {string} version - Exact canonical semantic version.
  */
 
 /**
  * @typedef ExternalDependencyDescription
- * @property {string} name - name.
- * @property {string} version - version.
+ * @property {string} name - Exact lowercase npm package name.
+ * @property {string} version - Exact canonical semantic version.
  */
 
 /**
- * @param {string | ExternalDependencyInputObject} external - external.
- * @returns {ExternalDependencyInputObject} - Result.
+ * @param {unknown} value - Candidate package name.
+ * @param {string} valuePath - Human-readable input path.
+ * @returns {string} - Canonical package name.
  */
-function normalizeExternalInput(external) {
-  if (typeof external === 'string') {
-    const trimmed = external.trim();
-    if (!trimmed) {
-      throw new TypeError('External dependency spec must not be empty');
-    }
-
-    const versionSeparator = trimmed.lastIndexOf('@');
-    if (versionSeparator > 0) {
-      const name = trimmed.slice(0, versionSeparator).trim();
-      const version = trimmed.slice(versionSeparator + 1).trim();
-      if (name && version) {
-        return { name, version };
-      }
-    }
-
-    return { name: trimmed };
+function validatePackageName(value, valuePath) {
+  if (
+    typeof value !== 'string' ||
+    value.trim() !== value ||
+    !NPM_PACKAGE_NAME_PATTERN.test(value)
+  ) {
+    throw new TypeError(
+      `${valuePath} must be an exact lowercase npm registry package name.`,
+    );
   }
-
-  if (external && typeof external === 'object') {
-    const name = typeof external.name === 'string' ? external.name.trim() : '';
-    const version =
-      typeof external.version === 'string' ? external.version.trim() : '';
-
-    if (!name) {
-      throw new TypeError('External dependency objects require a name');
-    }
-
-    return version ? { name, version } : { name };
-  }
-
-  throw new TypeError(
-    'External dependencies must be package names or { name, version? } objects',
-  );
+  return value;
 }
 
 /**
- * Portable activity bundles must identify registry packages by one immutable
- * published version. Ranges, tags, URLs, and VCS specs make the same manifest
- * resolve to different bytes over time.
- * @param {string} packageName - Package name.
- * @param {string} version - Requested version.
+ * @param {unknown} value - Candidate package version.
+ * @param {string} valuePath - Human-readable input path.
  * @returns {string} - Canonical exact semantic version.
  */
-function normalizeExactExternalVersion(packageName, version) {
-  const exactVersion = semver.valid(version.trim());
-  if (!exactVersion) {
+function validatePackageVersion(value, valuePath) {
+  if (
+    typeof value !== 'string' ||
+    value.trim() !== value ||
+    semver.valid(value) !== value
+  ) {
     throw new TypeError(
-      `External dependency '${packageName}' requires an exact semantic version; ranges, tags, URLs, and VCS specs are not supported.`,
+      `${valuePath} requires an exact canonical semantic version; ranges, tags, URLs, aliases, and VCS specs are not supported.`,
     );
   }
-  return exactVersion;
+  return value;
 }
 
 /**
- * @param {string | undefined} basePath - basePath.
- * @returns {any[]} - Result.
+ * Parse one exact `name@version` string, including scoped package names.
+ * @param {string} value - Exact external specifier.
+ * @param {string} valuePath - Human-readable input path.
+ * @returns {ExternalDependencyDescription} - Exact descriptor.
  */
-function createResolvers(basePath) {
-  const candidates = [
-    basePath ? path.resolve(basePath) : null,
-    path.join(process.cwd(), 'package.json'),
-  ];
-
-  /** @type {string[]} */
-  const resolvedCandidates = [];
-  for (const candidate of candidates) {
-    if (typeof candidate === 'string' && candidate) {
-      resolvedCandidates.push(candidate);
-    }
+function parseExternalString(value, valuePath) {
+  if (value.trim() !== value || value.length === 0) {
+    throw new TypeError(
+      `${valuePath} must be an exact package@version specifier.`,
+    );
   }
-
-  return Array.from(new Set(resolvedCandidates)).map((candidate) =>
-    createRequire(candidate),
-  );
+  const separator = value.lastIndexOf('@');
+  if (separator <= 0 || separator === value.length - 1) {
+    throw new TypeError(
+      `${valuePath} must include an exact version as package@version; ambient installed packages are not build inputs.`,
+    );
+  }
+  return {
+    name: validatePackageName(value.slice(0, separator), `${valuePath}.name`),
+    version: validatePackageVersion(
+      value.slice(separator + 1),
+      `${valuePath}.version`,
+    ),
+  };
 }
 
 /**
- * @param {string} packageName - packageName.
- * @param {any[]} resolvers - resolvers.
- * @returns {ExternalDependencyDescription} - Result.
+ * Normalize user-authored external dependency specs into an exact, sorted,
+ * duplicate-free descriptor list. Bare names are deliberately rejected:
+ * app-local lock bytes, not ambient node_modules, own dependency identity.
+ * @param {(string | ExternalDependencyInputObject)[] | undefined} externals - External declarations.
+ * @param {string | undefined} [_entrypointPath] - Retained positional compatibility; never used for resolution.
+ * @returns {ExternalDependencyDescription[] | undefined} - Canonical descriptors.
  */
-function resolveInstalledExternal(packageName, resolvers) {
-  /** @type {string[]} */
-  const errors = [];
-
-  for (const resolver of resolvers) {
-    try {
-      const packageJsonPath = resolver.resolve(`${packageName}/package.json`);
-      /** @type {{ version?: string, name?: string }} */
-      const manifest = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
-      if (typeof manifest.version === 'string' && manifest.version) {
-        return { name: packageName, version: manifest.version };
-      }
-    } catch {
-      // Fall back to resolving the package entrypoint and walking upward.
-    }
-
-    let resolvedEntry;
-    try {
-      resolvedEntry = resolver.resolve(packageName);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      errors.push(message);
-      continue;
-    }
-
-    let currentDir = path.dirname(resolvedEntry);
-    while (true) {
-      const packageJsonPath = path.join(currentDir, 'package.json');
-      if (existsSync(packageJsonPath)) {
-        /** @type {{ version?: string, name?: string }} */
-        const manifest = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
-        if (
-          manifest?.name === packageName &&
-          typeof manifest.version === 'string' &&
-          manifest.version
-        ) {
-          return { name: packageName, version: manifest.version };
-        }
-      }
-
-      const parentDir = path.dirname(currentDir);
-      if (parentDir === currentDir) {
-        break;
-      }
-      currentDir = parentDir;
-    }
+export function normalizeExternalDependencies(externals, _entrypointPath) {
+  if (externals === undefined || externals === null) return undefined;
+  if (!Array.isArray(externals)) {
+    throw new TypeError('External dependencies must be an array.');
   }
+  if (externals.length === 0) return undefined;
 
-  throw new Error(
-    `Could not resolve installed external dependency '${packageName}': ${errors.join(' | ')}`,
-  );
-}
-
-/**
- * Normalize user-authored external dependency specs into exact `{ name, version }`
- * descriptors.
- *
- * Supported input forms:
- * - 'lmdb'
- * - 'sharp@0.34.4'
- * - { name: 'lmdb' }
- * - { name: 'sharp', version: '0.34.4' }
- *
- * Bare package names are resolved against the installed dependency tree closest to
- * the function entrypoint, with a fallback to the current Wharfie working tree.
- * @param {(string | ExternalDependencyInputObject)[] | undefined} externals - externals.
- * @param {string | undefined} entrypointPath - entrypointPath.
- * @returns {ExternalDependencyDescription[] | undefined} - Result.
- */
-export function normalizeExternalDependencies(externals, entrypointPath) {
-  if (!Array.isArray(externals) || externals.length === 0) {
-    return undefined;
-  }
-
-  const resolvers = createResolvers(entrypointPath);
-  return externals.map((external) => {
-    const normalized = normalizeExternalInput(external);
-    if (normalized.version) {
-      return {
-        name: normalized.name,
-        version: normalizeExactExternalVersion(
-          normalized.name,
-          normalized.version,
-        ),
-      };
+  const normalized = externals.map((external, index) => {
+    const valuePath = `external[${index}]`;
+    if (typeof external === 'string') {
+      return parseExternalString(external, valuePath);
     }
-    const installed = resolveInstalledExternal(normalized.name, resolvers);
+    if (!external || typeof external !== 'object' || Array.isArray(external)) {
+      throw new TypeError(
+        `${valuePath} must be package@version or { name, version }.`,
+      );
+    }
+    for (const key of Object.keys(external)) {
+      if (!EXTERNAL_KEYS.has(key)) {
+        throw new TypeError(`${valuePath}.${key} is not supported.`);
+      }
+    }
+    for (const key of EXTERNAL_KEYS) {
+      if (!Object.prototype.hasOwnProperty.call(external, key)) {
+        throw new TypeError(`${valuePath}.${key} is required.`);
+      }
+    }
     return {
-      name: installed.name,
-      version: normalizeExactExternalVersion(installed.name, installed.version),
+      name: validatePackageName(external.name, `${valuePath}.name`),
+      version: validatePackageVersion(external.version, `${valuePath}.version`),
     };
   });
-}
 
-/**
- * Verify that source-mode execution will resolve the exact package versions
- * pinned by the canonical manifest. SEA builds install these pins into an
- * isolated bundle; source execution instead uses the app's installed tree and
- * must reject drift rather than silently running different code.
- * @param {ExternalDependencyDescription[] | undefined} externals - Pinned dependencies.
- * @param {string | undefined} entrypointPath - Activity entrypoint path.
- * @returns {void}
- */
-export function assertInstalledExternalDependencies(externals, entrypointPath) {
-  if (!Array.isArray(externals) || externals.length === 0) return;
-
-  const resolvers = createResolvers(entrypointPath);
-  for (const external of externals) {
-    const expected = normalizeExternalInput(external);
-    if (!expected.version) {
+  normalized.sort((left, right) =>
+    compareCanonicalStrings(left.name, right.name),
+  );
+  for (let index = 1; index < normalized.length; index += 1) {
+    if (normalized[index - 1].name === normalized[index].name) {
       throw new TypeError(
-        `External dependency '${expected.name}' must have an exact version before source execution.`,
-      );
-    }
-
-    const expectedVersion = normalizeExactExternalVersion(
-      expected.name,
-      expected.version,
-    );
-    const installed = resolveInstalledExternal(expected.name, resolvers);
-    if (installed.version !== expectedVersion) {
-      throw new Error(
-        `Source activity external dependency '${expected.name}' is pinned to ${expectedVersion}, but local resolution found ${installed.version}. Install the exact pinned version before running the activity from source.`,
+        `External package '${normalized[index].name}' is declared more than once.`,
       );
     }
   }
+  return normalized;
 }
 
-export default {
-  assertInstalledExternalDependencies,
-  normalizeExternalDependencies,
-};
+export default { normalizeExternalDependencies };

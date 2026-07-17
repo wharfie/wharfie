@@ -35,6 +35,13 @@ process.env.PATH = [path.dirname(process.execPath), process.env.PATH]
   .filter(Boolean)
   .join(path.delimiter);
 
+const sourceMetadata = readJson(path.join(REPO_ROOT, 'package.json'));
+assert.equal(
+  process.versions.node,
+  sourceMetadata.engines.node,
+  'the SEA smoke test must run under the exact repository Node version',
+);
+
 const packaged = createPackageTarball();
 const installDirectory = mkdtempSync(
   path.join(os.tmpdir(), 'wharfie-package-install-'),
@@ -78,8 +85,10 @@ try {
   const installedMetadata = readJson(
     path.join(installedPackageRoot, 'package.json'),
   );
-  const sourceMetadata = readJson(path.join(REPO_ROOT, 'package.json'));
   assert.equal(installedMetadata.version, sourceMetadata.version);
+  const installedLmdbMetadata = readJson(
+    path.join(installDirectory, 'node_modules', 'lmdb', 'package.json'),
+  );
 
   const wharfieBin = path.join(
     installDirectory,
@@ -110,25 +119,59 @@ try {
         name: 'wharfie-generated-sea-smoke',
         private: true,
         type: 'module',
+        dependencies: {
+          lmdb: installedLmdbMetadata.version,
+        },
       },
       null,
       2,
     )}\n`,
   );
+  runCommand(
+    NPM_COMMAND,
+    [
+      'install',
+      '--ignore-scripts',
+      '--no-audit',
+      '--no-fund',
+      `lmdb@${installedLmdbMetadata.version}`,
+    ],
+    {
+      cwd: appDirectory,
+      env: {
+        ...process.env,
+        npm_config_cache: path.join(packaged.directory, 'npm-cache'),
+      },
+    },
+  );
   writeFileSync(
     path.join(sourceDirectory, 'activity.ts'),
-    `type GreetEvent = { name?: string };
+    `import { open } from 'lmdb';
+
+type GreetEvent = { name?: string };
 type GreetContext = { requestId?: string };
 
 export async function greet(
   event: GreetEvent = {},
   context: GreetContext = {},
 ) {
-  return {
-    message: \`hello \${event.name || 'world'}\`,
-    requestId: context.requestId || null,
-    runtime: 'activity',
-  };
+  const message = \`hello \${event.name || 'world'}\`;
+  const database = open({
+    path: './lmdb-smoke',
+    eventTurnBatching: false,
+    commitDelay: 0,
+  });
+  try {
+    database.putSync('greeting', { message });
+    return {
+      message,
+      requestId: context.requestId || null,
+      runtime: 'activity',
+      nativeRecord: database.get('greeting'),
+    };
+  } finally {
+    await database.close();
+  }
 }
 
 export default greet;
@@ -187,6 +230,10 @@ export default defineApp({
         path: './src/activity.ts',
         export: 'greet',
       },
+      externalPackages: [{
+        name: 'lmdb',
+        version: ${JSON.stringify(installedLmdbMetadata.version)},
+      }],
     },
   },
 });
@@ -204,6 +251,11 @@ export default defineApp({
     message: 'hello source-user',
     requestId: 'portable-smoke',
     runtime: 'activity',
+    nativeRecord: { message: 'hello source-user' },
+  });
+  rmSync(path.join(appDirectory, 'lmdb-smoke'), {
+    recursive: true,
+    force: true,
   });
 
   const packageOutput = runCommand(
@@ -272,6 +324,7 @@ export default defineApp({
     message: 'hello packaged-user',
     requestId: 'portable-smoke',
     runtime: 'activity',
+    nativeRecord: { message: 'hello packaged-user' },
   });
 
   const embeddedManifest = JSON.parse(
@@ -300,6 +353,9 @@ export default defineApp({
     embeddedManifest.activities.greet.entrypoint.path,
     'src/activity.ts',
   );
+  assert.deepEqual(embeddedManifest.activities.greet.externalPackages, [
+    { name: 'lmdb', version: installedLmdbMetadata.version },
+  ]);
 
   const embeddedMetadata = JSON.parse(
     runCommand(cleanArtifactPath, ['wharfie', 'metadata', '--no-pretty'], {
@@ -330,7 +386,7 @@ export default defineApp({
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source CLI activity, and clean generated ${process.platform} SEA activity with Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source CLI activity, and clean generated ${process.platform} SEA activity with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();

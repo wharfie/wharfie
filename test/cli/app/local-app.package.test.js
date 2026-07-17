@@ -115,6 +115,16 @@ function getArtifactFileName(appName, contents, target) {
 }
 
 /**
+ * @param {string | Buffer | Uint8Array} contents - Exact bytes.
+ */
+function getSha256Digest(contents) {
+  return {
+    algorithm: /** @type {'sha256'} */ ('sha256'),
+    value: createHash('sha256').update(contents).digest('base64url'),
+  };
+}
+
+/**
  * Supply the reconciled, non-secret inputs normally produced by NodeBinary and
  * MacOSBinarySignature when a package test replaces the actor reconcile loop.
  * @param {ActorSystem} actorSystem - Mocked actor system.
@@ -139,6 +149,50 @@ async function prepareMockArtifactProvenance(actorSystem, buildDir) {
     if (resource instanceof MacOSBinarySignature) {
       resource._setUNSAFE('signingResult', { mode: 'ad-hoc' });
     }
+  }
+
+  for (const resource of actorSystem.getResources()) {
+    if (resource instanceof FunctionResource) {
+      await resource._reconcile();
+    }
+  }
+
+  for (const resource of actorSystem.getResources()) {
+    if (!(resource instanceof SeaBuild)) continue;
+    const sealedAssetsDir = await fsp.mkdtemp(
+      path.join(buildDir, 'sealed-assets-'),
+    );
+    const preparedAssets =
+      await resource._prepareSeaAssetsWithEvidence(sealedAssetsDir);
+    const nodeSourcePath = String(resource.get('nodeBinaryPath'));
+    const nodeSourceBytes = await fsp.readFile(nodeSourcePath);
+    const signingResource = actorSystem
+      .getResources()
+      .find(
+        (candidate) =>
+          candidate instanceof MacOSBinarySignature &&
+          Array.isArray(candidate.dependsOn) &&
+          candidate.dependsOn.includes(resource),
+      );
+    const signing = signingResource
+      ? signingResource.get('signingResult')
+      : { mode: 'unsigned' };
+
+    jest
+      .spyOn(resource, 'getSuccessfulBuildEvidence')
+      .mockImplementation((artifactBytes) => ({
+        binaryPath: String(resource.get('binaryPath')),
+        binaryDigest: getSha256Digest(artifactBytes),
+        nodeSource: {
+          path: nodeSourcePath,
+          digest: getSha256Digest(nodeSourceBytes),
+          size: nodeSourceBytes.length,
+          archive: null,
+        },
+        assets: preparedAssets.assetEvidence,
+        functionAssets: preparedAssets.functionAssetEvidence,
+        signing,
+      }));
   }
 }
 
@@ -975,6 +1029,71 @@ try {
     },
   );
 
+  it.each([
+    ['behavior', 'branding', true],
+    ['manifest', APP_MANIFEST_ASSET_NAME, false],
+    ['revision', APPLICATION_REVISION_ASSET_NAME, false],
+    ['runtime', ARTIFACT_RUNTIME_ASSET_NAME, false],
+  ])(
+    'rejects a %s asset mutated after its immutable digest is installed',
+    async (_label, assetName, includeBehaviorAsset) => {
+      const dir = await fsp.mkdtemp(
+        path.join(os.tmpdir(), 'wharfie-mutated-package-asset-'),
+      );
+      const outputDir = path.join(dir, 'dist');
+
+      try {
+        await writeTransactionalPackageApp(dir, 'mutated-package-asset', [
+          currentTarget,
+        ]);
+        if (includeBehaviorAsset) {
+          await fsp.writeFile(
+            path.join(dir, 'branding.txt'),
+            'original branding bytes',
+          );
+        }
+
+        jest.spyOn(ActorSystem.prototype, 'reconcile').mockImplementation(
+          /** @this {ActorSystem} */ async function () {
+            const build = this.getResources().find(
+              (resource) => resource instanceof SeaBuild,
+            );
+            if (!(build instanceof SeaBuild)) {
+              throw new Error('Expected a SEA build resource.');
+            }
+            const assets = build.get('assets');
+            const digests = build.get('assetDigests');
+            expect(digests[assetName]).toEqual({
+              algorithm: 'sha256',
+              value: expect.any(String),
+            });
+            await fsp.chmod(assets[assetName], 0o600);
+            await fsp.writeFile(
+              assets[assetName],
+              `mutated ${String(assetName)} bytes`,
+            );
+            const sealDir = await fsp.mkdtemp(
+              path.join(dir, '.mutated-sea-assets-'),
+            );
+            await build.prepareSeaAssets(sealDir);
+          },
+        );
+
+        await expect(
+          packageLocalApp({
+            dir,
+            outputDir,
+            ...(includeBehaviorAsset
+              ? { build: { assets: { branding: './branding.txt' } } }
+              : {}),
+          }),
+        ).rejects.toThrow(/does not match its expected SHA-256 digest/i);
+      } finally {
+        await fsp.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('rejects unsupported activity environment values before building', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-inline-env-package-'),
@@ -1240,7 +1359,7 @@ try {
     }
   });
 
-  it('leaves existing outputs untouched and removes staging when a staged copy fails', async () => {
+  it('leaves existing outputs untouched and removes staging when a staged artifact write fails', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-package-copy-transaction-'),
     );
@@ -1288,23 +1407,26 @@ try {
         },
       );
 
-      const copyFile = fsp.copyFile.bind(fsp);
-      let stagedCopyCount = 0;
+      const writeFile = fsp.writeFile.bind(fsp);
+      let stagedArtifactWriteCount = 0;
       jest
-        .spyOn(fsp, 'copyFile')
-        .mockImplementation(async (source, destination, mode) => {
-          if (String(destination).includes('.wharfie-package-')) {
-            stagedCopyCount += 1;
-            if (stagedCopyCount === 2) {
-              throw new Error('staged-copy-failure-sentinel');
+        .spyOn(fsp, 'writeFile')
+        .mockImplementation(async (destination, contents, options) => {
+          const destinationPath = String(destination);
+          if (
+            destinationPath.includes('.wharfie-package-') &&
+            !destinationPath.endsWith('.artifact.json')
+          ) {
+            stagedArtifactWriteCount += 1;
+            if (stagedArtifactWriteCount === 2) {
+              throw new Error('staged-write-failure-sentinel');
             }
           }
-          if (mode === undefined) return copyFile(source, destination);
-          return copyFile(source, destination, mode);
+          return writeFile(destination, contents, options);
         });
 
       await expect(packageLocalApp({ dir, outputDir })).rejects.toThrow(
-        'staged-copy-failure-sentinel',
+        'staged-write-failure-sentinel',
       );
       await expect(fsp.readFile(previousOutput, 'utf8')).resolves.toBe(
         'previous-artifact',

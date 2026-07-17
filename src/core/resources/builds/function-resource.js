@@ -6,13 +6,42 @@ import paths from '../../lib/paths.js';
 import { build } from '../../lib/esbuild.js';
 import { installForTarget } from './lib/install-deps.js';
 import { assertNoActivityEnvironmentVariables } from './lib/activity-environment.js';
+import {
+  FUNCTION_ASSET_SCHEMA_VERSION,
+  serializeFunctionAssetDescription,
+} from './lib/function-asset.js';
 import { normalizeExternalDependencies } from './lib/resolve-externals.js';
+import {
+  getBuildTargetId,
+  validateBuildTarget,
+} from '../../runtime/build-target.js';
+import { cloneJsonObject } from '../../runtime/json-value.js';
+import { assertLogicalId } from '../../runtime/logical-id.js';
 
 import { dirname, join } from 'node:path';
 import { promises, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { brotliCompressSync } from 'node:zlib';
 import { buffer as streamToBuffer } from 'node:stream/consumers';
+
+const WHARFIE_PUBLIC_APP_SPECIFIER = '@wharfie/wharfie/app';
+
+/**
+ * Resolve the source-tree public app API only when a nested function build is
+ * requested. Packaged CommonJS/SEA bundles must be able to boot without
+ * evaluating a file URL against their filesystem-style __filename value.
+ * @returns {string} - Absolute source module path.
+ */
+function getWharfiePublicAppEntrypoint() {
+  const moduleUrl = import.meta.url;
+  if (typeof moduleUrl !== 'string' || !moduleUrl.startsWith('file:')) {
+    throw new Error(
+      'This packaged Wharfie runtime cannot resolve source build modules.',
+    );
+  }
+  return fileURLToPath(new URL('../../../app.js', moduleUrl));
+}
 
 /**
  * @typedef ExternalDependencyDescription
@@ -23,7 +52,7 @@ import { buffer as streamToBuffer } from 'node:stream/consumers';
 /**
  * @typedef ExternalDependencyInput
  * @property {string} name - name.
- * @property {string} [version] - version.
+ * @property {string} version - Exact canonical semantic version.
  */
 
 /**
@@ -63,13 +92,14 @@ import { buffer as streamToBuffer } from 'node:stream/consumers';
  * @property {import('../reconcilable.js').default.Status} [status] - status.
  * @property {FunctionProperties & import('../../actors/typedefs.js').SharedProperties} properties - properties.
  * @property {import('../reconcilable.js').default[]} [dependsOn] - dependsOn.
+ * @property {{ path: string, input: import('../../runtime/application-revision.js').LockedInputDescriptor }} [dependencyLock] - Transient sealed dependency lock.
  */
 
 class FunctionResource extends BuildResource {
   /**
    * @param {FunctionOptions} options - options.
    */
-  constructor({ name, parent, status, properties, dependsOn }) {
+  constructor({ name, parent, status, properties, dependsOn, dependencyLock }) {
     const untypedProperties = /** @type {Record<string, any>} */ (properties);
     assertNoActivityEnvironmentVariables(
       untypedProperties.environmentVariables,
@@ -100,6 +130,48 @@ class FunctionResource extends BuildResource {
       properties: propertiesWithDefaults,
       dependsOn,
     });
+    this._dependencyLock = dependencyLock;
+  }
+
+  /**
+   * Resolve every behavior-bearing build property once for a reconciliation.
+   * @returns {{functionName: string, entrypoint: {path: string, export?: string}, buildTarget: import('../../runtime/build-target.js').BuildTarget, external: ExternalDependencyDescription[], resources: Record<string, any>}} - Coherent build inputs.
+   */
+  captureBuildInputs() {
+    const functionName = String(this.get('functionName'));
+    assertLogicalId(functionName, 'functionName');
+    const entrypoint = cloneJsonObject(this.get('entrypoint'), 'entrypoint');
+    if (
+      typeof entrypoint.path !== 'string' ||
+      entrypoint.path.length === 0 ||
+      (Object.prototype.hasOwnProperty.call(entrypoint, 'export') &&
+        (typeof entrypoint.export !== 'string' ||
+          entrypoint.export.length === 0))
+    ) {
+      throw new TypeError(
+        `Activity '${functionName}' requires a nonempty entrypoint path and optional nonempty export.`,
+      );
+    }
+    const external = normalizeExternalDependencies(
+      this.get('external', []),
+      entrypoint.path,
+    );
+    const canonicalEntrypoint = /** @type {{path: string, export?: string}} */ (
+      entrypoint
+    );
+    return {
+      functionName,
+      entrypoint: canonicalEntrypoint,
+      buildTarget: validateBuildTarget(
+        this.get('buildTarget'),
+        `Activity '${functionName}' build target`,
+      ),
+      external: external || [],
+      resources: cloneJsonObject(
+        this.get('resources', {}),
+        `Activity '${functionName}' resources`,
+      ),
+    };
   }
 
   async initializeEnvironment() {
@@ -107,13 +179,14 @@ class FunctionResource extends BuildResource {
   }
 
   /**
+   * @param {ReturnType<FunctionResource['captureBuildInputs']>} inputs - One coherent reconciliation input snapshot.
    * @returns {Promise<string>} - Result.
    */
-  async esbuild() {
-    const functionName = String(this.get('functionName'));
-    const exportName = String(this.get('entrypoint').export || 'default');
+  async esbuild(inputs = this.captureBuildInputs()) {
+    const functionName = inputs.functionName;
+    const exportName = String(inputs.entrypoint.export || 'default');
     const entryCode = `
-      import * as activityModule from ${JSON.stringify(this.get('entrypoint').path)};
+      import * as activityModule from ${JSON.stringify(inputs.entrypoint.path)};
       const entrypoint = activityModule[${JSON.stringify(exportName)}];
       if (typeof entrypoint !== 'function') {
         throw new TypeError(${JSON.stringify(
@@ -122,7 +195,7 @@ class FunctionResource extends BuildResource {
       }
       globalThis[Symbol.for(${JSON.stringify(functionName)})] = entrypoint;
     `;
-    const resolveDir = dirname(this.get('entrypoint').path || '');
+    const resolveDir = dirname(inputs.entrypoint.path);
     const { outputFiles, errors, warnings } = await build({
       stdin: {
         contents: entryCode,
@@ -136,17 +209,20 @@ class FunctionResource extends BuildResource {
       minify: true,
       keepNames: false,
       sourcemap: 'inline',
-      target: `node${this.get('buildTarget').nodeVersion}`,
+      target: `node${inputs.buildTarget.nodeVersion}`,
       logLevel: 'silent',
-      external: this.get('external', []).length
+      external: inputs.external.length
         ? [
             ...FunctionResource.REQUIRED_UNUSED_EXTERNALS,
-            ...this.get('external', []).map(
+            ...inputs.external.map(
               (/** @type {ExternalDependencyDescription} */ external) =>
                 external.name,
             ),
           ]
         : FunctionResource.REQUIRED_UNUSED_EXTERNALS,
+      alias: {
+        [WHARFIE_PUBLIC_APP_SPECIFIER]: getWharfiePublicAppEntrypoint(),
+      },
       define: {
         __WILLEM_BUILD_RECONCILE_TERMINATOR: '1', // injects this variable definition into the global scope
         'import.meta.url': '__filename',
@@ -169,18 +245,30 @@ class FunctionResource extends BuildResource {
   }
 
   /**
-   * @returns {Promise<string>} - Result.
+   * @param {ReturnType<FunctionResource['captureBuildInputs']>} inputs - One coherent reconciliation input snapshot.
+   * @returns {Promise<{ externalsTar: string, receipt: { dependencyLockInput: import('../../runtime/application-revision.js').LockedInputDescriptor, closureDigest: import('../../runtime/application-revision.js').Sha256Digest, plan: Readonly<Record<string, any>> } | null }>} - Exact archived closure and semantic receipt.
    */
-  async bundleExternals() {
-    const externals = this.get('external', []);
+  async bundleExternals(inputs = this.captureBuildInputs()) {
+    const externals = inputs.external;
+    if (externals.length === 0) {
+      return { externalsTar: '', receipt: null };
+    }
     const tmpBuildDir = join(FunctionResource.BUILD_DIR, `externals-${v4()}`);
-    await promises.mkdir(tmpBuildDir, { recursive: true });
+    await promises.mkdir(tmpBuildDir, { mode: 0o700, recursive: true });
+    await promises.chmod(tmpBuildDir, 0o700);
     try {
-      await installForTarget({
-        buildTarget: this.get('buildTarget'),
+      const receipt = await installForTarget({
+        activity: inputs.functionName,
+        buildTarget: inputs.buildTarget,
+        dependencyLock: this._dependencyLock,
         externals,
         tmpBuildDir,
       });
+      if (!receipt) {
+        throw new Error(
+          `Activity '${inputs.functionName}' declared externals but produced no frozen closure receipt.`,
+        );
+      }
       const stream = c(
         {
           cwd: tmpBuildDir,
@@ -191,16 +279,40 @@ class FunctionResource extends BuildResource {
         ['.'],
       );
       const externalsTar = await streamToBuffer(stream);
-      return externalsTar.toString('base64');
+      return {
+        externalsTar: externalsTar.toString('base64'),
+        receipt,
+      };
     } finally {
       await promises.rm(tmpBuildDir, { force: true, recursive: true });
     }
   }
 
   async _reconcile() {
-    // A previous successful reconcile must never be mistaken for the archive
-    // embedded by a later failed attempt.
+    // A previous successful reconcile must never be mistaken for the asset or
+    // archive produced by a later failed attempt.
+    const previousAssetPath = this.has('singleExecutableAssetPath')
+      ? this.get('singleExecutableAssetPath')
+      : undefined;
+    delete this.properties.singleExecutableAssetPath;
+    delete this.properties.singleExecutableAssetDigest;
     delete this.properties.externalArchiveDigest;
+    delete this.properties.externalClosureDigest;
+    delete this.properties.externalDependencyLockInput;
+    if (typeof previousAssetPath === 'string' && previousAssetPath) {
+      try {
+        await promises.unlink(previousAssetPath);
+      } catch (error) {
+        if (
+          !error ||
+          typeof error !== 'object' ||
+          !('code' in error) ||
+          error.code !== 'ENOENT'
+        ) {
+          throw error;
+        }
+      }
+    }
     if (!existsSync(FunctionResource.TEMP_ASSET_PATH)) {
       await promises.mkdir(FunctionResource.TEMP_ASSET_PATH, {
         mode: 0o700,
@@ -208,22 +320,25 @@ class FunctionResource extends BuildResource {
       });
     }
     await promises.chmod(FunctionResource.TEMP_ASSET_PATH, 0o700);
+    const inputs = this.captureBuildInputs();
     const [codeBlob, bundledExternals] = await Promise.all([
-      this.esbuild(),
-      this.bundleExternals(),
+      this.esbuild(inputs),
+      this.bundleExternals(inputs),
     ]);
-    const hasDeclaredExternals = this.get('external', []).length > 0;
-    if (hasDeclaredExternals && typeof bundledExternals !== 'string') {
+    const hasDeclaredExternals = inputs.external.length > 0;
+    if (
+      hasDeclaredExternals &&
+      (!bundledExternals.receipt || !bundledExternals.externalsTar)
+    ) {
       throw new Error(
-        `Activity '${this.get('functionName')}' declared external dependencies but produced no external archive.`,
+        `Activity '${inputs.functionName}' declared external dependencies but produced no external archive.`,
       );
     }
-    const externalsTar =
-      typeof bundledExternals === 'string' ? bundledExternals : '';
+    const externalsTar = bundledExternals.externalsTar;
     const externalArchiveBytes = Buffer.from(externalsTar, 'base64');
     if (externalArchiveBytes.toString('base64') !== externalsTar) {
       throw new Error(
-        `Activity '${this.get('functionName')}' produced a noncanonical external archive encoding.`,
+        `Activity '${inputs.functionName}' produced a noncanonical external archive encoding.`,
       );
     }
     const codeBundle = brotliCompressSync(codeBlob).toString('base64');
@@ -233,21 +348,78 @@ class FunctionResource extends BuildResource {
         .update(externalArchiveBytes)
         .digest('base64url'),
     };
-    const assetDescription = JSON.stringify({
-      codeBundle,
-      externalsTar,
-      resourceSpecs: this.get('resources', {}),
-    });
+    const planRoots = hasDeclaredExternals
+      ? bundledExternals.receipt?.plan?.roots?.map(
+          (/** @type {{name: string, version: string}} */ root) => ({
+            name: root.name,
+            version: root.version,
+          }),
+        )
+      : [];
+    if (hasDeclaredExternals && bundledExternals.receipt) {
+      const plan = bundledExternals.receipt.plan;
+      if (
+        plan.activity !== inputs.functionName ||
+        getBuildTargetId(plan.target) !==
+          getBuildTargetId(inputs.buildTarget) ||
+        !Array.isArray(planRoots) ||
+        planRoots.length !== inputs.external.length ||
+        planRoots.some(
+          (/** @type {{name: string, version: string}} */ root, index) =>
+            root.name !== inputs.external[index].name ||
+            root.version !== inputs.external[index].version,
+        )
+      ) {
+        throw new Error(
+          `Activity '${inputs.functionName}' frozen closure plan does not match its reconciliation inputs.`,
+        );
+      }
+    }
+    const externalDependencyReceipt =
+      hasDeclaredExternals && bundledExternals.receipt
+        ? {
+            dependencyLockInput: bundledExternals.receipt.plan.lock,
+            closureDigest: bundledExternals.receipt.closureDigest,
+            archiveDigest: externalArchiveDigest,
+          }
+        : null;
+    const assetBytes = serializeFunctionAssetDescription(
+      {
+        schemaVersion: FUNCTION_ASSET_SCHEMA_VERSION,
+        activity: inputs.functionName,
+        target: inputs.buildTarget,
+        externals: inputs.external,
+        codeBundle,
+        externalsTar,
+        externalDependencyReceipt,
+        resourceSpecs: inputs.resources,
+      },
+      `Activity '${inputs.functionName}' function asset`,
+    );
+    const singleExecutableAssetDigest = {
+      algorithm: 'sha256',
+      value: createHash('sha256').update(assetBytes).digest('base64url'),
+    };
     const singleExecutableAssetPath = join(
       FunctionResource.TEMP_ASSET_PATH,
       v4(),
     );
-    await promises.writeFile(singleExecutableAssetPath, assetDescription, {
+    await promises.writeFile(singleExecutableAssetPath, assetBytes, {
       flag: 'wx',
       mode: 0o600,
     });
-    this.set('singleExecutableAssetPath', singleExecutableAssetPath);
-    this._setUNSAFE('externalArchiveDigest', externalArchiveDigest);
+    await promises.chmod(singleExecutableAssetPath, 0o400);
+    this._setUNSAFE('singleExecutableAssetPath', singleExecutableAssetPath);
+    this._setUNSAFE('singleExecutableAssetDigest', singleExecutableAssetDigest);
+    if (hasDeclaredExternals && bundledExternals.receipt) {
+      this._setUNSAFE('externalDependencyLockInput', {
+        ...bundledExternals.receipt.plan.lock,
+      });
+      this._setUNSAFE('externalClosureDigest', {
+        ...bundledExternals.receipt.closureDigest,
+      });
+      this._setUNSAFE('externalArchiveDigest', externalArchiveDigest);
+    }
   }
 
   async _destroy() {

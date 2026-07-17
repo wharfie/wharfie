@@ -3,6 +3,8 @@ import { readEmbeddedAppManifest } from './core/resources/builds/lib/app-manifes
 import { invokeManifestActivity } from './core/runtime/app-runs.js';
 
 const SOURCE_APP_LOADER_PATH = './cli/app/load-app.js';
+const SOURCE_REVISION_COMPILER_PATH =
+  './cli/app/compile-application-revision.js';
 
 /**
  * Preserve a manifest's literal TypeScript shape while checking it against the
@@ -21,7 +23,7 @@ export function defineApp(definition) {
  * prevents packaging-only dependencies from entering the generated runtime's
  * eager module graph.
  * @param {string | undefined} dir - Source application directory.
- * @returns {Promise<{ manifest: any, appDir?: string, executionMode: 'source' | 'embedded' }>} - Loaded runtime manifest.
+ * @returns {Promise<{ manifest: any, appDir?: string, executionMode: 'source' | 'embedded', sourceRevision?: { revision: unknown, dependencyLock: unknown }, verifyRuntime?: () => Promise<void>, cleanup?: () => Promise<void> }>} - Loaded runtime manifest.
  */
 async function loadRuntimeManifest(dir) {
   if (isSea()) {
@@ -32,12 +34,25 @@ async function loadRuntimeManifest(dir) {
     };
   }
 
-  const { loadApp } = await import(SOURCE_APP_LOADER_PATH);
+  const [{ loadApp }, { prepareApplicationRevision }] = await Promise.all([
+    import(SOURCE_APP_LOADER_PATH),
+    import(SOURCE_REVISION_COMPILER_PATH),
+  ]);
   const loaded = await loadApp({ dir });
-  return {
-    manifest: loaded.manifest,
+  const prepared = await prepareApplicationRevision({
     appDir: loaded.appDir,
+    manifest: loaded.manifest,
+  });
+  return {
+    manifest: prepared.manifest,
+    appDir: prepared.appDir,
     executionMode: 'source',
+    sourceRevision: {
+      revision: prepared.revision,
+      dependencyLock: prepared.dependencyLock,
+    },
+    verifyRuntime: prepared.verifyRuntime,
+    cleanup: prepared.cleanup,
   };
 }
 
@@ -55,18 +70,28 @@ async function loadRuntimeManifest(dir) {
  */
 export async function invokeActivity(activityName, options = {}) {
   const loaded = await loadRuntimeManifest(options.dir);
-  return await invokeManifestActivity({
-    manifest: loaded.manifest,
-    appDir: loaded.appDir,
-    activityName,
-    ...(Object.prototype.hasOwnProperty.call(options, 'event')
-      ? { event: options.event }
-      : {}),
-    ...(Object.prototype.hasOwnProperty.call(options, 'context')
-      ? { context: options.context }
-      : {}),
-    executionMode: loaded.executionMode,
-  });
+  try {
+    if (loaded.verifyRuntime) await loaded.verifyRuntime();
+    const result = await invokeManifestActivity({
+      manifest: loaded.manifest,
+      appDir: loaded.appDir,
+      ...(loaded.sourceRevision
+        ? { sourceRevision: loaded.sourceRevision }
+        : {}),
+      activityName,
+      ...(Object.prototype.hasOwnProperty.call(options, 'event')
+        ? { event: options.event }
+        : {}),
+      ...(Object.prototype.hasOwnProperty.call(options, 'context')
+        ? { context: options.context }
+        : {}),
+      executionMode: loaded.executionMode,
+    });
+    if (loaded.verifyRuntime) await loaded.verifyRuntime();
+    return result;
+  } finally {
+    if (loaded.cleanup) await loaded.cleanup();
+  }
 }
 
 export default { defineApp, invokeActivity };

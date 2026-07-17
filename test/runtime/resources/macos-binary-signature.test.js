@@ -23,6 +23,30 @@ let runCmd;
 /** @type {ReturnType<typeof jest.fn>} */
 let execFileOutput;
 
+/**
+ * @param {string} binaryPath - Expected generated SEA path.
+ */
+function createGenerationBuild(binaryPath) {
+  return {
+    get: jest.fn((property) =>
+      property === 'binaryPath' ? binaryPath : undefined,
+    ),
+    getSuccessfulBuildEvidence: jest.fn(
+      /** @param {Buffer | Uint8Array} _artifactBytes */ (
+        _artifactBytes,
+      ) => ({}),
+    ),
+    advanceSuccessfulBuildEvidence: jest.fn(
+      /**
+       * @param {Buffer | Uint8Array} _beforeBytes - Unsigned bytes.
+       * @param {Buffer | Uint8Array} _afterBytes - Signed bytes.
+       * @param {object} _signing - Canonical signing result.
+       */
+      (_beforeBytes, _afterBytes, _signing) => {},
+    ),
+  };
+}
+
 beforeEach(() => {
   jest.resetModules();
   runCmd = jest.fn(async () => {});
@@ -94,12 +118,19 @@ describe('MacOSBinarySignature', () => {
       path.join(os.tmpdir(), 'wharfie-ad-hoc-result-'),
     );
     const binaryPath = path.join(sourceDir, 'app');
-    await fsp.writeFile(binaryPath, 'binary', 'utf8');
+    const unsignedBytes = Buffer.from('unsigned-binary');
+    const signedBytes = Buffer.from('signed-binary');
+    await fsp.writeFile(binaryPath, unsignedBytes);
+    const generationBuild = createGenerationBuild(binaryPath);
+    runCmd.mockImplementation(async (command) => {
+      if (command === 'codesign') await fsp.writeFile(binaryPath, signedBytes);
+    });
 
     try {
       const { default: MacOSBinarySignature } = await import(SIGNATURE_IMPORT);
       const signature = new MacOSBinarySignature({
         name: 'ad-hoc-result',
+        dependsOn: [/** @type {any} */ (generationBuild)],
         properties: { binaryPath },
       });
 
@@ -109,6 +140,12 @@ describe('MacOSBinarySignature', () => {
       expect(signature.serialize().properties.signingResult).toEqual({
         mode: 'ad-hoc',
       });
+      expect(generationBuild.getSuccessfulBuildEvidence).toHaveBeenCalledWith(
+        unsignedBytes,
+      );
+      expect(
+        generationBuild.advanceSuccessfulBuildEvidence,
+      ).toHaveBeenCalledWith(unsignedBytes, signedBytes, { mode: 'ad-hoc' });
     } finally {
       await fsp.rm(sourceDir, { recursive: true, force: true });
     }
@@ -120,6 +157,7 @@ describe('MacOSBinarySignature', () => {
     );
     const binaryPath = path.join(sourceDir, 'app');
     await fsp.writeFile(binaryPath, 'binary', 'utf8');
+    const generationBuild = createGenerationBuild(binaryPath);
     const credentials = {
       certificateBase64: Buffer.from('certificate').toString('base64'),
       certificatePassword: 'private-certificate-password',
@@ -134,6 +172,7 @@ describe('MacOSBinarySignature', () => {
       const { default: MacOSBinarySignature } = await import(SIGNATURE_IMPORT);
       const signature = new MacOSBinarySignature({
         name: 'identity-result',
+        dependsOn: [/** @type {any} */ (generationBuild)],
         credentials,
         properties: { binaryPath },
       });
@@ -161,6 +200,7 @@ describe('MacOSBinarySignature', () => {
     );
     const binaryPath = path.join(sourceDir, 'app');
     await fsp.writeFile(binaryPath, 'binary', 'utf8');
+    const generationBuild = createGenerationBuild(binaryPath);
 
     const credentials = {
       certificateBase64: Buffer.from('certificate-bytes').toString('base64'),
@@ -198,6 +238,7 @@ describe('MacOSBinarySignature', () => {
       const { default: MacOSBinarySignature } = await import(SIGNATURE_IMPORT);
       const signature = new MacOSBinarySignature({
         name: 'private-signing',
+        dependsOn: [/** @type {any} */ (generationBuild)],
         credentials,
         properties: { binaryPath },
       });
@@ -281,6 +322,7 @@ describe('MacOSBinarySignature', () => {
     );
     const binaryPath = path.join(sourceDir, 'app');
     await fsp.writeFile(binaryPath, 'binary', 'utf8');
+    const generationBuild = createGenerationBuild(binaryPath);
 
     execFileOutput.mockResolvedValue({
       stdout: `  1) ${IDENTITY_HASH} "Portable Test Identity"\n     1 valid identities found\n`,
@@ -296,6 +338,7 @@ describe('MacOSBinarySignature', () => {
       const { default: MacOSBinarySignature } = await import(SIGNATURE_IMPORT);
       const signature = new MacOSBinarySignature({
         name: 'cleanup-failure',
+        dependsOn: [/** @type {any} */ (generationBuild)],
         credentials: {
           certificateBase64: Buffer.from('certificate').toString('base64'),
           certificatePassword: 'certificate-password',

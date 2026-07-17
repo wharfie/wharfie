@@ -9,6 +9,10 @@ import { brotliCompressSync } from 'node:zlib';
 
 import { createActorSystemResources } from '../../../src/core/runtime/resources.js';
 import sandboxWorker from '../../../src/core/lib/code-execution/worker.js';
+import {
+  FUNCTION_ASSET_SCHEMA_VERSION,
+  serializeFunctionAssetDescription,
+} from '../../../src/core/resources/builds/lib/function-asset.js';
 
 const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
 const BUNDLED_RESOURCE_TEST_TIMEOUT_MS = 15_000;
@@ -18,11 +22,11 @@ const seaAssets = new Map();
 
 jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
   getAsset: async (/** @type {string} */ name) => {
-    const assetDescription = seaAssets.get(name);
-    if (!assetDescription) {
+    const assetBytes = seaAssets.get(name);
+    if (!assetBytes) {
       throw new Error(`Unexpected asset request: ${name}`);
     }
-    return Buffer.from(JSON.stringify(assetDescription), 'utf8');
+    return assetBytes;
   },
 }));
 
@@ -52,15 +56,28 @@ describe('Function.run bundled resource specs', () => {
       };
     `;
 
-      seaAssets.set(fnName, {
-        codeBundle: brotliCompressSync(
-          Buffer.from(bundleCode, 'utf8'),
-        ).toString('base64'),
-        externalsTar: '',
-        resourceSpecs: {
-          db: { adapter: 'vanilla', options: { path: tmp } },
-        },
-      });
+      seaAssets.set(
+        fnName,
+        serializeFunctionAssetDescription({
+          schemaVersion: FUNCTION_ASSET_SCHEMA_VERSION,
+          activity: fnName,
+          target: {
+            nodeVersion: process.versions.node,
+            platform: process.platform,
+            architecture: process.arch,
+            ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+          },
+          externals: [],
+          codeBundle: brotliCompressSync(
+            Buffer.from(bundleCode, 'utf8'),
+          ).toString('base64'),
+          externalsTar: '',
+          externalDependencyReceipt: null,
+          resourceSpecs: {
+            db: { adapter: 'vanilla', options: { path: tmp } },
+          },
+        }),
+      );
 
       const { default: Function } =
         await import('../../../src/core/resources/builds/function.js');
