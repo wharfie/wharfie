@@ -8,6 +8,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+import createLMDB from '../../../src/core/lib/db/adapters/lmdb.js';
 import createVanillaDB from '../../../src/core/lib/db/adapters/vanilla.js';
 import { resolveExecutionPayloadStoreId } from '../../../src/core/lib/config/db.js';
 import {
@@ -16,12 +17,14 @@ import {
   RunStatus,
   createExecutionLedger,
 } from '../../../src/core/lib/db/tables/execution-ledger.js';
+import { createLedgerServiceOwnership } from '../../../src/core/lib/db/tables/ledger-service-lifecycle.js';
 import { createLocalExecutionPayloadStore } from '../../../src/core/lib/payload-store/local.js';
 import { ActivityProtocolTranscriptValidator } from '../../../src/core/runtime/activity-protocol.js';
 import {
   MANUAL_LEDGER_INVOCATION_ID,
   createManualLedgerRunId,
 } from '../../../src/core/runtime/manual-ledger-run.js';
+import { acquireLocalLedgerServiceSession } from '../../../src/core/runtime/services/ledger-service.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
@@ -82,13 +85,19 @@ function completedEvidence(start, result) {
 }
 
 /**
- * @param {string} dbPath - Vanilla control-store directory.
+ * @param {string} dbPath - Control-store directory.
  * @param {string} tableName - Ledger table name.
  * @param {{appId: string, operationId: string, started?: boolean, completed?: boolean}} options - Persisted run shape.
+ * @param {(options: {path: string}) => import('../../../src/core/lib/db/base.js').DBClient} [createDB] - Local test adapter factory.
  * @returns {Promise<{runId: string, attemptId: string}>} - Durable run identity.
  */
-async function createManualRun(dbPath, tableName, options) {
-  const db = createVanillaDB({ path: dbPath });
+async function createManualRun(
+  dbPath,
+  tableName,
+  options,
+  createDB = createVanillaDB,
+) {
+  const db = createDB({ path: dbPath });
   const ledger = createExecutionLedger({
     db,
     tableName,
@@ -154,13 +163,14 @@ async function createManualRun(dbPath, tableName, options) {
 }
 
 /**
- * @param {string} dbPath - Vanilla control-store directory.
+ * @param {string} dbPath - Control-store directory.
  * @param {string} tableName - Ledger table name.
  * @param {string} runId - Durable run ID.
+ * @param {(options: {path: string}) => import('../../../src/core/lib/db/base.js').DBClient} [createDB] - Local test adapter factory.
  * @returns {Promise<Record<string, any> | null>} - Verified current view.
  */
-async function readRun(dbPath, tableName, runId) {
-  const db = createVanillaDB({ path: dbPath });
+async function readRun(dbPath, tableName, runId, createDB = createVanillaDB) {
+  const db = createDB({ path: dbPath });
   try {
     return await createExecutionLedger({
       db,
@@ -173,6 +183,69 @@ async function readRun(dbPath, tableName, runId) {
 }
 
 describe('ledger-native operator commands', () => {
+  it('refuses a recovery mutation while its application resident session is active', async () => {
+    const dbPath = mkdtempSync(path.join(os.tmpdir(), 'wharfie-ops-owner-'));
+    const emptyDir = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-ops-owner-no-manifest-'),
+    );
+    const tableName = 'operator-owner-test';
+    const appId = 'source-free-owner-operator';
+    const sessionRoot = path.join(dbPath, 'ledger-service-sessions');
+    const env = {
+      ...process.env,
+      NODE_ENV: 'development',
+      WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
+      WHARFIE_CONTROL_ADAPTER: 'lmdb',
+      WHARFIE_CONTROL_PATH: dbPath,
+      WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(dbPath, 'execution-payloads'),
+      WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionRoot,
+    };
+    const { runId } = await createManualRun(
+      dbPath,
+      tableName,
+      {
+        appId,
+        operationId: 'blocked-recovery',
+      },
+      createLMDB,
+    );
+    const ownerDb = createLMDB({ path: dbPath });
+    const ownership = createLedgerServiceOwnership({ db: ownerDb, tableName });
+    const owner = await acquireLocalLedgerServiceSession({
+      appId,
+      ownership,
+      ownerKind: 'resident',
+      sessionRoot,
+    });
+
+    try {
+      const result = runCli(
+        ['ops', 'recover', '--run-id', runId, '--confirm-runner-stopped'],
+        env,
+        emptyDir,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        'Local service session is already active',
+      );
+      await expect(
+        createExecutionLedger({
+          db: ownerDb,
+          tableName,
+          payloadStore: createPayloadStore(dbPath),
+        }).rebuildRun(runId),
+      ).resolves.toMatchObject({
+        attempts: [expect.objectContaining({ status: AttemptStatus.CLAIMED })],
+      });
+    } finally {
+      await owner.release();
+      await ownerDb.close();
+      rmSync(dbPath, { recursive: true, force: true });
+      rmSync(emptyDir, { recursive: true, force: true });
+    }
+  }, 20000);
+
   it('inspects and releases a claimed run without a manifest while redacting payloads', async () => {
     const dbPath = mkdtempSync(path.join(os.tmpdir(), 'wharfie-ops-ledger-'));
     const emptyDir = mkdtempSync(

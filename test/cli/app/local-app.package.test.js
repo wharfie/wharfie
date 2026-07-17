@@ -310,6 +310,13 @@ describe('packageLocalApp', () => {
             }
             const entryCode = String(seaBuild.get('entryCode'));
             expect(entryCode).toContain('cliExportName: "launch"');
+            expect(entryCode).toContain('ledger-service-command.js');
+            expect(entryCode).toContain("'ledger-service': ledgerServiceCmd");
+            expect(entryCode).not.toContain('state_cmds');
+            expect(entryCode).not.toContain("'serve-lambda':");
+            expect(entryCode).not.toContain("'serve-queue':");
+            expect(entryCode).not.toContain("'serve-db':");
+            expect(entryCode).not.toContain('start: startCmd');
             expect(entryCode).not.toContain("console.time('overall')");
             expect(entryCode).not.toContain("console.timeEnd('overall')");
 

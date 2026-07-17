@@ -5,7 +5,10 @@ import { Command } from 'commander';
 import { prepareApplicationRevision } from '../../app/compile-application-revision.js';
 import { loadApp } from '../../app/load-app.js';
 import { parseJsonInput } from '../../app/local-app.js';
-import { withExecutionLedger } from '../execution-ledger-store.js';
+import {
+  withExecutionLedger,
+  withLocalLedgerServiceMutationOwnership,
+} from '../execution-ledger-store.js';
 import {
   displayFailure,
   displayInfo,
@@ -144,23 +147,28 @@ const runCommand = new Command('run')
         );
 
         const result = await withExecutionLedger(
-          async (ledger) =>
-            await runManualLedgerActivity({
-              ledger,
-              runId,
+          async (ledger, context) =>
+            await withLocalLedgerServiceMutationOwnership({
               appId,
-              revisionId,
-              activityId: activityName,
-              input,
-              callerMetadata,
-              executeAttempt: async (startFrame) =>
-                await invokeManifestActivityAttemptWithStart({
-                  activityName,
-                  startFrame,
-                  execution: {
-                    kind: 'prepared-source',
-                    prepared: preparedRevision,
-                  },
+              context,
+              handler: async () =>
+                await runManualLedgerActivity({
+                  ledger,
+                  runId,
+                  appId,
+                  revisionId,
+                  activityId: activityName,
+                  input,
+                  callerMetadata,
+                  executeAttempt: async (startFrame) =>
+                    await invokeManifestActivityAttemptWithStart({
+                      activityName,
+                      startFrame,
+                      execution: {
+                        kind: 'prepared-source',
+                        prepared: preparedRevision,
+                      },
+                    }),
                 }),
             }),
         );

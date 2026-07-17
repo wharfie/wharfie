@@ -428,36 +428,13 @@ class ActorSystem extends BuildResourceGroup {
             'actor-system-cli',
             'index.js',
           );
-          const runtimeStartPath = path.resolve(
+          const runtimeLedgerServicePath = path.resolve(
             actorSystemDir,
-            'actor-system-cli',
-            'control_cmds',
-            'state_cmds',
-            'start.js',
-          );
-          const runtimeDbPath = path.resolve(
-            actorSystemDir,
-            'actor-system-cli',
-            'control_cmds',
-            'state_cmds',
-            'serve_cmds',
-            'db.js',
-          );
-          const runtimeQueuePath = path.resolve(
-            actorSystemDir,
-            'actor-system-cli',
-            'control_cmds',
-            'state_cmds',
-            'serve_cmds',
-            'queue.js',
-          );
-          const runtimeLambdaPath = path.resolve(
-            actorSystemDir,
-            'actor-system-cli',
-            'control_cmds',
-            'state_cmds',
-            'serve_cmds',
-            'lambda.js',
+            '..',
+            '..',
+            'runtime',
+            'services',
+            'ledger-service-command.js',
           );
           const developerImport = developerCliEntrypoint
             ? `import * as developerCliModule from ${JSON.stringify(
@@ -472,10 +449,9 @@ class ActorSystem extends BuildResourceGroup {
               )};
               ${developerImport}
               import runtimeOperatorCli from ${JSON.stringify(runtimeCliPath)};
-              import startCmd from ${JSON.stringify(runtimeStartPath)};
-              import serveDbCmd from ${JSON.stringify(runtimeDbPath)};
-              import serveQueueCmd from ${JSON.stringify(runtimeQueuePath)};
-              import serveLambdaCmd from ${JSON.stringify(runtimeLambdaPath)};
+              import ledgerServiceCmd from ${JSON.stringify(
+                runtimeLedgerServicePath,
+              )};
               (async () => {
                 sourceMapSupport.install();
                 await runPackagedApp({
@@ -487,10 +463,7 @@ class ActorSystem extends BuildResourceGroup {
                   }
                   runtimeModules: {
                     operatorCli: runtimeOperatorCli,
-                    start: startCmd,
-                    'serve-db': serveDbCmd,
-                    'serve-queue': serveQueueCmd,
-                    'serve-lambda': serveLambdaCmd,
+                    'ledger-service': ledgerServiceCmd,
                   },
                 });
               })();

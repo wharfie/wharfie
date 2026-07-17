@@ -99,6 +99,12 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       immutable, canonical local content references; rehash them before every
       ledger replay/read and fail closed on missing or altered content. V1
       ledger records are intentionally unsupported.
+- [x] Build the source-level resident `ledger-service` lifecycle foundation:
+      a stable per-app identity, scope/principal-bound durable local ownership
+      CAS paired with fresh process-held session endpoints, fenced durable
+      `STARTING` → `READY` → `STOPPING` → `STOPPED` records, and local-LMDB
+      exclusion for mutating manual `ops run`/`ops recover`. It deliberately
+      does not schedule, claim, or execute work.
 - [ ] Persist immutable revision bindings, inputs, outputs, scheduling decisions, attempts, and operator actions in the full append-only ledger.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, cancellation, retry policy, and recovery.
 - [ ] Implement substantiated `pure`, `idempotent`, and `transactional` replay properties, make begun in-process handlers `unsafe` by default, and add a durable blocked `uncertain` state with explicit reconciliation/compensation paths.
@@ -158,11 +164,14 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 ## Immediate queue
 
 1. Repair the clean-install lint dependency declaration after explicit approval, make draft PR #125 green in GitHub Actions, and review the reset stack for merge.
-2. Add a durable local resident-service lifecycle and ownership rule to the
-   ledger-backed manual path before schedules, queues, effects, or workflows.
+2. Package a self-contained, crash-durable local control-store runtime for the
+   resident `ledger-service`, then prove lifecycle startup, clean relocation,
+   crash, and restart with a SEA. The source runtime currently uses LMDB while
+   the SEA build externalizes it, so it must not yet be described as a
+   clean-machine resident service.
 3. Add an atomic, paginated ledger run-directory/index before providing any
    app-wide history or `ops list` replacement; do not add a scan-based list.
 4. Design durable cancellation/reconciliation transitions before exposing an
    `ops cancel` replacement.
 
-The latest dated handoff at [llm/checkpoints/2026-07-17-ledger-v2-payload-references.md](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md) contains the current durable-payload boundary and restart instructions. The preceding [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.
+The latest dated handoff at [llm/checkpoints/2026-07-17-ledger-service-lifecycle.md](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md) records the local resident-service foundation, its exact ownership scope, and the clean-SEA blocker. The preceding [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.

@@ -14,6 +14,7 @@ import {
   resolveExecutionLedgerTableName,
   resolveExecutionPayloadPath,
   resolveExecutionPayloadStoreId,
+  resolveLedgerServiceSessionPath,
   resolveOperationsAdapterName,
   resolveOperationsTableName,
   resolveStateAdapterName,
@@ -195,6 +196,27 @@ describe('Unified DB config', () => {
       async () => {
         expect(resolveExecutionPayloadPath()).toBe('/tmp/ignored');
         expect(resolveExecutionPayloadStoreId()).toBe('portable-payload-store');
+      },
+    );
+  });
+
+  test('ledger-service sessions share the configured local control namespace', async () => {
+    const controlPath = join(tmpdir(), 'wharfie-control-service-config');
+    await withEnv(
+      {
+        WHARFIE_CONTROL_PATH: controlPath,
+        WHARFIE_LEDGER_SERVICE_SESSION_PATH: undefined,
+      },
+      async () => {
+        expect(resolveLedgerServiceSessionPath()).toBe(
+          join(controlPath, 'ledger-service-sessions'),
+        );
+      },
+    );
+    await withEnv(
+      { WHARFIE_LEDGER_SERVICE_SESSION_PATH: ' /tmp/ledger-sessions ' },
+      async () => {
+        expect(resolveLedgerServiceSessionPath()).toBe('/tmp/ledger-sessions');
       },
     );
   });

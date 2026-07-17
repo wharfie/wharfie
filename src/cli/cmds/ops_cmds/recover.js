@@ -1,6 +1,9 @@
 import { Command } from 'commander';
 
-import { withExecutionLedger } from '../execution-ledger-store.js';
+import {
+  withExecutionLedger,
+  withLocalLedgerServiceMutationOwnership,
+} from '../execution-ledger-store.js';
 import {
   createExecutionLedgerRecoveryOperatorView,
   formatExecutionLedgerOperatorRows,
@@ -49,14 +52,31 @@ const recoverCommand = new Command('recover')
           'ops recover requires --confirm-runner-stopped before it can change durable state.',
         );
       }
-      const { recovery, view } = await withExecutionLedger(async (ledger) => {
-        const recovery = await recoverManualLedgerActivity({ ledger, runId });
-        if (!recovery.found) return { recovery, view: null };
-        return {
-          recovery,
-          view: await ledger.rebuildRun(runId),
-        };
-      });
+      const { recovery, view } = await withExecutionLedger(
+        async (ledger, context) => {
+          const preflight = await ledger.rebuildRun(runId);
+          if (!preflight) {
+            return {
+              recovery: { found: false, action: 'none', changed: false },
+              view: null,
+            };
+          }
+          return await withLocalLedgerServiceMutationOwnership({
+            appId: preflight.run.appId,
+            context,
+            handler: async () => {
+              const recovery = await recoverManualLedgerActivity({
+                ledger,
+                runId,
+              });
+              return {
+                recovery,
+                view: await ledger.rebuildRun(runId),
+              };
+            },
+          });
+        },
+      );
       if (!recovery.found || !view) {
         throw new Error(
           `No durable execution-ledger run exists; recovery refuses to create work: ${runId}`,

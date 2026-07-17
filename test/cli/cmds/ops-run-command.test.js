@@ -18,11 +18,14 @@ import {
   RunStatus,
   createExecutionLedger,
 } from '../../../src/core/lib/db/tables/execution-ledger.js';
+import createLMDB from '../../../src/core/lib/db/adapters/lmdb.js';
+import { createLedgerServiceOwnership } from '../../../src/core/lib/db/tables/ledger-service-lifecycle.js';
 import { createLocalExecutionPayloadStore } from '../../../src/core/lib/payload-store/local.js';
 import {
   MANUAL_LEDGER_INVOCATION_ID,
   createManualLedgerRunId,
 } from '../../../src/core/runtime/manual-ledger-run.js';
+import { acquireLocalLedgerServiceSession } from '../../../src/core/runtime/services/ledger-service.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
@@ -63,6 +66,74 @@ function runCli(args, env) {
 }
 
 describe('wharfie ops run', () => {
+  it('refuses to claim work while the application resident session is active', async () => {
+    const dbPath = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-ops-run-owner-'),
+    );
+    const tableName = 'execution-ledger-owner-test';
+    const appId = 'hello-world-demo';
+    const operationId = 'blocked-by-resident-service';
+    const runId = createManualLedgerRunId({ appId, operationId });
+    const sessionRoot = path.join(dbPath, 'ledger-service-sessions');
+    const ownerDb = createLMDB({ path: dbPath });
+    const ownership = createLedgerServiceOwnership({
+      db: ownerDb,
+      tableName,
+    });
+    const owner = await acquireLocalLedgerServiceSession({
+      appId,
+      ownership,
+      ownerKind: 'resident',
+      sessionRoot,
+    });
+    try {
+      const result = runCli(
+        [
+          'ops',
+          'run',
+          '--activity',
+          'echo-event',
+          '--operation-id',
+          operationId,
+          '--dir',
+          helloWorldDir,
+        ],
+        {
+          ...process.env,
+          NODE_ENV: 'development',
+          WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
+          WHARFIE_ARTIFACT_BUCKET: 'service-bucket',
+          WHARFIE_DB_ADAPTER: 'lmdb',
+          WHARFIE_DB_PATH: dbPath,
+          WHARFIE_CONTROL_ADAPTER: 'lmdb',
+          WHARFIE_CONTROL_PATH: dbPath,
+          WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(
+            dbPath,
+            'execution-payloads',
+          ),
+          WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionRoot,
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        'Local service session is already active',
+      );
+
+      await expect(
+        createExecutionLedger({
+          db: ownerDb,
+          tableName,
+          payloadStore: createPayloadStore(dbPath),
+        }).rebuildRun(runId),
+      ).resolves.toBeNull();
+    } finally {
+      await owner.release();
+      await ownerDb.close();
+      rmSync(dbPath, { recursive: true, force: true });
+    }
+  }, 20000);
+
   it('executes an app activity through the append-only ledger and deduplicates an exact retry', async () => {
     const dbPath = mkdtempSync(path.join(os.tmpdir(), 'wharfie-ops-run-'));
     const tableName = 'execution-ledger-test';

@@ -175,6 +175,40 @@ export function resolveExecutionPayloadStoreId(
 }
 
 /**
+ * Resolve the logical local namespace used for process-held ledger-service
+ * sessions.
+ *
+ * A session socket is not durable control state and is deliberately separate
+ * from the ledger's immutable payload root. Keeping its default beside the
+ * configured control path makes a locally restarted artifact use the same
+ * ownership namespace without putting a filesystem path into durable records.
+ * The session implementation hashes this value into a short ephemeral socket
+ * location so long macOS control paths cannot exceed Unix-domain socket path
+ * limits. The session itself is only a same-local-OS-principal exclusion
+ * primitive; it is never a distributed coordinator lease.
+ * @returns {string} - Logical ledger-service session namespace.
+ */
+export function resolveLedgerServiceSessionPath() {
+  const configured = process.env.WHARFIE_LEDGER_SERVICE_SESSION_PATH;
+  if (configured && String(configured).trim()) {
+    return String(configured).trim();
+  }
+
+  const controlPath =
+    typeof process.env.WHARFIE_CONTROL_PATH === 'string' &&
+    process.env.WHARFIE_CONTROL_PATH.trim()
+      ? process.env.WHARFIE_CONTROL_PATH.trim()
+      : undefined;
+  if (controlPath) return join(controlPath, 'ledger-service-sessions');
+
+  if (process.env.NODE_ENV === 'test') {
+    return join(mkTempDir('wharfie-ledger-service-session-'), 'sessions');
+  }
+
+  return join(paths.data, 'control', 'ledger-service-sessions');
+}
+
+/**
  * @param {string} prefix - prefix.
  * @returns {string} - Result.
  */
@@ -339,6 +373,7 @@ export default {
   resolveExecutionLedgerTableName,
   resolveExecutionPayloadPath,
   resolveExecutionPayloadStoreId,
+  resolveLedgerServiceSessionPath,
   createDBClient,
   createOperationsDBClient,
   createStateDBClient,

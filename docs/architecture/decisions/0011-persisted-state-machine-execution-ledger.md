@@ -323,9 +323,34 @@ The execution ledger and coordinator control store are distinct semantic
 contracts even when one physical database implements both.
 
 Local development and single-node restart may store the ledger in LMDB on one
-durable volume and use a locally exclusive coordinator session. This can recover
-after process restart on that volume, but it cannot claim automatic recovery
-after host or volume loss.
+durable volume and use a locally exclusive resident-service session. The first
+implementation gives the hidden `ledger-service` a stable per-application
+identity (shared across revisions), a separate durable ownership record, and a
+fenced lifecycle record in the same table as the ledger. An owner first binds a
+fresh endpoint derived from its random typed session ID, then conditionally
+claims the exact previously observed owner record. The ownership record binds
+the logical local scope and operating-system principal as well as the session
+and generation; another scope or principal fails closed rather than deriving a
+different endpoint and proceeding. A stale Unix-socket pathname is never
+reused or unlinked by a successor.
+
+After ownership is claimed, the service records `STARTING` → `READY` →
+`STOPPING` → `STOPPED`. A process crash removes its live socket listener (while
+the old pathname may remain), does not fabricate `STOPPED`, and lets one later
+owner conditionally replace the absent session with a new endpoint and higher
+generation. On the same local LMDB control volume, mutating manual `ops run`
+and `ops recover` acquire that same ownership fence and refuse to race a
+resident service; read-only inspection does not.
+
+This is deliberately not a lease, heartbeat, scheduler, work claim, or
+distributed coordinator protocol. It can recover after process restart on one
+local volume, host/network namespace, and operating-system principal, but it
+cannot claim automatic recovery after host or volume loss. The hidden resident
+runtime rejects vanilla and distributed control adapters: their semantics
+cannot substantiate this single-host ownership protocol. The current
+source-level runtime also uses LMDB while the SEA build externalizes that native
+dependency; portable clean-machine service startup remains an explicit
+packaging/verification task, not a property of this lifecycle record.
 
 Automatic coordinator replacement requires a provider-backed **ControlStore**
 with semantic operations for lease acquisition, renewal, epoch increment, and

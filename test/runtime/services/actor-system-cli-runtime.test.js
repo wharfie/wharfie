@@ -119,7 +119,7 @@ describe('actor-system CLI runtime surfaces', () => {
     expect(help).not.toMatch(/\bctl\b/);
   });
 
-  it('honors runtime command env for packaged child-service bootstrap', async () => {
+  it('honors the hidden ledger-service runtime env for packaged bootstrap', async () => {
     const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
     const parseAsync = jest.fn(async (_argv, _options) => undefined);
     const originalEnv = {
@@ -131,18 +131,15 @@ describe('actor-system CLI runtime surfaces', () => {
     const originalArgv = process.argv;
 
     process.env.WHARFIE_BOOTSTRAP_MODE = 'runtime';
-    process.env.WHARFIE_BOOTSTRAP_ARGS = JSON.stringify(['--role', 'leader']);
-    process.env.WHARFIE_RUNTIME_COMMAND = 'serve-db';
-    process.env.WHARFIE_RUNTIME_ARGS = JSON.stringify([
-      '--db-address',
-      '127.0.0.1:9100',
-    ]);
+    process.env.WHARFIE_BOOTSTRAP_ARGS = JSON.stringify([]);
+    process.env.WHARFIE_RUNTIME_COMMAND = 'ledger-service';
+    process.env.WHARFIE_RUNTIME_ARGS = JSON.stringify([]);
     process.argv = ['node', 'wharfie-artifact'];
 
     try {
       await runPackagedApp({
         runtimeModules: {
-          'serve-db': { parseAsync },
+          'ledger-service': { parseAsync },
         },
         argv: process.argv,
       });
@@ -157,10 +154,9 @@ describe('actor-system CLI runtime surfaces', () => {
       }
     }
 
-    expect(parseAsync).toHaveBeenCalledWith(
-      ['node', 'serve-db', '--db-address', '127.0.0.1:9100'],
-      { from: 'node' },
-    );
+    expect(parseAsync).toHaveBeenCalledWith(['node', 'ledger-service'], {
+      from: 'node',
+    });
   });
 
   it.each([
