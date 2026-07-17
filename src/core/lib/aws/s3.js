@@ -473,9 +473,7 @@ class S3 {
       await this.s3.send(new CopyObjectCommand(params));
     } catch (err) {
       if (
-        // @ts-ignore
-        !err.message ||
-        // @ts-ignore
+        !(err instanceof Error) ||
         !err.message.startsWith(
           'The specified copy source is larger than the maximum allowable size for a copy source',
         )
@@ -669,8 +667,7 @@ class S3 {
         Key: params.Key,
       });
     } catch (err) {
-      // @ts-ignore
-      if (err.name === 'NotFound') {
+      if (err instanceof Error && err.name === 'NotFound') {
         existingObject = null;
       } else {
         throw err;
@@ -710,8 +707,7 @@ class S3 {
             Key: this._LEFT_PAD_OBJECT_NAME,
           });
         } catch (err) {
-          // @ts-ignore
-          if (err.name === 'NotFound') {
+          if (err instanceof Error && err.name === 'NotFound') {
             const offset = ' '.repeat(this._LEFT_PAD_SIZE);
             await this.putObject({
               Bucket: params.Bucket,
@@ -902,8 +898,7 @@ class S3 {
     try {
       return await this.s3.send(command);
     } catch (err) {
-      // @ts-ignore
-      if (err.name === 'NoSuchTagSet') {
+      if (err instanceof Error && err.name === 'NoSuchTagSet') {
         return {
           TagSet: [],
           $metadata: {},

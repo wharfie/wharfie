@@ -6,14 +6,34 @@ if (process.setSourceMapsEnabled) process.setSourceMapsEnabled(true);
 
 // Global guards – shared across any accidental re-evaluations of this script
 
-// @ts-ignore
-if (!global.__wharfieWorkerInit) {
-  // @ts-ignore
-  global.__wharfieWorkerInit = {
-    handlerInstalled: false,
-    bundleLoaded: false,
-  };
+/**
+ * @typedef WorkerInitializationState
+ * @property {boolean} handlerInstalled - Whether the message handler exists.
+ * @property {boolean} bundleLoaded - Whether this worker loaded its bundle.
+ */
+
+/**
+ * @typedef {typeof globalThis & {__wharfieWorkerInit?: WorkerInitializationState} & Record<symbol, unknown>} WorkerGlobal
+ */
+
+const runtimeGlobal = /** @type {WorkerGlobal} */ (globalThis);
+
+/**
+ * Keep initialization state across accidental re-evaluation without widening
+ * the process-wide global type for every module.
+ * @returns {WorkerInitializationState} - Shared worker initialization state.
+ */
+function getWorkerInitializationState() {
+  if (!runtimeGlobal.__wharfieWorkerInit) {
+    runtimeGlobal.__wharfieWorkerInit = {
+      handlerInstalled: false,
+      bundleLoaded: false,
+    };
+  }
+  return runtimeGlobal.__wharfieWorkerInit;
 }
+
+const workerInitialization = getWorkerInitializationState();
 
 /**
  * Pending RPC calls made by resource proxies.
@@ -163,8 +183,7 @@ async function drainOneTick() {
  */
 function runBundleOnce({ codeString, pkgFile, entryFile, tmpRoot, env }) {
   // Use codeString as the key – if it’s the same bundle, don’t re-run it
-  // @ts-ignore
-  if (global.__wharfieWorkerInit.bundleLoaded) return;
+  if (workerInitialization.bundleLoaded) return;
 
   const sandboxRequire = createRequire(pkgFile);
 
@@ -202,18 +221,11 @@ function runBundleOnce({ codeString, pkgFile, entryFile, tmpRoot, env }) {
 
   bundleFn(sandboxRequire, entryFile, tmpRoot, sandboxProcess);
 
-  // @ts-ignore
-  global.__wharfieWorkerInit.bundleLoaded = true;
+  workerInitialization.bundleLoaded = true;
 }
 
-if (
-  !isMainThread &&
-  // @ts-ignore
-  !global.__wharfieWorkerInit.handlerInstalled &&
-  parentPort
-) {
-  // @ts-ignore
-  global.__wharfieWorkerInit.handlerInstalled = true;
+if (!isMainThread && !workerInitialization.handlerInstalled && parentPort) {
+  workerInitialization.handlerInstalled = true;
   parentPort.on('message', async (msg) => {
     const { kind } = msg || {};
 
@@ -254,8 +266,7 @@ if (
       });
 
       const sym = Symbol.for(functionName);
-      // @ts-ignore
-      const fn = global[sym];
+      const fn = runtimeGlobal[sym];
       if (typeof fn !== 'function') {
         throw new TypeError(
           `Global entrypoint ${functionName} is not a function`,
@@ -284,8 +295,7 @@ if (
         parentPort.postMessage({
           id,
           ok: false,
-          // @ts-ignore
-          error: err && err.stack ? err.stack : String(err),
+          error: err instanceof Error ? err.stack || err.message : String(err),
         });
     }
   });
