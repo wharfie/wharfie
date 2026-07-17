@@ -98,6 +98,11 @@ function cloneValue(value, label, path, ancestors) {
           `${formatPath(label, path)} must be a finite JSON number.`,
         );
       }
+      if (Object.is(value, -0)) {
+        throw new TypeError(
+          `${formatPath(label, path)} must not contain negative zero because JSON transport normalizes it to zero.`,
+        );
+      }
       return value;
     case 'undefined':
     case 'bigint':

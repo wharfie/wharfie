@@ -6,6 +6,9 @@ import {
   credentials,
 } from '@grpc/grpc-js';
 
+import { serializeActivityAttemptError } from '../activity-attempt.js';
+import { cloneJsonValue } from '../json-value.js';
+
 /**
  * Minimal gRPC helpers for Wharfie services.
  *
@@ -331,24 +334,61 @@ export function createGrpcRpcClient({ address, log }) {
 /**
  * Create a Lambda service client.
  * @param {{ address: string }} options - options.
- * @returns {{ invoke: (req: { functionName: string, event?: any, context?: any }) => Promise<void>, close: () => void }} - Result.
+ * @returns {{ invoke: (req: { functionName: string, revisionId: string, event?: any, context?: any }) => Promise<any>, close: () => void }} - Result.
  */
 export function createLambdaClient({ address }) {
   const client = new Client(address, credentials.createInsecure());
 
   return {
-    invoke: async ({ functionName, event, context }) => {
+    invoke: async (request) => {
+      const wireRequest = {
+        functionName: request.functionName,
+        revisionId: request.revisionId,
+        ...(Object.prototype.hasOwnProperty.call(request, 'event')
+          ? {
+              event: cloneJsonValue(request.event, 'Lambda invocation event'),
+            }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(request, 'context')
+          ? {
+              context: cloneJsonValue(
+                request.context,
+                'Lambda invocation context',
+              ),
+            }
+          : {}),
+      };
       const resp = await grpcUnary(
         client,
         LambdaServiceDefinition.Invoke.path,
-        { functionName, event, context },
+        wireRequest,
         { deadlineMs: 120_000 },
       );
       if (!resp || resp.ok !== true) {
-        throw new Error(
-          resp && resp.error ? String(resp.error) : 'Lambda invoke failed',
+        const structured = serializeActivityAttemptError(
+          resp?.error,
+          'activity-invocation-failed',
         );
+        const error = new Error(structured.message);
+        error.name = structured.name;
+        Object.assign(error, {
+          code: structured.code,
+          details: structured.details,
+        });
+        throw error;
       }
+      if (!Object.prototype.hasOwnProperty.call(resp, 'result')) {
+        const error = new Error(
+          'Lambda service returned success without a required result.',
+        );
+        error.name = 'ActivityResultProtocolError';
+        Object.assign(error, {
+          code: 'activity-result-missing',
+          details: {},
+        });
+        throw error;
+      }
+      return cloneJsonValue(resp.result, 'Lambda invocation result');
     },
     close: () => {
       try {

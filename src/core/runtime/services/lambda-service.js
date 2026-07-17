@@ -2,6 +2,12 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { getQueueOperationId, runPersistedActivity } from '../app-runs.js';
 import { assertApplicationRevisionId } from '../application-revision.js';
+import {
+  ActivityAttemptProtocolError,
+  serializeActivityAttemptError,
+} from '../activity-attempt.js';
+import { cloneJsonValue } from '../json-value.js';
+import { assertLogicalId } from '../logical-id.js';
 import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
 
 /**
@@ -30,6 +36,7 @@ import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
  * @typedef LambdaServiceOptions
  * @property {string} [host] - host.
  * @property {number} [port] - port.
+ * @property {string} revisionId - Immutable revision served by every invocation.
  * @property {(req: LambdaInvokeRequest) => Promise<any>} execute - Executes a function invocation.
  * @property {LambdaPollOptions} [poll] - Optional queue poll loop configuration.
  * @property {(msg: string, extra?: any) => void} [log] - log.
@@ -62,6 +69,50 @@ function resolveActivityName(payload) {
 }
 
 /**
+ * @param {string} code - Stable logical error code.
+ * @param {string} name - Stable error class name.
+ * @param {string} message - Safe error message.
+ * @param {Record<string, any>} [details] - Strict JSON details.
+ * @param {unknown} [cause] - Local-only cause.
+ * @returns {ActivityAttemptProtocolError} - Structured service error.
+ */
+function createInvocationProtocolError(
+  code,
+  name,
+  message,
+  details = {},
+  cause,
+) {
+  const error = new ActivityAttemptProtocolError(code, message, details, {
+    cause,
+  });
+  error.name = name;
+  return error;
+}
+
+/**
+ * Clone one direct-invocation value before the generic JSON gRPC codec can
+ * silently coerce it.
+ * @param {unknown} value - Candidate strict JSON value.
+ * @param {string} label - Boundary label.
+ * @param {string} code - Stable failure code.
+ * @returns {any} - Independent strict JSON clone.
+ */
+function cloneInvocationValue(value, label, code) {
+  try {
+    return cloneJsonValue(value, label);
+  } catch (cause) {
+    throw createInvocationProtocolError(
+      code,
+      'ActivityInvocationValueError',
+      cause instanceof Error ? cause.message : String(cause),
+      {},
+      cause,
+    );
+  }
+}
+
+/**
  * Start the Lambda service (execution plane).
  *
  * - Exposes a gRPC `Invoke` API for explicit invocations.
@@ -75,6 +126,7 @@ function resolveActivityName(payload) {
 export async function startLambdaService({
   host = '127.0.0.1',
   port = 0,
+  revisionId: configuredRevisionId,
   execute,
   poll,
   log,
@@ -84,6 +136,8 @@ export async function startLambdaService({
   }
 
   const abort = new AbortController();
+  assertApplicationRevisionId(configuredRevisionId, 'revisionId');
+  const serviceRevisionId = configuredRevisionId;
 
   /** @type {Promise<any>[]} */
   const pollTasks = [];
@@ -104,6 +158,11 @@ export async function startLambdaService({
       );
     }
     assertApplicationRevisionId(revisionId, 'poll.revisionId');
+    if (serviceRevisionId !== revisionId) {
+      throw new Error(
+        `Lambda service revision '${serviceRevisionId}' does not match queue polling revision '${revisionId}'.`,
+      );
+    }
     const waitTimeSeconds = clampNumber(poll.waitTimeSeconds, 0, 20, 20);
     const maxNumberOfMessages = clampNumber(
       poll.maxNumberOfMessages,
@@ -299,25 +358,97 @@ export async function startLambdaService({
             getNonemptyString(req.activity);
 
           if (!functionName) {
-            callback(null, { ok: false, error: 'Missing functionName' });
-            return;
+            throw createInvocationProtocolError(
+              'activity-name-required',
+              'ActivityNameRequiredError',
+              'Lambda invocation requires functionName.',
+            );
+          }
+          try {
+            assertLogicalId(functionName, 'request.functionName');
+          } catch (cause) {
+            throw createInvocationProtocolError(
+              'activity-name-invalid',
+              'ActivityNameInvalidError',
+              cause instanceof Error ? cause.message : String(cause),
+              {},
+              cause,
+            );
           }
 
-          await execute({
+          const requestedRevisionId = getNonemptyString(req.revisionId);
+          if (!requestedRevisionId) {
+            throw createInvocationProtocolError(
+              'activity-revision-required',
+              'ActivityRevisionRequiredError',
+              `Lambda invocation requires revisionId '${serviceRevisionId}'.`,
+              { expectedRevisionId: serviceRevisionId },
+            );
+          }
+          try {
+            assertApplicationRevisionId(
+              requestedRevisionId,
+              'request.revisionId',
+            );
+          } catch (cause) {
+            throw createInvocationProtocolError(
+              'activity-revision-invalid',
+              'ActivityRevisionInvalidError',
+              cause instanceof Error ? cause.message : String(cause),
+              {},
+              cause,
+            );
+          }
+          if (requestedRevisionId !== serviceRevisionId) {
+            throw createInvocationProtocolError(
+              'activity-revision-mismatch',
+              'ActivityRevisionMismatchError',
+              `Activity revision '${requestedRevisionId}' does not match the running service revision '${serviceRevisionId}'.`,
+              {
+                requestedRevisionId,
+                serviceRevisionId,
+              },
+            );
+          }
+
+          const value = await execute({
             functionName,
             activity: functionName,
-            event: req.event,
-            context: req.context,
+            revisionId: requestedRevisionId,
+            ...(Object.prototype.hasOwnProperty.call(req, 'event')
+              ? {
+                  event: cloneInvocationValue(
+                    req.event,
+                    'Lambda invocation event',
+                    'activity-input-invalid',
+                  ),
+                }
+              : {}),
+            ...(Object.prototype.hasOwnProperty.call(req, 'context')
+              ? {
+                  context: cloneInvocationValue(
+                    req.context,
+                    'Lambda invocation context',
+                    'activity-context-invalid',
+                  ),
+                }
+              : {}),
           });
 
-          callback(null, { ok: true });
+          const result = cloneInvocationValue(
+            value,
+            'Lambda invocation result',
+            'activity-result-invalid',
+          );
+          callback(null, { ok: true, result });
         } catch (err) {
-          const msgStr =
-            err && typeof err === 'object' && 'stack' in err
-              ? // @ts-ignore
-                String(err.stack)
-              : String(err);
-          callback(null, { ok: false, error: msgStr });
+          callback(null, {
+            ok: false,
+            error: serializeActivityAttemptError(
+              err,
+              'activity-invocation-failed',
+            ),
+          });
         }
       },
 

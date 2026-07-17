@@ -7,6 +7,7 @@ import { assertLogicalId } from './logical-id.js';
 export const ACTIVITY_PROTOCOL_NAME = 'wharfie.activity';
 export const ACTIVITY_PROTOCOL_VERSION = 1;
 export const ACTIVITY_PROTOCOL_MAX_ENCODED_FRAME_BYTES = 1024 * 1024;
+export const ACTIVITY_PROTOCOL_MAX_OPAQUE_ID_BYTES = 512;
 
 export const ACTIVITY_PROTOCOL_HOST_FRAME_TYPES = Object.freeze([
   'start',
@@ -173,7 +174,12 @@ function assertExactKeys(value, allowed, required, valuePath) {
  * @returns {asserts value is string}
  */
 function assertOpaqueId(value, valuePath) {
-  if (typeof value !== 'string' || value.length === 0) {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    UTF8_ENCODER.encode(value).byteLength >
+      ACTIVITY_PROTOCOL_MAX_OPAQUE_ID_BYTES
+  ) {
     throw new TypeError(`${valuePath} must be a nonempty opaque string.`);
   }
 }
@@ -716,6 +722,7 @@ export default {
   ACTIVITY_PROTOCOL_HOST_FRAME_TYPES,
   ACTIVITY_PROTOCOL_LOG_LEVELS,
   ACTIVITY_PROTOCOL_MAX_ENCODED_FRAME_BYTES,
+  ACTIVITY_PROTOCOL_MAX_OPAQUE_ID_BYTES,
   ACTIVITY_PROTOCOL_NAME,
   ACTIVITY_PROTOCOL_REPLAY_PROPERTIES,
   ACTIVITY_PROTOCOL_TERMINAL_TYPES,

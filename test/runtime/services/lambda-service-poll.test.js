@@ -52,6 +52,7 @@ describe('Lambda service queue poll loop (gRPC)', () => {
   it('refuses queue polling without durable operation state', async () => {
     await expect(
       startLambdaService({
+        revisionId: REVISION_ID,
         execute: async () => undefined,
         poll: /** @type {any} */ ({
           queue: {},
@@ -431,6 +432,7 @@ describe('Lambda service queue poll loop (gRPC)', () => {
     });
     const execute = jest.fn(async () => ({ ok: true }));
     const lambdaSvc = await startLambdaService({
+      revisionId: REVISION_ID,
       execute,
       poll: {
         queue,
@@ -535,6 +537,7 @@ describe('Lambda service queue poll loop (gRPC)', () => {
     const execute = jest.fn(async () => ({ shouldNotRun: true }));
     const log = jest.fn();
     const lambdaSvc = await startLambdaService({
+      revisionId: OTHER_REVISION_ID,
       execute,
       poll: {
         queue,
@@ -708,6 +711,7 @@ describe('Lambda service queue poll loop (gRPC)', () => {
     const lambdaSvc = await startLambdaService({
       host: '127.0.0.1',
       port: 0,
+      revisionId: REVISION_ID,
       execute: async ({ functionName, event, context }) => {
         return await Function.run(functionName, event, context ?? {}, {
           resources: {
@@ -884,6 +888,7 @@ describe('Lambda service queue poll loop (gRPC)', () => {
     const lambdaSvc = await startLambdaService({
       host: '127.0.0.1',
       port: 0,
+      revisionId: REVISION_ID,
       execute: async () => {
         throw new Error('boom');
       },

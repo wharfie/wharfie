@@ -89,6 +89,18 @@ const lambdaCmd = new Command('lambda')
       );
     }
 
+    const appId =
+      typeof bootstrap.manifest?.app?.id === 'string'
+        ? bootstrap.manifest.app.id
+        : undefined;
+    const embeddedIdentity = await readEmbeddedRevisionRuntimePair();
+    if (embeddedIdentity.runtime.appId !== appId) {
+      throw new Error(
+        'Lambda service application ID does not match the embedded immutable revision.',
+      );
+    }
+    const embeddedRevisionId = embeddedIdentity.runtime.revisionId;
+
     const db = dbAddress
       ? createGrpcRpcClient({
           address: dbAddress,
@@ -111,21 +123,11 @@ const lambdaCmd = new Command('lambda')
     const objectStorage = local.objectStorage;
     const pollQueueUrls = bootstrap.pollQueueUrls;
     const operationsTableName = resolveOperationsTableName();
-    const appId =
-      typeof bootstrap.manifest?.app?.id === 'string'
-        ? bootstrap.manifest.app.id
-        : undefined;
     const pollOptions = await (async () => {
       if (!queue || pollQueueUrls.length === 0) return undefined;
       if (!db || !appId) {
         throw new Error(
           'Durable queue polling requires a DB service and an embedded application ID.',
-        );
-      }
-      const embeddedIdentity = await readEmbeddedRevisionRuntimePair();
-      if (embeddedIdentity.runtime.appId !== appId) {
-        throw new Error(
-          'Durable queue polling application ID does not match the embedded immutable revision.',
         );
       }
       return {
@@ -139,7 +141,7 @@ const lambdaCmd = new Command('lambda')
           tableName: operationsTableName,
         }),
         appId,
-        revisionId: embeddedIdentity.runtime.revisionId,
+        revisionId: embeddedRevisionId,
         log: (/** @type {string} */ msg, /** @type {any} */ extra) =>
           console.error('[lambda-service:poll]', msg, extra ?? ''),
       };
@@ -148,20 +150,26 @@ const lambdaCmd = new Command('lambda')
     const svc = await startLambdaService({
       host: String(opts.host),
       port: Number(opts.port),
+      revisionId: embeddedRevisionId,
       log: (msg, extra) => console.error('[lambda-service]', msg, extra ?? ''),
       execute: async ({ functionName, revisionId, event, context }) => {
-        if (
-          revisionId &&
-          pollOptions &&
-          revisionId !== pollOptions.revisionId
-        ) {
-          throw new Error(
-            `Activity revision '${revisionId}' does not match the running artifact revision '${pollOptions.revisionId}'.`,
+        if (revisionId !== embeddedRevisionId) {
+          const error = new Error(
+            `Activity revision '${String(revisionId)}' does not match the running artifact revision '${embeddedRevisionId}'.`,
           );
+          error.name = 'ActivityRevisionMismatchError';
+          Object.assign(error, {
+            code: 'activity-revision-mismatch',
+            details: {
+              requestedRevisionId: revisionId,
+              serviceRevisionId: embeddedRevisionId,
+            },
+          });
+          throw error;
         }
         const ctx = context && typeof context === 'object' ? context : {};
 
-        await Function.run(functionName, event, ctx, {
+        return await Function.run(functionName, event, ctx, {
           resources: {
             ...(db ? { db } : {}),
             ...(queue ? { queue } : {}),

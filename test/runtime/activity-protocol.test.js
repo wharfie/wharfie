@@ -5,6 +5,7 @@ import {
   ACTIVITY_PROTOCOL_HOST_FRAME_TYPES,
   ACTIVITY_PROTOCOL_LOG_LEVELS,
   ACTIVITY_PROTOCOL_MAX_ENCODED_FRAME_BYTES,
+  ACTIVITY_PROTOCOL_MAX_OPAQUE_ID_BYTES,
   ACTIVITY_PROTOCOL_NAME,
   ACTIVITY_PROTOCOL_REPLAY_PROPERTIES,
   ACTIVITY_PROTOCOL_TERMINAL_TYPES,
@@ -188,6 +189,7 @@ describe('Activity Protocol v1 frame validation', () => {
     expect(ACTIVITY_PROTOCOL_NAME).toBe('wharfie.activity');
     expect(ACTIVITY_PROTOCOL_VERSION).toBe(1);
     expect(ACTIVITY_PROTOCOL_MAX_ENCODED_FRAME_BYTES).toBe(1024 * 1024);
+    expect(ACTIVITY_PROTOCOL_MAX_OPAQUE_ID_BYTES).toBe(512);
     expect(ACTIVITY_PROTOCOL_HOST_FRAME_TYPES).toEqual([
       'start',
       'cancel',
@@ -552,6 +554,14 @@ describe('Activity Protocol v1 frame validation', () => {
     [
       'empty attempt identity',
       () => startFrame({ attemptId: '' }),
+      /attemptId must be a nonempty opaque string/i,
+    ],
+    [
+      'oversized opaque attempt identity',
+      () =>
+        startFrame({
+          attemptId: 'a'.repeat(ACTIVITY_PROTOCOL_MAX_OPAQUE_ID_BYTES + 1),
+        }),
       /attemptId must be a nonempty opaque string/i,
     ],
     [

@@ -70,6 +70,14 @@ deadline, permits a bounded cooperative shutdown interval, and then terminates
 the adapter's attempt boundary when possible. Any late component frame is
 ignored for execution and rejected by transcript validation.
 
+Every host-owned operation that can stall an attempt—component-frame delivery,
+managed-effect handling, and forced termination—has a finite adapter timeout.
+A host cannot turn a deadline or cancellation into an unbounded wait. Failure
+to confirm delivery is explicit attempt-delivery uncertainty: the adapter
+retains the locally accepted transcript and its last contiguous acknowledged
+component sequence, but it must not claim that an unacknowledged terminal or
+side effect became durable.
+
 Stopping an adapter does not prove that unmanaged JavaScript or an external
 effect did not run. Durable recovery continues to apply the accepted unsafe and
 `uncertain` rules; cancellation only fences later Wharfie-managed commits unless

@@ -629,7 +629,8 @@ describe('actor-system CLI runtime surfaces', () => {
   });
 
   it('wires the Lambda serve command, queue polling, and shutdown hooks', async () => {
-    const functionRun = jest.fn(async (..._args) => {});
+    const functionResult = { indexed: 2 };
+    const functionRun = jest.fn(async (..._args) => functionResult);
     const dbClient = {
       __wharfie_closeTransport: jest.fn(),
       transactionWrite: jest.fn(async () => {}),
@@ -730,11 +731,25 @@ describe('actor-system CLI runtime surfaces', () => {
 
       await flushTurn();
 
-      await lambdaOptions.execute({
-        functionName: 'alpha',
-        event: { ok: true },
-        context: null,
+      await expect(
+        lambdaOptions.execute({
+          functionName: 'alpha',
+          revisionId: `wrv1_${'B'.repeat(42)}Q`,
+          event: { shouldNotRun: true },
+          context: null,
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActivityRevisionMismatchError',
+        code: 'activity-revision-mismatch',
       });
+      await expect(
+        lambdaOptions.execute({
+          functionName: 'alpha',
+          revisionId,
+          event: { ok: true },
+          context: null,
+        }),
+      ).resolves.toBe(functionResult);
 
       await listeners.get('SIGTERM')?.();
       await parsePromise;
@@ -764,6 +779,7 @@ describe('actor-system CLI runtime surfaces', () => {
         expect.objectContaining({
           host: '127.0.0.1',
           port: 9103,
+          revisionId,
           log: expect.any(Function),
           poll: expect.objectContaining({
             queue: queueClient,
@@ -797,6 +813,115 @@ describe('actor-system CLI runtime surfaces', () => {
       expect(closeLocal).toHaveBeenCalledTimes(1);
       expect(dbClient.__wharfie_closeTransport).toHaveBeenCalledTimes(1);
       expect(queueClient.__wharfie_closeTransport).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it('binds direct-only Lambda serving to the embedded revision and returns the function result', async () => {
+    const revisionId = `wrv1_${'A'.repeat(43)}`;
+    const functionResult = ['direct-result', null, 3];
+    const functionRun = jest.fn(async (..._args) => functionResult);
+    const closeLocal = jest.fn(async () => {});
+    const closeLambdaService = jest.fn(async () => {});
+    /** @type {any} */
+    let lambdaOptions;
+
+    await jest.unstable_mockModule(RESOURCE_UTIL_IMPORT, () => ({
+      loadRuntimeBootstrap: async () => ({
+        manifest: { app: { id: 'direct-runtime-test' } },
+        resourcesSpec: {},
+        pollQueueUrls: [],
+        servicePlan: { db: false, queue: false },
+      }),
+    }));
+    await jest.unstable_mockModule(FUNCTION_IMPORT, () => ({
+      default: { run: functionRun },
+    }));
+    await jest.unstable_mockModule(RUNTIME_RESOURCES_IMPORT, () => ({
+      createActorSystemResources: jest.fn(async () => ({
+        resources: {},
+        close: closeLocal,
+      })),
+    }));
+    await jest.unstable_mockModule(RPC_GRPC_IMPORT, () => ({
+      createGrpcRpcClient: jest.fn(),
+    }));
+    await jest.unstable_mockModule(LAMBDA_SERVICE_IMPORT, () => ({
+      startLambdaService: jest.fn(async (options) => {
+        lambdaOptions = options;
+        return {
+          address: '127.0.0.1:9104',
+          close: closeLambdaService,
+        };
+      }),
+    }));
+    await jest.unstable_mockModule(REVISION_RUNTIME_ASSETS_IMPORT, () => ({
+      readEmbeddedRevisionRuntimePair: jest.fn(async () => ({
+        revision: { revisionId },
+        runtime: { appId: 'direct-runtime-test', revisionId },
+      })),
+    }));
+
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { listeners, restore } = captureSignals();
+    const { default: lambdaCmd } = await import(LAMBDA_CMD_IMPORT);
+    const { startLambdaService } = await import(LAMBDA_SERVICE_IMPORT);
+    const { readEmbeddedRevisionRuntimePair } = await import(
+      REVISION_RUNTIME_ASSETS_IMPORT
+    );
+
+    try {
+      const parsePromise = lambdaCmd.parseAsync(
+        ['node', 'lambda', '--host', '127.0.0.1', '--port', '9104'],
+        { from: 'node' },
+      );
+
+      await flushTurn();
+
+      expect(readEmbeddedRevisionRuntimePair).toHaveBeenCalledTimes(1);
+      expect(startLambdaService).toHaveBeenCalledWith(
+        expect.objectContaining({
+          host: '127.0.0.1',
+          port: 9104,
+          revisionId,
+          poll: undefined,
+          execute: expect.any(Function),
+        }),
+      );
+
+      await expect(
+        lambdaOptions.execute({
+          functionName: 'alpha',
+          event: { shouldNotRun: true },
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActivityRevisionMismatchError',
+        code: 'activity-revision-mismatch',
+      });
+      expect(functionRun).not.toHaveBeenCalled();
+
+      await expect(
+        lambdaOptions.execute({
+          functionName: 'alpha',
+          revisionId,
+          event: { ok: true },
+          context: null,
+        }),
+      ).resolves.toBe(functionResult);
+      expect(functionRun).toHaveBeenCalledWith(
+        'alpha',
+        { ok: true },
+        {},
+        { resources: {} },
+      );
+
+      await listeners.get('SIGTERM')?.();
+      await parsePromise;
+      expect(closeLambdaService).toHaveBeenCalledTimes(1);
+      expect(closeLocal).toHaveBeenCalledTimes(1);
     } finally {
       restore();
     }

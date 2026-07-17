@@ -138,6 +138,7 @@ describe('JSON activity values', () => {
     ['function', { invalid: () => {} }],
     ['symbol', { invalid: Symbol('invalid') }],
     ['non-finite number', { invalid: Number.POSITIVE_INFINITY }],
+    ['negative zero', { invalid: -0 }],
     ['sparse array', Array(1)],
     ['non-plain object', { invalid: new Date(0) }],
   ])('rejects %s values instead of coercing them', (_name, value) => {
