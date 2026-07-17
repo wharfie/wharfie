@@ -340,7 +340,7 @@ describe('embedded app manifest asset helpers', () => {
       const seaAssets = new Map();
       const identity = embeddedRevisionAssets(embeddedRunnableManifest);
       const functionSource = `
-        globalThis[Symbol.for('wharfie.activity-attempt.v1/start')] = ({ startFrame }) => {
+        globalThis[Symbol.for('wharfie.activity-attempt.v1/start')] = ({ startFrame, transport }) => {
           const terminal = {
             protocol: 'wharfie.activity',
             protocolVersion: 1,
@@ -353,20 +353,7 @@ describe('embedded app manifest asset helpers', () => {
               requestId: startFrame.caller?.metadata?.requestId || null,
             },
           };
-          return {
-            status: 'completed',
-            start: startFrame,
-            terminal,
-            frames: [startFrame, terminal],
-            transcript: {
-              started: true,
-              attemptId: startFrame.attemptId,
-              nextComponentSequence: 2,
-              cancelRequested: false,
-              pendingEffectIds: [],
-              terminalType: 'completed',
-            },
-          };
+          return transport.onComponentFrame(terminal);
         };
       `;
 

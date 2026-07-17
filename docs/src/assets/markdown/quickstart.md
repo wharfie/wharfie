@@ -70,9 +70,10 @@ An activity export has the `(input, runtime)` ABI. `input` is the strict JSON
 value supplied by its caller; `runtime.caller.metadata` is separate trusted
 caller metadata; and `runtime.invocation` identifies the immutable revision,
 run, invocation, physical attempt, and fencing token. Activity code should use
-`runtime.logger` for structured logs. `runtime.signal` is reserved for host
-cancellation; public source/SEA invocation does not yet expose cancellation
-until the worker transport is framed. The initial Activity Protocol v1
+`runtime.logger` for structured logs. `runtime.signal` receives host
+cancellation and deadline interruption through the framed worker attempt
+transport. The currently shipped source/SEA invocation API does not expose an
+interactive caller-cancellation control yet. The initial Activity Protocol v1
 execution path does not inject resource handles or managed effects.
 
 ```ts

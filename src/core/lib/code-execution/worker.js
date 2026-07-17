@@ -9,13 +9,23 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
-import { Worker } from 'node:worker_threads';
+import { MessageChannel, Worker } from 'node:worker_threads';
 import { x } from 'tar';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { buffer as streamToBuffer } from 'node:stream/consumers';
 import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
+import {
+  DEFAULT_ACTIVITY_CANCELLATION_GRACE_MS,
+  DEFAULT_ACTIVITY_HOST_OPERATION_TIMEOUT_MS,
+  serializeActivityAttemptError,
+} from '../../runtime/activity-attempt.js';
+import {
+  ACTIVITY_PROTOCOL_NAME,
+  ACTIVITY_PROTOCOL_VERSION,
+  ActivityProtocolTranscriptValidator,
+} from '../../runtime/activity-protocol.js';
 
 // esbuild inlines this file as text (configure: loader { '.worker.js': 'text' })
 // In normal Node/Jest execution, this import resolves to the module default export (a function),
@@ -30,6 +40,8 @@ const require = createRequire(import.meta.url);
 
 // --- bundle-isolated workers + response routing ---
 let nextId = 1;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const DEFAULT_ACTIVITY_WORKER_READY_TIMEOUT_MS = 5_000;
 
 /**
  * @typedef PendingExecution
@@ -41,17 +53,42 @@ let nextId = 1;
  * @typedef WorkerState
  * @property {string} key - Stable bundle key.
  * @property {string} activityKey - Stable activity name/source key.
- * @property {string} externalBundleDigest - External bundle content digest.
  * @property {string} name - Activity name.
  * @property {Sandbox} sandbox - Private filesystem root owned by this worker.
  * @property {Worker} worker - Worker instance.
  * @property {Map<number, PendingExecution>} pending - Executions awaiting responses.
+ * @property {Map<number, PendingActivityAttempt>} activityAttempts - Framed Activity Protocol attempts awaiting completion.
+ * @property {Map<number, PendingActivityAttempt>} closingActivityAttempts - Terminal attempts kept until their dedicated worker exits.
  * @property {Set<string>} rpcSessionIds - RPC sessions owned by this worker.
  * @property {number} activeExecutions - Number of active runInSandbox calls.
  * @property {boolean} destroyRequested - Whether to terminate once idle.
  * @property {boolean} terminating - Whether termination has started.
  * @property {boolean} exited - Whether the worker has exited.
  * @property {Promise<void> | null} terminationPromise - Active termination.
+ */
+
+/**
+ * @typedef PendingActivityAttempt
+ * @property {(value: any) => void} resolve - Resolve verified host-collected evidence.
+ * @property {(error: any) => void} reject - Reject transport/evidence failure.
+ * @property {Readonly<Record<string, any>>} start - Host-accepted start frame.
+ * @property {ActivityProtocolTranscriptValidator} transcript - Host-owned transcript validator.
+ * @property {Readonly<Record<string, any>>[]} frames - Host-accepted ordered frames.
+ * @property {Readonly<Record<string, any>> | null} terminal - Host-accepted terminal.
+ * @property {boolean} ready - Whether the runner loaded the private wrapper.
+ * @property {boolean} startSent - Whether the host start frame was sent.
+ * @property {boolean} finished - Whether the runner reported normal wrapper completion.
+ * @property {boolean} cancelRequested - Whether the host has accepted a cancellation request.
+ * @property {Readonly<Record<string, any>> | null} pendingCancel - Host-accepted cancellation held until the start frame is physically sent.
+ * @property {import('node:worker_threads').MessagePort} port - Private host/runner Activity Protocol port, never exposed to bundle code.
+ * @property {string} transportAuth - Opaque per-attempt authenticator required on runner lifecycle messages.
+ * @property {number} readyTimeoutMs - Maximum time to load the private wrapper and report readiness.
+ * @property {ReturnType<typeof setTimeout> | null} readyTimer - Runner readiness watchdog.
+ * @property {number} cancellationGraceMs - Bounded cooperative-cancellation grace.
+ * @property {ReturnType<typeof setTimeout> | null} cancellationTimer - Cooperative-cancellation watchdog.
+ * @property {ReturnType<typeof setTimeout> | null} deadlineTimer - Host deadline watchdog.
+ * @property {ReturnType<typeof setTimeout> | null} terminalTimer - Post-terminal close watchdog.
+ * @property {(() => void) | null} removeAbortListener - External abort cleanup.
  */
 
 /** @type {Map<string, WorkerState>} */
@@ -102,6 +139,24 @@ function getBundleKey(activityKey, externalBundleDigest) {
     .update(activityKey)
     .update('\0')
     .update(externalBundleDigest)
+    .digest('hex');
+}
+
+/**
+ * Derive a one-shot sandbox key for an Activity Protocol attempt. The stable
+ * bundle key remains the content identity; the random isolation ID makes a
+ * force-terminable worker and filesystem root belong to this physical attempt
+ * alone, never to a concurrent legacy execution of the same bundle.
+ * @param {string} bundleKey - Stable content-addressed bundle key.
+ * @param {string} isolationId - Fresh physical-attempt isolation ID.
+ * @returns {string} - One-shot worker/sandbox key.
+ */
+function getActivityAttemptSandboxKey(bundleKey, isolationId) {
+  return createHash('sha256')
+    .update('wharfie-activity-attempt-sandbox-v1\0')
+    .update(bundleKey)
+    .update('\0')
+    .update(isolationId)
     .digest('hex');
 }
 
@@ -313,6 +368,101 @@ function rejectPendingExecutions(state, error) {
 }
 
 /**
+ * Stop timers/listeners owned by one framed attempt. This is intentionally
+ * idempotent because normal finish, a worker exit, and forced termination can
+ * converge on the same attempt.
+ * @param {PendingActivityAttempt} attempt - Pending framed attempt.
+ * @returns {void}
+ */
+function cleanupPendingActivityAttempt(attempt) {
+  if (attempt.readyTimer) {
+    clearTimeout(attempt.readyTimer);
+    attempt.readyTimer = null;
+  }
+  if (attempt.cancellationTimer) {
+    clearTimeout(attempt.cancellationTimer);
+    attempt.cancellationTimer = null;
+  }
+  if (attempt.deadlineTimer) {
+    clearTimeout(attempt.deadlineTimer);
+    attempt.deadlineTimer = null;
+  }
+  if (attempt.terminalTimer) {
+    clearTimeout(attempt.terminalTimer);
+    attempt.terminalTimer = null;
+  }
+  if (attempt.removeAbortListener) {
+    try {
+      attempt.removeAbortListener();
+    } catch {}
+    attempt.removeAbortListener = null;
+  }
+}
+
+/**
+ * @param {PendingActivityAttempt} attempt - Pending framed attempt.
+ * @returns {void}
+ */
+function closeActivityAttemptPort(attempt) {
+  try {
+    attempt.port.close();
+  } catch {}
+}
+
+/**
+ * The host has already accepted a terminal frame, so cancellation/deadline
+ * watchdogs are no longer relevant. Keep a short close watchdog instead: a
+ * terminal without a runner completion cannot safely be reported as a fully
+ * closed physical attempt.
+ * @param {PendingActivityAttempt} attempt - Pending framed attempt.
+ * @returns {void}
+ */
+function stopActivityAttemptInterruptionWatchdogs(attempt) {
+  if (attempt.cancellationTimer) {
+    clearTimeout(attempt.cancellationTimer);
+    attempt.cancellationTimer = null;
+  }
+  if (attempt.deadlineTimer) {
+    clearTimeout(attempt.deadlineTimer);
+    attempt.deadlineTimer = null;
+  }
+  if (attempt.removeAbortListener) {
+    try {
+      attempt.removeAbortListener();
+    } catch {}
+    attempt.removeAbortListener = null;
+  }
+}
+
+/**
+ * @param {WorkerState} state - Worker state.
+ * @param {Error} error - Rejection error.
+ * @returns {void}
+ */
+function rejectPendingActivityAttempts(state, error) {
+  for (const attempt of state.activityAttempts.values()) {
+    cleanupPendingActivityAttempt(attempt);
+    closeActivityAttemptPort(attempt);
+    attempt.reject(error);
+  }
+  state.activityAttempts.clear();
+}
+
+/**
+ * @param {WorkerState} state - Worker state.
+ * @param {Error} error - Rejection error.
+ * @returns {void}
+ */
+function rejectClosingActivityAttempts(state, error) {
+  for (const attempt of state.closingActivityAttempts.values()) {
+    cleanupPendingActivityAttempt(attempt);
+    closeActivityAttemptPort(attempt);
+    attempt.reject(error);
+  }
+  state.closingActivityAttempts.clear();
+}
+
+/**
  * @param {WorkerState} state - Worker state.
  * @returns {void}
  */
@@ -406,8 +556,12 @@ async function terminateWorkerState(state, options = {}) {
   clearWorkerRpcSessions(state);
   detachSandbox(state.sandbox);
 
-  if (state.pending.size > 0) {
+  if (state.pending.size > 0 || state.activityAttempts.size > 0) {
     rejectPendingExecutions(state, new Error('Sandbox worker was terminated.'));
+    rejectPendingActivityAttempts(
+      state,
+      new Error('Sandbox activity attempt worker was terminated.'),
+    );
   }
 
   if (state.exited) {
@@ -426,15 +580,536 @@ async function terminateWorkerState(state, options = {}) {
 }
 
 /**
+ * @param {string} message - Safe diagnostic message.
+ * @param {unknown} [cause] - Local failure cause.
+ * @returns {Error} - Error classified as invalid activity-attempt evidence.
+ */
+function createActivityAttemptEvidenceError(message, cause) {
+  const error = /** @type {Error & {code?: string, cause?: unknown}} */ (
+    new Error(message)
+  );
+  if (cause !== undefined) error.cause = cause;
+  error.code = 'activity-attempt-evidence-invalid';
+  return error;
+}
+
+/**
+ * @param {WorkerState} state - Worker state.
+ * @param {number} id - Transport session ID.
+ * @param {Error} error - Attempt failure.
+ * @param {boolean} [forceTerminate] - Whether to immediately terminate this dedicated worker.
+ * @returns {void}
+ */
+function failActivityAttempt(state, id, error, forceTerminate = true) {
+  const attempt = state.activityAttempts.get(id);
+  if (!attempt) return;
+  state.activityAttempts.delete(id);
+  cleanupPendingActivityAttempt(attempt);
+  closeActivityAttemptPort(attempt);
+  attempt.reject(error);
+  if (forceTerminate) {
+    terminateWorkerState(state, { force: true }).catch(() => {});
+  }
+}
+
+/**
+ * Terminate a completed attempt's dedicated worker before publishing its
+ * evidence. The closing map remains live during termination so any late frame
+ * is rejected instead of being silently ignored after a terminal.
+ * @param {WorkerState} state - Worker state.
+ * @param {number} id - Transport session ID.
+ * @param {PendingActivityAttempt} attempt - Terminal attempt.
+ * @returns {void}
+ */
+function closeVerifiedActivityAttempt(state, id, attempt) {
+  state.activityAttempts.delete(id);
+  state.closingActivityAttempts.set(id, attempt);
+  cleanupPendingActivityAttempt(attempt);
+  const evidence = {
+    status: attempt.terminal?.type,
+    start: attempt.start,
+    terminal: attempt.terminal,
+    frames: [...attempt.frames],
+    transcript: attempt.transcript.snapshot(),
+  };
+  terminateWorkerState(state, { force: true }).then(
+    () => {
+      if (state.closingActivityAttempts.get(id) !== attempt) return;
+      state.closingActivityAttempts.delete(id);
+      closeActivityAttemptPort(attempt);
+      attempt.resolve(evidence);
+    },
+    (cause) => {
+      if (state.closingActivityAttempts.get(id) !== attempt) return;
+      state.closingActivityAttempts.delete(id);
+      closeActivityAttemptPort(attempt);
+      const error = new Error(
+        'Could not close the verified activity attempt worker.',
+      );
+      /** @type {Error & {cause?: unknown}} */ (error).cause = cause;
+      attempt.reject(error);
+    },
+  );
+}
+
+/**
+ * A bundle must load its fixed private wrapper and report readiness within a
+ * finite bound. Without this watchdog, a top-level loop or blocked module
+ * initialization could leave an otherwise unbounded attempt pending forever.
+ * @param {WorkerState} state - Worker state.
+ * @param {number} id - Transport session ID.
+ * @param {PendingActivityAttempt} attempt - Pending attempt.
+ * @returns {void}
+ */
+function armActivityAttemptReadyWatchdog(state, id, attempt) {
+  if (attempt.ready || attempt.readyTimer) return;
+  attempt.readyTimer = setTimeout(() => {
+    attempt.readyTimer = null;
+    if (state.activityAttempts.get(id) !== attempt || attempt.ready) return;
+    failActivityAttempt(
+      state,
+      id,
+      new Error(
+        `The activity runner did not become ready within ${attempt.readyTimeoutMs}ms.`,
+      ),
+    );
+  }, attempt.readyTimeoutMs);
+}
+
+/**
+ * @param {WorkerState} state - Worker state.
+ * @param {number} id - Transport session ID.
+ * @param {PendingActivityAttempt} attempt - Pending attempt.
+ * @returns {void}
+ */
+function armActivityAttemptDeadlineWatchdog(state, id, attempt) {
+  if (
+    attempt.terminal ||
+    attempt.cancelRequested ||
+    attempt.deadlineTimer ||
+    !Object.prototype.hasOwnProperty.call(attempt.start, 'deadlineUnixMs')
+  ) {
+    return;
+  }
+
+  const remaining = attempt.start.deadlineUnixMs - Date.now();
+  const delay = Math.max(0, Math.min(remaining, MAX_TIMER_DELAY_MS));
+  attempt.deadlineTimer = setTimeout(() => {
+    attempt.deadlineTimer = null;
+    if (
+      state.activityAttempts.get(id) !== attempt ||
+      attempt.terminal ||
+      attempt.cancelRequested
+    ) {
+      return;
+    }
+    if (Date.now() < attempt.start.deadlineUnixMs) {
+      armActivityAttemptDeadlineWatchdog(state, id, attempt);
+      return;
+    }
+    armActivityAttemptForcedTermination(
+      state,
+      id,
+      attempt,
+      'The activity attempt exceeded its host deadline without a verified terminal frame.',
+    );
+  }, delay);
+}
+
+/**
+ * Bound the time an unresponsive worker can continue after cancellation or a
+ * deadline. Every protocol attempt owns a one-shot worker, so this is a true
+ * per-attempt termination boundary rather than collateral termination of a
+ * shared sandbox.
+ * @param {WorkerState} state - Worker state.
+ * @param {number} id - Transport session ID.
+ * @param {PendingActivityAttempt} attempt - Pending attempt.
+ * @param {string} message - Safe transport diagnostic.
+ * @returns {void}
+ */
+function armActivityAttemptForcedTermination(state, id, attempt, message) {
+  if (attempt.terminal || attempt.cancellationTimer) return;
+  attempt.cancellationTimer = setTimeout(() => {
+    attempt.cancellationTimer = null;
+    if (state.activityAttempts.get(id) !== attempt || attempt.terminal) return;
+    failActivityAttempt(state, id, new Error(message));
+  }, attempt.cancellationGraceMs);
+}
+
+/**
+ * A terminal component frame is evidence, but the runner must also close the
+ * wrapper before the host releases the one-shot worker. This catches a bundle
+ * that sends a terminal and then emits a late frame or hangs forever.
+ * @param {WorkerState} state - Worker state.
+ * @param {number} id - Transport session ID.
+ * @param {PendingActivityAttempt} attempt - Pending attempt.
+ * @returns {void}
+ */
+function armActivityAttemptTerminalWatchdog(state, id, attempt) {
+  if (attempt.terminalTimer || !attempt.terminal) return;
+  attempt.terminalTimer = setTimeout(() => {
+    attempt.terminalTimer = null;
+    if (
+      state.activityAttempts.get(id) !== attempt ||
+      !attempt.terminal ||
+      attempt.finished
+    ) {
+      return;
+    }
+    failActivityAttempt(
+      state,
+      id,
+      new Error(
+        'The activity worker delivered a terminal frame but did not close its framed attempt.',
+      ),
+    );
+  }, DEFAULT_ACTIVITY_HOST_OPERATION_TIMEOUT_MS);
+}
+
+/**
+ * @param {WorkerState} state - Worker state.
+ * @param {number} id - Transport session ID.
+ * @param {Record<string, any>} reason - Strict structured cancellation reason.
+ * @returns {void}
+ */
+function requestActivityAttemptCancellation(state, id, reason) {
+  const attempt = state.activityAttempts.get(id);
+  if (!attempt || attempt.terminal || attempt.cancelRequested) return;
+  if (
+    Object.prototype.hasOwnProperty.call(attempt.start, 'deadlineUnixMs') &&
+    Date.now() >= attempt.start.deadlineUnixMs
+  ) {
+    // The deadline is an absolute admission fence. A cancellation accepted
+    // before it owns its grace; a new cancellation at/after it does not alter
+    // the deadline-owned outcome.
+    return;
+  }
+
+  try {
+    const cancel = attempt.transcript.acceptHostFrame({
+      protocol: ACTIVITY_PROTOCOL_NAME,
+      protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+      type: 'cancel',
+      attemptId: attempt.start.attemptId,
+      reason,
+    });
+    attempt.frames.push(cancel);
+    attempt.cancelRequested = true;
+    if (!attempt.startSent) {
+      attempt.pendingCancel = cancel;
+      armActivityAttemptForcedTermination(
+        state,
+        id,
+        attempt,
+        'The activity attempt did not become ready before bounded cancellation grace elapsed.',
+      );
+      return;
+    }
+    attempt.port.postMessage({
+      kind: 'activity-attempt-host-frame',
+      id,
+      frame: cancel,
+    });
+    armActivityAttemptForcedTermination(
+      state,
+      id,
+      attempt,
+      'The activity attempt did not produce a verified terminal frame after cancellation.',
+    );
+  } catch (cause) {
+    failActivityAttempt(
+      state,
+      id,
+      createActivityAttemptEvidenceError(
+        'The activity host could not deliver its cancellation frame.',
+        cause,
+      ),
+    );
+  }
+}
+
+/**
+ * Send the already validated start frame once the runner reports that its
+ * fixed private wrapper is loaded.
+ * @param {WorkerState} state - Worker state.
+ * @param {number} id - Transport session ID.
+ * @param {PendingActivityAttempt} attempt - Pending attempt.
+ * @returns {void}
+ */
+function sendActivityAttemptStart(state, id, attempt) {
+  if (attempt.startSent) {
+    failActivityAttempt(
+      state,
+      id,
+      createActivityAttemptEvidenceError(
+        'The activity runner reported readiness more than once.',
+      ),
+    );
+    return;
+  }
+  try {
+    if (attempt.pendingCancel) {
+      attempt.port.postMessage({
+        kind: 'activity-attempt-pre-cancel',
+        id,
+        reason: attempt.pendingCancel.reason,
+      });
+    }
+    attempt.startSent = true;
+    attempt.port.postMessage({
+      kind: 'activity-attempt-host-frame',
+      id,
+      frame: attempt.start,
+    });
+    if (attempt.pendingCancel) {
+      const cancel = attempt.pendingCancel;
+      attempt.pendingCancel = null;
+      attempt.port.postMessage({
+        kind: 'activity-attempt-host-frame',
+        id,
+        frame: cancel,
+      });
+    }
+  } catch (cause) {
+    const error = new Error('Could not start activity attempt.');
+    /** @type {Error & {cause?: unknown}} */ (error).cause = cause;
+    failActivityAttempt(state, id, error);
+  }
+}
+
+/**
+ * Authenticate a message arriving on one attempt's private MessagePort before
+ * it can affect any host state. The bundled code shares a Node isolate with
+ * the runner and may discover the port, but it never receives this opaque
+ * capability: the runner captures it before evaluating the bundle and adds it
+ * only to its own lifecycle messages.
+ * @param {WorkerState} state - Worker state.
+ * @param {number} id - Expected transport session ID.
+ * @param {PendingActivityAttempt} attempt - Exact attempt that owns the port.
+ * @param {unknown} value - Candidate runner message.
+ * @returns {void}
+ */
+function handleAuthenticatedActivityAttemptPortMessage(
+  state,
+  id,
+  attempt,
+  value,
+) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+  const msg = /** @type {Record<string, any>} */ (value);
+  if (msg.transportAuth !== attempt.transportAuth) return;
+  if (msg.id !== id) {
+    const error = createActivityAttemptEvidenceError(
+      'The authenticated activity runner sent a message for the wrong attempt.',
+    );
+    if (state.activityAttempts.get(id) === attempt) {
+      failActivityAttempt(state, id, error);
+    } else if (state.closingActivityAttempts.get(id) === attempt) {
+      state.closingActivityAttempts.delete(id);
+      cleanupPendingActivityAttempt(attempt);
+      closeActivityAttemptPort(attempt);
+      attempt.reject(error);
+    }
+    return;
+  }
+  handleActivityAttemptMessage(state, msg);
+}
+
+/**
+ * @param {WorkerState} state - Worker state.
+ * @param {Record<string, any>} msg - Candidate worker message.
+ * @returns {boolean} - Whether this was an Activity Protocol transport message.
+ */
+function handleActivityAttemptMessage(state, msg) {
+  const recognizedKinds = new Set([
+    'activity-attempt-ready',
+    'activity-attempt-component-frame',
+    'activity-attempt-finished',
+    'activity-attempt-failed',
+    'activity-attempt-force-terminate',
+  ]);
+  if (!recognizedKinds.has(msg.kind)) return false;
+
+  const id = msg.id;
+  if (!Number.isSafeInteger(id) || id < 1) return true;
+  const closingAttempt = state.closingActivityAttempts.get(id);
+  if (closingAttempt) {
+    state.closingActivityAttempts.delete(id);
+    cleanupPendingActivityAttempt(closingAttempt);
+    closeActivityAttemptPort(closingAttempt);
+    closingAttempt.reject(
+      createActivityAttemptEvidenceError(
+        'The activity runner emitted a late framed message after its terminal frame.',
+      ),
+    );
+    return true;
+  }
+  const attempt = state.activityAttempts.get(id);
+  if (!attempt) return true;
+
+  if (msg.kind === 'activity-attempt-ready') {
+    if (attempt.ready || attempt.finished) {
+      failActivityAttempt(
+        state,
+        id,
+        createActivityAttemptEvidenceError(
+          'The activity runner sent an invalid readiness transition.',
+        ),
+      );
+      return true;
+    }
+    attempt.ready = true;
+    if (attempt.readyTimer) {
+      clearTimeout(attempt.readyTimer);
+      attempt.readyTimer = null;
+    }
+    sendActivityAttemptStart(state, id, attempt);
+    return true;
+  }
+
+  if (msg.kind === 'activity-attempt-component-frame') {
+    if (!attempt.ready || !attempt.startSent || attempt.finished) {
+      failActivityAttempt(
+        state,
+        id,
+        createActivityAttemptEvidenceError(
+          'The activity runner emitted a component frame outside an active attempt.',
+        ),
+      );
+      return true;
+    }
+    if (attempt.terminal) {
+      failActivityAttempt(
+        state,
+        id,
+        createActivityAttemptEvidenceError(
+          'The activity runner emitted a component frame after its terminal frame.',
+        ),
+      );
+      return true;
+    }
+    try {
+      const hasDeadline = Object.prototype.hasOwnProperty.call(
+        attempt.start,
+        'deadlineUnixMs',
+      );
+      const deadlinePassed =
+        hasDeadline && Date.now() >= attempt.start.deadlineUnixMs;
+      const componentType = msg.frame?.type;
+      if (componentType === 'deadline-exceeded' && !deadlinePassed) {
+        throw new Error(
+          'The activity runner emitted deadline-exceeded before the host deadline.',
+        );
+      }
+      if (attempt.cancelRequested) {
+        // A cancellation accepted before the deadline owns its bounded grace.
+        // The adapter may log cleanup, then only cancel or report a local
+        // protocol failure; it cannot replace the host interruption with a
+        // successful, failed, or deadline terminal.
+        if (
+          componentType === 'completed' ||
+          componentType === 'failed' ||
+          componentType === 'deadline-exceeded'
+        ) {
+          throw new Error(
+            'The activity runner emitted an incompatible terminal after host cancellation.',
+          );
+        }
+      } else if (deadlinePassed && componentType !== 'deadline-exceeded') {
+        throw new Error(
+          'The activity runner emitted a component frame after the host deadline.',
+        );
+      }
+      if (msg.frame?.type === 'effect-request') {
+        throw new TypeError(
+          'Activity Protocol effects are unavailable on this worker transport.',
+        );
+      }
+      const frame = attempt.transcript.acceptComponentFrame(msg.frame);
+      attempt.frames.push(frame);
+      if (
+        frame.type === 'completed' ||
+        frame.type === 'failed' ||
+        frame.type === 'cancelled' ||
+        frame.type === 'deadline-exceeded' ||
+        frame.type === 'protocol-failed'
+      ) {
+        attempt.terminal = frame;
+        stopActivityAttemptInterruptionWatchdogs(attempt);
+        armActivityAttemptTerminalWatchdog(state, id, attempt);
+      }
+      attempt.port.postMessage({
+        kind: 'activity-attempt-component-ack',
+        id,
+        sequence: frame.sequence,
+        ok: true,
+      });
+    } catch (cause) {
+      failActivityAttempt(
+        state,
+        id,
+        createActivityAttemptEvidenceError(
+          'The activity runner emitted an invalid component frame.',
+          cause,
+        ),
+      );
+    }
+    return true;
+  }
+
+  if (msg.kind === 'activity-attempt-finished') {
+    if (
+      !attempt.ready ||
+      !attempt.startSent ||
+      attempt.finished ||
+      !attempt.terminal
+    ) {
+      failActivityAttempt(
+        state,
+        id,
+        createActivityAttemptEvidenceError(
+          'The activity runner finished without one verified terminal frame.',
+        ),
+      );
+      return true;
+    }
+    attempt.finished = true;
+    closeVerifiedActivityAttempt(state, id, attempt);
+    return true;
+  }
+
+  if (msg.kind === 'activity-attempt-force-terminate') {
+    failActivityAttempt(
+      state,
+      id,
+      new Error(
+        'The activity worker requested forced termination after bounded cancellation grace.',
+      ),
+    );
+    return true;
+  }
+
+  failActivityAttempt(
+    state,
+    id,
+    new Error(
+      typeof msg.error === 'string'
+        ? `The activity runner failed: ${msg.error}`
+        : 'The activity runner failed before producing verifiable evidence.',
+    ),
+  );
+  return true;
+}
+
+/**
  * @param {string} name - name.
  * @param {string} codeString - Bundled activity source.
- * @param {string} externalBundleDigest - External bundle content digest.
  * @param {Sandbox} sandbox - Prepared private sandbox.
  * @returns {WorkerState | null} - Worker state, or null when the sandbox was invalidated.
  */
-function ensureWorker(name, codeString, externalBundleDigest, sandbox) {
+function ensureWorker(name, codeString, sandbox) {
   const activityKey = getActivityKey(name, codeString);
-  const key = getBundleKey(activityKey, externalBundleDigest);
+  const key = sandbox.key;
   if (sandboxes.get(key) !== sandbox) return null;
 
   const existing = workers.get(key);
@@ -456,11 +1131,12 @@ function ensureWorker(name, codeString, externalBundleDigest, sandbox) {
   const state = {
     key,
     activityKey,
-    externalBundleDigest,
     name,
     sandbox,
     worker: w,
     pending: new Map(),
+    activityAttempts: new Map(),
+    closingActivityAttempts: new Map(),
     rpcSessionIds: new Set(),
     activeExecutions: 0,
     destroyRequested: false,
@@ -503,6 +1179,8 @@ function ensureWorker(name, codeString, externalBundleDigest, sandbox) {
 
   w.on('error', (err) => {
     rejectPendingExecutions(state, err);
+    rejectPendingActivityAttempts(state, err);
+    rejectClosingActivityAttempts(state, err);
     clearWorkerRpcSessions(state);
     removeWorkerState(state);
     detachSandbox(state.sandbox);
@@ -515,6 +1193,22 @@ function ensureWorker(name, codeString, externalBundleDigest, sandbox) {
       rejectPendingExecutions(
         state,
         new Error(`Worker exited with code ${code} before responding.`),
+      );
+    }
+    if (state.activityAttempts.size > 0) {
+      rejectPendingActivityAttempts(
+        state,
+        new Error(
+          `Activity attempt worker exited with code ${code} before completing its framed transcript.`,
+        ),
+      );
+    }
+    if (!state.terminating && state.closingActivityAttempts.size > 0) {
+      rejectClosingActivityAttempts(
+        state,
+        new Error(
+          `Activity attempt worker exited with code ${code} while closing its framed transcript.`,
+        ),
       );
     }
     clearWorkerRpcSessions(state);
@@ -656,6 +1350,7 @@ async function assertRegularSandboxTree(root) {
  * @param {string} codeString - codeString.
  * @param {Buffer | null} externalsTar - Materialized external bundle bytes.
  * @param {string} externalBundleDigest - External bundle content digest.
+ * @param {{ isolationId?: string }} [options] - Optional one-shot physical-attempt isolation.
  * @returns {Promise<Sandbox>} - Result.
  */
 async function ensureSandboxForName(
@@ -663,13 +1358,17 @@ async function ensureSandboxForName(
   codeString,
   externalsTar,
   externalBundleDigest,
+  options = {},
 ) {
   if (sandboxClearPromise) {
     await sandboxClearPromise;
   }
 
   const activityKey = getActivityKey(name, codeString);
-  const key = getBundleKey(activityKey, externalBundleDigest);
+  const bundleKey = getBundleKey(activityKey, externalBundleDigest);
+  const key = options.isolationId
+    ? getActivityAttemptSandboxKey(bundleKey, options.isolationId)
+    : bundleKey;
   const cached = sandboxes.get(key);
   if (cached) return cached;
 
@@ -861,12 +1560,7 @@ async function runInSandbox(
     }
 
     try {
-      const candidate = ensureWorker(
-        name,
-        codeString,
-        externalBundleDigest,
-        sb,
-      );
+      const candidate = ensureWorker(name, codeString, sb);
       if (!candidate) continue;
       state = candidate;
       state.activeExecutions += 1;
@@ -956,6 +1650,259 @@ async function runInSandbox(
 }
 
 /**
+ * @typedef ActivityAttemptSandboxOptions
+ * @property {Buffer | Uint8Array | Iterable<any> | AsyncIterable<any>} [externalsTar] - Frozen external bundle bytes.
+ * @property {string} [externalBundleDigest] - Expected external-bundle content digest.
+ * @property {Object<string,string>} [env] - Fixed sandbox environment additions.
+ * @property {string} entrypointSymbol - Fixed private protocol wrapper symbol.
+ * @property {AbortSignal} [signal] - Optional host cancellation signal.
+ * @property {number} [readyTimeoutMs] - Maximum private-wrapper startup time.
+ * @property {number} [cancellationGraceMs] - Cooperative cancellation grace before worker termination.
+ */
+
+/**
+ * @param {unknown} value - Candidate cancellation grace duration.
+ * @returns {number} - Valid nonnegative finite grace duration.
+ */
+function validateActivityAttemptCancellationGrace(value) {
+  const grace =
+    value === undefined ? DEFAULT_ACTIVITY_CANCELLATION_GRACE_MS : value;
+  if (
+    typeof grace !== 'number' ||
+    !Number.isSafeInteger(grace) ||
+    grace < 0 ||
+    grace > MAX_TIMER_DELAY_MS
+  ) {
+    throw new TypeError(
+      `cancellationGraceMs must be a nonnegative safe integer no greater than ${MAX_TIMER_DELAY_MS}.`,
+    );
+  }
+  return grace;
+}
+
+/**
+ * @param {unknown} value - Candidate wrapper-ready timeout duration.
+ * @returns {number} - Valid positive finite ready timeout.
+ */
+function validateActivityAttemptReadyTimeout(value) {
+  const timeout =
+    value === undefined ? DEFAULT_ACTIVITY_WORKER_READY_TIMEOUT_MS : value;
+  if (
+    typeof timeout !== 'number' ||
+    !Number.isSafeInteger(timeout) ||
+    timeout < 1 ||
+    timeout > MAX_TIMER_DELAY_MS
+  ) {
+    throw new TypeError(
+      `readyTimeoutMs must be a positive safe integer no greater than ${MAX_TIMER_DELAY_MS}.`,
+    );
+  }
+  return timeout;
+}
+
+/**
+ * Run exactly one private activity wrapper on a one-shot worker using framed
+ * Activity Protocol messages. The host, not the bundle, owns the start frame,
+ * transcript validator, cancellation watchdog, and returned evidence.
+ * @param {string} name - Declared activity logical ID.
+ * @param {string} codeString - Exact bundled activity source.
+ * @param {unknown} startFrame - Candidate host-owned Activity Protocol start frame.
+ * @param {ActivityAttemptSandboxOptions} options - Framed attempt options.
+ * @returns {Promise<Record<string, any>>} - Host-collected raw evidence for final revalidation.
+ */
+async function runActivityAttemptInSandbox(
+  name,
+  codeString,
+  startFrame,
+  {
+    externalsTar,
+    externalBundleDigest: expectedDigest,
+    env = {},
+    entrypointSymbol,
+    signal,
+    readyTimeoutMs,
+    cancellationGraceMs,
+  } = /** @type {ActivityAttemptSandboxOptions} */ ({}),
+) {
+  if (typeof entrypointSymbol !== 'string' || entrypointSymbol.length === 0) {
+    throw new TypeError(
+      'Activity Protocol worker transport requires a nonempty entrypointSymbol.',
+    );
+  }
+  if (
+    signal !== undefined &&
+    (!signal ||
+      typeof signal !== 'object' ||
+      typeof signal.addEventListener !== 'function' ||
+      typeof signal.removeEventListener !== 'function')
+  ) {
+    throw new TypeError(
+      'signal must be an AbortSignal with addEventListener and removeEventListener when provided.',
+    );
+  }
+
+  const grace = validateActivityAttemptCancellationGrace(cancellationGraceMs);
+  const readyTimeout = validateActivityAttemptReadyTimeout(readyTimeoutMs);
+  const transcript = new ActivityProtocolTranscriptValidator();
+  const start = transcript.acceptHostFrame(startFrame);
+  if (start.type !== 'start') {
+    throw new TypeError(
+      'Activity Protocol worker transport requires a start frame.',
+    );
+  }
+  if (start.activityId !== name) {
+    throw new TypeError(
+      `Activity Protocol start selects '${start.activityId}', not '${name}'.`,
+    );
+  }
+
+  const materializedExternals = await materializeExternalBundle(externalsTar);
+  const externalBundleDigest = getExternalBundleDigest(materializedExternals);
+  if (expectedDigest !== undefined && expectedDigest !== externalBundleDigest) {
+    throw new Error(
+      'External bundle digest does not match externalsTar bytes.',
+    );
+  }
+
+  // A physical attempt gets an isolated sandbox/worker even for identical
+  // bundle bytes. This makes host-enforced Worker.terminate() precisely scoped.
+  const isolationId = randomUUID();
+  /** @type {Sandbox} */
+  let sb;
+  /** @type {WorkerState} */
+  let state;
+  for (;;) {
+    try {
+      sb = await ensureSandboxForName(
+        name,
+        codeString,
+        materializedExternals,
+        externalBundleDigest,
+        { isolationId },
+      );
+    } catch (error) {
+      if (error instanceof SandboxPreparationInvalidatedError) continue;
+      throw error;
+    }
+
+    try {
+      const candidate = ensureWorker(name, codeString, sb);
+      if (!candidate) continue;
+      state = candidate;
+      state.activeExecutions += 1;
+      break;
+    } catch (error) {
+      detachSandbox(sb);
+      await cleanupSandbox(sb);
+      throw error;
+    }
+  }
+
+  const id = nextId++;
+  const { port1, port2 } = new MessageChannel();
+  const transportAuth = randomUUID();
+  /** @type {PendingActivityAttempt | null} */
+  let attempt = null;
+  try {
+    return await new Promise((resolve, reject) => {
+      attempt = {
+        resolve,
+        reject,
+        start,
+        transcript,
+        frames: [start],
+        terminal: null,
+        ready: false,
+        startSent: false,
+        finished: false,
+        cancelRequested: false,
+        pendingCancel: null,
+        port: port1,
+        transportAuth,
+        readyTimeoutMs: readyTimeout,
+        readyTimer: null,
+        cancellationGraceMs: grace,
+        cancellationTimer: null,
+        deadlineTimer: null,
+        terminalTimer: null,
+        removeAbortListener: null,
+      };
+      const pendingAttempt = attempt;
+      state.activityAttempts.set(id, pendingAttempt);
+      port1.on('message', (/** @type {unknown} */ msg) => {
+        handleAuthenticatedActivityAttemptPortMessage(
+          state,
+          id,
+          pendingAttempt,
+          msg,
+        );
+      });
+      port1.on('messageerror', () => {
+        failActivityAttempt(
+          state,
+          id,
+          new Error(
+            'The private Activity Protocol port could not decode a message.',
+          ),
+        );
+      });
+      armActivityAttemptReadyWatchdog(state, id, pendingAttempt);
+      armActivityAttemptDeadlineWatchdog(state, id, attempt);
+
+      if (signal) {
+        const onAbort = () => {
+          requestActivityAttemptCancellation(
+            state,
+            id,
+            serializeActivityAttemptError(signal.reason, 'cancel-requested'),
+          );
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        attempt.removeAbortListener = () =>
+          signal.removeEventListener('abort', onAbort);
+        if (signal.aborted) onAbort();
+      }
+
+      try {
+        state.worker.postMessage(
+          {
+            kind: 'activity-attempt-open',
+            id,
+            codeString: sb.codeString,
+            entryFile: sb.entryFile,
+            tmpRoot: sb.root,
+            pkgFile: sb.pkgFile,
+            env,
+            entrypointSymbol,
+            transportPort: port2,
+            transportAuth,
+          },
+          [port2],
+        );
+      } catch (cause) {
+        try {
+          port2.close();
+        } catch {}
+        const error = new Error(
+          'Could not open framed activity attempt worker transport.',
+        );
+        /** @type {Error & {cause?: unknown}} */ (error).cause = cause;
+        failActivityAttempt(state, id, error);
+      }
+    });
+  } finally {
+    const pending = state.activityAttempts.get(id);
+    if (pending) {
+      state.activityAttempts.delete(id);
+      cleanupPendingActivityAttempt(pending);
+      closeActivityAttemptPort(pending);
+    }
+    state.activeExecutions -= 1;
+    await terminateWorkerState(state, { force: true });
+  }
+}
+
+/**
  * Terminate all workers, or only workers for one activity/bundle.
  * @param {string} [name] - Optional activity name.
  * @param {string} [codeString] - Optional exact bundle source.
@@ -1033,6 +1980,7 @@ async function clearSandboxCache() {
 
 export default {
   runInSandbox,
+  runActivityAttemptInSandbox,
   getExternalBundleDigest,
   _destroyWorker: destroyWorker,
   _clearSandboxCache: clearSandboxCache,

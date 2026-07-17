@@ -103,6 +103,7 @@ describe('FunctionResource Activity Protocol v1 bundle wrapper', () => {
       entryPath,
       [
         'export async function selected(input, runtime) {',
+        "  runtime?.logger?.info('selected', { value: input.value });",
         '  return {',
         '    value: input.value,',
         "    attemptId: runtime?.invocation?.attemptId ?? 'legacy-raw',",
@@ -144,23 +145,94 @@ describe('FunctionResource Activity Protocol v1 bundle wrapper', () => {
       caller: null,
     });
 
+    const newTransport = () => ({
+      onComponentFrame: () => {},
+      signal: new AbortController().signal,
+      forceTerminate: () => {},
+    });
+
     expect(() => attemptEntrypoint(startFrame(activityId))).toThrow(
-      /expects exactly \{ startFrame \}/i,
+      /expects exactly \{ startFrame, transport \}/i,
     );
-    expect(() =>
-      attemptEntrypoint({
-        startFrame: startFrame(activityId),
-        handler: () => 'caller-controlled-handler',
-      }),
-    ).toThrow(/expects exactly \{ startFrame \}/i);
+    for (const forbiddenField of ['handler', 'export', 'resources']) {
+      expect(() =>
+        attemptEntrypoint({
+          startFrame: startFrame(activityId),
+          transport: newTransport(),
+          [forbiddenField]: 'caller-controlled',
+        }),
+      ).toThrow(/expects exactly \{ startFrame, transport \}/i);
+    }
     expect(() =>
       attemptEntrypoint({
         startFrame: startFrame('different-activity'),
+        transport: newTransport(),
       }),
     ).toThrow(/activityId to match its selected entrypoint/i);
 
+    for (const transport of [
+      {},
+      {
+        signal: new AbortController().signal,
+        forceTerminate: () => {},
+      },
+      {
+        onComponentFrame: () => {},
+        forceTerminate: () => {},
+      },
+      {
+        onComponentFrame: () => {},
+        signal: new AbortController().signal,
+      },
+      {
+        ...newTransport(),
+        handler: () => 'caller-controlled-handler',
+      },
+      new Date(0),
+    ]) {
+      expect(() =>
+        attemptEntrypoint({
+          startFrame: startFrame(activityId),
+          transport,
+        }),
+      ).toThrow(/runner-owned transport with exactly/i);
+    }
+    for (const transport of [
+      {
+        ...newTransport(),
+        onComponentFrame: 'not-a-function',
+      },
+      {
+        ...newTransport(),
+        signal: {},
+      },
+      {
+        ...newTransport(),
+        forceTerminate: false,
+      },
+    ]) {
+      expect(() =>
+        attemptEntrypoint({
+          startFrame: startFrame(activityId),
+          transport,
+        }),
+      ).toThrow(/AbortSignal-like transport.signal/i);
+    }
+
+    /** @type {Record<string, any>[]} */
+    const componentFrames = [];
+    let forceTerminateCalls = 0;
+
     const evidence = await attemptEntrypoint({
       startFrame: startFrame(activityId),
+      transport: {
+        onComponentFrame: (/** @type {Record<string, any>} */ frame) =>
+          componentFrames.push(frame),
+        signal: new AbortController().signal,
+        forceTerminate: () => {
+          forceTerminateCalls += 1;
+        },
+      },
     });
 
     expect(evidence.status).toBe('completed');
@@ -169,12 +241,24 @@ describe('FunctionResource Activity Protocol v1 bundle wrapper', () => {
       protocolVersion: ACTIVITY_PROTOCOL_VERSION,
       type: 'completed',
       attemptId: 'attempt-1',
-      sequence: 1,
+      sequence: 2,
       result: {
         value: 'protocol',
         attemptId: 'attempt-1',
         caller: 'trace-1',
       },
     });
+    expect(componentFrames.map((frame) => frame.type)).toEqual([
+      'log',
+      'completed',
+    ]);
+    expect(componentFrames[0]).toMatchObject({
+      sequence: 1,
+      level: 'info',
+      message: 'selected',
+      fields: { value: 'protocol' },
+    });
+    expect(componentFrames[1]).toMatchObject({ sequence: 2 });
+    expect(forceTerminateCalls).toBe(0);
   });
 });

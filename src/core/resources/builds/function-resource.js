@@ -222,10 +222,11 @@ class FunctionResource extends BuildResource {
           typeof request !== 'object' ||
           Array.isArray(request) ||
           !Object.prototype.hasOwnProperty.call(request, 'startFrame') ||
-          Object.keys(request).length !== 1
+          !Object.prototype.hasOwnProperty.call(request, 'transport') ||
+          Object.keys(request).length !== 2
         ) {
           throw new TypeError(${JSON.stringify(
-            `Activity '${functionName}' protocol wrapper expects exactly { startFrame }.`,
+            `Activity '${functionName}' protocol wrapper expects exactly { startFrame, transport }.`,
           )});
         }
         if (
@@ -238,9 +239,39 @@ class FunctionResource extends BuildResource {
             `Activity '${functionName}' protocol wrapper requires startFrame.activityId to match its selected entrypoint.`,
           )});
         }
+        const transport = request.transport;
+        if (
+          transport === null ||
+          typeof transport !== 'object' ||
+          Array.isArray(transport) ||
+          Object.getPrototypeOf(transport) !== Object.prototype ||
+          !Object.prototype.hasOwnProperty.call(transport, 'onComponentFrame') ||
+          !Object.prototype.hasOwnProperty.call(transport, 'signal') ||
+          !Object.prototype.hasOwnProperty.call(transport, 'forceTerminate') ||
+          Object.keys(transport).length !== 3
+        ) {
+          throw new TypeError(${JSON.stringify(
+            `Activity '${functionName}' protocol wrapper requires a runner-owned transport with exactly { onComponentFrame, signal, forceTerminate }.`,
+          )});
+        }
+        if (
+          typeof transport.onComponentFrame !== 'function' ||
+          typeof transport.forceTerminate !== 'function' ||
+          transport.signal === null ||
+          typeof transport.signal !== 'object' ||
+          typeof transport.signal.addEventListener !== 'function' ||
+          typeof transport.signal.removeEventListener !== 'function'
+        ) {
+          throw new TypeError(${JSON.stringify(
+            `Activity '${functionName}' protocol wrapper requires transport.onComponentFrame and transport.forceTerminate functions plus an AbortSignal-like transport.signal.`,
+          )});
+        }
         return runNodeActivityAttempt({
           startFrame: request.startFrame,
           handler: entrypoint,
+          onComponentFrame: transport.onComponentFrame,
+          signal: transport.signal,
+          forceTerminate: transport.forceTerminate,
         });
       };
       globalThis[Symbol.for(${JSON.stringify(functionName)})] = entrypoint;

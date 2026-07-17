@@ -55,20 +55,27 @@ frames, followed by exactly one terminal frame. The terminal outcome is one of:
 - `deadline-exceeded`; or
 - `protocol-failed`.
 
-Only the first valid terminal frame can resolve the attempt. Duplicate or late
-terminal, log, effect, or result frames are rejected. This protocol outcome is
-evidence about one physical attempt; the durable ledger separately decides
-whether it can become the invocation's one authoritative outcome.
+Only the first valid terminal frame can resolve the attempt. Duplicate frames
+and frames after a terminal are rejected. A cancellation accepted before the
+deadline owns its bounded grace: cleanup logs and a `cancelled` or
+`protocol-failed` terminal may arrive after the clock crosses that deadline.
+It cannot be replaced by `completed`, `failed`, or `deadline-exceeded`. Without
+such a prior cancellation, a post-deadline component frame must be
+`deadline-exceeded`; a deadline terminal before its absolute deadline is
+invalid. This protocol outcome is evidence about one physical attempt; the
+durable ledger separately decides whether it can become the invocation's one
+authoritative outcome.
 
 ### Cancellation and deadlines
 
 Cancellation is explicit protocol input, not an inference from a closed
 transport. A deadline is an absolute instant in the start frame, not merely a
-client RPC timeout. The host exposes both through a Wharfie-owned runtime
-context and an `AbortSignal`, rejects new managed effects after cancellation or
-deadline, permits a bounded cooperative shutdown interval, and then terminates
-the adapter's attempt boundary when possible. Any late component frame is
-ignored for execution and rejected by transcript validation.
+client RPC timeout. The first host interruption wins: a cancellation accepted
+before the deadline owns its bounded cooperative shutdown interval; at or after
+the deadline a new cancellation does not displace the deadline-owned outcome.
+The host exposes interruption through a Wharfie-owned runtime context and an
+`AbortSignal`, rejects new managed effects after interruption, and terminates
+the adapter's attempt boundary when the relevant grace interval expires.
 
 Every host-owned operation that can stall an attempt—component-frame delivery,
 managed-effect handling, and forced termination—has a finite adapter timeout.
@@ -123,10 +130,22 @@ capabilities. An activity cannot use process exit status as its outcome;
 `process.exit`, abort, or process termination inside an adapter is protocol
 failure.
 
-Source and packaged activities will use the same adapter and transcript rules.
-The current worker-thread implementation is suitable as the initial terminable
-attempt boundary, but its private message shapes are not the public protocol
-and must be replaced or wrapped by the strict frame codec.
+Source and packaged activities use the same adapter and transcript rules. The
+packaged/external path uses a one-shot worker and a framed private MessagePort:
+the host owns `start`, `cancel`, transcript validation, acknowledgements,
+deadlines, a finite readiness watchdog, and returned evidence. Runner lifecycle messages require a
+per-attempt opaque authenticator captured before bundle evaluation, so ordinary
+in-isolate code cannot forge direct port traffic. Legacy `exec`/RPC messages
+remain confined to legacy execution paths and are not Activity Protocol
+effects. This is an integrity boundary for Wharfie's trusted application code,
+not a hostile-code sandbox; adversarial bundles require a separate
+process/OS-level boundary.
+
+A cancellation that predates runner readiness prevents the activity handler
+from being entered, but cannot prevent module/bundle top-level initialization:
+the runner must evaluate the bundle to install and report that boundary. The
+ready watchdog bounds that initialization; suppressing all bundle side effects
+would require a different loading architecture.
 
 The selected protocol version is part of Wharfie's target-independent runtime
 lock and therefore the immutable application revision. Function assets and

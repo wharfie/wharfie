@@ -73,6 +73,13 @@ import { normalizeExternalDependencies } from './lib/resolve-externals.js';
  */
 
 /**
+ * @typedef ActivityAttemptRunOptions
+ * @property {AbortSignal} [signal] - Optional host cancellation signal.
+ * @property {number} [readyTimeoutMs] - Maximum time for the one-shot worker to load its private wrapper.
+ * @property {number} [cancellationGraceMs] - Cooperative cancellation grace before the one-shot worker is terminated.
+ */
+
+/**
  * @param {any} v - v.
  * @returns {boolean} - Result.
  */
@@ -268,10 +275,11 @@ function validateActivityAttemptStart(name, value) {
 }
 
 /**
- * Revalidate the only transcript shape the initial private worker wrapper can
- * honestly produce. There is no worker frame transport, cancellation channel,
- * or managed-effect host yet, so accepting fabricated effects/cancel frames
- * would incorrectly claim capabilities that do not exist.
+ * Revalidate host-collected evidence from the framed private worker transport.
+ * The worker never returns an aggregate transcript: every retained frame was
+ * accepted by the host before its acknowledgement. This final clone still
+ * protects callers from mutable references and keeps the public evidence ABI
+ * strict. Cancellation is supported; generic effects remain unavailable.
  * @param {unknown} value - Candidate worker result.
  * @param {Readonly<Record<string, any>>} expectedStart - Host-accepted start.
  * @returns {Readonly<import('../../runtime/activity-attempt.js').ActivityAttemptEvidence>} - Fresh frozen evidence.
@@ -321,6 +329,16 @@ function revalidateWorkerActivityAttemptEvidence(value, expectedStart) {
         continue;
       }
 
+      if (frame?.type === 'cancel') {
+        const accepted = transcript.acceptHostFrame(frame);
+        frames.push(accepted);
+        continue;
+      }
+      if (frame?.type === 'effect-result') {
+        throw new TypeError(
+          'The framed activity transport does not expose managed effects yet.',
+        );
+      }
       const accepted = validateActivityProtocolComponentFrame(
         frame,
         `worker activity attempt evidence.frames[${index}]`,
@@ -328,12 +346,13 @@ function revalidateWorkerActivityAttemptEvidence(value, expectedStart) {
       const isTerminal = [
         'completed',
         'failed',
+        'cancelled',
         'deadline-exceeded',
         'protocol-failed',
       ].includes(accepted.type);
       if (accepted.type !== 'log' && !isTerminal) {
         throw new TypeError(
-          'The private activity wrapper cannot return cancellation or managed-effect frames.',
+          'The framed activity transport cannot return managed-effect frames.',
         );
       }
       if (isTerminal && index !== evidence.frames.length - 1) {
@@ -632,50 +651,61 @@ class Function {
    * Run the private Activity Protocol v1 bundle entrypoint. This is separate
    * from runPreparedBundle on purpose: it never instantiates resource specs,
    * merges caller resources, or creates the legacy arbitrary resource RPC.
-   * The worker's old exec message is only a temporary byte transport for an
-   * otherwise self-contained protocol attempt wrapper.
+   * The worker transport is framed: the host emits start/cancel, validates and
+   * acknowledges component frames in order, and builds evidence locally.
    * @param {string} name - Declared activity ID.
    * @param {PreparedFunctionBundle} bundle - Exact in-memory runtime bundle.
    * @param {unknown} startFrame - Host-owned Activity Protocol start frame.
+   * @param {ActivityAttemptRunOptions} [options] - Optional host cancellation controls.
    * @returns {Promise<Readonly<import('../../runtime/activity-attempt.js').ActivityAttemptEvidence>>} - Revalidated attempt evidence.
    */
-  static async runPreparedActivityAttempt(name, bundle, startFrame) {
+  static async runPreparedActivityAttempt(
+    name,
+    bundle,
+    startFrame,
+    options = {},
+  ) {
+    if (!options || typeof options !== 'object' || Array.isArray(options)) {
+      throw new TypeError(
+        'Activity attempt options must be an object when provided.',
+      );
+    }
     const start = validateActivityAttemptStart(name, startFrame);
     const { functionCodeString, externalsTar, externalBundleDigest } =
       validatePreparedBundle(bundle);
     let rawEvidence;
-    /** @type {unknown} */
-    let transportFailure;
     try {
-      rawEvidence = await worker.runInSandbox(
+      rawEvidence = await worker.runActivityAttemptInSandbox(
         name,
         functionCodeString,
-        [{ startFrame: start }],
+        start,
         {
           ...(externalsTar && externalsTar.length > 0 ? { externalsTar } : {}),
           externalBundleDigest,
           entrypointSymbol: getActivityAttemptProtocolSymbol(name),
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(options.readyTimeoutMs !== undefined
+            ? { readyTimeoutMs: options.readyTimeoutMs }
+            : {}),
+          ...(options.cancellationGraceMs !== undefined
+            ? { cancellationGraceMs: options.cancellationGraceMs }
+            : {}),
         },
       );
     } catch (cause) {
-      transportFailure = cause;
-    }
-    try {
-      await worker._destroyWorker(
-        name,
-        functionCodeString,
-        externalBundleDigest,
-      );
-    } catch (cleanupFailure) {
-      transportFailure = transportFailure
-        ? new AggregateError(
-            [transportFailure, cleanupFailure],
-            'The activity worker failed and its cleanup was incomplete.',
-          )
-        : cleanupFailure;
-    }
-    if (transportFailure) {
-      throw new ActivityAttemptTransportError(start, transportFailure);
+      if (
+        cause &&
+        typeof cause === 'object' &&
+        /** @type {{code?: unknown}} */ (cause).code ===
+          'activity-attempt-evidence-invalid'
+      ) {
+        throw new ActivityAttemptEvidenceError(
+          'The activity worker emitted invalid framed evidence.',
+          {},
+          { cause },
+        );
+      }
+      throw new ActivityAttemptTransportError(start, cause);
     }
 
     return revalidateWorkerActivityAttemptEvidence(rawEvidence, start);
@@ -763,11 +793,17 @@ class Function {
    * RPC. It returns physical attempt evidence instead of an application value.
    * @param {string} name - Declared activity ID.
    * @param {unknown} startFrame - Host-owned Activity Protocol start frame.
+   * @param {ActivityAttemptRunOptions} [options] - Optional host cancellation controls.
    * @returns {Promise<Readonly<import('../../runtime/activity-attempt.js').ActivityAttemptEvidence>>} - Revalidated attempt evidence.
    */
-  static async runActivityAttempt(name, startFrame) {
+  static async runActivityAttempt(name, startFrame, options = {}) {
     const bundle = await Function.readPackagedBundle(name);
-    return await Function.runPreparedActivityAttempt(name, bundle, startFrame);
+    return await Function.runPreparedActivityAttempt(
+      name,
+      bundle,
+      startFrame,
+      options,
+    );
   }
 
   /**

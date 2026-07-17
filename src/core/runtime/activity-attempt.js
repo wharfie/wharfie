@@ -889,8 +889,12 @@ export async function runNodeActivityAttempt(options) {
       if (options.signal) {
         options.signal.addEventListener('abort', externalAbort, { once: true });
       }
-      armDeadline();
+      // The first host interruption owns this physical attempt. In
+      // particular, a cancellation already accepted while the worker was
+      // loading must not be overwritten merely because the start frame's
+      // deadline has elapsed by the time the adapter initializes.
       if (options.signal?.aborted) externalAbort();
+      armDeadline();
     } catch (cause) {
       latchProtocolFailure(
         asProtocolError(

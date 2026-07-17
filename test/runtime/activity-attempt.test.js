@@ -643,6 +643,31 @@ describe('Node Activity Protocol v1 attempt adapter', () => {
     });
   });
 
+  it('keeps an already accepted cancellation ahead of an elapsed deadline', async () => {
+    const controller = new AbortController();
+    controller.abort(cancellationReason('cancelled before worker startup'));
+    const handler = jest.fn();
+
+    const evidence = await runNodeActivityAttempt({
+      startFrame: startFrame({ deadlineUnixMs: 100 }),
+      now: () => 101,
+      signal: controller.signal,
+      handler,
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(evidence.status).toBe('cancelled');
+    expect(evidence.frames.map((frame) => frame.type)).toEqual([
+      'start',
+      'cancel',
+      'cancelled',
+    ]);
+    expect(evidence.terminal.error).toMatchObject({
+      code: 'cancel-requested',
+      message: 'cancelled before worker startup',
+    });
+  });
+
   it('delivers deadline cancellation into a running cooperative handler', async () => {
     const deadlineUnixMs = Date.now() + 15;
     let started = false;
