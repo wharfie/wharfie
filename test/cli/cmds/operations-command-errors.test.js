@@ -5,8 +5,8 @@ import { jest } from '@jest/globals';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import opsListCommand from '../../../src/cli/cmds/ops_cmds/list.js';
-import cancelCommand from '../../../src/cli/cmds/ops_cmds/cancel.js';
+import inspectCommand from '../../../src/cli/cmds/ops_cmds/inspect.js';
+import recoverCommand from '../../../src/cli/cmds/ops_cmds/recover.js';
 import runCommand from '../../../src/cli/cmds/ops_cmds/run.js';
 
 const ORIGINAL_ENV = process.env;
@@ -95,18 +95,26 @@ afterAll(() => {
 
 describe.each([
   [
-    'wharfie ops list',
+    'wharfie ops inspect',
     () =>
-      opsListCommand.parseAsync(['node', 'list', '--dir', helloWorldDir], {
-        from: 'node',
-      }),
+      inspectCommand.parseAsync(
+        ['node', 'inspect', '--run-id', 'wlm_missing-inspection-run'],
+        { from: 'node' },
+      ),
   ],
   [
-    'wharfie ops cancel',
+    'wharfie ops recover',
     () =>
-      cancelCommand.parseAsync(['node', 'cancel', '--dir', helloWorldDir], {
-        from: 'node',
-      }),
+      recoverCommand.parseAsync(
+        [
+          'node',
+          'recover',
+          '--run-id',
+          'wlm_missing-recovery-run',
+          '--confirm-runner-stopped',
+        ],
+        { from: 'node' },
+      ),
   ],
   [
     'wharfie ops run',
@@ -124,8 +132,13 @@ describe.each([
 
     await expectCliFailure(invoke, /WHARFIE_CONTROL_ADAPTER/i);
   });
+});
 
-  test('uses an isolated zero-config control store in tests', async () => {
-    await expectCliSuccess(invoke);
-  });
+test('wharfie ops run uses an isolated zero-config control store in tests', async () => {
+  await expectCliSuccess(() =>
+    runCommand.parseAsync(
+      ['node', 'run', '--dir', helloWorldDir, '--activity', 'echo-event'],
+      { from: 'node' },
+    ),
+  );
 });

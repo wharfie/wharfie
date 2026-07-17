@@ -12,6 +12,20 @@ import { serializeActivityAttemptError } from './activity-attempt.js';
 
 export const MANUAL_LEDGER_INVOCATION_ID = 'manual';
 
+export const ManualLedgerRecoveryAction = Object.freeze({
+  NONE: 'none',
+  RELEASED_UNSTARTED_CLAIM: 'released-unstarted-claim',
+  MARKED_STARTED_UNCERTAIN: 'marked-started-uncertain',
+});
+
+/**
+ * @typedef {'none'|'released-unstarted-claim'|'marked-started-uncertain'} ManualLedgerRecoveryActionValue
+ */
+
+/**
+ * @typedef {{found: boolean, mayExecute: boolean, action: ManualLedgerRecoveryActionValue, changed: boolean, outcome?: ReturnType<typeof outcomeFromState>}} ManualLedgerRecoveryResult
+ */
+
 const DEFAULT_ACTOR = Object.freeze({ kind: 'local', id: 'cli' });
 
 /**
@@ -95,6 +109,46 @@ async function readCurrent(ledger, runId, invocationId) {
 }
 
 /**
+ * @param {Record<string, any>} view - Verified rebuilt ledger view.
+ * @param {string} invocationId - Durable invocation identity.
+ * @param {boolean} [reused] - Whether the result came from retained state.
+ * @returns {ReturnType<typeof outcomeFromState>} - Current public outcome.
+ */
+function outcomeFromView(view, invocationId, reused = true) {
+  const invocation = getInvocation(view, invocationId);
+  const attempt =
+    invocation.generation === 0
+      ? undefined
+      : getCurrentAttempt(view, invocation);
+  return outcomeFromState({ run: view.run, invocation, attempt, reused });
+}
+
+/**
+ * @param {Record<string, any>} run - Current run projection.
+ * @param {Record<string, any>} invocation - Current invocation projection.
+ * @returns {boolean} - Whether state is runnable without asserting ownership.
+ */
+function mayExecuteFromState(run, invocation) {
+  return (
+    run.status === RunStatus.RUNNING &&
+    invocation.status === InvocationStatus.RUNNABLE
+  );
+}
+
+/**
+ * @param {Record<string, any> | undefined} left - First attempt identity.
+ * @param {Record<string, any>} right - Expected attempt identity.
+ * @returns {boolean} - Whether both records name the same physical attempt.
+ */
+function isSameAttempt(left, right) {
+  return (
+    left?.attemptId === right.attemptId &&
+    left?.fencingToken === right.fencingToken &&
+    left?.generation === right.generation
+  );
+}
+
+/**
  * @param {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, reused?: boolean}} state - Durable state to expose.
  * @returns {{disposition: 'completed'|'failed'|'blocked'|'in-progress', reused: boolean, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, terminal?: Record<string, any>, evidence?: Record<string, any>}} - Public run outcome.
  */
@@ -165,9 +219,9 @@ function startedRecoveryReason(attemptId) {
 
 /**
  * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, invocationId: string, attempt: Record<string, any>, expectedVersion: number, transitionId: string, actor: Record<string, any>, reason: Record<string, any>}} options - Uncertainty transition options.
- * @returns {Promise<ReturnType<typeof outcomeFromState>>} - Blocked or already terminal outcome.
+ * @returns {Promise<{outcome: ReturnType<typeof outcomeFromState>, changed: boolean}>} - Blocked or already terminal outcome with transition ownership.
  */
-async function markUncertainOrReadTerminal(options) {
+async function markUncertainOrReadTerminalResult(options) {
   const {
     ledger,
     runId,
@@ -191,11 +245,14 @@ async function markUncertainOrReadTerminal(options) {
       coordinatorEpoch: 0,
       reason,
     });
-    return outcomeFromState({
-      run: result.run,
-      invocation: result.invocation,
-      attempt: result.attempt,
-    });
+    return {
+      outcome: outcomeFromState({
+        run: result.run,
+        invocation: result.invocation,
+        attempt: result.attempt,
+      }),
+      changed: result.applied,
+    };
   } catch (markError) {
     const current = await readCurrent(ledger, runId, invocationId);
     const currentAttempt = getCurrentAttempt(current.view, current.invocation);
@@ -204,17 +261,28 @@ async function markUncertainOrReadTerminal(options) {
       current.invocation.status !== InvocationStatus.RUNNING ||
       currentAttempt.status !== AttemptStatus.STARTED
     ) {
-      return outcomeFromState({
-        run: current.run,
-        invocation: current.invocation,
-        attempt: currentAttempt,
-      });
+      return {
+        outcome: outcomeFromState({
+          run: current.run,
+          invocation: current.invocation,
+          attempt: currentAttempt,
+        }),
+        changed: false,
+      };
     }
     throw new AggregateError(
       [markError],
       `Could not durably record uncertainty for started attempt ${attempt.attemptId}.`,
     );
   }
+}
+
+/**
+ * @param {Parameters<typeof markUncertainOrReadTerminalResult>[0]} options - Uncertainty transition options.
+ * @returns {Promise<ReturnType<typeof outcomeFromState>>} - Blocked or already terminal outcome.
+ */
+async function markUncertainOrReadTerminal(options) {
+  return (await markUncertainOrReadTerminalResult(options)).outcome;
 }
 
 /**
@@ -302,7 +370,7 @@ async function settleDispatchFailure(options) {
  * execution decision. It is not a coordinator lease and never authorizes a
  * caller to dispatch a changed revision.
  * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, invocationId?: string, actor?: {kind: string, id: string}}} options - Existing run recovery request.
- * @returns {Promise<{found: boolean, mayExecute: boolean, outcome?: ReturnType<typeof outcomeFromState>}>} - Recovered durable state.
+ * @returns {Promise<ManualLedgerRecoveryResult>} - Recovered durable state.
  */
 export async function recoverManualLedgerActivity(options) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) {
@@ -319,89 +387,149 @@ export async function recoverManualLedgerActivity(options) {
       : assertLedgerOpaqueId(options.invocationId, 'invocationId');
   const actor = options.actor || DEFAULT_ACTOR;
   const view = await ledger.rebuildRun(runId);
-  if (!view) return { found: false, mayExecute: true };
+  if (!view) {
+    return {
+      found: false,
+      mayExecute: false,
+      action: ManualLedgerRecoveryAction.NONE,
+      changed: false,
+    };
+  }
 
   const invocation = getInvocation(view, invocationId);
   if (invocation.status === InvocationStatus.RUNNABLE) {
     return {
       found: true,
-      mayExecute: true,
-      outcome: outcomeFromState({ run: view.run, invocation, reused: true }),
+      mayExecute: mayExecuteFromState(view.run, invocation),
+      action: ManualLedgerRecoveryAction.NONE,
+      changed: false,
+      outcome: outcomeFromView(view, invocationId),
     };
   }
   if (invocation.status === InvocationStatus.RUNNING) {
     const attempt = getCurrentAttempt(view, invocation);
     if (attempt.status === AttemptStatus.CLAIMED) {
-      const released = await ledger.abandonUnstartedAttempt({
+      try {
+        const released = await ledger.abandonUnstartedAttempt({
+          runId,
+          invocationId,
+          attemptId: attempt.attemptId,
+          fencingToken: attempt.fencingToken,
+          generation: attempt.generation,
+          expectedVersion: view.run.version,
+          transitionId: `recover-abandon:${attempt.attemptId}`,
+          actor,
+          coordinatorEpoch: 0,
+          reason: preStartRecoveryReason(attempt.attemptId),
+        });
+        const current = await readCurrent(ledger, runId, invocationId);
+        return {
+          found: true,
+          mayExecute: mayExecuteFromState(current.run, current.invocation),
+          action: released.applied
+            ? ManualLedgerRecoveryAction.RELEASED_UNSTARTED_CLAIM
+            : ManualLedgerRecoveryAction.NONE,
+          changed: released.applied,
+          outcome: outcomeFromView(current.view, invocationId),
+        };
+      } catch (error) {
+        // If a concurrent actor moved the original claim, do not turn a
+        // recoverer into a stale owner. A confirmed recovery must still mark
+        // that same physical attempt uncertain if it crossed the durable
+        // STARTED boundary; it must never touch a newer generation.
+        const current = await readCurrent(ledger, runId, invocationId);
+        const currentAttempt =
+          current.invocation.generation === 0
+            ? undefined
+            : getCurrentAttempt(current.view, current.invocation);
+        if (
+          current.run.status === RunStatus.RUNNING &&
+          current.invocation.status === InvocationStatus.RUNNING &&
+          currentAttempt?.status === AttemptStatus.CLAIMED &&
+          isSameAttempt(currentAttempt, attempt)
+        ) {
+          throw error;
+        }
+        if (
+          current.run.status === RunStatus.RUNNING &&
+          current.invocation.status === InvocationStatus.RUNNING &&
+          currentAttempt?.status === AttemptStatus.STARTED &&
+          isSameAttempt(currentAttempt, attempt)
+        ) {
+          const recovered = await markUncertainOrReadTerminalResult({
+            ledger,
+            runId,
+            invocationId,
+            attempt: currentAttempt,
+            expectedVersion: current.run.version,
+            transitionId: `recover-uncertain:${currentAttempt.attemptId}`,
+            actor,
+            reason: startedRecoveryReason(currentAttempt.attemptId),
+          });
+          return {
+            found: true,
+            mayExecute: false,
+            action: recovered.changed
+              ? ManualLedgerRecoveryAction.MARKED_STARTED_UNCERTAIN
+              : ManualLedgerRecoveryAction.NONE,
+            changed: recovered.changed,
+            outcome: recovered.outcome,
+          };
+        }
+        return {
+          found: true,
+          mayExecute: mayExecuteFromState(current.run, current.invocation),
+          action: ManualLedgerRecoveryAction.NONE,
+          changed: false,
+          outcome: outcomeFromView(current.view, invocationId),
+        };
+      }
+    }
+    if (attempt.status === AttemptStatus.STARTED) {
+      const recovered = await markUncertainOrReadTerminalResult({
+        ledger,
         runId,
         invocationId,
-        attemptId: attempt.attemptId,
-        fencingToken: attempt.fencingToken,
-        generation: attempt.generation,
+        attempt,
         expectedVersion: view.run.version,
-        transitionId: `recover-abandon:${attempt.attemptId}`,
+        transitionId: `recover-uncertain:${attempt.attemptId}`,
         actor,
-        coordinatorEpoch: 0,
-        reason: preStartRecoveryReason(attempt.attemptId),
+        reason: startedRecoveryReason(attempt.attemptId),
       });
       return {
         found: true,
-        mayExecute: true,
-        outcome: outcomeFromState({
-          run: released.run,
-          invocation: released.invocation,
-          attempt: released.attempt,
-          reused: true,
-        }),
-      };
-    }
-    if (attempt.status === AttemptStatus.STARTED) {
-      return {
-        found: true,
         mayExecute: false,
-        outcome: await markUncertainOrReadTerminal({
-          ledger,
-          runId,
-          invocationId,
-          attempt,
-          expectedVersion: view.run.version,
-          transitionId: `recover-uncertain:${attempt.attemptId}`,
-          actor,
-          reason: startedRecoveryReason(attempt.attemptId),
-        }),
+        action: recovered.changed
+          ? ManualLedgerRecoveryAction.MARKED_STARTED_UNCERTAIN
+          : ManualLedgerRecoveryAction.NONE,
+        changed: recovered.changed,
+        outcome: recovered.outcome,
       };
     }
     return {
       found: true,
       mayExecute: false,
-      outcome: outcomeFromState({
-        run: view.run,
-        invocation,
-        attempt,
-        reused: true,
-      }),
+      action: ManualLedgerRecoveryAction.NONE,
+      changed: false,
+      outcome: outcomeFromView(view, invocationId),
     };
   }
 
   return {
     found: true,
     mayExecute: false,
-    outcome: outcomeFromState({
-      run: view.run,
-      invocation,
-      attempt: getCurrentAttempt(view, invocation),
-      reused: true,
-    }),
+    action: ManualLedgerRecoveryAction.NONE,
+    changed: false,
+    outcome: outcomeFromView(view, invocationId),
   };
 }
 
 /**
  * Create, claim, and execute exactly one manual activity through the
  * append-only ledger. A normal repeat never steals a RUNNING attempt because
- * coordinator leases do not exist yet. `recover: true` is an explicit
- * operator assertion that the previous local runner is gone: it can release
- * a CLAIMED attempt, but a STARTED one becomes BLOCKED/UNCERTAIN.
- * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, appId: string, revisionId: string, activityId: string, input?: any, callerMetadata?: Record<string, any>, actor?: {kind: string, id: string}, recover?: boolean, createFencingToken?: () => string, executeAttempt: (startFrame: Readonly<Record<string, any>>) => Promise<Readonly<Record<string, any>>>}} options - Bound manual activity execution.
+ * coordinator leases do not exist yet; recovery is a separate operator action
+ * that never accepts or compiles current application source.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, appId: string, revisionId: string, activityId: string, input?: any, callerMetadata?: Record<string, any>, actor?: {kind: string, id: string}, createFencingToken?: () => string, executeAttempt: (startFrame: Readonly<Record<string, any>>) => Promise<Readonly<Record<string, any>>>}} options - Bound manual activity execution.
  * @returns {Promise<ReturnType<typeof outcomeFromState>>} - Durable terminal, blocked, or in-progress result.
  */
 export async function runManualLedgerActivity(options) {
@@ -413,6 +541,11 @@ export async function runManualLedgerActivity(options) {
   }
   if (typeof options.executeAttempt !== 'function') {
     throw new TypeError('runManualLedgerActivity requires executeAttempt.');
+  }
+  if (Object.prototype.hasOwnProperty.call(options, 'recover')) {
+    throw new TypeError(
+      'runManualLedgerActivity.recover is not supported; use recoverManualLedgerActivity before a separate execution decision.',
+    );
   }
   if (
     options.createFencingToken !== undefined &&
@@ -449,7 +582,7 @@ export async function runManualLedgerActivity(options) {
     coordinatorEpoch: 0,
   });
 
-  let current = await readCurrent(ledger, runId, invocationId);
+  const current = await readCurrent(ledger, runId, invocationId);
   if (current.invocation.status === InvocationStatus.UNCERTAIN) {
     return outcomeFromState({
       run: current.run,
@@ -472,27 +605,12 @@ export async function runManualLedgerActivity(options) {
   }
 
   if (current.invocation.status === InvocationStatus.RUNNING) {
-    if (!options.recover) {
-      return outcomeFromState({
-        run: current.run,
-        invocation: current.invocation,
-        attempt: getCurrentAttempt(current.view, current.invocation),
-        reused: !created.applied,
-      });
-    }
-    const recovery = await recoverManualLedgerActivity({
-      ledger,
-      runId,
-      invocationId,
-      actor,
+    return outcomeFromState({
+      run: current.run,
+      invocation: current.invocation,
+      attempt: getCurrentAttempt(current.view, current.invocation),
+      reused: !created.applied,
     });
-    if (!recovery.mayExecute) {
-      if (!recovery.outcome) {
-        throw new Error(`Execution ledger recovery has no outcome: ${runId}`);
-      }
-      return recovery.outcome;
-    }
-    current = await readCurrent(ledger, runId, invocationId);
   }
 
   if (current.invocation.status !== InvocationStatus.RUNNABLE) {
@@ -626,6 +744,7 @@ export async function runManualLedgerActivity(options) {
 
 export default {
   MANUAL_LEDGER_INVOCATION_ID,
+  ManualLedgerRecoveryAction,
   createManualLedgerRunId,
   recoverManualLedgerActivity,
   runManualLedgerActivity,

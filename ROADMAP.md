@@ -92,6 +92,9 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 - [x] Route one local manual `ops run` activity through that ledger, with an
       exact post-`STARTED` host frame, terminal evidence commits, idempotent
       operation IDs, and explicit operator-confirmed recovery only.
+- [x] Add source-independent exact-run inspection and explicitly confirmed
+      recovery, with redacted JSON output; remove the misleading mutable CLI
+      `ops list` and `ops cancel` surfaces rather than dual-writing them.
 - [ ] Persist immutable revision bindings, inputs, outputs, scheduling decisions, attempts, and operator actions in the full append-only ledger.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, cancellation, retry policy, and recovery.
 - [ ] Implement substantiated `pure`, `idempotent`, and `transactional` replay properties, make begun in-process handlers `unsafe` by default, and add a durable blocked `uncertain` state with explicit reconciliation/compensation paths.
@@ -154,11 +157,9 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 2. Add a durable local-store/service lifecycle and immutable payload references
    to the ledger-backed manual path before schedules, queues, effects, or
    workflows.
-3. Replace or remove the remaining mutable `ops list`/`ops cancel` and
-   OperationsStore surface once the ledger has an honest inspection and
-   cancellation contract; do not make those commands pretend to observe the
-   new run path.
-4. Add source-independent ledger inspection and recovery by persisted run ID
-   before calling manual recovery operationally complete.
+3. Add an atomic, paginated ledger run-directory/index before providing any
+   app-wide history or `ops list` replacement; do not add a scan-based list.
+4. Design durable cancellation/reconciliation transitions before exposing an
+   `ops cancel` replacement.
 
-The latest dated handoff at [llm/checkpoints/2026-07-17-ledger-backed-ops-run.md](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md) contains the current manual-run boundary and restart instructions. The preceding [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) records the ledger integrity work beneath it.
+The latest dated handoff at [llm/checkpoints/2026-07-17-source-independent-ledger-ops.md](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md) contains the current operator boundary and restart instructions. The preceding [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md) and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.

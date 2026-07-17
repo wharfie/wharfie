@@ -16,7 +16,9 @@ import {
 import { ActivityProtocolTranscriptValidator } from '../../src/core/runtime/activity-protocol.js';
 import {
   MANUAL_LEDGER_INVOCATION_ID,
+  ManualLedgerRecoveryAction,
   createManualLedgerRunId,
+  recoverManualLedgerActivity,
   runManualLedgerActivity,
 } from '../../src/core/runtime/manual-ledger-run.js';
 
@@ -521,9 +523,25 @@ describe('manual ledger activity runner', () => {
       });
       expect(calls).toBe(0);
 
+      const recovery = await recoverManualLedgerActivity({
+        ledger,
+        runId: options.runId,
+      });
+      expect(recovery).toMatchObject({
+        found: true,
+        mayExecute: true,
+        action: ManualLedgerRecoveryAction.RELEASED_UNSTARTED_CLAIM,
+        changed: true,
+        outcome: {
+          disposition: 'in-progress',
+          run: { status: RunStatus.RUNNING },
+          invocation: { status: InvocationStatus.RUNNABLE, generation: 1 },
+          attempt: { status: AttemptStatus.ABANDONED, generation: 1 },
+        },
+      });
+
       const recovered = await runManualLedgerActivity({
         ...options,
-        recover: true,
         createFencingToken: () => 'replacement-runner-fence',
         executeAttempt: async (
           /** @type {Readonly<Record<string, any>>} */ startFrame,
@@ -554,6 +572,121 @@ describe('manual ledger activity runner', () => {
         'attempt-terminal',
       ]);
     });
+  });
+
+  it('marks the same claim uncertain when it starts during confirmed recovery', async () => {
+    const directory = mkdtempSync(
+      join(tmpdir(), 'wharfie-manual-ledger-recovery-race-'),
+    );
+    const baseDb = createVanillaDB({ path: directory });
+    /** @type {import('../../src/core/lib/db/tables/execution-ledger.js').ExecutionLedgerStore} */
+    let ledger;
+    let startedDuringRecovery = false;
+    const db = {
+      ...baseDb,
+      transactionWrite: async (
+        /** @type {import('../../src/core/lib/db/base.js').TransactionWriteParams} */ params,
+      ) => {
+        const abandon = params.putRequests?.find(
+          (request) =>
+            request.record?.record_type === 'execution_ledger_event' &&
+            request.record.type === 'attempt-abandoned-before-start',
+        )?.record;
+        if (abandon && !startedDuringRecovery) {
+          startedDuringRecovery = true;
+          const current = await ledger.rebuildRun(abandon.run_id);
+          if (!current) throw new Error('Expected claimed run to exist');
+          const invocation = current.invocations.find(
+            (/** @type {Record<string, any>} */ candidate) =>
+              candidate.invocationId === MANUAL_LEDGER_INVOCATION_ID,
+          );
+          const attempt = current.attempts.find(
+            (/** @type {Record<string, any>} */ candidate) =>
+              candidate.invocationId === MANUAL_LEDGER_INVOCATION_ID &&
+              candidate.generation === invocation?.generation,
+          );
+          if (!invocation || !attempt) {
+            throw new Error('Expected concurrent claimed attempt');
+          }
+          await ledger.markAttemptStarted({
+            runId: abandon.run_id,
+            invocationId: MANUAL_LEDGER_INVOCATION_ID,
+            attemptId: attempt.attemptId,
+            fencingToken: attempt.fencingToken,
+            generation: attempt.generation,
+            expectedVersion: current.run.version,
+            transitionId: `concurrent-start:${attempt.attemptId}`,
+            actor: { kind: 'local', id: 'concurrent-runner' },
+          });
+        }
+        await baseDb.transactionWrite(params);
+      },
+    };
+    ledger = createExecutionLedger({
+      db,
+      tableName: 'manual-ledger-recovery-race-test',
+      now: createClock(),
+    });
+
+    try {
+      const options = runOptions(ledger);
+      await ledger.createManualRun({
+        runId: options.runId,
+        appId: options.appId,
+        revisionId: options.revisionId,
+        invocationId: MANUAL_LEDGER_INVOCATION_ID,
+        activityId: options.activityId,
+        input: options.input,
+        callerMetadata: options.callerMetadata,
+        transitionId: 'create',
+        actor: { kind: 'local', id: 'cli' },
+      });
+      await ledger.claimInvocation({
+        runId: options.runId,
+        invocationId: MANUAL_LEDGER_INVOCATION_ID,
+        fencingToken: 'recovery-race-fence',
+        expectedGeneration: 0,
+        expectedVersion: 1,
+        transitionId: 'claim:1',
+        actor: { kind: 'local', id: 'cli' },
+      });
+
+      const recovered = await recoverManualLedgerActivity({
+        ledger,
+        runId: options.runId,
+      });
+
+      expect(startedDuringRecovery).toBe(true);
+      expect(recovered).toMatchObject({
+        found: true,
+        mayExecute: false,
+        action: ManualLedgerRecoveryAction.MARKED_STARTED_UNCERTAIN,
+        changed: true,
+        outcome: {
+          disposition: 'blocked',
+          run: { status: RunStatus.BLOCKED },
+          invocation: { status: InvocationStatus.UNCERTAIN },
+          attempt: {
+            status: AttemptStatus.ABANDONED,
+            fencingToken: 'recovery-race-fence',
+          },
+        },
+      });
+      const view = await ledger.rebuildRun(options.runId);
+      expect(
+        view?.events.map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual([
+        'manual-run-created',
+        'attempt-claimed',
+        'attempt-started',
+        'attempt-became-uncertain',
+      ]);
+    } finally {
+      await baseDb.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('turns an explicitly recovered started attempt into uncertainty without dispatching new work', async () => {
@@ -592,15 +725,21 @@ describe('manual ledger activity runner', () => {
         transitionId: `start:${claim.attempt?.attemptId}`,
       });
 
-      const recovered = await runManualLedgerActivity({
-        ...options,
-        recover: true,
+      const recovered = await recoverManualLedgerActivity({
+        ledger,
+        runId: options.runId,
       });
       expect(recovered).toMatchObject({
-        disposition: 'blocked',
-        run: { status: RunStatus.BLOCKED },
-        invocation: { status: InvocationStatus.UNCERTAIN },
-        attempt: { status: AttemptStatus.ABANDONED, generation: 1 },
+        found: true,
+        mayExecute: false,
+        action: ManualLedgerRecoveryAction.MARKED_STARTED_UNCERTAIN,
+        changed: true,
+        outcome: {
+          disposition: 'blocked',
+          run: { status: RunStatus.BLOCKED },
+          invocation: { status: InvocationStatus.UNCERTAIN },
+          attempt: { status: AttemptStatus.ABANDONED, generation: 1 },
+        },
       });
     });
   });

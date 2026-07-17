@@ -28,6 +28,9 @@ const staleCommands = [
   'wharfie list',
   'wharfie init',
   'wharfie build-self',
+  'wharfie ops list',
+  'wharfie ops cancel',
+  'wharfie ops run --recover',
 ];
 
 describe('docs command surface', () => {
@@ -99,5 +102,11 @@ describe('docs command surface', () => {
     );
     expect(quickstart).toContain('--operation-id <stable-run-id>');
     expect(quickstart).toContain('append-only run → invocation → attempt');
+    expect(quickstart).toContain('wharfie ops inspect --run-id <run-id>');
+    expect(quickstart).toContain(
+      'wharfie ops recover --run-id <run-id> --confirm-runner-stopped',
+    );
+    expect(quickstart).not.toContain('wharfie ops list');
+    expect(quickstart).not.toContain('wharfie ops cancel');
   });
 });

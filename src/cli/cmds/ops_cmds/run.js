@@ -18,7 +18,6 @@ import {
 } from '../../../core/runtime/app-runs.js';
 import {
   createManualLedgerRunId,
-  recoverManualLedgerActivity,
   runManualLedgerActivity,
 } from '../../../core/runtime/manual-ledger-run.js';
 
@@ -73,7 +72,7 @@ function outcomeError(result, resourceId, operationId) {
     );
   }
   return new Error(
-    `Run ${resourceId}#${operationId} is already in progress (attempt ${result.attempt?.attemptId || '(unknown)'}). Use --recover only after confirming that prior local runner is no longer alive.`,
+    `Run ${resourceId}#${operationId} is already in progress (attempt ${result.attempt?.attemptId || '(unknown)'}). Inspect it with \`wharfie ops inspect --run-id ${result.run.runId}\`; after confirming every runner stopped, use \`wharfie ops recover --run-id ${result.run.runId} --confirm-runner-stopped\`.`,
   );
 }
 
@@ -87,10 +86,6 @@ const runCommand = new Command('run')
   .option('--input <json>', 'Activity input JSON (default: {})')
   .option('--caller-metadata <json>', 'Caller metadata JSON (default: {})')
   .option('--operation-id <operationId>', 'Stable manual operation identity')
-  .option(
-    '--recover',
-    'After confirming an old local runner is dead, release an unstarted claim or mark a started attempt uncertain',
-  )
   .action(async (options) => {
     try {
       const appDir = options.dir || process.cwd();
@@ -98,47 +93,8 @@ const runCommand = new Command('run')
       const { manifest } = loadedApp;
       const appId = manifest.app.id;
       const resourceId = getAppResourceId(appId);
-      if (options.recover === true && options.operationId === undefined) {
-        throw new Error(
-          'ops run --recover requires --operation-id so recovery cannot create a new run.',
-        );
-      }
       const operationId = resolveOperationId(options.operationId);
       const runId = createManualLedgerRunId({ appId, operationId });
-
-      // Recovery intentionally happens before parsing current invocation
-      // arguments or compiling current application source. A persisted
-      // STARTED attempt must become visibly uncertain even if its source,
-      // input, metadata, or activity declaration has since changed.
-      if (options.recover === true) {
-        const recovery = await withExecutionLedger(
-          async (ledger) =>
-            await recoverManualLedgerActivity({
-              ledger,
-              runId,
-            }),
-        );
-        if (!recovery.found) {
-          throw new Error(
-            `No durable run exists for ${resourceId}#${operationId}; recovery refuses to create new work.`,
-          );
-        }
-        if (recovery.found && !recovery.mayExecute) {
-          if (!recovery.outcome) {
-            throw new Error(
-              `Execution ledger recovery has no outcome: ${runId}`,
-            );
-          }
-          console.table([formatRunRow(recovery.outcome, operationId)]);
-          if (recovery.outcome.disposition !== 'completed') {
-            throw outcomeError(recovery.outcome, resourceId, operationId);
-          }
-          displaySuccess(
-            `Recovered durable activity through attempt ${recovery.outcome.attempt?.generation || 0}.`,
-          );
-          return;
-        }
-      }
 
       const activityName =
         typeof options.activity === 'string' ? options.activity : '';
@@ -198,10 +154,6 @@ const runCommand = new Command('run')
               activityId: activityName,
               input,
               callerMetadata,
-              // A recovery was already completed against the persisted run
-              // above. Do not make a second, source-bound recovery decision
-              // after preparing current application code.
-              recover: false,
               executeAttempt: async (startFrame) =>
                 await invokeManifestActivityAttemptWithStart({
                   activityName,

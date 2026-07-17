@@ -148,19 +148,26 @@ The first run writes an append-only run → invocation → attempt ledger. Reusi
 the same `--operation-id` with identical app revision, activity, input, and
 caller metadata returns its durable terminal without running the activity
 again. A changed request with that ID fails rather than silently deduplicating.
-`--recover` is deliberately explicit: use it only after confirming an earlier
-local runner is gone. It can release a claim that never started; a begun
-attempt becomes visibly blocked as `UNCERTAIN` instead of replaying code.
-Recovery requires an explicit `--operation-id` and refuses to create work if
-that durable run is absent, so a typo cannot become a new activity. It reads
-the persisted run before parsing current input or compiling the activity
-source; this lets a begun attempt be reconciled after its activity source has
-changed or no longer builds. The current app manifest still has to load to
-derive the app-scoped run identity; fully source-independent `--run-id`
-recovery is not available yet.
+The result table includes the durable `run_id`. Inspect it or perform an
+operator-confirmed recovery without loading an app manifest, parsing current
+input, compiling source, or dispatching user code:
 
-Run-history listing, cancellation, and a resident service lifecycle are not
-yet available on this ledger path.
+```bash
+wharfie ops inspect --run-id <run-id>
+wharfie ops recover --run-id <run-id> --confirm-runner-stopped
+```
+
+Recovery is deliberately explicit: use it only after confirming every prior
+runner is gone. It can release a claim that never started; a begun attempt
+becomes visibly blocked as `UNCERTAIN` instead of replaying code. Both commands
+also support `--json`, which emits a redacted verified lifecycle view for
+automation. It intentionally excludes activity inputs, caller metadata,
+terminal results, evidence, and fencing tokens.
+
+There is no global/app-wide run list or cancellation command yet. The ledger
+currently has only exact `run_id` partitions, so an honest list requires a
+durable run-directory index and cancellation requires a separate durable
+decision contract. A resident service lifecycle is also not available yet.
 
 ## Package the app
 
