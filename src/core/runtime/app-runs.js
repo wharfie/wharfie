@@ -317,6 +317,38 @@ function createEphemeralActivityAttemptStart(options) {
 }
 
 /**
+ * Validate the durable host frame supplied by a scheduler against the sealed
+ * execution identity. The scheduler owns run/invocation/attempt/fence IDs;
+ * this adapter only accepts a frame that names this exact activity revision.
+ * @param {unknown} value - Host-owned candidate start frame.
+ * @param {string} revisionId - Immutable execution revision.
+ * @param {string} activityName - Declared activity ID.
+ * @returns {Readonly<Record<string, any>>} - Validated immutable start frame.
+ */
+function validateBoundActivityAttemptStart(value, revisionId, activityName) {
+  const start = validateActivityProtocolHostFrame(
+    value,
+    'manifest activity attempt start',
+  );
+  if (start.type !== 'start') {
+    throw new TypeError(
+      'manifest activity attempt start must have type start.',
+    );
+  }
+  if (start.revisionId !== revisionId) {
+    throw new Error(
+      `manifest activity attempt start revision ${start.revisionId} does not match execution revision ${revisionId}.`,
+    );
+  }
+  if (start.activityId !== activityName) {
+    throw new Error(
+      `manifest activity attempt start activity ${start.activityId} does not match requested activity ${activityName}.`,
+    );
+  }
+  return start;
+}
+
+/**
  * A protocol attempt reached a genuine non-completed terminal. It is not a
  * transport crash or delivery uncertainty, both of which continue to reject
  * without inventing a user-visible application outcome.
@@ -686,28 +718,32 @@ function validateManifestActivityAttemptOptions(options) {
 }
 
 /**
- * Execute one embedded manifest activity as a physical Protocol v1 attempt.
- * @param {Record<string, any>} options - Invocation options with embedded execution identity.
- * @returns {Promise<Readonly<import('./activity-attempt.js').ActivityAttemptEvidence>>} - Physical attempt evidence.
+ * Validate an attempt invocation that already has its host-owned start frame.
+ * @param {Record<string, any>} options - Candidate durable invocation options.
+ * @returns {void}
  */
-export async function invokeEmbeddedManifestActivityAttempt(options) {
-  validateManifestActivityAttemptOptions(options);
-  const embedded = validateEmbeddedExecution(options.execution);
-  const definition = requireManifestActivityDefinition(
-    embedded.manifest,
-    options.activityName,
-  );
-  assertNoLegacyAttemptResources(embedded.manifest, definition);
-  const invocation = cloneActivityAttemptInputs(options);
-  const startFrame = createEphemeralActivityAttemptStart({
-    revisionId: embedded.revision.revisionId,
-    activityName: options.activityName,
-    ...invocation,
-  });
-  return await WharfieFunction.runActivityAttempt(
-    options.activityName,
-    startFrame,
-  );
+function validateManifestActivityAttemptWithStartOptions(options) {
+  if (!isObjectRecord(options)) {
+    throw new TypeError(
+      'invokeManifestActivityAttemptWithStart requires options.',
+    );
+  }
+  const allowed = new Set(['activityName', 'startFrame', 'execution']);
+  for (const key of Object.keys(options)) {
+    if (!allowed.has(key)) {
+      throw new TypeError(
+        `invokeManifestActivityAttemptWithStart.${key} is not supported.`,
+      );
+    }
+  }
+  for (const key of ['activityName', 'startFrame', 'execution']) {
+    if (!Object.prototype.hasOwnProperty.call(options, key)) {
+      throw new TypeError(
+        `invokeManifestActivityAttemptWithStart.${key} is required.`,
+      );
+    }
+  }
+  assertLogicalId(options.activityName, 'activityName');
 }
 
 /**
@@ -748,6 +784,101 @@ async function executeVerifiedPreparedSourceAttempt(source, execute) {
 }
 
 /**
+ * Resolve and validate a source or packaged execution identity once before
+ * dispatching the physical activity attempt.
+ * @param {unknown} execution - Candidate execution identity.
+ * @returns {{kind: 'prepared-source', source: ReturnType<typeof validatePreparedSourceExecution>} | {kind: 'embedded', embedded: ReturnType<typeof validateEmbeddedExecution>}} - Resolved execution identity.
+ */
+function resolveManifestActivityAttemptExecution(execution) {
+  if (isObjectRecord(execution) && execution.kind === 'embedded') {
+    return { kind: 'embedded', embedded: validateEmbeddedExecution(execution) };
+  }
+  return {
+    kind: 'prepared-source',
+    source: validatePreparedSourceExecution(execution),
+  };
+}
+
+/**
+ * Dispatch one physical attempt after its host start frame has been bound to
+ * the selected immutable execution identity.
+ * @param {{kind: 'prepared-source', source: ReturnType<typeof validatePreparedSourceExecution>} | {kind: 'embedded', embedded: ReturnType<typeof validateEmbeddedExecution>}} execution - Resolved execution identity.
+ * @param {string} activityName - Declared activity ID.
+ * @param {Readonly<Record<string, any>>} startFrame - Exact host-owned start frame.
+ * @returns {Promise<Readonly<import('./activity-attempt.js').ActivityAttemptEvidence>>} - Physical attempt evidence.
+ */
+async function dispatchManifestActivityAttempt(
+  execution,
+  activityName,
+  startFrame,
+) {
+  if (execution.kind === 'embedded') {
+    const { embedded } = execution;
+    const definition = requireManifestActivityDefinition(
+      embedded.manifest,
+      activityName,
+    );
+    assertNoLegacyAttemptResources(embedded.manifest, definition);
+    return await WharfieFunction.runActivityAttempt(activityName, startFrame);
+  }
+
+  const { source } = execution;
+  return await executeVerifiedPreparedSourceAttempt(source, async () => {
+    const definition = requireManifestActivityDefinition(
+      source.manifest,
+      activityName,
+    );
+    assertNoLegacyAttemptResources(source.manifest, definition);
+    assertSourceRuntimeResolution(
+      path.resolve(source.appDir, definition.entrypoint.path),
+    );
+    const hasExternalPackages =
+      Array.isArray(definition.externalPackages) &&
+      definition.externalPackages.length > 0;
+    if (hasExternalPackages) {
+      return await invokePreparedSourceExternalActivity({
+        ...source,
+        activityName,
+        startFrame,
+      });
+    }
+    const fn = createManifestActivityFunction({
+      manifest: source.manifest,
+      activityName,
+      appDir: source.appDir,
+    });
+    return await fn.runActivityAttempt(startFrame);
+  });
+}
+
+/**
+ * Dispatch a physical Protocol v1 attempt from a durable host-owned start
+ * frame. This is the narrow scheduler seam: the frame must name the selected
+ * revision and activity, but its run/invocation/attempt/fence identity is not
+ * regenerated or otherwise changed by the runtime.
+ * @param {{ activityName: string, startFrame: Record<string, any>, execution: { kind: 'prepared-source', prepared: import('../../cli/app/compile-application-revision.js').PreparedApplicationRevision } | { kind: 'embedded', manifest: any, embeddedRevision: import('../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair } }} options - Durable invocation options.
+ * @returns {Promise<Readonly<import('./activity-attempt.js').ActivityAttemptEvidence>>} - Physical attempt evidence.
+ */
+export async function invokeManifestActivityAttemptWithStart(options) {
+  validateManifestActivityAttemptWithStartOptions(options);
+  const execution = resolveManifestActivityAttemptExecution(options.execution);
+  const revisionId =
+    execution.kind === 'embedded'
+      ? execution.embedded.revision.revisionId
+      : execution.source.revision.revisionId;
+  const startFrame = validateBoundActivityAttemptStart(
+    options.startFrame,
+    revisionId,
+    options.activityName,
+  );
+  return await dispatchManifestActivityAttempt(
+    execution,
+    options.activityName,
+    startFrame,
+  );
+}
+
+/**
  * Execute one source or packaged activity as exactly one bounded physical
  * Activity Protocol attempt. The returned evidence is not a durable result;
  * callers that want a value must explicitly unwrap only a completed terminal.
@@ -756,46 +887,43 @@ async function executeVerifiedPreparedSourceAttempt(source, execute) {
  */
 export async function invokeManifestActivityAttempt(options) {
   validateManifestActivityAttemptOptions(options);
-  if (
-    isObjectRecord(options.execution) &&
-    options.execution.kind === 'embedded'
-  ) {
-    return await invokeEmbeddedManifestActivityAttempt(options);
-  }
-
-  const source = validatePreparedSourceExecution(options.execution);
-  return await executeVerifiedPreparedSourceAttempt(source, async () => {
-    const definition = requireManifestActivityDefinition(
-      source.manifest,
-      options.activityName,
-    );
-    assertNoLegacyAttemptResources(source.manifest, definition);
-    assertSourceRuntimeResolution(
-      path.resolve(source.appDir, definition.entrypoint.path),
-    );
-    const invocation = cloneActivityAttemptInputs(options);
-    const startFrame = createEphemeralActivityAttemptStart({
-      revisionId: source.revision.revisionId,
-      activityName: options.activityName,
-      ...invocation,
-    });
-    const hasExternalPackages =
-      Array.isArray(definition.externalPackages) &&
-      definition.externalPackages.length > 0;
-    if (hasExternalPackages) {
-      return await invokePreparedSourceExternalActivity({
-        ...source,
-        activityName: options.activityName,
-        startFrame,
-      });
-    }
-    const fn = createManifestActivityFunction({
-      manifest: source.manifest,
-      activityName: options.activityName,
-      appDir: source.appDir,
-    });
-    return await fn.runActivityAttempt(startFrame);
+  const execution = resolveManifestActivityAttemptExecution(options.execution);
+  const revisionId =
+    execution.kind === 'embedded'
+      ? execution.embedded.revision.revisionId
+      : execution.source.revision.revisionId;
+  const invocation = cloneActivityAttemptInputs(options);
+  const startFrame = createEphemeralActivityAttemptStart({
+    revisionId,
+    activityName: options.activityName,
+    ...invocation,
   });
+  return await dispatchManifestActivityAttempt(
+    execution,
+    options.activityName,
+    startFrame,
+  );
+}
+
+/**
+ * Execute one embedded manifest activity as a physical Protocol v1 attempt.
+ * @param {Record<string, any>} options - Invocation options with embedded execution identity.
+ * @returns {Promise<Readonly<import('./activity-attempt.js').ActivityAttemptEvidence>>} - Physical attempt evidence.
+ */
+export async function invokeEmbeddedManifestActivityAttempt(options) {
+  validateManifestActivityAttemptOptions(options);
+  const embedded = validateEmbeddedExecution(options.execution);
+  const invocation = cloneActivityAttemptInputs(options);
+  const startFrame = createEphemeralActivityAttemptStart({
+    revisionId: embedded.revision.revisionId,
+    activityName: options.activityName,
+    ...invocation,
+  });
+  return await dispatchManifestActivityAttempt(
+    { kind: 'embedded', embedded },
+    options.activityName,
+    startFrame,
+  );
 }
 
 /**
@@ -1261,6 +1389,7 @@ export default {
   invokeEmbeddedManifestActivityAttempt,
   invokeManifestActivity,
   invokeManifestActivityAttempt,
+  invokeManifestActivityAttemptWithStart,
   runPersistedActivity,
   unwrapCompletedActivityAttempt,
 };

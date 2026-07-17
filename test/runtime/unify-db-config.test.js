@@ -11,6 +11,7 @@ import Operation from '../../src/core/lib/graph/operation.js';
 import {
   closeDB,
   createOperationsDBClient,
+  resolveExecutionLedgerTableName,
   resolveOperationsAdapterName,
   resolveOperationsTableName,
   resolveStateAdapterName,
@@ -46,11 +47,15 @@ describe('Unified DB config', () => {
         WHARFIE_CONTROL_ADAPTER: undefined,
         WHARFIE_CONTROL_PATH: undefined,
         WHARFIE_OPERATIONS_TABLE: undefined,
+        WHARFIE_EXECUTION_LEDGER_TABLE: undefined,
         OPERATIONS_TABLE: 'ignored-legacy-name',
       },
       async () => {
         expect(resolveOperationsAdapterName()).toBe('vanilla');
         expect(resolveOperationsTableName()).toBe('wharfie-operations');
+        expect(resolveExecutionLedgerTableName()).toBe(
+          'wharfie-execution-ledger',
+        );
 
         const first = await createOperationsDBClient();
         const second = await createOperationsDBClient();
@@ -144,6 +149,21 @@ describe('Unified DB config', () => {
       await db.close();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test('execution ledger table names resolve independently at call time', async () => {
+    await withEnv(
+      { WHARFIE_EXECUTION_LEDGER_TABLE: ' ledger-a ' },
+      async () => {
+        expect(resolveExecutionLedgerTableName()).toBe('ledger-a');
+        await withEnv(
+          { WHARFIE_EXECUTION_LEDGER_TABLE: 'ledger-b' },
+          async () => {
+            expect(resolveExecutionLedgerTableName()).toBe('ledger-b');
+          },
+        );
+      },
+    );
   });
 });
 

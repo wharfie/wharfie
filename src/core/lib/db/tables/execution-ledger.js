@@ -1845,6 +1845,44 @@ function transitionResult(state, attempt, receipt, applied) {
 }
 
 /**
+ * Attach the exact host start frame to a successfully persisted STARTED
+ * transition. This deliberately happens only after the durable transition is
+ * readable again, so callers cannot accidentally dispatch an attempt from a
+ * merely claimed projection.
+ * @param {{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} result - Persisted transition result.
+ * @param {string} runId - Durable run identity for diagnostics.
+ * @returns {{applied: boolean, dispatchAuthorized: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, startFrame: Readonly<Record<string, any>>}} - Started transition result.
+ */
+function startedTransitionResult(result, runId) {
+  if (!result.attempt) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'started transition has no attempt',
+    );
+  }
+  return {
+    ...result,
+    attempt: result.attempt,
+    // A receipt replay proves only that a start was durably observed, not
+    // whether another process already dispatched it. Never authorize a second
+    // physical delivery from that ambiguous response. The post-write read can
+    // also observe a newer recovery or terminal transition, so an accepted
+    // write alone is not enough: dispatch remains authorized only while this
+    // exact attempt is still the live STARTED attempt.
+    dispatchAuthorized:
+      result.applied &&
+      result.run.status === RunStatus.RUNNING &&
+      result.invocation.status === InvocationStatus.RUNNING &&
+      result.attempt.status === AttemptStatus.STARTED,
+    startFrame: createLedgerAttemptStart(
+      result.run,
+      result.invocation,
+      result.attempt,
+    ),
+  };
+}
+
+/**
  * @param {string} type - Stable transition type.
  * @param {Record<string, any>} value - Semantic transition request.
  * @returns {string} - Canonical request digest.
@@ -2802,7 +2840,7 @@ export function createExecutionLedger({
    * runtime adapter receives the attempt start frame. From this point a lost
    * response is ambiguous by default and must not be replayed automatically.
    * @param {{runId: string, invocationId: string, attemptId: string, fencingToken: string, generation: number, expectedVersion: number, transitionId: string, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Start request.
-   * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}>} - Start outcome.
+   * @returns {Promise<{applied: boolean, dispatchAuthorized: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, startFrame: Readonly<Record<string, any>>}>} - Start outcome and exact durable host frame. Only a `dispatchAuthorized: true` response may be dispatched.
    */
   async function markAttemptStarted(options) {
     const value = cloneBoundedJsonObject(
@@ -2866,7 +2904,12 @@ export function createExecutionLedger({
       ),
       requestDigest,
     );
-    if (existing) return existingTransitionResult(state, existing);
+    if (existing) {
+      return startedTransitionResult(
+        existingTransitionResult(state, existing),
+        common.runId,
+      );
+    }
     if (state.head.version !== common.expectedVersion) {
       throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
     }
@@ -2925,17 +2968,20 @@ export function createExecutionLedger({
       },
       { run: nextRun, invocation: nextInvocation, attempt: nextAttempt },
     );
-    return await appendOrReplay({
-      state,
-      runId: common.runId,
-      transitionId: common.transitionId,
-      requestDigest,
-      event,
-      nextRun,
-      nextInvocation,
-      nextAttempt,
-      currentAttempt: attempt,
-    });
+    return startedTransitionResult(
+      await appendOrReplay({
+        state,
+        runId: common.runId,
+        transitionId: common.transitionId,
+        requestDigest,
+        event,
+        nextRun,
+        nextInvocation,
+        nextAttempt,
+        currentAttempt: attempt,
+      }),
+      common.runId,
+    );
   }
 
   /**

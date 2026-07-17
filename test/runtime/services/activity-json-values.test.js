@@ -361,6 +361,52 @@ describe('JSON activity values', () => {
     expect(first.start.fencingToken).not.toBe(second.start.fencingToken);
   });
 
+  it('dispatches a scheduler-owned start frame without regenerating durable identity', async () => {
+    const { invokeManifestActivityAttemptWithStart } = await import(
+      APP_RUNS_IMPORT
+    );
+    const execution = sourceExecution();
+    const startFrame = {
+      protocol: 'wharfie.activity',
+      protocolVersion: 1,
+      type: 'start',
+      revisionId: execution.prepared.revision.revisionId,
+      activityId: 'echo',
+      runId: 'durable-run-1',
+      invocationId: 'manual',
+      attemptId: 'durable-attempt-1',
+      fencingToken: 'durable-fence-1',
+      input: { durable: true },
+      caller: { metadata: { source: 'scheduler' } },
+    };
+
+    const evidence = await invokeManifestActivityAttemptWithStart({
+      activityName: 'echo',
+      startFrame,
+      execution,
+    });
+
+    expect(evidence.start).toEqual(startFrame);
+    expect(invocationCalls).toHaveLength(1);
+    expect(invocationCalls[0].runtime.invocation).toEqual({
+      revisionId: startFrame.revisionId,
+      activityId: startFrame.activityId,
+      runId: startFrame.runId,
+      invocationId: startFrame.invocationId,
+      attemptId: startFrame.attemptId,
+      fencingToken: startFrame.fencingToken,
+    });
+
+    await expect(
+      invokeManifestActivityAttemptWithStart({
+        activityName: 'echo',
+        startFrame: { ...startFrame, revisionId: `wrv1_${'A'.repeat(43)}` },
+        execution,
+      }),
+    ).rejects.toThrow(/does not match execution revision/i);
+    expect(invocationCalls).toHaveLength(1);
+  });
+
   it('does not accept a source outcome when the prepared revision changes while it runs', async () => {
     const { invokeManifestActivity } = await import(APP_RUNS_IMPORT);
     let verificationCount = 0;

@@ -247,8 +247,26 @@ for (const adapter of getAdapterMatrix()) {
           transitionId: 'start-1',
         });
         expect(started).toMatchObject({
+          dispatchAuthorized: true,
           run: { version: 3, lastSequence: 3 },
           attempt: { status: AttemptStatus.STARTED, version: 2 },
+        });
+        expect(started.startFrame).toEqual(attemptStart(attemptId, 'fence-1'));
+        expect(Object.isFrozen(started.startFrame)).toBe(true);
+        await expect(
+          ledger.markAttemptStarted({
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            attemptId,
+            fencingToken: 'fence-1',
+            generation: 1,
+            expectedVersion: 2,
+            transitionId: 'start-1',
+          }),
+        ).resolves.toMatchObject({
+          applied: false,
+          dispatchAuthorized: false,
+          startFrame: attemptStart(attemptId, 'fence-1'),
         });
 
         const invalidCancelledTerminal = {

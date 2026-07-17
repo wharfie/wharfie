@@ -8,7 +8,7 @@ import paths from '../paths.js';
  *
  * This module is intentionally the only place in `src/core/lib` that reads
  * Wharfie DB-related environment variables (adapter selection, local paths,
- * and the operations-control table name).
+ * and durable control-plane table names).
  */
 
 /**
@@ -107,6 +107,19 @@ export function resolveOperationsTableName() {
   const name = process.env.WHARFIE_OPERATIONS_TABLE;
   if (name && String(name).trim()) return String(name).trim();
   return 'wharfie-operations';
+}
+
+/**
+ * Resolve the append-only execution-ledger table name. It is deliberately
+ * separate from the legacy mutable operations table: DynamoDB needs a
+ * distinct `run_id`/`sort_key` physical schema, while local adapters can
+ * safely share the same control-store path under a different table name.
+ * @returns {string} - Result.
+ */
+export function resolveExecutionLedgerTableName() {
+  const name = process.env.WHARFIE_EXECUTION_LEDGER_TABLE;
+  if (name && String(name).trim()) return String(name).trim();
+  return 'wharfie-execution-ledger';
 }
 
 /**
@@ -271,6 +284,7 @@ export default {
   resolveStateAdapterName,
   resolveOperationsAdapterName,
   resolveOperationsTableName,
+  resolveExecutionLedgerTableName,
   createDBClient,
   createOperationsDBClient,
   createStateDBClient,

@@ -136,12 +136,31 @@ wharfie app manifest ./path/to/app
 wharfie app run <activity-id> --dir ./path/to/app --input '{"who":"cli-user"}'
 ```
 
-To create a persisted local operation for an activity, use `wharfie ops`:
+To create one durable local manual run for an activity, use `wharfie ops` with
+an operator-chosen idempotency identity:
 
 ```bash
-wharfie ops run --activity <activity-id> --dir ./path/to/app --input '{"who":"cli-user"}'
-wharfie ops list --dir ./path/to/app
+wharfie ops run --activity <activity-id> --dir ./path/to/app \
+  --operation-id <stable-run-id> --input '{"who":"cli-user"}'
 ```
+
+The first run writes an append-only run → invocation → attempt ledger. Reusing
+the same `--operation-id` with identical app revision, activity, input, and
+caller metadata returns its durable terminal without running the activity
+again. A changed request with that ID fails rather than silently deduplicating.
+`--recover` is deliberately explicit: use it only after confirming an earlier
+local runner is gone. It can release a claim that never started; a begun
+attempt becomes visibly blocked as `UNCERTAIN` instead of replaying code.
+Recovery requires an explicit `--operation-id` and refuses to create work if
+that durable run is absent, so a typo cannot become a new activity. It reads
+the persisted run before parsing current input or compiling the activity
+source; this lets a begun attempt be reconciled after its activity source has
+changed or no longer builds. The current app manifest still has to load to
+derive the app-scoped run identity; fully source-independent `--run-id`
+recovery is not available yet.
+
+Run-history listing, cancellation, and a resident service lifecycle are not
+yet available on this ledger path.
 
 ## Package the app
 

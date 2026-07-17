@@ -95,8 +95,9 @@ describe('docs command surface', () => {
       `wharfie app run <activity-id> --dir ./path/to/app --input '{\"who\":\"cli-user\"}'`,
     );
     expect(quickstart).toContain(
-      `wharfie ops run --activity <activity-id> --dir ./path/to/app --input '{\"who\":\"cli-user\"}'`,
+      'wharfie ops run --activity <activity-id> --dir ./path/to/app',
     );
-    expect(quickstart).toContain('wharfie ops list --dir ./path/to/app');
+    expect(quickstart).toContain('--operation-id <stable-run-id>');
+    expect(quickstart).toContain('append-only run → invocation → attempt');
   });
 });
