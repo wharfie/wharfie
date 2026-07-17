@@ -1,6 +1,6 @@
 # Wharfie roadmap
 
-**Status:** project reset in progress · **Last updated:** 2026-07-16
+**Status:** project reset in progress · **Last updated:** 2026-07-17
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -59,12 +59,15 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 - [x] Define the minimal TypeScript application manifest around a developer-owned CLI and named activities.
 - [x] Define the strict application/activity logical-ID contract plus exact target and portable-resource descriptors.
-- [ ] Define schemas and stable identifiers for immutable logical revisions, target-specific artifacts, and deployment profiles.
+- [x] Define schemas and stable identifiers for immutable logical revisions, target-specific artifacts, and deployment profiles.
+- [x] Compile one target-independent revision from the strict contract, dependency lock, Wharfie runtime, source, and behavior assets; consume a sealed application snapshot and audit the static bundled-module graph.
 - [x] Keep build-only settings outside the runtime manifest and reject ActorSystem, workflow, and scheduler public authoring until their contracts are designed.
 - [ ] Preserve normal argv, stdio, exit codes, and CLI-library choice in local and packaged execution.
-- [ ] Package one content-addressed SEA executable for a clean Linux target and record its locked inputs and provenance; reproducible builds are a later hardening goal.
+- [x] Content-address each final SEA executable, pair it with an immutable artifact-record sidecar, record exact Node/toolchain/target-closure/signing provenance, and expose embedded revision/runtime metadata through the operator CLI.
+- [ ] Make target packaging consume and fail-check one frozen complete transitive external dependency closure, then prove the resulting artifact on a clean Linux target; reproducible builds are a later hardening goal.
 - [x] Define a reserved, non-colliding dispatch mechanism for Wharfie operator commands inside an application-owned executable: `<app> wharfie <command>`.
 - [ ] Define the versioned activity protocol and test its serialization, cancellation, deadline, log, error, and host-effect boundaries without requiring a second language implementation yet.
+- [ ] Define an explicit declaration or rejection rule for runtime-computed module paths that cannot be proven by the static bundle graph.
 - [x] Build one executable example and an end-to-end test from authored TypeScript through a clean generated-SEA execution.
 - [ ] Prove one real target-specific Node-API activity dependency from a moved SEA; do not treat text fixtures with a `.node` suffix as native-addon evidence.
 - [ ] Add signed Windows and Developer-ID-signed, notarized macOS release targets after the Linux release path is stable.
@@ -77,7 +80,8 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 - [ ] Decide and record whether durable workflows use deterministic replay or an explicitly persisted state-machine/continuation model, including timers, signals, cancellation, side effects, and revision changes.
 - [ ] Define the run → invocation → attempt → effect ledger and state machines.
-- [ ] Persist immutable revision bindings, inputs, outputs, scheduling decisions, attempts, and operator actions.
+- [x] Bind current persisted operation snapshots, claims, retries, cancellation, and result commits to one immutable revision; persist stable user activity context separately from volatile delivery-attempt metadata.
+- [ ] Persist immutable revision bindings, inputs, outputs, scheduling decisions, attempts, and operator actions in the full append-only ledger.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, cancellation, retry policy, and recovery.
 - [ ] Implement substantiated `pure`, `idempotent`, and `transactional` replay properties, make begun in-process handlers `unsafe` by default, and add a durable blocked `uncertain` state with explicit reconciliation/compensation paths.
 - [ ] Provide transactional inbox/outbox behavior for Wharfie-managed state and queues, with destination-side deduplication committed atomically with consumer mutations where exactly-once processing is claimed.
@@ -124,7 +128,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 **Goal:** make unattended software straightforward to understand and change across many coding sessions.
 
 - [ ] Pin every run to an immutable revision and define explicit behavior for in-flight work during upgrades.
-- [ ] Make build inputs, dependency locks, target matrices, and provenance inspectable.
+- [x] Make build-input and dependency-lock digests, target matrices, embedded revision/runtime metadata, and exact artifact provenance inspectable through package results, the operator metadata command, and canonical sidecars.
 - [ ] Make builds reproducible where the selected packaging toolchain supports it, while always content-addressing the produced artifacts.
 - [ ] Support staged rollout, health gates, rollback, and garbage collection of unreferenced revisions.
 - [ ] Add schema/version migration contracts for durable application and control state.
@@ -135,10 +139,9 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 ## Immediate queue
 
-1. Review and merge the stacked reset, inventory, packaging, v1-deletion, strict-manifest, and atomic-operation-store changes.
-2. Restore GitHub authentication and execute the archived branch, PR, and issue cleanup decisions.
-3. Run the current stack through the clean Linux SEA proof in hosted CI and review the resulting narrow boundary.
-4. Define schemas and stable identifiers for immutable logical revisions, target-specific artifacts, and deployment profiles.
-5. Decide the durable workflow model and define the run → invocation → attempt → effect ledger before adding schedules or workflows.
+1. Restore GitHub authentication, recheck the archive tags, publish the current stack, and execute the archived PR/branch/issue cleanup decisions.
+2. Make SEA external installation consume and fail-check one frozen complete transitive dependency closure.
+3. Run the current content-addressed stack through the clean Linux SEA proof in hosted CI, then prove argv/stdio/exit behavior and one real target-specific Node-API dependency.
+4. Decide the durable workflow model and define the run → invocation → attempt → effect ledger before adding schedules or workflows.
 
-The latest dated handoff at [llm/checkpoints/2026-07-16-atomic-operation-store.md](llm/checkpoints/2026-07-16-atomic-operation-store.md) contains exact repository state and restart instructions.
+The latest dated handoff at [llm/checkpoints/2026-07-17-immutable-identity-spine.md](llm/checkpoints/2026-07-17-immutable-identity-spine.md) contains exact repository state and restart instructions.

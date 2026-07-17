@@ -22,8 +22,19 @@ operation cannot silently move to different code, bytes, or bindings.
 
 ### Logical revisions
 
-A logical revision is target-independent. `RevisionInputV1` is a canonical,
-JSON-compatible record containing:
+A logical revision is target-independent. Its canonical JSON-compatible
+identity payload is exactly:
+
+```text
+{
+  schemaVersion: 1,
+  kind: "applicationRevision",
+  contract: <strict target-free application contract>,
+  inputs: <versioned source, dependencies, runtime, and optional asset locks>
+}
+```
+
+Together, `contract` and `inputs` contain:
 
 - the strict canonical application contract projected without `targets` or
   other target, signing, build-host, deployment, or provider choices;
@@ -39,12 +50,15 @@ application behavior must be represented by one of the source, lock, runtime,
 or behavior-asset digests. Signing credentials, timestamps, build logs, target
 selection, and provider configuration are not revision inputs.
 
-Every digest role and digest algorithm is named in `RevisionInputV1`; raw
+Every digest role and digest algorithm is named in the identity payload; raw
 digests are not concatenated without structure. The revision identifier is:
 
 ```text
 revisionId = "wrv1_" + base64url(
-  SHA-256(UTF-8("wharfie:revision:v1\0") || canonicalJson(RevisionInputV1))
+  SHA-256(
+    UTF-8("wharfie:revision:v1\0") ||
+      canonicalJson(identity payload excluding revisionId)
+  )
 )
 ```
 
@@ -90,24 +104,26 @@ directly addresses the final bytes. Any byte change, including a different
 signature or signing timestamp, creates a different artifact. One logical
 revision and target may therefore have more than one artifact record.
 
-An immutable `ArtifactRecordV1` binds at least:
+An immutable `ArtifactRecordV1` binds exactly:
 
 - `artifactId`, byte-digest algorithm and value, and byte length;
 - the owning application ID and `revisionId`;
-- the exact Node version, platform, architecture, and Linux libc target;
-- the builder identity/version and relevant toolchain or builder-input digests;
-- the revision inputs or a reference to their immutable record;
-- signing mode and non-secret signer or certificate identity when applicable;
-  and
-- an immutable provenance record or provenance digest sufficient to audit how
-  those final bytes were produced.
+- the exact Node version, platform, architecture, Linux libc target, and
+  canonical target ID;
+- the versioned artifact format; and
+- one strict provenance object containing the builder identity/version,
+  runtime/toolchain digests, exact Node binary and optional official archive,
+  target dependency-closure digest, and signing mode plus non-secret signer
+  identity when applicable.
 
-Build time, host description, logs, and similar observations may accompany the
-record. Artifact records and provenance statements are append-only assertions:
-producing the same final bytes again can add another immutable provenance
-statement without changing the byte-derived `artifactId`, but cannot rewrite an
-earlier statement. A conflicting revision or target association fails
-validation rather than changing an accepted record.
+`ArtifactRecordV1` contains exactly one strict inline provenance object and
+rejects build time, host description, logs, and other observational fields.
+Those observations belong in a separate log or envelope. One published
+content-addressed executable/sidecar pair is one immutable v1 association; the
+same bytes paired with different v1 provenance conflicts rather than rewriting
+the sidecar. A future registry may attach several append-only provenance
+statements to the same byte-derived `artifactId`, but it cannot rewrite an
+earlier statement or change an accepted revision or target association.
 
 The initial SEA provenance records the exact Node executable digest, an
 official Node download receipt when one is available, the exact embedded target
@@ -120,33 +136,51 @@ pair, rejects a conflicting or incomplete pair, and never overwrites an
 existing content-addressed destination.
 
 The final `artifactId` is not required or permitted as an identity-bearing field
-inside the bytes it names. An embedded runtime manifest may contain the
-`revisionId`, exact target, and other pre-byte-address facts, but not a claimed
-hash of its own final artifact. Artifact verification compares downloaded bytes
-with the external immutable artifact record. This avoids a self-hash cycle and
-ensures verification covers the signature and every post-build mutation.
+inside the bytes it names. The SEA reserves
+`<WHARFIE_APP>/revision.json` for the complete validated
+`ApplicationRevisionV1` and `<WHARFIE_APP>/runtime.json` for this exact strict
+runtime record:
+
+```text
+{
+  schemaVersion: 1,
+  kind: "artifactRuntime",
+  appId,
+  revisionId,
+  target
+}
+```
+
+The embedded pair is cross-validated for application and revision agreement.
+It deliberately contains neither `artifactId` nor provenance. Artifact
+verification compares downloaded bytes with the external immutable artifact
+record. This avoids a self-hash cycle and ensures verification covers the
+signature and every post-build mutation.
+
 The reserved `wharfie metadata` command reports the embedded revision and
 runtime records and computes the identity of the executable bytes actually
 running; it does not treat that runtime observation as an embedded self-claim.
 
 ### Deployment profiles
 
-`DeploymentProfileV1` is deliberately narrow. It contains:
+`DeploymentProfileV1` is deliberately narrow. It contains only:
 
 - a human-authored `profile.id` using Wharfie's canonical logical-ID grammar;
 - the application ID the profile is allowed to deploy;
 - one exact target using the same Node, platform, architecture, and libc fields
   as an artifact record; and
-- optional current resource bindings, each explicitly marked `external` and
-  referring to an already-existing resource.
+- optional `db`, `queue`, and `objectStorage` bindings, each with the exact shape
+  `{ kind: "external", ref: <canonical logical ID> }` and referring to an
+  already-existing resource.
 
 An external binding is a reference, not desired infrastructure. It contains no
 embedded credential or secret, grants Wharfie no ownership claim, and cannot
 authorize create, mutate, or destroy behavior. Current profile revisions cannot
-contain managed-resource bindings.
+contain managed-resource bindings, credentials, environment values, provider
+configuration, topology, or unknown binding kinds.
 
-The complete canonical profile content, excluding `profileRevisionId` itself
-and non-semantic annotations, produces an immutable domain-separated identity:
+The complete strict canonical profile content, excluding
+`profileRevisionId` itself, produces an immutable domain-separated identity:
 
 ```text
 profileRevisionId = "wpr1_" + base64url(
@@ -183,6 +217,12 @@ Other derived trigger identities decide whether revision is part of their
 domain-separated preimage according to the trigger's replay semantics. Claims,
 retries, and result commits validate the mandatory persisted `revisionId` along
 with their other fencing values.
+
+The immutable operation association also contains the activity event and stable
+user-supplied activity context. Provider receipts, delivery observations, and
+other current-attempt metadata are excluded from durable identity and supplied
+separately as volatile `attemptContext`. Retrying may change attempt metadata;
+reusing the same operation ID with different stable context fails visibly.
 
 ### Initial implementation boundary
 
@@ -233,7 +273,9 @@ This decision does not define or implement:
 - provider credential handling or a general infrastructure-as-code schema;
 - the future `Deployment` lifecycle, rollout, rollback, or node-enrollment
   state machine;
-- the run → invocation → attempt → effect ledger; or
+- the run → invocation → attempt → effect ledger;
 - a reproducible-build claim. Provenance and final-byte addressing make the
   actual output inspectable even when independently rebuilding identical bytes
-  has not yet been proven.
+  has not yet been proven; or
+- a remote artifact/provenance registry or multi-statement provenance storage
+  model.
