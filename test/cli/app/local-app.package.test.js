@@ -3,6 +3,7 @@
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
@@ -14,8 +15,14 @@ import {
   APP_MANIFEST_ASSET_NAME,
   APP_MANIFEST_ASSET_PREFIX,
 } from '../../../src/core/resources/builds/lib/app-manifest-asset.js';
+import {
+  APPLICATION_REVISION_ASSET_NAME,
+  ARTIFACT_RUNTIME_ASSET_NAME,
+  validateEmbeddedRevisionRuntimePair,
+} from '../../../src/core/resources/builds/lib/revision-runtime-assets.js';
 import ActorSystem from '../../../src/core/resources/builds/actor-system.js';
 import FunctionResource from '../../../src/core/resources/builds/function-resource.js';
+import MacOSBinarySignature from '../../../src/core/resources/builds/macos-binary-signature.js';
 import NodeBinary from '../../../src/core/resources/builds/node-binary.js';
 import SeaBuild from '../../../src/core/resources/builds/sea-build.js';
 
@@ -96,17 +103,43 @@ async function writeTransactionalPackageApp(dir, appName, targets) {
 
 /**
  * @param {string} appName - App name.
- * @param {{ nodeVersion: string, platform: string, architecture: string, libc?: string }} target - Build target.
+ * @param {string | Buffer} contents - Exact artifact bytes.
+ * @param {{ platform: string }} target - Build target.
  * @returns {string} - Artifact file name.
  */
-function getArtifactFileName(appName, target) {
-  const canonicalTarget =
-    target.platform === 'linux' && !target.libc
-      ? { ...target, libc: 'glibc' }
-      : target;
-  return `${appName}-${getTargetSelector(canonicalTarget)}${
+function getArtifactFileName(appName, contents, target) {
+  const digest = createHash('sha256').update(contents).digest('hex');
+  return `${appName}-sha256-${digest}${
     target.platform === 'win32' ? '.exe' : ''
   }`;
+}
+
+/**
+ * Supply the reconciled, non-secret inputs normally produced by NodeBinary and
+ * MacOSBinarySignature when a package test replaces the actor reconcile loop.
+ * @param {ActorSystem} actorSystem - Mocked actor system.
+ * @param {string} buildDir - Private fake-build directory.
+ */
+async function prepareMockArtifactProvenance(actorSystem, buildDir) {
+  await fsp.mkdir(buildDir, { recursive: true });
+
+  for (const resource of actorSystem.getResources()) {
+    if (resource instanceof NodeBinary) {
+      const version = String(resource.get('version')).replace(/^v/, '');
+      if (!resource.has('exactVersion')) {
+        resource._setUNSAFE('exactVersion', `v${version}`);
+      }
+      if (!resource.has('binaryPath')) {
+        const nodePath = path.join(buildDir, `${resource.name}.node`);
+        await fsp.writeFile(nodePath, `mock node ${resource.name}\n`, 'utf8');
+        resource._setUNSAFE('binaryPath', nodePath);
+      }
+    }
+
+    if (resource instanceof MacOSBinarySignature) {
+      resource._setUNSAFE('signingResult', { mode: 'ad-hoc' });
+    }
+  }
 }
 
 afterEach(() => {
@@ -121,6 +154,8 @@ describe('packageLocalApp', () => {
     const outputDir = path.join(dir, 'dist-output');
     /** @type {string | undefined} */
     let temporaryManifestPath;
+    /** @type {string[]} */
+    const temporaryRevisionRuntimePaths = [];
 
     try {
       await fsp.mkdir(path.join(dir, 'src', 'activities'), { recursive: true });
@@ -189,10 +224,16 @@ describe('packageLocalApp', () => {
         .spyOn(ActorSystem.prototype, 'initializeEnvironment')
         .mockImplementation(
           /** @this {ActorSystem} */ async function () {
-            expect(this.get('cli')).toEqual({
-              entrypoint: path.join(dir, 'src', 'cli.js'),
+            const snapshottedCli = this.get('cli');
+            expect(snapshottedCli).toEqual({
+              entrypoint: expect.stringMatching(
+                /\.wharfie[/\\]revision-snapshots[/\\]revision-[^/\\]+[/\\]app[/\\]src[/\\]cli\.js$/,
+              ),
               export: 'launch',
             });
+            expect(snapshottedCli.entrypoint).not.toBe(
+              path.join(dir, 'src', 'cli.js'),
+            );
             expect(this.getMacOSSigningCredentials()).toEqual({
               certificateBase64: 'certificate-data',
               certificatePassword: 'certificate-password',
@@ -231,16 +272,27 @@ describe('packageLocalApp', () => {
         );
       jest.spyOn(ActorSystem.prototype, 'reconcile').mockImplementation(
         /** @this {ActorSystem} */ async function () {
-          const buildDir = path.join(dir, '.fake-builds');
-          await fsp.mkdir(buildDir, { recursive: true });
+          const buildDir = path.join(dir, '.wharfie', 'mock-builds');
+          await prepareMockArtifactProvenance(this, buildDir);
 
           for (const resource of this.getResources()) {
             if (resource instanceof SeaBuild) {
-              const manifestAssetPath = resource.get('assets', {})[
-                APP_MANIFEST_ASSET_NAME
-              ];
+              const assets = resource.get('assets', {});
+              const manifestAssetPath = assets[APP_MANIFEST_ASSET_NAME];
+              const revisionAssetPath = assets[APPLICATION_REVISION_ASSET_NAME];
+              const runtimeAssetPath = assets[ARTIFACT_RUNTIME_ASSET_NAME];
               temporaryManifestPath = manifestAssetPath;
+              temporaryRevisionRuntimePaths.push(
+                revisionAssetPath,
+                runtimeAssetPath,
+              );
               expect((await fsp.stat(manifestAssetPath)).mode & 0o777).toBe(
+                0o600,
+              );
+              expect((await fsp.stat(revisionAssetPath)).mode & 0o777).toBe(
+                0o600,
+              );
+              expect((await fsp.stat(runtimeAssetPath)).mode & 0o777).toBe(
                 0o600,
               );
               const embeddedManifest = JSON.parse(
@@ -281,6 +333,15 @@ describe('packageLocalApp', () => {
               };
               const selector = getTargetSelector(target);
               const fakeBinaryPath = path.join(buildDir, selector);
+              const embeddedRevisionRuntime =
+                validateEmbeddedRevisionRuntimePair(
+                  JSON.parse(await fsp.readFile(revisionAssetPath, 'utf8')),
+                  JSON.parse(await fsp.readFile(runtimeAssetPath, 'utf8')),
+                );
+              expect(
+                embeddedRevisionRuntime.revision.contract,
+              ).not.toHaveProperty('targets');
+              expect(embeddedRevisionRuntime.runtime.target).toEqual(target);
 
               await fsp.writeFile(
                 fakeBinaryPath,
@@ -310,20 +371,42 @@ describe('packageLocalApp', () => {
       expect(result.app).toEqual({ id: 'plain-object-package-demo' });
       expect(result.targets).toEqual([currentTarget]);
       expect(result.artifacts).toHaveLength(1);
+      const artifactContents = `#!/bin/sh\necho ${getTargetSelector(currentTarget)}\n`;
       expect(result.artifacts[0]).toEqual(
         expect.objectContaining({
-          fileName: `plain-object-package-demo-${getTargetSelector(currentTarget)}${
-            process.platform === 'win32' ? '.exe' : ''
-          }`,
+          fileName: getArtifactFileName(
+            'plain-object-package-demo',
+            artifactContents,
+            currentTarget,
+          ),
           target: currentTarget,
+          artifactId: expect.stringMatching(/^waf1_[A-Za-z0-9_-]{43}$/),
+          revisionId: result.revision.revisionId,
+          size: Buffer.byteLength(artifactContents),
+        }),
+      );
+      expect(result.revision.revisionId).toMatch(/^wrv1_[A-Za-z0-9_-]{43}$/);
+      expect(result.artifacts[0].record).toEqual(
+        expect.objectContaining({
+          artifactId: result.artifacts[0].artifactId,
+          revisionId: result.revision.revisionId,
+          byteDigest: result.artifacts[0].byteDigest,
+          size: result.artifacts[0].size,
         }),
       );
       expect(existsSync(result.artifacts[0].path)).toBe(true);
+      expect(existsSync(result.artifacts[0].recordPath)).toBe(true);
+      await expect(
+        fsp.readFile(result.artifacts[0].recordPath, 'utf8'),
+      ).resolves.toContain(result.artifacts[0].artifactId);
       await expect(
         fsp.readFile(result.artifacts[0].path, 'utf8'),
-      ).resolves.toBe(`#!/bin/sh\necho ${getTargetSelector(currentTarget)}\n`);
+      ).resolves.toBe(artifactContents);
       expect(temporaryManifestPath).toEqual(expect.any(String));
       expect(existsSync(String(temporaryManifestPath))).toBe(false);
+      for (const temporaryPath of temporaryRevisionRuntimePaths) {
+        expect(existsSync(temporaryPath)).toBe(false);
+      }
       expect(
         (await fsp.readdir(outputDir)).some((entry) =>
           entry.startsWith('.wharfie-package-'),
@@ -342,13 +425,15 @@ describe('packageLocalApp', () => {
     jest.spyOn(ActorSystem.prototype, 'reconcile').mockImplementation(
       /** @this {ActorSystem} */ async function () {
         const buildDir = path.join(outputDir, '.fake-builds');
-        await fsp.mkdir(buildDir, { recursive: true });
 
         for (const resource of this.getResources()) {
           if (resource instanceof NodeBinary) {
             expect(resource.has('exactVersion')).toBe(false);
           }
+        }
+        await prepareMockArtifactProvenance(this, buildDir);
 
+        for (const resource of this.getResources()) {
           if (resource instanceof SeaBuild) {
             const target = {
               nodeVersion: String(resource.get('nodeVersion')),
@@ -382,12 +467,16 @@ describe('packageLocalApp', () => {
       expect(result.app).toEqual({ id: 'hello-world-demo' });
       expect(result.targets).toEqual([currentTarget]);
       expect(result.artifacts).toHaveLength(1);
+      const artifactContents = `#!/bin/sh\necho ${getTargetSelector(currentTarget)}\n`;
       expect(result.artifacts[0]).toEqual(
         expect.objectContaining({
-          fileName: `hello-world-demo-${getTargetSelector(currentTarget)}${
-            process.platform === 'win32' ? '.exe' : ''
-          }`,
+          fileName: getArtifactFileName(
+            'hello-world-demo',
+            artifactContents,
+            currentTarget,
+          ),
           target: currentTarget,
+          revisionId: result.revision.revisionId,
         }),
       );
       expect(existsSync(result.artifacts[0].path)).toBe(true);
@@ -1169,24 +1258,25 @@ try {
         architecture: 'arm64',
       },
     ];
+    const previousOutput = path.join(outputDir, 'previous-artifact');
     const firstOutput = path.join(
       outputDir,
-      getArtifactFileName(appName, targets[0]),
+      getArtifactFileName(appName, 'new-artifact-0', targets[0]),
     );
     const secondOutput = path.join(
       outputDir,
-      getArtifactFileName(appName, targets[1]),
+      getArtifactFileName(appName, 'new-artifact-1', targets[1]),
     );
 
     try {
       await writeTransactionalPackageApp(dir, appName, targets);
       await fsp.mkdir(outputDir, { recursive: true });
-      await fsp.writeFile(firstOutput, 'previous-artifact', 'utf8');
+      await fsp.writeFile(previousOutput, 'previous-artifact', 'utf8');
 
       jest.spyOn(ActorSystem.prototype, 'reconcile').mockImplementation(
         /** @this {ActorSystem} */ async function () {
-          const buildDir = path.join(dir, '.fake-builds');
-          await fsp.mkdir(buildDir, { recursive: true });
+          const buildDir = path.join(dir, '.wharfie', 'mock-builds');
+          await prepareMockArtifactProvenance(this, buildDir);
           let index = 0;
           for (const resource of this.getResources()) {
             if (!(resource instanceof SeaBuild)) continue;
@@ -1216,12 +1306,13 @@ try {
       await expect(packageLocalApp({ dir, outputDir })).rejects.toThrow(
         'staged-copy-failure-sentinel',
       );
-      await expect(fsp.readFile(firstOutput, 'utf8')).resolves.toBe(
+      await expect(fsp.readFile(previousOutput, 'utf8')).resolves.toBe(
         'previous-artifact',
       );
+      expect(existsSync(firstOutput)).toBe(false);
       expect(existsSync(secondOutput)).toBe(false);
       expect(await fsp.readdir(outputDir)).toEqual([
-        path.basename(firstOutput),
+        path.basename(previousOutput),
       ]);
     } finally {
       await fsp.rm(dir, { recursive: true, force: true });
@@ -1246,24 +1337,25 @@ try {
         architecture: 'arm64',
       },
     ];
+    const previousOutput = path.join(outputDir, 'previous-artifact');
     const firstOutput = path.join(
       outputDir,
-      getArtifactFileName(appName, targets[0]),
+      getArtifactFileName(appName, 'new-artifact-0', targets[0]),
     );
     const secondOutput = path.join(
       outputDir,
-      getArtifactFileName(appName, targets[1]),
+      getArtifactFileName(appName, 'new-artifact-1', targets[1]),
     );
 
     try {
       await writeTransactionalPackageApp(dir, appName, targets);
       await fsp.mkdir(outputDir, { recursive: true });
-      await fsp.writeFile(firstOutput, 'previous-artifact', 'utf8');
+      await fsp.writeFile(previousOutput, 'previous-artifact', 'utf8');
 
       jest.spyOn(ActorSystem.prototype, 'reconcile').mockImplementation(
         /** @this {ActorSystem} */ async function () {
           const buildDir = path.join(dir, '.fake-builds');
-          await fsp.mkdir(buildDir, { recursive: true });
+          await prepareMockArtifactProvenance(this, buildDir);
           let index = 0;
           for (const resource of this.getResources()) {
             if (!(resource instanceof SeaBuild)) continue;
@@ -1275,34 +1367,143 @@ try {
         },
       );
 
-      const rename = fsp.rename.bind(fsp);
-      let publishRenameCount = 0;
+      const link = fsp.link.bind(fsp);
       jest
-        .spyOn(fsp, 'rename')
+        .spyOn(fsp, 'link')
         .mockImplementation(async (source, destination) => {
           if (
             String(source).includes('.wharfie-package-') &&
-            path.dirname(String(destination)) === outputDir &&
-            path.basename(path.dirname(String(source))) === 'ready'
+            String(destination) === secondOutput
           ) {
-            publishRenameCount += 1;
-            if (publishRenameCount === 2) {
-              throw new Error('publish-rename-failure-sentinel');
-            }
+            throw new Error('publish-link-failure-sentinel');
           }
-          return rename(source, destination);
+          return link(source, destination);
         });
 
       await expect(packageLocalApp({ dir, outputDir })).rejects.toThrow(
-        'publish-rename-failure-sentinel',
+        'publish-link-failure-sentinel',
       );
-      await expect(fsp.readFile(firstOutput, 'utf8')).resolves.toBe(
+      await expect(fsp.readFile(previousOutput, 'utf8')).resolves.toBe(
         'previous-artifact',
       );
+      expect(existsSync(firstOutput)).toBe(false);
       expect(existsSync(secondOutput)).toBe(false);
       expect(await fsp.readdir(outputDir)).toEqual([
-        path.basename(firstOutput),
+        path.basename(previousOutput),
       ]);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reuses one exact artifact association and rejects the same bytes under a new revision', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-package-association-'),
+    );
+    const outputDir = path.join(dir, 'dist');
+    const appName = 'artifact-association-demo';
+    const targets = [
+      {
+        nodeVersion: process.versions.node,
+        platform: 'linux',
+        architecture: 'x64',
+      },
+    ];
+
+    try {
+      await writeTransactionalPackageApp(dir, appName, targets);
+      jest.spyOn(ActorSystem.prototype, 'reconcile').mockImplementation(
+        /** @this {ActorSystem} */ async function () {
+          const buildDir = path.join(dir, '.wharfie', 'mock-builds');
+          await prepareMockArtifactProvenance(this, buildDir);
+          for (const resource of this.getResources()) {
+            if (!(resource instanceof SeaBuild)) continue;
+            const sourcePath = path.join(buildDir, resource.name);
+            await fsp.writeFile(sourcePath, 'identical-artifact', 'utf8');
+            resource._setUNSAFE('binaryPath', sourcePath);
+          }
+        },
+      );
+
+      const first = await packageLocalApp({ dir, outputDir });
+      const firstArtifact = first.artifacts[0];
+      const firstRecordJson = await fsp.readFile(
+        firstArtifact.recordPath,
+        'utf8',
+      );
+      const link = jest.spyOn(fsp, 'link');
+      const repeated = await packageLocalApp({ dir, outputDir });
+      expect(repeated.artifacts[0].artifactId).toBe(firstArtifact.artifactId);
+      expect(repeated.artifacts[0].revisionId).toBe(firstArtifact.revisionId);
+      expect(link).not.toHaveBeenCalled();
+
+      await fsp.writeFile(
+        path.join(dir, 'src', 'cli.js'),
+        'export default async function cli() { return "changed"; }\n',
+      );
+      await expect(packageLocalApp({ dir, outputDir })).rejects.toThrow(
+        /revisionId.*trusted inputs|owning revision/i,
+      );
+      await expect(fsp.readFile(firstArtifact.path, 'utf8')).resolves.toBe(
+        'identical-artifact',
+      );
+      await expect(
+        fsp.readFile(firstArtifact.recordPath, 'utf8'),
+      ).resolves.toBe(firstRecordJson);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('never overwrites a destination created after publication preflight', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-package-no-replace-'),
+    );
+    const outputDir = path.join(dir, 'dist');
+    const appName = 'no-replace-demo';
+    const targets = [
+      {
+        nodeVersion: process.versions.node,
+        platform: 'linux',
+        architecture: 'x64',
+      },
+    ];
+    /** @type {string | undefined} */
+    let racedPath;
+
+    try {
+      await writeTransactionalPackageApp(dir, appName, targets);
+      jest.spyOn(ActorSystem.prototype, 'reconcile').mockImplementation(
+        /** @this {ActorSystem} */ async function () {
+          const buildDir = path.join(dir, '.wharfie', 'mock-builds');
+          await prepareMockArtifactProvenance(this, buildDir);
+          for (const resource of this.getResources()) {
+            if (!(resource instanceof SeaBuild)) continue;
+            const sourcePath = path.join(buildDir, resource.name);
+            await fsp.writeFile(sourcePath, 'candidate-artifact', 'utf8');
+            resource._setUNSAFE('binaryPath', sourcePath);
+          }
+        },
+      );
+
+      const link = fsp.link.bind(fsp);
+      jest
+        .spyOn(fsp, 'link')
+        .mockImplementation(async (source, destination) => {
+          if (!String(destination).endsWith('.artifact.json')) {
+            racedPath = String(destination);
+            await fsp.writeFile(racedPath, 'raced-destination', 'utf8');
+          }
+          return link(source, destination);
+        });
+
+      await expect(packageLocalApp({ dir, outputDir })).rejects.toMatchObject({
+        code: 'EEXIST',
+      });
+      expect(racedPath).toEqual(expect.any(String));
+      await expect(fsp.readFile(String(racedPath), 'utf8')).resolves.toBe(
+        'raced-destination',
+      );
     } finally {
       await fsp.rm(dir, { recursive: true, force: true });
     }
@@ -1344,7 +1545,7 @@ try {
           await holdFirstReconcile;
 
           const buildDir = path.join(dir, '.fake-builds');
-          await fsp.mkdir(buildDir, { recursive: true });
+          await prepareMockArtifactProvenance(this, buildDir);
           for (const resource of this.getResources()) {
             if (!(resource instanceof SeaBuild)) continue;
             const sourcePath = path.join(buildDir, resource.name);
@@ -1378,7 +1579,7 @@ try {
     }
   });
 
-  it('preserves transaction backups when rollback restoration is incomplete', async () => {
+  it('preserves transaction staging when immutable publication rollback is incomplete', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-package-recovery-preservation-'),
     );
@@ -1396,24 +1597,25 @@ try {
         architecture: 'arm64',
       },
     ];
+    const previousOutput = path.join(outputDir, 'previous-artifact');
     const firstOutput = path.join(
       outputDir,
-      getArtifactFileName(appName, targets[0]),
+      getArtifactFileName(appName, 'new-artifact-0', targets[0]),
     );
     const secondOutput = path.join(
       outputDir,
-      getArtifactFileName(appName, targets[1]),
+      getArtifactFileName(appName, 'new-artifact-1', targets[1]),
     );
 
     try {
       await writeTransactionalPackageApp(dir, appName, targets);
       await fsp.mkdir(outputDir, { recursive: true });
-      await fsp.writeFile(firstOutput, 'previous-artifact', 'utf8');
+      await fsp.writeFile(previousOutput, 'previous-artifact', 'utf8');
 
       jest.spyOn(ActorSystem.prototype, 'reconcile').mockImplementation(
         /** @this {ActorSystem} */ async function () {
           const buildDir = path.join(dir, '.fake-builds');
-          await fsp.mkdir(buildDir, { recursive: true });
+          await prepareMockArtifactProvenance(this, buildDir);
           let index = 0;
           for (const resource of this.getResources()) {
             if (!(resource instanceof SeaBuild)) continue;
@@ -1425,26 +1627,23 @@ try {
         },
       );
 
-      const rename = fsp.rename.bind(fsp);
+      const link = fsp.link.bind(fsp);
       jest
-        .spyOn(fsp, 'rename')
+        .spyOn(fsp, 'link')
         .mockImplementation(async (source, destination) => {
-          const sourcePath = String(source);
           const destinationPath = String(destination);
-          if (
-            path.basename(path.dirname(sourcePath)) === 'ready' &&
-            destinationPath === secondOutput
-          ) {
+          if (destinationPath === secondOutput) {
             throw new Error('publish-failure-sentinel');
           }
-          if (
-            path.basename(path.dirname(sourcePath)) === 'backups' &&
-            destinationPath === firstOutput
-          ) {
-            throw new Error('restore-failure-sentinel');
-          }
-          return rename(source, destination);
+          return link(source, destination);
         });
+      const rm = fsp.rm.bind(fsp);
+      jest.spyOn(fsp, 'rm').mockImplementation(async (targetPath, options) => {
+        if (String(targetPath) === firstOutput) {
+          throw new Error('rollback-removal-failure-sentinel');
+        }
+        return rm(targetPath, options);
+      });
 
       /** @type {any} */
       let publicationError;
@@ -1461,11 +1660,17 @@ try {
       const recoveryPath = publicationError.recoveryPath;
       expect(recoveryPath).toEqual(expect.any(String));
       expect(existsSync(recoveryPath)).toBe(true);
-      await expect(
-        fsp.readFile(path.join(recoveryPath, 'backups', '0'), 'utf8'),
-      ).resolves.toBe('previous-artifact');
-      expect(existsSync(firstOutput)).toBe(false);
+      await expect(fsp.readFile(previousOutput, 'utf8')).resolves.toBe(
+        'previous-artifact',
+      );
+      expect(existsSync(firstOutput)).toBe(true);
       expect(existsSync(secondOutput)).toBe(false);
+      await expect(
+        fsp.readFile(
+          path.join(recoveryPath, 'ready', path.basename(secondOutput)),
+          'utf8',
+        ),
+      ).resolves.toBe('new-artifact-1');
       expect(
         (await fsp.readdir(outputDir)).some((entry) =>
           entry.endsWith('.publish.lock'),
@@ -1513,6 +1718,10 @@ try {
 
       jest.spyOn(ActorSystem.prototype, 'reconcile').mockImplementation(
         /** @this {ActorSystem} */ async function () {
+          await prepareMockArtifactProvenance(
+            this,
+            path.join(dir, '.fake-builds'),
+          );
           let index = 0;
           for (const resource of this.getResources()) {
             if (!(resource instanceof SeaBuild)) continue;

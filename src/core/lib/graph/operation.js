@@ -2,6 +2,7 @@ import Action from './action.js';
 import { createId } from '../id.js';
 import { WHARFIE_VERSION } from '../version.js';
 import { getOperationSortKey } from './operation-record-key.js';
+import { assertApplicationRevisionId } from '../../runtime/application-revision.js';
 
 /**
  * @typedef {'PIPELINE'} WharfieOperationTypeEnum
@@ -39,7 +40,7 @@ const Status = {
 /**
  * @typedef OperationOptions
  * @property {string} resource_id - resource_id.
- * @property {number} resource_version - resource_version.
+ * @property {string} revision_id - Immutable application revision identity.
  * @property {string} [id] - id.
  * @property {WharfieOperationTypeEnum} type - type.
  * @property {WharfieOperationStatusEnum} [status] - status.
@@ -59,7 +60,7 @@ class Operation {
    */
   constructor({
     resource_id,
-    resource_version,
+    revision_id,
     id = createId(),
     type,
     status = Status.PENDING,
@@ -72,8 +73,9 @@ class Operation {
     last_updated_at = started_at,
     wharfie_version = WHARFIE_VERSION,
   }) {
+    assertApplicationRevisionId(revision_id, 'revision_id');
     this.resource_id = resource_id;
-    this.resource_version = resource_version;
+    this.revision_id = revision_id;
     this.id = id;
     this.type = type;
     this.status = status;
@@ -429,7 +431,7 @@ class Operation {
       sort_key: getOperationSortKey(this.id),
       data: {
         resource_id: this.resource_id,
-        resource_version: this.resource_version,
+        revision_id: this.revision_id,
         id: this.id,
         type: this.type,
         status: this.status,
@@ -455,7 +457,7 @@ class Operation {
   static fromRecord(operation_record) {
     const operation = new Operation({
       resource_id: operation_record.data.resource_id,
-      resource_version: operation_record.data.resource_version,
+      revision_id: operation_record.data.revision_id,
       id: operation_record.data.id,
       type: operation_record.data.type,
       status: operation_record.data.status,
@@ -480,7 +482,7 @@ class Operation {
   static fromRecords(operation_record, action_records) {
     const operation = new Operation({
       resource_id: operation_record.data.resource_id,
-      resource_version: operation_record.data.resource_version,
+      revision_id: operation_record.data.revision_id,
       id: operation_record.data.id,
       type: operation_record.data.type,
       status: operation_record.data.status,

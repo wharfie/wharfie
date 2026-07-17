@@ -13,6 +13,12 @@ const CODE_SIGNING_IDENTITY_PATTERN =
   /^\s*\d+\)\s+([0-9a-f]{40,64})\s+"([^"]+)"\s*$/gim;
 
 /**
+ * @typedef CodeSigningIdentity
+ * @property {string} hash - Public certificate identity hash.
+ * @property {string} name - Public certificate identity name.
+ */
+
+/**
  * Parse valid identities rendered by `security find-identity -v`.
  * @param {string} output - `security` command output.
  * @returns {{ hash: string, name: string }[]} - Valid identities.
@@ -140,6 +146,15 @@ class MacOSBinarySignature extends BaseResource {
    * @returns {Promise<string>} - Identity hash accepted by codesign.
    */
   async resolveCodeSigningIdentity(keychainPath) {
+    return (await this.resolveCodeSigningIdentityDetails(keychainPath)).hash;
+  }
+
+  /**
+   * Resolve the public details of the single imported signing identity.
+   * @param {string} keychainPath - keychainPath.
+   * @returns {Promise<CodeSigningIdentity>} - Public identity details.
+   */
+  async resolveCodeSigningIdentityDetails(keychainPath) {
     const { stdout } = await execFileOutput('security', [
       'find-identity',
       '-v',
@@ -158,7 +173,7 @@ class MacOSBinarySignature extends BaseResource {
         `Expected exactly one codesigning identity in the temporary keychain, found ${identities.length}.`,
       );
     }
-    return identities[0].hash;
+    return identities[0];
   }
 
   /**
@@ -174,6 +189,8 @@ class MacOSBinarySignature extends BaseResource {
   }
 
   async signBinary() {
+    // Never allow a failed re-sign attempt to leave a stale successful result.
+    delete this.properties.signingResult;
     const credentials = this.getMacOSSigningCredentials();
     const suppliedCredentialCount = [
       credentials.certificateBase64,
@@ -196,6 +213,8 @@ class MacOSBinarySignature extends BaseResource {
 
     /** @type {unknown} */
     let signingError;
+    /** @type {{mode: 'ad-hoc'} | {mode: 'identity', signer: string} | undefined} */
+    let signingResult;
     try {
       await promises.chmod(signingDir, 0o700);
       await this.writeEntitlements(entitlementsPath);
@@ -213,6 +232,7 @@ class MacOSBinarySignature extends BaseResource {
           entitlementsPath,
           this.get('binaryPath'),
         ]);
+        signingResult = { mode: 'ad-hoc' };
       } else {
         await promises.writeFile(
           certificatePath,
@@ -220,8 +240,8 @@ class MacOSBinarySignature extends BaseResource {
           { mode: 0o600 },
         );
         await this.setupMacKeychain(keychainPath, certificatePath);
-        const identityHash =
-          await this.resolveCodeSigningIdentity(keychainPath);
+        const identity =
+          await this.resolveCodeSigningIdentityDetails(keychainPath);
         await runCmd('codesign', [
           '--force',
           '--deep',
@@ -229,13 +249,17 @@ class MacOSBinarySignature extends BaseResource {
           '--options',
           'runtime',
           '--sign',
-          identityHash,
+          identity.hash,
           '--entitlements',
           entitlementsPath,
           '--keychain',
           keychainPath,
           this.get('binaryPath'),
         ]);
+        signingResult = {
+          mode: 'identity',
+          signer: `${identity.name} [${identity.hash}]`,
+        };
       }
     } catch (error) {
       signingError = error;
@@ -274,6 +298,7 @@ class MacOSBinarySignature extends BaseResource {
         'macOS signing completed but temporary credential cleanup was incomplete.',
       );
     }
+    this._setUNSAFE('signingResult', signingResult);
   }
 
   async _reconcile() {

@@ -1,7 +1,7 @@
 /**
  * @typedef OperationRecordData
  * @property {string} resource_id - Id of the app resource.
- * @property {number} resource_version - Version of the app resource.
+ * @property {string} revision_id - Immutable application revision identity.
  * @property {string} id - Id of the operation.
  * @property {import('./operation.js').WharfieOperationTypeEnum} type - Type of operation.
  * @property {import('./operation.js').WharfieOperationStatusEnum} status - Status of operation.

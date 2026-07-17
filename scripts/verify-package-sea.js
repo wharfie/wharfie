@@ -59,13 +59,7 @@ try {
 
   runCommand(
     NPM_COMMAND,
-    [
-      'install',
-      '--no-audit',
-      '--no-fund',
-      '--package-lock=false',
-      packaged.tarballPath,
-    ],
+    ['install', '--no-audit', '--no-fund', packaged.tarballPath],
     {
       cwd: installDirectory,
       env: {
@@ -212,7 +206,7 @@ export default defineApp({
     runtime: 'activity',
   });
 
-  runCommand(
+  const packageOutput = runCommand(
     wharfieBin,
     [
       'app',
@@ -222,17 +216,28 @@ export default defineApp({
       outputDirectory,
       '--no-pretty',
     ],
-    { cwd: appDirectory },
+    { cwd: appDirectory, capture: true },
+  ).stdout;
+  const packageResult = JSON.parse(
+    packageOutput.trim().split('\n').filter(Boolean).at(-1),
   );
-
-  const targetSuffix = `${process.platform}-${process.arch}${
-    process.platform === 'linux' ? '-glibc' : ''
-  }`;
-  const artifactName = `portable-app-node${process.versions.node}-${targetSuffix}`;
+  assert.match(packageResult.revision.revisionId, /^wrv1_[A-Za-z0-9_-]{43}$/);
+  assert.equal(packageResult.artifacts.length, 1);
+  const packagedArtifact = packageResult.artifacts[0];
+  const artifactName = packagedArtifact.fileName;
   const artifactPath = path.join(outputDirectory, artifactName);
   assert.ok(
     existsSync(artifactPath),
     `Missing generated SEA artifact: ${artifactPath}`,
+  );
+  assert.equal(packagedArtifact.path, artifactPath);
+  assert.ok(
+    existsSync(packagedArtifact.recordPath),
+    `Missing generated artifact record: ${packagedArtifact.recordPath}`,
+  );
+  assert.deepEqual(
+    readJson(packagedArtifact.recordPath),
+    packagedArtifact.record,
   );
 
   const cleanArtifactPath = path.join(cleanRunDirectory, artifactName);
@@ -295,6 +300,33 @@ export default defineApp({
     embeddedManifest.activities.greet.entrypoint.path,
     'src/activity.ts',
   );
+
+  const embeddedMetadata = JSON.parse(
+    runCommand(cleanArtifactPath, ['wharfie', 'metadata', '--no-pretty'], {
+      cwd: cleanRunDirectory,
+      capture: true,
+      env: cleanEnvironment,
+    }).stdout,
+  );
+  assert.equal(
+    embeddedMetadata.revision.revisionId,
+    packageResult.revision.revisionId,
+  );
+  assert.deepEqual(embeddedMetadata.revision, packageResult.revision);
+  assert.deepEqual(embeddedMetadata.runtime.target, packagedArtifact.target);
+  assert.equal(
+    embeddedMetadata.runtime.revisionId,
+    packagedArtifact.revisionId,
+  );
+  assert.equal(
+    embeddedMetadata.artifact.artifactId,
+    packagedArtifact.artifactId,
+  );
+  assert.deepEqual(
+    embeddedMetadata.artifact.byteDigest,
+    packagedArtifact.byteDigest,
+  );
+  assert.equal(embeddedMetadata.artifact.size, packagedArtifact.size);
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(

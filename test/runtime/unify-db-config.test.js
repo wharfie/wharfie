@@ -154,7 +154,7 @@ describe('Unified DB config', () => {
 function makeOperation(id) {
   return new Operation({
     resource_id: 'app:config-test',
-    resource_version: 1,
+    revision_id: `wrv1_${'A'.repeat(43)}`,
     id,
     type: Operation.Type.PIPELINE,
   });

@@ -9,11 +9,21 @@ import {
   createEmbeddedAppManifestAsset,
   readEmbeddedAppManifest,
 } from '../../core/resources/builds/lib/app-manifest-asset.js';
+import {
+  ARTIFACT_RUNTIME_KIND,
+  ARTIFACT_RUNTIME_SCHEMA_VERSION,
+  createEmbeddedRevisionRuntimeAssets,
+} from '../../core/resources/builds/lib/revision-runtime-assets.js';
 import FunctionResource from '../../core/resources/builds/function-resource.js';
 import { assertSeaNodeVersionCompatible } from '../../core/resources/builds/lib/sea-node-version.js';
 import { withResourceScope } from '../../core/resources/resource-scope.js';
-import { createResourceScope } from '../../core/resources/runtime-config.js';
+import { WHARFIE_VERSION } from '../../core/lib/version.js';
 import { validateAppManifest } from '../../core/runtime/app-manifest.js';
+import { sortCanonicalJsonValue } from '../../core/runtime/canonical-order.js';
+import {
+  createArtifactRecord,
+  validateArtifactRecord,
+} from '../../core/runtime/artifact-record.js';
 import {
   createManifestActivityFunction,
   getManifestActivityNames,
@@ -21,6 +31,8 @@ import {
   invokeManifestActivity,
 } from '../../core/runtime/app-runs.js';
 
+import { prepareApplicationRevision } from './compile-application-revision.js';
+import { createArtifactProvenance } from './artifact-provenance.js';
 import { loadApp } from './load-app.js';
 
 /**
@@ -57,7 +69,13 @@ import { loadApp } from './load-app.js';
  * @typedef PackageArtifactSummary
  * @property {string} fileName - fileName.
  * @property {string} path - path.
+ * @property {string} recordPath - Canonical artifact-record sidecar path.
  * @property {PackageArtifactTarget} target - target.
+ * @property {string} artifactId - Exact final-byte identity.
+ * @property {string} revisionId - Owning logical revision.
+ * @property {{ algorithm: 'sha256', value: string }} byteDigest - Exact final-byte digest.
+ * @property {number} size - Exact artifact byte length.
+ * @property {import('../../core/runtime/artifact-record.js').ArtifactRecord} record - Immutable artifact record and provenance.
  */
 
 /**
@@ -96,6 +114,7 @@ import { loadApp } from './load-app.js';
 /**
  * @typedef PackageLocalAppResult
  * @property {{ id: string }} app - App identity.
+ * @property {import('../../core/runtime/application-revision.js').ApplicationRevision} revision - Immutable target-independent application revision.
  * @property {PackageArtifactTarget[]} [targets] - targets.
  * @property {string} outputDir - outputDir.
  * @property {PackageArtifactSummary[]} artifacts - artifacts.
@@ -385,21 +404,17 @@ function toPackageableActorSystem(loaded) {
 }
 
 /**
- * @param {SeaBuild} build - build.
+ * @param {import('../../core/runtime/artifact-record.js').ArtifactRecord} record - Exact artifact record.
  * @param {string} appName - appName.
  * @returns {string} - Result.
  */
-function getArtifactFileName(build, appName) {
+function getArtifactFileName(record, appName) {
   const safeAppName = getSafeArtifactAppName(appName);
-  const nodeVersion = String(build.get('nodeVersion'));
-  const platform = String(build.get('platform'));
-  const architecture = String(build.get('architecture'));
-  const libc = build.has('libc') ? String(build.get('libc')) : '';
-  const extension = platform === 'win32' ? '.exe' : '';
-
-  return `${safeAppName}-node${nodeVersion}-${platform}-${architecture}${
-    libc ? `-${libc}` : ''
-  }${extension}`;
+  const digestHex = Buffer.from(record.byteDigest.value, 'base64url').toString(
+    'hex',
+  );
+  const extension = record.target.platform === 'win32' ? '.exe' : '';
+  return `${safeAppName}-sha256-${digestHex}${extension}`;
 }
 
 /**
@@ -429,18 +444,22 @@ function getSeaBuildResources(actorSystem) {
  * @property {string} fileName - Public artifact file name.
  * @property {string} stagedPath - Private, fully prepared artifact path.
  * @property {string} finalPath - Public destination path.
+ * @property {string} stagedRecordPath - Private canonical record sidecar.
+ * @property {string} finalRecordPath - Public record sidecar destination.
  * @property {PackageArtifactTarget} target - Artifact target.
+ * @property {import('../../core/runtime/artifact-record.js').ArtifactRecord} record - Exact artifact record.
  */
 
 /**
  * @typedef PackageArtifactTransaction
  * @property {string} stagingDir - Private transaction directory.
+ * @property {import('../../core/runtime/application-revision.js').ApplicationRevision} revision - Owning application revision.
  * @property {StagedPackageArtifact[]} artifacts - Fully staged artifacts.
  */
 
 /**
- * Publication failed and one or more previous artifacts could not be restored.
- * The transaction directory must be retained for manual recovery.
+ * Publication failed and one or more newly created immutable artifacts could
+ * not be removed. The transaction directory is retained for inspection.
  */
 class ArtifactPublicationRecoveryError extends AggregateError {
   /**
@@ -450,7 +469,7 @@ class ArtifactPublicationRecoveryError extends AggregateError {
   constructor(errors, recoveryPath) {
     super(
       errors,
-      `Artifact publication failed and its previous output set could not be fully restored. Recovery files have been preserved at '${recoveryPath}'.`,
+      `Artifact publication failed and one or more newly published immutable artifacts could not be removed. Recovery files have been preserved at '${recoveryPath}'.`,
     );
     this.name = 'ArtifactPublicationRecoveryError';
     this.recoveryPath = recoveryPath;
@@ -536,7 +555,6 @@ function isPackageOwnedSeaBuildBinaryPath(filePath) {
  * Remove the private, uniquely named SeaBuild outputs after every artifact has
  * been copied into the output-local staging transaction. External and mocked
  * binary paths are deliberately left untouched.
- *
  * @param {SeaBuild[]} builds - Reconciled builds.
  * @returns {Promise<void>}
  */
@@ -597,16 +615,60 @@ async function assertRegularArtifactFile(filePath, label) {
 }
 
 /**
+ * @param {unknown} value - JSON value.
+ * @returns {string} - Canonical compact JSON for equality checks.
+ */
+function stringifyCanonicalJson(value) {
+  return JSON.stringify(sortCanonicalJsonValue(value));
+}
+
+/**
+ * Read, validate, and compare one durable artifact-record sidecar.
+ * @param {string} recordPath - Record sidecar path.
+ * @param {import('../../core/runtime/artifact-record.js').ArtifactRecord} expectedRecord - Newly derived immutable association.
+ * @param {Buffer} artifactBytes - Exact associated artifact bytes.
+ * @param {import('../../core/runtime/application-revision.js').ApplicationRevision} revision - Trusted owning revision.
+ * @param {string} label - Human-readable record label.
+ * @returns {Promise<void>}
+ */
+async function assertMatchingArtifactRecordSidecar(
+  recordPath,
+  expectedRecord,
+  artifactBytes,
+  revision,
+  label,
+) {
+  await assertRegularArtifactFile(recordPath, label);
+  let candidate;
+  try {
+    candidate = JSON.parse(await fsp.readFile(recordPath, 'utf8'));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label} is not valid JSON: ${message}`);
+  }
+  const validated = validateArtifactRecord(
+    candidate,
+    { bytes: artifactBytes, revision },
+    label,
+  );
+  if (
+    stringifyCanonicalJson(validated) !== stringifyCanonicalJson(expectedRecord)
+  ) {
+    throw new Error(
+      `${label} conflicts with the immutable artifact association being published.`,
+    );
+  }
+}
+
+/**
  * Copy every reconciled binary into a private directory on the destination
  * filesystem. Public output paths remain untouched until the entire artifact
  * set has been copied and verified.
- *
- * @param {SeaBuild[]} builds - builds.
- * @param {string} appName - appName.
- * @param {string} outputDir - outputDir.
+ * @param {{ builds: SeaBuild[], appName: string, outputDir: string, actorSystem: ActorSystem, revision: import('../../core/runtime/application-revision.js').ApplicationRevision }} options - Staging inputs.
  * @returns {Promise<PackageArtifactTransaction>} - Result.
  */
-async function stagePackageArtifacts(builds, appName, outputDir) {
+async function stagePackageArtifacts(options) {
+  const { builds, appName, outputDir, actorSystem, revision } = options;
   const stagingDir = await fsp.mkdtemp(
     path.join(outputDir, '.wharfie-package-'),
   );
@@ -631,7 +693,21 @@ async function stagePackageArtifacts(builds, appName, outputDir) {
         `Build '${build.name}' binaryPath`,
       );
 
-      const fileName = getArtifactFileName(build, appName);
+      const artifactBytes = await fsp.readFile(sourcePath);
+      const target = getBuildTarget(build);
+      const provenance = await createArtifactProvenance({
+        build,
+        actorSystem,
+        revision,
+        builderVersion: WHARFIE_VERSION,
+      });
+      const record = createArtifactRecord({
+        bytes: artifactBytes,
+        revision,
+        target,
+        provenance,
+      });
+      const fileName = getArtifactFileName(record, appName);
       if (fileNames.has(fileName)) {
         throw new Error(
           `Multiple builds resolved to artifact file name '${fileName}'.`,
@@ -641,6 +717,8 @@ async function stagePackageArtifacts(builds, appName, outputDir) {
 
       const stagedPath = path.join(readyDir, fileName);
       const finalPath = path.join(outputDir, fileName);
+      const stagedRecordPath = `${stagedPath}.artifact.json`;
+      const finalRecordPath = `${finalPath}.artifact.json`;
       await fsp.copyFile(sourcePath, stagedPath);
       if (build.get('platform') !== 'win32') {
         await fsp.chmod(stagedPath, 0o755);
@@ -649,16 +727,36 @@ async function stagePackageArtifacts(builds, appName, outputDir) {
         stagedPath,
         `Staged artifact '${fileName}'`,
       );
+      validateArtifactRecord(
+        record,
+        { bytes: await fsp.readFile(stagedPath), revision },
+        `Staged artifact '${fileName}' record`,
+      );
+      await fsp.writeFile(
+        stagedRecordPath,
+        `${JSON.stringify(sortCanonicalJsonValue(record), null, 2)}\n`,
+        { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+      );
+      await assertMatchingArtifactRecordSidecar(
+        stagedRecordPath,
+        record,
+        await fsp.readFile(stagedPath),
+        revision,
+        `Staged artifact '${fileName}' record sidecar`,
+      );
 
       artifacts.push({
         fileName,
         stagedPath,
         finalPath,
-        target: getBuildTarget(build),
+        stagedRecordPath,
+        finalRecordPath,
+        target,
+        record,
       });
     }
 
-    return { stagingDir, artifacts };
+    return { stagingDir, revision, artifacts };
   } catch (error) {
     try {
       await fsp.rm(stagingDir, { force: true, recursive: true });
@@ -673,72 +771,103 @@ async function stagePackageArtifacts(builds, appName, outputDir) {
 }
 
 /**
- * Publish a fully staged artifact set. Existing regular-file outputs are moved
- * into the private transaction directory first and restored if any rename
- * fails, so a failed publication does not leave a partial new set behind.
- *
+ * Publish a fully staged immutable artifact set. A matching content-addressed
+ * destination is verified and reused; it is never overwritten. If a later
+ * create-if-absent link fails, only destinations created by this transaction
+ * are removed.
  * @param {PackageArtifactTransaction} transaction - transaction.
  * @returns {Promise<PackageArtifactSummary[]>} - Published artifact summaries.
  */
 async function publishStagedArtifacts(transaction) {
-  /** @type {{ artifact: StagedPackageArtifact, existed: boolean, backupPath: string }[]} */
+  /** @type {{ artifact: StagedPackageArtifact, artifactReused: boolean, recordReused: boolean }[]} */
   const publicationPlan = [];
-  const backupDir = path.join(transaction.stagingDir, 'backups');
 
-  for (const [index, artifact] of transaction.artifacts.entries()) {
+  for (const artifact of transaction.artifacts) {
     await assertRegularArtifactFile(
       artifact.stagedPath,
       `Staged artifact '${artifact.fileName}'`,
     );
+    await assertRegularArtifactFile(
+      artifact.stagedRecordPath,
+      `Staged artifact '${artifact.fileName}' record sidecar`,
+    );
     const destinationStats = await lstatIfExists(artifact.finalPath);
+    const destinationRecordStats = await lstatIfExists(
+      artifact.finalRecordPath,
+    );
     if (destinationStats && !destinationStats.isFile()) {
       throw new Error(
         `Artifact destination '${artifact.finalPath}' must be a regular file when it already exists.`,
       );
     }
+    if (destinationRecordStats && !destinationRecordStats.isFile()) {
+      throw new Error(
+        `Artifact record destination '${artifact.finalRecordPath}' must be a regular file when it already exists.`,
+      );
+    }
+    if (destinationRecordStats && !destinationStats) {
+      throw new Error(
+        `Artifact record '${artifact.finalRecordPath}' exists without its immutable artifact '${artifact.finalPath}'.`,
+      );
+    }
+    if (destinationStats) {
+      const destinationBytes = await fsp.readFile(artifact.finalPath);
+      validateArtifactRecord(
+        artifact.record,
+        {
+          bytes: destinationBytes,
+          revision: transaction.revision,
+        },
+        `Existing artifact '${artifact.fileName}' record`,
+      );
+      if (destinationRecordStats) {
+        await assertMatchingArtifactRecordSidecar(
+          artifact.finalRecordPath,
+          artifact.record,
+          destinationBytes,
+          transaction.revision,
+          `Existing artifact '${artifact.fileName}' record sidecar`,
+        );
+      }
+    }
     publicationPlan.push({
       artifact,
-      existed: !!destinationStats,
-      backupPath: path.join(backupDir, String(index)),
+      artifactReused: !!destinationStats,
+      recordReused: !!destinationRecordStats,
     });
   }
 
-  await fsp.mkdir(backupDir, { mode: 0o700 });
-  await fsp.chmod(backupDir, 0o700);
-
-  /** @type {typeof publicationPlan} */
-  const backedUp = [];
-  /** @type {typeof publicationPlan} */
-  const published = [];
+  /** @type {string[]} */
+  const publishedPaths = [];
 
   try {
     for (const item of publicationPlan) {
-      if (item.existed) {
-        await fsp.rename(item.artifact.finalPath, item.backupPath);
-        backedUp.push(item);
+      if (!item.artifactReused) {
+        await fsp.link(item.artifact.stagedPath, item.artifact.finalPath);
+        publishedPaths.push(item.artifact.finalPath);
       }
-      await fsp.rename(item.artifact.stagedPath, item.artifact.finalPath);
-      published.push(item);
+      await fsp.rm(item.artifact.stagedPath, { force: true });
+
+      if (!item.recordReused) {
+        await fsp.link(
+          item.artifact.stagedRecordPath,
+          item.artifact.finalRecordPath,
+        );
+        publishedPaths.push(item.artifact.finalRecordPath);
+      }
+      await fsp.rm(item.artifact.stagedRecordPath, { force: true });
     }
   } catch (error) {
     /** @type {unknown[]} */
     const rollbackErrors = [];
 
-    for (const item of [...published].reverse()) {
+    for (const publishedPath of [...publishedPaths].reverse()) {
       try {
-        await fsp.rm(item.artifact.finalPath, { force: true });
+        await fsp.rm(publishedPath, { force: true });
       } catch (rollbackError) {
         rollbackErrors.push(rollbackError);
       }
     }
-    for (const item of [...backedUp].reverse()) {
-      try {
-        await fsp.rename(item.backupPath, item.artifact.finalPath);
-      } catch (rollbackError) {
-        rollbackErrors.push(rollbackError);
-      }
-    }
-
     if (rollbackErrors.length > 0) {
       throw new ArtifactPublicationRecoveryError(
         [error, ...rollbackErrors],
@@ -751,7 +880,13 @@ async function publishStagedArtifacts(transaction) {
   return transaction.artifacts.map((artifact) => ({
     fileName: artifact.fileName,
     path: artifact.finalPath,
+    recordPath: artifact.finalRecordPath,
     target: artifact.target,
+    artifactId: artifact.record.artifactId,
+    revisionId: artifact.record.revisionId,
+    byteDigest: artifact.record.byteDigest,
+    size: artifact.record.size,
+    record: artifact.record,
   }));
 }
 
@@ -965,16 +1100,18 @@ function resolveBuildAssets(build, assetSource) {
 /**
  * @param {SeaBuild[]} builds - builds.
  * @param {Record<string, any>} manifest - manifest.
+ * @param {import('../../core/runtime/application-revision.js').ApplicationRevision} revision - Target-independent application revision.
  * @param {Record<string, string>} [additionalAssets] - additionalAssets.
- * @returns {Promise<import('../../core/resources/builds/lib/app-manifest-asset.js').EmbeddedAppManifestAsset[]>} - Temporary asset handles.
+ * @returns {Promise<Array<{ cleanup: () => Promise<void> }>>} - Temporary asset handles.
  */
 async function attachEmbeddedManifestAssets(
   builds,
   manifest,
+  revision,
   additionalAssets = {},
 ) {
-  /** @type {import('../../core/resources/builds/lib/app-manifest-asset.js').EmbeddedAppManifestAsset[]} */
-  const manifestAssets = [];
+  /** @type {Array<{ cleanup: () => Promise<void> }>} */
+  const temporaryAssets = [];
 
   try {
     for (const build of builds) {
@@ -987,17 +1124,29 @@ async function attachEmbeddedManifestAssets(
       };
       const manifestAsset =
         await createEmbeddedAppManifestAsset(embeddedManifest);
-      manifestAssets.push(manifestAsset);
+      temporaryAssets.push(manifestAsset);
+      const revisionRuntimeAssets = await createEmbeddedRevisionRuntimeAssets({
+        revision,
+        runtime: {
+          schemaVersion: ARTIFACT_RUNTIME_SCHEMA_VERSION,
+          kind: ARTIFACT_RUNTIME_KIND,
+          appId: revision.contract.app.id,
+          revisionId: revision.revisionId,
+          target: buildTarget,
+        },
+      });
+      temporaryAssets.push(revisionRuntimeAssets);
       const originalAssets = build.properties?.assets;
       build._setUNSAFE('assets', () => ({
         ...resolveBuildAssets(build, originalAssets),
         ...additionalAssets,
         [APP_MANIFEST_ASSET_NAME]: manifestAsset.path,
+        ...revisionRuntimeAssets.assets,
       }));
     }
   } catch (error) {
     const cleanupResults = await Promise.allSettled(
-      manifestAssets.map((asset) => asset.cleanup()),
+      temporaryAssets.map((asset) => asset.cleanup()),
     );
     const cleanupErrors = cleanupResults
       .filter((result) => result.status === 'rejected')
@@ -1011,7 +1160,7 @@ async function attachEmbeddedManifestAssets(
     throw error;
   }
 
-  return manifestAssets;
+  return temporaryAssets;
 }
 
 /**
@@ -1088,12 +1237,6 @@ export async function packageLocalApp(options) {
 
   assertPortableManifestContract(manifest);
 
-  const actorSystem = toPackageableActorSystem(loaded);
-  applyPackagingSigningConfig(actorSystem, options.build);
-  applyTargetSelection(actorSystem, selectedTargets);
-  manifest.targets = selectedTargets.map((target) => cloneTarget(target));
-
-  const builds = getSeaBuildResources(actorSystem);
   const outputDir = path.resolve(
     options.outputDir || path.join(options.dir, 'dist'),
   );
@@ -1105,8 +1248,31 @@ export async function packageLocalApp(options) {
     outputDir,
     manifest: loaded.manifest,
   });
+  const preparedRevision = await prepareApplicationRevision({
+    appDir: loaded.appDir,
+    manifest: loaded.manifest,
+    outputDir,
+    assets: packagingAssets,
+  });
+  const { revision } = preparedRevision;
 
-  /** @type {import('../../core/resources/builds/lib/app-manifest-asset.js').EmbeddedAppManifestAsset[]} */
+  let actorSystem;
+  try {
+    actorSystem = toPackageableActorSystem({
+      appDir: preparedRevision.appDir,
+      manifest: preparedRevision.manifest,
+    });
+    applyPackagingSigningConfig(actorSystem, options.build);
+    applyTargetSelection(actorSystem, selectedTargets);
+    manifest.targets = selectedTargets.map((target) => cloneTarget(target));
+  } catch (error) {
+    await preparedRevision.cleanup();
+    throw error;
+  }
+
+  const builds = getSeaBuildResources(actorSystem);
+
+  /** @type {Array<{ cleanup: () => Promise<void> }>} */
   let manifestAssets = [];
   /** @type {PackageLocalAppResult | undefined} */
   let packageResult;
@@ -1129,9 +1295,11 @@ export async function packageLocalApp(options) {
     manifestAssets = await attachEmbeddedManifestAssets(
       builds,
       manifest,
-      packagingAssets,
+      revision,
+      preparedRevision.assets,
     );
     await actorSystem.reconcile();
+    await preparedRevision.verifyRuntime();
 
     if (builds.length === 0) {
       throw new Error(
@@ -1139,16 +1307,19 @@ export async function packageLocalApp(options) {
       );
     }
 
-    artifactTransaction = await stagePackageArtifacts(
+    artifactTransaction = await stagePackageArtifacts({
       builds,
-      manifest.app.id,
+      appName: manifest.app.id,
       outputDir,
-    );
+      actorSystem,
+      revision,
+    });
     await removePackageOwnedSeaBuildOutputs(builds);
     const artifacts = await publishStagedArtifacts(artifactTransaction);
 
     packageResult = {
       app: manifest.app,
+      revision,
       ...(Array.isArray(manifest.targets) ? { targets: manifest.targets } : {}),
       outputDir,
       artifacts,
@@ -1169,6 +1340,7 @@ export async function packageLocalApp(options) {
     ),
   );
   const cleanupResults = await Promise.allSettled([
+    preparedRevision.cleanup(),
     ...manifestAssets.map((asset) => asset.cleanup()),
     ...functionAssetPaths.map((assetPath) =>
       fsp.rm(assetPath, { force: true }),

@@ -21,6 +21,8 @@ export function formatOperationRows(operations = []) {
     )
     .map((operation) => ({
       id: operation.id,
+      revision:
+        typeof operation.revision_id === 'string' ? operation.revision_id : '',
       app:
         typeof operation.operation_config?.app_id === 'string'
           ? operation.operation_config.app_id

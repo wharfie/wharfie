@@ -1,4 +1,4 @@
-import { invokeActivity } from '../../../../src/app.js';
+import { invokeActivity } from '@wharfie/wharfie/app';
 
 /**
  * Run the packaged hello-world developer CLI.

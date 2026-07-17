@@ -13,12 +13,14 @@ import Action from '../../../src/core/lib/graph/action.js';
 import Operation from '../../../src/core/lib/graph/operation.js';
 import { runOperation } from '../../../src/core/lib/graph/runner.js';
 
+const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
+
 describe('graph runner', () => {
   test('performs no activity when it loses the operation claim', async () => {
     const operation = new Operation({
       id: 'claim-loser',
       resource_id: 'r1',
-      resource_version: 1,
+      revision_id: REVISION_ID,
       type: Operation.Type.PIPELINE,
     });
     operation.createAction({ id: 'invoke', type: Action.Type.INVOKE_FUNCTION });
@@ -55,7 +57,7 @@ describe('graph runner', () => {
       const operation = new Operation({
         id: 'op1',
         resource_id: resourceId,
-        resource_version: 1,
+        revision_id: REVISION_ID,
         type: Operation.Type.PIPELINE,
         started_at: 1,
         last_updated_at: 1,
@@ -157,7 +159,7 @@ describe('graph runner', () => {
       const operation = new Operation({
         id: 'op1',
         resource_id: resourceId,
-        resource_version: 1,
+        revision_id: REVISION_ID,
         type: Operation.Type.PIPELINE,
         started_at: 1,
         last_updated_at: 1,
@@ -231,7 +233,7 @@ describe('graph runner', () => {
       const operation = new Operation({
         id: 'op1',
         resource_id: resourceId,
-        resource_version: 1,
+        revision_id: REVISION_ID,
         type: Operation.Type.PIPELINE,
         started_at: 1,
         last_updated_at: 1,
@@ -294,7 +296,7 @@ describe('graph runner', () => {
       const operation = new Operation({
         id: 'op1',
         resource_id: resourceId,
-        resource_version: 1,
+        revision_id: REVISION_ID,
         type: Operation.Type.PIPELINE,
         started_at: 1,
         last_updated_at: 1,
@@ -402,7 +404,7 @@ describe('graph runner', () => {
       const operation = new Operation({
         id: 'op1',
         resource_id: resourceId,
-        resource_version: 1,
+        revision_id: REVISION_ID,
         type: Operation.Type.PIPELINE,
         started_at: 1,
         last_updated_at: 1,
@@ -477,7 +479,7 @@ describe('graph runner', () => {
       const operation = new Operation({
         id: 'cancel-race',
         resource_id: 'r1',
-        resource_version: 1,
+        revision_id: REVISION_ID,
         type: Operation.Type.PIPELINE,
       });
       operation.createAction({

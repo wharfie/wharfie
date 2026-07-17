@@ -18,6 +18,8 @@ import {
   getOperationSortKeyPrefix,
 } from '../../src/core/lib/graph/operation-record-key.js';
 
+const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
+
 describe('operation record key codec', () => {
   test('creates typed injective keys and exact query prefixes', () => {
     expect(OPERATIONS_SORT_KEY_PREFIX).toBe('run/');
@@ -80,7 +82,7 @@ describe('operation and action persistence model', () => {
   test('round-trips versions, cancellation, generations, statuses, and typed keys', () => {
     const operation = new Operation({
       resource_id: 'app:portable-notes',
-      resource_version: 2,
+      revision_id: REVISION_ID,
       id: 'run/#/雪',
       type: Operation.Type.PIPELINE,
       status: Operation.Status.CANCELLED,
@@ -116,6 +118,7 @@ describe('operation and action persistence model', () => {
     expect(operationRecord).toMatchObject({
       sort_key: getOperationSortKey(operation.id),
       data: {
+        revision_id: REVISION_ID,
         generation: 7,
         version: 11,
         cancellation: operation.cancellation,
@@ -137,6 +140,7 @@ describe('operation and action persistence model', () => {
     const restored = Operation.fromRecords(operationRecord, actionRecords);
     expect(restored).toMatchObject({
       id: operation.id,
+      revision_id: REVISION_ID,
       generation: 7,
       version: 11,
       cancellation: operation.cancellation,
@@ -152,7 +156,7 @@ describe('operation and action persistence model', () => {
   test('defaults new and legacy records to generation and version zero', () => {
     const operation = new Operation({
       resource_id: 'app:defaults',
-      resource_version: 1,
+      revision_id: REVISION_ID,
       id: 'run-defaults',
       type: Operation.Type.PIPELINE,
     });
@@ -189,5 +193,26 @@ describe('operation and action persistence model', () => {
       operation_generation: 0,
       version: 0,
     });
+  });
+
+  test('requires a canonical immutable application revision identity', () => {
+    expect(
+      () =>
+        new Operation(
+          /** @type {any} */ ({
+            resource_id: 'app:missing-revision',
+            type: Operation.Type.PIPELINE,
+          }),
+        ),
+    ).toThrow(/revision_id/i);
+
+    expect(
+      () =>
+        new Operation({
+          resource_id: 'app:malformed-revision',
+          revision_id: 'revision-latest',
+          type: Operation.Type.PIPELINE,
+        }),
+    ).toThrow(/revision_id must be a canonical/i);
   });
 });

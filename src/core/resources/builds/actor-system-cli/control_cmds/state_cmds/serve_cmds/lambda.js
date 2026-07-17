@@ -5,6 +5,7 @@ import { resolveOperationsTableName } from '../../../../../../lib/config/db.js';
 import { createActorSystemResources } from '../../../../../../runtime/resources.js';
 import { createGrpcRpcClient } from '../../../../../../runtime/services/rpc-grpc.js';
 import { startLambdaService } from '../../../../../../runtime/services/lambda-service.js';
+import { readEmbeddedRevisionRuntimePair } from '../../../../lib/revision-runtime-assets.js';
 
 import { loadRuntimeBootstrap } from '../util/resources.js';
 
@@ -114,11 +115,17 @@ const lambdaCmd = new Command('lambda')
       typeof bootstrap.manifest?.app?.id === 'string'
         ? bootstrap.manifest.app.id
         : undefined;
-    const pollOptions = (() => {
+    const pollOptions = await (async () => {
       if (!queue || pollQueueUrls.length === 0) return undefined;
       if (!db || !appId) {
         throw new Error(
           'Durable queue polling requires a DB service and an embedded application ID.',
+        );
+      }
+      const embeddedIdentity = await readEmbeddedRevisionRuntimePair();
+      if (embeddedIdentity.runtime.appId !== appId) {
+        throw new Error(
+          'Durable queue polling application ID does not match the embedded immutable revision.',
         );
       }
       return {
@@ -132,6 +139,7 @@ const lambdaCmd = new Command('lambda')
           tableName: operationsTableName,
         }),
         appId,
+        revisionId: embeddedIdentity.runtime.revisionId,
         log: (/** @type {string} */ msg, /** @type {any} */ extra) =>
           console.error('[lambda-service:poll]', msg, extra ?? ''),
       };
@@ -141,7 +149,16 @@ const lambdaCmd = new Command('lambda')
       host: String(opts.host),
       port: Number(opts.port),
       log: (msg, extra) => console.error('[lambda-service]', msg, extra ?? ''),
-      execute: async ({ functionName, event, context }) => {
+      execute: async ({ functionName, revisionId, event, context }) => {
+        if (
+          revisionId &&
+          pollOptions &&
+          revisionId !== pollOptions.revisionId
+        ) {
+          throw new Error(
+            `Activity revision '${revisionId}' does not match the running artifact revision '${pollOptions.revisionId}'.`,
+          );
+        }
         const ctx = context && typeof context === 'object' ? context : {};
 
         await Function.run(functionName, event, ctx, {

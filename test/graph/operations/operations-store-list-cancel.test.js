@@ -10,6 +10,8 @@ import createOperationsStore from '../../../src/core/lib/graph/operations-store.
 import Action from '../../../src/core/lib/graph/action.js';
 import Operation from '../../../src/core/lib/graph/operation.js';
 
+const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
+
 /** @typedef {import('../../../src/core/lib/db/base.js').DBClient} DBClient */
 /** @typedef {import('../../../src/core/lib/db/tables/operations.js').OperationsTableClient} OperationsStore */
 
@@ -20,7 +22,7 @@ import Operation from '../../../src/core/lib/graph/operation.js';
 function makePipeline({ resourceId, id, startedAt = 1 }) {
   const operation = new Operation({
     resource_id: resourceId,
-    resource_version: 1,
+    revision_id: REVISION_ID,
     id,
     type: Operation.Type.PIPELINE,
     operation_config: {

@@ -23,6 +23,7 @@ describe('operation row formatting', () => {
       },
       {
         id: 'newer',
+        revision_id: `wrv1_${'A'.repeat(43)}`,
         type: 'PIPELINE',
         status: 'PENDING',
         started_at: 1700000100000,
@@ -38,6 +39,7 @@ describe('operation row formatting', () => {
     expect(rows).toEqual([
       {
         id: 'newer',
+        revision: `wrv1_${'A'.repeat(43)}`,
         app: 'hello-world',
         activity: 'say-hello',
         trigger: 'cli',
@@ -48,6 +50,7 @@ describe('operation row formatting', () => {
       },
       {
         id: 'older',
+        revision: '',
         app: 'cleanup-service',
         activity: 'remove-stale-resources',
         trigger: 'schedule',

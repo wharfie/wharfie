@@ -2,6 +2,7 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { createHash } from 'node:crypto';
 
 const PROCESS_RUNNER_IMPORT =
   '../../../src/core/resources/builds/actor-system-cli/lib/process-runner.js';
@@ -28,6 +29,8 @@ const RUNTIME_RESOURCES_IMPORT = '../../../src/core/runtime/resources.js';
 const RPC_GRPC_IMPORT = '../../../src/core/runtime/services/rpc-grpc.js';
 const LAMBDA_SERVICE_IMPORT =
   '../../../src/core/runtime/services/lambda-service.js';
+const REVISION_RUNTIME_ASSETS_IMPORT =
+  '../../../src/core/resources/builds/lib/revision-runtime-assets.js';
 const PACKAGED_APP_ENTRY_IMPORT =
   '../../../src/core/resources/builds/packaged-app-entry.js';
 
@@ -407,6 +410,7 @@ describe('actor-system CLI runtime surfaces', () => {
       getSelfSpawnCommand,
     }));
     await jest.unstable_mockModule('node:crypto', () => ({
+      createHash,
       randomUUID: () => 'node-123',
     }));
 
@@ -488,6 +492,7 @@ describe('actor-system CLI runtime surfaces', () => {
       getSelfSpawnCommand: () => ({ cmd: '/fake/node', prefixArgs: [] }),
     }));
     await jest.unstable_mockModule('node:crypto', () => ({
+      createHash,
       randomUUID: () => 'node-123',
     }));
 
@@ -677,6 +682,13 @@ describe('actor-system CLI runtime surfaces', () => {
         };
       }),
     }));
+    const revisionId = `wrv1_${'A'.repeat(43)}`;
+    await jest.unstable_mockModule(REVISION_RUNTIME_ASSETS_IMPORT, () => ({
+      readEmbeddedRevisionRuntimePair: jest.fn(async () => ({
+        revision: { revisionId },
+        runtime: { appId: 'runtime-test', revisionId },
+      })),
+    }));
 
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -762,6 +774,8 @@ describe('actor-system CLI runtime surfaces', () => {
             operationsStore: expect.objectContaining({
               createOperation: expect.any(Function),
             }),
+            appId: 'runtime-test',
+            revisionId,
             log: expect.any(Function),
           }),
           execute: expect.any(Function),

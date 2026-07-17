@@ -31,6 +31,8 @@ const TARGET_KEYS = new Set([
   'architecture',
   'libc',
 ]);
+const EXACT_RELEASE_SEMVER_PATTERN =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const RESOURCE_KINDS = ['db', 'queue', 'objectStorage'];
 const RESOURCE_SPEC_KEYS = new Set(['adapter', 'options']);
 const ACTIVITY_KEYS = new Set(['entrypoint', 'externalPackages', 'resources']);
@@ -175,7 +177,10 @@ function assertTargets(value, valuePath) {
       target.nodeVersion,
       `${targetPath}.nodeVersion`,
     );
-    if (semver.valid(target.nodeVersion) !== target.nodeVersion) {
+    if (
+      semver.valid(target.nodeVersion) !== target.nodeVersion ||
+      !EXACT_RELEASE_SEMVER_PATTERN.test(target.nodeVersion)
+    ) {
       throw new TypeError(
         `${targetPath}.nodeVersion must be an exact canonical semantic version in x.y.z form.`,
       );

@@ -1,12 +1,14 @@
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { getQueueOperationId, runPersistedActivity } from '../app-runs.js';
+import { assertApplicationRevisionId } from '../application-revision.js';
 import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
 
 /**
  * @typedef LambdaInvokeRequest
  * @property {string} functionName - functionName.
  * @property {string} [activity] - activity.
+ * @property {string} [revisionId] - Immutable application revision identity.
  * @property {any} [event] - event.
  * @property {any} [context] - context.
  */
@@ -20,6 +22,7 @@ import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
  * @property {number} [visibilityTimeout] - seconds
  * @property {import('../../lib/db/tables/operations.js').OperationsTableClient} operationsStore - Durable operations store.
  * @property {string} appId - Canonical application ID.
+ * @property {string} revisionId - Immutable application revision identity.
  * @property {(msg: string, extra?: any) => void} [log] - log.
  */
 
@@ -94,11 +97,13 @@ export async function startLambdaService({
     const queue = poll.queue;
     const operationsStore = poll.operationsStore;
     const appId = poll.appId;
-    if (!operationsStore || !appId) {
+    const revisionId = poll.revisionId;
+    if (!operationsStore || !appId || !revisionId) {
       throw new TypeError(
-        'Lambda service queue polling requires operationsStore and appId.',
+        'Lambda service queue polling requires operationsStore, appId, and revisionId.',
       );
     }
+    assertApplicationRevisionId(revisionId, 'poll.revisionId');
     const waitTimeSeconds = clampNumber(poll.waitTimeSeconds, 0, 20, 20);
     const maxNumberOfMessages = clampNumber(
       poll.maxNumberOfMessages,
@@ -172,8 +177,8 @@ export async function startLambdaService({
 
               const messageId = getNonemptyString(msg?.MessageId);
               const receiptHandle = getNonemptyString(receipt);
-              const invocationContext = {
-                ...(normalizeContext(payload?.context) || {}),
+              const context = normalizeContext(payload?.context) || {};
+              const attemptContext = {
                 trigger: {
                   source: 'event',
                   queueUrl,
@@ -195,21 +200,29 @@ export async function startLambdaService({
                 await runPersistedActivity({
                   store: operationsStore,
                   appId,
+                  revisionId,
                   activityName: activity,
                   operationId,
                   ...(Object.prototype.hasOwnProperty.call(payload, 'event')
                     ? { event: payload.event }
                     : {}),
-                  context: invocationContext,
+                  context,
+                  attemptContext,
                   trigger: {
                     source: 'event',
                     queueUrl,
                     messageId,
                   },
-                  execute: async ({ activityName, event, context }) => {
+                  execute: async ({
+                    activityName,
+                    revisionId: operationRevisionId,
+                    event,
+                    context,
+                  }) => {
                     return await execute({
                       functionName: activityName,
                       activity: activityName,
+                      revisionId: operationRevisionId,
                       event,
                       context,
                     });

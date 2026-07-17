@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 
+import { prepareApplicationRevision } from '../../app/compile-application-revision.js';
 import { loadApp } from '../../app/load-app.js';
 import { parseJsonInput } from '../../app/local-app.js';
 import { withOperationsStore } from '../operations-store.js';
@@ -86,111 +87,146 @@ const runCommand = new Command('run')
           );
         }
 
-        operation = createOperationFromActivity({
-          appId,
-          activityName,
-          event: parseJsonInput(options.event, 'event', {}),
-          operationId: options.operationId,
-          trigger: { source: 'manual' },
+        const preparedRevision = await prepareApplicationRevision({
+          appDir: loadedApp.appDir,
+          manifest,
         });
-        displayInfo(
-          `Running activity: ${resourceId}#${operation.id} (${activityName})`,
-        );
+        try {
+          const revisionId = preparedRevision.revision.revisionId;
 
-        await store.createOperation(operation);
-
-        /**
-         * @param {import('../../../core/lib/graph/action.js').default} action - action.
-         * @returns {Promise<{ ok: boolean, outputs?: any }>} - Result.
-         */
-        const executeAction = async (action) => {
-          if (
-            action.type === Action.Type.START ||
-            action.type === Action.Type.FINISH
-          ) {
-            displayInfo(`- ${action.id} (${action.type})`);
-            return { ok: true };
-          }
-
-          if (action.type !== Action.Type.INVOKE_FUNCTION) {
-            throw new Error(
-              `Unsupported action type '${action.type}' for ops run. Only START, FINISH, and INVOKE_FUNCTION are currently executable.`,
-            );
-          }
-
-          if (!action.function_name || !String(action.function_name).trim()) {
-            throw new Error(
-              `INVOKE_FUNCTION action '${action.id}' is missing activity.`,
-            );
-          }
-
-          const placementMode = getPlacementMode(action.placement);
-          if (placementMode !== 'local' && placementMode !== 'in_process') {
-            throw new Error(
-              `INVOKE_FUNCTION action '${action.id}' requested unsupported placement mode '${placementMode}'. Local execution currently supports only 'local' or 'in_process'.`,
-            );
-          }
-
-          const attemptCount = Number(action.attempt_count || 0) + 1;
+          operation = createOperationFromActivity({
+            appId,
+            revisionId,
+            activityName,
+            event: parseJsonInput(options.event, 'event', {}),
+            operationId: options.operationId,
+            trigger: { source: 'manual' },
+          });
           displayInfo(
-            `- ${action.id} (${action.type}:${action.function_name} attempt=${attemptCount})`,
+            `Running activity: ${resourceId}#${operation.id}@${revisionId} (${activityName})`,
           );
 
-          const outputs = await invokeManifestActivity({
-            manifest,
-            appDir: loadedApp.appDir,
-            activityName: action.function_name,
-            event: action.inputs ?? {},
-            context: {
-              operation: {
-                resourceId: action.resource_id,
-                operationId: action.operation_id,
-                actionId: action.id,
-                actionType: action.type,
-                attemptCount,
-                placement: action.placement,
+          try {
+            await store.createOperation(operation);
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              error.name === 'OperationAlreadyExistsError'
+            ) {
+              const existing = await store.getOperation(
+                resourceId,
+                operation.id,
+              );
+              if (existing && existing.revision_id !== revisionId) {
+                const mismatch = new Error(
+                  `Operation revision conflicts with existing work: ${resourceId}#${operation.id} requested ${revisionId}, persisted ${existing.revision_id}`,
+                );
+                mismatch.name = 'OperationRevisionMismatchError';
+                throw mismatch;
+              }
+            }
+            throw error;
+          }
+
+          /**
+           * @param {import('../../../core/lib/graph/action.js').default} action - action.
+           * @returns {Promise<{ ok: boolean, outputs?: any }>} - Result.
+           */
+          const executeAction = async (action) => {
+            if (
+              action.type === Action.Type.START ||
+              action.type === Action.Type.FINISH
+            ) {
+              displayInfo(`- ${action.id} (${action.type})`);
+              return { ok: true };
+            }
+
+            if (action.type !== Action.Type.INVOKE_FUNCTION) {
+              throw new Error(
+                `Unsupported action type '${action.type}' for ops run. Only START, FINISH, and INVOKE_FUNCTION are currently executable.`,
+              );
+            }
+
+            if (!action.function_name || !String(action.function_name).trim()) {
+              throw new Error(
+                `INVOKE_FUNCTION action '${action.id}' is missing activity.`,
+              );
+            }
+
+            const placementMode = getPlacementMode(action.placement);
+            if (placementMode !== 'local' && placementMode !== 'in_process') {
+              throw new Error(
+                `INVOKE_FUNCTION action '${action.id}' requested unsupported placement mode '${placementMode}'. Local execution currently supports only 'local' or 'in_process'.`,
+              );
+            }
+
+            const attemptCount = Number(action.attempt_count || 0) + 1;
+            displayInfo(
+              `- ${action.id} (${action.type}:${action.function_name} attempt=${attemptCount})`,
+            );
+
+            const outputs = await invokeManifestActivity({
+              manifest: preparedRevision.manifest,
+              appDir: preparedRevision.appDir,
+              activityName: action.function_name,
+              event: action.inputs ?? {},
+              context: {
+                operation: {
+                  resourceId: action.resource_id,
+                  operationId: action.operation_id,
+                  revisionId,
+                  actionId: action.id,
+                  actionType: action.type,
+                  attemptCount,
+                  placement: action.placement,
+                },
               },
-            },
+            });
+
+            return {
+              ok: true,
+              outputs,
+            };
+          };
+
+          const result = await runOperation({
+            store,
+            resourceId,
+            operationId: operation.id,
+            executeAction,
           });
 
-          return {
-            ok: true,
-            outputs,
-          };
-        };
-
-        const result = await runOperation({
-          store,
-          resourceId,
-          operationId: operation.id,
-          executeAction,
-        });
-
-        const finalRecords = await store.getRecords(resourceId, operation.id);
-        const finalOperation = finalRecords.operations.find(
-          (candidate) => candidate.id === operation.id,
-        );
-
-        console.table(
-          formatActionRows(finalOperation, result.finalStatusByActionId),
-        );
-
-        if (result.status !== 'COMPLETED') {
-          const details = [];
-          if (result.failedActionIds.length > 0) {
-            details.push(`failed=${result.failedActionIds.join(',')}`);
-          }
-          if (result.blockedActionIds.length > 0) {
-            details.push(`blocked=${result.blockedActionIds.join(',')}`);
-          }
-          throw new Error(
-            `Operation ${resourceId}#${operation.id} finished with status ${result.status}${
-              details.length > 0 ? ` (${details.join(' ')})` : ''
-            }.`,
+          const finalRecords = await store.getRecords(resourceId, operation.id);
+          const finalOperation = finalRecords.operations.find(
+            (candidate) => candidate.id === operation.id,
           );
-        }
 
-        displaySuccess(`Executed ${result.executedActionIds.length} actions.`);
+          console.table(
+            formatActionRows(finalOperation, result.finalStatusByActionId),
+          );
+
+          if (result.status !== 'COMPLETED') {
+            const details = [];
+            if (result.failedActionIds.length > 0) {
+              details.push(`failed=${result.failedActionIds.join(',')}`);
+            }
+            if (result.blockedActionIds.length > 0) {
+              details.push(`blocked=${result.blockedActionIds.join(',')}`);
+            }
+            throw new Error(
+              `Operation ${resourceId}#${operation.id} finished with status ${result.status}${
+                details.length > 0 ? ` (${details.join(' ')})` : ''
+              }.`,
+            );
+          }
+
+          await preparedRevision.verifyRuntime();
+          displaySuccess(
+            `Executed ${result.executedActionIds.length} actions.`,
+          );
+        } finally {
+          await preparedRevision.cleanup();
+        }
       });
     } catch (err) {
       displayFailure(err);

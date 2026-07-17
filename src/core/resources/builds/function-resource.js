@@ -10,6 +10,7 @@ import { normalizeExternalDependencies } from './lib/resolve-externals.js';
 
 import { dirname, join } from 'node:path';
 import { promises, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { brotliCompressSync } from 'node:zlib';
 import { buffer as streamToBuffer } from 'node:stream/consumers';
 
@@ -197,6 +198,9 @@ class FunctionResource extends BuildResource {
   }
 
   async _reconcile() {
+    // A previous successful reconcile must never be mistaken for the archive
+    // embedded by a later failed attempt.
+    delete this.properties.externalArchiveDigest;
     if (!existsSync(FunctionResource.TEMP_ASSET_PATH)) {
       await promises.mkdir(FunctionResource.TEMP_ASSET_PATH, {
         mode: 0o700,
@@ -204,11 +208,31 @@ class FunctionResource extends BuildResource {
       });
     }
     await promises.chmod(FunctionResource.TEMP_ASSET_PATH, 0o700);
-    const [codeBlob, externalsTar] = await Promise.all([
+    const [codeBlob, bundledExternals] = await Promise.all([
       this.esbuild(),
       this.bundleExternals(),
     ]);
+    const hasDeclaredExternals = this.get('external', []).length > 0;
+    if (hasDeclaredExternals && typeof bundledExternals !== 'string') {
+      throw new Error(
+        `Activity '${this.get('functionName')}' declared external dependencies but produced no external archive.`,
+      );
+    }
+    const externalsTar =
+      typeof bundledExternals === 'string' ? bundledExternals : '';
+    const externalArchiveBytes = Buffer.from(externalsTar, 'base64');
+    if (externalArchiveBytes.toString('base64') !== externalsTar) {
+      throw new Error(
+        `Activity '${this.get('functionName')}' produced a noncanonical external archive encoding.`,
+      );
+    }
     const codeBundle = brotliCompressSync(codeBlob).toString('base64');
+    const externalArchiveDigest = {
+      algorithm: 'sha256',
+      value: createHash('sha256')
+        .update(externalArchiveBytes)
+        .digest('base64url'),
+    };
     const assetDescription = JSON.stringify({
       codeBundle,
       externalsTar,
@@ -223,6 +247,7 @@ class FunctionResource extends BuildResource {
       mode: 0o600,
     });
     this.set('singleExecutableAssetPath', singleExecutableAssetPath);
+    this._setUNSAFE('externalArchiveDigest', externalArchiveDigest);
   }
 
   async _destroy() {

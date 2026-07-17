@@ -1,22 +1,27 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { describe, expect, test } from '@jest/globals';
+import { describe, expect, jest, test } from '@jest/globals';
 
 import { getAdapterMatrix } from '../../helpers/db-adapters.js';
 import createOperationsStore from '../../../src/core/lib/graph/operations-store.js';
 import Action from '../../../src/core/lib/graph/action.js';
 import Operation from '../../../src/core/lib/graph/operation.js';
+import { getOperationSortKey } from '../../../src/core/lib/graph/operation-record-key.js';
+
+const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
+const OTHER_REVISION_ID = `wrv1_${'B'.repeat(42)}Q`;
 
 function makeOperation({
   resourceId = 'app:lifecycle-test',
   operationId = 'operation-1',
   actionIds = ['invoke'],
   status = Operation.Status.PENDING,
+  revisionId = REVISION_ID,
 } = {}) {
   const operation = new Operation({
     resource_id: resourceId,
-    resource_version: 1,
+    revision_id: revisionId,
     id: operationId,
     type: Operation.Type.PIPELINE,
     status,
@@ -99,6 +104,30 @@ for (const adapter of getAdapterMatrix()) {
       }
     });
 
+    test.each([undefined, 'revision-latest'])(
+      'rejects an operation with invalid revision identity %p',
+      async (revisionId) => {
+        const { db, cleanup } = await adapter.create();
+        try {
+          const store = createOperationsStore({
+            db,
+            tableName: 'operation-lifecycle',
+          });
+          const operation = makeOperation();
+          operation.revision_id = /** @type {any} */ (revisionId);
+
+          await expect(store.createOperation(operation)).rejects.toThrow(
+            /operation\.revision_id/i,
+          );
+          await expect(
+            store.getOperation(operation.resource_id, operation.id),
+          ).resolves.toBeNull();
+        } finally {
+          await cleanup();
+        }
+      },
+    );
+
     test('rejects duplicate and concurrent creates without changing the winner', async () => {
       const { db, cleanup } = await adapter.create();
       try {
@@ -179,6 +208,147 @@ for (const adapter of getAdapterMatrix()) {
             await store.getRecords(replacement.resource_id, replacement.id)
           ).actions.map(({ id }) => id),
         ).toEqual(['keep', 'new']);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('rejects a replacement revision change before constructing its snapshot', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const store = createOperationsStore({
+          db,
+          tableName: 'operation-revision-immutable',
+        });
+        const original = makeOperation({ actionIds: ['original'] });
+        await store.createOperation(original);
+        const replacement = makeOperation({
+          actionIds: ['replacement'],
+          revisionId: OTHER_REVISION_ID,
+        });
+        const constructSnapshot = jest.spyOn(replacement, 'toRecords');
+
+        await expect(
+          store.replaceOperation(replacement, original.version),
+        ).rejects.toMatchObject({
+          name: 'OperationConflictError',
+          message: expect.stringMatching(/replacement revision.*persisted/i),
+        });
+        expect(constructSnapshot).not.toHaveBeenCalled();
+        expect(replacement).toMatchObject({ generation: 0, version: 0 });
+
+        const persisted = await store.getOperation(
+          original.resource_id,
+          original.id,
+        );
+        expect(persisted).toMatchObject({
+          revision_id: REVISION_ID,
+          generation: 1,
+          version: 1,
+        });
+        expect(persisted?.getActions().map(({ id }) => id)).toEqual([
+          'original',
+        ]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('conditions replacement on both observed version and persisted revision', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const tableName = 'operation-revision-race';
+        let injectRevisionRace = false;
+        /** @type {any[] | undefined} */
+        let replacementConditions;
+        const guardedDb = {
+          ...db,
+          transactionWrite: async (/** @type {any} */ params) => {
+            const replacementMetadata = params.putRequests?.find(
+              (/** @type {any} */ request) =>
+                request.record?.data?.record_type === Operation.RecordType &&
+                request.record.data.version === 2,
+            );
+            if (injectRevisionRace && replacementMetadata) {
+              injectRevisionRace = false;
+              replacementConditions = replacementMetadata.conditions;
+              await db.update({
+                tableName,
+                keyName: 'resource_id',
+                keyValue: replacementMetadata.record.resource_id,
+                sortKeyName: 'sort_key',
+                sortKeyValue: replacementMetadata.record.sort_key,
+                updates: [
+                  {
+                    property: ['revision_id'],
+                    propertyValue: OTHER_REVISION_ID,
+                  },
+                  {
+                    property: ['data', 'revision_id'],
+                    propertyValue: OTHER_REVISION_ID,
+                  },
+                ],
+              });
+            }
+            return await db.transactionWrite(params);
+          },
+        };
+        const store = createOperationsStore({
+          db: /** @type {any} */ (guardedDb),
+          tableName,
+        });
+        const directStore = createOperationsStore({ db, tableName });
+        const original = makeOperation({ actionIds: ['original'] });
+        await store.createOperation(original);
+
+        const rawMetadata = await db.get({
+          tableName,
+          keyName: 'resource_id',
+          keyValue: original.resource_id,
+          sortKeyName: 'sort_key',
+          sortKeyValue: getOperationSortKey(original.id),
+          consistentRead: true,
+        });
+        expect(rawMetadata).toMatchObject({
+          version: 1,
+          revision_id: REVISION_ID,
+          data: { revision_id: REVISION_ID },
+        });
+
+        injectRevisionRace = true;
+        await expect(
+          store.replaceOperation(
+            makeOperation({ actionIds: ['replacement'] }),
+            original.version,
+          ),
+        ).rejects.toMatchObject({ name: 'OperationConflictError' });
+        expect(replacementConditions).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              conditionType: 'EQUALS',
+              propertyName: 'version',
+              propertyValue: 1,
+            }),
+            expect.objectContaining({
+              conditionType: 'EQUALS',
+              propertyName: 'revision_id',
+              propertyValue: REVISION_ID,
+            }),
+          ]),
+        );
+
+        const persisted = await directStore.getOperation(
+          original.resource_id,
+          original.id,
+        );
+        expect(persisted).toMatchObject({
+          revision_id: OTHER_REVISION_ID,
+          generation: 1,
+          version: 1,
+        });
+        expect(persisted?.getActions().map(({ id }) => id)).toEqual([
+          'original',
+        ]);
       } finally {
         await cleanup();
       }

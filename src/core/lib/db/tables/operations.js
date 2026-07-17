@@ -6,6 +6,7 @@ import {
   getOperationSortKey,
   getOperationSortKeyPrefix,
 } from '../../graph/operation-record-key.js';
+import { assertApplicationRevisionId } from '../../../runtime/application-revision.js';
 
 import { CONDITION_TYPE, KEY_TYPE } from '../base.js';
 
@@ -58,9 +59,14 @@ export class OperationConflictError extends Error {
   /**
    * @param {string} resourceId - Application resource id.
    * @param {string} operationId - Operation id.
+   * @param {string} [reason] - Optional safe conflict reason.
    */
-  constructor(resourceId, operationId) {
-    super(`Operation changed concurrently: ${resourceId}#${operationId}`);
+  constructor(resourceId, operationId, reason) {
+    super(
+      `Operation changed concurrently: ${resourceId}#${operationId}${
+        reason ? ` (${reason})` : ''
+      }`,
+    );
     this.name = 'OperationConflictError';
     this.resourceId = resourceId;
     this.operationId = operationId;
@@ -384,6 +390,7 @@ function validateOperationSnapshot(operation) {
   if (!(operation instanceof Operation)) {
     throw new TypeError('Expected an Operation instance');
   }
+  assertApplicationRevisionId(operation.revision_id, 'operation.revision_id');
   const actions = operation.getActions();
   if (actions.length > MAX_OPERATION_ACTIONS) {
     throw new RangeError(
@@ -422,6 +429,7 @@ function normalizeRecord(record) {
       ? {
           generation: record.data.generation,
           version: record.data.version,
+          revision_id: record.data.revision_id,
         }
       : {
           operation_generation: record.data.operation_generation,
@@ -538,6 +546,18 @@ function validatePersistedSnapshot(
       'metadata record identity is invalid',
     );
   }
+  try {
+    assertApplicationRevisionId(
+      operationRecord.data.revision_id,
+      'operation.revision_id',
+    );
+  } catch {
+    throw new OperationSnapshotError(
+      resourceId,
+      operationId,
+      'application revision identity is invalid',
+    );
+  }
   if (
     !Number.isSafeInteger(operationRecord.data.generation) ||
     operationRecord.data.generation < 1 ||
@@ -545,6 +565,7 @@ function validatePersistedSnapshot(
     operationRecord.data.version < 1 ||
     operationRecord.generation !== operationRecord.data.generation ||
     operationRecord.version !== operationRecord.data.version ||
+    operationRecord.revision_id !== operationRecord.data.revision_id ||
     operationRecord.status !== operationRecord.data.status
   ) {
     throw new OperationSnapshotError(
@@ -664,6 +685,7 @@ async function loadStableOperationRecords(
       before.data?.version !== after.data?.version ||
       before.data?.generation !== after.data?.generation ||
       before.data?.status !== after.data?.status ||
+      before.data?.revision_id !== after.data?.revision_id ||
       before.data?.serialized_action_graph !==
         after.data?.serialized_action_graph
     ) {
@@ -685,7 +707,8 @@ async function loadStableOperationRecords(
       if (
         queriedMetadata.length !== 1 ||
         queriedMetadata[0].data.version !== after.data.version ||
-        queriedMetadata[0].data.generation !== after.data.generation
+        queriedMetadata[0].data.generation !== after.data.generation ||
+        queriedMetadata[0].data.revision_id !== after.data.revision_id
       ) {
         throw new OperationSnapshotError(
           resourceId,
@@ -825,6 +848,13 @@ export function createOperationsTable({ db, tableName } = {}) {
     if (currentOperationRecord.data.version !== expectedVersion) {
       throw new OperationConflictError(operation.resource_id, operation.id);
     }
+    if (operation.revision_id !== currentOperationRecord.data.revision_id) {
+      throw new OperationConflictError(
+        operation.resource_id,
+        operation.id,
+        'replacement revision does not match persisted revision',
+      );
+    }
     const currentStatus = currentOperationRecord.data.status;
     const normallyReplaceable = new Set([
       OperationStatus.PENDING,
@@ -909,7 +939,12 @@ export function createOperationsTable({ db, tableName } = {}) {
           sortKeyName: SORT_KEY_NAME,
           record,
           ...(record === nextOperationRecord
-            ? { conditions: [eq('version', expectedVersion)] }
+            ? {
+                conditions: [
+                  eq('version', expectedVersion),
+                  eq('revision_id', currentOperationRecord.data.revision_id),
+                ],
+              }
             : {
                 conditions:
                   expectedActionStateBySortKey.get(record.sort_key) ||

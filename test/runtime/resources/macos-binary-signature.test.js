@@ -89,6 +89,72 @@ describe('MacOSBinarySignature', () => {
     ).rejects.toThrow(/exactly one codesigning identity.*found 2/i);
   });
 
+  it('retains a completed ad-hoc result without retaining credentials', async () => {
+    const sourceDir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-ad-hoc-result-'),
+    );
+    const binaryPath = path.join(sourceDir, 'app');
+    await fsp.writeFile(binaryPath, 'binary', 'utf8');
+
+    try {
+      const { default: MacOSBinarySignature } = await import(SIGNATURE_IMPORT);
+      const signature = new MacOSBinarySignature({
+        name: 'ad-hoc-result',
+        properties: { binaryPath },
+      });
+
+      await signature.signBinary();
+
+      expect(signature.get('signingResult')).toEqual({ mode: 'ad-hoc' });
+      expect(signature.serialize().properties.signingResult).toEqual({
+        mode: 'ad-hoc',
+      });
+    } finally {
+      await fsp.rm(sourceDir, { recursive: true, force: true });
+    }
+  });
+
+  it('retains only the public identity name and hash after identity signing', async () => {
+    const sourceDir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-identity-result-'),
+    );
+    const binaryPath = path.join(sourceDir, 'app');
+    await fsp.writeFile(binaryPath, 'binary', 'utf8');
+    const credentials = {
+      certificateBase64: Buffer.from('certificate').toString('base64'),
+      certificatePassword: 'private-certificate-password',
+      keychainPassword: 'private-keychain-password',
+    };
+    execFileOutput.mockResolvedValue({
+      stdout: `  1) ${IDENTITY_HASH} "Portable Test Identity"\n     1 valid identities found\n`,
+      stderr: '',
+    });
+
+    try {
+      const { default: MacOSBinarySignature } = await import(SIGNATURE_IMPORT);
+      const signature = new MacOSBinarySignature({
+        name: 'identity-result',
+        credentials,
+        properties: { binaryPath },
+      });
+
+      await signature.signBinary();
+
+      expect(signature.get('signingResult')).toEqual({
+        mode: 'identity',
+        signer: `Portable Test Identity [${IDENTITY_HASH}]`,
+      });
+      const serialized = JSON.stringify(signature.serialize());
+      expect(serialized).toContain('Portable Test Identity');
+      expect(serialized).toContain(IDENTITY_HASH);
+      for (const secret of Object.values(credentials)) {
+        expect(serialized).not.toContain(secret);
+      }
+    } finally {
+      await fsp.rm(sourceDir, { recursive: true, force: true });
+    }
+  });
+
   it('uses a private signing directory and removes it after signing fails', async () => {
     const sourceDir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-signature-test-'),

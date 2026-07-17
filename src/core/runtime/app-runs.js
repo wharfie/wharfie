@@ -12,6 +12,7 @@ import {
   compareCanonicalStrings,
   sortCanonicalJsonValue,
 } from './canonical-order.js';
+import { assertApplicationRevisionId } from './application-revision.js';
 import { cloneJsonObject, cloneJsonValue } from './json-value.js';
 import { assertLogicalId } from './logical-id.js';
 import { createActorSystemResources } from './resources.js';
@@ -190,13 +191,6 @@ export function getAppResourceId(appId) {
 }
 
 /**
- * @returns {number} - Result.
- */
-export function getAppResourceVersion() {
-  return 1;
-}
-
-/**
  * Derive one stable operation identity from a queue and its provider-assigned
  * message identity. JSON encodes the pair without delimiter ambiguity; the
  * domain-separated digest keeps operation IDs compact and safe for storage.
@@ -251,11 +245,12 @@ function normalizeTrigger(trigger) {
 }
 
 /**
- * @param {{ appId: string, activityName: string, event?: any, operationId?: string, trigger?: any }} options - options.
+ * @param {{ appId: string, revisionId: string, activityName: string, event?: any, context?: Record<string, any>, operationId?: string, trigger?: any }} options - options.
  * @returns {Operation} - Result.
  */
 export function createOperationFromActivity(options) {
   assertLogicalId(options.appId, 'appId');
+  assertApplicationRevisionId(options.revisionId, 'revisionId');
   assertLogicalId(options.activityName, 'activityName');
   const hasOperationId = options.operationId !== undefined;
   if (
@@ -269,15 +264,22 @@ export function createOperationFromActivity(options) {
     Object.prototype.hasOwnProperty.call(options, 'event') ? options.event : {},
     'Activity event',
   );
+  const context = cloneJsonObject(
+    Object.prototype.hasOwnProperty.call(options, 'context')
+      ? options.context
+      : {},
+    'Activity context',
+  );
   const operation = new Operation({
     resource_id: getAppResourceId(options.appId),
-    resource_version: getAppResourceVersion(),
+    revision_id: options.revisionId,
     ...(hasOperationId ? { id: options.operationId } : {}),
     type: OperationType.PIPELINE,
     operation_config: {
       source: 'app-manifest',
       app_id: options.appId,
       activity_name: options.activityName,
+      context,
       trigger: normalizeTrigger(options.trigger),
     },
     operation_inputs: event,
@@ -298,12 +300,14 @@ export function createOperationFromActivity(options) {
  * @typedef RunPersistedActivityOptions
  * @property {import('../lib/db/tables/operations.js').OperationsTableClient} store - Operations store.
  * @property {string} appId - Canonical application ID.
+ * @property {string} revisionId - Immutable application revision identity.
  * @property {string} activityName - Canonical activity ID.
  * @property {string} operationId - Stable operation ID.
  * @property {any} [event] - Activity event.
- * @property {Record<string, any>} [context] - Attempt-scoped activity context.
+ * @property {Record<string, any>} [context] - Immutable user activity context.
+ * @property {Record<string, any>} [attemptContext] - Volatile current-attempt context excluded from durable identity.
  * @property {any} [trigger] - Immutable operation trigger.
- * @property {(request: { activityName: string, event?: any, context: Record<string, any> }) => Promise<any>} execute - Activity executor.
+ * @property {(request: { activityName: string, revisionId: string, event?: any, context: Record<string, any> }) => Promise<any>} execute - Activity executor.
  */
 
 /**
@@ -316,7 +320,7 @@ function isOperationAlreadyExistsError(error) {
 
 /**
  * @param {string} message - Error message.
- * @param {{ resourceId: string, operationId: string, status: string }} details - Operation details.
+ * @param {{ resourceId: string, operationId: string, status: string, requestedRevisionId?: string, persistedRevisionId?: string }} details - Operation details.
  * @param {string} [name] - Error name.
  * @returns {Error} - Enriched operation error.
  */
@@ -337,7 +341,7 @@ function createOperationRunError(message, details, name) {
 function getPersistedActivityIdentity(operation) {
   return {
     resource_id: operation.resource_id,
-    resource_version: operation.resource_version,
+    revision_id: operation.revision_id,
     id: operation.id,
     type: operation.type,
     operation_config: operation.operation_config,
@@ -405,20 +409,24 @@ export async function runPersistedActivity(options) {
 
   const operation = createOperationFromActivity({
     appId: options.appId,
+    revisionId: options.revisionId,
     activityName: options.activityName,
     operationId: options.operationId,
     ...(Object.prototype.hasOwnProperty.call(options, 'event')
       ? { event: options.event }
       : {}),
+    ...(Object.prototype.hasOwnProperty.call(options, 'context')
+      ? { context: options.context }
+      : {}),
     trigger: options.trigger,
   });
   const resourceId = operation.resource_id;
   const operationId = operation.id;
-  const context = cloneJsonObject(
-    Object.prototype.hasOwnProperty.call(options, 'context')
-      ? options.context
+  const attemptContext = cloneJsonObject(
+    Object.prototype.hasOwnProperty.call(options, 'attemptContext')
+      ? options.attemptContext
       : {},
-    'Activity context',
+    'Activity attempt context',
   );
 
   let created = false;
@@ -439,6 +447,20 @@ export async function runPersistedActivity(options) {
       throw createOperationRunError(
         `Operation already exists but could not be loaded: ${resourceId}#${operationId}`,
         { resourceId, operationId, status: 'UNKNOWN' },
+      );
+    }
+
+    if (operation.revision_id !== existing.revision_id) {
+      throw createOperationRunError(
+        `Operation revision conflicts with existing work: ${resourceId}#${operationId} requested ${operation.revision_id}, persisted ${existing.revision_id}`,
+        {
+          resourceId,
+          operationId,
+          status: existing.status,
+          requestedRevisionId: operation.revision_id,
+          persistedRevisionId: existing.revision_id,
+        },
+        'OperationRevisionMismatchError',
       );
     }
 
@@ -517,8 +539,17 @@ export async function runPersistedActivity(options) {
         );
       }
       const activityName = action.function_name || options.activityName;
+      const persistedContext = cloneJsonObject(
+        operationToClaim.operation_config?.context,
+        'Persisted activity context',
+      );
+      const context = cloneJsonObject(
+        { ...persistedContext, ...attemptContext },
+        'Activity execution context',
+      );
       const rawOutputs = await options.execute({
         activityName,
+        revisionId: operationToClaim.revision_id,
         event: cloneJsonValue(action.inputs, 'Activity event'),
         context,
       });
@@ -562,7 +593,6 @@ export default {
   createManifestActivityFunction,
   createOperationFromActivity,
   getAppResourceId,
-  getAppResourceVersion,
   getManifestActivities,
   getManifestActivityDefinition,
   getManifestActivityNames,
