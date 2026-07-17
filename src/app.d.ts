@@ -148,7 +148,7 @@ export type AppTarget =
       libc: 'glibc';
     })
   | (AppTargetBase & {
-      platform: 'darwin' | 'win32';
+      platform: 'darwin';
       libc?: never;
     });
 

@@ -1,9 +1,9 @@
-import { open } from 'lmdb';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import paths from '../../paths.js';
 import { createId } from '../../id.js';
+import { getLmdbModule } from '../../lmdb-module.js';
 
 /**
  * @typedef {Record<string, string>} QueueAttributes
@@ -45,7 +45,7 @@ export default function createLMDBQueue(options = {}) {
     : join(paths.data, 'queue-lmdb');
   mkdirSync(dbRoot, { recursive: true });
 
-  const env = open({
+  const env = getLmdbModule().open({
     path: dbRoot,
     eventTurnBatching: false,
     commitDelay: 0,

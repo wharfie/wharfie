@@ -12,6 +12,7 @@ import {
   createArtifactProvenance,
   createArtifactToolchainDigest,
 } from '../../../src/cli/app/artifact-provenance.js';
+import CoreRuntimeDependenciesResource from '../../../src/core/resources/builds/core-runtime-dependencies.js';
 import FunctionResource from '../../../src/core/resources/builds/function-resource.js';
 import MacOSBinarySignature from '../../../src/core/resources/builds/macos-binary-signature.js';
 import NodeBinary from '../../../src/core/resources/builds/node-binary.js';
@@ -21,6 +22,14 @@ import {
   parseFunctionAssetDescription,
   serializeFunctionAssetDescription,
 } from '../../../src/core/resources/builds/lib/function-asset.js';
+import {
+  CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
+  CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
+  CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
+  CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME,
+  CORE_RUNTIME_DEPENDENCY_PURPOSE,
+  CORE_RUNTIME_DEPENDENCY_ROOT,
+} from '../../../src/core/resources/builds/lib/core-runtime-dependency-asset.js';
 import {
   APP_MANIFEST_ASSET_NAME,
   stringifyEmbeddedAppManifest,
@@ -211,6 +220,42 @@ function makeFunctionResource({
 
 /**
  * @param {import('../../../src/core/runtime/build-target.js').BuildTarget} target
+ * @param {string} marker
+ */
+function makeCoreRuntimeDependenciesResource(target, marker) {
+  const resource = new CoreRuntimeDependenciesResource({
+    name: `core-runtime-dependencies-${marker}`,
+    properties: { buildTarget: target },
+  });
+  const archiveDigest = digest(`${marker} core archive`);
+  const receipt = {
+    schemaVersion: CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
+    kind: CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
+    purpose: CORE_RUNTIME_DEPENDENCY_PURPOSE,
+    target,
+    roots: [{ ...CORE_RUNTIME_DEPENDENCY_ROOT }],
+    dependencyLockInput: {
+      format: 'wharfie-npm-package-lock-v3-closure-v1',
+      digest: digest(`${marker} core dependency lock`),
+    },
+    closureDigest: digest(`${marker} core closure`),
+    archive: {
+      assetName: CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
+      digest: archiveDigest,
+    },
+  };
+  resource._setUNSAFE('receipt', receipt);
+  resource._setUNSAFE('assetDigests', {
+    [CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME]: digest(
+      `${marker} core manifest`,
+    ),
+    [CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME]: archiveDigest,
+  });
+  return resource;
+}
+
+/**
+ * @param {import('../../../src/core/runtime/build-target.js').BuildTarget} target
  * @param {string} binaryPath
  * @param {any[]} dependencies
  * @param {import('../../../src/core/runtime/application-revision.js').ApplicationRevision} revision
@@ -227,6 +272,14 @@ async function makeBuild(target, binaryPath, dependencies, revision) {
   const functionResources = dependencies.filter(
     (dependency) => dependency instanceof FunctionResource,
   );
+  const coreResources = dependencies.filter(
+    (dependency) => dependency instanceof CoreRuntimeDependenciesResource,
+  );
+  if (coreResources.length > 1) {
+    throw new Error(
+      'Test SEA build has more than one core dependency resource.',
+    );
+  }
   for (const [index, resource] of functionResources.entries()) {
     const activity = String(resource.get('functionName'));
     const externalArchiveBytes = Buffer.from(
@@ -363,6 +416,23 @@ async function makeBuild(target, binaryPath, dependencies, revision) {
     functionAssets: functionAssetEvidence,
     signing: { mode: 'unsigned' },
   };
+  if (coreResources.length === 1) {
+    const coreReceipt = coreResources[0].get('receipt');
+    const coreAssetDigests = coreResources[0].get('assetDigests');
+    generation.assets[CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME] =
+      coreAssetDigests[CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME];
+    generation.assets[coreReceipt.archive.assetName] =
+      coreAssetDigests[coreReceipt.archive.assetName];
+    generation.coreRuntimeDependencies = {
+      manifestDigest:
+        coreAssetDigests[CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME],
+      target: coreReceipt.target,
+      roots: coreReceipt.roots,
+      dependencyLockInput: coreReceipt.dependencyLockInput,
+      closureDigest: coreReceipt.closureDigest,
+      archive: coreReceipt.archive,
+    };
+  }
   successfulGenerations.set(build, generation);
   jest
     .spyOn(build, 'getSuccessfulBuildEvidence')
@@ -813,6 +883,91 @@ describe('package-time artifact provenance', () => {
         artifactBytes: await readArtifactBytes(unreconciledBuild),
       }),
     ).rejects.toThrow(/no reconciled external archive digest/i);
+  });
+
+  it('binds the core LMDB closure receipt into artifact provenance', async () => {
+    const directory = await makeTemporaryDirectory('wharfie-core-closure-');
+    const binaryPath = path.join(directory, 'node');
+    await fsp.writeFile(binaryPath, 'node bytes');
+    const revision = makeRevision();
+    const firstCore = makeCoreRuntimeDependenciesResource(
+      LINUX_TARGET,
+      'first',
+    );
+    const firstBuild = await makeBuild(
+      LINUX_TARGET,
+      binaryPath,
+      [firstCore],
+      revision,
+    );
+    const first = await createArtifactProvenance({
+      build: firstBuild,
+      actorSystem: makeActorSystem(),
+      revision,
+      builderVersion: BUILDER_VERSION,
+      artifactBytes: await readArtifactBytes(firstBuild),
+    });
+
+    const secondCore = makeCoreRuntimeDependenciesResource(
+      LINUX_TARGET,
+      'second',
+    );
+    const secondBuild = await makeBuild(
+      LINUX_TARGET,
+      binaryPath,
+      [secondCore],
+      revision,
+    );
+    const second = await createArtifactProvenance({
+      build: secondBuild,
+      actorSystem: makeActorSystem(),
+      revision,
+      builderVersion: BUILDER_VERSION,
+      artifactBytes: await readArtifactBytes(secondBuild),
+    });
+    expect(second.dependencies.digest).not.toEqual(first.dependencies.digest);
+
+    firstCore._setUNSAFE('assetDigests', {
+      ...firstCore.get('assetDigests'),
+      [CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME]: digest(
+        'mutated core archive',
+      ),
+    });
+    await expect(
+      createArtifactProvenance({
+        build: firstBuild,
+        actorSystem: makeActorSystem(),
+        revision,
+        builderVersion: BUILDER_VERSION,
+        artifactBytes: await readArtifactBytes(firstBuild),
+      }),
+    ).rejects.toThrow(/core runtime dependency archive does not match/i);
+  });
+
+  it('rejects a core resource without sealed SEA evidence', async () => {
+    const directory = await makeTemporaryDirectory(
+      'wharfie-missing-core-evidence-',
+    );
+    const binaryPath = path.join(directory, 'node');
+    await fsp.writeFile(binaryPath, 'node bytes');
+    const revision = makeRevision();
+    const core = makeCoreRuntimeDependenciesResource(LINUX_TARGET, 'missing');
+    const build = await makeBuild(LINUX_TARGET, binaryPath, [core], revision);
+    const generation = successfulGenerations.get(build);
+    if (!generation) throw new Error('Expected a successful build generation.');
+    delete generation.coreRuntimeDependencies;
+    delete generation.assets[CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME];
+    delete generation.assets[CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME];
+
+    await expect(
+      createArtifactProvenance({
+        build,
+        actorSystem: makeActorSystem(),
+        revision,
+        builderVersion: BUILDER_VERSION,
+        artifactBytes: await readArtifactBytes(build),
+      }),
+    ).rejects.toThrow(/resource and sealed generation evidence/i);
   });
 
   it('rejects an activity receipt from a different dependency lock', async () => {

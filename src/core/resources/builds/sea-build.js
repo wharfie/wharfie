@@ -17,6 +17,11 @@ import { inject } from 'postject';
 import BaseResource from '../base-resource.js';
 import NodeBinary from './node-binary.js';
 import { assertSeaNodeVersionCompatible } from './lib/sea-node-version.js';
+import {
+  CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
+  CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME,
+  validateCoreRuntimeDependencyManifest,
+} from './lib/core-runtime-dependency-asset.js';
 import { parseFunctionAssetDescription } from './lib/function-asset.js';
 import { validateSha256Digest } from '../../runtime/application-revision.js';
 import {
@@ -59,6 +64,7 @@ let _originalStderrWrite = null;
  * @property {{path: string, digest: import('../../runtime/application-revision.js').Sha256Digest, size: number, archive: null | {fileName: string, digest: import('../../runtime/application-revision.js').Sha256Digest}}} nodeSource - Exact pre-injection Node source and same-generation archive evidence.
  * @property {Record<string, import('../../runtime/application-revision.js').Sha256Digest>} assets - Exact generic asset bytes consumed by SEA.
  * @property {Record<string, any>} functionAssets - Strict parsed function-asset evidence.
+ * @property {null | {manifestDigest: import('../../runtime/application-revision.js').Sha256Digest, target: import('../../runtime/build-target.js').BuildTarget, roots: {name: string, version: string}[], dependencyLockInput: import('../../runtime/application-revision.js').LockedInputDescriptor, closureDigest: import('../../runtime/application-revision.js').Sha256Digest, archive: {assetName: string, digest: import('../../runtime/application-revision.js').Sha256Digest}}} [coreRuntimeDependencies] - Strict core-native closure receipt when embedded.
  * @property {{mode: 'unsigned'} | {mode: 'ad-hoc'} | {mode: 'identity', signer: string}} signing - Generation signing state.
  */
 
@@ -564,6 +570,20 @@ class SeaBuild extends BaseResource {
   }
 
   /**
+   * Return sealed core-native dependency evidence from the exact asset bytes
+   * consumed by this generation. A null result means this low-level SeaBuild
+   * was not constructed through an ActorSystem target.
+   * @returns {SuccessfulBuildEvidence['coreRuntimeDependencies']} - Sealed receipt.
+   */
+  getEmbeddedCoreRuntimeDependencyEvidence() {
+    const evidence = successfulBuildEvidence.get(this);
+    if (!evidence) {
+      throw new Error('SEA build has no committed successful-build evidence.');
+    }
+    return evidence.coreRuntimeDependencies;
+  }
+
+  /**
    * Bind package-time provenance to the exact bytes from this successful
    * build generation.
    * @param {Buffer | Uint8Array} artifactBytes - Exact SEA bytes being recorded.
@@ -710,6 +730,8 @@ class SeaBuild extends BaseResource {
         },
         assets: seaResult.assetEvidence,
         functionAssets: seaResult.functionAssetEvidence,
+        coreRuntimeDependencies:
+          seaResult.coreRuntimeDependencyEvidence || null,
         signing: { mode: 'unsigned' },
       };
     } catch (error) {
@@ -853,7 +875,7 @@ class SeaBuild extends BaseResource {
   /**
    * Seal configured SEA assets into the private build tree.
    * @param {string} buildDir - Private mode-0700 build directory.
-   * @returns {Promise<{assets: Record<string, string>, assetEvidence: Record<string, import('../../runtime/application-revision.js').Sha256Digest>, functionAssetEvidence: Record<string, any>}>} - Sealed paths and exact evidence.
+   * @returns {Promise<{assets: Record<string, string>, assetEvidence: Record<string, import('../../runtime/application-revision.js').Sha256Digest>, functionAssetEvidence: Record<string, any>, coreRuntimeDependencyEvidence?: SuccessfulBuildEvidence['coreRuntimeDependencies']}>} - Sealed paths and exact evidence.
    */
   async _prepareSeaAssetsWithEvidence(buildDir) {
     delete this.properties.embeddedAssetDigests;
@@ -889,6 +911,10 @@ class SeaBuild extends BaseResource {
     const embeddedAssetDigests = Object.create(null);
     /** @type {Record<string, any>} */
     const functionEvidence = Object.create(null);
+    /** @type {Buffer | null} */
+    let coreManifestBytes = null;
+    /** @type {import('../../runtime/application-revision.js').Sha256Digest | null} */
+    let coreManifestDigest = null;
     const buildTarget = validateBuildTarget(
       {
         nodeVersion: String(this.get('nodeVersion')).replace(/^v/, ''),
@@ -926,6 +952,10 @@ class SeaBuild extends BaseResource {
       await promises.chmod(sealedPath, 0o400);
       sealedAssets[name] = sealedPath;
       embeddedAssetDigests[name] = digest;
+      if (name === CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME) {
+        coreManifestBytes = bytes;
+        coreManifestDigest = { ...digest };
+      }
       if (functionAssetDigests[name]) {
         const parsed = parseFunctionAssetDescription(
           bytes,
@@ -956,11 +986,64 @@ class SeaBuild extends BaseResource {
       }
     }
 
+    const hasCoreManifest = coreManifestBytes !== null;
+    const hasCoreArchive = Object.prototype.hasOwnProperty.call(
+      embeddedAssetDigests,
+      CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
+    );
+    if (hasCoreManifest !== hasCoreArchive) {
+      throw new Error(
+        'SEA core runtime dependency assets must include both manifest and archive.',
+      );
+    }
+    /** @type {SuccessfulBuildEvidence['coreRuntimeDependencies']} */
+    let coreRuntimeDependencyEvidence = null;
+    if (coreManifestBytes && coreManifestDigest) {
+      let parsed;
+      try {
+        parsed = JSON.parse(coreManifestBytes.toString('utf8'));
+      } catch {
+        throw new Error(
+          'SEA core runtime dependency manifest is not valid JSON.',
+        );
+      }
+      const manifest = validateCoreRuntimeDependencyManifest(
+        parsed,
+        `assets[${JSON.stringify(CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME)}]`,
+      );
+      if (getBuildTargetId(manifest.target) !== getBuildTargetId(buildTarget)) {
+        throw new Error(
+          'SEA core runtime dependency target does not match its SEA build.',
+        );
+      }
+      const embeddedArchiveDigest =
+        embeddedAssetDigests[manifest.archive.assetName];
+      if (
+        !embeddedArchiveDigest ||
+        embeddedArchiveDigest.value !== manifest.archive.digest.value
+      ) {
+        throw new Error(
+          'SEA core runtime dependency archive does not match its sealed manifest receipt.',
+        );
+      }
+      coreRuntimeDependencyEvidence = {
+        manifestDigest: coreManifestDigest,
+        target: manifest.target,
+        roots: manifest.roots,
+        dependencyLockInput: manifest.dependencyLockInput,
+        closureDigest: manifest.closureDigest,
+        archive: manifest.archive,
+      };
+    }
+
     this._setUNSAFE('embeddedAssetDigests', embeddedAssetDigests);
     return {
       assets: sealedAssets,
       assetEvidence: freezeJsonSnapshot(embeddedAssetDigests),
       functionAssetEvidence: freezeJsonSnapshot(functionEvidence),
+      coreRuntimeDependencyEvidence: freezeJsonSnapshot(
+        coreRuntimeDependencyEvidence,
+      ),
     };
   }
 
@@ -977,7 +1060,7 @@ class SeaBuild extends BaseResource {
   /**
    * @param {string} buildDir - buildDir.
    * @param {string} nodeBinaryPath - nodeBinaryPath.
-   * @returns {Promise<{assetEvidence: Record<string, import('../../runtime/application-revision.js').Sha256Digest>, functionAssetEvidence: Record<string, any>}>} - Exact asset evidence consumed by SEA generation.
+   * @returns {Promise<{assetEvidence: Record<string, import('../../runtime/application-revision.js').Sha256Digest>, functionAssetEvidence: Record<string, any>, coreRuntimeDependencyEvidence?: SuccessfulBuildEvidence['coreRuntimeDependencies']}>} - Exact asset evidence consumed by SEA generation.
    */
   async seaBuild(buildDir, nodeBinaryPath) {
     this.assertNodeVersionCompatible();
@@ -1021,6 +1104,8 @@ class SeaBuild extends BaseResource {
     return {
       assetEvidence: preparedAssets.assetEvidence,
       functionAssetEvidence: preparedAssets.functionAssetEvidence,
+      coreRuntimeDependencyEvidence:
+        preparedAssets.coreRuntimeDependencyEvidence,
     };
   }
 

@@ -2,12 +2,20 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 
 import FunctionResource from '../../core/resources/builds/function-resource.js';
+import CoreRuntimeDependenciesResource from '../../core/resources/builds/core-runtime-dependencies.js';
 import MacOSBinarySignature from '../../core/resources/builds/macos-binary-signature.js';
 import NodeBinary from '../../core/resources/builds/node-binary.js';
 import {
   APP_MANIFEST_ASSET_NAME,
   stringifyEmbeddedAppManifest,
 } from '../../core/resources/builds/lib/app-manifest-asset.js';
+import {
+  CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
+  CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME,
+  CORE_RUNTIME_DEPENDENCY_PURPOSE,
+  CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
+  validateCoreRuntimeDependencyManifest,
+} from '../../core/resources/builds/lib/core-runtime-dependency-asset.js';
 import {
   APPLICATION_REVISION_ASSET_NAME,
   ARTIFACT_RUNTIME_ASSET_NAME,
@@ -34,7 +42,7 @@ import { cloneJsonValue } from '../../core/runtime/json-value.js';
 
 export const ARTIFACT_TOOLCHAIN_DIGEST_DOMAIN = 'wharfie:artifact-toolchain:v1';
 export const ARTIFACT_DEPENDENCY_CLOSURE_DIGEST_DOMAIN =
-  'wharfie:artifact-dependency-closure:v2';
+  'wharfie:artifact-dependency-closure:v3';
 export const ARTIFACT_PROVENANCE_BUILDER_NAME = '@wharfie/wharfie';
 
 const require = createRequire(import.meta.url);
@@ -151,6 +159,34 @@ function validateGenerationAssets(generation, revision, target) {
       evidence.assetDigest,
       `Activity '${activity}' sealed asset digest`,
     );
+  }
+  const coreEvidence = generation.coreRuntimeDependencies;
+  if (coreEvidence !== null && coreEvidence !== undefined) {
+    const coreManifest = validateCoreRuntimeDependencyManifest(
+      {
+        schemaVersion: CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
+        kind: CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
+        purpose: CORE_RUNTIME_DEPENDENCY_PURPOSE,
+        target: coreEvidence.target,
+        roots: coreEvidence.roots,
+        dependencyLockInput: coreEvidence.dependencyLockInput,
+        closureDigest: coreEvidence.closureDigest,
+        archive: coreEvidence.archive,
+      },
+      'SEA core runtime dependency evidence',
+    );
+    if (getBuildTargetId(coreManifest.target) !== getBuildTargetId(target)) {
+      throw new Error(
+        'SEA core runtime dependency evidence does not match the artifact target.',
+      );
+    }
+    expectedAssets[CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME] =
+      validateSha256Digest(
+        coreEvidence.manifestDigest,
+        'SEA core runtime dependency manifest digest',
+      );
+    expectedAssets[coreManifest.archive.assetName] =
+      coreManifest.archive.digest;
   }
   const actualNames = Object.keys(actualAssets).sort(compareCanonicalStrings);
   const expectedNames = Object.keys(expectedAssets).sort(
@@ -687,9 +723,100 @@ export function createArtifactDependencyClosureDigest(
     }
   }
 
+  /** @type {Record<string, any> | null} */
+  let coreRuntimeDependencies = null;
+  const coreResources = /** @type {CoreRuntimeDependenciesResource[]} */ (
+    Array.isArray(build.dependsOn)
+      ? build.dependsOn.filter(
+          (/** @type {any} */ dependency) =>
+            dependency instanceof CoreRuntimeDependenciesResource,
+        )
+      : []
+  );
+  if (coreResources.length > 1) {
+    throw new Error(
+      'SEA build has more than one core runtime dependency resource.',
+    );
+  }
+  const coreEvidence = generation?.coreRuntimeDependencies;
+  if (
+    (coreResources.length === 1) !==
+    (coreEvidence !== null && coreEvidence !== undefined)
+  ) {
+    throw new Error(
+      'SEA core runtime dependency resource and sealed generation evidence must either both be present or both be absent.',
+    );
+  }
+  if (coreEvidence !== null && coreEvidence !== undefined) {
+    const coreManifest = validateCoreRuntimeDependencyManifest(
+      {
+        schemaVersion: CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
+        kind: CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
+        purpose: CORE_RUNTIME_DEPENDENCY_PURPOSE,
+        target: coreEvidence.target,
+        roots: coreEvidence.roots,
+        dependencyLockInput: coreEvidence.dependencyLockInput,
+        closureDigest: coreEvidence.closureDigest,
+        archive: coreEvidence.archive,
+      },
+      'SEA core runtime dependency evidence',
+    );
+    if (getBuildTargetId(coreManifest.target) !== getBuildTargetId(target)) {
+      throw new Error(
+        'SEA core runtime dependency evidence does not match the artifact target.',
+      );
+    }
+    const resourceReceipt = coreResources[0].get('receipt');
+    const reconciledManifest = validateCoreRuntimeDependencyManifest(
+      resourceReceipt,
+      'reconciled core runtime dependency receipt',
+    );
+    if (!hasSameCanonicalJson(reconciledManifest, coreManifest)) {
+      throw new Error(
+        'Reconciled core runtime dependency receipt does not match its sealed SEA evidence.',
+      );
+    }
+    const resourceAssetDigests = coreResources[0].get('assetDigests', {});
+    const reconciledManifestDigest = validateSha256Digest(
+      resourceAssetDigests[CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME],
+      'reconciled core runtime dependency manifest digest',
+    );
+    const sealedManifestDigest = validateSha256Digest(
+      coreEvidence.manifestDigest,
+      'SEA core runtime dependency manifest digest',
+    );
+    if (reconciledManifestDigest.value !== sealedManifestDigest.value) {
+      throw new Error(
+        'Reconciled core runtime dependency manifest does not match its sealed SEA evidence.',
+      );
+    }
+    const reconciledArchiveDigest = validateSha256Digest(
+      resourceAssetDigests[coreManifest.archive.assetName],
+      'reconciled core runtime dependency archive digest',
+    );
+    if (reconciledArchiveDigest.value !== coreManifest.archive.digest.value) {
+      throw new Error(
+        'Reconciled core runtime dependency archive does not match its sealed SEA evidence.',
+      );
+    }
+    coreRuntimeDependencies = {
+      manifestDigest: sealedManifestDigest,
+      roots: coreManifest.roots,
+      dependencyLockInput: coreManifest.dependencyLockInput,
+      closureDigest: coreManifest.closureDigest,
+      archiveDigest: coreManifest.archive.digest,
+    };
+  }
+
   return createCanonicalDigest(
     ARTIFACT_DEPENDENCY_CLOSURE_DIGEST_DOMAIN,
-    { schemaVersion: 2, lock: expectedLock, target, activities },
+    {
+      schemaVersion: 3,
+      lock: expectedLock,
+      target,
+      activities,
+      coreRuntimeDependencies,
+    },
     'artifact dependency closure',
   );
 }

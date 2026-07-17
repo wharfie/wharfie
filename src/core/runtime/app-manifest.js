@@ -185,9 +185,9 @@ function assertTargets(value, valuePath) {
         `${targetPath}.nodeVersion must be an exact canonical semantic version in x.y.z form.`,
       );
     }
-    if (!['darwin', 'linux', 'win32'].includes(target.platform)) {
+    if (!['darwin', 'linux'].includes(target.platform)) {
       throw new TypeError(
-        `${targetPath}.platform must be 'darwin', 'linux', or 'win32'.`,
+        `${targetPath}.platform must be 'darwin' or 'linux'. Windows SEA targets are deferred until private core-runtime extraction is hardened and tested.`,
       );
     }
     if (!['arm64', 'x64'].includes(target.architecture)) {

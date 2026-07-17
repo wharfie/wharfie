@@ -20,7 +20,17 @@ import {
   ARTIFACT_RUNTIME_ASSET_NAME,
   validateEmbeddedRevisionRuntimePair,
 } from '../../../src/core/resources/builds/lib/revision-runtime-assets.js';
+import {
+  CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
+  CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
+  CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
+  CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME,
+  CORE_RUNTIME_DEPENDENCY_PURPOSE,
+  CORE_RUNTIME_DEPENDENCY_ROOT,
+  stringifyCoreRuntimeDependencyManifest,
+} from '../../../src/core/resources/builds/lib/core-runtime-dependency-asset.js';
 import ActorSystem from '../../../src/core/resources/builds/actor-system.js';
+import CoreRuntimeDependenciesResource from '../../../src/core/resources/builds/core-runtime-dependencies.js';
 import FunctionResource from '../../../src/core/resources/builds/function-resource.js';
 import MacOSBinarySignature from '../../../src/core/resources/builds/macos-binary-signature.js';
 import NodeBinary from '../../../src/core/resources/builds/node-binary.js';
@@ -157,6 +167,60 @@ async function prepareMockArtifactProvenance(actorSystem, buildDir) {
     }
   }
 
+  let coreResourceIndex = 0;
+  for (const resource of actorSystem.getResources()) {
+    if (!(resource instanceof CoreRuntimeDependenciesResource)) continue;
+    const target = resource.get('buildTarget');
+    const assetDirectory = path.join(
+      buildDir,
+      `core-runtime-dependencies-${coreResourceIndex}`,
+    );
+    coreResourceIndex += 1;
+    await fsp.mkdir(assetDirectory, { recursive: true, mode: 0o700 });
+    const archiveBytes = Buffer.from(
+      `mock core runtime archive ${JSON.stringify(target)}`,
+      'utf8',
+    );
+    const archiveDigest = getSha256Digest(archiveBytes);
+    const receipt = {
+      schemaVersion: CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
+      kind: CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
+      purpose: CORE_RUNTIME_DEPENDENCY_PURPOSE,
+      target,
+      roots: [{ ...CORE_RUNTIME_DEPENDENCY_ROOT }],
+      dependencyLockInput: {
+        format: 'wharfie-npm-package-lock-v3-closure-v1',
+        digest: getSha256Digest('mock core dependency lock'),
+      },
+      closureDigest: getSha256Digest('mock core closure'),
+      archive: {
+        assetName: CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
+        digest: archiveDigest,
+      },
+    };
+    const manifestBytes = Buffer.from(
+      `${stringifyCoreRuntimeDependencyManifest(receipt)}\n`,
+      'utf8',
+    );
+    const manifestPath = path.join(assetDirectory, 'manifest.json');
+    const archivePath = path.join(assetDirectory, 'local-control-store.tgz');
+    await Promise.all([
+      fsp.writeFile(manifestPath, manifestBytes, { mode: 0o400 }),
+      fsp.writeFile(archivePath, archiveBytes, { mode: 0o400 }),
+    ]);
+    resource._setUNSAFE('assets', {
+      [CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME]: manifestPath,
+      [CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME]: archivePath,
+    });
+    resource._setUNSAFE('assetDigests', {
+      [CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME]:
+        getSha256Digest(manifestBytes),
+      [CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME]: archiveDigest,
+    });
+    resource._setUNSAFE('receipt', receipt);
+    resource._setUNSAFE('assetDirectory', assetDirectory);
+  }
+
   for (const resource of actorSystem.getResources()) {
     if (!(resource instanceof SeaBuild)) continue;
     const sealedAssetsDir = await fsp.mkdtemp(
@@ -191,6 +255,7 @@ async function prepareMockArtifactProvenance(actorSystem, buildDir) {
         },
         assets: preparedAssets.assetEvidence,
         functionAssets: preparedAssets.functionAssetEvidence,
+        coreRuntimeDependencies: preparedAssets.coreRuntimeDependencyEvidence,
         signing,
       }));
   }
@@ -312,6 +377,12 @@ describe('packageLocalApp', () => {
             expect(entryCode).toContain('cliExportName: "launch"');
             expect(entryCode).toContain('ledger-service-command.js');
             expect(entryCode).toContain("'ledger-service': ledgerServiceCmd");
+            expect(entryCode).toContain('const loadDeveloperCliModule = () =>');
+            expect(
+              entryCode.indexOf(
+                'await preparePackagedCoreRuntimeDependencies()',
+              ),
+            ).toBeLessThan(entryCode.indexOf('await loadDeveloperCliModule()'));
             expect(entryCode).not.toContain('state_cmds');
             expect(entryCode).not.toContain("'serve-lambda':");
             expect(entryCode).not.toContain("'serve-queue':");
@@ -652,11 +723,12 @@ describe('packageLocalApp', () => {
   });
 
   it.each([
+    ['platform', 'macos', 'x64', /platform must be 'darwin' or 'linux'/i],
     [
       'platform',
-      'macos',
+      'win32',
       'x64',
-      /platform must be 'darwin', 'linux', or 'win32'/i,
+      /Windows SEA targets are deferred until private core-runtime extraction is hardened and tested/i,
     ],
     [
       'architecture',
@@ -1347,6 +1419,20 @@ try {
             });
             resource._setUNSAFE('singleExecutableAssetPath', assetPath);
             temporaryPaths.push(assetPath);
+          }
+          if (resource instanceof CoreRuntimeDependenciesResource) {
+            const assetDirectory = path.join(
+              outputDir,
+              `core-runtime-dependencies-${temporaryPaths.length}`,
+            );
+            await fsp.mkdir(assetDirectory, { recursive: true, mode: 0o700 });
+            await fsp.writeFile(
+              path.join(assetDirectory, 'local-control-store.tgz'),
+              'temporary core dependency archive',
+              { mode: 0o600 },
+            );
+            resource._setUNSAFE('assetDirectory', assetDirectory);
+            temporaryPaths.push(assetDirectory);
           }
         }
         throw new Error('reconcile-failure-sentinel');

@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { SHARED_RESOURCE_REGISTRY_FILE_NAME } from '../../../src/core/runtime/shared-resource-registry.js';
 import Function from '../../../src/core/resources/builds/function.js';
 import ActorSystem from '../../../src/core/resources/builds/actor-system.js';
+import CoreRuntimeDependenciesResource from '../../../src/core/resources/builds/core-runtime-dependencies.js';
 import FunctionResource from '../../../src/core/resources/builds/function-resource.js';
 import MacOSBinarySignature from '../../../src/core/resources/builds/macos-binary-signature.js';
 import SeaBuild from '../../../src/core/resources/builds/sea-build.js';
@@ -321,6 +322,9 @@ describe('ActorSystem runtime resources', () => {
     const build = system
       .getResources()
       .find((resource) => resource instanceof SeaBuild);
+    const coreRuntimeDependencies = system
+      .getResources()
+      .find((resource) => resource instanceof CoreRuntimeDependenciesResource);
 
     expect(system.get('targets')).toEqual([
       {
@@ -332,6 +336,37 @@ describe('ActorSystem runtime resources', () => {
     ]);
     expect(build).toBeInstanceOf(SeaBuild);
     expect(build?.get('libc')).toBe('glibc');
+    expect(coreRuntimeDependencies).toBeInstanceOf(
+      CoreRuntimeDependenciesResource,
+    );
+    expect(coreRuntimeDependencies?.get('buildTarget')).toEqual({
+      nodeVersion: process.versions.node,
+      platform: 'linux',
+      architecture: 'arm64',
+      libc: 'glibc',
+    });
+    expect(build?.dependsOn).toContain(coreRuntimeDependencies);
+  });
+
+  it('rejects Windows targets before defining a core-runtime SEA build', () => {
+    expect(
+      () =>
+        new ActorSystem({
+          name: 'unsupported-windows-core-runtime-system',
+          properties: {
+            targets: [
+              {
+                nodeVersion: process.versions.node,
+                platform: 'win32',
+                architecture: 'x64',
+              },
+            ],
+            resources: {},
+          },
+        }),
+    ).toThrow(
+      /Windows SEA targets are deferred until private core-runtime extraction is hardened and tested/i,
+    );
   });
 
   it('omits libc from Darwin function build targets', () => {
@@ -365,8 +400,19 @@ describe('ActorSystem runtime resources', () => {
     const build = system
       .getResources()
       .find((resource) => resource instanceof SeaBuild);
+    const coreRuntimeDependencies = system
+      .getResources()
+      .find((resource) => resource instanceof CoreRuntimeDependenciesResource);
 
     expect(functionResource).toBeInstanceOf(FunctionResource);
+    expect(coreRuntimeDependencies).toBeInstanceOf(
+      CoreRuntimeDependenciesResource,
+    );
+    expect(coreRuntimeDependencies?.get('buildTarget')).toEqual({
+      nodeVersion: process.versions.node,
+      platform: 'darwin',
+      architecture: 'arm64',
+    });
     expect(functionResource?.get('buildTarget')).toEqual({
       nodeVersion: process.versions.node,
       platform: 'darwin',

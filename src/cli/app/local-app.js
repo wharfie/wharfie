@@ -11,6 +11,7 @@ import {
   readEmbeddedAppManifest,
   stringifyEmbeddedAppManifest,
 } from '../../core/resources/builds/lib/app-manifest-asset.js';
+import { CORE_RUNTIME_DEPENDENCY_ASSET_PREFIX } from '../../core/resources/builds/lib/core-runtime-dependency-asset.js';
 import {
   APPLICATION_REVISION_ASSET_NAME,
   ARTIFACT_RUNTIME_ASSET_NAME,
@@ -22,6 +23,7 @@ import {
   stringifyEmbeddedArtifactRuntime,
 } from '../../core/resources/builds/lib/revision-runtime-assets.js';
 import FunctionResource from '../../core/resources/builds/function-resource.js';
+import CoreRuntimeDependenciesResource from '../../core/resources/builds/core-runtime-dependencies.js';
 import { assertSeaNodeVersionCompatible } from '../../core/resources/builds/lib/sea-node-version.js';
 import { withResourceScope } from '../../core/resources/resource-scope.js';
 import { WHARFIE_VERSION } from '../../core/lib/version.js';
@@ -315,7 +317,11 @@ async function resolvePackagingAssets(options) {
     if (!name.trim()) {
       throw new Error('Packaging asset names must not be empty.');
     }
-    if (reservedNames.has(name) || name.startsWith(APP_MANIFEST_ASSET_PREFIX)) {
+    if (
+      reservedNames.has(name) ||
+      name.startsWith(APP_MANIFEST_ASSET_PREFIX) ||
+      name.startsWith(CORE_RUNTIME_DEPENDENCY_ASSET_PREFIX)
+    ) {
       throw new Error(
         `Packaging asset name '${name}' is reserved for Wharfie runtime content.`,
       );
@@ -935,9 +941,9 @@ function assertSupportedSeaTarget(target) {
     ...(target.libc ? { libc: String(target.libc).trim().toLowerCase() } : {}),
   };
 
-  if (!['darwin', 'linux', 'win32'].includes(normalized.platform)) {
+  if (!['darwin', 'linux'].includes(normalized.platform)) {
     throw new Error(
-      `Unsupported SEA platform '${target.platform}'. Expected darwin, linux, or win32.`,
+      `Unsupported SEA platform '${target.platform}'. Expected darwin or linux. Windows SEA targets are deferred until private core-runtime extraction is hardened and tested.`,
     );
   }
   if (!['arm64', 'x64'].includes(normalized.architecture)) {
@@ -1449,11 +1455,28 @@ export async function packageLocalApp(options) {
         .filter((assetPath) => typeof assetPath === 'string' && assetPath),
     ),
   );
+  const coreRuntimeDependencyDirectories = Array.from(
+    new Set(
+      actorSystem
+        .getResources()
+        .filter(
+          (resource) => resource instanceof CoreRuntimeDependenciesResource,
+        )
+        .map((resource) => resource.get('assetDirectory'))
+        .filter(
+          (assetDirectory) =>
+            typeof assetDirectory === 'string' && assetDirectory,
+        ),
+    ),
+  );
   const cleanupResults = await Promise.allSettled([
     preparedRevision.cleanup(),
     ...manifestAssets.map((asset) => asset.cleanup()),
     ...functionAssetPaths.map((assetPath) =>
       fsp.rm(assetPath, { force: true }),
+    ),
+    ...coreRuntimeDependencyDirectories.map((assetDirectory) =>
+      fsp.rm(assetDirectory, { force: true, recursive: true }),
     ),
     ...(artifactTransaction && !preserveArtifactTransaction
       ? [

@@ -83,6 +83,58 @@ describe('hidden ledger-service runtime command', () => {
     expect(processRef.listenerCount('SIGTERM')).toBe(0);
   });
 
+  it('removes unneeded signal listeners when startup cleanup aborts the wait', async () => {
+    const processRef = new EventEmitter();
+    const controller = new AbortController();
+    const waiting = waitForLedgerServiceShutdown({
+      processRef: /** @type {NodeJS.Process} */ (processRef),
+      signal: controller.signal,
+    });
+
+    controller.abort();
+    await expect(waiting).resolves.toBeUndefined();
+    expect(processRef.listenerCount('SIGINT')).toBe(0);
+    expect(processRef.listenerCount('SIGTERM')).toBe(0);
+  });
+
+  it('registers graceful shutdown before durable readiness can be published', async () => {
+    const db = { close: jest.fn(async () => {}) };
+    /** @type {() => void} */
+    let requestShutdown;
+    const waitForShutdown = jest.fn(
+      () =>
+        new Promise((resolve) => {
+          requestShutdown = () => resolve('SIGTERM');
+        }),
+    );
+    const service = {
+      start: jest.fn(async () => {
+        expect(waitForShutdown).toHaveBeenCalledTimes(1);
+        requestShutdown();
+        return { status: 'READY', generation: 1 };
+      }),
+      stop: jest.fn(async () => ({ status: 'STOPPED', generation: 1 })),
+    };
+
+    await expect(
+      runLedgerServiceRuntime({
+        readEmbeddedRevisionRuntimePair: async () => ({
+          runtime: { appId: 'packaged-runtime', revisionId: REVISION_ID },
+        }),
+        createOperationsDBClient: async () => db,
+        createLedgerServiceLifecycle: () => ({ kind: 'lifecycle-store' }),
+        createLedgerServiceOwnership: () => ({ kind: 'ownership-store' }),
+        createLedgerService: () => service,
+        waitForShutdown,
+        tableName: 'ledger-table',
+        sessionRoot: '/logical/control/session-namespace',
+      }),
+    ).resolves.toEqual({ status: 'STOPPED', generation: 1 });
+
+    expect(service.stop).toHaveBeenCalledTimes(1);
+    expect(db.close).toHaveBeenCalledTimes(1);
+  });
+
   it('closes control state if startup rejects before the resident service becomes ready', async () => {
     const db = { close: jest.fn(async () => {}) };
     const startupError = new Error('already active');

@@ -105,6 +105,14 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       `STARTING` → `READY` → `STOPPING` → `STOPPED` records, and local-LMDB
       exclusion for mutating manual `ops run`/`ops recover`. It deliberately
       does not schedule, claim, or execute work.
+- [ ] Run the new Node-24 hosted-Linux proof for Wharfie-owned,
+      target-specific LMDB bytes in the durable local control store. The
+      implementation binds its sealed receipt into SEA assets and artifact
+      provenance, and the clean relocated-SEA verifier starts hidden
+      `ledger-service`, preserves `READY` after `SIGKILL`, recovers a higher
+      generation, and proves graceful `STOPPED` on `SIGTERM` with Node absent
+      from `PATH`. Windows targets are explicitly deferred pending a hardened
+      private-extraction design.
 - [ ] Persist immutable revision bindings, inputs, outputs, scheduling decisions, attempts, and operator actions in the full append-only ledger.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, cancellation, retry policy, and recovery.
 - [ ] Implement substantiated `pure`, `idempotent`, and `transactional` replay properties, make begun in-process handlers `unsafe` by default, and add a durable blocked `uncertain` state with explicit reconciliation/compensation paths.
@@ -164,14 +172,11 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 ## Immediate queue
 
 1. Repair the clean-install lint dependency declaration after explicit approval, make draft PR #125 green in GitHub Actions, and review the reset stack for merge.
-2. Package a self-contained, crash-durable local control-store runtime for the
-   resident `ledger-service`, then prove lifecycle startup, clean relocation,
-   crash, and restart with a SEA. The source runtime currently uses LMDB while
-   the SEA build externalizes it, so it must not yet be described as a
-   clean-machine resident service.
+2. Run the Node-24 hosted-Linux SEA verifier for the newly added resident
+   control-store crash/recovery proof, then review the resulting PR evidence.
 3. Add an atomic, paginated ledger run-directory/index before providing any
    app-wide history or `ops list` replacement; do not add a scan-based list.
 4. Design durable cancellation/reconciliation transitions before exposing an
    `ops cancel` replacement.
 
-The latest dated handoff at [llm/checkpoints/2026-07-17-ledger-service-lifecycle.md](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md) records the local resident-service foundation, its exact ownership scope, and the clean-SEA blocker. The preceding [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.
+The latest dated handoff at [llm/checkpoints/2026-07-17-core-control-store-closure.md](llm/checkpoints/2026-07-17-core-control-store-closure.md) records the portable durable-control-store boundary and its proof. The preceding [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.

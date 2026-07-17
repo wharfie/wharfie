@@ -17,26 +17,41 @@ import { createLedgerService } from './ledger-service.js';
  * Wait for the ordinary process-manager signals that request a graceful
  * resident-service shutdown. The internal runtime owns these handlers rather
  * than exposing a public CLI signal contract.
- * @param {{processRef?: {on: Function, removeListener: Function}}} [options] - Injected signal emitter for tests.
- * @returns {Promise<'SIGINT'|'SIGTERM'>} - First requested graceful shutdown.
+ * @param {{processRef?: {on: Function, removeListener: Function}, signal?: AbortSignal}} [options] - Injected signal emitter and optional listener cleanup signal for tests.
+ * @returns {Promise<'SIGINT'|'SIGTERM'|undefined>} - First requested graceful shutdown, or undefined when startup cleanup cancels the wait.
  */
 export function waitForLedgerServiceShutdown(options = {}) {
   const processRef = options.processRef || process;
   return new Promise((resolve) => {
     /** @type {boolean} */
     let settled = false;
+    const cleanup = () => {
+      processRef.removeListener('SIGINT', onSigint);
+      processRef.removeListener('SIGTERM', onSigterm);
+      options.signal?.removeEventListener('abort', onAbort);
+    };
     /** @param {'SIGINT'|'SIGTERM'} signal - Requested shutdown signal. */
     const onSignal = (signal) => {
       if (settled) return;
       settled = true;
-      processRef.removeListener('SIGINT', onSigint);
-      processRef.removeListener('SIGTERM', onSigterm);
+      cleanup();
       resolve(signal);
     };
     const onSigint = () => onSignal('SIGINT');
     const onSigterm = () => onSignal('SIGTERM');
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(undefined);
+    };
     processRef.on('SIGINT', onSigint);
     processRef.on('SIGTERM', onSigterm);
+    if (options.signal?.aborted) {
+      onAbort();
+    } else {
+      options.signal?.addEventListener('abort', onAbort, { once: true });
+    }
   });
 }
 
@@ -45,7 +60,7 @@ export function waitForLedgerServiceShutdown(options = {}) {
  * to immutable metadata embedded in the SEA, opens the durable control store,
  * and owns only the empty lifecycle/session vertical. Scheduling and activity
  * execution intentionally remain unavailable here.
- * @param {{readEmbeddedRevisionRuntimePair?: () => Promise<{runtime: {appId: string, revisionId: string}}>, createOperationsDBClient?: () => Promise<any>, resolveOperationsAdapterName?: () => string, createLedgerServiceLifecycle?: (...args: any[]) => any, createLedgerServiceOwnership?: (...args: any[]) => any, createLedgerService?: (...args: any[]) => {start: () => Promise<any>, stop: () => Promise<any>}, waitForShutdown?: () => Promise<unknown>, tableName?: string, sessionRoot?: string}} [options] - Injected runtime dependencies for tests.
+ * @param {{readEmbeddedRevisionRuntimePair?: () => Promise<{runtime: {appId: string, revisionId: string}}>, createOperationsDBClient?: () => Promise<any>, resolveOperationsAdapterName?: () => string, createLedgerServiceLifecycle?: (...args: any[]) => any, createLedgerServiceOwnership?: (...args: any[]) => any, createLedgerService?: (...args: any[]) => {start: () => Promise<any>, stop: () => Promise<any>}, waitForShutdown?: (options?: {signal?: AbortSignal}) => Promise<unknown>, tableName?: string, sessionRoot?: string}} [options] - Injected runtime dependencies for tests.
  * @returns {Promise<any>} - Final durable STOPPED lifecycle snapshot.
  */
 export async function runLedgerServiceRuntime(options = {}) {
@@ -67,8 +82,10 @@ export async function runLedgerServiceRuntime(options = {}) {
     options.sessionRoot === undefined
       ? resolveLedgerServiceSessionPath()
       : options.sessionRoot;
+  const shutdownAbort = new AbortController();
+  /** @type {Promise<unknown> | undefined} */
+  let shutdownRequested;
 
-  const embedded = await readIdentity();
   /** @type {any} */
   let db;
   /** @type {{start: () => Promise<any>, stop: () => Promise<any>} | undefined} */
@@ -84,6 +101,12 @@ export async function runLedgerServiceRuntime(options = {}) {
   };
 
   try {
+    // Register signal handlers before any await in startup. In particular,
+    // the durable READY transition must never become externally visible
+    // before a SIGTERM can be captured and converted into a fenced STOPPED
+    // transition.
+    shutdownRequested = waitForShutdown({ signal: shutdownAbort.signal });
+    const embedded = await readIdentity();
     if (
       !options.createOperationsDBClient &&
       resolveControlAdapter() !== 'lmdb'
@@ -104,13 +127,17 @@ export async function runLedgerServiceRuntime(options = {}) {
     });
     await service.start();
     started = true;
-    await waitForShutdown();
+    await shutdownRequested;
     return await stopStartedService();
   } finally {
     try {
       await stopStartedService();
     } finally {
-      await db?.close?.();
+      try {
+        shutdownAbort.abort();
+      } finally {
+        await db?.close?.();
+      }
     }
   }
 }

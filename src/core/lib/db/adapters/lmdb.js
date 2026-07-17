@@ -1,7 +1,7 @@
-import { open } from 'lmdb';
-import { mkdirSync } from 'node:fs';
+import { lstatSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import paths from '../../paths.js';
+import { getLmdbModule } from '../../lmdb-module.js';
 import {
   CONDITION_TYPE,
   recordMatchesCondition,
@@ -17,6 +17,7 @@ const SEP = '\u001f';
 /**
  * @typedef CreateLMDBDBOptions
  * @property {string} [path] - Path to the database file. Defaults to `./data/database.json`. [db_path]
+ * @property {boolean} [readOnly] - Open an existing control volume without creating tables or accepting writes.
  */
 
 /**
@@ -37,12 +38,31 @@ export default function createLMDB(options = {}) {
   const dbRoot = options.path
     ? join(options.path, 'lmdb')
     : join(paths.data, 'lmdb');
-  mkdirSync(dbRoot, { recursive: true });
+  const readOnly = options.readOnly === true;
+  if (readOnly) {
+    let stats;
+    try {
+      stats = lstatSync(dbRoot);
+    } catch (error) {
+      const detail = error instanceof Error ? ` ${error.message}` : '';
+      throw new Error(
+        `LMDB read-only control volume does not exist at '${dbRoot}'.${detail}`,
+      );
+    }
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      throw new Error(
+        `LMDB read-only control volume must be a non-symbolic-link directory: '${dbRoot}'.`,
+      );
+    }
+  } else {
+    mkdirSync(dbRoot, { recursive: true });
+  }
 
   // Disable event-turn batching to reduce the chance of background commit scheduling
   // keeping Jest alive (especially if someone accidentally uses async put/remove).
-  const env = open({
+  const env = getLmdbModule().open({
     path: dbRoot,
+    readOnly,
     eventTurnBatching: false,
     commitDelay: 0,
     // encoding defaults to msgpack; we store plain JSON-ish objects.
@@ -58,7 +78,16 @@ export default function createLMDB(options = {}) {
   function ensureTable(tableName) {
     let t = tables.get(tableName);
     if (!t) {
-      t = env.openDB({ name: tableName });
+      const opened = env.openDB({ name: tableName, create: !readOnly });
+      if (!opened) {
+        if (readOnly) {
+          throw new Error(
+            `LMDB read-only table '${tableName}' is not ready in the existing control volume.`,
+          );
+        }
+        throw new Error(`LMDB could not open table '${tableName}'.`);
+      }
+      t = opened;
       tables.set(tableName, t);
     }
     return t;
@@ -476,7 +505,7 @@ export default function createLMDB(options = {}) {
     if (env?.flushed) await env.flushed;
 
     for (const db of tables.values()) {
-      if (typeof db.close === 'function') await db.close();
+      if (db && typeof db.close === 'function') await db.close();
     }
     tables.clear();
 

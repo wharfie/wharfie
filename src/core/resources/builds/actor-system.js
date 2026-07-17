@@ -1,6 +1,7 @@
 import BuildResourceGroup from './build-resource-group.js';
 import NodeBinary from './node-binary.js';
 import BuildResource from './build-resource.js';
+import CoreRuntimeDependenciesResource from './core-runtime-dependencies.js';
 import FunctionResource from './function-resource.js';
 import SeaBuild from './sea-build.js';
 import MacOSBinarySignature from './macos-binary-signature.js';
@@ -8,6 +9,7 @@ import {
   getMacOSSigningCredentials,
   setMacOSSigningCredentials,
 } from './lib/macos-signing-credentials.js';
+import { assertCoreRuntimeDependencyTargetSupported } from './lib/core-runtime-dependency-asset.js';
 import operatorCli from './actor-system-cli/index.js';
 import { createActorSystemResources } from '../../runtime/resources.js';
 import { withResourceScope } from '../resource-scope.js';
@@ -364,7 +366,7 @@ class ActorSystem extends BuildResourceGroup {
 
   /**
    * @param {string|undefined} parent - parent.
-   * @param {BuildTarget} target - target.
+   * @param {ResolvedBuildTarget} target - target.
    * @returns {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} - Result.
    */
   _defineTargetResources(
@@ -382,6 +384,24 @@ class ActorSystem extends BuildResourceGroup {
         architecture,
       },
     });
+    const resolvedPlatform = /** @type {'darwin'|'linux'|'win32'} */ (platform);
+    const resolvedArchitecture = /** @type {'arm64'|'x64'} */ (architecture);
+    const resolvedLibc = /** @type {'glibc'} */ (libc);
+    /** @returns {import('../../runtime/build-target.js').BuildTarget} - Exact resolved target. */
+    const buildTarget = () => ({
+      nodeVersion: resolveNodeBinaryVersion(node_binary, nodeVersion),
+      platform: resolvedPlatform,
+      architecture: resolvedArchitecture,
+      ...(platform === 'linux' ? { libc: resolvedLibc } : {}),
+    });
+    const coreRuntimeDependencies = new CoreRuntimeDependenciesResource({
+      name: `${this.name}-core-runtime-dependencies-${nodeVersion}-${platform}-${architecture}`,
+      parent,
+      dependsOn: [node_binary],
+      properties: {
+        buildTarget,
+      },
+    });
     const targetFunctions = this.functions.map(
       (/** @type {import('./function.js').default} */ func) => {
         return new FunctionResource({
@@ -392,12 +412,7 @@ class ActorSystem extends BuildResourceGroup {
             functionName: func.name,
             entrypoint: func.entrypoint,
             ...func.properties,
-            buildTarget: () => ({
-              nodeVersion: resolveNodeBinaryVersion(node_binary, nodeVersion),
-              platform,
-              architecture,
-              ...(platform === 'linux' ? { libc } : {}),
-            }),
+            buildTarget,
           },
           dependencyLock: this._dependencyLock,
         });
@@ -406,7 +421,7 @@ class ActorSystem extends BuildResourceGroup {
     const build = new SeaBuild({
       name: `${this.name}-build-${nodeVersion}-${platform}-${architecture}`,
       parent,
-      dependsOn: [node_binary, ...targetFunctions],
+      dependsOn: [node_binary, coreRuntimeDependencies, ...targetFunctions],
       properties: {
         entryCode: () => {
           const developerCliEntrypoint =
@@ -436,24 +451,37 @@ class ActorSystem extends BuildResourceGroup {
             'services',
             'ledger-service-command.js',
           );
-          const developerImport = developerCliEntrypoint
-            ? `import * as developerCliModule from ${JSON.stringify(
+          const developerCliLoader = developerCliEntrypoint
+            ? `const loadDeveloperCliModule = () => import(${JSON.stringify(
                 developerCliEntrypoint,
-              )};`
-            : 'const developerCliModule = null;';
+              )});`
+            : 'const loadDeveloperCliModule = null;';
 
           return `
               import sourceMapSupport from 'source-map-support';
+              import { preparePackagedCoreRuntimeDependencies } from ${JSON.stringify(
+                path.resolve(
+                  actorSystemDir,
+                  '..',
+                  '..',
+                  'runtime',
+                  'core-runtime-dependencies.js',
+                ),
+              )};
               import { runPackagedApp } from ${JSON.stringify(
                 packagedAppEntryPath,
               )};
-              ${developerImport}
               import runtimeOperatorCli from ${JSON.stringify(runtimeCliPath)};
               import ledgerServiceCmd from ${JSON.stringify(
                 runtimeLedgerServicePath,
               )};
+              ${developerCliLoader}
               (async () => {
                 sourceMapSupport.install();
+                await preparePackagedCoreRuntimeDependencies();
+                const developerCliModule = loadDeveloperCliModule
+                  ? await loadDeveloperCliModule()
+                  : null;
                 await runPackagedApp({
                   developerCliModule,
                   ${
@@ -479,7 +507,7 @@ class ActorSystem extends BuildResourceGroup {
           return {};
         },
         assets: () => {
-          return targetFunctions.reduce(
+          const activityAssets = targetFunctions.reduce(
             (
               /** @type {{ [x: string]: string; }} */ acc,
               /** @type {import('./function-resource.js').default} */ func,
@@ -491,7 +519,12 @@ class ActorSystem extends BuildResourceGroup {
             },
             {},
           );
+          return {
+            ...activityAssets,
+            ...coreRuntimeDependencies.get('assets', {}),
+          };
         },
+        assetDigests: () => coreRuntimeDependencies.get('assetDigests', {}),
         functionAssetDigests: () => {
           return targetFunctions.reduce(
             (
@@ -509,7 +542,12 @@ class ActorSystem extends BuildResourceGroup {
       },
     });
     /** @type {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} */
-    resources.push(node_binary, build, ...targetFunctions);
+    resources.push(
+      node_binary,
+      coreRuntimeDependencies,
+      build,
+      ...targetFunctions,
+    );
     if (platform === 'darwin') {
       const macosBinarySignature = new MacOSBinarySignature({
         name: `${this.name}-macos-binary-signature-${nodeVersion}-${platform}-${architecture}`,
@@ -532,9 +570,11 @@ class ActorSystem extends BuildResourceGroup {
   defineActorSystemResources(parent) {
     /** @type {(import('../base-resource.js').default | import('../base-resource-group.js').default)[]} */
     const resources = [];
-    this.get('targets', []).forEach((/** @type {BuildTarget} */ target) => {
-      resources.push(...this._defineTargetResources(parent, target));
-    });
+    this.get('targets', []).forEach(
+      (/** @type {ResolvedBuildTarget} */ target) => {
+        resources.push(...this._defineTargetResources(parent, target));
+      },
+    );
     return resources;
   }
 
@@ -547,7 +587,9 @@ class ActorSystem extends BuildResourceGroup {
    * @returns {ResolvedBuildTarget[]} - Result.
    */
   static resolveBuildTargets(targets) {
-    return resolveConfiguredTargets(targets);
+    return resolveConfiguredTargets(targets).map((target) =>
+      assertCoreRuntimeDependencyTargetSupported(target, 'ActorSystem target'),
+    );
   }
 
   /**

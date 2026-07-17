@@ -52,7 +52,7 @@ deliberately private. It is not ready for production use.
 - [Strict v2 manifest checkpoint](llm/checkpoints/2026-07-16-strict-v2-manifest.md) — historical strict public-boundary handoff.
 - [Atomic operation-store checkpoint](llm/checkpoints/2026-07-16-atomic-operation-store.md) — historical atomic snapshot and fencing boundary.
 - [Immutable identity-spine checkpoint](llm/checkpoints/2026-07-17-immutable-identity-spine.md) — historical identity and artifact boundary.
-- [Frozen dependency-closure checkpoint](llm/checkpoints/2026-07-17-frozen-dependency-closure.md) — current restart point, verification evidence, remaining hard edges, and ordered next work.
+- [Portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md) — current restart point, verification evidence, remaining hard edges, and ordered next work.
 
 The charter and accepted decisions are authoritative; the roadmap is expected to evolve, and dated checkpoints are historical snapshots. Older material under `docs/` and `llm/design/` describes prior iterations and can be stale.
 
@@ -114,9 +114,12 @@ Closure v1 deliberately ignores package lifecycle scripts, creates no package
 rejects aliases, links, bundled dependencies, unsupported targets, and
 non-registry edges. Private-registry authentication, workspace-lock selection,
 musl Linux, and reproducible builds are not yet supported. Published native
-packages must already contain usable locked target bytes. A moved Darwin SEA
-has exercised a real LMDB dependency with Node absent from `PATH`; the clean
-hosted-Linux proof remains open.
+packages must already contain usable locked target bytes. Windows SEA targets
+are deliberately deferred until private runtime extraction has a tested ACL and
+reparse-point design. Moved Darwin SEAs and the clean hosted-Linux verifier
+exercise a real LMDB dependency with Node absent from `PATH`; the verifier's
+new resident-service crash/recovery leg awaits its Node-24 CI run on this
+branch.
 
 ## Current development checks
 

@@ -7,6 +7,15 @@ import { existsSync, promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import {
+  CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
+  CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
+  CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
+  CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME,
+  CORE_RUNTIME_DEPENDENCY_PURPOSE,
+  CORE_RUNTIME_DEPENDENCY_ROOT,
+} from '../../../src/core/resources/builds/lib/core-runtime-dependency-asset.js';
+
 const CHILD_PROCESS_IMPORT = 'node:child_process';
 const MISMATCHED_NODE_VERSION =
   process.versions.node === '0.0.0' ? '0.0.1' : '0.0.0';
@@ -735,6 +744,111 @@ describe('SeaBuild', () => {
         alpha: { algorithm: 'sha256', value: alphaDigest },
         zeta: { algorithm: 'sha256', value: zetaDigest },
       });
+    } finally {
+      await fsp.rm(tmpRoot, { force: true, recursive: true });
+    }
+  });
+
+  it('seals a matched core LMDB receipt and archive as one target-bound pair', async () => {
+    const { default: SeaBuild } =
+      await import('../../../src/core/resources/builds/sea-build.js');
+    const tmpRoot = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-sea-core-assets-'),
+    );
+    const buildDir = path.join(tmpRoot, 'build');
+    const manifestPath = path.join(tmpRoot, 'core-manifest.json');
+    const archivePath = path.join(tmpRoot, 'core-archive.tgz');
+    /** @type {import('../../../src/core/runtime/build-target.js').BuildTarget} */
+    const target = {
+      nodeVersion: process.versions.node,
+      platform: /** @type {'darwin'|'linux'|'win32'} */ (process.platform),
+      architecture: /** @type {'arm64'|'x64'} */ (process.arch),
+      ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+    };
+    const archiveBytes = Buffer.from('sealed core closure');
+    /** @param {string | Buffer | Uint8Array} value */
+    const digest = (value) => ({
+      algorithm: /** @type {'sha256'} */ ('sha256'),
+      value: createHash('sha256').update(value).digest('base64url'),
+    });
+    const manifest = {
+      schemaVersion: CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
+      kind: CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
+      purpose: CORE_RUNTIME_DEPENDENCY_PURPOSE,
+      target,
+      roots: [{ ...CORE_RUNTIME_DEPENDENCY_ROOT }],
+      dependencyLockInput: {
+        format: 'wharfie-npm-package-lock-v3-closure-v1',
+        digest: digest('core lock'),
+      },
+      closureDigest: digest('core closure'),
+      archive: {
+        assetName: CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
+        digest: digest(archiveBytes),
+      },
+    };
+    const manifestBytes = Buffer.from(JSON.stringify(manifest), 'utf8');
+    await fsp.mkdir(buildDir, { mode: 0o700 });
+    await Promise.all([
+      fsp.writeFile(manifestPath, manifestBytes),
+      fsp.writeFile(archivePath, archiveBytes),
+    ]);
+    const build = new SeaBuild({
+      name: 'seal-core-assets',
+      properties: {
+        entryCode: 'void 0;',
+        resolveDir: process.cwd(),
+        nodeBinaryPath: process.execPath,
+        nodeVersion: target.nodeVersion,
+        platform: target.platform,
+        architecture: target.architecture,
+        ...(target.platform === 'linux' ? { libc: target.libc } : {}),
+        assets: {
+          [CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME]: manifestPath,
+          [CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME]: archivePath,
+        },
+        assetDigests: {
+          [CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME]: digest(manifestBytes),
+          [CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME]: digest(archiveBytes),
+        },
+      },
+    });
+
+    try {
+      const sealed = await build._prepareSeaAssetsWithEvidence(buildDir);
+      expect(sealed.coreRuntimeDependencyEvidence).toEqual({
+        manifestDigest: digest(manifestBytes),
+        target,
+        roots: [{ ...CORE_RUNTIME_DEPENDENCY_ROOT }],
+        dependencyLockInput: manifest.dependencyLockInput,
+        closureDigest: manifest.closureDigest,
+        archive: manifest.archive,
+      });
+
+      const incomplete = new SeaBuild({
+        name: 'reject-incomplete-core-assets',
+        properties: {
+          entryCode: 'void 0;',
+          resolveDir: process.cwd(),
+          nodeBinaryPath: process.execPath,
+          nodeVersion: target.nodeVersion,
+          platform: target.platform,
+          architecture: target.architecture,
+          ...(target.platform === 'linux' ? { libc: target.libc } : {}),
+          assets: {
+            [CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME]: manifestPath,
+          },
+          assetDigests: {
+            [CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME]:
+              digest(manifestBytes),
+          },
+        },
+      });
+      const incompleteDir = path.join(tmpRoot, 'incomplete');
+      await fsp.mkdir(incompleteDir, { mode: 0o700 });
+      await expect(
+        incomplete._prepareSeaAssetsWithEvidence(incompleteDir),
+      ).rejects.toThrow(/must include both manifest and archive/i);
     } finally {
       await fsp.rm(tmpRoot, { force: true, recursive: true });
     }
