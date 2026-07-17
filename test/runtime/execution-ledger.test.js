@@ -1,7 +1,10 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { describe, expect, test } from '@jest/globals';
+import { afterAll, describe, expect, test } from '@jest/globals';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { getAdapterMatrix } from '../helpers/db-adapters.js';
 import { ActivityProtocolTranscriptValidator } from '../../src/core/runtime/activity-protocol.js';
@@ -13,10 +16,12 @@ import {
   ExecutionLedgerRunConflictError,
   ExecutionLedgerTransitionConflictError,
   EXECUTION_LEDGER_MAX_EVIDENCE_FRAMES,
+  EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
   InvocationStatus,
   RunStatus,
-  createExecutionLedger,
+  createExecutionLedger as createProductionExecutionLedger,
 } from '../../src/core/lib/db/tables/execution-ledger.js';
+import { createLocalExecutionPayloadStore } from '../../src/core/lib/payload-store/local.js';
 import {
   getAttemptProjectionSortKey,
   getEventSortKey,
@@ -29,6 +34,46 @@ const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
 const RUN_ID = 'run-1';
 const INVOCATION_ID = 'main';
 const ACTIVITY_ID = 'greet';
+const PAYLOAD_ROOT = mkdtempSync(join(tmpdir(), 'wharfie-ledger-payload-'));
+const PAYLOAD_STORE = createLocalExecutionPayloadStore({
+  path: PAYLOAD_ROOT,
+  storeId: 'ledger-contract',
+});
+
+afterAll(() => {
+  rmSync(PAYLOAD_ROOT, { recursive: true, force: true });
+});
+
+/**
+ * @param {Omit<Parameters<typeof createProductionExecutionLedger>[0], 'payloadStore'>} options
+ * @returns {ReturnType<typeof createProductionExecutionLedger>}
+ */
+function createExecutionLedger(options) {
+  return createProductionExecutionLedger({
+    ...options,
+    payloadStore: PAYLOAD_STORE,
+  });
+}
+
+/**
+ * @returns {{writes: {value: unknown, payloadSchema: string}[], payloadStore: {putJson: (input: {value: unknown, payloadSchema: string}) => Promise<unknown>, readBytes: (reference: unknown) => Promise<unknown>}}} - Store wrapper that exposes durable publication attempts.
+ */
+function createCountingPayloadStore() {
+  /** @type {{value: unknown, payloadSchema: string}[]} */
+  const writes = [];
+  return {
+    writes,
+    payloadStore: {
+      async putJson(input) {
+        writes.push(input);
+        return await PAYLOAD_STORE.putJson(input);
+      },
+      async readBytes(reference) {
+        return await PAYLOAD_STORE.readBytes(reference);
+      },
+    },
+  };
+}
 
 /**
  * @param {string} attemptId - Durable physical attempt identity.
@@ -78,18 +123,28 @@ function completedEvidence(
   fencingToken,
   result = { greeting: 'hello' },
 ) {
-  const transcript = new ActivityProtocolTranscriptValidator();
-  const start = transcript.acceptHostFrame(
+  return completedEvidenceForStart(
     attemptStart(attemptId, fencingToken),
+    result,
   );
+}
+
+/**
+ * @param {Readonly<Record<string, any>>} start - Exact durable start frame.
+ * @param {any} [result] - Strict JSON completion result.
+ * @returns {Record<string, any>} - Host-verified complete evidence.
+ */
+function completedEvidenceForStart(start, result = { greeting: 'hello' }) {
+  const transcript = new ActivityProtocolTranscriptValidator();
+  const acceptedStart = transcript.acceptHostFrame(start);
   const terminal = transcript.acceptComponentFrame(
-    completedTerminal(attemptId, result),
+    completedTerminal(acceptedStart.attemptId, result),
   );
   return {
     status: terminal.type,
-    start,
+    start: acceptedStart,
     terminal,
-    frames: [start, terminal],
+    frames: [acceptedStart, terminal],
     transcript: transcript.snapshot(),
   };
 }
@@ -100,7 +155,7 @@ function completedEvidence(
  */
 function eventIdFor(event) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v1',
+    domain: 'wharfie:execution-ledger-event:v2',
     prefix: 'wle',
     value: {
       schemaVersion: event.schema_version,
@@ -172,6 +227,13 @@ for (const adapter of getAdapterMatrix()) {
             version: 1,
           },
         });
+        expect(created.run).toMatchObject({
+          requestRef: {
+            payloadSchema: 'wharfie.execution.manual-request.v1',
+          },
+        });
+        expect(created.run).not.toHaveProperty('input');
+        expect(created.invocation).not.toHaveProperty('callerMetadata');
         expect((await ledger.createManualRun(manualRun())).applied).toBe(false);
         await expect(
           ledger.createManualRun(manualRun({ input: { name: 'Grace' } })),
@@ -307,7 +369,10 @@ for (const adapter of getAdapterMatrix()) {
         );
 
         const evidence = completedEvidence(attemptId, 'fence-1');
-        const terminal = evidence.terminal;
+        const terminalSummary = {
+          type: evidence.terminal.type,
+          attemptId: evidence.terminal.attemptId,
+        };
         const committed = await ledger.commitVerifiedAttemptTerminal({
           runId: RUN_ID,
           invocationId: INVOCATION_ID,
@@ -322,13 +387,17 @@ for (const adapter of getAdapterMatrix()) {
           run: { status: RunStatus.COMPLETED, version: 4 },
           invocation: {
             status: InvocationStatus.COMPLETED,
-            terminal,
+            terminal: terminalSummary,
           },
           attempt: {
             status: AttemptStatus.COMPLETED,
-            terminal,
+            terminal: terminalSummary,
+            evidenceRef: {
+              payloadSchema: 'wharfie.execution.activity-evidence.v1',
+            },
           },
         });
+        expect(committed.attempt).not.toHaveProperty('evidence');
         await expect(
           ledger.commitVerifiedAttemptTerminal({
             runId: RUN_ID,
@@ -545,7 +614,314 @@ for (const adapter of getAdapterMatrix()) {
       }
     });
 
-    test('treats an oversized yet protocol-valid terminal as uncertainty, not success', async () => {
+    test('fails closed when retained terminal evidence is altered after append', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const runId = `payload-integrity-${adapter.name}`;
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-payload-integrity',
+          now: createClock(),
+        });
+        await ledger.createManualRun(
+          manualRun({
+            runId,
+            transitionId: 'payload-create',
+            input: { unique: `payload-${adapter.name}` },
+          }),
+        );
+        const claim = await ledger.claimInvocation({
+          runId,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'payload-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'payload-claim',
+        });
+        const attemptId = claim.attempt?.attemptId;
+        if (!attemptId) throw new Error('Expected durable payload attempt');
+        const started = await ledger.markAttemptStarted({
+          runId,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'payload-fence',
+          generation: 1,
+          expectedVersion: 2,
+          transitionId: 'payload-start',
+        });
+        const committed = await ledger.commitVerifiedAttemptTerminal({
+          runId,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'payload-fence',
+          generation: 1,
+          expectedVersion: started.run.version,
+          transitionId: 'payload-terminal',
+          evidence: completedEvidenceForStart(started.startFrame),
+        });
+        const evidenceRef = committed.attempt?.evidenceRef;
+        if (!evidenceRef) throw new Error('Expected immutable evidence ref');
+        writeFileSync(
+          PAYLOAD_STORE.getPath(evidenceRef),
+          '{"tampered":true}',
+          'utf8',
+        );
+
+        await expect(ledger.getEvents(runId)).rejects.toBeInstanceOf(
+          ExecutionLedgerProjectionError,
+        );
+        await expect(
+          ledger.markAttemptUncertain({
+            runId,
+            invocationId: INVOCATION_ID,
+            attemptId,
+            fencingToken: 'payload-fence',
+            generation: 1,
+            expectedVersion: committed.run.version,
+            transitionId: 'payload-unsafe-recovery',
+            reason: { code: 'tampered-evidence' },
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerProjectionError);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('fails closed when retained manual request is altered after append', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const runId = `request-integrity-${adapter.name}`;
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-request-integrity',
+          now: createClock(),
+        });
+        const created = await ledger.createManualRun(
+          manualRun({
+            runId,
+            transitionId: 'request-create',
+            input: { unique: `request-${adapter.name}` },
+          }),
+        );
+        const requestPath = PAYLOAD_STORE.getPath(created.run.requestRef);
+        const retainedRequest = readFileSync(requestPath, 'utf8');
+        const marker = `request-${adapter.name}`;
+        const sameLengthTamper = `forged--${adapter.name}`;
+        expect(Buffer.byteLength(sameLengthTamper)).toBe(
+          Buffer.byteLength(marker),
+        );
+        const alteredRequest = retainedRequest.replace(
+          marker,
+          sameLengthTamper,
+        );
+        expect(alteredRequest).not.toBe(retainedRequest);
+        expect(Buffer.byteLength(alteredRequest)).toBe(
+          created.run.requestRef.size,
+        );
+        writeFileSync(requestPath, alteredRequest, 'utf8');
+
+        await expect(ledger.getRun(runId)).rejects.toBeInstanceOf(
+          ExecutionLedgerProjectionError,
+        );
+        await expect(
+          ledger.claimInvocation({
+            runId,
+            invocationId: INVOCATION_ID,
+            fencingToken: 'request-fence',
+            expectedGeneration: 0,
+            expectedVersion: 1,
+            transitionId: 'request-claim',
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerProjectionError);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('rehashes and bounds provider bytes before decoding a payload', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const runId = `provider-bytes-${adapter.name}`;
+        const tableName = 'execution-ledger-provider-byte-binding';
+        const writer = createExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+        });
+        await writer.createManualRun(
+          manualRun({ runId, transitionId: 'provider-bytes-create' }),
+        );
+
+        const reader = createProductionExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+          payloadStore: {
+            putJson: PAYLOAD_STORE.putJson,
+            readBytes: async () =>
+              Buffer.from(
+                '{"callerMetadata":{},"input":{"forged":true}}',
+                'utf8',
+              ),
+          },
+        });
+        await expect(reader.getRun(runId)).rejects.toBeInstanceOf(
+          ExecutionLedgerProjectionError,
+        );
+
+        const oversizedReader = createProductionExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+          payloadStore: {
+            putJson: PAYLOAD_STORE.putJson,
+            readBytes: async () =>
+              Buffer.alloc(EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES + 1),
+          },
+        });
+        await expect(oversizedReader.getRun(runId)).rejects.toBeInstanceOf(
+          ExecutionLedgerProjectionError,
+        );
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('rejects oversized referenced payload descriptors before append', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const reference = await PAYLOAD_STORE.putJson({
+          payloadSchema: 'wharfie.execution.manual-request.v1',
+          value: { input: {}, callerMetadata: {} },
+        });
+        const oversizedReference = {
+          ...reference,
+          size: EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES + 1,
+        };
+        const ledger = createProductionExecutionLedger({
+          db,
+          tableName: 'execution-ledger-referenced-payload-boundary',
+          now: createClock(),
+          payloadStore: {
+            putJson: async () => oversizedReference,
+            readBytes: async () => {
+              throw new Error('oversized payload should not be read');
+            },
+          },
+        });
+
+        await expect(
+          ledger.createManualRun(
+            manualRun({
+              runId: `oversized-reference-${adapter.name}`,
+              transitionId: 'oversized-reference-create',
+            }),
+          ),
+        ).rejects.toThrow(/execution payload limit/i);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('does not publish payloads for ordinary rejected or replayed requests', async () => {
+      const { db, cleanup } = await adapter.create();
+      const { payloadStore, writes } = createCountingPayloadStore();
+      try {
+        const ledger = createProductionExecutionLedger({
+          db,
+          tableName: 'execution-ledger-payload-publication-order',
+          now: createClock(),
+          payloadStore,
+        });
+        await ledger.createManualRun(
+          manualRun({
+            runId: `publication-order-${adapter.name}`,
+            transitionId: 'publication-create',
+          }),
+        );
+        expect(writes).toHaveLength(1);
+
+        expect(
+          (
+            await ledger.createManualRun(
+              manualRun({
+                runId: `publication-order-${adapter.name}`,
+                transitionId: 'publication-create',
+              }),
+            )
+          ).applied,
+        ).toBe(false);
+        expect(writes).toHaveLength(1);
+
+        await expect(
+          ledger.createManualRun(
+            manualRun({
+              runId: `publication-order-${adapter.name}`,
+              transitionId: 'publication-conflict',
+              input: { changed: true },
+            }),
+          ),
+        ).rejects.toBeInstanceOf(ExecutionLedgerRunConflictError);
+        expect(writes).toHaveLength(1);
+
+        const runId = `publication-order-${adapter.name}`;
+        const claim = await ledger.claimInvocation({
+          runId,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'publication-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'publication-claim',
+        });
+        const attemptId = claim.attempt?.attemptId;
+        if (!attemptId) throw new Error('Expected publication-order attempt');
+        const started = await ledger.markAttemptStarted({
+          runId,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'publication-fence',
+          generation: 1,
+          expectedVersion: 2,
+          transitionId: 'publication-start',
+        });
+        const evidence = completedEvidenceForStart(started.startFrame);
+
+        await expect(
+          ledger.commitVerifiedAttemptTerminal({
+            runId,
+            invocationId: INVOCATION_ID,
+            attemptId,
+            fencingToken: 'publication-fence',
+            generation: 1,
+            expectedVersion: started.run.version - 1,
+            transitionId: 'publication-stale-terminal',
+            evidence,
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
+        expect(writes).toHaveLength(1);
+
+        const terminalRequest = {
+          runId,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'publication-fence',
+          generation: 1,
+          expectedVersion: started.run.version,
+          transitionId: 'publication-terminal',
+          evidence,
+        };
+        await ledger.commitVerifiedAttemptTerminal(terminalRequest);
+        expect(writes).toHaveLength(2);
+        expect(
+          (await ledger.commitVerifiedAttemptTerminal(terminalRequest)).applied,
+        ).toBe(false);
+        expect(writes).toHaveLength(2);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('keeps large request and terminal evidence out of ledger records', async () => {
       const { db, cleanup } = await adapter.create();
       try {
         const ledger = createExecutionLedger({
@@ -560,7 +936,10 @@ for (const adapter of getAdapterMatrix()) {
             input: { body: 'x'.repeat(33_000) },
           }),
         );
-        expect(acceptedLargeInput.run.input.body).toHaveLength(33_000);
+        const storedLargeRequest = await PAYLOAD_STORE.readJson(
+          acceptedLargeInput.run.requestRef,
+        );
+        expect(storedLargeRequest.input.body).toHaveLength(33_000);
 
         await ledger.createManualRun(manualRun());
         const claim = await ledger.claimInvocation({
@@ -600,43 +979,31 @@ for (const adapter of getAdapterMatrix()) {
           }),
         ).rejects.toThrow(/no more than/);
 
-        await expect(
-          ledger.commitVerifiedAttemptTerminal({
-            runId: RUN_ID,
-            invocationId: INVOCATION_ID,
-            attemptId,
-            fencingToken: 'fence-1',
-            generation: 1,
-            expectedVersion: 3,
-            transitionId: 'oversized-terminal',
-            evidence: completedEvidence(attemptId, 'fence-1', {
-              body: 'x'.repeat(70_000),
-            }),
+        const completed = await ledger.commitVerifiedAttemptTerminal({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'fence-1',
+          generation: 1,
+          expectedVersion: 3,
+          transitionId: 'oversized-terminal',
+          evidence: completedEvidence(attemptId, 'fence-1', {
+            body: 'x'.repeat(70_000),
           }),
-        ).rejects.toThrow(/65536/);
-        await expect(
-          ledger.getAttempt(RUN_ID, INVOCATION_ID, attemptId),
-        ).resolves.toMatchObject({ status: AttemptStatus.STARTED });
-
-        await expect(
-          ledger.markAttemptUncertain({
-            runId: RUN_ID,
-            invocationId: INVOCATION_ID,
-            attemptId,
-            fencingToken: 'fence-1',
-            generation: 1,
-            expectedVersion: 3,
-            transitionId: 'oversized-terminal-uncertain',
-            reason: {
-              code: 'ledger-inline-payload-limit',
-              byteLimit: 65_536,
-            },
-          }),
-        ).resolves.toMatchObject({
-          run: { status: RunStatus.BLOCKED },
-          invocation: { status: InvocationStatus.UNCERTAIN },
-          attempt: { status: AttemptStatus.ABANDONED },
         });
+        expect(completed).toMatchObject({
+          run: { status: RunStatus.COMPLETED },
+          attempt: {
+            status: AttemptStatus.COMPLETED,
+            evidenceRef: {
+              payloadSchema: 'wharfie.execution.activity-evidence.v1',
+            },
+          },
+        });
+        const storedEvidence = await PAYLOAD_STORE.readJson(
+          completed.attempt?.evidenceRef,
+        );
+        expect(storedEvidence.terminal.result.body).toHaveLength(70_000);
       } finally {
         await cleanup();
       }

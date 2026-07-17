@@ -1,4 +1,5 @@
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { join, resolve } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import paths from '../paths.js';
@@ -119,7 +120,58 @@ export function resolveOperationsTableName() {
 export function resolveExecutionLedgerTableName() {
   const name = process.env.WHARFIE_EXECUTION_LEDGER_TABLE;
   if (name && String(name).trim()) return String(name).trim();
-  return 'wharfie-execution-ledger';
+  return 'wharfie-execution-ledger-v2';
+}
+
+/**
+ * Resolve the immutable local execution-payload root.  The v2 ledger writes
+ * content before it appends a reference to the control store, so the default
+ * lives beside that local control store when one is configured.  A future
+ * shared payload provider can keep the same reference contract without
+ * changing the ledger records.
+ * @returns {string} - Local payload-store root.
+ */
+export function resolveExecutionPayloadPath() {
+  const configured = process.env.WHARFIE_EXECUTION_PAYLOAD_PATH;
+  if (configured && String(configured).trim()) {
+    return String(configured).trim();
+  }
+
+  const controlPath =
+    typeof process.env.WHARFIE_CONTROL_PATH === 'string' &&
+    process.env.WHARFIE_CONTROL_PATH.trim()
+      ? process.env.WHARFIE_CONTROL_PATH.trim()
+      : undefined;
+  if (controlPath) return join(controlPath, 'execution-payloads');
+
+  if (process.env.NODE_ENV === 'test') {
+    return join(mkTempDir('wharfie-execution-payload-'), 'payloads');
+  }
+
+  return join(paths.data, 'control', 'execution-payloads');
+}
+
+/**
+ * Resolve a stable logical identity for the configured local payload store.
+ * The full filesystem path is never placed in durable references; a
+ * path-derived digest gives local stores distinct identities while preserving
+ * a compact portable descriptor. Operators moving a store intact can pin an
+ * explicit identity with WHARFIE_EXECUTION_PAYLOAD_STORE_ID.
+ * @param {string} [payloadPath] - Resolved payload-store root.
+ * @returns {string} - Canonical local store identity.
+ */
+export function resolveExecutionPayloadStoreId(
+  payloadPath = resolveExecutionPayloadPath(),
+) {
+  const configured = process.env.WHARFIE_EXECUTION_PAYLOAD_STORE_ID;
+  if (configured && String(configured).trim()) {
+    return String(configured).trim();
+  }
+  const digest = createHash('sha256')
+    .update(resolve(payloadPath), 'utf8')
+    .digest('hex');
+  // `payload-` plus 55 hex characters is the 63-character logical-ID limit.
+  return `payload-${digest.slice(0, 55)}`;
 }
 
 /**
@@ -285,6 +337,8 @@ export default {
   resolveOperationsAdapterName,
   resolveOperationsTableName,
   resolveExecutionLedgerTableName,
+  resolveExecutionPayloadPath,
+  resolveExecutionPayloadStoreId,
   createDBClient,
   createOperationsDBClient,
   createStateDBClient,

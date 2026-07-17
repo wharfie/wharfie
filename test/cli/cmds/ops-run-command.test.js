@@ -11,12 +11,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { compileApplicationRevision } from '../../../src/cli/app/compile-application-revision.js';
 import { loadApp } from '../../../src/cli/app/load-app.js';
 import createVanillaDB from '../../../src/core/lib/db/adapters/vanilla.js';
+import { resolveExecutionPayloadStoreId } from '../../../src/core/lib/config/db.js';
 import {
   AttemptStatus,
   InvocationStatus,
   RunStatus,
   createExecutionLedger,
 } from '../../../src/core/lib/db/tables/execution-ledger.js';
+import { createLocalExecutionPayloadStore } from '../../../src/core/lib/payload-store/local.js';
 import {
   MANUAL_LEDGER_INVOCATION_ID,
   createManualLedgerRunId,
@@ -32,6 +34,18 @@ const helloWorldDir = path.join(
   'apps',
   'hello-world',
 );
+
+/**
+ * @param {string} dbPath - Shared local control-store root.
+ * @returns {ReturnType<typeof createLocalExecutionPayloadStore>} - Matching CLI payload store.
+ */
+function createPayloadStore(dbPath) {
+  const payloadPath = path.join(dbPath, 'execution-payloads');
+  return createLocalExecutionPayloadStore({
+    path: payloadPath,
+    storeId: resolveExecutionPayloadStoreId(payloadPath),
+  });
+}
 
 /**
  * @param {string[]} args - CLI arguments.
@@ -88,6 +102,7 @@ describe('wharfie ops run', () => {
         WHARFIE_DB_PATH: dbPath,
         WHARFIE_CONTROL_ADAPTER: 'vanilla',
         WHARFIE_CONTROL_PATH: dbPath,
+        WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(dbPath, 'execution-payloads'),
       };
       const first = runCli(args, env);
 
@@ -103,7 +118,11 @@ describe('wharfie ops run', () => {
       );
 
       inspectDb = createVanillaDB({ path: dbPath });
-      const ledger = createExecutionLedger({ db: inspectDb, tableName });
+      const ledger = createExecutionLedger({
+        db: inspectDb,
+        tableName,
+        payloadStore: createPayloadStore(dbPath),
+      });
       const firstView = await ledger.rebuildRun(runId);
       expect(firstView).not.toBeNull();
       if (!firstView) throw new Error('Expected durable manual run');
@@ -119,8 +138,9 @@ describe('wharfie ops run', () => {
           invocationId: MANUAL_LEDGER_INVOCATION_ID,
           activityId: 'echo-event',
           status: InvocationStatus.COMPLETED,
-          input: { who: 'ops-run' },
-          callerMetadata: { requestId: 'ops-request' },
+          requestRef: expect.objectContaining({
+            payloadSchema: 'wharfie.execution.manual-request.v1',
+          }),
         }),
       ]);
       expect(firstView.attempts).toEqual([
@@ -129,15 +149,14 @@ describe('wharfie ops run', () => {
           generation: 1,
           terminal: expect.objectContaining({
             type: 'completed',
-            result: {
-              ok: true,
-              who: 'ops-run',
-              message: 'hello ops-run',
-              requestId: 'ops-request',
-            },
+          }),
+          evidenceRef: expect.objectContaining({
+            payloadSchema: 'wharfie.execution.activity-evidence.v1',
           }),
         }),
       ]);
+      expect(JSON.stringify(firstView)).not.toContain('ops-request');
+      expect(JSON.stringify(firstView)).not.toContain('hello ops-run');
       expect(
         firstView.events.map(
           (/** @type {Record<string, any>} */ event) => event.type,
@@ -160,6 +179,7 @@ describe('wharfie ops run', () => {
       const retryView = await createExecutionLedger({
         db: inspectDb,
         tableName,
+        payloadStore: createPayloadStore(dbPath),
       }).rebuildRun(runId);
       expect(retryView?.events).toHaveLength(4);
       expect(retryView?.attempts).toHaveLength(1);
@@ -249,6 +269,7 @@ describe('wharfie ops run', () => {
         WHARFIE_DB_PATH: dbPath,
         WHARFIE_CONTROL_ADAPTER: 'vanilla',
         WHARFIE_CONTROL_PATH: dbPath,
+        WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(dbPath, 'execution-payloads'),
       };
       const args = [
         'ops',
@@ -286,6 +307,7 @@ describe('wharfie ops run', () => {
       const view = await createExecutionLedger({
         db: inspectDb,
         tableName,
+        payloadStore: createPayloadStore(dbPath),
       }).rebuildRun(runId);
       expect(view?.run).toMatchObject({
         revisionId: firstRevision.revisionId,
@@ -295,11 +317,10 @@ describe('wharfie ops run', () => {
         expect.objectContaining({
           status: AttemptStatus.COMPLETED,
           terminal: expect.objectContaining({
-            result: {
-              marker: 'v1',
-              revisionId: firstRevision.revisionId,
-              value: 1,
-            },
+            type: 'completed',
+          }),
+          evidenceRef: expect.objectContaining({
+            payloadSchema: 'wharfie.execution.activity-evidence.v1',
           }),
         }),
       ]);

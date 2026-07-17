@@ -1,7 +1,10 @@
 import { createExecutionLedger } from '../../core/lib/db/tables/execution-ledger.js';
+import { createLocalExecutionPayloadStore } from '../../core/lib/payload-store/local.js';
 import {
   createOperationsDBClient,
   resolveExecutionLedgerTableName,
+  resolveExecutionPayloadPath,
+  resolveExecutionPayloadStoreId,
 } from '../../core/lib/config/db.js';
 
 /**
@@ -23,9 +26,14 @@ export async function withExecutionLedger(handler) {
 
   try {
     db = await createOperationsDBClient();
+    const payloadPath = resolveExecutionPayloadPath();
     const ledger = createExecutionLedger({
       db,
       tableName: resolveExecutionLedgerTableName(),
+      payloadStore: createLocalExecutionPayloadStore({
+        path: payloadPath,
+        storeId: resolveExecutionPayloadStoreId(payloadPath),
+      }),
     });
     return await handler(ledger);
   } finally {

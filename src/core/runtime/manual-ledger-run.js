@@ -39,7 +39,7 @@ export function createManualLedgerRunId(options) {
   assertLogicalId(options?.appId, 'appId');
   const operationId = assertLedgerOpaqueId(options?.operationId, 'operationId');
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:manual-ledger-run:v1',
+    domain: 'wharfie:manual-ledger-run:v2',
     prefix: 'wlm',
     value: { appId: options.appId, operationId },
     valuePath: 'manual ledger run identity',
@@ -150,10 +150,10 @@ function isSameAttempt(left, right) {
 
 /**
  * @param {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, reused?: boolean}} state - Durable state to expose.
- * @returns {{disposition: 'completed'|'failed'|'blocked'|'in-progress', reused: boolean, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, terminal?: Record<string, any>, evidence?: Record<string, any>}} - Public run outcome.
+ * @returns {{disposition: 'completed'|'failed'|'blocked'|'in-progress', reused: boolean, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, terminalSummary?: Record<string, any>, evidenceRef?: Record<string, any>}} - Public run outcome.
  */
 function outcomeFromState({ run, invocation, attempt, reused = false }) {
-  /** @type {{disposition: 'completed'|'failed'|'blocked'|'in-progress', reused: boolean, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, terminal?: Record<string, any>, evidence?: Record<string, any>}} */
+  /** @type {{disposition: 'completed'|'failed'|'blocked'|'in-progress', reused: boolean, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, terminalSummary?: Record<string, any>, evidenceRef?: Record<string, any>}} */
   const result = {
     disposition: dispositionForRun(run),
     reused,
@@ -162,8 +162,8 @@ function outcomeFromState({ run, invocation, attempt, reused = false }) {
   };
   if (attempt) {
     result.attempt = attempt;
-    if (attempt.terminal) result.terminal = attempt.terminal;
-    if (attempt.evidence) result.evidence = attempt.evidence;
+    if (attempt.terminal) result.terminalSummary = attempt.terminal;
+    if (attempt.evidenceRef) result.evidenceRef = attempt.evidenceRef;
   }
   return result;
 }

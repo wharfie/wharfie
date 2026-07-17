@@ -9,12 +9,14 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import createVanillaDB from '../../../src/core/lib/db/adapters/vanilla.js';
+import { resolveExecutionPayloadStoreId } from '../../../src/core/lib/config/db.js';
 import {
   AttemptStatus,
   InvocationStatus,
   RunStatus,
   createExecutionLedger,
 } from '../../../src/core/lib/db/tables/execution-ledger.js';
+import { createLocalExecutionPayloadStore } from '../../../src/core/lib/payload-store/local.js';
 import { ActivityProtocolTranscriptValidator } from '../../../src/core/runtime/activity-protocol.js';
 import {
   MANUAL_LEDGER_INVOCATION_ID,
@@ -25,6 +27,18 @@ const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
 const binPath = path.join(repoRoot, 'bin', 'wharfie');
 const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
+
+/**
+ * @param {string} dbPath - Shared local control-store root.
+ * @returns {ReturnType<typeof createLocalExecutionPayloadStore>} - Matching CLI payload store.
+ */
+function createPayloadStore(dbPath) {
+  const payloadPath = path.join(dbPath, 'execution-payloads');
+  return createLocalExecutionPayloadStore({
+    path: payloadPath,
+    storeId: resolveExecutionPayloadStoreId(payloadPath),
+  });
+}
 
 /**
  * @param {string[]} args - CLI arguments.
@@ -75,7 +89,11 @@ function completedEvidence(start, result) {
  */
 async function createManualRun(dbPath, tableName, options) {
   const db = createVanillaDB({ path: dbPath });
-  const ledger = createExecutionLedger({ db, tableName });
+  const ledger = createExecutionLedger({
+    db,
+    tableName,
+    payloadStore: createPayloadStore(dbPath),
+  });
   const runId = createManualLedgerRunId({
     appId: options.appId,
     operationId: options.operationId,
@@ -144,7 +162,11 @@ async function createManualRun(dbPath, tableName, options) {
 async function readRun(dbPath, tableName, runId) {
   const db = createVanillaDB({ path: dbPath });
   try {
-    return await createExecutionLedger({ db, tableName }).rebuildRun(runId);
+    return await createExecutionLedger({
+      db,
+      tableName,
+      payloadStore: createPayloadStore(dbPath),
+    }).rebuildRun(runId);
   } finally {
     await db.close();
   }
@@ -164,6 +186,7 @@ describe('ledger-native operator commands', () => {
       WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
       WHARFIE_CONTROL_ADAPTER: 'vanilla',
       WHARFIE_CONTROL_PATH: dbPath,
+      WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(dbPath, 'execution-payloads'),
     };
 
     try {
@@ -278,6 +301,7 @@ describe('ledger-native operator commands', () => {
       WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
       WHARFIE_CONTROL_ADAPTER: 'vanilla',
       WHARFIE_CONTROL_PATH: dbPath,
+      WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(dbPath, 'execution-payloads'),
     };
 
     try {
@@ -333,6 +357,7 @@ describe('ledger-native operator commands', () => {
       WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
       WHARFIE_CONTROL_ADAPTER: 'vanilla',
       WHARFIE_CONTROL_PATH: dbPath,
+      WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(dbPath, 'execution-payloads'),
     };
 
     try {
@@ -419,6 +444,7 @@ describe('ledger-native operator commands', () => {
       WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
       WHARFIE_CONTROL_ADAPTER: 'vanilla',
       WHARFIE_CONTROL_PATH: dbPath,
+      WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(dbPath, 'execution-payloads'),
     };
 
     try {

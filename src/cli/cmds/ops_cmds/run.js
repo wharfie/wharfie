@@ -60,10 +60,9 @@ function formatRunRow(result, operationId) {
  * @returns {Error} - Human-readable non-completed outcome.
  */
 function outcomeError(result, resourceId, operationId) {
-  const terminal = result.terminal;
-  if (result.disposition === 'failed' && terminal?.error?.message) {
+  if (result.disposition === 'failed') {
     return new Error(
-      `Run ${resourceId}#${operationId} finished ${result.run.status}: ${terminal.error.message}`,
+      `Run ${resourceId}#${operationId} finished ${result.run.status}. Terminal details are retained as immutable evidence and are not exposed by this command.`,
     );
   }
   if (result.disposition === 'blocked') {

@@ -9,6 +9,11 @@ import {
 } from '../../../runtime/activity-protocol.js';
 import { createCanonicalJsonSha256Id } from '../../../runtime/content-id.js';
 import {
+  EXECUTION_PAYLOAD_MAX_BYTES,
+  validateExecutionPayloadReference,
+  verifyExecutionPayloadReference,
+} from '../../../runtime/execution-payload.js';
+import {
   cloneBoundedJsonObject,
   cloneBoundedJsonValue,
   cloneJsonObject,
@@ -34,12 +39,21 @@ import { CONDITION_TYPE, KEY_TYPE } from '../base.js';
  * inconsistent records, but are not signatures against a writer that can
  * replace an entire semantically valid history.
  */
-export const EXECUTION_LEDGER_SCHEMA_VERSION = 1;
+// V2 intentionally does not read v1 records.  Manual request and terminal
+// evidence bytes now live behind immutable content-addressed references, so a
+// mixed namespace would make replay and recovery ambiguous.
+export const EXECUTION_LEDGER_SCHEMA_VERSION = 2;
 export const EXECUTION_LEDGER_MAX_OPAQUE_ID_BYTES =
   MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES;
 export const EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES = 64 * 1024;
 export const EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES =
   EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES * 4;
+// Referenced payloads are intentionally much larger than table records, but
+// still bounded before they enter a durable local process. Keep the ledger
+// alias for its public API while the payload reference is the single source
+// of truth for the limit.
+export const EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES =
+  EXECUTION_PAYLOAD_MAX_BYTES;
 // Bound transcript replay independently of its byte cap. Without this, a
 // caller can make validation work scale with a large number of tiny frames.
 export const EXECUTION_LEDGER_MAX_EVIDENCE_FRAMES = 512;
@@ -89,6 +103,9 @@ const SUPPORTED_MANUAL_TERMINAL_TYPES = new Set([
   'failed',
   'protocol-failed',
 ]);
+const MANUAL_REQUEST_PAYLOAD_SCHEMA = 'wharfie.execution.manual-request.v1';
+const ACTIVITY_EVIDENCE_PAYLOAD_SCHEMA =
+  'wharfie.execution.activity-evidence.v1';
 /**
  * @typedef {import('../base.js').DBClient} DBClient
  */
@@ -351,6 +368,155 @@ function cloneEventPayload(value, label) {
 }
 
 /**
+ * @param {unknown} value - Candidate content-addressed JSON payload.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {any} - Strict independently cloned referenced payload.
+ */
+function cloneReferencedPayload(value, label) {
+  return cloneBoundedJson(
+    value,
+    label,
+    EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+  );
+}
+
+/**
+ * @param {unknown} value - Candidate content-addressed JSON object.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {Record<string, any>} - Strict independently cloned referenced payload object.
+ */
+function cloneReferencedPayloadObject(value, label) {
+  return cloneBoundedJsonObject(
+    value,
+    EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+    label,
+  );
+}
+
+/**
+ * @param {unknown} value - Candidate immutable payload reference.
+ * @param {string} expectedPayloadSchema - Required semantic payload schema.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {Readonly<import('../../../runtime/execution-payload.js').ExecutionPayloadReference>} - Validated immutable reference.
+ */
+function normalizePayloadReference(value, expectedPayloadSchema, label) {
+  const reference = validateExecutionPayloadReference(value, label);
+  if (reference.payloadSchema !== expectedPayloadSchema) {
+    throw new TypeError(
+      `${label}.payloadSchema must be '${expectedPayloadSchema}'.`,
+    );
+  }
+  return reference;
+}
+
+/**
+ * @param {unknown} value - Candidate durable manual request envelope.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {{input: any, callerMetadata: Record<string, any>}} - Strict manual request envelope.
+ */
+function normalizeManualRequestEnvelope(value, label) {
+  const envelope = cloneReferencedPayloadObject(value, label);
+  assertExactKeys(envelope, ['input', 'callerMetadata'], label);
+  return {
+    input: cloneReferencedPayload(envelope.input, `${label}.input`),
+    callerMetadata: cloneReferencedPayloadObject(
+      envelope.callerMetadata,
+      `${label}.callerMetadata`,
+    ),
+  };
+}
+
+/**
+ * Store JSON bytes before a ledger append and require an independent
+ * read/rehash verification before returning the descriptor that may enter an
+ * event.  The local store performs this internally too; the second explicit
+ * call keeps the ledger boundary equally strict for later providers.
+ * @param {{putJson: (input: {value: unknown, payloadSchema: string}) => Promise<unknown>, readBytes: (reference: unknown) => Promise<unknown>}} payloadStore - Immutable payload store.
+ * @param {{value: unknown, payloadSchema: string, label: string}} input - Payload persistence request.
+ * @returns {Promise<Readonly<import('../../../runtime/execution-payload.js').ExecutionPayloadReference>>} - Durably verified immutable reference.
+ */
+async function putVerifiedPayload(payloadStore, input) {
+  const reference = normalizePayloadReference(
+    await payloadStore.putJson({
+      value: input.value,
+      payloadSchema: input.payloadSchema,
+    }),
+    input.payloadSchema,
+    input.label,
+  );
+  const verified = verifyPayloadBytes(
+    await payloadStore.readBytes(reference),
+    reference,
+    input.payloadSchema,
+    `${input.label} verification`,
+  );
+  if (!hasSameCanonicalJson(verified.value, input.value)) {
+    throw new TypeError(`${input.label} verification changed its payload.`);
+  }
+  return reference;
+}
+
+/**
+ * Rehash and decode exact provider bytes inside the ledger before using a
+ * payload. A provider only supplies one read result; the ledger itself binds
+ * that result to the immutable reference, avoiding a verify/read TOCTOU gap.
+ * @param {unknown} value - Exact bytes returned by the payload provider.
+ * @param {Readonly<import('../../../runtime/execution-payload.js').ExecutionPayloadReference>} expectedReference - Reference requested by the ledger.
+ * @param {string} expectedPayloadSchema - Required semantic payload schema.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {{reference: Readonly<import('../../../runtime/execution-payload.js').ExecutionPayloadReference>, value: any}} - Exact verified reference and decoded value.
+ */
+function verifyPayloadBytes(
+  value,
+  expectedReference,
+  expectedPayloadSchema,
+  label,
+) {
+  const verified = verifyExecutionPayloadReference(
+    expectedReference,
+    value,
+    label,
+  );
+  const reference = normalizePayloadReference(
+    verified.reference,
+    expectedPayloadSchema,
+    `${label}.reference`,
+  );
+  if (!hasSameCanonicalJson(reference, expectedReference)) {
+    throw new TypeError(`${label} changed its immutable reference.`);
+  }
+  return { reference, value: verified.value };
+}
+
+/**
+ * @param {Record<string, any>} terminal - Verified terminal protocol frame.
+ * @returns {{type: string, attemptId: string}} - Minimal durable terminal summary.
+ */
+function createTerminalSummary(terminal) {
+  return {
+    type: terminal.type,
+    attemptId: terminal.attemptId,
+  };
+}
+
+/**
+ * @param {unknown} value - Candidate terminal summary.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {{type: string, attemptId: string}} - Strict terminal summary.
+ */
+function normalizeTerminalSummary(value, label) {
+  const summary = cloneInlinePayload(value, label);
+  assertExactKeys(summary, ['type', 'attemptId'], label);
+  if (!TERMINAL_TYPES.has(summary.type)) {
+    throw new TypeError(`${label}.type must be an activity terminal type.`);
+  }
+  return {
+    type: summary.type,
+    attemptId: assertOpaqueId(summary.attemptId, `${label}.attemptId`),
+  };
+}
+
+/**
  * @param {unknown} left - First JSON value.
  * @param {unknown} right - Second JSON value.
  * @returns {boolean} - Whether both values have identical canonical JSON.
@@ -495,7 +661,7 @@ function createEventId({
   payload,
 }) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v1',
+    domain: 'wharfie:execution-ledger-event:v2',
     prefix: 'wle',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -647,8 +813,7 @@ function normalizeRunSnapshot(run, runId) {
       'appId',
       'revisionId',
       'trigger',
-      'input',
-      'callerMetadata',
+      'requestRef',
       'status',
       'version',
       'lastSequence',
@@ -673,10 +838,10 @@ function normalizeRunSnapshot(run, runId) {
   normalizeObservedAt(value.createdAt, 'run projection createdAt');
   normalizeObservedAt(value.updatedAt, 'run projection updatedAt');
   value.trigger = normalizeManualTrigger(value.trigger);
-  value.input = cloneInlinePayload(value.input, 'run projection input');
-  value.callerMetadata = cloneInlinePayload(
-    value.callerMetadata,
-    'run projection callerMetadata',
+  value.requestRef = normalizePayloadReference(
+    value.requestRef,
+    MANUAL_REQUEST_PAYLOAD_SCHEMA,
+    'run projection requestRef',
   );
   return value;
 }
@@ -701,8 +866,7 @@ function normalizeInvocationSnapshot(invocation, runId) {
       'appId',
       'revisionId',
       'activityId',
-      'input',
-      'callerMetadata',
+      'requestRef',
       'status',
       'generation',
       'version',
@@ -746,10 +910,10 @@ function normalizeInvocationSnapshot(invocation, runId) {
   );
   normalizeObservedAt(value.createdAt, 'invocation projection createdAt');
   normalizeObservedAt(value.updatedAt, 'invocation projection updatedAt');
-  value.input = cloneInlinePayload(value.input, 'invocation projection input');
-  value.callerMetadata = cloneInlinePayload(
-    value.callerMetadata,
-    'invocation projection callerMetadata',
+  value.requestRef = normalizePayloadReference(
+    value.requestRef,
+    MANUAL_REQUEST_PAYLOAD_SCHEMA,
+    'invocation projection requestRef',
   );
   const hasTerminal = Object.prototype.hasOwnProperty.call(value, 'terminal');
   const hasUncertainty = Object.prototype.hasOwnProperty.call(
@@ -776,7 +940,7 @@ function normalizeInvocationSnapshot(invocation, runId) {
     );
   }
   if (hasTerminal) {
-    value.terminal = cloneInlinePayload(
+    value.terminal = normalizeTerminalSummary(
       value.terminal,
       'invocation projection terminal',
     );
@@ -820,7 +984,7 @@ function normalizeAttemptSnapshot(attempt, runId) {
       'updatedAt',
       'lastSequence',
     ],
-    ['startedAt', 'terminal', 'evidence', 'abandonment'],
+    ['startedAt', 'terminal', 'evidenceRef', 'abandonment'],
     'attempt snapshot',
   );
   if (value.schemaVersion !== EXECUTION_LEDGER_SCHEMA_VERSION) {
@@ -858,24 +1022,27 @@ function normalizeAttemptSnapshot(attempt, runId) {
   normalizeObservedAt(value.updatedAt, 'attempt projection updatedAt');
   const hasStartedAt = Object.prototype.hasOwnProperty.call(value, 'startedAt');
   const hasTerminal = Object.prototype.hasOwnProperty.call(value, 'terminal');
-  const hasEvidence = Object.prototype.hasOwnProperty.call(value, 'evidence');
+  const hasEvidenceRef = Object.prototype.hasOwnProperty.call(
+    value,
+    'evidenceRef',
+  );
   const hasAbandonment = Object.prototype.hasOwnProperty.call(
     value,
     'abandonment',
   );
   if (
     (value.status === AttemptStatus.CLAIMED &&
-      (hasStartedAt || hasTerminal || hasEvidence || hasAbandonment)) ||
+      (hasStartedAt || hasTerminal || hasEvidenceRef || hasAbandonment)) ||
     (value.status === AttemptStatus.STARTED &&
-      (!hasStartedAt || hasTerminal || hasEvidence || hasAbandonment)) ||
+      (!hasStartedAt || hasTerminal || hasEvidenceRef || hasAbandonment)) ||
     ([
       AttemptStatus.COMPLETED,
       AttemptStatus.FAILED,
       AttemptStatus.CANCELLED,
     ].includes(value.status) &&
-      (!hasStartedAt || !hasTerminal || !hasEvidence || hasAbandonment)) ||
+      (!hasStartedAt || !hasTerminal || !hasEvidenceRef || hasAbandonment)) ||
     (value.status === AttemptStatus.ABANDONED &&
-      (hasTerminal || hasEvidence || !hasAbandonment))
+      (hasTerminal || hasEvidenceRef || !hasAbandonment))
   ) {
     throw new ExecutionLedgerProjectionError(
       runId,
@@ -886,15 +1053,16 @@ function normalizeAttemptSnapshot(attempt, runId) {
     normalizeObservedAt(value.startedAt, 'attempt projection startedAt');
   }
   if (hasTerminal) {
-    value.terminal = cloneInlinePayload(
+    value.terminal = normalizeTerminalSummary(
       value.terminal,
       'attempt projection terminal',
     );
   }
-  if (hasEvidence) {
-    value.evidence = cloneInlinePayload(
-      value.evidence,
-      'attempt projection evidence',
+  if (hasEvidenceRef) {
+    value.evidenceRef = normalizePayloadReference(
+      value.evidenceRef,
+      ACTIVITY_EVIDENCE_PAYLOAD_SCHEMA,
+      'attempt projection evidenceRef',
     );
   }
   if (hasAbandonment) {
@@ -919,8 +1087,7 @@ function assertRunAdvance(prior, next, sequence, runId) {
     next.appId !== prior.appId ||
     next.revisionId !== prior.revisionId ||
     !hasSameCanonicalJson(next.trigger, prior.trigger) ||
-    !hasSameCanonicalJson(next.input, prior.input) ||
-    !hasSameCanonicalJson(next.callerMetadata, prior.callerMetadata) ||
+    !hasSameCanonicalJson(next.requestRef, prior.requestRef) ||
     next.createdAt !== prior.createdAt ||
     next.version !== prior.version + 1 ||
     next.lastSequence !== sequence
@@ -943,8 +1110,7 @@ function assertInvocationAdvance(prior, next, sequence, runId) {
     next.appId !== prior.appId ||
     next.revisionId !== prior.revisionId ||
     next.activityId !== prior.activityId ||
-    !hasSameCanonicalJson(next.input, prior.input) ||
-    !hasSameCanonicalJson(next.callerMetadata, prior.callerMetadata) ||
+    !hasSameCanonicalJson(next.requestRef, prior.requestRef) ||
     next.createdAt !== prior.createdAt ||
     next.version !== prior.version + 1 ||
     next.lastSequence !== sequence
@@ -1231,8 +1397,7 @@ function assertEventRequestDigest(
       appId: run.appId,
       revisionId: run.revisionId,
       activityId: invocation.activityId,
-      input: run.input,
-      callerMetadata: run.callerMetadata,
+      requestRef: run.requestRef,
       trigger: run.trigger,
     };
   } else if (event.type === 'attempt-claimed') {
@@ -1269,7 +1434,7 @@ function assertEventRequestDigest(
       expectedVersion: currentRun?.version,
       transitionId: event.transition_id,
       terminal: attempt?.terminal,
-      evidence: attempt?.evidence,
+      evidenceRef: attempt?.evidenceRef,
       actor: event.actor,
       coordinatorEpoch: attempt?.coordinatorEpoch,
     };
@@ -1307,15 +1472,96 @@ function assertEventRequestDigest(
 }
 
 /**
+ * Build a per-fold verified payload reader.  It caches only within one
+ * complete ledger read: every later read rehashes content from storage before
+ * authorizing another mutation.
+ * @param {{readBytes: (reference: unknown) => Promise<unknown>}} payloadStore - Immutable payload store.
+ * @param {string} runId - Durable run identity for safe diagnostics.
+ * @returns {{readManualRequest: (reference: unknown) => Promise<Record<string, any>>, readEvidence: (reference: unknown) => Promise<Record<string, any>>}} - Verified payload reader.
+ */
+function createLedgerPayloadReader(payloadStore, runId) {
+  /** @type {Map<string, Promise<any>>} */
+  const reads = new Map();
+
+  /**
+   * @param {unknown} reference - Candidate immutable reference.
+   * @param {string} payloadSchema - Required semantic schema.
+   * @param {string} label - Human-readable payload label.
+   * @returns {Promise<any>} - Rehashed and decoded payload.
+   */
+  async function read(reference, payloadSchema, label) {
+    const normalized = normalizePayloadReference(
+      reference,
+      payloadSchema,
+      label,
+    );
+    const key = JSON.stringify(normalized);
+    let pending = reads.get(key);
+    if (!pending) {
+      pending = Promise.resolve()
+        .then(
+          async () =>
+            verifyPayloadBytes(
+              await payloadStore.readBytes(normalized),
+              normalized,
+              payloadSchema,
+              label,
+            ).value,
+        )
+        .catch(() => {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            `${label} is unavailable or invalid`,
+          );
+        });
+      reads.set(key, pending);
+    }
+    return await pending;
+  }
+
+  return {
+    async readManualRequest(reference) {
+      return normalizeManualRequestEnvelope(
+        await read(
+          reference,
+          MANUAL_REQUEST_PAYLOAD_SCHEMA,
+          'persisted manual request',
+        ),
+        'persisted manual request',
+      );
+    },
+    async readEvidence(reference) {
+      return cloneReferencedPayloadObject(
+        await read(
+          reference,
+          ACTIVITY_EVIDENCE_PAYLOAD_SCHEMA,
+          'persisted attempt evidence',
+        ),
+        'persisted attempt evidence',
+      );
+    },
+  };
+}
+
+/**
  * @param {Record<string, any>} run - Run snapshot.
  * @param {Record<string, any>} invocation - Invocation snapshot.
  * @param {Record<string, any> | undefined} attempt - Attempt snapshot.
  * @param {Record<string, any>} event - Event being folded.
  * @param {{run?: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>}} state - Mutable fold state.
  * @param {string} runId - Run identity.
- * @returns {void}
+ * @param {{readManualRequest: (reference: unknown) => Promise<Record<string, any>>, readEvidence: (reference: unknown) => Promise<Record<string, any>>}} payloadReader - Per-fold verified immutable payload reader.
+ * @returns {Promise<void>}
  */
-function applyEvent(run, invocation, attempt, event, state, runId) {
+async function applyEvent(
+  run,
+  invocation,
+  attempt,
+  event,
+  state,
+  runId,
+  payloadReader,
+) {
   const currentRun = state.run;
   const currentInvocation = state.invocations.get(invocation.invocationId);
   const currentAttempt = attempt
@@ -1341,13 +1587,13 @@ function applyEvent(run, invocation, attempt, event, state, runId) {
       invocation.updatedAt !== event.observed_at ||
       run.appId !== invocation.appId ||
       run.revisionId !== invocation.revisionId ||
-      !hasSameCanonicalJson(run.input, invocation.input) ||
-      !hasSameCanonicalJson(run.callerMetadata, invocation.callerMetadata) ||
+      !hasSameCanonicalJson(run.requestRef, invocation.requestRef) ||
       event.fence.coordinatorEpoch !== 0 ||
       event.fence.invocationGeneration !== 0
     ) {
       throw new ExecutionLedgerProjectionError(runId, 'invalid run creation');
     }
+    await payloadReader.readManualRequest(run.requestRef);
     assertEventRequestDigest(
       event,
       undefined,
@@ -1399,7 +1645,7 @@ function applyEvent(run, invocation, attempt, event, state, runId) {
       attempt.updatedAt !== event.observed_at ||
       Object.prototype.hasOwnProperty.call(attempt, 'startedAt') ||
       Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
-      Object.prototype.hasOwnProperty.call(attempt, 'evidence') ||
+      Object.prototype.hasOwnProperty.call(attempt, 'evidenceRef') ||
       Object.prototype.hasOwnProperty.call(attempt, 'abandonment') ||
       event.fence.coordinatorEpoch !== attempt.coordinatorEpoch ||
       event.fence.invocationGeneration !== attempt.generation
@@ -1418,7 +1664,7 @@ function applyEvent(run, invocation, attempt, event, state, runId) {
       Object.prototype.hasOwnProperty.call(currentAttempt, 'startedAt') ||
       attempt.startedAt !== event.observed_at ||
       Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
-      Object.prototype.hasOwnProperty.call(attempt, 'evidence') ||
+      Object.prototype.hasOwnProperty.call(attempt, 'evidenceRef') ||
       Object.prototype.hasOwnProperty.call(attempt, 'abandonment') ||
       invocation.status !== InvocationStatus.RUNNING ||
       invocation.generation !== currentInvocation.generation
@@ -1427,10 +1673,7 @@ function applyEvent(run, invocation, attempt, event, state, runId) {
     }
     assertAttemptAdvance(currentAttempt, attempt, event, runId);
   } else if (event.type === 'attempt-terminal') {
-    const terminal = validateActivityProtocolComponentFrame(
-      attempt.terminal,
-      'persisted attempt terminal',
-    );
+    const terminal = attempt.terminal;
     if (!SUPPORTED_MANUAL_TERMINAL_TYPES.has(terminal.type)) {
       throw new ExecutionLedgerProjectionError(
         runId,
@@ -1439,8 +1682,8 @@ function applyEvent(run, invocation, attempt, event, state, runId) {
     }
     const statuses = statusesForTerminal(terminal);
     const verifiedEvidence = validateLedgerAttemptEvidence(
-      attempt.evidence,
-      createLedgerAttemptStart(run, invocation, attempt),
+      await payloadReader.readEvidence(attempt.evidenceRef),
+      await createLedgerAttemptStart(run, invocation, attempt, payloadReader),
       'persisted attempt evidence',
     );
     if (
@@ -1455,7 +1698,10 @@ function applyEvent(run, invocation, attempt, event, state, runId) {
       run.status !== statuses.run ||
       attempt.startedAt !== currentAttempt.startedAt ||
       terminal.attemptId !== attempt.attemptId ||
-      !hasSameCanonicalJson(verifiedEvidence.terminal, terminal) ||
+      !hasSameCanonicalJson(
+        createTerminalSummary(verifiedEvidence.terminal),
+        terminal,
+      ) ||
       !hasSameCanonicalJson(invocation.terminal, terminal)
     ) {
       throw new ExecutionLedgerProjectionError(
@@ -1475,7 +1721,7 @@ function applyEvent(run, invocation, attempt, event, state, runId) {
       Object.prototype.hasOwnProperty.call(currentAttempt, 'startedAt') ||
       Object.prototype.hasOwnProperty.call(attempt, 'startedAt') ||
       Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
-      Object.prototype.hasOwnProperty.call(attempt, 'evidence') ||
+      Object.prototype.hasOwnProperty.call(attempt, 'evidenceRef') ||
       !Object.prototype.hasOwnProperty.call(attempt, 'abandonment') ||
       invocation.status !== InvocationStatus.RUNNABLE ||
       invocation.generation !== currentInvocation.generation ||
@@ -1497,7 +1743,7 @@ function applyEvent(run, invocation, attempt, event, state, runId) {
       attempt.generation !== currentInvocation.generation ||
       attempt.startedAt !== currentAttempt.startedAt ||
       Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
-      Object.prototype.hasOwnProperty.call(attempt, 'evidence') ||
+      Object.prototype.hasOwnProperty.call(attempt, 'evidenceRef') ||
       !Object.prototype.hasOwnProperty.call(attempt, 'abandonment') ||
       invocation.status !== InvocationStatus.UNCERTAIN ||
       invocation.generation !== currentInvocation.generation ||
@@ -1559,9 +1805,10 @@ function sameSnapshot(left, right) {
  * against that fold before returning state that may authorize another write.
  * @param {Record<string, any>[]} records - All partition records.
  * @param {string} runId - Expected run identity.
- * @returns {{head: Record<string, any>, run: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, events: Record<string, any>[]}|null} - Verified current state, if the run exists.
+ * @param {{readBytes: (reference: unknown) => Promise<unknown>}} payloadStore - Immutable payload store.
+ * @returns {Promise<{head: Record<string, any>, run: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, events: Record<string, any>[]}|null>} - Verified current state, if the run exists.
  */
-function foldAndVerifyRun(records, runId) {
+async function foldAndVerifyRun(records, runId, payloadStore) {
   if (records.length === 0) return null;
 
   /** @type {Record<string, any> | undefined} */
@@ -1722,6 +1969,7 @@ function foldAndVerifyRun(records, runId) {
     invocations: new Map(),
     attempts: new Map(),
   };
+  const payloadReader = createLedgerPayloadReader(payloadStore, runId);
   for (const [index, event] of events.entries()) {
     const expectedSequence = index + 1;
     if (
@@ -1759,13 +2007,14 @@ function foldAndVerifyRun(records, runId) {
         'transition receipt attempt mismatch',
       );
     }
-    applyEvent(
+    await applyEvent(
       snapshots.run,
       snapshots.invocation,
       snapshots.attempt,
       event,
       state,
       runId,
+      payloadReader,
     );
   }
 
@@ -1851,9 +2100,10 @@ function transitionResult(state, attempt, receipt, applied) {
  * merely claimed projection.
  * @param {{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} result - Persisted transition result.
  * @param {string} runId - Durable run identity for diagnostics.
- * @returns {{applied: boolean, dispatchAuthorized: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, startFrame: Readonly<Record<string, any>>}} - Started transition result.
+ * @param {{readBytes: (reference: unknown) => Promise<unknown>}} payloadStore - Immutable payload store.
+ * @returns {Promise<{applied: boolean, dispatchAuthorized: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, startFrame: Readonly<Record<string, any>>}>} - Started transition result.
  */
-function startedTransitionResult(result, runId) {
+async function startedTransitionResult(result, runId, payloadStore) {
   if (!result.attempt) {
     throw new ExecutionLedgerProjectionError(
       runId,
@@ -1874,10 +2124,11 @@ function startedTransitionResult(result, runId) {
       result.run.status === RunStatus.RUNNING &&
       result.invocation.status === InvocationStatus.RUNNING &&
       result.attempt.status === AttemptStatus.STARTED,
-    startFrame: createLedgerAttemptStart(
+    startFrame: await createLedgerAttemptStart(
       result.run,
       result.invocation,
       result.attempt,
+      createLedgerPayloadReader(payloadStore, runId),
     ),
   };
 }
@@ -1889,7 +2140,7 @@ function startedTransitionResult(result, runId) {
  */
 function createTransitionRequestDigest(type, value) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-transition:v1',
+    domain: 'wharfie:execution-ledger-transition:v2',
     prefix: 'wlt',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -1910,7 +2161,7 @@ function createTransitionRequestDigest(type, value) {
 function normalizeTransitionOptions(options, allowed, label, now) {
   const value = cloneBoundedJsonObject(
     options,
-    EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+    EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
     label,
   );
   assertSupportedKeys(value, allowed, label);
@@ -2041,9 +2292,16 @@ function assertSupportedManualTerminal(terminal, label) {
  * @param {Record<string, any>} run - Current run projection.
  * @param {Record<string, any>} invocation - Current invocation projection.
  * @param {Record<string, any>} attempt - Current attempt projection.
- * @returns {Readonly<Record<string, any>>} - Exact host start frame bound by the ledger.
+ * @param {{readManualRequest: (reference: unknown) => Promise<Record<string, any>>}} payloadReader - Verified immutable payload reader.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Exact host start frame bound by the ledger.
  */
-function createLedgerAttemptStart(run, invocation, attempt) {
+async function createLedgerAttemptStart(
+  run,
+  invocation,
+  attempt,
+  payloadReader,
+) {
+  const request = await payloadReader.readManualRequest(invocation.requestRef);
   return validateActivityProtocolHostFrame(
     {
       protocol: ACTIVITY_PROTOCOL_NAME,
@@ -2055,8 +2313,8 @@ function createLedgerAttemptStart(run, invocation, attempt) {
       invocationId: invocation.invocationId,
       attemptId: attempt.attemptId,
       fencingToken: attempt.fencingToken,
-      input: invocation.input,
-      caller: { metadata: invocation.callerMetadata },
+      input: request.input,
+      caller: { metadata: request.callerMetadata },
     },
     'ledger activity attempt start',
   );
@@ -2101,7 +2359,7 @@ function validateLedgerAttemptEvidence(value, expectedStart, label) {
   assertEvidenceFrameCountPreflight(value, label);
   const evidence = cloneBoundedJsonObject(
     value,
-    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
     label,
   );
   assertExactKeys(
@@ -2189,7 +2447,7 @@ function validateLedgerAttemptEvidence(value, expectedStart, label) {
  */
 function createAttemptId(runId, invocationId, generation) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-attempt:v1',
+    domain: 'wharfie:execution-ledger-attempt:v2',
     prefix: 'wla',
     value: { runId, invocationId, generation },
     valuePath: 'execution ledger attempt identity',
@@ -2200,12 +2458,13 @@ function createAttemptId(runId, invocationId, generation) {
  * Create a provider-neutral append-only execution ledger over one transactional
  * DB table. It intentionally does not provide leases, scheduling, effects, or
  * a general workflow API; those require later durable contracts.
- * @param {{db: DBClient, tableName: string, now?: () => number}} options - Store dependencies.
+ * @param {{db: DBClient, tableName: string, payloadStore: {putJson: (input: {value: unknown, payloadSchema: string}) => Promise<unknown>, readBytes: (reference: unknown) => Promise<unknown>}, now?: () => number}} options - Store dependencies.
  * @returns {ExecutionLedgerStore} - Durable ledger API.
  */
 export function createExecutionLedger({
   db,
   tableName,
+  payloadStore,
   now = () => Date.now(),
 }) {
   if (!db || typeof db.transactionWrite !== 'function') {
@@ -2215,6 +2474,15 @@ export function createExecutionLedger({
   }
   if (typeof tableName !== 'string' || !tableName.trim()) {
     throw new TypeError('createExecutionLedger requires a tableName.');
+  }
+  if (
+    !payloadStore ||
+    typeof payloadStore.putJson !== 'function' ||
+    typeof payloadStore.readBytes !== 'function'
+  ) {
+    throw new TypeError(
+      'createExecutionLedger requires an immutable payloadStore with putJson and readBytes.',
+    );
   }
   if (typeof now !== 'function') {
     throw new TypeError('createExecutionLedger now must be a function.');
@@ -2226,9 +2494,10 @@ export function createExecutionLedger({
    * @returns {Promise<ReturnType<typeof foldAndVerifyRun>>} - Verified run state.
    */
   async function readVerifiedRun(runId) {
-    return foldAndVerifyRun(
+    return await foldAndVerifyRun(
       await readRunRecords(db, resolvedTableName, runId),
       runId,
+      payloadStore,
     );
   }
 
@@ -2383,22 +2652,34 @@ export function createExecutionLedger({
   /**
    * @param {Record<string, any>} current - Existing run projection.
    * @param {Record<string, any>} invocation - Existing root invocation projection.
-   * @param {{appId: string, revisionId: string, activityId: string, input: any, callerMetadata: Record<string, any>, trigger: {kind: 'manual'}}} requested - Immutable requested work.
-   * @returns {boolean} - Whether the run is an exact idempotent duplicate.
+   * @param {{appId: string, revisionId: string, activityId: string, input: any, callerMetadata: Record<string, any>, trigger: {kind: 'manual'}}} requested - Caller-requested manual work.
+   * @param {{readManualRequest: (reference: unknown) => Promise<Record<string, any>>}} payloadReader - Verified immutable payload reader.
+   * @returns {Promise<boolean>} - Whether the run is an exact idempotent duplicate.
    */
-  function isSameManualRun(current, invocation, requested) {
-    return (
+  async function isSameManualRun(
+    current,
+    invocation,
+    requested,
+    payloadReader,
+  ) {
+    if (
       current.appId === requested.appId &&
       current.revisionId === requested.revisionId &&
       invocation.appId === requested.appId &&
       invocation.revisionId === requested.revisionId &&
       invocation.activityId === requested.activityId &&
       hasSameCanonicalJson(current.trigger, requested.trigger) &&
-      hasSameCanonicalJson(current.input, requested.input) &&
-      hasSameCanonicalJson(current.callerMetadata, requested.callerMetadata) &&
-      hasSameCanonicalJson(invocation.input, requested.input) &&
-      hasSameCanonicalJson(invocation.callerMetadata, requested.callerMetadata)
-    );
+      hasSameCanonicalJson(current.requestRef, invocation.requestRef)
+    ) {
+      const persisted = await payloadReader.readManualRequest(
+        current.requestRef,
+      );
+      return (
+        hasSameCanonicalJson(persisted.input, requested.input) &&
+        hasSameCanonicalJson(persisted.callerMetadata, requested.callerMetadata)
+      );
+    }
+    return false;
   }
 
   /**
@@ -2411,7 +2692,7 @@ export function createExecutionLedger({
   async function createManualRun(options) {
     const value = cloneBoundedJsonObject(
       options,
-      EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
       'createManualRun',
     );
     assertSupportedKeys(
@@ -2443,15 +2724,14 @@ export function createExecutionLedger({
     );
     const activityId = value.activityId;
     assertLogicalId(activityId, 'createManualRun.activityId');
-    const input = cloneInlinePayload(
+    const input = cloneReferencedPayload(
       Object.prototype.hasOwnProperty.call(value, 'input') ? value.input : {},
       'createManualRun.input',
     );
-    const callerMetadata = cloneBoundedJsonObject(
+    const callerMetadata = cloneReferencedPayloadObject(
       Object.prototype.hasOwnProperty.call(value, 'callerMetadata')
         ? value.callerMetadata
         : {},
-      EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
       'createManualRun.callerMetadata',
     );
     const trigger = normalizeManualTrigger(value.trigger);
@@ -2485,24 +2765,36 @@ export function createExecutionLedger({
       callerMetadata,
       trigger,
     };
-    const requestDigest = createTransitionRequestDigest('manual-run-created', {
-      runId,
-      invocationId,
-      transitionId,
-      actor,
-      coordinatorEpoch,
-      ...requested,
-    });
 
     const existing = await readVerifiedRun(runId);
     if (existing) {
       const persistedInvocation = existing.invocations.get(invocationId);
       if (
         !persistedInvocation ||
-        !isSameManualRun(existing.run, persistedInvocation, requested)
+        !(await isSameManualRun(
+          existing.run,
+          persistedInvocation,
+          requested,
+          createLedgerPayloadReader(payloadStore, runId),
+        ))
       ) {
         throw new ExecutionLedgerRunConflictError(runId);
       }
+      const requestDigest = createTransitionRequestDigest(
+        'manual-run-created',
+        {
+          runId,
+          invocationId,
+          transitionId,
+          actor,
+          coordinatorEpoch,
+          appId,
+          revisionId,
+          activityId,
+          requestRef: existing.run.requestRef,
+          trigger,
+        },
+      );
       const receipt = await getTransitionReceipt(
         db,
         resolvedTableName,
@@ -2520,14 +2812,31 @@ export function createExecutionLedger({
       };
     }
 
+    const requestRef = await putVerifiedPayload(payloadStore, {
+      value: { input, callerMetadata },
+      payloadSchema: MANUAL_REQUEST_PAYLOAD_SCHEMA,
+      label: 'createManualRun.requestRef',
+    });
+    const requestDigest = createTransitionRequestDigest('manual-run-created', {
+      runId,
+      invocationId,
+      transitionId,
+      actor,
+      coordinatorEpoch,
+      appId,
+      revisionId,
+      activityId,
+      requestRef,
+      trigger,
+    });
+
     const run = {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
       runId,
       appId,
       revisionId,
       trigger,
-      input,
-      callerMetadata,
+      requestRef,
       status: RunStatus.RUNNING,
       version: 1,
       lastSequence: 1,
@@ -2541,8 +2850,7 @@ export function createExecutionLedger({
       appId,
       revisionId,
       activityId,
-      input,
-      callerMetadata,
+      requestRef,
       status: InvocationStatus.RUNNABLE,
       generation: 0,
       version: 1,
@@ -2579,17 +2887,37 @@ export function createExecutionLedger({
       const persistedInvocation = raced.invocations.get(invocationId);
       if (
         !persistedInvocation ||
-        !isSameManualRun(raced.run, persistedInvocation, requested)
+        !(await isSameManualRun(
+          raced.run,
+          persistedInvocation,
+          requested,
+          createLedgerPayloadReader(payloadStore, runId),
+        ))
       ) {
         throw new ExecutionLedgerRunConflictError(runId);
       }
+      const racedRequestDigest = createTransitionRequestDigest(
+        'manual-run-created',
+        {
+          runId,
+          invocationId,
+          transitionId,
+          actor,
+          coordinatorEpoch,
+          appId,
+          revisionId,
+          activityId,
+          requestRef: raced.run.requestRef,
+          trigger,
+        },
+      );
       const receipt = await getTransitionReceipt(
         db,
         resolvedTableName,
         runId,
         transitionId,
       );
-      if (receipt && receipt.request_digest !== requestDigest) {
+      if (receipt && receipt.request_digest !== racedRequestDigest) {
         throw new ExecutionLedgerTransitionConflictError(runId, transitionId);
       }
       return {
@@ -2698,7 +3026,7 @@ export function createExecutionLedger({
   async function claimInvocation(options) {
     const value = cloneBoundedJsonObject(
       options,
-      EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
       'claimInvocation',
     );
     const common = normalizeTransitionOptions(
@@ -2905,9 +3233,10 @@ export function createExecutionLedger({
       requestDigest,
     );
     if (existing) {
-      return startedTransitionResult(
+      return await startedTransitionResult(
         existingTransitionResult(state, existing),
         common.runId,
+        payloadStore,
       );
     }
     if (state.head.version !== common.expectedVersion) {
@@ -2968,7 +3297,7 @@ export function createExecutionLedger({
       },
       { run: nextRun, invocation: nextInvocation, attempt: nextAttempt },
     );
-    return startedTransitionResult(
+    return await startedTransitionResult(
       await appendOrReplay({
         state,
         runId: common.runId,
@@ -2981,6 +3310,7 @@ export function createExecutionLedger({
         currentAttempt: attempt,
       }),
       common.runId,
+      payloadStore,
     );
   }
 
@@ -2994,7 +3324,7 @@ export function createExecutionLedger({
   async function commitVerifiedAttemptTerminal(options) {
     const value = cloneBoundedJsonObject(
       options,
-      EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
       'commitVerifiedAttemptTerminal',
     );
     const common = normalizeTransitionOptions(
@@ -3041,9 +3371,15 @@ export function createExecutionLedger({
         'attempt does not belong to this invocation',
       );
     }
+    const payloadReader = createLedgerPayloadReader(payloadStore, common.runId);
     const verifiedEvidence = validateLedgerAttemptEvidence(
       value.evidence,
-      createLedgerAttemptStart(state.run, invocation, attempt),
+      await createLedgerAttemptStart(
+        state.run,
+        invocation,
+        attempt,
+        payloadReader,
+      ),
       'commitVerifiedAttemptTerminal.evidence',
     );
     const terminal = verifiedEvidence.terminal;
@@ -3057,30 +3393,81 @@ export function createExecutionLedger({
       );
     }
     assertSupportedManualTerminal(terminal, 'commitVerifiedAttemptTerminal');
-    const requestDigest = createTransitionRequestDigest('attempt-terminal', {
-      runId: common.runId,
-      invocationId,
-      attemptId,
-      fencingToken,
-      generation,
-      expectedVersion: common.expectedVersion,
-      transitionId: common.transitionId,
-      terminal,
-      evidence,
-      actor: common.actor,
-      coordinatorEpoch: common.coordinatorEpoch,
-    });
-    const existing = assertMatchingReceipt(
-      state,
-      await getTransitionReceipt(
-        db,
-        resolvedTableName,
-        common.runId,
-        common.transitionId,
-      ),
-      requestDigest,
+    const terminalSummary = createTerminalSummary(terminal);
+    const existingReceipt = await getTransitionReceipt(
+      db,
+      resolvedTableName,
+      common.runId,
+      common.transitionId,
     );
-    if (existing) return existingTransitionResult(state, existing);
+    if (existingReceipt) {
+      if (
+        existingReceipt.type !== 'attempt-terminal' ||
+        existingReceipt.invocation_id !== invocationId ||
+        existingReceipt.attempt_id !== attemptId
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      const existingEvent = state.events[existingReceipt.sequence - 1];
+      if (
+        !existingEvent ||
+        existingEvent.event_id !== existingReceipt.event_id ||
+        existingEvent.transition_id !== common.transitionId
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          common.runId,
+          'terminal receipt event is unavailable',
+        );
+      }
+      const existingAttempt = eventSnapshots(
+        existingEvent,
+        common.runId,
+      ).attempt;
+      if (
+        !existingAttempt ||
+        !hasSameCanonicalJson(existingAttempt.terminal, terminalSummary) ||
+        !hasSameCanonicalJson(
+          await payloadReader.readEvidence(existingAttempt.evidenceRef),
+          evidence,
+        )
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      const existingRequestDigest = createTransitionRequestDigest(
+        'attempt-terminal',
+        {
+          runId: common.runId,
+          invocationId,
+          attemptId,
+          fencingToken,
+          generation,
+          expectedVersion: common.expectedVersion,
+          transitionId: common.transitionId,
+          terminal: terminalSummary,
+          evidenceRef: existingAttempt.evidenceRef,
+          actor: common.actor,
+          coordinatorEpoch: common.coordinatorEpoch,
+        },
+      );
+      const existing = assertMatchingReceipt(
+        state,
+        existingReceipt,
+        existingRequestDigest,
+      );
+      if (!existing) {
+        throw new ExecutionLedgerProjectionError(
+          common.runId,
+          'terminal receipt disappeared',
+        );
+      }
+      return existingTransitionResult(state, existing);
+    }
     if (state.head.version !== common.expectedVersion) {
       throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
     }
@@ -3099,6 +3486,24 @@ export function createExecutionLedger({
       { coordinatorEpoch: common.coordinatorEpoch, fencingToken, generation },
       common.runId,
     );
+    const evidenceRef = await putVerifiedPayload(payloadStore, {
+      value: evidence,
+      payloadSchema: ACTIVITY_EVIDENCE_PAYLOAD_SCHEMA,
+      label: 'commitVerifiedAttemptTerminal.evidenceRef',
+    });
+    const requestDigest = createTransitionRequestDigest('attempt-terminal', {
+      runId: common.runId,
+      invocationId,
+      attemptId,
+      fencingToken,
+      generation,
+      expectedVersion: common.expectedVersion,
+      transitionId: common.transitionId,
+      terminal: terminalSummary,
+      evidenceRef,
+      actor: common.actor,
+      coordinatorEpoch: common.coordinatorEpoch,
+    });
     const statuses = statusesForTerminal(terminal);
     const sequence = state.head.sequence + 1;
     const nextRun = {
@@ -3114,7 +3519,7 @@ export function createExecutionLedger({
       version: invocation.version + 1,
       lastSequence: sequence,
       updatedAt: common.observedAt,
-      terminal: cloneInlinePayload(terminal, 'terminal'),
+      terminal: terminalSummary,
     };
     const nextAttempt = {
       ...cloneJsonObject(attempt, 'current attempt'),
@@ -3122,8 +3527,8 @@ export function createExecutionLedger({
       version: attempt.version + 1,
       lastSequence: sequence,
       updatedAt: common.observedAt,
-      terminal: cloneInlinePayload(terminal, 'terminal'),
-      evidence,
+      terminal: terminalSummary,
+      evidenceRef,
     };
     const event = createEventRecord(
       common.runId,

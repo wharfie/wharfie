@@ -13,6 +13,7 @@ import {
   RunStatus,
   createExecutionLedger,
 } from '../../src/core/lib/db/tables/execution-ledger.js';
+import { createLocalExecutionPayloadStore } from '../../src/core/lib/payload-store/local.js';
 import { ActivityProtocolTranscriptValidator } from '../../src/core/runtime/activity-protocol.js';
 import {
   MANUAL_LEDGER_INVOCATION_ID,
@@ -87,6 +88,17 @@ function createClock() {
 }
 
 /**
+ * @param {string} directory - Isolated local control root.
+ * @returns {ReturnType<typeof createLocalExecutionPayloadStore>} - Matching immutable payload store.
+ */
+function createPayloadStore(directory) {
+  return createLocalExecutionPayloadStore({
+    path: join(directory, 'execution-payloads'),
+    storeId: 'manual-ledger-test',
+  });
+}
+
+/**
  * @param {(ledger: import('../../src/core/lib/db/tables/execution-ledger.js').ExecutionLedgerStore) => Promise<void>} test - Isolated ledger test body.
  * @returns {Promise<void>} - Resolves after cleanup.
  */
@@ -96,6 +108,7 @@ async function withLedger(test) {
   const ledger = createExecutionLedger({
     db,
     tableName: 'manual-ledger-test',
+    payloadStore: createPayloadStore(directory),
     now: createClock(),
   });
   try {
@@ -155,12 +168,12 @@ describe('manual ledger activity runner', () => {
           generation: 1,
         },
         attempt: { status: AttemptStatus.COMPLETED, generation: 1 },
-        terminal: { type: 'completed', result: { greeting: 'hello Ada' } },
+        terminalSummary: { type: 'completed' },
+        evidenceRef: {
+          payloadSchema: 'wharfie.execution.activity-evidence.v1',
+        },
       });
       expect(starts).toHaveLength(1);
-      if (!first.evidence)
-        throw new Error('Expected retained terminal evidence');
-      expect(starts[0]).toEqual(first.evidence.start);
       expect(starts[0]).toMatchObject({
         runId: first.run.runId,
         invocationId: MANUAL_LEDGER_INVOCATION_ID,
@@ -263,6 +276,7 @@ describe('manual ledger activity runner', () => {
     ledger = createExecutionLedger({
       db,
       tableName: 'manual-ledger-race-test',
+      payloadStore: createPayloadStore(directory),
       now: createClock(),
     });
 
@@ -366,6 +380,7 @@ describe('manual ledger activity runner', () => {
     ledger = createExecutionLedger({
       db,
       tableName: 'manual-ledger-stale-start-test',
+      payloadStore: createPayloadStore(directory),
       now: createClock(),
     });
 
@@ -401,18 +416,21 @@ describe('manual ledger activity runner', () => {
           generation: 2,
         }),
       ]);
-      expect(view?.attempts).toEqual([
-        expect.objectContaining({
-          status: AttemptStatus.ABANDONED,
-          generation: 1,
-          fencingToken: 'stale-fence',
-        }),
-        expect.objectContaining({
-          status: AttemptStatus.STARTED,
-          generation: 2,
-          fencingToken: 'replacement-fence',
-        }),
-      ]);
+      expect(view?.attempts).toHaveLength(2);
+      expect(view?.attempts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            status: AttemptStatus.ABANDONED,
+            generation: 1,
+            fencingToken: 'stale-fence',
+          }),
+          expect.objectContaining({
+            status: AttemptStatus.STARTED,
+            generation: 2,
+            fencingToken: 'replacement-fence',
+          }),
+        ]),
+      );
     } finally {
       await baseDb.close();
       rmSync(directory, { recursive: true, force: true });
@@ -473,9 +491,8 @@ describe('manual ledger activity runner', () => {
         run: { status: RunStatus.FAILED },
         invocation: { status: InvocationStatus.FAILED },
         attempt: { status: AttemptStatus.FAILED },
-        terminal: {
+        terminalSummary: {
           type: 'failed',
-          error: { message: 'expected activity failure' },
         },
       });
     });
@@ -625,6 +642,7 @@ describe('manual ledger activity runner', () => {
     ledger = createExecutionLedger({
       db,
       tableName: 'manual-ledger-recovery-race-test',
+      payloadStore: createPayloadStore(directory),
       now: createClock(),
     });
 

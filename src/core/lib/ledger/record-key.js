@@ -4,7 +4,10 @@
  * caller-controlled delimiter can never make two typed records alias.
  */
 
-export const EXECUTION_LEDGER_SORT_KEY_PREFIX = 'ledger/v1/';
+// Ledger v2 is intentionally a fresh namespace.  It replaces v1's inline
+// request/evidence payloads with immutable content references, so sharing
+// physical keys with a v1 record would make recovery ambiguous.
+export const EXECUTION_LEDGER_SORT_KEY_PREFIX = 'ledger/v2/';
 export const EXECUTION_LEDGER_EVENT_SEQUENCE_WIDTH = 16;
 export const MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES = 512;
 

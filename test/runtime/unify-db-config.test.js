@@ -12,6 +12,8 @@ import {
   closeDB,
   createOperationsDBClient,
   resolveExecutionLedgerTableName,
+  resolveExecutionPayloadPath,
+  resolveExecutionPayloadStoreId,
   resolveOperationsAdapterName,
   resolveOperationsTableName,
   resolveStateAdapterName,
@@ -54,7 +56,7 @@ describe('Unified DB config', () => {
         expect(resolveOperationsAdapterName()).toBe('vanilla');
         expect(resolveOperationsTableName()).toBe('wharfie-operations');
         expect(resolveExecutionLedgerTableName()).toBe(
-          'wharfie-execution-ledger',
+          'wharfie-execution-ledger-v2',
         );
 
         const first = await createOperationsDBClient();
@@ -162,6 +164,37 @@ describe('Unified DB config', () => {
             expect(resolveExecutionLedgerTableName()).toBe('ledger-b');
           },
         );
+      },
+    );
+  });
+
+  test('execution payload storage is independently configurable and stable per root', async () => {
+    const controlPath = join(tmpdir(), 'wharfie-control-payload-config');
+    await withEnv(
+      {
+        WHARFIE_CONTROL_PATH: controlPath,
+        WHARFIE_EXECUTION_PAYLOAD_PATH: undefined,
+        WHARFIE_EXECUTION_PAYLOAD_STORE_ID: undefined,
+      },
+      async () => {
+        const payloadPath = resolveExecutionPayloadPath();
+        expect(payloadPath).toBe(join(controlPath, 'execution-payloads'));
+        expect(resolveExecutionPayloadStoreId(payloadPath)).toMatch(
+          /^payload-[a-f0-9]{55}$/,
+        );
+        expect(resolveExecutionPayloadStoreId(payloadPath)).toBe(
+          resolveExecutionPayloadStoreId(payloadPath),
+        );
+      },
+    );
+    await withEnv(
+      {
+        WHARFIE_EXECUTION_PAYLOAD_PATH: ' /tmp/ignored ',
+        WHARFIE_EXECUTION_PAYLOAD_STORE_ID: 'portable-payload-store',
+      },
+      async () => {
+        expect(resolveExecutionPayloadPath()).toBe('/tmp/ignored');
+        expect(resolveExecutionPayloadStoreId()).toBe('portable-payload-store');
       },
     );
   });
