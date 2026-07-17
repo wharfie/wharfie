@@ -5,6 +5,9 @@
  * @property {string} id - Id of the operation.
  * @property {import('./operation.js').WharfieOperationTypeEnum} type - Type of operation.
  * @property {import('./operation.js').WharfieOperationStatusEnum} status - Status of operation.
+ * @property {number} generation - Execution generation used to fence actions.
+ * @property {number} version - Optimistic operation record version.
+ * @property {Record<string, any>} [cancellation] - Durable cancellation metadata.
  * @property {string} serialized_action_graph - Serialized action dependency graph.
  * @property {any} [operation_config] - Configuration for the operation.
  * @property {any} [operation_inputs] - Inputs for the operation.
@@ -25,6 +28,8 @@
  * @typedef ActionRecordData
  * @property {string} resource_id - Id of the app resource.
  * @property {string} operation_id - Id of the operation.
+ * @property {number} operation_generation - Generation of the owning operation.
+ * @property {number} version - Monotonic action record revision.
  * @property {string} id - Id of the action.
  * @property {import('./action.js').WharfieActionTypeEnum} type - Type of action.
  * @property {import('./action.js').WharfieActionStatusEnum} status - Status of the action.

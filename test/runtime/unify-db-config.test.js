@@ -10,6 +10,8 @@ import { createOperationsTable } from '../../src/core/lib/db/tables/operations.j
 import Operation from '../../src/core/lib/graph/operation.js';
 import {
   closeDB,
+  createOperationsDBClient,
+  resolveOperationsAdapterName,
   resolveOperationsTableName,
   resolveStateAdapterName,
 } from '../../src/core/lib/config/db.js';
@@ -35,6 +37,68 @@ describe('Unified DB config', () => {
     );
   });
 
+  test('operations control has isolated test defaults and durable local defaults', async () => {
+    await withEnv(
+      {
+        NODE_ENV: 'test',
+        AWS_REGION: 'us-east-1',
+        AWS_EXECUTION_ENV: 'AWS_Lambda_nodejs22.x',
+        WHARFIE_CONTROL_ADAPTER: undefined,
+        WHARFIE_CONTROL_PATH: undefined,
+        WHARFIE_OPERATIONS_TABLE: undefined,
+        OPERATIONS_TABLE: 'ignored-legacy-name',
+      },
+      async () => {
+        expect(resolveOperationsAdapterName()).toBe('vanilla');
+        expect(resolveOperationsTableName()).toBe('wharfie-operations');
+
+        const first = await createOperationsDBClient();
+        const second = await createOperationsDBClient();
+        try {
+          await first.put({
+            tableName: 'isolation-probe',
+            keyName: 'id',
+            record: { id: 'only-in-first' },
+          });
+          expect(
+            await second.get({
+              tableName: 'isolation-probe',
+              keyName: 'id',
+              keyValue: 'only-in-first',
+            }),
+          ).toBeUndefined();
+        } finally {
+          await first.close();
+          await second.close();
+        }
+      },
+    );
+
+    await withEnv(
+      {
+        NODE_ENV: 'development',
+        AWS_REGION: 'us-east-1',
+        AWS_EXECUTION_ENV: 'AWS_Lambda_nodejs22.x',
+        WHARFIE_CONTROL_ADAPTER: undefined,
+      },
+      async () => {
+        expect(resolveOperationsAdapterName()).toBe('lmdb');
+      },
+    );
+  });
+
+  test('operations control honors explicit adapter selection', async () => {
+    await withEnv({ WHARFIE_CONTROL_ADAPTER: 'LMDB' }, async () => {
+      expect(resolveOperationsAdapterName()).toBe('lmdb');
+    });
+    await withEnv({ WHARFIE_CONTROL_ADAPTER: 'dynamodb' }, async () => {
+      expect(resolveOperationsAdapterName()).toBe('dynamodb');
+    });
+    await withEnv({ WHARFIE_CONTROL_ADAPTER: 'vanilla' }, async () => {
+      expect(resolveOperationsAdapterName()).toBe('vanilla');
+    });
+  });
+
   test('operations table factory requires an explicit tableName', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'wharfie-ops-table-'));
     const db = createVanillaDB({ path: dir });
@@ -51,17 +115,17 @@ describe('Unified DB config', () => {
     const db = createVanillaDB({ path: dir });
 
     try {
-      await withEnv({ OPERATIONS_TABLE: 'ops-a' }, async () => {
+      await withEnv({ WHARFIE_OPERATIONS_TABLE: ' ops-a ' }, async () => {
         const storeA = createOperationsTable({
           db,
           tableName: resolveOperationsTableName(),
         });
-        await storeA.putOperation(makeOperation('run-a'));
+        await storeA.createOperation(makeOperation('run-a'));
         expect(
           await storeA.getOperation('app:config-test', 'run-a'),
         ).not.toBeNull();
 
-        await withEnv({ OPERATIONS_TABLE: 'ops-b' }, async () => {
+        await withEnv({ WHARFIE_OPERATIONS_TABLE: 'ops-b' }, async () => {
           const storeB = createOperationsTable({
             db,
             tableName: resolveOperationsTableName(),
@@ -70,7 +134,7 @@ describe('Unified DB config', () => {
             await storeB.getOperation('app:config-test', 'run-a'),
           ).toBeNull();
 
-          await storeB.putOperation(makeOperation('run-b'));
+          await storeB.createOperation(makeOperation('run-b'));
           expect(
             await storeA.getOperation('app:config-test', 'run-b'),
           ).toBeNull();

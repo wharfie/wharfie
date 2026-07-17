@@ -6,6 +6,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { createMockedDynamoDB } from '../../helpers/db-adapters.js';
+
 const VANILLA_DB_IMPORT = '../../../src/core/lib/db/adapters/vanilla.js';
 const LMDB_DB_IMPORT = '../../../src/core/lib/db/adapters/lmdb.js';
 const DYNAMO_DB_IMPORT = '../../../src/core/lib/db/adapters/dynamodb.js';
@@ -59,6 +61,367 @@ function fieldEquals(propertyName, propertyValue) {
     propertyName,
     propertyValue,
   };
+}
+
+/**
+ * @param {import('../../../src/core/lib/db/base.js').ConditionTypeEnum} conditionType - conditionType.
+ * @param {string} propertyName - propertyName.
+ * @param {any} [propertyValue] - propertyValue.
+ * @returns {import('../../../src/core/lib/db/base.js').KeyCondition} - Result.
+ */
+function fieldCondition(conditionType, propertyName, propertyValue) {
+  return {
+    conditionType,
+    propertyName,
+    ...(propertyValue === undefined ? {} : { propertyValue }),
+  };
+}
+
+/**
+ * @param {import('../../../src/core/lib/db/base.js').DBClient} db - DB adapter.
+ * @returns {Promise<void>} - Result.
+ */
+async function expectTransactionWriteContract(db) {
+  const tableName = 'transaction-items';
+  await db.batchWrite({
+    tableName,
+    putRequests: [
+      {
+        keyName: 'pk',
+        sortKeyName: 'sk',
+        record: { pk: 'account', sk: 'state', status: 'open', count: 1 },
+      },
+      {
+        keyName: 'pk',
+        sortKeyName: 'sk',
+        record: { pk: 'guard', sk: 'state', status: 'ready' },
+      },
+      {
+        keyName: 'pk',
+        sortKeyName: 'sk',
+        record: { pk: 'obsolete', sk: 'state', status: 'old' },
+      },
+    ],
+  });
+
+  await db.transactionWrite({
+    tableName,
+    conditionChecks: [
+      {
+        keyName: 'pk',
+        keyValue: 'guard',
+        sortKeyName: 'sk',
+        sortKeyValue: 'state',
+        conditions: [fieldEquals('status', 'ready')],
+      },
+    ],
+    putRequests: [
+      {
+        keyName: 'pk',
+        sortKeyName: 'sk',
+        record: { pk: 'created', sk: 'state', status: 'new' },
+        conditions: [fieldCondition('NOT_EXISTS', 'pk')],
+      },
+    ],
+    updateRequests: [
+      {
+        keyName: 'pk',
+        keyValue: 'account',
+        sortKeyName: 'sk',
+        sortKeyValue: 'state',
+        conditions: [
+          fieldCondition('EXISTS', 'status'),
+          fieldEquals('status', 'open'),
+        ],
+        updates: [
+          { property: ['status'], propertyValue: 'closed' },
+          { property: ['count'], propertyValue: 2 },
+        ],
+      },
+    ],
+    deleteRequests: [
+      {
+        keyName: 'pk',
+        keyValue: 'obsolete',
+        sortKeyName: 'sk',
+        sortKeyValue: 'state',
+        conditions: [fieldCondition('EXISTS', 'pk')],
+      },
+    ],
+  });
+
+  await expect(
+    db.get({
+      tableName,
+      keyName: 'pk',
+      keyValue: 'account',
+      sortKeyName: 'sk',
+      sortKeyValue: 'state',
+    }),
+  ).resolves.toEqual({
+    pk: 'account',
+    sk: 'state',
+    status: 'closed',
+    count: 2,
+  });
+  await expect(
+    db.get({
+      tableName,
+      keyName: 'pk',
+      keyValue: 'created',
+      sortKeyName: 'sk',
+      sortKeyValue: 'state',
+    }),
+  ).resolves.toEqual({ pk: 'created', sk: 'state', status: 'new' });
+  await expect(
+    db.get({
+      tableName,
+      keyName: 'pk',
+      keyValue: 'obsolete',
+      sortKeyName: 'sk',
+      sortKeyValue: 'state',
+    }),
+  ).resolves.toBeUndefined();
+
+  await expect(
+    db.transactionWrite({
+      tableName,
+      putRequests: [
+        {
+          keyName: 'pk',
+          sortKeyName: 'sk',
+          record: { pk: 'must-not-exist', sk: 'state' },
+        },
+      ],
+      updateRequests: [
+        {
+          keyName: 'pk',
+          keyValue: 'account',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+          conditions: [fieldEquals('status', 'open')],
+          updates: [{ property: ['count'], propertyValue: 999 }],
+        },
+      ],
+      deleteRequests: [
+        {
+          keyName: 'pk',
+          keyValue: 'guard',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+        },
+      ],
+    }),
+  ).rejects.toThrow(/ConditionalCheckFailed/i);
+
+  await expect(
+    db.get({
+      tableName,
+      keyName: 'pk',
+      keyValue: 'must-not-exist',
+      sortKeyName: 'sk',
+      sortKeyValue: 'state',
+    }),
+  ).resolves.toBeUndefined();
+  await expect(
+    db.get({
+      tableName,
+      keyName: 'pk',
+      keyValue: 'account',
+      sortKeyName: 'sk',
+      sortKeyValue: 'state',
+    }),
+  ).resolves.toMatchObject({ count: 2 });
+  await expect(
+    db.get({
+      tableName,
+      keyName: 'pk',
+      keyValue: 'guard',
+      sortKeyName: 'sk',
+      sortKeyValue: 'state',
+    }),
+  ).resolves.toMatchObject({ status: 'ready' });
+
+  await expect(
+    db.transactionWrite({
+      tableName,
+      conditionChecks: [
+        {
+          keyName: 'pk',
+          keyValue: 'guard',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+          conditions: [fieldCondition('EXISTS', 'pk')],
+        },
+      ],
+      deleteRequests: [
+        {
+          keyName: 'pk',
+          keyValue: 'guard',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+        },
+      ],
+    }),
+  ).rejects.toThrow(/target an item more than once/i);
+
+  await expect(
+    db.transactionWrite({
+      tableName,
+      conditionChecks: Array.from({ length: 101 }, (_, index) => ({
+        keyName: 'pk',
+        keyValue: `limit-${index}`,
+        sortKeyName: 'sk',
+        sortKeyValue: 'state',
+        conditions: [fieldCondition('NOT_EXISTS', 'pk')],
+      })),
+    }),
+  ).rejects.toThrow(/between 1 and 100 items/i);
+
+  await db.transactionWrite({
+    tableName,
+    updateRequests: [
+      {
+        keyName: 'pk',
+        keyValue: 'upserted',
+        sortKeyName: 'sk',
+        sortKeyValue: 'state',
+        updates: [{ property: ['status'], propertyValue: 'created' }],
+      },
+    ],
+  });
+  await expect(
+    db.get({
+      tableName,
+      keyName: 'pk',
+      keyValue: 'upserted',
+      sortKeyName: 'sk',
+      sortKeyValue: 'state',
+    }),
+  ).resolves.toEqual({ pk: 'upserted', sk: 'state', status: 'created' });
+
+  const invalidUpdateRequests = [
+    {
+      updates: [{ property: ['pk'], propertyValue: 'changed' }],
+      message: /key field/i,
+    },
+    {
+      updates: [
+        { property: ['data'], propertyValue: {} },
+        { property: ['data', 'status'], propertyValue: 'changed' },
+      ],
+      message: /duplicate or overlapping paths/i,
+    },
+    {
+      updates: [
+        { property: ['status'], propertyValue: 'one' },
+        { property: ['status'], propertyValue: 'two' },
+      ],
+      message: /duplicate or overlapping paths/i,
+    },
+    {
+      updates: [{ property: [''], propertyValue: 'changed' }],
+      message: /nonempty string path/i,
+    },
+    {
+      updates: [{ property: ['status'], propertyValue: undefined }],
+      message: /must not be undefined/i,
+    },
+  ];
+  for (const invalid of invalidUpdateRequests) {
+    // eslint-disable-next-line no-await-in-loop
+    await expect(
+      db.transactionWrite({
+        tableName,
+        updateRequests: [
+          {
+            keyName: 'pk',
+            keyValue: 'account',
+            sortKeyName: 'sk',
+            sortKeyValue: 'state',
+            updates: invalid.updates,
+          },
+        ],
+      }),
+      // @ts-ignore - table-driven regex assertion.
+    ).rejects.toThrow(invalid.message);
+  }
+
+  await expect(
+    db.transactionWrite({
+      tableName,
+      updateRequests: [
+        {
+          keyName: 'pk',
+          keyValue: 'account',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+          updates: [{ property: ['missing', 'child'], propertyValue: 'value' }],
+        },
+      ],
+    }),
+  ).rejects.toThrow(/invalid update path/i);
+  await expect(
+    db.transactionWrite({
+      tableName,
+      updateRequests: [
+        {
+          keyName: 'pk',
+          keyValue: 'account',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+          updates: [{ property: ['status', 'child'], propertyValue: 'value' }],
+        },
+      ],
+    }),
+  ).rejects.toThrow(/invalid update path/i);
+
+  await expect(
+    db.transactionWrite({
+      tableName,
+      conditionChecks: [
+        {
+          keyName: 'pk',
+          keyValue: 'account',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+          conditions: [
+            fieldEquals('status', /** @type {any} */ ({ bad: true })),
+          ],
+        },
+      ],
+    }),
+  ).rejects.toThrow(/portable JSON primitive/i);
+  await expect(
+    db.transactionWrite({
+      tableName,
+      conditionChecks: [
+        {
+          keyName: 'pk',
+          keyValue: 'account',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+          conditions: [fieldCondition('BEGINS_WITH', 'missing', '')],
+        },
+      ],
+    }),
+  ).rejects.toThrow(/ConditionalCheckFailed/i);
+  await expect(
+    db.transactionWrite({
+      tableName,
+      conditionChecks: [
+        {
+          keyName: 'pk',
+          keyValue: 'account',
+          sortKeyName: 'sk',
+          sortKeyValue: 'state',
+          conditions: [
+            fieldCondition('EQUALS', 'count', /** @type {any} */ ('2')),
+          ],
+        },
+      ],
+    }),
+  ).rejects.toThrow(/ConditionalCheckFailed/i);
 }
 
 /**
@@ -300,12 +663,94 @@ function runLocalDBContract(adapter) {
         }),
       ).toBeUndefined();
     });
+
+    test('supports atomic conditional transactionWrite semantics', async () => {
+      tmpDir = makeTmpDir();
+      db = await adapter.create(tmpDir);
+      await expectTransactionWriteContract(db);
+    });
   });
 }
 
 runLocalDBContract({
   name: 'vanilla',
   create: createVanillaDB,
+});
+
+describe('dynamodb transactionWrite contract', () => {
+  test('uses an atomic conditional TransactWrite operation', async () => {
+    const { db, fakeDocClient } = await createMockedDynamoDB();
+    try {
+      await expectTransactionWriteContract(db);
+      expect(fakeDocClient.__calls).toEqual({
+        batchWrite: 1,
+        transactWrite: 7,
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  test('does not normalize systemic transaction cancellation as a condition race', async () => {
+    const { db, fakeDocClient } = await createMockedDynamoDB();
+    try {
+      const systemic = /** @type {any} */ (
+        new Error('transaction conflict and throttling')
+      );
+      systemic.name = 'TransactionCanceledException';
+      systemic.CancellationReasons = [
+        { Code: 'ConditionalCheckFailed' },
+        { Code: 'TransactionConflict' },
+      ];
+      fakeDocClient.__failNextTransaction(systemic);
+
+      await expect(
+        db.transactionWrite({
+          tableName: 'systemic-cancellation',
+          putRequests: [
+            {
+              keyName: 'pk',
+              record: { pk: 'one', status: 'pending' },
+            },
+          ],
+        }),
+      ).rejects.toBe(systemic);
+    } finally {
+      await db.close();
+    }
+  });
+
+  test('retries a transient DynamoDB transaction conflict', async () => {
+    const { db, fakeDocClient } = await createMockedDynamoDB();
+    try {
+      const conflict = /** @type {any} */ (
+        new Error('transient transaction conflict')
+      );
+      conflict.name = 'TransactionCanceledException';
+      conflict.CancellationReasons = [{ Code: 'TransactionConflict' }];
+      fakeDocClient.__failNextTransaction(conflict);
+
+      await db.transactionWrite({
+        tableName: 'transient-conflict',
+        putRequests: [
+          {
+            keyName: 'pk',
+            record: { pk: 'one', status: 'committed' },
+          },
+        ],
+      });
+      await expect(
+        db.get({
+          tableName: 'transient-conflict',
+          keyName: 'pk',
+          keyValue: 'one',
+        }),
+      ).resolves.toMatchObject({ status: 'committed' });
+      expect(fakeDocClient.__calls.transactWrite).toBe(2);
+    } finally {
+      await db.close();
+    }
+  });
 });
 
 runLocalDBContract({
@@ -328,6 +773,7 @@ describe('db adapter wiring', () => {
       get: jest.fn(async () => undefined),
       remove: jest.fn(async () => {}),
       batchWrite: jest.fn(async () => {}),
+      transactionWrite: jest.fn(async () => {}),
       close,
       options,
     }));

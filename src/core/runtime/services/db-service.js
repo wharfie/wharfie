@@ -88,7 +88,16 @@ export async function startDbService({
               ? // @ts-ignore
                 String(err.stack)
               : String(err);
-          callback(null, { ok: false, error: msg });
+          callback(null, {
+            ok: false,
+            error: msg,
+            ...(err && typeof err === 'object' && 'name' in err
+              ? { errorName: String(err.name) }
+              : {}),
+            ...(err && typeof err === 'object' && 'code' in err
+              ? { errorCode: String(err.code) }
+              : {}),
+          });
         }
       },
 

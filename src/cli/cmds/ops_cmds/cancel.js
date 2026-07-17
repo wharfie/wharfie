@@ -6,24 +6,32 @@ import { displayFailure, displaySuccess } from '../../output/basic.js';
 import { getAppResourceId } from '../../../core/runtime/app-runs.js';
 
 /**
- * Cancels operations for a given app resource or operation ID.
+ * Durably cancels nonterminal operations for an app resource or operation ID.
  * @param {import('../../../core/lib/db/tables/operations.js').OperationsTableClient} store - store.
  * @param {string} resource_id - The ID of the resource.
  * @param {string} [operation_id] - The specific operation ID to cancel.
  */
 const cancel = async (store, resource_id, operation_id) => {
   const records = await store.getRecords(resource_id, operation_id);
-  const operationsToRemove = records.operations;
+  let cancelled = 0;
+  let alreadyTerminal = 0;
 
-  const operationsToRemoveCount = operationsToRemove.length;
-  while (operationsToRemove.length > 0) {
-    const operationChunk = operationsToRemove.splice(0, 10);
-    await Promise.all(
-      operationChunk.map((operation) => store.deleteOperation(operation)),
-    );
+  for (const operation of records.operations) {
+    // Serialize cancellation requests so each result and conflict is visible.
+    // eslint-disable-next-line no-await-in-loop
+    const result = await store.cancelOperation(resource_id, operation.id, {
+      requestedBy: 'cli',
+    });
+    if (result.changed) {
+      cancelled += 1;
+    } else {
+      alreadyTerminal += 1;
+    }
   }
 
-  displaySuccess(`${operationsToRemoveCount} operations cancelled.`);
+  displaySuccess(
+    `${cancelled} operations cancelled; ${alreadyTerminal} already terminal.`,
+  );
 };
 
 const cancelCommand = new Command('cancel')

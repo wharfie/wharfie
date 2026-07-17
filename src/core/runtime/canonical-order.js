@@ -23,7 +23,7 @@ export function sortCanonicalJsonValue(value) {
   if (value === null || typeof value !== 'object') return value;
 
   /** @type {Record<string, any>} */
-  const sorted = {};
+  const sorted = Object.create(null);
   for (const key of Object.keys(value).sort(compareCanonicalStrings)) {
     sorted[key] = sortCanonicalJsonValue(value[key]);
   }

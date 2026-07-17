@@ -9,10 +9,9 @@ import { brotliCompressSync } from 'node:zlib';
 
 import { startDbService } from '../../../src/core/runtime/services/db-service.js';
 import { startQueueService } from '../../../src/core/runtime/services/queue-service.js';
-import { startLambdaService } from '../../../src/core/runtime/services/lambda-service.js';
 import { createGrpcRpcClient } from '../../../src/core/runtime/services/rpc-grpc.js';
 import createOperationsStore from '../../../src/core/lib/graph/operations-store.js';
-import { getSyntheticAppResourceId } from '../../../src/core/lib/graph/app-run.js';
+import createVanillaDB from '../../../src/core/lib/db/adapters/vanilla.js';
 
 const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
 
@@ -30,10 +29,436 @@ jest.unstable_mockModule(NODE_SEA_IMPORT, () => ({
   },
 }));
 
+const { startLambdaService } =
+  await import('../../../src/core/runtime/services/lambda-service.js');
+const {
+  createOperationFromActivity,
+  getAppResourceId,
+  getQueueOperationId,
+  runPersistedActivity,
+} = await import('../../../src/core/runtime/app-runs.js');
+
 describe('Lambda service queue poll loop (gRPC)', () => {
   beforeEach(() => {
     seaAssets.clear();
   });
+
+  it('refuses queue polling without durable operation state', async () => {
+    await expect(
+      startLambdaService({
+        execute: async () => undefined,
+        poll: /** @type {any} */ ({
+          queue: {},
+          queueUrls: ['queue://missing-control-state'],
+        }),
+      }),
+    ).rejects.toThrow(/requires operationsStore and appId/i);
+  });
+
+  it('derives stable queue operation IDs without composite-identity collisions', () => {
+    const identity = { queueUrl: 'queue://one', messageId: 'message-1' };
+
+    expect(getQueueOperationId(identity)).toBe(getQueueOperationId(identity));
+    expect(getQueueOperationId(identity)).not.toBe(
+      getQueueOperationId({
+        queueUrl: 'queue://two',
+        messageId: identity.messageId,
+      }),
+    );
+    expect(getQueueOperationId({ queueUrl: 'ab', messageId: 'c' })).not.toBe(
+      getQueueOperationId({ queueUrl: 'a', messageId: 'bc' }),
+    );
+    expect(
+      getQueueOperationId({
+        queueUrl: identity.queueUrl,
+        messageId: ` ${identity.messageId} `,
+      }),
+    ).not.toBe(getQueueOperationId(identity));
+  });
+
+  it('builds one canonical activity action and keeps receipts out of immutable trigger state', () => {
+    const operation = createOperationFromActivity({
+      appId: 'canonical-app',
+      activityName: 'process-message',
+      operationId: 'operation-1',
+      event: { value: 1 },
+      trigger: {
+        source: 'event',
+        queueUrl: 'queue://one',
+        messageId: 'message-1',
+        receiptHandle: 'attempt-only',
+      },
+    });
+
+    expect(operation.operation_config).toEqual({
+      source: 'app-manifest',
+      app_id: 'canonical-app',
+      activity_name: 'process-message',
+      trigger: {
+        source: 'event',
+        queueUrl: 'queue://one',
+        messageId: 'message-1',
+      },
+    });
+    expect(operation.getActions()).toEqual([
+      expect.objectContaining({
+        id: 'invoke',
+        type: 'INVOKE_FUNCTION',
+        function_name: 'process-message',
+        inputs: { value: 1 },
+      }),
+    ]);
+    expect(
+      createOperationFromActivity({
+        appId: 'canonical-app',
+        activityName: 'process-message',
+        operationId: '  opaque operation/id  ',
+      }).id,
+    ).toBe('  opaque operation/id  ');
+    expect(() =>
+      createOperationFromActivity({
+        appId: 'canonical-app',
+        activityName: 'process-message',
+        operationId: '',
+      }),
+    ).toThrow(/operationId must be a nonempty string/i);
+    expect(() =>
+      createOperationFromActivity({
+        appId: 'Canonical App',
+        activityName: 'process-message',
+      }),
+    ).toThrow(/canonical logical ID/i);
+    expect(() =>
+      createOperationFromActivity({
+        appId: 'canonical-app',
+        activityName: 'Process Message',
+      }),
+    ).toThrow(/canonical logical ID/i);
+  });
+
+  it('deduplicates a completed queue operation without executing it again', async () => {
+    const appId = 'dedupe-app';
+    const operationId = getQueueOperationId({
+      queueUrl: 'queue://dedupe',
+      messageId: 'message-1',
+    });
+    const duplicate = new Error('already exists');
+    duplicate.name = 'OperationAlreadyExistsError';
+    const existing = createOperationFromActivity({
+      appId,
+      activityName: 'work',
+      operationId,
+      event: { value: 1 },
+      trigger: {
+        source: 'event',
+        queueUrl: 'queue://dedupe',
+        messageId: 'message-1',
+      },
+    });
+    existing.status = 'COMPLETED';
+    const store = {
+      createOperation: jest.fn(async () => {
+        throw duplicate;
+      }),
+      getRecords: jest.fn(async () => ({
+        operations: [existing],
+        actions: existing.getActions(),
+      })),
+    };
+    const execute = jest.fn(async () => undefined);
+
+    await expect(
+      runPersistedActivity({
+        store: /** @type {any} */ (store),
+        appId,
+        activityName: 'work',
+        operationId,
+        event: { value: 1 },
+        context: {
+          trigger: { receiptHandle: 'attempt-scoped-receipt' },
+        },
+        trigger: {
+          source: 'event',
+          queueUrl: 'queue://dedupe',
+          messageId: 'message-1',
+        },
+        execute,
+      }),
+    ).resolves.toEqual({
+      resourceId: getAppResourceId(appId),
+      operationId,
+      status: 'COMPLETED',
+      deduplicated: true,
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('isolates immutable activity inputs from handler mutation before deduplication', async () => {
+    const tmp = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-activity-inputs-'),
+    );
+    try {
+      const store = createOperationsStore({
+        db: createVanillaDB({ path: tmp }),
+        tableName: 'activity-inputs',
+      });
+      const request = {
+        store,
+        appId: 'input-app',
+        activityName: 'work',
+        operationId: 'immutable-input',
+        event: { value: 1 },
+        trigger: { source: 'manual' },
+      };
+      const execute = jest.fn(
+        async (
+          /** @type {{activityName: string, event?: any, context: Record<string, any>}} */ {
+            event,
+          },
+        ) => {
+          event.value = 2;
+          return { observed: event.value };
+        },
+      );
+
+      await expect(
+        runPersistedActivity({ ...request, execute }),
+      ).resolves.toMatchObject({ status: 'COMPLETED', deduplicated: false });
+
+      const records = await store.getRecords(
+        getAppResourceId(request.appId),
+        request.operationId,
+      );
+      expect(records.operations[0].operation_inputs).toEqual({ value: 1 });
+      expect(records.actions[0].inputs).toEqual({ value: 1 });
+
+      const duplicateExecute = jest.fn(async () => undefined);
+      await expect(
+        runPersistedActivity({ ...request, execute: duplicateExecute }),
+      ).resolves.toMatchObject({ status: 'COMPLETED', deduplicated: true });
+      expect(duplicateExecute).not.toHaveBeenCalled();
+    } finally {
+      await fsp.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to claim a definition replaced after identity validation', async () => {
+    const tmp = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-activity-claim-race-'),
+    );
+    try {
+      const store = createOperationsStore({
+        db: createVanillaDB({ path: tmp }),
+        tableName: 'activity-claim-race',
+      });
+      const request = {
+        appId: 'claim-race-app',
+        activityName: 'work',
+        operationId: 'stable-operation',
+        event: { value: 1 },
+        trigger: { source: 'manual' },
+      };
+      const original = createOperationFromActivity(request);
+      await store.createOperation(original);
+
+      let exactReads = 0;
+      const racingStore = {
+        ...store,
+        getRecords: async (
+          /** @type {string} */ resourceId,
+          /** @type {string | undefined} */ operationId,
+        ) => {
+          exactReads += 1;
+          if (exactReads === 2) {
+            const replacement = createOperationFromActivity({
+              ...request,
+              event: { value: 2 },
+            });
+            await store.replaceOperation(replacement, original.version);
+          }
+          return await store.getRecords(resourceId, operationId);
+        },
+      };
+      const execute = jest.fn(async () => ({ shouldNotRun: true }));
+
+      await expect(
+        runPersistedActivity({
+          store: /** @type {any} */ (racingStore),
+          ...request,
+          execute,
+        }),
+      ).rejects.toThrow(/snapshot changed before claim/i);
+      expect(execute).not.toHaveBeenCalled();
+
+      const records = await store.getRecords(
+        getAppResourceId(request.appId),
+        request.operationId,
+      );
+      expect(records.operations[0]).toMatchObject({
+        status: 'PENDING',
+        generation: 2,
+        version: 2,
+        operation_inputs: { value: 2 },
+      });
+    } finally {
+      await fsp.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves provider queue identities and defaults an omitted event', async () => {
+    const tmp = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-queue-identity-'),
+    );
+    const queueUrl = 'queue://opaque-identities';
+    const messageId = ' provider-message ';
+    const receiptHandle = ' provider-receipt ';
+    let delivered = false;
+    const queue = /** @type {any} */ ({
+      receiveMessage: jest.fn(async () => {
+        if (delivered) return { Messages: [] };
+        delivered = true;
+        return {
+          Messages: [
+            {
+              MessageId: messageId,
+              ReceiptHandle: receiptHandle,
+              Body: JSON.stringify({ activity: 'work' }),
+            },
+          ],
+        };
+      }),
+      deleteMessage: jest.fn(async () => ({})),
+    });
+    const store = createOperationsStore({
+      db: createVanillaDB({ path: tmp }),
+      tableName: 'queue-identities',
+    });
+    const execute = jest.fn(async () => ({ ok: true }));
+    const lambdaSvc = await startLambdaService({
+      execute,
+      poll: {
+        queue,
+        queueUrls: [queueUrl],
+        waitTimeSeconds: 0,
+        maxNumberOfMessages: 1,
+        operationsStore: store,
+        appId: 'queue-identity-app',
+      },
+    });
+
+    try {
+      await waitFor(async () => queue.deleteMessage.mock.calls.length > 0);
+      expect(queue.deleteMessage).toHaveBeenCalledWith({
+        QueueUrl: queueUrl,
+        ReceiptHandle: receiptHandle,
+      });
+      expect(execute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          functionName: 'work',
+          activity: 'work',
+          event: {},
+          context: expect.objectContaining({
+            trigger: {
+              source: 'event',
+              queueUrl,
+              messageId,
+              receiptHandle,
+            },
+          }),
+        }),
+      );
+
+      const operationId = getQueueOperationId({ queueUrl, messageId });
+      const records = await store.getRecords(
+        getAppResourceId('queue-identity-app'),
+        operationId,
+      );
+      expect(records.operations[0]).toEqual(
+        expect.objectContaining({
+          id: operationId,
+          operation_inputs: {},
+          operation_config: expect.objectContaining({
+            trigger: {
+              source: 'event',
+              queueUrl,
+              messageId,
+            },
+          }),
+        }),
+      );
+    } finally {
+      await lambdaSvc.close();
+      await fsp.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['activity', { activityName: 'other-work' }],
+    ['event', { event: { value: 2 } }],
+    [
+      'prototype-named event property',
+      { event: JSON.parse('{"value":1,"__proto__":{"marker":2}}') },
+    ],
+    [
+      'trigger',
+      {
+        trigger: {
+          source: 'event',
+          queueUrl: 'queue://identity',
+          messageId: 'message-2',
+        },
+      },
+    ],
+  ])(
+    'rejects a completed operation ID reused for different %s identity',
+    async (_field, changed) => {
+      const appId = 'identity-app';
+      const operationId = 'stable-operation-id';
+      const trigger = {
+        source: 'event',
+        queueUrl: 'queue://identity',
+        messageId: 'message-1',
+      };
+      const existing = createOperationFromActivity({
+        appId,
+        activityName: 'work',
+        operationId,
+        event: { value: 1 },
+        trigger,
+      });
+      existing.status = 'COMPLETED';
+      const duplicate = new Error('already exists');
+      duplicate.name = 'OperationAlreadyExistsError';
+      const store = {
+        createOperation: jest.fn(async () => {
+          throw duplicate;
+        }),
+        getRecords: jest.fn(async () => ({
+          operations: [existing],
+          actions: existing.getActions(),
+        })),
+      };
+      const execute = jest.fn(async () => undefined);
+
+      await expect(
+        runPersistedActivity({
+          store: /** @type {any} */ (store),
+          appId,
+          activityName: 'work',
+          operationId,
+          event: { value: 1 },
+          trigger,
+          ...changed,
+          execute,
+        }),
+      ).rejects.toMatchObject({
+        name: 'OperationIdentityConflictError',
+        resourceId: getAppResourceId(appId),
+        operationId,
+      });
+      expect(execute).not.toHaveBeenCalled();
+    },
+  );
 
   it('polls queue messages, persists an event run, and acks on success', async () => {
     const tmp = await fsp.mkdtemp(
@@ -88,7 +513,7 @@ describe('Lambda service queue poll loop (gRPC)', () => {
       host: '127.0.0.1',
       port: 0,
       execute: async ({ functionName, event, context }) => {
-        await Function.run(functionName, event, context ?? {}, {
+        return await Function.run(functionName, event, context ?? {}, {
           resources: {
             db,
             queue,
@@ -116,6 +541,10 @@ describe('Lambda service queue poll loop (gRPC)', () => {
         QueueUrl: 'lambda-invoke',
         MessageBody: JSON.stringify(payload),
       });
+      const operationId = getQueueOperationId({
+        queueUrl: 'lambda-invoke',
+        messageId: sendResult.MessageId,
+      });
 
       // Wait for the function to write to DB via gRPC->worker RPC chain.
       const record = await waitFor(async () => {
@@ -133,15 +562,15 @@ describe('Lambda service queue poll loop (gRPC)', () => {
         message: 'hello world',
       });
 
-      const resourceId = getSyntheticAppResourceId('lambda-poll-app');
+      const resourceId = getAppResourceId('lambda-poll-app');
       const persisted = /** @type {{ operation: any, actions: any[] }} */ (
         await waitFor(async () => {
           const records = await operationsStore.getRecords(
             resourceId,
-            sendResult.MessageId,
+            operationId,
           );
           const operation = records.operations.find(
-            (candidate) => candidate.id === sendResult.MessageId,
+            (candidate) => candidate.id === operationId,
           );
           if (!operation || operation.status !== 'COMPLETED') {
             return null;
@@ -151,31 +580,61 @@ describe('Lambda service queue poll loop (gRPC)', () => {
       );
 
       expect(persisted.operation.resource_id).toBe(resourceId);
-      expect(persisted.operation.operation_config).toEqual(
+      expect(persisted.operation.operation_config).toEqual({
+        source: 'app-manifest',
+        app_id: 'lambda-poll-app',
+        activity_name: fnName,
+        trigger: {
+          source: 'event',
+          queueUrl: 'lambda-invoke',
+          messageId: sendResult.MessageId,
+        },
+      });
+      expect(persisted.operation.operation_inputs).toEqual({ who: 'world' });
+      expect(persisted.actions).toHaveLength(1);
+      expect(persisted.actions[0]).toEqual(
         expect.objectContaining({
-          app: 'lambda-poll-app',
-          activity: fnName,
-          trigger: expect.objectContaining({
+          id: 'invoke',
+          operation_id: operationId,
+          resource_id: resourceId,
+          function_name: fnName,
+          inputs: { who: 'world' },
+          attempt_count: 1,
+          status: 'COMPLETED',
+        }),
+      );
+
+      const duplicateExecute = jest.fn(async () => undefined);
+      await expect(
+        runPersistedActivity({
+          store: operationsStore,
+          appId: 'lambda-poll-app',
+          activityName: fnName,
+          operationId,
+          event: payload.event,
+          context: {
+            ...payload.context,
+            trigger: {
+              source: 'event',
+              queueUrl: 'lambda-invoke',
+              messageId: sendResult.MessageId,
+              receiptHandle: 'redelivery-receipt',
+            },
+          },
+          trigger: {
             source: 'event',
             queueUrl: 'lambda-invoke',
             messageId: sendResult.MessageId,
-            receiptHandle: expect.any(String),
-          }),
+          },
+          execute: duplicateExecute,
         }),
-      );
-      expect(persisted.operation.operation_inputs).toEqual(payload);
-      expect(persisted.actions).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            operation_id: sendResult.MessageId,
-            resource_id: resourceId,
-            function_name: fnName,
-            inputs: { who: 'world' },
-            attempt_count: 1,
-            status: 'COMPLETED',
-          }),
-        ]),
-      );
+      ).resolves.toEqual({
+        resourceId,
+        operationId,
+        status: 'COMPLETED',
+        deduplicated: true,
+      });
+      expect(duplicateExecute).not.toHaveBeenCalled();
 
       // Queue message should be acked (deleted)
       const q = await queue.receiveMessage({
@@ -249,16 +708,20 @@ describe('Lambda service queue poll loop (gRPC)', () => {
         QueueUrl: 'lambda-invoke',
         MessageBody: JSON.stringify(payload),
       });
+      const operationId = getQueueOperationId({
+        queueUrl: 'lambda-invoke',
+        messageId: sendResult.MessageId,
+      });
 
-      const resourceId = getSyntheticAppResourceId('lambda-poll-app');
+      const resourceId = getAppResourceId('lambda-poll-app');
       const persisted = /** @type {{ operation: any, actions: any[] }} */ (
         await waitFor(async () => {
           const records = await operationsStore.getRecords(
             resourceId,
-            sendResult.MessageId,
+            operationId,
           );
           const operation = records.operations.find(
-            (candidate) => candidate.id === sendResult.MessageId,
+            (candidate) => candidate.id === operationId,
           );
           if (!operation || operation.status !== 'FAILED') {
             return null;
@@ -267,31 +730,30 @@ describe('Lambda service queue poll loop (gRPC)', () => {
         })
       );
 
-      expect(persisted.operation.operation_config).toEqual(
+      expect(persisted.operation.operation_config).toEqual({
+        source: 'app-manifest',
+        app_id: 'lambda-poll-app',
+        activity_name: 'failing-activity',
+        trigger: {
+          source: 'event',
+          queueUrl: 'lambda-invoke',
+          messageId: sendResult.MessageId,
+        },
+      });
+      expect(persisted.operation.operation_inputs).toEqual({ who: 'world' });
+      expect(persisted.actions).toHaveLength(1);
+      expect(persisted.actions[0]).toEqual(
         expect.objectContaining({
-          app: 'lambda-poll-app',
-          activity: 'failing-activity',
-          trigger: expect.objectContaining({
-            source: 'event',
-            queueUrl: 'lambda-invoke',
-            messageId: sendResult.MessageId,
+          id: 'invoke',
+          operation_id: operationId,
+          resource_id: resourceId,
+          function_name: 'failing-activity',
+          attempt_count: 1,
+          status: 'FAILED',
+          error: expect.objectContaining({
+            message: 'boom',
           }),
         }),
-      );
-      expect(persisted.operation.operation_inputs).toEqual(payload);
-      expect(persisted.actions).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            operation_id: sendResult.MessageId,
-            resource_id: resourceId,
-            function_name: 'failing-activity',
-            attempt_count: 1,
-            status: 'FAILED',
-            error: expect.objectContaining({
-              message: 'boom',
-            }),
-          }),
-        ]),
       );
 
       await lambdaSvc.close();
@@ -310,6 +772,55 @@ describe('Lambda service queue poll loop (gRPC)', () => {
           Body: JSON.stringify(payload),
         }),
       );
+
+      const retryExecute = jest.fn(async () => ({ recovered: true }));
+      await expect(
+        runPersistedActivity({
+          store: operationsStore,
+          appId: 'lambda-poll-app',
+          activityName: 'failing-activity',
+          operationId,
+          event: payload.event,
+          context: {
+            ...payload.context,
+            trigger: {
+              source: 'event',
+              queueUrl: 'lambda-invoke',
+              messageId: sendResult.MessageId,
+              receiptHandle: q.Messages[0].ReceiptHandle,
+            },
+          },
+          trigger: {
+            source: 'event',
+            queueUrl: 'lambda-invoke',
+            messageId: sendResult.MessageId,
+          },
+          execute: retryExecute,
+        }),
+      ).resolves.toEqual({
+        resourceId,
+        operationId,
+        status: 'COMPLETED',
+        deduplicated: false,
+      });
+      expect(retryExecute).toHaveBeenCalledTimes(1);
+
+      const retriedRecords = await operationsStore.getRecords(
+        resourceId,
+        operationId,
+      );
+      expect(retriedRecords.operations[0]).toEqual(
+        expect.objectContaining({ status: 'COMPLETED', generation: 2 }),
+      );
+      expect(retriedRecords.actions).toEqual([
+        expect.objectContaining({
+          id: 'invoke',
+          status: 'COMPLETED',
+          attempt_count: 2,
+          outputs: { recovered: true },
+          operation_generation: 2,
+        }),
+      ]);
     } finally {
       try {
         await lambdaSvc.close();

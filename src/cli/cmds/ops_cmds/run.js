@@ -97,7 +97,7 @@ const runCommand = new Command('run')
           `Running activity: ${resourceId}#${operation.id} (${activityName})`,
         );
 
-        await store.putOperation(operation);
+        await store.createOperation(operation);
 
         /**
          * @param {import('../../../core/lib/graph/action.js').default} action - action.

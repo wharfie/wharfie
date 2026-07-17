@@ -13,7 +13,7 @@ import { Status as OperationStatus } from './operation.js';
  * (createOperationsTable / createOperationsStore).
  * @typedef {Object} OperationRunnerStore
  * @property {(resource_id: string, operation_id?: string) => Promise<{ operations: OperationInstance[]; actions: ActionInstance[] }>} getRecords - Load operation and action records.
- * @property {(action: ActionInstance) => Promise<void>} putAction - Persist a full action snapshot.
+ * @property {(action: ActionInstance, expected_status?: string) => Promise<boolean>} commitAction - Conditionally persist a full action snapshot.
  * @property {(action: ActionInstance, new_status: string) => Promise<boolean>} updateActionStatus - Optimistically transition an action status.
  * @property {(operation: OperationInstance, new_status: import('./operation.js').WharfieOperationStatusEnum) => Promise<boolean>} [updateOperationStatus] - Optimistically transition an operation status.
  * @property {(operation: OperationInstance, action_identifier: string) => Promise<boolean>} [checkActionPrerequisites] - Check whether prerequisites have completed.
@@ -24,6 +24,8 @@ import { Status as OperationStatus } from './operation.js';
  * @property {OperationRunnerStore} store - Operations store/table client.
  * @property {string} resourceId - Resource id.
  * @property {string} operationId - Operation id.
+ * @property {number} [expectedGeneration] - Exact graph generation authorized for the initial claim.
+ * @property {number} [expectedVersion] - Exact operation version authorized for the initial claim.
  * @property {(action: ActionInstance) => (unknown | Promise<unknown>)} executeAction - User-provided action executor. Return `true`/`false` for the legacy shorthand or `{ ok, outputs, error }` for structured results.
  */
 
@@ -99,19 +101,21 @@ function getMaxAttempts(action) {
  * - Persist operation-level RUNNING / COMPLETED / FAILED / BLOCKED transitions
  * - Repeat until no runnable actions remain
  * @param {RunOperationParams} params - params.
- * @returns {Promise<{ status: 'COMPLETED' | 'FAILED' | 'BLOCKED'; executedActionIds: string[]; failedActionIds: string[]; blockedActionIds: string[]; finalStatusByActionId: Record<string, string> }>} - Result.
+ * @returns {Promise<{ status: 'COMPLETED' | 'FAILED' | 'BLOCKED' | 'CANCELLED'; executedActionIds: string[]; failedActionIds: string[]; blockedActionIds: string[]; finalStatusByActionId: Record<string, string> }>} - Result.
  */
 export async function runOperation({
   store,
   resourceId,
   operationId,
+  expectedGeneration,
+  expectedVersion,
   executeAction,
 }) {
   if (!store) throw new Error('runOperation requires store');
   if (!resourceId) throw new Error('runOperation requires resourceId');
   if (!operationId) throw new Error('runOperation requires operationId');
-  if (typeof store.putAction !== 'function') {
-    throw new Error('runOperation requires store.putAction(action)');
+  if (typeof store.commitAction !== 'function') {
+    throw new Error('runOperation requires store.commitAction(action)');
   }
   if (typeof executeAction !== 'function') {
     throw new Error('runOperation requires executeAction(action)');
@@ -123,25 +127,24 @@ export async function runOperation({
   /** @type {Record<string, string>} */
   const finalStatusByActionId = {};
 
-  /** @type {'COMPLETED' | 'FAILED' | 'BLOCKED'} */
+  /** @type {'COMPLETED' | 'FAILED' | 'BLOCKED' | 'CANCELLED'} */
   let status = 'COMPLETED';
 
   /**
    * @param {OperationInstance} operation - operation.
    * @param {import('./operation.js').WharfieOperationStatusEnum} nextStatus - nextStatus.
-   * @returns {Promise<void>} - Result.
+   * @returns {Promise<boolean>} - Whether this process won the transition.
    */
   const persistOperationStatus = async (operation, nextStatus) => {
-    if (operation.status === nextStatus) return;
+    if (operation.status === nextStatus) return true;
 
     if (typeof store.updateOperationStatus === 'function') {
-      // Best-effort optimistic update. The stored operation record is the source
-      // of truth; the in-memory object is only used to issue the transition.
-      await store.updateOperationStatus(operation, nextStatus);
+      return await store.updateOperationStatus(operation, nextStatus);
     }
 
     operation.status = nextStatus;
     operation.last_updated_at = Date.now();
+    return true;
   };
 
   /**
@@ -175,7 +178,56 @@ export async function runOperation({
     throw new Error(`Operation not found: ${resourceId}#${operationId}`);
   }
 
-  await persistOperationStatus(initialOperation, OperationStatus.RUNNING);
+  if (
+    (expectedGeneration !== undefined &&
+      initialOperation.generation !== expectedGeneration) ||
+    (expectedVersion !== undefined &&
+      initialOperation.version !== expectedVersion)
+  ) {
+    throw new Error(
+      `Operation snapshot changed before claim: ${resourceId}#${operationId}`,
+    );
+  }
+
+  if (initialOperation.status === OperationStatus.COMPLETED) {
+    const finalStatusByActionId = Object.fromEntries(
+      initialRecords.actions.map((action) => [action.id, action.status]),
+    );
+    return {
+      status: 'COMPLETED',
+      executedActionIds,
+      failedActionIds: [],
+      blockedActionIds: [],
+      finalStatusByActionId,
+    };
+  }
+  if (initialOperation.status === OperationStatus.CANCELLED) {
+    const finalStatusByActionId = Object.fromEntries(
+      initialRecords.actions.map((action) => [action.id, action.status]),
+    );
+    return {
+      status: 'CANCELLED',
+      executedActionIds,
+      failedActionIds: [],
+      blockedActionIds: [],
+      finalStatusByActionId,
+    };
+  }
+  if (initialOperation.status !== OperationStatus.PENDING) {
+    throw new Error(
+      `Operation ${resourceId}#${operationId} cannot be claimed from ${initialOperation.status}`,
+    );
+  }
+
+  const claimedOperation = await persistOperationStatus(
+    initialOperation,
+    OperationStatus.RUNNING,
+  );
+  if (!claimedOperation) {
+    throw new Error(`Operation claim lost: ${resourceId}#${operationId}`);
+  }
+
+  let cancellationObserved = false;
 
   // Run until no runnable PENDING actions remain.
   // Each loop reloads from the store to ensure DB-backed status is respected.
@@ -191,6 +243,16 @@ export async function runOperation({
 
     if (!operation) {
       throw new Error(`Operation not found: ${resourceId}#${operationId}`);
+    }
+    if (operation.status === OperationStatus.CANCELLED) {
+      status = 'CANCELLED';
+      cancellationObserved = true;
+      break;
+    }
+    if (operation.status !== OperationStatus.RUNNING) {
+      throw new Error(
+        `Operation ownership lost: ${resourceId}#${operationId} is ${operation.status}`,
+      );
     }
 
     const pending = actions.filter(
@@ -256,13 +318,29 @@ export async function runOperation({
         : (execution.error ?? { message: 'Action execution failed.' });
 
       // eslint-disable-next-line no-await-in-loop
-      await store.putAction(action);
+      const committed = await store.commitAction(action, ActionStatus.RUNNING);
+      if (!committed) {
+        const latest = await store.getRecords(resourceId, operationId);
+        const latestOperation = latest.operations.find(
+          (candidate) => candidate.id === operationId,
+        );
+        if (latestOperation?.status === OperationStatus.CANCELLED) {
+          status = 'CANCELLED';
+          cancellationObserved = true;
+          break;
+        }
+        throw new Error(
+          `Action commit lost: ${resourceId}#${operationId}#${action.id}`,
+        );
+      }
 
       if (!executedActionIds.includes(action.id)) {
         executedActionIds.push(action.id);
       }
       finalStatusByActionId[action.id] = terminal;
     }
+
+    if (cancellationObserved) break;
   }
 
   const finalRecords = await store.getRecords(resourceId, operationId);
@@ -288,16 +366,36 @@ export async function runOperation({
     )
     .map((action) => action.id);
 
-  if (failedActionIds.length > 0) status = 'FAILED';
+  if (finalOperation.status === OperationStatus.CANCELLED) {
+    status = 'CANCELLED';
+  } else if (failedActionIds.length > 0) status = 'FAILED';
   else if (blockedActionIds.length > 0) status = 'BLOCKED';
 
-  const terminalOperationStatus =
-    status === 'FAILED'
-      ? OperationStatus.FAILED
-      : status === 'BLOCKED'
-        ? OperationStatus.BLOCKED
-        : OperationStatus.COMPLETED;
-  await persistOperationStatus(finalOperation, terminalOperationStatus);
+  if (status !== 'CANCELLED') {
+    const terminalOperationStatus =
+      status === 'FAILED'
+        ? OperationStatus.FAILED
+        : status === 'BLOCKED'
+          ? OperationStatus.BLOCKED
+          : OperationStatus.COMPLETED;
+    const committed = await persistOperationStatus(
+      finalOperation,
+      terminalOperationStatus,
+    );
+    if (!committed) {
+      const latest = await store.getRecords(resourceId, operationId);
+      const latestOperation = latest.operations.find(
+        (candidate) => candidate.id === operationId,
+      );
+      if (latestOperation?.status === OperationStatus.CANCELLED) {
+        status = 'CANCELLED';
+      } else {
+        throw new Error(
+          `Operation terminal commit lost: ${resourceId}#${operationId}`,
+        );
+      }
+    }
+  }
 
   return {
     status,

@@ -7,8 +7,15 @@ import {
 } from '@aws-sdk/client-dynamodb';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import BaseAWS from '../../aws/base.js';
-import { CONDITION_TYPE } from '../base.js';
+import {
+  CONDITION_TYPE,
+  transactionRequestKey,
+  transactionRequestUpdates,
+  validateTransactionWrite,
+} from '../base.js';
 import { assertTightQuery } from '../utils.js';
+
+const MAX_TRANSACTION_CONFLICT_ATTEMPTS = 5;
 
 /**
  * Factory options for creating a DynamoDB wrapper client.
@@ -55,6 +62,17 @@ export default function createDynamoDB(
   }
 
   /**
+   * Apply bounded millisecond jitter before retrying an in-flight transaction.
+   * @param {number} attempt 0-based attempt number
+   * @returns {Promise<void>} - Result.
+   */
+  async function sleepTransactionConflictBackoff(attempt) {
+    const maxMilliseconds = Math.min(250, 25 * Math.pow(2, attempt));
+    const milliseconds = 1 + Math.floor(Math.random() * maxMilliseconds);
+    await new Promise((resolve) => setTimeout(resolve, milliseconds));
+  }
+
+  /**
    * Build a DynamoDB Key object.
    *
    * Guarantees:
@@ -82,6 +100,50 @@ export default function createDynamoDB(
     }
 
     return Key;
+  }
+
+  /**
+   * Compile portable top-level write conditions for a DynamoDB expression.
+   * @param {import('../base.js').KeyCondition[]} [conditions] - conditions.
+   * @param {string} [tokenPrefix] - Token namespace.
+   * @returns {{ ConditionExpression?: string, ExpressionAttributeNames?: Record<string, string>, ExpressionAttributeValues?: Record<string, any> }} - Expression fields.
+   */
+  function compileWriteConditions(conditions = [], tokenPrefix = 'c') {
+    if (conditions.length === 0) return {};
+
+    /** @type {Record<string, string>} */
+    const ExpressionAttributeNames = {};
+    /** @type {Record<string, any>} */
+    const ExpressionAttributeValues = {};
+    const clauses = conditions.map((condition, index) => {
+      const nameToken = `#${tokenPrefix}n${index}`;
+      const valueToken = `:${tokenPrefix}v${index}`;
+      ExpressionAttributeNames[nameToken] = condition.propertyName;
+
+      if (condition.conditionType === CONDITION_TYPE.EXISTS) {
+        return `attribute_exists(${nameToken})`;
+      }
+      if (condition.conditionType === CONDITION_TYPE.NOT_EXISTS) {
+        return `attribute_not_exists(${nameToken})`;
+      }
+
+      ExpressionAttributeValues[valueToken] = condition.propertyValue;
+      if (condition.conditionType === CONDITION_TYPE.BEGINS_WITH) {
+        return `begins_with(${nameToken}, ${valueToken})`;
+      }
+      if (condition.conditionType === CONDITION_TYPE.EQUALS) {
+        return `${nameToken} = ${valueToken}`;
+      }
+      throw new Error(`invalid condition type: ${condition.conditionType}`);
+    });
+
+    return {
+      ConditionExpression: clauses.join(' AND '),
+      ExpressionAttributeNames,
+      ...(Object.keys(ExpressionAttributeValues).length > 0
+        ? { ExpressionAttributeValues }
+        : {}),
+    };
   }
 
   /**
@@ -306,12 +368,20 @@ export default function createDynamoDB(
         .map((condition, i) => {
           const nameToken = nameTokenFor(condition.propertyName);
           const valueToken = `:c${i}`;
-          ExpressionAttributeValues[valueToken] = condition.propertyValue;
+
+          if (condition.conditionType === CONDITION_TYPE.EXISTS) {
+            return `attribute_exists(${nameToken})`;
+          }
+          if (condition.conditionType === CONDITION_TYPE.NOT_EXISTS) {
+            return `attribute_not_exists(${nameToken})`;
+          }
 
           if (condition.conditionType === CONDITION_TYPE.BEGINS_WITH) {
+            ExpressionAttributeValues[valueToken] = condition.propertyValue;
             return `begins_with(${nameToken}, ${valueToken})`;
           }
           if (condition.conditionType === CONDITION_TYPE.EQUALS) {
+            ExpressionAttributeValues[valueToken] = condition.propertyValue;
             return `${nameToken} = ${valueToken}`;
           }
           throw new Error(`invalid condition type: ${condition.conditionType}`);
@@ -504,6 +574,144 @@ export default function createDynamoDB(
     }
   }
 
+  /**
+   * Atomically condition-check and mutate distinct items in one table using
+   * DynamoDB TransactWriteItems.
+   * @param {import('../base.js').TransactionWriteParams} params - params.
+   * @returns {import('../base.js').TransactionWriteReturn} - Result.
+   */
+  async function transactionWrite(params) {
+    const requests = validateTransactionWrite(params);
+    /** @type {any[]} */
+    const TransactItems = [];
+
+    for (const [index, request] of requests.conditionChecks.entries()) {
+      TransactItems.push({
+        ConditionCheck: {
+          TableName: params.tableName,
+          Key: buildKey(transactionRequestKey(request, '', false)),
+          ...compileWriteConditions(request.conditions, `cc${index}`),
+        },
+      });
+    }
+
+    for (const [index, request] of requests.putRequests.entries()) {
+      TransactItems.push({
+        Put: {
+          TableName: params.tableName,
+          Item: request.record,
+          ...compileWriteConditions(request.conditions, `p${index}`),
+        },
+      });
+    }
+
+    for (const [index, request] of requests.updateRequests.entries()) {
+      const updates = transactionRequestUpdates(
+        request,
+        `updateRequests[${index}]`,
+      );
+      /** @type {Record<string, string>} */
+      const updateNames = {};
+      /** @type {Record<string, any>} */
+      const updateValues = {};
+      let nameIndex = 0;
+      const nameTokens = new Map();
+      const nameTokenFor = (/** @type {string} */ segment) => {
+        if (nameTokens.has(segment)) return nameTokens.get(segment);
+        const token = `#u${index}n${nameIndex++}`;
+        nameTokens.set(segment, token);
+        updateNames[token] = segment;
+        return token;
+      };
+      const clauses = updates.map((definition, updateIndex) => {
+        const path = definition.property.map(nameTokenFor).join('.');
+        const valueToken = `:u${index}v${updateIndex}`;
+        updateValues[valueToken] = definition.propertyValue;
+        return `${path} = ${valueToken}`;
+      });
+      const condition = compileWriteConditions(
+        request.conditions,
+        `u${index}c`,
+      );
+
+      TransactItems.push({
+        Update: {
+          TableName: params.tableName,
+          Key: buildKey(transactionRequestKey(request, '', false)),
+          UpdateExpression: `SET ${clauses.join(', ')}`,
+          ...(condition.ConditionExpression
+            ? { ConditionExpression: condition.ConditionExpression }
+            : {}),
+          ExpressionAttributeNames: {
+            ...updateNames,
+            ...(condition.ExpressionAttributeNames || {}),
+          },
+          ExpressionAttributeValues: {
+            ...updateValues,
+            ...(condition.ExpressionAttributeValues || {}),
+          },
+        },
+      });
+    }
+
+    for (const [index, request] of requests.deleteRequests.entries()) {
+      TransactItems.push({
+        Delete: {
+          TableName: params.tableName,
+          Key: buildKey(transactionRequestKey(request, '', false)),
+          ...compileWriteConditions(request.conditions, `d${index}`),
+        },
+      });
+    }
+
+    for (
+      let attempt = 0;
+      attempt < MAX_TRANSACTION_CONFLICT_ATTEMPTS;
+      attempt += 1
+    ) {
+      try {
+        await docClient.transactWrite({ TransactItems });
+        return;
+      } catch (error) {
+        const cancellationReasons =
+          error && typeof error === 'object' && 'CancellationReasons' in error
+            ? /** @type {{ CancellationReasons?: Array<{Code?: string}> }} */ (
+                error
+              ).CancellationReasons
+            : undefined;
+        const reasonCodes = (cancellationReasons || [])
+          .map((reason) => reason.Code)
+          .filter((code) => code && code !== 'None');
+        const onlyTransactionConflicts =
+          reasonCodes.length > 0 &&
+          reasonCodes.every((code) => code === 'TransactionConflict');
+        if (
+          error instanceof Error &&
+          error.name === 'TransactionCanceledException' &&
+          onlyTransactionConflicts &&
+          attempt + 1 < MAX_TRANSACTION_CONFLICT_ATTEMPTS
+        ) {
+          // eslint-disable-next-line no-await-in-loop
+          await sleepTransactionConflictBackoff(attempt);
+          continue;
+        }
+        if (
+          error instanceof Error &&
+          error.name === 'TransactionCanceledException' &&
+          reasonCodes.length > 0 &&
+          reasonCodes.every((code) => code === 'ConditionalCheckFailed')
+        ) {
+          const conditionalError = new Error(error.message);
+          conditionalError.name = 'ConditionalCheckFailedException';
+          throw conditionalError;
+        }
+        throw error;
+      }
+    }
+
+    throw new Error('DynamoDB transaction conflict retry limit exceeded');
+  }
+
   return {
     query,
     put,
@@ -511,6 +719,7 @@ export default function createDynamoDB(
     get,
     remove,
     batchWrite,
+    transactionWrite,
     /**
      * Close underlying resources (best-effort).
      * DynamoDB v3 clients keep sockets; destroy() closes them.

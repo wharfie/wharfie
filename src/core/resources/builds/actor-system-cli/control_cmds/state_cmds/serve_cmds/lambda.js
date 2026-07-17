@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import Function from '../../../../function.js';
 import makeOperationsStore from '../../../../../../lib/graph/operations-store.js';
+import { resolveOperationsTableName } from '../../../../../../lib/config/db.js';
 import { createActorSystemResources } from '../../../../../../runtime/resources.js';
 import { createGrpcRpcClient } from '../../../../../../runtime/services/rpc-grpc.js';
 import { startLambdaService } from '../../../../../../runtime/services/lambda-service.js';
@@ -108,19 +109,33 @@ const lambdaCmd = new Command('lambda')
 
     const objectStorage = local.objectStorage;
     const pollQueueUrls = bootstrap.pollQueueUrls;
-    const operationsTableName =
-      typeof process.env.OPERATIONS_TABLE === 'string' &&
-      process.env.OPERATIONS_TABLE.trim()
-        ? process.env.OPERATIONS_TABLE.trim()
-        : undefined;
+    const operationsTableName = resolveOperationsTableName();
     const appId =
       typeof bootstrap.manifest?.app?.id === 'string'
         ? bootstrap.manifest.app.id
         : undefined;
-    const operationsStore =
-      db && operationsTableName
-        ? makeOperationsStore({ db, tableName: operationsTableName })
-        : undefined;
+    const pollOptions = (() => {
+      if (!queue || pollQueueUrls.length === 0) return undefined;
+      if (!db || !appId) {
+        throw new Error(
+          'Durable queue polling requires a DB service and an embedded application ID.',
+        );
+      }
+      return {
+        queue,
+        queueUrls: pollQueueUrls,
+        waitTimeSeconds: Number(opts.pollWaitSeconds),
+        maxNumberOfMessages: Number(opts.pollMaxMessages),
+        visibilityTimeout: Number(opts.pollVisibilityTimeout),
+        operationsStore: makeOperationsStore({
+          db,
+          tableName: operationsTableName,
+        }),
+        appId,
+        log: (/** @type {string} */ msg, /** @type {any} */ extra) =>
+          console.error('[lambda-service:poll]', msg, extra ?? ''),
+      };
+    })();
 
     const svc = await startLambdaService({
       host: String(opts.host),
@@ -137,20 +152,7 @@ const lambdaCmd = new Command('lambda')
           },
         });
       },
-      poll:
-        queue && pollQueueUrls.length > 0
-          ? {
-              queue,
-              queueUrls: pollQueueUrls,
-              waitTimeSeconds: Number(opts.pollWaitSeconds),
-              maxNumberOfMessages: Number(opts.pollMaxMessages),
-              visibilityTimeout: Number(opts.pollVisibilityTimeout),
-              operationsStore,
-              appId,
-              log: (msg, extra) =>
-                console.error('[lambda-service:poll]', msg, extra ?? ''),
-            }
-          : undefined,
+      poll: pollOptions,
     });
 
     console.log(`[lambda-service] listening at ${svc.address} (gRPC Invoke)`);

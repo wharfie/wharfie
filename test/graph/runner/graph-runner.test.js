@@ -1,6 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
+import { jest } from '@jest/globals';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +14,36 @@ import Operation from '../../../src/core/lib/graph/operation.js';
 import { runOperation } from '../../../src/core/lib/graph/runner.js';
 
 describe('graph runner', () => {
+  test('performs no activity when it loses the operation claim', async () => {
+    const operation = new Operation({
+      id: 'claim-loser',
+      resource_id: 'r1',
+      resource_version: 1,
+      type: Operation.Type.PIPELINE,
+    });
+    operation.createAction({ id: 'invoke', type: Action.Type.INVOKE_FUNCTION });
+    const executeAction = jest.fn(async () => true);
+    const store = {
+      getRecords: jest.fn(async () => ({
+        operations: [operation],
+        actions: operation.getActions(),
+      })),
+      updateOperationStatus: jest.fn(async () => false),
+      updateActionStatus: jest.fn(async () => false),
+      commitAction: jest.fn(async () => false),
+    };
+
+    await expect(
+      runOperation({
+        store: /** @type {any} */ (store),
+        resourceId: operation.resource_id,
+        operationId: operation.id,
+        executeAction,
+      }),
+    ).rejects.toThrow(/claim lost/i);
+    expect(executeAction).not.toHaveBeenCalled();
+  });
+
   test('executes a persisted action DAG in prerequisite order and persists COMPLETED', async () => {
     const tmp = mkdtempSync(join(tmpdir(), 'wharfie-runner-'));
     try {
@@ -40,7 +71,7 @@ describe('graph runner', () => {
         dependsOn: [actionA],
       });
 
-      await store.putOperation(operation);
+      await store.createOperation(operation);
 
       /** @type {string[]} */
       const order = [];
@@ -142,7 +173,7 @@ describe('graph runner', () => {
         dependsOn: [actionA],
       });
 
-      await store.putOperation(operation);
+      await store.createOperation(operation);
 
       const result = await runOperation({
         store,
@@ -223,7 +254,7 @@ describe('graph runner', () => {
       operation.addAction({ action: actionA, dependsOn: [] });
       operation.addAction({ action: actionB, dependsOn: [actionA] });
 
-      await store.putOperation(operation);
+      await store.createOperation(operation);
 
       const result = await runOperation({
         store,
@@ -287,7 +318,7 @@ describe('graph runner', () => {
         dependsOn: [actionA],
       });
 
-      await store.putOperation(operation);
+      await store.createOperation(operation);
 
       /** @type {string[]} */
       const order = [];
@@ -385,7 +416,7 @@ describe('graph runner', () => {
         retry: { max_attempts: 2 },
       });
 
-      await store.putOperation(operation);
+      await store.createOperation(operation);
 
       let attempts = 0;
       const result = await runOperation({
@@ -430,6 +461,54 @@ describe('graph runner', () => {
       });
       expect(storedOperation.status).toBe(Operation.Status.FAILED);
       expect(storedOperation.last_updated_at).toBeGreaterThan(1);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('observes durable cancellation and cannot commit an in-flight result', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'wharfie-runner-'));
+    try {
+      const db = createVanillaDB({ path: tmp });
+      const store = createOperationsTable({
+        db,
+        tableName: 'operations-runner-cancel-test',
+      });
+      const operation = new Operation({
+        id: 'cancel-race',
+        resource_id: 'r1',
+        resource_version: 1,
+        type: Operation.Type.PIPELINE,
+      });
+      operation.createAction({
+        id: 'invoke',
+        type: Action.Type.INVOKE_FUNCTION,
+      });
+      await store.createOperation(operation);
+
+      const result = await runOperation({
+        store,
+        resourceId: operation.resource_id,
+        operationId: operation.id,
+        executeAction: async () => {
+          await store.cancelOperation(operation.resource_id, operation.id, {
+            reason: 'cancel during activity',
+          });
+          return { ok: true, outputs: { stale: true } };
+        },
+      });
+
+      expect(result.status).toBe('CANCELLED');
+      expect(result.executedActionIds).toEqual([]);
+      const records = await store.getRecords(
+        operation.resource_id,
+        operation.id,
+      );
+      expect(records.operations[0].status).toBe(Operation.Status.CANCELLED);
+      expect(records.actions[0]).toMatchObject({
+        status: Action.Status.CANCELLED,
+        outputs: undefined,
+      });
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

@@ -44,7 +44,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 - [x] Delete the v1 Athena/table application, legacy-only tests, documentation, dependencies, and compatibility paths.
 - [x] Keep npm publication disabled and retain v1 regression checks in the release gate.
 - [x] Choose one app-manifest compiler and one canonical version 2 schema; delete the compatibility alternatives.
-- [ ] Choose one persisted-run implementation and delete the alternatives.
+- [x] Choose one persisted-run implementation and delete the alternatives.
 - [x] Make package metadata, version reporting, license metadata, tarball contents, release commands, environment names, and artifact names agree.
 - [x] Remove the abandoned direct dependency graph and test-only packages from the runtime package.
 - [ ] Resolve the current production audit findings and add an appropriate audit gate.
@@ -138,7 +138,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 1. Review and merge the stacked reset, inventory, packaging, v1-deletion, and strict-manifest changes.
 2. Restore GitHub authentication and execute the archived branch, PR, and issue cleanup decisions.
 3. Run the strict stack through the clean Linux SEA proof in hosted CI and review the resulting narrow boundary.
-4. Choose one persisted-run implementation and fix operation create/replace, record-key, and cancellation semantics.
-5. Define immutable revisions and the durable run/invocation/attempt/effect ledger before adding schedules or workflows.
+4. Define schemas and stable identifiers for immutable logical revisions, target-specific artifacts, and deployment profiles.
+5. Decide the durable workflow model and define the run → invocation → attempt → effect ledger before adding schedules or workflows.
 
 The latest dated handoff at [llm/checkpoints/2026-07-16-strict-v2-manifest.md](llm/checkpoints/2026-07-16-strict-v2-manifest.md) contains exact repository state and restart instructions.

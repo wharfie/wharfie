@@ -1,5 +1,6 @@
 import { createId } from '../id.js';
 import { WHARFIE_VERSION } from '../version.js';
+import { getActionSortKey } from './operation-record-key.js';
 
 /**
  * @typedef {('START'|'INVOKE_FUNCTION'|'FINISH')} WharfieActionTypeEnum
@@ -16,6 +17,7 @@ const Type = {
 
 /**
  * @typedef {('COMPLETED'|
+ * 'CANCELLED'|
  * 'PENDING'|
  * 'RUNNING'|
  * 'FAILED'
@@ -26,6 +28,7 @@ const Type = {
  * @type {Object<WharfieActionStatusEnum,WharfieActionStatusEnum>}
  */
 const Status = {
+  CANCELLED: 'CANCELLED',
   COMPLETED: 'COMPLETED',
   PENDING: 'PENDING',
   RUNNING: 'RUNNING',
@@ -37,6 +40,8 @@ const Status = {
  * @property {string} [id] - id.
  * @property {string} resource_id - resource_id.
  * @property {string} operation_id - operation_id.
+ * @property {number} [operation_generation] - Generation of the owning operation.
+ * @property {number} [version] - Monotonic action record revision.
  * @property {WharfieActionTypeEnum} type - type.
  * @property {WharfieActionStatusEnum} [status] - status.
  * @property {number} [started_at] - start timestamp.
@@ -59,6 +64,8 @@ class Action {
     id = createId(),
     resource_id,
     operation_id,
+    operation_generation = 0,
+    version = 0,
     type,
     status = Status.PENDING,
     started_at = Date.now(),
@@ -75,6 +82,8 @@ class Action {
     this.id = id;
     this.resource_id = resource_id;
     this.operation_id = operation_id;
+    this.operation_generation = operation_generation;
+    this.version = version;
     this.type = type;
     this.status = status;
     this.started_at = started_at;
@@ -102,11 +111,13 @@ class Action {
   toRecord() {
     return {
       resource_id: this.resource_id,
-      sort_key: `${this.resource_id}#${this.operation_id}#${this.id}`,
+      sort_key: getActionSortKey(this.operation_id, this.id),
       data: {
         id: this.id,
         resource_id: this.resource_id,
         operation_id: this.operation_id,
+        operation_generation: this.operation_generation,
+        version: this.version,
         type: this.type,
         status: this.status,
         started_at: this.started_at,
@@ -133,6 +144,8 @@ class Action {
       id: action_record.data.id,
       resource_id: action_record.data.resource_id,
       operation_id: action_record.data.operation_id,
+      operation_generation: action_record.data.operation_generation,
+      version: action_record.data.version,
       type: action_record.data.type,
       status: action_record.data.status,
       started_at: action_record.data.started_at,

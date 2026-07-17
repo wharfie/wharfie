@@ -82,8 +82,8 @@ describe('v2 operations persistence (vanilla DB)', () => {
       startedAt: 20,
     });
 
-    await store.putOperation(first);
-    await store.putOperation(second);
+    await store.createOperation(first);
+    await store.createOperation(second);
 
     const allRecords = await store.getRecords(appId);
     expect(allRecords.operations.map(({ id }) => id)).toEqual([
@@ -121,7 +121,7 @@ describe('v2 operations persistence (vanilla DB)', () => {
     );
   });
 
-  test('scopes and deletes exact operation ids across prefixes and apps', async () => {
+  test('scopes and durably cancels exact operation ids across prefixes and apps', async () => {
     const run = makePipeline({ resourceId: 'app:one', id: 'run-1' });
     const prefixedRun = makePipeline({
       resourceId: 'app:one',
@@ -132,9 +132,9 @@ describe('v2 operations persistence (vanilla DB)', () => {
       id: 'run-1',
     });
 
-    await store.putOperation(run);
-    await store.putOperation(prefixedRun);
-    await store.putOperation(otherAppRun);
+    await store.createOperation(run);
+    await store.createOperation(prefixedRun);
+    await store.createOperation(otherAppRun);
 
     const scoped = await store.getRecords('app:one', 'run-1');
     expect(scoped.operations.map(({ id }) => id)).toEqual(['run-1']);
@@ -142,14 +142,33 @@ describe('v2 operations persistence (vanilla DB)', () => {
       scoped.actions.every(({ operation_id }) => operation_id === 'run-1'),
     ).toBe(true);
 
-    await store.deleteOperation(run);
+    const cancellation = await store.cancelOperation('app:one', 'run-1', {
+      reason: 'test cancellation',
+      requestedBy: 'test',
+    });
 
-    expect(await store.getOperation('app:one', 'run-1')).toBeNull();
-    expect(await store.getAction('app:one', 'run-1', 'run-1:start')).toBeNull();
+    expect(cancellation.changed).toBe(true);
+    expect(await store.getOperation('app:one', 'run-1')).toMatchObject({
+      status: Operation.Status.CANCELLED,
+      cancellation: {
+        reason: 'test cancellation',
+        requested_by: 'test',
+        requested_at: expect.any(Number),
+      },
+    });
+    expect(
+      await store.getAction('app:one', 'run-1', 'run-1:start'),
+    ).toMatchObject({ status: Action.Status.COMPLETED });
+    expect(
+      await store.getAction('app:one', 'run-1', 'run-1:invoke'),
+    ).toMatchObject({ status: Action.Status.CANCELLED });
     expect(await store.getOperation('app:one', 'run-10')).not.toBeNull();
     expect(
       await store.getAction('app:one', 'run-10', 'run-10:start'),
     ).not.toBeNull();
     expect(await store.getOperation('app:two', 'run-1')).not.toBeNull();
+
+    const repeated = await store.cancelOperation('app:one', 'run-1');
+    expect(repeated.changed).toBe(false);
   });
 });

@@ -2,7 +2,13 @@ import { promises as fsp, existsSync, readFileSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { createId } from '../../id.js';
 import paths from '../../paths.js';
-import { CONDITION_TYPE } from '../base.js';
+import {
+  CONDITION_TYPE,
+  recordMatchesCondition,
+  transactionRequestKey,
+  transactionRequestUpdates,
+  validateTransactionWrite,
+} from '../base.js';
 import { assertTightQuery } from '../utils.js';
 
 const NO_SORT = '__no_sort__';
@@ -132,30 +138,22 @@ export default function createVanillaDB(options = {}) {
     let cur = record;
     for (let i = 0; i < path.length - 1; i++) {
       const seg = path[i];
-      if (cur[seg] == null || typeof cur[seg] !== 'object') cur[seg] = {};
+      if (
+        !Object.prototype.hasOwnProperty.call(cur, seg) ||
+        cur[seg] === null ||
+        typeof cur[seg] !== 'object' ||
+        Array.isArray(cur[seg])
+      ) {
+        throw new Error(`Invalid update path: ${path.join('.')}`);
+      }
       cur = cur[seg];
     }
-    cur[path[path.length - 1]] = value;
-  }
-
-  /**
-   * @param {import('../base.js').DBRecord} record - record.
-   * @param {import('../base.js').KeyCondition} condition - condition.
-   * @returns {boolean} - Result.
-   */
-  function matchesCondition(record, condition) {
-    const value = record?.[condition.propertyName];
-
-    if (condition.conditionType === CONDITION_TYPE.BEGINS_WITH) {
-      return (
-        typeof value === 'string' &&
-        value.startsWith(String(condition.propertyValue))
-      );
-    }
-    if (condition.conditionType === CONDITION_TYPE.EQUALS) {
-      return value === condition.propertyValue;
-    }
-    throw new Error(`invalid condition type: ${condition.conditionType}`);
+    Object.defineProperty(cur, path[path.length - 1], {
+      configurable: true,
+      enumerable: true,
+      value,
+      writable: true,
+    });
   }
 
   /**
@@ -205,7 +203,9 @@ export default function createVanillaDB(options = {}) {
 
     let out = candidates;
     if (filters.length) {
-      out = out.filter((r) => filters.every((c) => matchesCondition(r, c)));
+      out = out.filter((r) =>
+        filters.every((c) => recordMatchesCondition(r, c)),
+      );
     }
 
     // immutability: return clones
@@ -291,7 +291,7 @@ export default function createVanillaDB(options = {}) {
 
     if (params.conditions?.length) {
       for (const c of params.conditions) {
-        if (!matchesCondition(existing, c)) {
+        if (!recordMatchesCondition(existing, c)) {
           const err = new Error('ConditionalCheckFailedException');
           err.name = 'ConditionalCheckFailedException';
           throw err;
@@ -401,6 +401,101 @@ export default function createVanillaDB(options = {}) {
   }
 
   /**
+   * Atomically condition-check and mutate distinct items in one table.
+   * @param {import('../base.js').TransactionWriteParams} params - params.
+   * @returns {import('../base.js').TransactionWriteReturn} - Result.
+   */
+  async function transactionWrite(params) {
+    const requests = validateTransactionWrite(params);
+    const currentTable = database[params.tableName] || {};
+
+    /**
+     * @param {ReturnType<typeof transactionRequestKey>} key - Exact item key.
+     * @param {Record<string, Record<string, import('../base.js').DBRecord>>} table - Table snapshot.
+     * @returns {import('../base.js').DBRecord | undefined} - Record.
+     */
+    const recordAt = (key, table) => {
+      const pkTok = `${key.keyName}=${key.keyValue}`;
+      const skTok = key.sortKeyName
+        ? `${key.sortKeyName}=${key.sortKeyValue}`
+        : NO_SORT;
+      return table[pkTok]?.[skTok];
+    };
+
+    const groups = /** @type {Array<[string, any[], boolean]>} */ ([
+      ['conditionChecks', requests.conditionChecks, false],
+      ['putRequests', requests.putRequests, true],
+      ['updateRequests', requests.updateRequests, false],
+      ['deleteRequests', requests.deleteRequests, false],
+    ]);
+
+    // Evaluate every condition against the same pre-transaction snapshot.
+    for (const [, group, putRequest] of groups) {
+      for (const request of group) {
+        const key = transactionRequestKey(request, '', putRequest);
+        const existing = recordAt(key, currentTable);
+        if (
+          !(request.conditions || []).every(
+            (/** @type {import('../base.js').KeyCondition} */ condition) =>
+              recordMatchesCondition(existing, condition),
+          )
+        ) {
+          const error = new Error('ConditionalCheckFailedException');
+          error.name = 'ConditionalCheckFailedException';
+          throw error;
+        }
+      }
+    }
+
+    const nextTable = deepClone(currentTable);
+
+    for (const request of requests.deleteRequests) {
+      const key = transactionRequestKey(request, '', false);
+      const pkTok = `${key.keyName}=${key.keyValue}`;
+      const skTok = key.sortKeyName
+        ? `${key.sortKeyName}=${key.sortKeyValue}`
+        : NO_SORT;
+      if (!nextTable[pkTok]) continue;
+      delete nextTable[pkTok][skTok];
+      if (Object.keys(nextTable[pkTok]).length === 0) delete nextTable[pkTok];
+    }
+
+    for (const request of requests.putRequests) {
+      const key = transactionRequestKey(request, '', true);
+      const pkTok = `${key.keyName}=${key.keyValue}`;
+      const skTok = key.sortKeyName
+        ? `${key.sortKeyName}=${key.sortKeyValue}`
+        : NO_SORT;
+      if (!nextTable[pkTok]) nextTable[pkTok] = {};
+      nextTable[pkTok][skTok] = deepClone(request.record);
+    }
+
+    for (const request of requests.updateRequests) {
+      const key = transactionRequestKey(request, '', false);
+      const pkTok = `${key.keyName}=${key.keyValue}`;
+      const skTok = key.sortKeyName
+        ? `${key.sortKeyName}=${key.sortKeyValue}`
+        : NO_SORT;
+      const existing = recordAt(key, nextTable);
+      const next = existing
+        ? deepClone(existing)
+        : {
+            [key.keyName]: key.keyValue,
+            ...(key.sortKeyName ? { [key.sortKeyName]: key.sortKeyValue } : {}),
+          };
+      const updates = transactionRequestUpdates(request);
+      for (const update of updates) {
+        assertNonEmptyPath(update.property);
+        setPath(next, update.property, update.propertyValue);
+      }
+      if (!nextTable[pkTok]) nextTable[pkTok] = {};
+      nextTable[pkTok][skTok] = next;
+    }
+
+    database[params.tableName] = nextTable;
+  }
+
+  /**
    * Persist the in-memory DB to disk (atomic replace).
    * @returns {import('../base.js').CloseReturn} - Result.
    */
@@ -438,6 +533,7 @@ export default function createVanillaDB(options = {}) {
   return {
     query,
     batchWrite,
+    transactionWrite,
     update,
     put,
     get,

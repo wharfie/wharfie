@@ -55,9 +55,34 @@ async function expectCliFailure(invoke, expectedMessage) {
   }
 }
 
+/**
+ * @param {() => Promise<unknown>} invoke - invoke.
+ * @returns {Promise<void>} - Result.
+ */
+async function expectCliSuccess(invoke) {
+  const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+  const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+  const tableSpy = jest.spyOn(console, 'table').mockImplementation(() => {});
+
+  try {
+    await invoke();
+
+    expect(process.exitCode).toBeUndefined();
+    expect(errorSpy).not.toHaveBeenCalled();
+  } finally {
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+    tableSpy.mockRestore();
+    process.exitCode = undefined;
+  }
+}
+
 beforeEach(() => {
   process.env = { ...ORIGINAL_ENV, NODE_ENV: 'test' };
   delete process.env.WHARFIE_DB_ADAPTER;
+  delete process.env.WHARFIE_CONTROL_ADAPTER;
+  delete process.env.WHARFIE_CONTROL_PATH;
+  delete process.env.WHARFIE_OPERATIONS_TABLE;
   delete process.env.OPERATIONS_TABLE;
   delete process.env.WHARFIE_DB_PATH;
   delete process.env.AWS_REGION;
@@ -94,14 +119,13 @@ describe.each([
       ),
   ],
 ])('%s', (_label, invoke) => {
-  test('reports invalid WHARFIE_DB_ADAPTER as a CLI failure', async () => {
-    process.env.OPERATIONS_TABLE = 'operations-test';
-    process.env.WHARFIE_DB_ADAPTER = 'not-a-real-adapter';
+  test('reports invalid WHARFIE_CONTROL_ADAPTER as a CLI failure', async () => {
+    process.env.WHARFIE_CONTROL_ADAPTER = 'not-a-real-adapter';
 
-    await expectCliFailure(invoke, /WHARFIE_DB_ADAPTER/i);
+    await expectCliFailure(invoke, /WHARFIE_CONTROL_ADAPTER/i);
   });
 
-  test('reports a missing OPERATIONS_TABLE as a CLI failure', async () => {
-    await expectCliFailure(invoke, /OPERATIONS_TABLE/i);
+  test('uses an isolated zero-config control store in tests', async () => {
+    await expectCliSuccess(invoke);
   });
 });

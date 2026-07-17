@@ -279,7 +279,14 @@ export function createGrpcRpcClient({ address, log }) {
     if (!resp || resp.ok !== true) {
       const errMsg =
         resp && resp.error ? String(resp.error) : `RPC error calling ${method}`;
-      throw new Error(errMsg);
+      const error = new Error(errMsg);
+      if (typeof resp?.errorName === 'string' && resp.errorName) {
+        error.name = resp.errorName;
+      }
+      if (typeof resp?.errorCode === 'string' && resp.errorCode) {
+        Object.assign(error, { code: resp.errorCode });
+      }
+      throw error;
     }
     return resp.value;
   };

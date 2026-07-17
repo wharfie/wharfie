@@ -65,17 +65,19 @@ describe('wharfie ops run', () => {
         {
           ...process.env,
           NODE_ENV: 'development',
-          OPERATIONS_TABLE: tableName,
+          WHARFIE_OPERATIONS_TABLE: tableName,
           WHARFIE_ARTIFACT_BUCKET: 'service-bucket',
           WHARFIE_DB_ADAPTER: 'vanilla',
           WHARFIE_DB_PATH: dbPath,
+          WHARFIE_CONTROL_ADAPTER: 'vanilla',
+          WHARFIE_CONTROL_PATH: dbPath,
         },
       );
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe('');
       expect(result.stdout).toContain('INVOKE_FUNCTION:echo-event');
-      expect(result.stdout).toContain('Executed 3 actions.');
+      expect(result.stdout).toContain('Executed 1 action');
 
       inspectDb = createVanillaDB({ path: dbPath });
       const inspectStore = operationsStoreFactory({ db: inspectDb, tableName });

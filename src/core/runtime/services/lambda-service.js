@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { runPersistedEventActivity } from '../../lib/graph/app-run.js';
+import { getQueueOperationId, runPersistedActivity } from '../app-runs.js';
 import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
 
 /**
@@ -18,8 +18,8 @@ import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
  * @property {number} [waitTimeSeconds] - Long poll seconds (0-20).
  * @property {number} [maxNumberOfMessages] - 1-10.
  * @property {number} [visibilityTimeout] - seconds
- * @property {import('../../lib/db/tables/operations.js').OperationsTableClient} [operationsStore] - operationsStore.
- * @property {string} [appId] - Canonical application ID.
+ * @property {import('../../lib/db/tables/operations.js').OperationsTableClient} operationsStore - Durable operations store.
+ * @property {string} appId - Canonical application ID.
  * @property {(msg: string, extra?: any) => void} [log] - log.
  */
 
@@ -27,7 +27,7 @@ import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
  * @typedef LambdaServiceOptions
  * @property {string} [host] - host.
  * @property {number} [port] - port.
- * @property {(req: LambdaInvokeRequest) => Promise<void>} execute - Executes a function invocation.
+ * @property {(req: LambdaInvokeRequest) => Promise<any>} execute - Executes a function invocation.
  * @property {LambdaPollOptions} [poll] - Optional queue poll loop configuration.
  * @property {(msg: string, extra?: any) => void} [log] - log.
  */
@@ -36,8 +36,8 @@ import { startGrpcServer, LambdaServiceDefinition } from './rpc-grpc.js';
  * @param {unknown} value - value.
  * @returns {string | undefined} - Result.
  */
-function normalizeOptionalString(value) {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+function getNonemptyString(value) {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 /**
@@ -55,7 +55,7 @@ function normalizeContext(value) {
  * @returns {string | undefined} - Result.
  */
 function resolveActivityName(payload) {
-  return normalizeOptionalString(payload?.activity);
+  return getNonemptyString(payload?.activity);
 }
 
 /**
@@ -92,6 +92,13 @@ export async function startLambdaService({
     poll.queueUrls.length
   ) {
     const queue = poll.queue;
+    const operationsStore = poll.operationsStore;
+    const appId = poll.appId;
+    if (!operationsStore || !appId) {
+      throw new TypeError(
+        'Lambda service queue polling requires operationsStore and appId.',
+      );
+    }
     const waitTimeSeconds = clampNumber(poll.waitTimeSeconds, 0, 20, 20);
     const maxNumberOfMessages = clampNumber(
       poll.maxNumberOfMessages,
@@ -163,8 +170,8 @@ export async function startLambdaService({
                 continue;
               }
 
-              const messageId = normalizeOptionalString(msg?.MessageId);
-              const receiptHandle = normalizeOptionalString(receipt);
+              const messageId = getNonemptyString(msg?.MessageId);
+              const receiptHandle = getNonemptyString(receipt);
               const invocationContext = {
                 ...(normalizeContext(payload?.context) || {}),
                 trigger: {
@@ -176,36 +183,38 @@ export async function startLambdaService({
               };
 
               try {
-                if (poll.operationsStore && poll.appId) {
-                  await runPersistedEventActivity({
-                    store: poll.operationsStore,
-                    appName: poll.appId,
-                    activity,
-                    event: payload?.event,
-                    context: invocationContext,
-                    payload,
-                    message: {
-                      queueUrl,
-                      ...(messageId ? { messageId } : {}),
-                      ...(receiptHandle ? { receiptHandle } : {}),
-                    },
-                    execute: async ({ functionName, event, context }) => {
-                      await execute({
-                        functionName,
-                        activity,
-                        event,
-                        context,
-                      });
-                    },
-                  });
-                } else {
-                  await execute({
-                    functionName: activity,
-                    activity,
-                    event: payload?.event,
-                    context: invocationContext,
-                  });
+                if (!messageId) {
+                  throw new Error(
+                    'Persisted queue activity requires a message ID.',
+                  );
                 }
+                const operationId = getQueueOperationId({
+                  queueUrl,
+                  messageId,
+                });
+                await runPersistedActivity({
+                  store: operationsStore,
+                  appId,
+                  activityName: activity,
+                  operationId,
+                  ...(Object.prototype.hasOwnProperty.call(payload, 'event')
+                    ? { event: payload.event }
+                    : {}),
+                  context: invocationContext,
+                  trigger: {
+                    source: 'event',
+                    queueUrl,
+                    messageId,
+                  },
+                  execute: async ({ activityName, event, context }) => {
+                    return await execute({
+                      functionName: activityName,
+                      activity: activityName,
+                      event,
+                      context,
+                    });
+                  },
+                });
 
                 // Ack/delete only on success.
                 await queue.deleteMessage({
@@ -273,8 +282,8 @@ export async function startLambdaService({
         try {
           const req = call?.request || {};
           const functionName =
-            normalizeOptionalString(req.functionName) ||
-            normalizeOptionalString(req.activity);
+            getNonemptyString(req.functionName) ||
+            getNonemptyString(req.activity);
 
           if (!functionName) {
             callback(null, { ok: false, error: 'Missing functionName' });

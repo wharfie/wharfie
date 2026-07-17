@@ -1,13 +1,14 @@
 import { join } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import paths from '../paths.js';
 
 /**
  * Centralized DB configuration for Wharfie core runtime.
  *
  * This module is intentionally the only place in `src/core/lib` that reads
  * Wharfie DB-related environment variables (adapter selection, local paths,
- * and the Operations table name).
+ * and the operations-control table name).
  */
 
 /**
@@ -77,16 +78,35 @@ export function resolveStateAdapterName() {
 }
 
 /**
- * Resolve the Operations table name.
+ * Resolve the durable operations-control adapter independently from application
+ * and actor-state resources.
+ *
+ * Tests default to isolated vanilla stores. Normal local execution defaults to
+ * LMDB so acknowledged operation transitions survive process termination.
+ * `vanilla` remains an explicit test/diagnostic option, but it is not crash
+ * durable because it flushes only when the client closes.
+ * @returns {DBAdapterName} - Result.
+ */
+export function resolveOperationsAdapterName() {
+  const explicit = process.env.WHARFIE_CONTROL_ADAPTER;
+  if (explicit) {
+    return normalizeAdapterName(explicit, 'WHARFIE_CONTROL_ADAPTER');
+  }
+
+  return process.env.NODE_ENV === 'test' ? 'vanilla' : 'lmdb';
+}
+
+/**
+ * Resolve the operations-control table name.
  *
  * This is intentionally resolved at call-time (not import-time) so tests and
  * runtimes can safely override env vars between uses.
  * @returns {string} - Result.
  */
 export function resolveOperationsTableName() {
-  const name = process.env.OPERATIONS_TABLE;
+  const name = process.env.WHARFIE_OPERATIONS_TABLE;
   if (name && String(name).trim()) return String(name).trim();
-  throw new Error('OPERATIONS_TABLE env var is required');
+  return 'wharfie-operations';
 }
 
 /**
@@ -124,6 +144,43 @@ export async function createDBClient(adapterName = resolveDBAdapterName()) {
   }
 
   return createVanillaDB({ path: process.env.WHARFIE_DB_PATH });
+}
+
+/**
+ * Create the dedicated operations-control DB client.
+ * @param {DBAdapterName} [adapterName] - Explicit adapter override.
+ * @returns {Promise<import('../db/base.js').DBClient>} - Result.
+ */
+export async function createOperationsDBClient(
+  adapterName = resolveOperationsAdapterName(),
+) {
+  if (adapterName === 'dynamodb') {
+    const { default: createDynamoDB } =
+      await import('../db/adapters/dynamodb.js');
+    return createDynamoDB({ region: process.env.AWS_REGION });
+  }
+
+  const configuredPath =
+    typeof process.env.WHARFIE_CONTROL_PATH === 'string' &&
+    process.env.WHARFIE_CONTROL_PATH.trim()
+      ? process.env.WHARFIE_CONTROL_PATH.trim()
+      : undefined;
+
+  if (adapterName === 'lmdb') {
+    const { default: createLMDB } = await import('../db/adapters/lmdb.js');
+    return createLMDB({ path: configuredPath || join(paths.data, 'control') });
+  }
+
+  // Explicit vanilla is useful for tests and diagnostics, but is not crash
+  // durable: its disk snapshot is written only from close().
+  const { default: createVanillaDB } =
+    await import('../db/adapters/vanilla.js');
+  if (process.env.NODE_ENV === 'test' && !configuredPath) {
+    return createVanillaDB({ path: mkTempDir('wharfie-control-') });
+  }
+  return createVanillaDB({
+    path: configuredPath || join(paths.data, 'control'),
+  });
 }
 
 /**
@@ -212,8 +269,10 @@ export async function closeDB() {
 export default {
   resolveDBAdapterName,
   resolveStateAdapterName,
+  resolveOperationsAdapterName,
   resolveOperationsTableName,
   createDBClient,
+  createOperationsDBClient,
   createStateDBClient,
   getDB,
   resetDB,

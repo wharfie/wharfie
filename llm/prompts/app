@@ -149,7 +149,8 @@ Always read these Wharfie files first:
 - `src/core/runtime/services/node-agent.js`
 - `src/core/lib/graph/action.js`
 - `src/core/lib/graph/operation.js`
-- `src/core/lib/graph/app-run.js`
+- `src/core/runtime/app-runs.js`
+- `src/core/lib/graph/runner.js`
 - `src/core/lib/db/tables/operations.js`
 - `test/cli/app/load-app.test.js`
 - `test/cli/app/examples.test.js`

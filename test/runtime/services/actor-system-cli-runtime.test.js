@@ -627,6 +627,7 @@ describe('actor-system CLI runtime surfaces', () => {
     const functionRun = jest.fn(async (..._args) => {});
     const dbClient = {
       __wharfie_closeTransport: jest.fn(),
+      transactionWrite: jest.fn(async () => {}),
     };
     const queueClient = {
       __wharfie_closeTransport: jest.fn(),
@@ -758,6 +759,9 @@ describe('actor-system CLI runtime surfaces', () => {
             waitTimeSeconds: 3,
             maxNumberOfMessages: 4,
             visibilityTimeout: 45,
+            operationsStore: expect.objectContaining({
+              createOperation: expect.any(Function),
+            }),
             log: expect.any(Function),
           }),
           execute: expect.any(Function),

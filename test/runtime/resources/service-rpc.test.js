@@ -39,6 +39,29 @@ describe('ActorSystem resources over service RPC (gRPC)', () => {
 
     const objectStorage = local.objectStorage;
 
+    await db.transactionWrite({
+      tableName: 'control',
+      putRequests: [
+        {
+          keyName: 'pk',
+          record: { pk: 'conditional-item', value: 1 },
+          conditions: [{ conditionType: 'NOT_EXISTS', propertyName: 'pk' }],
+        },
+      ],
+    });
+    await expect(
+      db.transactionWrite({
+        tableName: 'control',
+        putRequests: [
+          {
+            keyName: 'pk',
+            record: { pk: 'conditional-item', value: 2 },
+            conditions: [{ conditionType: 'NOT_EXISTS', propertyName: 'pk' }],
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ name: 'ConditionalCheckFailedException' });
+
     const fnName = `wharfie-worker-remote-${Date.now()}-${Math.floor(
       Math.random() * 1e9,
     )}`;

@@ -1,6 +1,7 @@
 import Action from './action.js';
 import { createId } from '../id.js';
 import { WHARFIE_VERSION } from '../version.js';
+import { getOperationSortKey } from './operation-record-key.js';
 
 /**
  * @typedef {'PIPELINE'} WharfieOperationTypeEnum
@@ -15,6 +16,7 @@ const Type = {
 
 /**
  * @typedef {('BLOCKED'|
+ * 'CANCELLED'|
  * 'COMPLETED'|
  * 'FAILED'|
  * 'PENDING'|
@@ -27,6 +29,7 @@ const Type = {
  */
 const Status = {
   BLOCKED: 'BLOCKED',
+  CANCELLED: 'CANCELLED',
   COMPLETED: 'COMPLETED',
   FAILED: 'FAILED',
   PENDING: 'PENDING',
@@ -40,6 +43,9 @@ const Status = {
  * @property {string} [id] - id.
  * @property {WharfieOperationTypeEnum} type - type.
  * @property {WharfieOperationStatusEnum} [status] - status.
+ * @property {number} [generation] - Execution generation used to fence actions.
+ * @property {number} [version] - Optimistic operation record version.
+ * @property {Record<string, any>} [cancellation] - Durable cancellation metadata.
  * @property {any} [operation_config] - operation_config.
  * @property {any} [operation_inputs] - operation_inputs.
  * @property {number} [started_at] - start timestamp
@@ -57,6 +63,9 @@ class Operation {
     id = createId(),
     type,
     status = Status.PENDING,
+    generation = 0,
+    version = 0,
+    cancellation,
     operation_config,
     operation_inputs,
     started_at = Date.now(),
@@ -68,6 +77,9 @@ class Operation {
     this.id = id;
     this.type = type;
     this.status = status;
+    this.generation = generation;
+    this.version = version;
+    this.cancellation = cancellation;
     this.operation_config = operation_config;
     this.operation_inputs = operation_inputs;
     this.started_at = started_at;
@@ -107,6 +119,7 @@ class Operation {
    * @property {Record<string, any>} [retry] - retry.
    * @property {any} [error] - error.
    * @property {number} [attempt_count] - attempt_count.
+   * @property {number} [version] - Monotonic action record revision.
    * @property {any} [outputs] - outputs.
    */
 
@@ -129,6 +142,7 @@ class Operation {
     retry,
     error,
     attempt_count,
+    version,
     outputs,
   }) {
     const action = new Action({
@@ -144,9 +158,11 @@ class Operation {
       retry,
       error,
       attempt_count,
+      version,
       outputs,
       resource_id: this.resource_id,
       operation_id: this.id,
+      operation_generation: this.generation,
     });
     this._addAction(action, dependsOn);
     return action;
@@ -410,13 +426,16 @@ class Operation {
     }
     records.push({
       resource_id: this.resource_id,
-      sort_key: `${this.resource_id}#${this.id}`,
+      sort_key: getOperationSortKey(this.id),
       data: {
         resource_id: this.resource_id,
         resource_version: this.resource_version,
         id: this.id,
         type: this.type,
         status: this.status,
+        generation: this.generation,
+        version: this.version,
+        cancellation: this.cancellation,
         operation_config: this.operation_config,
         operation_inputs: this.operation_inputs,
         serialized_action_graph: this.serializeGraph(),
@@ -440,6 +459,9 @@ class Operation {
       id: operation_record.data.id,
       type: operation_record.data.type,
       status: operation_record.data.status,
+      generation: operation_record.data.generation,
+      version: operation_record.data.version,
+      cancellation: operation_record.data.cancellation,
       operation_config: operation_record.data.operation_config,
       operation_inputs: operation_record.data.operation_inputs,
       started_at: operation_record.data.started_at,
@@ -462,6 +484,9 @@ class Operation {
       id: operation_record.data.id,
       type: operation_record.data.type,
       status: operation_record.data.status,
+      generation: operation_record.data.generation,
+      version: operation_record.data.version,
+      cancellation: operation_record.data.cancellation,
       operation_config: operation_record.data.operation_config,
       operation_inputs: operation_record.data.operation_inputs,
       started_at: operation_record.data.started_at,

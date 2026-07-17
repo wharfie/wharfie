@@ -2,7 +2,13 @@ import { open } from 'lmdb';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import paths from '../../paths.js';
-import { CONDITION_TYPE } from '../base.js';
+import {
+  CONDITION_TYPE,
+  recordMatchesCondition,
+  transactionRequestKey,
+  transactionRequestUpdates,
+  validateTransactionWrite,
+} from '../base.js';
 import { assertTightQuery } from '../utils.js';
 
 const NO_SORT = '__no_sort__';
@@ -118,7 +124,7 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * @param {{ conditionType?: import("../base.js").ConditionTypeEnum; propertyName: any; propertyValue: any; keyType?: import("../base.js").KeyTypeEnum | undefined; }} pk -
+   * @param {import('../base.js').KeyCondition} pk - condition.
    * @returns {string} - Result.
    */
   function pkTokenFromCondition(pk) {
@@ -126,7 +132,7 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * @param {{ conditionType?: import("../base.js").ConditionTypeEnum; propertyName: any; propertyValue: any; keyType?: import("../base.js").KeyTypeEnum | undefined; }} sk -
+   * @param {import('../base.js').KeyCondition} sk - condition.
    * @returns {string} - Result.
    */
   function skPrefixFromCondition(sk) {
@@ -160,39 +166,32 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * @param {import("../base.js").DBRecord | null | undefined} record - record.
-   * @param {string | any[]} path - path.
+   * @param {import('../base.js').DBRecord} record - record.
+   * @param {string[]} path - path.
    * @param {any} value - value.
+   * @returns {void} - Result.
    */
   function setPath(record, path, value) {
     /** @type {any} */
     let cur = record;
     for (let i = 0; i < path.length - 1; i++) {
       const seg = path[i];
-      if (cur[seg] == null || typeof cur[seg] !== 'object') cur[seg] = {};
+      if (
+        !Object.prototype.hasOwnProperty.call(cur, seg) ||
+        cur[seg] === null ||
+        typeof cur[seg] !== 'object' ||
+        Array.isArray(cur[seg])
+      ) {
+        throw new Error(`Invalid update path: ${path.join('.')}`);
+      }
       cur = cur[seg];
     }
-    cur[path[path.length - 1]] = value;
-  }
-
-  /**
-   * @param {{ [x: string]: any; }} record -
-   * @param {{ conditionType: any; propertyName: any; propertyValue: any; keyType?: import("../base.js").KeyTypeEnum | undefined; }} condition -
-   * @returns {boolean} - Result.
-   */
-  function matchesCondition(record, condition) {
-    const value = record?.[condition.propertyName];
-
-    if (condition.conditionType === CONDITION_TYPE.BEGINS_WITH) {
-      return (
-        typeof value === 'string' &&
-        value.startsWith(String(condition.propertyValue))
-      );
-    }
-    if (condition.conditionType === CONDITION_TYPE.EQUALS) {
-      return value === condition.propertyValue;
-    }
-    throw new Error(`invalid condition type: ${condition.conditionType}`);
+    Object.defineProperty(cur, path[path.length - 1], {
+      configurable: true,
+      enumerable: true,
+      value,
+      writable: true,
+    });
   }
 
   /**
@@ -210,7 +209,10 @@ export default function createLMDB(options = {}) {
       const skTok = skPrefixFromCondition(sk);
       const row = table.get(makeKey(pkTok, skTok));
       if (!row) return [];
-      if (filters.length && !filters.every((c) => matchesCondition(row, c)))
+      if (
+        filters.length &&
+        !filters.every((c) => recordMatchesCondition(row, c))
+      )
         return [];
       return row ? [deepClone(row)] : [];
     }
@@ -232,7 +234,7 @@ export default function createLMDB(options = {}) {
       if (filters.length === 0) {
         out.push(deepClone(value));
       } else {
-        if (filters.every((c) => matchesCondition(value, c)))
+        if (filters.every((c) => recordMatchesCondition(value, c)))
           out.push(deepClone(value));
       }
     }
@@ -299,7 +301,7 @@ export default function createLMDB(options = {}) {
 
       if (params.conditions?.length) {
         for (const c of params.conditions) {
-          if (!matchesCondition(existing, c)) {
+          if (!recordMatchesCondition(existing, c)) {
             const err = new Error('ConditionalCheckFailedException');
             err.name = 'ConditionalCheckFailedException';
             throw err;
@@ -391,6 +393,81 @@ export default function createLMDB(options = {}) {
   }
 
   /**
+   * Atomically condition-check and mutate distinct items in one table.
+   * @param {import('../base.js').TransactionWriteParams} params - params.
+   */
+  async function transactionWrite(params) {
+    const requests = validateTransactionWrite(params);
+    const table = ensureTable(params.tableName);
+
+    /**
+     * @param {ReturnType<typeof transactionRequestKey>} key - Exact item key.
+     * @returns {string} - LMDB key.
+     */
+    const dbKey = (key) =>
+      makeKey(
+        `${key.keyName}=${key.keyValue}`,
+        key.sortKeyName ? `${key.sortKeyName}=${key.sortKeyValue}` : NO_SORT,
+      );
+
+    table.transactionSync(() => {
+      const groups = /** @type {Array<[any[], boolean]>} */ ([
+        [requests.conditionChecks, false],
+        [requests.putRequests, true],
+        [requests.updateRequests, false],
+        [requests.deleteRequests, false],
+      ]);
+
+      // Read and check all conditions before applying any mutation.
+      for (const [group, putRequest] of groups) {
+        for (const request of group) {
+          const key = transactionRequestKey(request, '', putRequest);
+          const existing = table.get(dbKey(key));
+          if (
+            !(request.conditions || []).every(
+              (/** @type {import('../base.js').KeyCondition} */ condition) =>
+                recordMatchesCondition(existing, condition),
+            )
+          ) {
+            const error = new Error('ConditionalCheckFailedException');
+            error.name = 'ConditionalCheckFailedException';
+            throw error;
+          }
+        }
+      }
+
+      for (const request of requests.deleteRequests) {
+        const key = transactionRequestKey(request, '', false);
+        table.removeSync(dbKey(key));
+      }
+
+      for (const request of requests.putRequests) {
+        const key = transactionRequestKey(request, '', true);
+        table.putSync(dbKey(key), deepClone(request.record));
+      }
+
+      for (const request of requests.updateRequests) {
+        const key = transactionRequestKey(request, '', false);
+        const existing = table.get(dbKey(key));
+        const next = existing
+          ? deepClone(existing)
+          : {
+              [key.keyName]: key.keyValue,
+              ...(key.sortKeyName
+                ? { [key.sortKeyName]: key.sortKeyValue }
+                : {}),
+            };
+        const updates = transactionRequestUpdates(request);
+        for (const update of updates) {
+          assertNonEmptyPath(update.property);
+          setPath(next, update.property, update.propertyValue);
+        }
+        table.putSync(dbKey(key), next);
+      }
+    });
+  }
+
+  /**
    * Close underlying resources.
    */
   async function close() {
@@ -409,6 +486,7 @@ export default function createLMDB(options = {}) {
   return {
     query,
     batchWrite,
+    transactionWrite,
     update,
     put,
     get,

@@ -1,6 +1,6 @@
 import createOperationsStore from '../../core/lib/graph/operations-store.js';
 import {
-  createDBClient,
+  createOperationsDBClient,
   resolveOperationsTableName,
 } from '../../core/lib/config/db.js';
 
@@ -22,7 +22,7 @@ export async function withOperationsStore(handler) {
   let db;
 
   try {
-    db = await createDBClient();
+    db = await createOperationsDBClient();
     const store = createOperationsStore({
       db,
       tableName: resolveOperationsTableName(),
