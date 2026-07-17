@@ -9,8 +9,9 @@ import {
 } from '../../../runtime/activity-protocol.js';
 import { createCanonicalJsonSha256Id } from '../../../runtime/content-id.js';
 import {
+  cloneBoundedJsonObject,
+  cloneBoundedJsonValue,
   cloneJsonObject,
-  cloneJsonValue,
 } from '../../../runtime/json-value.js';
 import { assertLogicalId } from '../../../runtime/logical-id.js';
 import {
@@ -28,7 +29,10 @@ import { CONDITION_TYPE, KEY_TYPE } from '../base.js';
 /**
  * The first ledger schema deliberately covers one manual, single-activity
  * invocation. It is a separate append-only boundary, not an extension of the
- * mutable Operation/Action snapshot store.
+ * mutable Operation/Action snapshot store. Its table write authority is a
+ * trusted control-plane boundary: content IDs and request digests detect
+ * inconsistent records, but are not signatures against a writer that can
+ * replace an entire semantically valid history.
  */
 export const EXECUTION_LEDGER_SCHEMA_VERSION = 1;
 export const EXECUTION_LEDGER_MAX_OPAQUE_ID_BYTES =
@@ -36,6 +40,9 @@ export const EXECUTION_LEDGER_MAX_OPAQUE_ID_BYTES =
 export const EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES = 64 * 1024;
 export const EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES =
   EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES * 4;
+// Bound transcript replay independently of its byte cap. Without this, a
+// caller can make validation work scale with a large number of tiny frames.
+export const EXECUTION_LEDGER_MAX_EVIDENCE_FRAMES = 512;
 
 export const RunStatus = Object.freeze({
   RUNNING: 'RUNNING',
@@ -250,12 +257,35 @@ function assertExactKeys(value, keys, label) {
 }
 
 /**
+ * Assert a snapshot has every required field, no unknown fields, and only
+ * explicitly declared optional fields.
+ * @param {Record<string, any>} value - Candidate snapshot.
+ * @param {string[]} required - Fields that must be present.
+ * @param {string[]} optional - Fields that may be present.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {void}
+ */
+function assertSnapshotKeys(value, required, optional, label) {
+  assertExactKeys(
+    value,
+    [
+      ...required,
+      ...optional.filter((key) =>
+        Object.prototype.hasOwnProperty.call(value, key),
+      ),
+    ],
+    label,
+  );
+}
+
+/**
  * @param {unknown} value - Candidate actor.
  * @returns {{kind: string, id: string}} - Validated actor.
  */
 function normalizeActor(value) {
-  const actor = cloneJsonObject(
+  const actor = cloneBoundedJsonObject(
     value ?? { kind: 'local', id: 'local' },
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
     'actor',
   );
   assertExactKeys(actor, ['kind', 'id'], 'actor');
@@ -270,7 +300,11 @@ function normalizeActor(value) {
  * @returns {{kind: 'manual'}} - Validated trigger.
  */
 function normalizeManualTrigger(value) {
-  const trigger = cloneJsonObject(value ?? { kind: 'manual' }, 'trigger');
+  const trigger = cloneBoundedJsonObject(
+    value ?? { kind: 'manual' },
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    'trigger',
+  );
   assertExactKeys(trigger, ['kind'], 'trigger');
   if (trigger.kind !== 'manual') {
     throw new TypeError(
@@ -287,14 +321,7 @@ function normalizeManualTrigger(value) {
  * @returns {any} - Strict independently cloned JSON value.
  */
 function cloneBoundedJson(value, label, maxBytes) {
-  const cloned = cloneJsonValue(value, label);
-  const encoded = Buffer.byteLength(JSON.stringify(cloned), 'utf8');
-  if (encoded > maxBytes) {
-    throw new RangeError(
-      `${label} encoded JSON must not exceed ${maxBytes} bytes until immutable payload references are implemented.`,
-    );
-  }
-  return cloned;
+  return cloneBoundedJsonValue(value, maxBytes, label);
 }
 
 /**
@@ -607,7 +634,29 @@ function attemptMapKey(invocationId, attemptId) {
  * @returns {Record<string, any>} - Strict cloned run snapshot.
  */
 function normalizeRunSnapshot(run, runId) {
-  const value = cloneJsonObject(run, 'run snapshot');
+  const value = cloneBoundedJsonObject(
+    run,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    'run snapshot',
+  );
+  assertExactKeys(
+    value,
+    [
+      'schemaVersion',
+      'runId',
+      'appId',
+      'revisionId',
+      'trigger',
+      'input',
+      'callerMetadata',
+      'status',
+      'version',
+      'lastSequence',
+      'createdAt',
+      'updatedAt',
+    ],
+    'run snapshot',
+  );
   if (value.schemaVersion !== EXECUTION_LEDGER_SCHEMA_VERSION) {
     throw new ExecutionLedgerProjectionError(runId, 'unsupported run schema');
   }
@@ -638,7 +687,32 @@ function normalizeRunSnapshot(run, runId) {
  * @returns {Record<string, any>} - Strict cloned invocation snapshot.
  */
 function normalizeInvocationSnapshot(invocation, runId) {
-  const value = cloneJsonObject(invocation, 'invocation snapshot');
+  const value = cloneBoundedJsonObject(
+    invocation,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    'invocation snapshot',
+  );
+  assertSnapshotKeys(
+    value,
+    [
+      'schemaVersion',
+      'runId',
+      'invocationId',
+      'appId',
+      'revisionId',
+      'activityId',
+      'input',
+      'callerMetadata',
+      'status',
+      'generation',
+      'version',
+      'lastSequence',
+      'createdAt',
+      'updatedAt',
+    ],
+    ['terminal', 'uncertainty'],
+    'invocation snapshot',
+  );
   if (value.schemaVersion !== EXECUTION_LEDGER_SCHEMA_VERSION) {
     throw new ExecutionLedgerProjectionError(
       runId,
@@ -677,13 +751,37 @@ function normalizeInvocationSnapshot(invocation, runId) {
     value.callerMetadata,
     'invocation projection callerMetadata',
   );
-  if (Object.prototype.hasOwnProperty.call(value, 'terminal')) {
+  const hasTerminal = Object.prototype.hasOwnProperty.call(value, 'terminal');
+  const hasUncertainty = Object.prototype.hasOwnProperty.call(
+    value,
+    'uncertainty',
+  );
+  if (
+    ([InvocationStatus.RUNNABLE, InvocationStatus.RUNNING].includes(
+      value.status,
+    ) &&
+      (hasTerminal || hasUncertainty)) ||
+    (value.status === InvocationStatus.UNCERTAIN &&
+      (!hasUncertainty || hasTerminal)) ||
+    ([
+      InvocationStatus.COMPLETED,
+      InvocationStatus.FAILED,
+      InvocationStatus.CANCELLED,
+    ].includes(value.status) &&
+      (!hasTerminal || hasUncertainty))
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'invalid invocation lifecycle fields',
+    );
+  }
+  if (hasTerminal) {
     value.terminal = cloneInlinePayload(
       value.terminal,
       'invocation projection terminal',
     );
   }
-  if (Object.prototype.hasOwnProperty.call(value, 'uncertainty')) {
+  if (hasUncertainty) {
     value.uncertainty = cloneInlinePayload(
       value.uncertainty,
       'invocation projection uncertainty',
@@ -698,7 +796,33 @@ function normalizeInvocationSnapshot(invocation, runId) {
  * @returns {Record<string, any>} - Strict cloned attempt snapshot.
  */
 function normalizeAttemptSnapshot(attempt, runId) {
-  const value = cloneJsonObject(attempt, 'attempt snapshot');
+  const value = cloneBoundedJsonObject(
+    attempt,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    'attempt snapshot',
+  );
+  assertSnapshotKeys(
+    value,
+    [
+      'schemaVersion',
+      'runId',
+      'invocationId',
+      'attemptId',
+      'appId',
+      'revisionId',
+      'activityId',
+      'status',
+      'generation',
+      'version',
+      'coordinatorEpoch',
+      'fencingToken',
+      'claimedAt',
+      'updatedAt',
+      'lastSequence',
+    ],
+    ['startedAt', 'terminal', 'evidence', 'abandonment'],
+    'attempt snapshot',
+  );
   if (value.schemaVersion !== EXECUTION_LEDGER_SCHEMA_VERSION) {
     throw new ExecutionLedgerProjectionError(
       runId,
@@ -732,22 +856,48 @@ function normalizeAttemptSnapshot(attempt, runId) {
   assertPositiveSafeInteger(value.lastSequence, 'attempt projection sequence');
   normalizeObservedAt(value.claimedAt, 'attempt projection claimedAt');
   normalizeObservedAt(value.updatedAt, 'attempt projection updatedAt');
-  if (Object.prototype.hasOwnProperty.call(value, 'startedAt')) {
+  const hasStartedAt = Object.prototype.hasOwnProperty.call(value, 'startedAt');
+  const hasTerminal = Object.prototype.hasOwnProperty.call(value, 'terminal');
+  const hasEvidence = Object.prototype.hasOwnProperty.call(value, 'evidence');
+  const hasAbandonment = Object.prototype.hasOwnProperty.call(
+    value,
+    'abandonment',
+  );
+  if (
+    (value.status === AttemptStatus.CLAIMED &&
+      (hasStartedAt || hasTerminal || hasEvidence || hasAbandonment)) ||
+    (value.status === AttemptStatus.STARTED &&
+      (!hasStartedAt || hasTerminal || hasEvidence || hasAbandonment)) ||
+    ([
+      AttemptStatus.COMPLETED,
+      AttemptStatus.FAILED,
+      AttemptStatus.CANCELLED,
+    ].includes(value.status) &&
+      (!hasStartedAt || !hasTerminal || !hasEvidence || hasAbandonment)) ||
+    (value.status === AttemptStatus.ABANDONED &&
+      (hasTerminal || hasEvidence || !hasAbandonment))
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'invalid attempt lifecycle fields',
+    );
+  }
+  if (hasStartedAt) {
     normalizeObservedAt(value.startedAt, 'attempt projection startedAt');
   }
-  if (Object.prototype.hasOwnProperty.call(value, 'terminal')) {
+  if (hasTerminal) {
     value.terminal = cloneInlinePayload(
       value.terminal,
       'attempt projection terminal',
     );
   }
-  if (Object.prototype.hasOwnProperty.call(value, 'evidence')) {
+  if (hasEvidence) {
     value.evidence = cloneInlinePayload(
       value.evidence,
       'attempt projection evidence',
     );
   }
-  if (Object.prototype.hasOwnProperty.call(value, 'abandonment')) {
+  if (hasAbandonment) {
     value.abandonment = cloneInlinePayload(
       value.abandonment,
       'attempt projection abandonment',
@@ -907,7 +1057,11 @@ function normalizeEventRecord(value, runId) {
   assertOpaqueId(event.event_id, 'event identity');
   normalizeObservedAt(event.observed_at, 'event observedAt');
   const actor = normalizeActor(event.actor);
-  const fence = cloneJsonObject(event.fence, 'event fence');
+  const fence = cloneBoundedJsonObject(
+    event.fence,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    'event fence',
+  );
   assertExactKeys(
     fence,
     ['coordinatorEpoch', 'invocationGeneration'],
@@ -1006,7 +1160,11 @@ function normalizeTransitionReceipt(value, runId) {
     assertOpaqueId(receipt.invocation_id, 'transition receipt invocation');
     assertOpaqueId(receipt.attempt_id, 'transition receipt attempt');
   }
-  return cloneJsonObject(receipt, 'transition receipt');
+  return cloneBoundedJsonObject(
+    receipt,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    'transition receipt',
+  );
 }
 
 /**
@@ -1015,7 +1173,18 @@ function normalizeTransitionReceipt(value, runId) {
  * @returns {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} - Event projection snapshots.
  */
 function eventSnapshots(event, runId) {
-  const payload = cloneJsonObject(event.payload, 'event payload');
+  const payload = cloneBoundedJsonObject(
+    event.payload,
+    EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+    'event payload',
+  );
+  assertExactKeys(
+    payload,
+    event.type === 'manual-run-created'
+      ? ['run', 'invocation']
+      : ['run', 'invocation', 'attempt'],
+    'event payload',
+  );
   const run = normalizeRunSnapshot(payload.run, runId);
   const invocation = normalizeInvocationSnapshot(payload.invocation, runId);
   /** @type {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} */
@@ -1024,6 +1193,117 @@ function eventSnapshots(event, runId) {
     result.attempt = normalizeAttemptSnapshot(payload.attempt, runId);
   }
   return result;
+}
+
+/**
+ * Recompute the semantic idempotency digest from the immutable event and the
+ * prior folded state. Event IDs bind a stored digest, but this check binds the
+ * digest itself to the transition it claims to represent.
+ * @param {Record<string, any>} event - Event being folded.
+ * @param {Record<string, any> | undefined} currentRun - Prior run snapshot.
+ * @param {Record<string, any> | undefined} currentInvocation - Prior invocation snapshot.
+ * @param {Record<string, any> | undefined} currentAttempt - Prior attempt snapshot.
+ * @param {Record<string, any>} run - Next run snapshot.
+ * @param {Record<string, any>} invocation - Next invocation snapshot.
+ * @param {Record<string, any> | undefined} attempt - Next attempt snapshot.
+ * @param {string} runId - Durable run identity.
+ * @returns {void}
+ */
+function assertEventRequestDigest(
+  event,
+  currentRun,
+  currentInvocation,
+  currentAttempt,
+  run,
+  invocation,
+  attempt,
+  runId,
+) {
+  /** @type {Record<string, any>} */
+  let value;
+  if (event.type === 'manual-run-created') {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      transitionId: event.transition_id,
+      actor: event.actor,
+      coordinatorEpoch: event.fence.coordinatorEpoch,
+      appId: run.appId,
+      revisionId: run.revisionId,
+      activityId: invocation.activityId,
+      input: run.input,
+      callerMetadata: run.callerMetadata,
+      trigger: run.trigger,
+    };
+  } else if (event.type === 'attempt-claimed') {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      attemptId: attempt?.attemptId,
+      fencingToken: attempt?.fencingToken,
+      expectedGeneration: currentInvocation?.generation,
+      expectedVersion: currentRun?.version,
+      transitionId: event.transition_id,
+      actor: event.actor,
+      coordinatorEpoch: attempt?.coordinatorEpoch,
+    };
+  } else if (event.type === 'attempt-started') {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      attemptId: attempt?.attemptId,
+      fencingToken: attempt?.fencingToken,
+      generation: attempt?.generation,
+      expectedVersion: currentRun?.version,
+      transitionId: event.transition_id,
+      actor: event.actor,
+      coordinatorEpoch: attempt?.coordinatorEpoch,
+    };
+  } else if (event.type === 'attempt-terminal') {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      attemptId: attempt?.attemptId,
+      fencingToken: attempt?.fencingToken,
+      generation: attempt?.generation,
+      expectedVersion: currentRun?.version,
+      transitionId: event.transition_id,
+      terminal: attempt?.terminal,
+      evidence: attempt?.evidence,
+      actor: event.actor,
+      coordinatorEpoch: attempt?.coordinatorEpoch,
+    };
+  } else if (event.type === 'attempt-abandoned-before-start') {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      attemptId: attempt?.attemptId,
+      fencingToken: attempt?.fencingToken,
+      generation: attempt?.generation,
+      expectedVersion: currentRun?.version,
+      transitionId: event.transition_id,
+      reason: attempt?.abandonment,
+      actor: event.actor,
+      coordinatorEpoch: attempt?.coordinatorEpoch,
+    };
+  } else {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      attemptId: attempt?.attemptId,
+      fencingToken: attempt?.fencingToken,
+      generation: attempt?.generation,
+      expectedVersion: currentRun?.version,
+      transitionId: event.transition_id,
+      reason: attempt?.abandonment,
+      actor: event.actor,
+      coordinatorEpoch: attempt?.coordinatorEpoch,
+    };
+  }
+  const expectedDigest = createTransitionRequestDigest(event.type, value);
+  if (event.request_digest !== expectedDigest) {
+    throw new ExecutionLedgerProjectionError(runId, 'event request digest');
+  }
 }
 
 /**
@@ -1068,6 +1348,16 @@ function applyEvent(run, invocation, attempt, event, state, runId) {
     ) {
       throw new ExecutionLedgerProjectionError(runId, 'invalid run creation');
     }
+    assertEventRequestDigest(
+      event,
+      undefined,
+      undefined,
+      undefined,
+      run,
+      invocation,
+      undefined,
+      runId,
+    );
     state.run = run;
     state.invocations.set(invocation.invocationId, invocation);
     return;
@@ -1092,6 +1382,7 @@ function applyEvent(run, invocation, attempt, event, state, runId) {
     assertAttemptBelongsToInvocation(attempt, run, invocation, runId);
     if (
       currentRun.status !== RunStatus.RUNNING ||
+      run.status !== RunStatus.RUNNING ||
       currentInvocation.status !== InvocationStatus.RUNNABLE ||
       state.attempts.has(
         attemptMapKey(attempt.invocationId, attempt.attemptId),
@@ -1117,9 +1408,13 @@ function applyEvent(run, invocation, attempt, event, state, runId) {
     }
   } else if (event.type === 'attempt-started') {
     if (
+      currentRun.status !== RunStatus.RUNNING ||
+      run.status !== RunStatus.RUNNING ||
+      currentInvocation.status !== InvocationStatus.RUNNING ||
       !currentAttempt ||
       currentAttempt.status !== AttemptStatus.CLAIMED ||
       attempt.status !== AttemptStatus.STARTED ||
+      attempt.generation !== currentInvocation.generation ||
       Object.prototype.hasOwnProperty.call(currentAttempt, 'startedAt') ||
       attempt.startedAt !== event.observed_at ||
       Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
@@ -1149,10 +1444,14 @@ function applyEvent(run, invocation, attempt, event, state, runId) {
       'persisted attempt evidence',
     );
     if (
+      currentRun.status !== RunStatus.RUNNING ||
+      currentInvocation.status !== InvocationStatus.RUNNING ||
       !currentAttempt ||
       currentAttempt.status !== AttemptStatus.STARTED ||
       attempt.status !== statuses.attempt ||
+      attempt.generation !== currentInvocation.generation ||
       invocation.status !== statuses.invocation ||
+      invocation.generation !== currentInvocation.generation ||
       run.status !== statuses.run ||
       attempt.startedAt !== currentAttempt.startedAt ||
       terminal.attemptId !== attempt.attemptId ||
@@ -1167,9 +1466,12 @@ function applyEvent(run, invocation, attempt, event, state, runId) {
     assertAttemptAdvance(currentAttempt, attempt, event, runId);
   } else if (event.type === 'attempt-abandoned-before-start') {
     if (
+      currentRun.status !== RunStatus.RUNNING ||
+      currentInvocation.status !== InvocationStatus.RUNNING ||
       !currentAttempt ||
       currentAttempt.status !== AttemptStatus.CLAIMED ||
       attempt.status !== AttemptStatus.ABANDONED ||
+      attempt.generation !== currentInvocation.generation ||
       Object.prototype.hasOwnProperty.call(currentAttempt, 'startedAt') ||
       Object.prototype.hasOwnProperty.call(attempt, 'startedAt') ||
       Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
@@ -1187,14 +1489,19 @@ function applyEvent(run, invocation, attempt, event, state, runId) {
     assertAttemptAdvance(currentAttempt, attempt, event, runId);
   } else if (event.type === 'attempt-became-uncertain') {
     if (
+      currentRun.status !== RunStatus.RUNNING ||
+      currentInvocation.status !== InvocationStatus.RUNNING ||
       !currentAttempt ||
       currentAttempt.status !== AttemptStatus.STARTED ||
       attempt.status !== AttemptStatus.ABANDONED ||
+      attempt.generation !== currentInvocation.generation ||
       attempt.startedAt !== currentAttempt.startedAt ||
       Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
       Object.prototype.hasOwnProperty.call(attempt, 'evidence') ||
       !Object.prototype.hasOwnProperty.call(attempt, 'abandonment') ||
       invocation.status !== InvocationStatus.UNCERTAIN ||
+      invocation.generation !== currentInvocation.generation ||
+      !hasSameCanonicalJson(invocation.uncertainty, attempt.abandonment) ||
       run.status !== RunStatus.BLOCKED
     ) {
       throw new ExecutionLedgerProjectionError(
@@ -1204,6 +1511,17 @@ function applyEvent(run, invocation, attempt, event, state, runId) {
     }
     assertAttemptAdvance(currentAttempt, attempt, event, runId);
   }
+
+  assertEventRequestDigest(
+    event,
+    currentRun,
+    currentInvocation,
+    currentAttempt,
+    run,
+    invocation,
+    attempt,
+    runId,
+  );
 
   state.run = run;
   state.invocations.set(invocation.invocationId, invocation);
@@ -1552,7 +1870,11 @@ function createTransitionRequestDigest(type, value) {
  * @returns {{runId: string, transitionId: string, expectedVersion: number, actor: {kind: string, id: string}, observedAt: number, coordinatorEpoch: number}} - Common transition fields.
  */
 function normalizeTransitionOptions(options, allowed, label, now) {
-  const value = cloneJsonObject(options, label);
+  const value = cloneBoundedJsonObject(
+    options,
+    EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+    label,
+  );
   assertSupportedKeys(value, allowed, label);
   return {
     runId: assertOpaqueId(value.runId, `${label}.runId`),
@@ -1703,6 +2025,31 @@ function createLedgerAttemptStart(run, invocation, attempt) {
 }
 
 /**
+ * Reject a known oversized frames array before deep-cloning evidence. This is
+ * only a fast path: the strict bounded clone below remains the authority for
+ * object shape, accessors, and byte accounting.
+ * @param {unknown} value - Candidate evidence envelope.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {void}
+ */
+function assertEvidenceFrameCountPreflight(value, label) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return;
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, 'frames');
+  if (
+    descriptor &&
+    'value' in descriptor &&
+    Array.isArray(descriptor.value) &&
+    descriptor.value.length > EXECUTION_LEDGER_MAX_EVIDENCE_FRAMES
+  ) {
+    throw new TypeError(
+      `${label}.frames must contain no more than ${EXECUTION_LEDGER_MAX_EVIDENCE_FRAMES} frames.`,
+    );
+  }
+}
+
+/**
  * Validate the complete host-owned evidence before allowing any physical
  * attempt terminal to become a durable logical outcome. A bare terminal frame
  * is not sufficient: cancellation, deadline, component ordering, and managed
@@ -1713,14 +2060,25 @@ function createLedgerAttemptStart(run, invocation, attempt) {
  * @returns {{terminal: Readonly<Record<string, any>>, evidence: Record<string, any>}} - Revalidated bounded evidence.
  */
 function validateLedgerAttemptEvidence(value, expectedStart, label) {
-  const evidence = cloneJsonObject(value, label);
+  assertEvidenceFrameCountPreflight(value, label);
+  const evidence = cloneBoundedJsonObject(
+    value,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    label,
+  );
   assertExactKeys(
     evidence,
     ['status', 'start', 'terminal', 'frames', 'transcript'],
     label,
   );
-  if (!Array.isArray(evidence.frames) || evidence.frames.length < 2) {
-    throw new TypeError(`${label}.frames must contain a start and terminal.`);
+  if (
+    !Array.isArray(evidence.frames) ||
+    evidence.frames.length < 2 ||
+    evidence.frames.length > EXECUTION_LEDGER_MAX_EVIDENCE_FRAMES
+  ) {
+    throw new TypeError(
+      `${label}.frames must contain a start and terminal and no more than ${EXECUTION_LEDGER_MAX_EVIDENCE_FRAMES} frames.`,
+    );
   }
   const declaredStart = validateActivityProtocolHostFrame(
     evidence.start,
@@ -1781,7 +2139,7 @@ function validateLedgerAttemptEvidence(value, expectedStart, label) {
   }
   return {
     terminal,
-    evidence: cloneInlinePayload(evidence, label),
+    evidence,
   };
 }
 
@@ -2013,7 +2371,11 @@ export function createExecutionLedger({
    * @returns {Promise<{applied: boolean, receipt?: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>}>} - Created or deduplicated run.
    */
   async function createManualRun(options) {
-    const value = cloneJsonObject(options, 'createManualRun');
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+      'createManualRun',
+    );
     assertSupportedKeys(
       value,
       [
@@ -2047,13 +2409,11 @@ export function createExecutionLedger({
       Object.prototype.hasOwnProperty.call(value, 'input') ? value.input : {},
       'createManualRun.input',
     );
-    const callerMetadata = cloneInlinePayload(
-      cloneJsonObject(
-        Object.prototype.hasOwnProperty.call(value, 'callerMetadata')
-          ? value.callerMetadata
-          : {},
-        'createManualRun.callerMetadata',
-      ),
+    const callerMetadata = cloneBoundedJsonObject(
+      Object.prototype.hasOwnProperty.call(value, 'callerMetadata')
+        ? value.callerMetadata
+        : {},
+      EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
       'createManualRun.callerMetadata',
     );
     const trigger = normalizeManualTrigger(value.trigger);
@@ -2068,6 +2428,11 @@ export function createExecutionLedger({
         : 0,
       'createManualRun.coordinatorEpoch',
     );
+    if (coordinatorEpoch !== 0) {
+      throw new TypeError(
+        'createManualRun.coordinatorEpoch must be 0 until durable coordinator ownership is implemented.',
+      );
+    }
     const observedAt = normalizeObservedAt(
       Object.prototype.hasOwnProperty.call(value, 'observedAt')
         ? value.observedAt
@@ -2293,7 +2658,11 @@ export function createExecutionLedger({
    * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}>} - Claim outcome.
    */
   async function claimInvocation(options) {
-    const value = cloneJsonObject(options, 'claimInvocation');
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+      'claimInvocation',
+    );
     const common = normalizeTransitionOptions(
       value,
       [
@@ -2436,7 +2805,11 @@ export function createExecutionLedger({
    * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}>} - Start outcome.
    */
   async function markAttemptStarted(options) {
-    const value = cloneJsonObject(options, 'markAttemptStarted');
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+      'markAttemptStarted',
+    );
     const common = normalizeTransitionOptions(
       value,
       [
@@ -2573,7 +2946,11 @@ export function createExecutionLedger({
    * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}>} - Terminal outcome.
    */
   async function commitVerifiedAttemptTerminal(options) {
-    const value = cloneJsonObject(options, 'commitVerifiedAttemptTerminal');
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+      'commitVerifiedAttemptTerminal',
+    );
     const common = normalizeTransitionOptions(
       value,
       [
@@ -2737,7 +3114,11 @@ export function createExecutionLedger({
    * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}>} - Uncertainty outcome.
    */
   async function markAttemptUncertain(options) {
-    const value = cloneJsonObject(options, 'markAttemptUncertain');
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+      'markAttemptUncertain',
+    );
     const common = normalizeTransitionOptions(
       value,
       [
@@ -2885,7 +3266,11 @@ export function createExecutionLedger({
    * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}>} - Recovery outcome.
    */
   async function abandonUnstartedAttempt(options) {
-    const value = cloneJsonObject(options, 'abandonUnstartedAttempt');
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+      'abandonUnstartedAttempt',
+    );
     const common = normalizeTransitionOptions(
       value,
       [

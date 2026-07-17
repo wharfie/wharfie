@@ -152,4 +152,4 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
    then add a durable local-store/service lifecycle and payload references
    before schedules, queues, effects, or workflows.
 
-The latest dated handoff at [llm/checkpoints/2026-07-17-execution-ledger-foundation.md](llm/checkpoints/2026-07-17-execution-ledger-foundation.md) contains exact repository state and restart instructions.
+The latest dated handoff at [llm/checkpoints/2026-07-17-execution-ledger-hardening.md](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) contains the current ledger integrity boundary and restart instructions. The preceding [foundation checkpoint](llm/checkpoints/2026-07-17-execution-ledger-foundation.md) records the original vertical's scope.

@@ -12,6 +12,7 @@ import {
   ExecutionLedgerProjectionError,
   ExecutionLedgerRunConflictError,
   ExecutionLedgerTransitionConflictError,
+  EXECUTION_LEDGER_MAX_EVIDENCE_FRAMES,
   InvocationStatus,
   RunStatus,
   createExecutionLedger,
@@ -479,6 +480,24 @@ for (const adapter of getAdapterMatrix()) {
       }
     });
 
+    test('rejects coordinator ownership on manual creation until it is durable', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-create-epoch',
+          now: createClock(),
+        });
+
+        await expect(
+          ledger.createManualRun(manualRun({ coordinatorEpoch: 1 })),
+        ).rejects.toThrow(/coordinatorEpoch must be 0/);
+        await expect(ledger.getRun(RUN_ID)).resolves.toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
     test('fails closed if a mutable projection no longer agrees with the event stream', async () => {
       const { db, cleanup } = await adapter.create();
       try {
@@ -545,6 +564,24 @@ for (const adapter of getAdapterMatrix()) {
           transitionId: 'start-1',
         });
 
+        const tooManyFrames = completedEvidence(attemptId, 'fence-1');
+        tooManyFrames.frames = Array.from(
+          { length: EXECUTION_LEDGER_MAX_EVIDENCE_FRAMES + 1 },
+          () => ({}),
+        );
+        await expect(
+          ledger.commitVerifiedAttemptTerminal({
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            attemptId,
+            fencingToken: 'fence-1',
+            generation: 1,
+            expectedVersion: 3,
+            transitionId: 'too-many-evidence-frames',
+            evidence: tooManyFrames,
+          }),
+        ).rejects.toThrow(/no more than/);
+
         await expect(
           ledger.commitVerifiedAttemptTerminal({
             runId: RUN_ID,
@@ -609,6 +646,64 @@ for (const adapter of getAdapterMatrix()) {
         });
 
         await expect(ledger.getRun(RUN_ID)).rejects.toBeInstanceOf(
+          ExecutionLedgerProjectionError,
+        );
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('rejects a rehashed event with a detached semantic request digest', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const tableName = 'execution-ledger-request-digest-forgery';
+        const ledger = createExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+
+        const event = await db.get({
+          tableName,
+          keyName: 'run_id',
+          keyValue: RUN_ID,
+          sortKeyName: 'sort_key',
+          sortKeyValue: getEventSortKey(1),
+          consistentRead: true,
+        });
+        expect(event).toBeDefined();
+        const forgedEvent = {
+          ...event,
+          request_digest: 'wlt_detached-request-digest',
+        };
+        const forgedEventId = eventIdFor(forgedEvent);
+        /** @param {string} sortKeyValue - Ledger record sort key. @param {any[]} updates - Atomic field updates. */
+        const update = async (sortKeyValue, updates) =>
+          await db.update({
+            tableName,
+            keyName: 'run_id',
+            keyValue: RUN_ID,
+            sortKeyName: 'sort_key',
+            sortKeyValue,
+            updates,
+          });
+        await update(getEventSortKey(1), [
+          {
+            property: ['request_digest'],
+            propertyValue: forgedEvent.request_digest,
+          },
+          { property: ['event_id'], propertyValue: forgedEventId },
+        ]);
+        await update(getTransitionSortKey('create-run'), [
+          {
+            property: ['request_digest'],
+            propertyValue: forgedEvent.request_digest,
+          },
+          { property: ['event_id'], propertyValue: forgedEventId },
+        ]);
+
+        await expect(ledger.rebuildRun(RUN_ID)).rejects.toBeInstanceOf(
           ExecutionLedgerProjectionError,
         );
       } finally {
@@ -708,6 +803,155 @@ for (const adapter of getAdapterMatrix()) {
             property: ['data', 'status'],
             propertyValue: AttemptStatus.FAILED,
           },
+        ]);
+
+        await expect(ledger.rebuildRun(RUN_ID)).rejects.toBeInstanceOf(
+          ExecutionLedgerProjectionError,
+        );
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('rejects a rehashed claim that rewrites the next run status', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const tableName = 'execution-ledger-claim-status-forgery';
+        const ledger = createExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'fence-1',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'claim-1',
+        });
+
+        const event = await db.get({
+          tableName,
+          keyName: 'run_id',
+          keyValue: RUN_ID,
+          sortKeyName: 'sort_key',
+          sortKeyValue: getEventSortKey(2),
+          consistentRead: true,
+        });
+        expect(event).toBeDefined();
+        const forgedPayload = JSON.parse(JSON.stringify(event?.payload));
+        forgedPayload.run.status = RunStatus.COMPLETED;
+        const forgedEvent = { ...event, payload: forgedPayload };
+        const forgedEventId = eventIdFor(forgedEvent);
+        /** @param {string} sortKeyValue - Ledger record sort key. @param {any[]} updates - Atomic field updates. */
+        const update = async (sortKeyValue, updates) =>
+          await db.update({
+            tableName,
+            keyName: 'run_id',
+            keyValue: RUN_ID,
+            sortKeyName: 'sort_key',
+            sortKeyValue,
+            updates,
+          });
+
+        await update(getEventSortKey(2), [
+          { property: ['payload'], propertyValue: forgedPayload },
+          { property: ['event_id'], propertyValue: forgedEventId },
+        ]);
+        await update(getTransitionSortKey('claim-1'), [
+          { property: ['event_id'], propertyValue: forgedEventId },
+        ]);
+        await update(getRunProjectionSortKey(), [
+          { property: ['status'], propertyValue: RunStatus.COMPLETED },
+          {
+            property: ['data', 'status'],
+            propertyValue: RunStatus.COMPLETED,
+          },
+        ]);
+
+        await expect(ledger.rebuildRun(RUN_ID)).rejects.toBeInstanceOf(
+          ExecutionLedgerProjectionError,
+        );
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('rejects a rehashed terminal that rewrites the invocation generation', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const tableName = 'execution-ledger-terminal-generation-forgery';
+        const ledger = createExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        const claim = await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'fence-1',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'claim-1',
+        });
+        const attemptId = claim.attempt?.attemptId;
+        await ledger.markAttemptStarted({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'fence-1',
+          generation: 1,
+          expectedVersion: 2,
+          transitionId: 'start-1',
+        });
+        await ledger.commitVerifiedAttemptTerminal({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'fence-1',
+          generation: 1,
+          expectedVersion: 3,
+          transitionId: 'terminal-1',
+          evidence: completedEvidence(attemptId, 'fence-1'),
+        });
+
+        const event = await db.get({
+          tableName,
+          keyName: 'run_id',
+          keyValue: RUN_ID,
+          sortKeyName: 'sort_key',
+          sortKeyValue: getEventSortKey(4),
+          consistentRead: true,
+        });
+        expect(event).toBeDefined();
+        const forgedPayload = JSON.parse(JSON.stringify(event?.payload));
+        forgedPayload.invocation.generation = 99;
+        const forgedEvent = { ...event, payload: forgedPayload };
+        const forgedEventId = eventIdFor(forgedEvent);
+        /** @param {string} sortKeyValue - Ledger record sort key. @param {any[]} updates - Atomic field updates. */
+        const update = async (sortKeyValue, updates) =>
+          await db.update({
+            tableName,
+            keyName: 'run_id',
+            keyValue: RUN_ID,
+            sortKeyName: 'sort_key',
+            sortKeyValue,
+            updates,
+          });
+
+        await update(getEventSortKey(4), [
+          { property: ['payload'], propertyValue: forgedPayload },
+          { property: ['event_id'], propertyValue: forgedEventId },
+        ]);
+        await update(getTransitionSortKey('terminal-1'), [
+          { property: ['event_id'], propertyValue: forgedEventId },
+        ]);
+        await update(getInvocationProjectionSortKey(INVOCATION_ID), [
+          { property: ['generation'], propertyValue: 99 },
+          { property: ['data', 'generation'], propertyValue: 99 },
         ]);
 
         await expect(ledger.rebuildRun(RUN_ID)).rejects.toBeInstanceOf(

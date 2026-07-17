@@ -79,18 +79,117 @@ function isPlainArray(value) {
 }
 
 /**
+ * @param {number | undefined} maxBytes - Optional encoded JSON byte limit.
+ * @param {string} label - Boundary label.
+ * @returns {{maxBytes: number, usedBytes: number} | undefined} - Mutable byte budget.
+ */
+function createByteBudget(maxBytes, label) {
+  if (maxBytes === undefined) return undefined;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    throw new TypeError(
+      `${label} byte limit must be a nonnegative safe integer.`,
+    );
+  }
+  return { maxBytes, usedBytes: 0 };
+}
+
+/**
+ * Account for encoded JSON bytes while cloning. This keeps a bounded caller
+ * from allocating a complete clone before its byte limit is checked.
+ * @param {{maxBytes: number, usedBytes: number} | undefined} budget - Optional byte budget.
+ * @param {number} byteCount - Number of exact serialized UTF-8 bytes.
+ * @param {string} label - Boundary label.
+ * @returns {void}
+ */
+function consumeJsonByteCount(budget, byteCount, label) {
+  if (!budget) return;
+  budget.usedBytes += byteCount;
+  if (budget.usedBytes > budget.maxBytes) {
+    throw new RangeError(
+      `${label} encoded JSON must not exceed ${budget.maxBytes} bytes.`,
+    );
+  }
+}
+
+/**
+ * Account for one already-serialized JSON fragment while cloning.
+ * @param {{maxBytes: number, usedBytes: number} | undefined} budget - Optional byte budget.
+ * @param {string} fragment - Exact JSON fragment.
+ * @param {string} label - Boundary label.
+ * @returns {void}
+ */
+function consumeJsonBytes(budget, fragment, label) {
+  consumeJsonByteCount(budget, Buffer.byteLength(fragment, 'utf8'), label);
+}
+
+/**
+ * Account for the exact JSON encoding of a string without first allocating an
+ * escaped copy of an oversized input string.
+ * @param {{maxBytes: number, usedBytes: number} | undefined} budget - Optional byte budget.
+ * @param {string} value - String being serialized.
+ * @param {string} label - Boundary label.
+ * @returns {void}
+ */
+function consumeJsonStringBytes(budget, value, label) {
+  if (!budget) return;
+  // Opening and closing JSON quotes.
+  consumeJsonByteCount(budget, 2, label);
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === 0x22 || code === 0x5c) {
+      consumeJsonByteCount(budget, 2, label);
+    } else if (
+      code === 0x08 ||
+      code === 0x09 ||
+      code === 0x0a ||
+      code === 0x0c ||
+      code === 0x0d
+    ) {
+      consumeJsonByteCount(budget, 2, label);
+    } else if (code < 0x20) {
+      consumeJsonByteCount(budget, 6, label);
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        consumeJsonByteCount(budget, 4, label);
+        index += 1;
+      } else {
+        // JSON.stringify's well-formed JSON behavior escapes lone surrogates.
+        consumeJsonByteCount(budget, 6, label);
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      // JSON.stringify's well-formed JSON behavior escapes lone surrogates.
+      consumeJsonByteCount(budget, 6, label);
+    } else if (code < 0x80) {
+      consumeJsonByteCount(budget, 1, label);
+    } else if (code < 0x800) {
+      consumeJsonByteCount(budget, 2, label);
+    } else {
+      consumeJsonByteCount(budget, 3, label);
+    }
+  }
+}
+
+/**
  * @param {unknown} value - Candidate JSON value.
  * @param {string} label - Boundary label.
  * @param {(string | number)[]} path - Path segments.
  * @param {WeakSet<object>} ancestors - Objects on the active traversal path.
+ * @param {{maxBytes: number, usedBytes: number} | undefined} budget - Optional encoded JSON byte budget.
  * @returns {any} - Cloned JSON value.
  */
-function cloneValue(value, label, path, ancestors) {
-  if (value === null) return null;
+function cloneValue(value, label, path, ancestors, budget) {
+  if (value === null) {
+    consumeJsonBytes(budget, 'null', label);
+    return null;
+  }
 
   switch (typeof value) {
     case 'string':
+      consumeJsonStringBytes(budget, value, label);
+      return value;
     case 'boolean':
+      consumeJsonBytes(budget, value ? 'true' : 'false', label);
       return value;
     case 'number':
       if (!Number.isFinite(value)) {
@@ -103,6 +202,7 @@ function cloneValue(value, label, path, ancestors) {
           `${formatPath(label, path)} must not contain negative zero because JSON transport normalizes it to zero.`,
         );
       }
+      consumeJsonBytes(budget, JSON.stringify(value), label);
       return value;
     case 'undefined':
     case 'bigint':
@@ -129,6 +229,12 @@ function cloneValue(value, label, path, ancestors) {
         );
       }
 
+      if (budget && value.length > budget.maxBytes) {
+        throw new RangeError(
+          `${label} encoded JSON must not exceed ${budget.maxBytes} bytes.`,
+        );
+      }
+
       for (let index = 0; index < value.length; index += 1) {
         if (!Object.prototype.hasOwnProperty.call(value, index)) {
           throw new TypeError(
@@ -150,6 +256,7 @@ function cloneValue(value, label, path, ancestors) {
       }
 
       const clone = new Array(value.length);
+      consumeJsonBytes(budget, '[', label);
       for (let index = 0; index < value.length; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(
           value,
@@ -160,13 +267,16 @@ function cloneValue(value, label, path, ancestors) {
             `${formatPath(label, [...path, index])} must be a plain JSON array element.`,
           );
         }
+        if (index > 0) consumeJsonBytes(budget, ',', label);
         clone[index] = cloneValue(
           descriptor.value,
           label,
           [...path, index],
           ancestors,
+          budget,
         );
       }
+      consumeJsonBytes(budget, ']', label);
       return clone;
     }
 
@@ -178,6 +288,8 @@ function cloneValue(value, label, path, ancestors) {
 
     /** @type {Record<string, any>} */
     const clone = {};
+    let propertyCount = 0;
+    consumeJsonBytes(budget, '{', label);
     for (const key of Reflect.ownKeys(value)) {
       if (typeof key !== 'string') {
         throw new TypeError(
@@ -192,13 +304,25 @@ function cloneValue(value, label, path, ancestors) {
         );
       }
 
+      if (propertyCount > 0) consumeJsonBytes(budget, ',', label);
+      consumeJsonStringBytes(budget, key, label);
+      consumeJsonBytes(budget, ':', label);
+
       Object.defineProperty(clone, key, {
         configurable: true,
         enumerable: true,
-        value: cloneValue(descriptor.value, label, [...path, key], ancestors),
+        value: cloneValue(
+          descriptor.value,
+          label,
+          [...path, key],
+          ancestors,
+          budget,
+        ),
         writable: true,
       });
+      propertyCount += 1;
     }
+    consumeJsonBytes(budget, '}', label);
     return clone;
   } finally {
     ancestors.delete(objectValue);
@@ -216,7 +340,25 @@ function cloneValue(value, label, path, ancestors) {
  * @returns {any} - Independent JSON value clone.
  */
 export function cloneJsonValue(value, label = 'Value') {
-  return cloneValue(value, label, [], new WeakSet());
+  return cloneValue(value, label, [], new WeakSet(), undefined);
+}
+
+/**
+ * Validate and clone JSON without first allocating a complete clone that is
+ * larger than the caller's encoded-byte limit.
+ * @param {unknown} value - Candidate JSON value.
+ * @param {number} maxBytes - Maximum UTF-8 bytes in its exact JSON encoding.
+ * @param {string} [label] - Boundary label used in validation errors.
+ * @returns {any} - Independent bounded JSON value clone.
+ */
+export function cloneBoundedJsonValue(value, maxBytes, label = 'Value') {
+  return cloneValue(
+    value,
+    label,
+    [],
+    new WeakSet(),
+    createByteBudget(maxBytes, label),
+  );
 }
 
 /**
@@ -232,4 +374,23 @@ export function cloneJsonObject(value, label = 'Value') {
   return cloneJsonValue(value, label);
 }
 
-export default { cloneJsonObject, cloneJsonValue };
+/**
+ * Validate and clone a JSON object within an encoded-byte limit.
+ * @param {unknown} value - Candidate JSON object.
+ * @param {number} maxBytes - Maximum UTF-8 bytes in its exact JSON encoding.
+ * @param {string} [label] - Boundary label used in validation errors.
+ * @returns {Record<string, any>} - Independent bounded JSON object clone.
+ */
+export function cloneBoundedJsonObject(value, maxBytes, label = 'Value') {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${label} must be a JSON object.`);
+  }
+  return cloneBoundedJsonValue(value, maxBytes, label);
+}
+
+export default {
+  cloneBoundedJsonObject,
+  cloneBoundedJsonValue,
+  cloneJsonObject,
+  cloneJsonValue,
+};

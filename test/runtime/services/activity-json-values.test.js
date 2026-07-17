@@ -6,6 +6,8 @@ import { createHash } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 
 import {
+  cloneBoundedJsonObject,
+  cloneBoundedJsonValue,
   cloneJsonObject,
   cloneJsonValue,
 } from '../../../src/core/runtime/json-value.js';
@@ -243,6 +245,25 @@ describe('JSON activity values', () => {
       first: { valid: true },
       second: { valid: true },
     });
+  });
+
+  it('enforces an exact UTF-8 JSON budget while cloning', () => {
+    for (const text of ['é\n"', '\b\t\n\f\r\u0000', '😀', '\ud800', '\udc00']) {
+      const value = { text };
+      const encodedBytes = Buffer.byteLength(JSON.stringify(value), 'utf8');
+      expect(
+        cloneBoundedJsonValue(value, encodedBytes, 'Bounded value'),
+      ).toEqual(value);
+      expect(() =>
+        cloneBoundedJsonValue(value, encodedBytes - 1, 'Bounded value'),
+      ).toThrow(RangeError);
+    }
+    expect(() =>
+      cloneBoundedJsonObject(['not-an-object'], 100, 'Bounded object'),
+    ).toThrow(TypeError);
+    expect(() => cloneBoundedJsonValue({}, -1, 'Bounded value')).toThrow(
+      TypeError,
+    );
   });
 
   it('uses identical cloned input, caller metadata, and result semantics in source and embedded modes', async () => {
