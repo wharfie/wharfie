@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 import {
   CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
+  CORE_RUNTIME_DEPENDENCY_ACTIVITY,
   CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME,
 } from '../../../src/core/resources/builds/lib/core-runtime-dependency-asset.js';
 import { DEPENDENCY_LOCK_INPUT_FORMAT } from '../../../src/core/runtime/application-revision.js';
@@ -118,7 +119,7 @@ describe('CoreRuntimeDependenciesResource', () => {
       const dependencyLock = await getCoreLmdbDependencyLock();
       expect(dependencyLock.path).toBe(CORE_LOCK_PATH);
       const plan = await createFrozenDependencyClosurePlan({
-        activity: 'core-local-control-store',
+        activity: CORE_RUNTIME_DEPENDENCY_ACTIVITY,
         buildTarget: target,
         dependencyLock,
         externals: [{ name: 'lmdb', version: '3.4.4' }],
@@ -183,7 +184,7 @@ describe('CoreRuntimeDependenciesResource', () => {
         const plan = {
           schemaVersion: 2,
           kind: 'frozenDependencyClosure',
-          activity: 'core-local-control-store',
+          activity: CORE_RUNTIME_DEPENDENCY_ACTIVITY,
           lock: dependencyLock.input,
           target: buildTarget,
           installScripts: 'ignored',
@@ -255,7 +256,7 @@ describe('CoreRuntimeDependenciesResource', () => {
 
       expect(installForTarget).toHaveBeenCalledWith(
         expect.objectContaining({
-          activity: 'core-local-control-store',
+          activity: CORE_RUNTIME_DEPENDENCY_ACTIVITY,
           buildTarget: target,
           dependencyLock: expect.objectContaining({
             input: {

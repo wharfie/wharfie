@@ -15,7 +15,11 @@ import BuildResource from './build-resource.js';
 import { installForTarget } from './lib/install-deps.js';
 import {
   CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
+  CORE_RUNTIME_DEPENDENCY_ACTIVITY,
+  CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
+  CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
   CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME,
+  CORE_RUNTIME_DEPENDENCY_PURPOSE,
   CORE_RUNTIME_DEPENDENCY_ROOT,
   assertCoreRuntimeDependencyTargetSupported,
   stringifyCoreRuntimeDependencyManifest,
@@ -98,8 +102,8 @@ async function getCoreLmdbDependencyLock() {
 }
 
 /**
- * Build the core-owned target closure required by a portable durable local
- * control store. This is intentionally a resource rather than an activity:
+ * Build the core-owned target closure required by portable durable local
+ * control and application data stores. This is intentionally a resource rather than an activity:
  * application dependency locks do not own Wharfie's runtime-native modules.
  */
 class CoreRuntimeDependenciesResource extends BuildResource {
@@ -151,7 +155,7 @@ class CoreRuntimeDependenciesResource extends BuildResource {
       const closureDirectory = join(assetDirectory, 'closure');
       await fsp.mkdir(closureDirectory, { mode: 0o700 });
       const installed = await installForTarget({
-        activity: 'core-local-control-store',
+        activity: CORE_RUNTIME_DEPENDENCY_ACTIVITY,
         buildTarget: target,
         dependencyLock,
         externals: [CORE_LMDB_ROOT],
@@ -168,7 +172,7 @@ class CoreRuntimeDependenciesResource extends BuildResource {
         roots[0]?.version !== CORE_LMDB_ROOT.version
       ) {
         throw new Error(
-          'Core LMDB frozen closure roots do not match the local control-store contract.',
+          'Core LMDB frozen closure roots do not match the local durable-storage contract.',
         );
       }
 
@@ -188,9 +192,9 @@ class CoreRuntimeDependenciesResource extends BuildResource {
         value: createHash('sha256').update(archiveBytes).digest('base64url'),
       };
       const receipt = {
-        schemaVersion: /** @type {const} */ (2),
-        kind: /** @type {const} */ ('coreRuntimeDependencyClosure'),
-        purpose: /** @type {const} */ ('localControlStore'),
+        schemaVersion: CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
+        kind: CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
+        purpose: CORE_RUNTIME_DEPENDENCY_PURPOSE,
         target,
         roots: [{ ...CORE_LMDB_ROOT }],
         dependencyLockInput: installed.dependencyLockInput,
@@ -206,7 +210,7 @@ class CoreRuntimeDependenciesResource extends BuildResource {
         'utf8',
       );
       const manifestPath = join(assetDirectory, 'manifest.json');
-      const archivePath = join(assetDirectory, 'local-control-store.tgz');
+      const archivePath = join(assetDirectory, 'core-lmdb.tgz');
       await fsp.writeFile(manifestPath, manifestBytes, {
         flag: 'wx',
         mode: 0o400,

@@ -22,6 +22,7 @@ import {
 } from '../../../src/core/resources/builds/lib/revision-runtime-assets.js';
 import {
   CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
+  CORE_RUNTIME_DEPENDENCY_ACTIVITY,
   CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
   CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
   CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME,
@@ -191,7 +192,7 @@ async function prepareMockArtifactProvenance(actorSystem, buildDir) {
     const plan = {
       schemaVersion: 2,
       kind: 'frozenDependencyClosure',
-      activity: 'core-local-control-store',
+      activity: CORE_RUNTIME_DEPENDENCY_ACTIVITY,
       lock: dependencyLockInput,
       target,
       installScripts: 'ignored',
@@ -238,7 +239,7 @@ async function prepareMockArtifactProvenance(actorSystem, buildDir) {
       'utf8',
     );
     const manifestPath = path.join(assetDirectory, 'manifest.json');
-    const archivePath = path.join(assetDirectory, 'local-control-store.tgz');
+    const archivePath = path.join(assetDirectory, 'core-lmdb.tgz');
     await Promise.all([
       fsp.writeFile(manifestPath, manifestBytes, { mode: 0o400 }),
       fsp.writeFile(archivePath, archiveBytes, { mode: 0o400 }),
@@ -1464,7 +1465,7 @@ try {
             );
             await fsp.mkdir(assetDirectory, { recursive: true, mode: 0o700 });
             await fsp.writeFile(
-              path.join(assetDirectory, 'local-control-store.tgz'),
+              path.join(assetDirectory, 'core-lmdb.tgz'),
               'temporary core dependency archive',
               { mode: 0o600 },
             );

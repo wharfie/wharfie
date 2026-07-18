@@ -24,6 +24,7 @@ import {
 } from '../../../src/core/resources/builds/lib/function-asset.js';
 import {
   CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
+  CORE_RUNTIME_DEPENDENCY_ACTIVITY,
   CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
   CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
   CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME,
@@ -232,7 +233,7 @@ function makeCoreRuntimeDependenciesResource(target, marker) {
   const plan = {
     schemaVersion: 2,
     kind: 'frozenDependencyClosure',
-    activity: 'core-local-control-store',
+    activity: CORE_RUNTIME_DEPENDENCY_ACTIVITY,
     lock: dependencyLockInput,
     target,
     installScripts: 'ignored',

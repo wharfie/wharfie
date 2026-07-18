@@ -18,14 +18,15 @@ import {
   validateFrozenDependencyClosurePlan,
 } from './frozen-dependency-closure-plan.js';
 
-export const CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION = 2;
+export const CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION = 3;
 export const CORE_RUNTIME_DEPENDENCY_ASSET_KIND =
   'coreRuntimeDependencyClosure';
 export const CORE_RUNTIME_DEPENDENCY_ASSET_PREFIX =
   '<WHARFIE_CORE>/dependencies/';
-export const CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME = `${CORE_RUNTIME_DEPENDENCY_ASSET_PREFIX}v2/manifest.json`;
-export const CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME = `${CORE_RUNTIME_DEPENDENCY_ASSET_PREFIX}v2/local-control-store.tgz`;
-export const CORE_RUNTIME_DEPENDENCY_PURPOSE = 'localControlStore';
+export const CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME = `${CORE_RUNTIME_DEPENDENCY_ASSET_PREFIX}v3/manifest.json`;
+export const CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME = `${CORE_RUNTIME_DEPENDENCY_ASSET_PREFIX}v3/core-lmdb.tgz`;
+export const CORE_RUNTIME_DEPENDENCY_PURPOSE = 'localDurableStorage';
+export const CORE_RUNTIME_DEPENDENCY_ACTIVITY = 'core-local-durable-storage';
 export const CORE_RUNTIME_DEPENDENCY_ROOT = Object.freeze({
   name: 'lmdb',
   version: '3.4.4',
@@ -77,9 +78,9 @@ const NPM_PACKAGE_NAME_PATTERN =
 
 /**
  * @typedef CoreRuntimeDependencyManifest
- * @property {2} schemaVersion - Strict document schema version.
+ * @property {3} schemaVersion - Strict document schema version.
  * @property {'coreRuntimeDependencyClosure'} kind - Fixed document kind.
- * @property {'localControlStore'} purpose - Fixed runtime use.
+ * @property {'localDurableStorage'} purpose - Fixed runtime use shared by control and application data stores.
  * @property {import('../../../runtime/build-target.js').BuildTarget} target - Exact target.
  * @property {CoreRuntimeDependencyRoot[]} roots - Exact root packages.
  * @property {import('../../../runtime/application-revision.js').LockedInputDescriptor} dependencyLockInput - Core-owned frozen lock receipt.
@@ -113,7 +114,8 @@ function assertExactKeys(value, allowedKeys, valuePath) {
  * Unlike app activity archives, this closure is owned by Wharfie's shipped
  * runtime lock rather than the application's dependency lock. Keeping it in
  * a dedicated strict document prevents an application dependency declaration
- * from silently controlling the durable local control store.
+ * from silently controlling Wharfie's durable local control or application
+ * data stores.
  * @param {unknown} value - Candidate manifest.
  * @param {string} [valuePath] - Human-readable document path.
  * @returns {CoreRuntimeDependencyManifest} - Independently cloned receipt.
@@ -172,7 +174,7 @@ export function validateCoreRuntimeDependencyManifest(
     roots[0].version !== CORE_RUNTIME_DEPENDENCY_ROOT.version
   ) {
     throw new TypeError(
-      `${valuePath}.roots must contain exactly ${CORE_RUNTIME_DEPENDENCY_ROOT.name}@${CORE_RUNTIME_DEPENDENCY_ROOT.version} for the local control store.`,
+      `${valuePath}.roots must contain exactly ${CORE_RUNTIME_DEPENDENCY_ROOT.name}@${CORE_RUNTIME_DEPENDENCY_ROOT.version} for local durable storage.`,
     );
   }
 
@@ -206,9 +208,9 @@ export function validateCoreRuntimeDependencyManifest(
       `${valuePath}.closureDigest does not match its embedded closure plan.`,
     );
   }
-  if (plan.activity !== 'core-local-control-store') {
+  if (plan.activity !== CORE_RUNTIME_DEPENDENCY_ACTIVITY) {
     throw new TypeError(
-      `${valuePath}.plan.activity must be 'core-local-control-store'.`,
+      `${valuePath}.plan.activity must be '${CORE_RUNTIME_DEPENDENCY_ACTIVITY}'.`,
     );
   }
   if (getBuildTargetId(plan.target) !== getBuildTargetId(target)) {
@@ -275,6 +277,7 @@ export default {
   CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
   CORE_RUNTIME_DEPENDENCY_ASSET_PREFIX,
   CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
+  CORE_RUNTIME_DEPENDENCY_ACTIVITY,
   CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME,
   CORE_RUNTIME_DEPENDENCY_PURPOSE,
   CORE_RUNTIME_DEPENDENCY_ROOT,

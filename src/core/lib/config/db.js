@@ -9,7 +9,7 @@ import paths from '../paths.js';
  *
  * This module is intentionally the only place in `src/core/lib` that reads
  * Wharfie DB-related environment variables (adapter selection, local paths,
- * and durable control-plane table names).
+ * durable roots, and fixed runtime table names).
  */
 
 /**
@@ -98,6 +98,25 @@ export function resolveControlAdapterName() {
 }
 
 /**
+ * Resolve the application data-store adapter independently from execution
+ * control state and the legacy actor-state store.
+ *
+ * Application state is a durable product surface, so normal local execution
+ * defaults to LMDB. Tests receive isolated vanilla stores unless they opt in
+ * to a production adapter explicitly. Ambient AWS variables and the general
+ * DB adapter never redirect application data into a cloud account.
+ * @returns {DBAdapterName} - Canonical adapter name.
+ */
+export function resolveApplicationStateAdapterName() {
+  const explicit = process.env.WHARFIE_APPLICATION_STATE_ADAPTER;
+  if (explicit) {
+    return normalizeAdapterName(explicit, 'WHARFIE_APPLICATION_STATE_ADAPTER');
+  }
+
+  return process.env.NODE_ENV === 'test' ? 'vanilla' : 'lmdb';
+}
+
+/**
  * Resolve one local control-store root. Test defaults are unique but are not
  * created until a writable adapter opens them, so read-only missing lookups do
  * not leave filesystem state behind.
@@ -112,6 +131,36 @@ export function resolveControlStorePath() {
     return join(tmpdir(), `wharfie-control-${randomUUID()}`);
   }
   return join(paths.data, 'control');
+}
+
+/**
+ * Resolve the dedicated application-state root. Merely resolving the path
+ * never creates it, which lets read-only probes fail without materializing a
+ * missing local store.
+ * @returns {string} - Local application-state root.
+ */
+export function resolveApplicationStateStorePath() {
+  const configured = process.env.WHARFIE_APPLICATION_STATE_PATH;
+  if (typeof configured === 'string' && configured.trim()) {
+    return configured.trim();
+  }
+  if (process.env.NODE_ENV === 'test') {
+    return join(tmpdir(), `wharfie-application-state-${randomUUID()}`);
+  }
+  return join(paths.data, 'application-state');
+}
+
+/** The sole physical table owned by the v1 application-state contract. */
+export const APPLICATION_STATE_TABLE_NAME = 'wharfie-application-state-v1';
+
+/**
+ * Resolve the fixed application-state table. It intentionally has no
+ * environment override: destination routing belongs to Wharfie's finite
+ * host-owned catalog, not component input or ambient process configuration.
+ * @returns {'wharfie-application-state-v1'} - Fixed table name.
+ */
+export function resolveApplicationStateTableName() {
+  return APPLICATION_STATE_TABLE_NAME;
 }
 
 /**
@@ -292,6 +341,75 @@ export async function createControlDBClient(
 }
 
 /**
+ * Create a client for the dedicated application data store.
+ *
+ * This uses the same provider-neutral DB contract as control state, but a
+ * separate root and fixed table ensure application mutations can never share
+ * the execution-ledger namespace accidentally. In a SEA, the LMDB adapter
+ * resolves from Wharfie's single verified core-runtime dependency closure.
+ * @param {DBAdapterName} [adapterName] - Explicit adapter override.
+ * @param {{readOnly?: boolean, path?: string}} [options] - Access mode and already-resolved local root.
+ * @returns {Promise<import('../db/base.js').DBClient>} - Dedicated client.
+ */
+export async function createApplicationStateDBClient(
+  adapterName = resolveApplicationStateAdapterName(),
+  options = {},
+) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError('Application-state DB options must be an object.');
+  }
+  const allowedOptionKeys = new Set(['path', 'readOnly']);
+  for (const key of Object.keys(options)) {
+    if (!allowedOptionKeys.has(key)) {
+      throw new TypeError(
+        `Application-state DB option '${key}' is not supported.`,
+      );
+    }
+  }
+  if (options.readOnly !== undefined && typeof options.readOnly !== 'boolean') {
+    throw new TypeError('Application-state DB readOnly must be a boolean.');
+  }
+  if (
+    options.path !== undefined &&
+    (typeof options.path !== 'string' || !options.path.trim())
+  ) {
+    throw new TypeError(
+      'Application-state DB path must be a non-empty string.',
+    );
+  }
+
+  const normalizedAdapter = normalizeAdapterName(
+    adapterName,
+    'application-state adapter',
+  );
+  const storePath =
+    typeof options.path === 'string'
+      ? options.path.trim()
+      : resolveApplicationStateStorePath();
+  const readOnly = options.readOnly === true;
+
+  if (normalizedAdapter === 'dynamodb') {
+    const { default: createDynamoDB } =
+      await import('../db/adapters/dynamodb.js');
+    return createDynamoDB({
+      region: process.env.AWS_REGION,
+      readOnly,
+    });
+  }
+
+  if (normalizedAdapter === 'lmdb') {
+    const { default: createLMDB } = await import('../db/adapters/lmdb.js');
+    return createLMDB({ path: storePath, readOnly });
+  }
+
+  // Vanilla is an explicit test/diagnostic implementation. A read-only open
+  // never writes its in-memory view or creates the resolved root on close.
+  const { default: createVanillaDB } =
+    await import('../db/adapters/vanilla.js');
+  return createVanillaDB({ path: storePath, readOnly });
+}
+
+/**
  * Create a new DB client for the actor runtime state store.
  * @param {DBAdapterName} [adapterName] - adapterName.
  * @returns {Promise<import('../db/base.js').DBClient>} - Result.
@@ -375,16 +493,21 @@ export async function closeDB() {
 }
 
 export default {
+  APPLICATION_STATE_TABLE_NAME,
   resolveDBAdapterName,
   resolveStateAdapterName,
   resolveControlAdapterName,
+  resolveApplicationStateAdapterName,
   resolveControlStorePath,
+  resolveApplicationStateStorePath,
+  resolveApplicationStateTableName,
   resolveExecutionLedgerTableName,
   resolveExecutionPayloadPath,
   resolveExecutionPayloadStoreId,
   resolveLedgerServiceSessionPath,
   createDBClient,
   createControlDBClient,
+  createApplicationStateDBClient,
   createStateDBClient,
   getDB,
   resetDB,

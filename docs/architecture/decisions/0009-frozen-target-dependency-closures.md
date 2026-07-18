@@ -107,10 +107,10 @@ provenance consumes receipt evidence derived from the exact bytes selected for
 SEA and only uses mutable resource outputs as fail-closed consistency checks.
 Changing a producer field after SEA sealing therefore cannot relabel an
 unchanged archive or closure. Activity closure plans remain represented by
-their semantic digest in function assets. Wharfie's core local-control-store
-closure additionally embeds its complete canonical plan in a strict v2 SEA
-manifest so the packaged runtime can independently preflight its extracted
-tree.
+their semantic digest in function assets. Wharfie's core local-durable-storage
+closure additionally embeds its complete canonical plan in a strict v3 SEA
+manifest so the packaged runtime can independently preflight the one extracted
+LMDB tree shared by its separate control and application-data roots.
 
 Before SEA generation, every configured asset is stably read and copied into a
 private build directory. Function-asset digests and strict receipts are parsed

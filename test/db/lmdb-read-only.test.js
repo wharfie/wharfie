@@ -19,13 +19,13 @@ afterEach(() => {
 });
 
 describe('LMDB read-only observer mode', () => {
-  it('does not create a missing durable control volume', () => {
+  it('does not create a missing durable local volume', () => {
     const controlPath = mkdtempSync(join(tmpdir(), 'wharfie-lmdb-read-only-'));
     temporaryDirectories.push(controlPath);
     const dbRoot = join(controlPath, 'lmdb');
 
     expect(() => createLMDB({ path: controlPath, readOnly: true })).toThrow(
-      /read-only control volume does not exist/i,
+      /read-only local volume does not exist/i,
     );
     expect(existsSync(dbRoot)).toBe(false);
   });

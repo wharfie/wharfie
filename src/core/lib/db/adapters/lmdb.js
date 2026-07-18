@@ -20,7 +20,7 @@ const SEP = '\u001f';
 
 /**
  * Node-lmdb's root `close()` closes its whole native environment, including
- * every named table opened from it. A control-store reader can therefore not
+ * every named table opened from it. A local-store reader can therefore not
  * open and close an independent root for the same local volume while a
  * resident writer is live in this process. Keep compatible facades on one
  * root and close physical resources only after the final facade releases.
@@ -122,7 +122,7 @@ async function releaseSharedLmdbEnvironment(dbRoot, shared) {
 /**
  * @typedef CreateLMDBDBOptions
  * @property {string} [path] - Path to the database file. Defaults to `./data/database.json`. [db_path]
- * @property {boolean} [readOnly] - Open an existing control volume without creating tables or accepting writes.
+ * @property {boolean} [readOnly] - Open an existing local volume without creating tables or accepting writes.
  */
 
 /**
@@ -151,12 +151,12 @@ export default function createLMDB(options = {}) {
     } catch (error) {
       const detail = error instanceof Error ? ` ${error.message}` : '';
       throw new LMDBReadOnlyStoreNotFoundError(
-        `LMDB read-only control volume does not exist at '${dbRoot}'.${detail}`,
+        `LMDB read-only local volume does not exist at '${dbRoot}'.${detail}`,
       );
     }
     if (stats.isSymbolicLink() || !stats.isDirectory()) {
       throw new Error(
-        `LMDB read-only control volume must be a non-symbolic-link directory: '${dbRoot}'.`,
+        `LMDB read-only local volume must be a non-symbolic-link directory: '${dbRoot}'.`,
       );
     }
   } else {
@@ -193,7 +193,7 @@ export default function createLMDB(options = {}) {
       if (!opened) {
         if (readOnly) {
           throw new LMDBReadOnlyStoreNotFoundError(
-            `LMDB read-only table '${tableName}' is not ready in the existing control volume.`,
+            `LMDB read-only table '${tableName}' is not ready in the existing local volume.`,
           );
         }
         throw new Error(`LMDB could not open table '${tableName}'.`);

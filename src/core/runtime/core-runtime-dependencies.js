@@ -944,8 +944,9 @@ function loadVerifiedLmdb(prepared) {
 }
 
 /**
- * Read, verify, and materialize the core local-control-store dependency
- * closure embedded in a SEA. Source execution is deliberately a no-op: it
+ * Read, verify, and materialize the core local durable-storage dependency
+ * closure embedded in a SEA. The same verified LMDB graph backs distinct
+ * control and application-state roots. Source execution is deliberately a no-op: it
  * continues to use its installed development dependencies.
  * @param {{assetProvider?: EmbeddedAssetProvider, readEmbeddedRevisionRuntimePair?: () => Promise<any>, tempParent?: string}} [options] - Controlled test hooks.
  * @returns {Promise<PreparedCoreRuntimeDependencies | null>} - Prepared closure or source-mode no-op.

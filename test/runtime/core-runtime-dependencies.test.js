@@ -12,6 +12,7 @@ import { c } from 'tar';
 
 import {
   CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
+  CORE_RUNTIME_DEPENDENCY_ACTIVITY,
   CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
   CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
   CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME,
@@ -158,7 +159,7 @@ async function makeMisdirectedPackageClosure(options = {}) {
   const plan = validateFrozenDependencyClosurePlan({
     schemaVersion: 2,
     kind: 'frozenDependencyClosure',
-    activity: 'core-local-control-store',
+    activity: CORE_RUNTIME_DEPENDENCY_ACTIVITY,
     lock,
     target: currentTarget(),
     installScripts: 'ignored',
@@ -326,7 +327,7 @@ function makeMinimalPlan() {
   return validateFrozenDependencyClosurePlan({
     schemaVersion: 2,
     kind: 'frozenDependencyClosure',
-    activity: 'core-local-control-store',
+    activity: CORE_RUNTIME_DEPENDENCY_ACTIVITY,
     lock,
     target,
     installScripts: 'ignored',
@@ -365,7 +366,7 @@ function makeMinimalPlan() {
 async function makeInstalledLmdbClosurePlan() {
   return (
     await createFrozenDependencyClosurePlan({
-      activity: 'core-local-control-store',
+      activity: CORE_RUNTIME_DEPENDENCY_ACTIVITY,
       buildTarget: currentTarget(),
       dependencyLock: await getCoreLmdbDependencyLock(),
       externals: [{ name: 'lmdb', version: '3.4.4' }],
