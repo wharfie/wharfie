@@ -32,20 +32,6 @@ function makeValidSource() {
         libc: 'glibc',
       },
     ],
-    resources: {
-      db: {
-        adapter: 'dynamodb',
-        options: { region: 'us-east-1' },
-      },
-      queue: {
-        adapter: 'vanilla',
-        options: { path: '.wharfie/queue' },
-      },
-      objectStorage: {
-        adapter: 's3',
-        options: { region: 'us-east-1' },
-      },
-    },
     activities: {
       greet: {
         entrypoint: {
@@ -57,12 +43,6 @@ function makeValidSource() {
           { name: 'zeta-package', version: '2.0.0' },
           { name: 'alpha-package', version: '1.2.3' },
         ],
-        resources: {
-          queue: {
-            adapter: 'sqs',
-            options: { region: 'us-west-2' },
-          },
-        },
       },
     },
   };
@@ -134,20 +114,6 @@ describe('Wharfie app loader', () => {
             libc: 'glibc',
           },
         ],
-        resources: {
-          db: {
-            adapter: 'dynamodb',
-            options: { region: 'us-east-1' },
-          },
-          queue: {
-            adapter: 'vanilla',
-            options: { path: '.wharfie/queue' },
-          },
-          objectStorage: {
-            adapter: 's3',
-            options: { region: 'us-east-1' },
-          },
-        },
         activities: {
           greet: {
             entrypoint: {
@@ -159,12 +125,6 @@ describe('Wharfie app loader', () => {
               { name: 'alpha-package', version: '1.2.3' },
               { name: 'zeta-package', version: '2.0.0' },
             ],
-            resources: {
-              queue: {
-                adapter: 'sqs',
-                options: { region: 'us-west-2' },
-              },
-            },
           },
         },
       },
@@ -250,6 +210,22 @@ describe('Wharfie app loader', () => {
       /app\.properties is not supported/i,
     ],
     [
+      'the removed top-level resources field',
+      (source) => {
+        source.resources = { db: { adapter: 'vanilla' } };
+      },
+      /app\.resources is not supported/i,
+    ],
+    [
+      'the removed activity resources field',
+      (source) => {
+        source.activities.greet.resources = {
+          queue: { adapter: 'vanilla' },
+        };
+      },
+      /app\.activities\.greet\.resources is not supported/i,
+    ],
+    [
       'workflows before a reviewed durable contract exists',
       (source) => {
         source.workflows = {};
@@ -326,20 +302,6 @@ describe('Wharfie app loader', () => {
         source.targets.push({ ...source.targets[0] });
       },
       /duplicates an earlier target/i,
-    ],
-    [
-      'a host-native resource adapter',
-      (source) => {
-        source.resources.db = { adapter: 'lmdb' };
-      },
-      /not a supported portable db adapter/i,
-    ],
-    [
-      'an unsupported resource option',
-      (source) => {
-        source.resources.db.options.tableName = 'records';
-      },
-      /options\.tableName is not supported/i,
     ],
     [
       'a ranged external package version',
@@ -427,7 +389,7 @@ describe('Wharfie app loader', () => {
       'a non-JSON value',
       'const app = ' +
         JSON.stringify(makeValidSource()) +
-        '; app.resources.db.options.region = () => "computed"; export default app;\n',
+        '; app.activities.greet.externalPackages[0].version = () => "computed"; export default app;\n',
       /contains an unsupported function value/i,
     ],
   ];
@@ -440,13 +402,15 @@ describe('Wharfie app loader', () => {
     },
   );
 
-  it('rejects inline secrets without rendering their value', async () => {
+  it('rejects removed resources without rendering nested secrets', async () => {
     const secret = 'secret-sentinel-that-must-not-leak';
     const source = makeValidSource();
-    source.resources.db = {
-      adapter: 'vanilla',
-      options: {
-        path: 'https://runtime-user:' + secret + '@example.com/db',
+    source.resources = {
+      db: {
+        adapter: 'vanilla',
+        options: {
+          path: 'https://runtime-user:' + secret + '@example.com/db',
+        },
       },
     };
 
@@ -460,7 +424,7 @@ describe('Wharfie app loader', () => {
     if (!(thrown instanceof Error)) {
       throw new Error('Expected loadApp to reject the inline secret.');
     }
-    expect(thrown.message).toMatch(/credential-bearing URLs/i);
+    expect(thrown.message).toMatch(/app\.resources is not supported/i);
     expect(thrown.message).not.toContain(secret);
   });
 });

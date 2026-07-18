@@ -11,7 +11,6 @@ import {
 } from './lib/macos-signing-credentials.js';
 import { assertCoreRuntimeDependencyTargetSupported } from './lib/core-runtime-dependency-asset.js';
 import operatorCli from './actor-system-cli/index.js';
-import { createActorSystemResources } from '../../runtime/resources.js';
 import { withResourceScope } from '../resource-scope.js';
 import { createResourceScope } from '../runtime-config.js';
 
@@ -43,22 +42,8 @@ const actorSystemDir =
  */
 
 /**
- * @typedef ActorSystemResourceSpecObject
- * @property {string} adapter - adapter.
- * @property {Object<string, any>} [options] - options.
- */
-
-/**
- * @typedef ActorSystemResourcesSpec
- * @property {string|ActorSystemResourceSpecObject|any} [db] - db.
- * @property {string|ActorSystemResourceSpecObject|any} [queue] - queue.
- * @property {string|ActorSystemResourceSpecObject|any} [objectStorage] - objectStorage.
- */
-
-/**
  * @typedef WharfieActorSystemProperties
  * @property {BuildTarget[] | function(): BuildTarget[]} targets - targets.
- * @property {ActorSystemResourcesSpec} [resources] - resources.
  * @property {import('./function.js').default[]} [functions] - functions.
  * @property {{ entrypoint: string, export?: string }} [cli] - CLI entrypoint config.
  */
@@ -208,6 +193,14 @@ class ActorSystem extends BuildResourceGroup {
     runtime,
     dependencyLock,
   }) {
+    if (
+      properties &&
+      Object.prototype.hasOwnProperty.call(properties, 'resources')
+    ) {
+      throw new TypeError(
+        `ActorSystem '${name}' no longer supports properties.resources.`,
+      );
+    }
     const propertiesWithDefaults = /** @type {Record<string, any>} */ (
       Object.assign({}, ActorSystem.DefaultProperties, properties)
     );
@@ -240,8 +233,6 @@ class ActorSystem extends BuildResourceGroup {
     this.functions = functions;
     this._dependencyLock = dependencyLock;
     setMacOSSigningCredentials(this, macosSigningCredentials);
-    /** @type {Promise<{ resources: any, close: () => Promise<void> }> | null} */
-    this._runtimeResourcesPromise = null;
     // normally _defineGroupResources is used but this is a workaround to make sure this.functions is set before defining things
     this.addResources(
       withResourceScope(createResourceScope(this.getRuntimeConfig()), () =>
@@ -276,91 +267,6 @@ class ActorSystem extends BuildResourceGroup {
         }
         return Promise.resolve();
       }),
-    );
-  }
-
-  /**
-   * Lazily create and cache runtime resources from `properties.resources`.
-   * @returns {Promise<{ resources: any, close: () => Promise<void> }>} -
-   */
-  async _ensureRuntimeResources() {
-    if (this._runtimeResourcesPromise) return this._runtimeResourcesPromise;
-
-    const specs = /** @type {any} */ (this.get('resources', {}));
-    this._runtimeResourcesPromise = createActorSystemResources(specs);
-    return this._runtimeResourcesPromise;
-  }
-
-  /**
-   * Get the instantiated runtime resources for this ActorSystem.
-   * @returns {Promise<any>} - Result.
-   */
-  async getRuntimeResources() {
-    const { resources } = await this._ensureRuntimeResources();
-    return resources;
-  }
-
-  /**
-   * Build a context object for actor invocation.
-   *
-   * - `context.resources` is always present (may be empty).
-   * - caller-provided `context.resources` overrides ActorSystem resources.
-   * @param {any} [context] - context.
-   * @returns {Promise<any>} - Result.
-   */
-  async createContext(context = {}) {
-    const systemResources = await this.getRuntimeResources();
-    const overrideResources =
-      context?.resources && typeof context.resources === 'object'
-        ? context.resources
-        : {};
-    return {
-      ...context,
-      resources: {
-        ...(systemResources || {}),
-        ...(overrideResources || {}),
-      },
-    };
-  }
-
-  /**
-   * Invoke an actor function by name with runtime resources injected onto `context.resources`.
-   * @param {string} functionName - functionName.
-   * @param {any} [event] - event.
-   * @param {any} [context] - context.
-   * @returns {Promise<any>} - Result.
-   */
-  async invoke(functionName, event = {}, context = {}) {
-    const fn = this.functions.find((f) => f.name === functionName);
-    if (!fn) {
-      const available = this.functions.map((f) => f.name).join(', ');
-      throw new Error(
-        `Unknown function '${functionName}'. Available: ${available || '(none)'}`,
-      );
-    }
-    const systemResources = await this.getRuntimeResources();
-    return await fn.fn(event, context, {
-      baseResources: systemResources,
-    });
-  }
-
-  /**
-   * Close all cached runtime resources (best-effort).
-   * @returns {Promise<void>} - Result.
-   */
-  async closeRuntimeResources() {
-    if (this._runtimeResourcesPromise) {
-      const { close } = await this._ensureRuntimeResources();
-      await close();
-      this._runtimeResourcesPromise = null;
-    }
-
-    await Promise.all(
-      this.functions.map((fn) =>
-        typeof fn.closeRuntimeResources === 'function'
-          ? fn.closeRuntimeResources()
-          : Promise.resolve(),
-      ),
     );
   }
 
@@ -668,35 +574,10 @@ class ActorSystem extends BuildResourceGroup {
 
   async run() {
     await operatorCli();
-    //   if (process.argv.length <= 2) {
-    //     // this should spin up polling actor/workqueues
-    //     console.log('starting system');
-
-    //     const controller = new AbortController();
-    //     const { signal } = controller;
-    //     const child = fork('start', ['hello'], { signal });
-    //     child.on('error', (err) => {
-    //       // This will be called with err being an AbortError if the controller aborts
-    //     });
-    //     const [exitCode] = await once(child, 'exit');
-    //     console.log('exited with ', exitCode);
-    //     // c
-    //     // controller.abort();
-    //   } else {
-    //     // assume that we are passing some work to a specific function
-    //     const binary = process.argv[0];
-    //     const filteredArgs = process.argv.filter((arg) => arg !== binary);
-    //     console.log(filteredArgs);
-    //     const functionName = filteredArgs[0];
-    //     console.log(`running function ${functionName}`);
-    //     const func = this.functionMap.get(functionName);
-    //     await func.run(filteredArgs[1], { context: 'foo' });
-    //   }
   }
 }
 ActorSystem.DefaultProperties = {
   functions: [],
-  resources: {},
 };
 /** @type {string[] | null} */
 ActorSystem.RequestedBuildTargetSelectors = null;

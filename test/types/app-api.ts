@@ -1,7 +1,6 @@
 import {
   defineApp,
   invokeActivity,
-  type AppResources,
   type JsonObject,
 } from '@wharfie/wharfie/app';
 
@@ -23,9 +22,6 @@ const app = defineApp({
       libc: 'glibc',
     },
   ],
-  resources: {
-    db: { adapter: 'dynamodb', options: { region: 'us-east-1' } },
-  },
   activities: {
     greet: {
       entrypoint: {
@@ -34,9 +30,6 @@ const app = defineApp({
         export: 'greet',
       },
       externalPackages: [{ name: 'example-package', version: '1.2.3' }],
-      resources: {
-        queue: { adapter: 'vanilla', options: { path: './data/queue' } },
-      },
     },
   },
 });
@@ -46,7 +39,6 @@ const appId: 'typed-app' = app.app.id;
 const entrypointKind: 'node' = app.cli.entrypoint.kind;
 const cliPath: './src/cli.ts' = app.cli.entrypoint.path;
 const activityExport: 'greet' = app.activities.greet.entrypoint.export;
-const databaseAdapter: 'dynamodb' = app.resources.db.adapter;
 const externalPackageName: 'example-package' =
   app.activities.greet.externalPackages[0].name;
 void schemaVersion;
@@ -54,15 +46,7 @@ void appId;
 void entrypointKind;
 void cliPath;
 void activityExport;
-void databaseAdapter;
 void externalPackageName;
-
-const hostOnlyResources = {
-  db: { adapter: 'lmdb' },
-} as const;
-// @ts-expect-error Host-native adapters are not in the portable v2 manifest.
-const invalidResources: AppResources = hostOnlyResources;
-void invalidResources;
 
 const legacyApp = {
   schemaVersion: 2,
@@ -129,39 +113,30 @@ const appWithExtraTargetKey = {
 // @ts-expect-error Target records accept only exact portable target fields.
 defineApp(appWithExtraTargetKey);
 
-const appWithExtraResourceKind = {
+const appWithRemovedTopLevelResources = {
   ...minimalApp,
   resources: {
-    cache: { adapter: 'vanilla', options: { path: './data/cache' } },
+    db: { adapter: 'vanilla' },
   },
 } as const;
-// @ts-expect-error The v2 manifest has exactly three portable resource kinds.
-defineApp(appWithExtraResourceKind);
+// @ts-expect-error Resources are not part of the v2 manifest authoring boundary.
+defineApp(appWithRemovedTopLevelResources);
 
-const appWithExtraResourceSpecKey = {
+const appWithRemovedActivityResources = {
   ...minimalApp,
-  resources: {
-    db: {
-      adapter: 'dynamodb',
-      options: { region: 'us-east-1' },
-      tableName: 'unsupported',
+  activities: {
+    greet: {
+      entrypoint: {
+        kind: 'node',
+        path: './src/greet.ts',
+        export: 'greet',
+      },
+      resources: { queue: { adapter: 'vanilla' } },
     },
   },
 } as const;
-// @ts-expect-error Resource specs accept only adapter and options.
-defineApp(appWithExtraResourceSpecKey);
-
-const appWithExtraResourceOptionKey = {
-  ...minimalApp,
-  resources: {
-    queue: {
-      adapter: 'sqs',
-      options: { region: 'us-east-1', endpoint: 'unsupported' },
-    },
-  },
-} as const;
-// @ts-expect-error Adapter options reject provider-specific escape hatches.
-defineApp(appWithExtraResourceOptionKey);
+// @ts-expect-error Activity resources are not part of the v2 authoring boundary.
+defineApp(appWithRemovedActivityResources);
 
 const appWithExtraActivityKey = {
   ...minimalApp,
@@ -223,6 +198,9 @@ interface GreetResult extends JsonObject {
 
 const result = await invokeActivity<GreetResult, { name: string }>('greet', {
   input: { name: 'typed-user' },
+  callerMetadata: {
+    resources: { note: 'ordinary metadata' },
+  },
 });
 
 const message: string = result.message;

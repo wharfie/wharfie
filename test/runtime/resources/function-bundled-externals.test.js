@@ -15,6 +15,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { DEPENDENCY_LOCK_INPUT_FORMAT } from '../../../src/core/runtime/application-revision.js';
+import {
+  ACTIVITY_PROTOCOL_NAME,
+  ACTIVITY_PROTOCOL_VERSION,
+} from '../../../src/core/runtime/activity-protocol.js';
 
 const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
 
@@ -177,6 +181,7 @@ describe('FunctionResource bundled externals', () => {
         'const fakeNative = fakeNativeModule.default ?? fakeNativeModule;',
         'export async function handler(event) {',
         '  fakeNative.writeMarker(event.outputFile, event.who);',
+        '  return { written: true };',
         '}',
       ].join('\n'),
       'utf8',
@@ -228,12 +233,22 @@ describe('FunctionResource bundled externals', () => {
       );
       expect(resource.get('externalClosureDigest')).toEqual(closureDigest);
 
-      await Function.run(
-        functionName,
-        { outputFile, who: 'bundle-user' },
-        { requestId: 'req-1' },
-      );
+      const evidence = await Function.runActivityAttempt(functionName, {
+        protocol: ACTIVITY_PROTOCOL_NAME,
+        protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+        type: 'start',
+        revisionId: `wrv1_${'A'.repeat(43)}`,
+        activityId: functionName,
+        runId: 'run-bundled-native',
+        invocationId: 'invocation-bundled-native',
+        attemptId: 'attempt-bundled-native',
+        fencingToken: 'fence-bundled-native',
+        input: { outputFile, who: 'bundle-user' },
+        caller: { metadata: { requestId: 'req-1' } },
+      });
 
+      expect(evidence.status).toBe('completed');
+      expect(evidence.terminal.result).toEqual({ written: true });
       await expect(fsp.readFile(outputFile, 'utf8')).resolves.toEqual(
         'FAKE_NATIVE_BINARY:bundle-user',
       );

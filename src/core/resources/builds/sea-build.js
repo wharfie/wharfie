@@ -979,7 +979,6 @@ class SeaBuild extends BaseResource {
           activity: parsed.description.activity,
           target: parsed.description.target,
           externals: parsed.description.externals,
-          resourceSpecs: parsed.description.resourceSpecs,
           externalDependencyReceipt:
             parsed.description.externalDependencyReceipt,
         };

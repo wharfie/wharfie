@@ -58,11 +58,10 @@ ASCII bytes. The compiler rejects aliases and unknown fields instead of
 normalizing them. The v2 schema has no `ActorSystem`, `functions`,
 `capabilities`, workflows, scheduler, or public packaging/signing section.
 
-The schema still recognizes historical `resources` fields so existing sealed
-artifacts can be inspected safely, but Activity Protocol v1 rejects every
-nonempty application or activity resource declaration. Do not author resource
-injection for new applications: it will return no durable-effect guarantee.
-Managed capability effects will replace that surface in a later milestone.
+The schema does not accept application- or activity-level `resources`; those
+are unknown fields. A property named `resources` inside caller metadata remains
+ordinary cloned JSON and does not request injection. Managed capabilities and
+effects will use separate durable contracts in a later milestone.
 
 An activity may pin target-specific dependencies with exact published versions:
 

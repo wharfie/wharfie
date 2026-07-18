@@ -175,8 +175,7 @@ function makeNodeBinary(target, binaryPath) {
  *   externals?: {name: string, version: string}[],
  *   archiveBytes?: Buffer | Uint8Array | string,
  *   closureDigest?: import('../../../src/core/runtime/application-revision.js').Sha256Digest,
- *   dependencyLockInput?: import('../../../src/core/runtime/application-revision.js').LockedInputDescriptor,
- *   resources?: Record<string, any>
+ *   dependencyLockInput?: import('../../../src/core/runtime/application-revision.js').LockedInputDescriptor
  * }} options
  */
 function makeFunctionResource({
@@ -186,7 +185,6 @@ function makeFunctionResource({
   archiveBytes,
   closureDigest,
   dependencyLockInput,
-  resources = {},
 }) {
   const resource = new FunctionResource({
     name: `${name}-${target.platform}-${target.architecture}`,
@@ -195,7 +193,6 @@ function makeFunctionResource({
       entrypoint: { path: `/tmp/${name}.js`, export: 'default' },
       buildTarget: target,
       ...(externals.length ? { external: externals } : {}),
-      resources,
     },
   });
   resource._setUNSAFE(
@@ -305,7 +302,6 @@ async function makeBuild(target, binaryPath, dependencies, revision) {
             archiveDigest: resource.get('externalArchiveDigest'),
           }
         : null,
-      resourceSpecs: resource.get('resources', {}),
     });
     const assetPath = path.join(directory, `${index}.asset`);
     await fsp.writeFile(assetPath, assetBytes);
@@ -322,7 +318,6 @@ async function makeBuild(target, binaryPath, dependencies, revision) {
       activity: parsed.activity,
       target: parsed.target,
       externals: parsed.externals,
-      resourceSpecs: parsed.resourceSpecs,
       externalDependencyReceipt: parsed.externalDependencyReceipt,
     };
   }
@@ -810,6 +805,19 @@ describe('package-time artifact provenance', () => {
     expect(embedded.schemaVersion).toBe(FUNCTION_ASSET_SCHEMA_VERSION);
     expect(embedded.externalsTar).toBe('');
     expect(embedded.externalDependencyReceipt).toBeNull();
+    expect(embedded).not.toHaveProperty('resourceSpecs');
+    expect(() =>
+      serializeFunctionAssetDescription({
+        ...embedded,
+        schemaVersion: 3,
+      }),
+    ).toThrow(/schemaVersion must be the integer 4/i);
+    expect(() =>
+      serializeFunctionAssetDescription({
+        ...embedded,
+        resourceSpecs: {},
+      }),
+    ).toThrow(/resourceSpecs is not supported/i);
   });
 
   it('canonically digests target external closures and fails on unreconciled archives', async () => {
@@ -1037,7 +1045,7 @@ describe('package-time artifact provenance', () => {
     ).rejects.toThrow(/does not match the bytes embedded in its SEA build/i);
   });
 
-  it('rejects revision externals and resource specs that disagree with sealed function assets', async () => {
+  it('rejects revision externals that disagree with sealed function assets', async () => {
     const directory = await makeTemporaryDirectory(
       'wharfie-revision-activity-mismatch-',
     );
@@ -1072,39 +1080,6 @@ describe('package-time artifact provenance', () => {
       }),
     ).rejects.toThrow(
       /external packages do not match its sealed function asset and revision contract/i,
-    );
-
-    const sealedResource = makeFunctionResource({
-      name: 'resource-activity',
-      target: LINUX_TARGET,
-      resources: {
-        db: { adapter: 'vanilla', options: { path: 'state.db' } },
-      },
-    });
-    const mutatedResourceContract = makeFunctionResource({
-      name: 'resource-activity',
-      target: LINUX_TARGET,
-      resources: {
-        db: { adapter: 'vanilla', options: { path: 'other.db' } },
-      },
-    });
-    const resourceRevision = makeRevision([mutatedResourceContract]);
-    const resourceBuild = await makeBuild(
-      LINUX_TARGET,
-      binaryPath,
-      [sealedResource],
-      resourceRevision,
-    );
-    await expect(
-      createArtifactProvenance({
-        build: resourceBuild,
-        actorSystem: makeActorSystem(),
-        revision: resourceRevision,
-        builderVersion: BUILDER_VERSION,
-        artifactBytes: await readArtifactBytes(resourceBuild),
-      }),
-    ).rejects.toThrow(
-      /resource specs do not match its sealed function asset and revision contract/i,
     );
   });
 

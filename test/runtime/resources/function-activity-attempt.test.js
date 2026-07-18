@@ -1,7 +1,8 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { afterEach, describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { createHash } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -73,9 +74,42 @@ async function waitForPath(filePath, timeoutMs = 2_000) {
 
 afterEach(async () => {
   await worker._clearSandboxCache();
+  jest.restoreAllMocks();
 });
 
 describe('Function Activity Protocol v1 attempt execution', () => {
+  it('rejects prepared external archive drift before opening a worker', async () => {
+    const activityId = `prepared-archive-drift-${Date.now()}-${Math.floor(
+      Math.random() * 1e9,
+    )}`;
+    const runActivityAttemptInSandbox = jest.spyOn(
+      worker,
+      'runActivityAttemptInSandbox',
+    );
+    const externalsTar = Buffer.from('prepared external archive bytes');
+    const differentArchiveDigest = {
+      algorithm: /** @type {const} */ ('sha256'),
+      value: createHash('sha256')
+        .update('different external archive bytes')
+        .digest('base64url'),
+    };
+
+    await expect(
+      WharfieFunction.runPreparedActivityAttempt(
+        activityId,
+        {
+          codeString: 'throw new Error("worker must not start");',
+          externalsTar,
+          externalArchiveDigest: differentArchiveDigest,
+        },
+        startFrame(activityId),
+      ),
+    ).rejects.toThrow(
+      /bundled external archive does not match its embedded build digest/i,
+    );
+    expect(runActivityAttemptInSandbox).not.toHaveBeenCalled();
+  });
+
   it('uses the generated private wrapper and returns revalidated restricted evidence', async () => {
     const root = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-function-attempt-'),
@@ -111,7 +145,7 @@ describe('Function Activity Protocol v1 attempt execution', () => {
     try {
       const evidence = await WharfieFunction.runPreparedActivityAttempt(
         activityId,
-        { codeString: await resource.esbuild(), resourceSpecs: { db: {} } },
+        { codeString: await resource.esbuild() },
         startFrame(activityId),
       );
 

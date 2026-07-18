@@ -14,17 +14,12 @@ const SOURCE_TOP_LEVEL_KEYS = new Set([
   'app',
   'cli',
   'targets',
-  'resources',
   'activities',
 ]);
 const SOURCE_APP_KEYS = new Set(['id']);
 const SOURCE_CLI_KEYS = new Set(['entrypoint']);
 const SOURCE_ENTRYPOINT_KEYS = new Set(['kind', 'path', 'export']);
-const SOURCE_ACTIVITY_KEYS = new Set([
-  'entrypoint',
-  'externalPackages',
-  'resources',
-]);
+const SOURCE_ACTIVITY_KEYS = new Set(['entrypoint', 'externalPackages']);
 const SOURCE_EXTERNAL_PACKAGE_KEYS = new Set(['name', 'version']);
 
 /**
@@ -227,9 +222,6 @@ export async function compileAppManifest(sourceValue, options) {
   if (Object.prototype.hasOwnProperty.call(source, 'targets')) {
     manifest.targets = source.targets;
   }
-  if (Object.prototype.hasOwnProperty.call(source, 'resources')) {
-    manifest.resources = source.resources;
-  }
   if (Object.prototype.hasOwnProperty.call(source, 'activities')) {
     assertPlainObject(source.activities, 'app.activities');
     manifest.activities = {};
@@ -252,9 +244,6 @@ export async function compileAppManifest(sourceValue, options) {
           activity.externalPackages,
           `${activityPath}.externalPackages`,
         );
-      }
-      if (Object.prototype.hasOwnProperty.call(activity, 'resources')) {
-        compiledActivity.resources = activity.resources;
       }
       manifest.activities[activityId] = compiledActivity;
     }

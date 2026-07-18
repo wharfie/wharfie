@@ -115,11 +115,6 @@ const runCommand = new Command('run')
       ) {
         throw new Error('Caller metadata JSON must be an object.');
       }
-      if (Object.prototype.hasOwnProperty.call(callerMetadata, 'resources')) {
-        throw new Error(
-          'Caller metadata cannot supply resources; managed capabilities are not available yet.',
-        );
-      }
 
       const availableActivities = getManifestActivityNames(manifest);
       if (!availableActivities.includes(activityName)) {

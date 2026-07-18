@@ -269,7 +269,10 @@ describe('JSON activity values', () => {
   it('uses identical cloned input, caller metadata, and result semantics in source and embedded modes', async () => {
     const { invokeManifestActivity } = await import(APP_RUNS_IMPORT);
     const input = { nested: { count: 1 } };
-    const callerMetadata = { trace: { id: 'trace-1' } };
+    const callerMetadata = {
+      trace: { id: 'trace-1' },
+      resources: { note: 'ordinary caller metadata' },
+    };
     resultFactory = (receivedInput, runtime) => {
       expect(Object.isFrozen(receivedInput)).toBe(true);
       expect(Object.isFrozen(runtime.caller.metadata)).toBe(true);
@@ -294,7 +297,13 @@ describe('JSON activity values', () => {
 
     expect(sourceResult).toEqual(embeddedResult);
     expect(input).toEqual({ nested: { count: 1 } });
-    expect(callerMetadata).toEqual({ trace: { id: 'trace-1' } });
+    expect(callerMetadata).toEqual({
+      trace: { id: 'trace-1' },
+      resources: { note: 'ordinary caller metadata' },
+    });
+    expect(sourceResult.callerMetadata.resources).toEqual({
+      note: 'ordinary caller metadata',
+    });
     expect(invocationCalls.map(({ mode }) => mode)).toEqual([
       'source',
       'embedded',

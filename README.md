@@ -54,7 +54,8 @@ package remains deliberately private. It is not ready for production use.
 - [Strict v2 manifest checkpoint](llm/checkpoints/2026-07-16-strict-v2-manifest.md) — historical strict public-boundary handoff.
 - [Atomic operation-store checkpoint](llm/checkpoints/2026-07-16-atomic-operation-store.md) — historical atomic snapshot and fencing boundary.
 - [Immutable identity-spine checkpoint](llm/checkpoints/2026-07-17-immutable-identity-spine.md) — historical identity and artifact boundary.
-- [Mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md) — current restart point after making the append-only V3 ledger the only writable durable run model.
+- [Mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md) — historical deletion boundary after making the append-only V3 ledger the only writable durable run model.
+- [Resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md) — current restart point after narrowing activities to the framed protocol and deleting the unusable injected-resource/runtime-RPC island.
 - [Obsolete runtime retirement checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md) — historical deletion boundary for the disconnected NodeAgent/systemd/private-gRPC runtime island.
 - [Atomic run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md) — historical hosted SEA evidence, verified V3 history index, and the cleanup boundary that preceded the runtime deletion.
 
@@ -93,11 +94,13 @@ export default defineApp({
 Application and activity IDs are lowercase kebab identifiers matching
 `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`, with a maximum of 63 ASCII bytes. Wharfie
 does not trim or rewrite them. The CLI is required; activities and package
-targets are optional. Activity resource injection is intentionally unsupported
-until it can be expressed as durable managed effects. Workflows and schedules
-are intentionally not in this schema until their durable semantics are ready.
-Build credentials, signing material, and extra asset configuration are also
-outside the public manifest.
+targets are optional. Application- and activity-level `resources` are not part
+of the schema and are rejected as unknown fields. A caller-metadata object may
+contain a property named `resources`, but it is ordinary inert JSON—not an
+injection request. Managed capabilities and effects will gain separate durable
+contracts in later milestones. Workflows and schedules are intentionally not in
+this schema until their durable semantics are ready. Build credentials, signing
+material, and extra asset configuration are also outside the public manifest.
 
 See the [quickstart](docs/src/assets/markdown/quickstart.md) and [application
 structure](docs/src/assets/markdown/project-structure.md) for the complete

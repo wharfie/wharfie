@@ -99,7 +99,6 @@ function getWharfieActivityAttemptEntrypoint() {
  * @property {FunctionEntrypoint} entrypoint - entrypoint.
  * @property {BuildTarget | function(): BuildTarget} buildTarget - buildTarget.
  * @property {(string | ExternalDependencyInput)[]} [external] - external.
- * @property {Record<string, any>} [resources] - Function-scoped runtime resource specs.
  * @property {Object<string,string> | function(): Object<string,string>} [assets] - assets.
  */
 
@@ -119,6 +118,11 @@ class FunctionResource extends BuildResource {
    */
   constructor({ name, parent, status, properties, dependsOn, dependencyLock }) {
     const untypedProperties = /** @type {Record<string, any>} */ (properties);
+    if (Object.prototype.hasOwnProperty.call(untypedProperties, 'resources')) {
+      throw new TypeError(
+        `Activity '${properties.functionName || name}' no longer supports properties.resources.`,
+      );
+    }
     assertNoActivityEnvironmentVariables(
       untypedProperties.environmentVariables,
       properties.functionName || name,
@@ -153,7 +157,7 @@ class FunctionResource extends BuildResource {
 
   /**
    * Resolve every behavior-bearing build property once for a reconciliation.
-   * @returns {{functionName: string, entrypoint: {path: string, export?: string}, buildTarget: import('../../runtime/build-target.js').BuildTarget, external: ExternalDependencyDescription[], resources: Record<string, any>}} - Coherent build inputs.
+   * @returns {{functionName: string, entrypoint: {path: string, export?: string}, buildTarget: import('../../runtime/build-target.js').BuildTarget, external: ExternalDependencyDescription[]}} - Coherent build inputs.
    */
   captureBuildInputs() {
     const functionName = String(this.get('functionName'));
@@ -185,10 +189,6 @@ class FunctionResource extends BuildResource {
         `Activity '${functionName}' build target`,
       ),
       external: external || [],
-      resources: cloneJsonObject(
-        this.get('resources', {}),
-        `Activity '${functionName}' resources`,
-      ),
     };
   }
 
@@ -274,7 +274,6 @@ class FunctionResource extends BuildResource {
           forceTerminate: transport.forceTerminate,
         });
       };
-      globalThis[Symbol.for(${JSON.stringify(functionName)})] = entrypoint;
       globalThis[Symbol.for(${JSON.stringify(activityAttemptSymbol)})] = runActivityAttempt;
     `;
     const resolveDir = dirname(inputs.entrypoint.path);
@@ -474,7 +473,6 @@ class FunctionResource extends BuildResource {
         codeBundle,
         externalsTar,
         externalDependencyReceipt,
-        resourceSpecs: inputs.resources,
       },
       `Activity '${inputs.functionName}' function asset`,
     );
@@ -514,7 +512,6 @@ class FunctionResource extends BuildResource {
 }
 
 FunctionResource.DefaultProperties = {
-  resources: {},
   assets: {},
 };
 FunctionResource.BUILD_DIR = join(paths.temp, 'builds');

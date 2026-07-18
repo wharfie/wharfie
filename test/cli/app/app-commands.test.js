@@ -140,7 +140,9 @@ describe('wharfie app commands', () => {
 
       expect(result.status).toBe(1);
       expect(result.stdout).not.toContain(secret);
-      expect(result.stderr).toMatch(/dbPassword.*not supported/i);
+      expect(result.stderr).toMatch(
+        /app\.resources is not supported by schemaVersion 2/i,
+      );
       expect(result.stderr).not.toContain(secret);
     } finally {
       rmSync(dir, { recursive: true, force: true });

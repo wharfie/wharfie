@@ -581,16 +581,6 @@ export function createArtifactDependencyClosureDigest(
         `Activity '${activity}' external packages do not match its sealed function asset and revision contract.`,
       );
     }
-    const resourceSpecs = resource.get('resources', {});
-    const contractResourceSpecs = contractDefinition.resources || {};
-    if (
-      !hasSameCanonicalJson(resourceSpecs, sealedEvidence.resourceSpecs) ||
-      !hasSameCanonicalJson(sealedEvidence.resourceSpecs, contractResourceSpecs)
-    ) {
-      throw new Error(
-        `Activity '${activity}' resource specs do not match its sealed function asset and revision contract.`,
-      );
-    }
   }
   const activities = functionResources.reduce(
     (

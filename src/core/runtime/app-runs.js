@@ -257,11 +257,6 @@ function cloneActivityAttemptInputs(options) {
       : {},
     'Activity caller metadata',
   );
-  if (Object.prototype.hasOwnProperty.call(callerMetadata, 'resources')) {
-    throw new TypeError(
-      'Activity caller metadata cannot supply resources; managed capabilities are not available yet.',
-    );
-  }
   if (!Object.prototype.hasOwnProperty.call(options, 'deadlineUnixMs')) {
     return { input, callerMetadata };
   }
@@ -387,38 +382,6 @@ export function getManifestActivityNames(manifest) {
 export function getManifestActivityDefinition(options) {
   assertLogicalId(options.activityName, 'activityName');
   return getManifestActivities(options.manifest)[options.activityName];
-}
-
-/**
- * @param {any} manifest - manifest.
- * @returns {Record<string, any>} - Result.
- */
-export function getManifestResourcesSpec(manifest) {
-  return isObjectRecord(manifest?.resources) ? manifest.resources : {};
-}
-
-/**
- * Reject the legacy resource injection surface on the new protocol path. A
- * resource object or arbitrary RPC proxy is not a managed effect and cannot
- * honestly carry replay or recovery guarantees.
- * @param {Record<string, any>} manifest - Valid app manifest.
- * @param {Record<string, any>} definition - Selected activity definition.
- * @returns {void}
- */
-function assertNoLegacyAttemptResources(manifest, definition) {
-  if (Object.keys(getManifestResourcesSpec(manifest)).length > 0) {
-    throw new Error(
-      'Activity Protocol v1 invocation does not yet support manifest resources; use no resources until managed effects are implemented.',
-    );
-  }
-  if (
-    isObjectRecord(definition.resources) &&
-    Object.keys(definition.resources).length > 0
-  ) {
-    throw new Error(
-      'Activity Protocol v1 invocation does not yet support activity resources; use no resources until managed effects are implemented.',
-    );
-  }
 }
 
 /**
@@ -807,11 +770,7 @@ async function dispatchManifestActivityAttempt(
 ) {
   if (execution.kind === 'embedded') {
     const { embedded } = execution;
-    const definition = requireManifestActivityDefinition(
-      embedded.manifest,
-      activityName,
-    );
-    assertNoLegacyAttemptResources(embedded.manifest, definition);
+    requireManifestActivityDefinition(embedded.manifest, activityName);
     return await WharfieFunction.runActivityAttempt(activityName, startFrame);
   }
 
@@ -821,7 +780,6 @@ async function dispatchManifestActivityAttempt(
       source.manifest,
       activityName,
     );
-    assertNoLegacyAttemptResources(source.manifest, definition);
     assertSourceRuntimeResolution(
       path.resolve(source.appDir, definition.entrypoint.path),
     );
@@ -966,7 +924,6 @@ export default {
   getManifestActivities,
   getManifestActivityDefinition,
   getManifestActivityNames,
-  getManifestResourcesSpec,
   ActivityAttemptOutcomeError,
   invokeEmbeddedManifestActivityAttempt,
   invokeManifestActivity,

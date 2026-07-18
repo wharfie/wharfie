@@ -176,7 +176,7 @@ describe('wharfie ops run', () => {
         '--input',
         '{"who":"ops-run"}',
         '--caller-metadata',
-        '{"requestId":"ops-request"}',
+        '{"requestId":"ops-request","resources":{"note":"ordinary metadata"}}',
       ];
       const env = {
         ...process.env,
@@ -243,6 +243,7 @@ describe('wharfie ops run', () => {
         }),
       ]);
       expect(JSON.stringify(firstView)).not.toContain('ops-request');
+      expect(JSON.stringify(firstView)).not.toContain('ordinary metadata');
       expect(JSON.stringify(firstView)).not.toContain('hello ops-run');
       expect(
         firstView.events.map(

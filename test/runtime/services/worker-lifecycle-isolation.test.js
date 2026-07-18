@@ -20,6 +20,11 @@ import { c } from 'tar';
 import { DEPENDENCY_LOCK_INPUT_FORMAT } from '../../../src/core/runtime/application-revision.js';
 import { sortCanonicalJsonValue } from '../../../src/core/runtime/canonical-order.js';
 import { FUNCTION_ASSET_SCHEMA_VERSION } from '../../../src/core/resources/builds/lib/function-asset.js';
+import { getActivityAttemptProtocolSymbol } from '../../../src/core/runtime/activity-attempt.js';
+import {
+  ACTIVITY_PROTOCOL_NAME,
+  ACTIVITY_PROTOCOL_VERSION,
+} from '../../../src/core/runtime/activity-protocol.js';
 
 const NODE_SEA_IMPORT = '../../../src/core/lib/node-sea.js';
 const FUNCTION_IMPORT = '../../../src/core/resources/builds/function.js';
@@ -48,6 +53,25 @@ function makeName(prefix) {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
 }
 
+function startFrame(
+  /** @type {string} */ activityId,
+  /** @type {string} */ attemptId = 'attempt-1',
+) {
+  return {
+    protocol: ACTIVITY_PROTOCOL_NAME,
+    protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+    type: 'start',
+    revisionId: `wrv1_${'A'.repeat(43)}`,
+    activityId,
+    runId: `run-${attemptId}`,
+    invocationId: `invocation-${attemptId}`,
+    attemptId,
+    fencingToken: `fence-${attemptId}`,
+    input: {},
+    caller: { metadata: {} },
+  };
+}
+
 /** @param {string | Buffer} value */
 function digest(value) {
   return {
@@ -59,15 +83,22 @@ function digest(value) {
 /**
  * @param {string} name
  * @param {string} label
- * @returns {{schemaVersion: 3, activity: string, target: {nodeVersion: string, platform: NodeJS.Platform, architecture: string, libc?: string}, externals: never[], codeBundle: string, externalsTar: string, externalDependencyReceipt: null, resourceSpecs: Record<string, any>}}
+ * @returns {{schemaVersion: 4, activity: string, target: {nodeVersion: string, platform: NodeJS.Platform, architecture: string, libc?: string}, externals: never[], codeBundle: string, externalsTar: string, externalDependencyReceipt: null}}
  */
 function createFunctionAsset(name, label) {
+  const entrypointSymbol = getActivityAttemptProtocolSymbol(name);
   const codeString = `
-    global[Symbol.for(${JSON.stringify(name)})] = async (event, context) => {
-      const identity = await context.resources.identity.read();
-      await new Promise((resolve) => setTimeout(resolve, event.delay));
-      return { activity: ${JSON.stringify(label)}, identity, value: event.value };
-    };
+    globalThis[Symbol.for(${JSON.stringify(entrypointSymbol)})] =
+      async ({ startFrame, transport }) => {
+        await transport.onComponentFrame({
+          protocol: 'wharfie.activity',
+          protocolVersion: 1,
+          type: 'completed',
+          attemptId: startFrame.attemptId,
+          sequence: 1,
+          result: ${JSON.stringify(label)},
+        });
+      };
   `;
 
   return {
@@ -85,7 +116,6 @@ function createFunctionAsset(name, label) {
     ),
     externalsTar: '',
     externalDependencyReceipt: null,
-    resourceSpecs: {},
   };
 }
 
@@ -161,25 +191,6 @@ afterEach(async () => {
 });
 
 describe('sandbox worker lifecycle isolation', () => {
-  it('runs two different activity bundles sequentially without resetting the worker pool', async () => {
-    const { default: sandboxWorker } = await import(WORKER_IMPORT);
-    const firstName = makeName('sequential-first');
-    const secondName = makeName('sequential-second');
-    const firstCode = `
-      global[Symbol.for(${JSON.stringify(firstName)})] = async () => 'first';
-    `;
-    const secondCode = `
-      global[Symbol.for(${JSON.stringify(secondName)})] = async () => 'second';
-    `;
-
-    await expect(
-      sandboxWorker.runInSandbox(firstName, firstCode, []),
-    ).resolves.toBe('first');
-    await expect(
-      sandboxWorker.runInSandbox(secondName, secondCode, []),
-    ).resolves.toBe('second');
-  });
-
   it.each([
     [
       'an archive whose bytes do not match its digest',
@@ -222,75 +233,40 @@ describe('sandbox worker lifecycle isolation', () => {
         ...overrides,
       });
       const { default: sandboxWorker } = await import(WORKER_IMPORT);
-      const runInSandbox = jest.spyOn(sandboxWorker, 'runInSandbox');
+      const runActivityAttemptInSandbox = jest.spyOn(
+        sandboxWorker,
+        'runActivityAttemptInSandbox',
+      );
       const { default: WharfieFunction } = await import(FUNCTION_IMPORT);
 
       await expect(
-        WharfieFunction.run(activityName, { delay: 0 }, {}),
+        WharfieFunction.runActivityAttempt(
+          activityName,
+          startFrame(activityName),
+        ),
       ).rejects.toThrow(error);
-      expect(runInSandbox).not.toHaveBeenCalled();
+      expect(runActivityAttemptInSandbox).not.toHaveBeenCalled();
     },
-  );
-
-  it(
-    'keeps concurrent WharfieFunction activities and RPC sessions isolated',
-    async () => {
-      const firstName = makeName('concurrent-first');
-      const secondName = makeName('concurrent-second');
-      const firstIdentity = jest.fn(async () => 'first-rpc');
-      const secondIdentity = jest.fn(async () => 'second-rpc');
-
-      seaAssets.set(
-        firstName,
-        createFunctionAsset(firstName, 'first-activity'),
-      );
-      seaAssets.set(
-        secondName,
-        createFunctionAsset(secondName, 'second-activity'),
-      );
-
-      const { default: WharfieFunction } = await import(FUNCTION_IMPORT);
-      const [firstResult, secondResult] = await Promise.all([
-        WharfieFunction.run(
-          firstName,
-          { delay: 75, value: 1 },
-          {},
-          { resources: { identity: { read: firstIdentity } } },
-        ),
-        WharfieFunction.run(
-          secondName,
-          { delay: 5, value: 2 },
-          {},
-          { resources: { identity: { read: secondIdentity } } },
-        ),
-      ]);
-
-      expect(firstResult).toEqual({
-        activity: 'first-activity',
-        identity: 'first-rpc',
-        value: 1,
-      });
-      expect(secondResult).toEqual({
-        activity: 'second-activity',
-        identity: 'second-rpc',
-        value: 2,
-      });
-      expect(firstIdentity).toHaveBeenCalledTimes(1);
-      expect(secondIdentity).toHaveBeenCalledTimes(1);
-    },
-    TEST_TIMEOUT_MS,
   );
 
   it(
     'isolates the same activity code by external bundle content',
     async () => {
       const activityName = makeName('external-bundle-revision');
+      const entrypointSymbol = getActivityAttemptProtocolSymbol(activityName);
       const codeString = `
         const externalIdentity = require('wharfie-test-identity');
-        global[Symbol.for(${JSON.stringify(activityName)})] = async (event) => {
-          await new Promise((resolve) => setTimeout(resolve, event.delay));
-          return externalIdentity.identity;
-        };
+        globalThis[Symbol.for(${JSON.stringify(entrypointSymbol)})] =
+          async ({ startFrame, transport }) => {
+            await transport.onComponentFrame({
+              protocol: 'wharfie.activity',
+              protocolVersion: 1,
+              type: 'completed',
+              attemptId: startFrame.attemptId,
+              sequence: 1,
+              result: externalIdentity.identity,
+            });
+          };
       `;
       const [firstExternals, secondExternals] = await Promise.all([
         createIdentityExternalsTar('first-bundle'),
@@ -314,17 +290,23 @@ describe('sandbox worker lifecycle isolation', () => {
           activityName,
           digest(externalsTar),
         ),
-        resourceSpecs: {},
       });
 
       seaAssets.set(activityName, createAsset(firstExternals));
       const { default: WharfieFunction } = await import(FUNCTION_IMPORT);
-      const firstRun = WharfieFunction.run(activityName, { delay: 5 });
+      const firstRun = WharfieFunction.runActivityAttempt(
+        activityName,
+        startFrame(activityName, 'attempt-first'),
+      );
 
       seaAssets.set(activityName, createAsset(secondExternals));
-      const secondRun = WharfieFunction.run(activityName, { delay: 75 });
+      const secondRun = WharfieFunction.runActivityAttempt(
+        activityName,
+        startFrame(activityName, 'attempt-second'),
+      );
 
-      await expect(Promise.all([firstRun, secondRun])).resolves.toEqual([
+      const results = await Promise.all([firstRun, secondRun]);
+      expect(results.map((result) => result.terminal.result)).toEqual([
         'first-bundle',
         'second-bundle',
       ]);

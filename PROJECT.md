@@ -1,6 +1,6 @@
 # Wharfie project charter
 
-**Status:** active project reset · **Last updated:** 2026-07-16
+**Status:** active project reset · **Last updated:** 2026-07-17
 
 ## One sentence
 
@@ -51,7 +51,7 @@ Local and single-node operation require no external Wharfie control plane. Autom
 - **Capability:** a portable resource, property, or semantic guarantee that a node or deployment can provide and an application or activity can require, such as application state, fenced control state, artifact storage, ingress, identity, or a hardware feature. Placement constraints are predicates over advertised capabilities.
 - **Deployment:** the binding between an application revision, a deployment profile, fulfilled capabilities, and enrolled nodes.
 
-These are the public concepts. Existing actors, resources, graphs, and provider adapters are implementation material to reuse only where they support this model cleanly.
+These are the public concepts. Existing build-resource abstractions and provider helpers are private implementation material to reuse only where they support this model cleanly.
 
 ## Scope
 

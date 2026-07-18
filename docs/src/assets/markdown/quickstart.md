@@ -74,7 +74,9 @@ run, invocation, physical attempt, and fencing token. Activity code should use
 cancellation and deadline interruption through the framed worker attempt
 transport. The currently shipped source/SEA invocation API does not expose an
 interactive caller-cancellation control yet. The initial Activity Protocol v1
-execution path does not inject resource handles or managed effects.
+execution path does not inject resource handles or managed effects. The app
+schema rejects application- and activity-level `resources`; a caller-metadata
+property with that name is ordinary inert JSON.
 
 ```ts
 import type { ActivityHandler } from '@wharfie/wharfie/app';

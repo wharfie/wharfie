@@ -15,7 +15,6 @@ import {
   validateActivityProtocolComponentFrame,
   validateActivityProtocolHostFrame,
 } from '../../runtime/activity-protocol.js';
-import { createActorSystemResources } from '../../runtime/resources.js';
 import { assertNoActivityEnvironmentVariables } from './lib/activity-environment.js';
 import { parseFunctionAssetDescription } from './lib/function-asset.js';
 import { validateSha256Digest } from '../../runtime/application-revision.js';
@@ -38,7 +37,6 @@ import { normalizeExternalDependencies } from './lib/resolve-externals.js';
 /**
  * @typedef FunctionProperties
  * @property {(string | ExternalDependencyInput)[]} [external] - external.
- * @property {Record<string, any>} [resources] - Function-scoped runtime resources or specs.
  */
 
 /**
@@ -55,21 +53,10 @@ import { normalizeExternalDependencies } from './lib/resolve-externals.js';
  */
 
 /**
- * @typedef FunctionRunOptions
- * @property {Record<string, any>} [resources] - In-process resource instances to expose to the sandbox via RPC.
- */
-
-/**
  * @typedef PreparedFunctionBundle
  * @property {string} codeString - Exact bundled activity source.
  * @property {Buffer | Uint8Array | null} [externalsTar] - Exact frozen external archive bytes.
  * @property {import('../../runtime/application-revision.js').Sha256Digest} [externalArchiveDigest] - Expected raw archive digest.
- * @property {Record<string, any>} [resourceSpecs] - Function-scoped resource declarations.
- */
-
-/**
- * @typedef FunctionInvokeOptions
- * @property {Record<string, any>} [baseResources] - Base resources to merge beneath function-scoped resources.
  */
 
 /**
@@ -78,64 +65,6 @@ import { normalizeExternalDependencies } from './lib/resolve-externals.js';
  * @property {number} [readyTimeoutMs] - Maximum time for the one-shot worker to load its private wrapper.
  * @property {number} [cancellationGraceMs] - Cooperative cancellation grace before the one-shot worker is terminated.
  */
-
-/**
- * @param {any} v - v.
- * @returns {boolean} - Result.
- */
-function isObject(v) {
-  return !!v && typeof v === 'object';
-}
-
-/**
- * @param {Record<string, any> | null | undefined} resources - resources.
- * @returns {boolean} - Result.
- */
-function hasAnyResources(resources) {
-  return !!resources && Object.keys(resources).length > 0;
-}
-
-/**
- * Split a context object into:
- * - a clone-safe context (no resource client instances)
- * - an RPC resource map to be hosted in the parent process
- *
- * We conservatively treat `context.resources.{db,queue,objectStorage}` as RPC candidates
- * when the value looks like a client instance (has at least one function property).
- * @param {any} context - context.
- * @returns {{ safeContext: any, rpcResources: Record<string, any> | null }} - Result.
- */
-function splitContextForWorker(context) {
-  if (!isObject(context)) return { safeContext: context, rpcResources: null };
-
-  const res = context.resources;
-  if (!isObject(res)) return { safeContext: context, rpcResources: null };
-
-  /** @type {Record<string, any>} */
-  const rpcResources = {};
-  const safeResources = { ...res };
-
-  for (const key of ['db', 'queue', 'objectStorage']) {
-    const v = res[key];
-    if (!isObject(v)) continue;
-
-    // Heuristic: client instances have at least one function property.
-    const hasFn = Object.values(v).some((x) => typeof x === 'function');
-    if (!hasFn) continue;
-
-    rpcResources[key] = v;
-    delete safeResources[key];
-  }
-
-  if (Object.keys(rpcResources).length === 0) {
-    return { safeContext: context, rpcResources: null };
-  }
-
-  return {
-    safeContext: { ...context, resources: safeResources },
-    rpcResources,
-  };
-}
 
 /**
  * An untrusted sandbox return value was not a valid restricted attempt
@@ -406,9 +335,9 @@ function revalidateWorkerActivityAttemptEvidence(value, expectedStart) {
 }
 
 /**
- * Validate a prepared code/archive pair without creating resources, RPC
- * sessions, or a worker. The new Activity Protocol path deliberately reuses
- * only this frozen-bundle integrity boundary from legacy Function.run.
+ * Validate a prepared code/archive pair without creating a worker. Packaged
+ * and prepared Activity Protocol attempts share this frozen-bundle integrity
+ * boundary so archive verification cannot drift.
  * @param {PreparedFunctionBundle} bundle - Exact in-memory runtime bundle.
  * @returns {{ functionCodeString: string, externalsTar: Buffer | null, externalBundleDigest: string }} - Validated prepared bytes.
  */
@@ -474,11 +403,16 @@ class Function {
       throw new Error('Function expects a name as an argument');
     }
     const untypedProperties = /** @type {Record<string, any>} */ (properties);
+    if (Object.prototype.hasOwnProperty.call(untypedProperties, 'resources')) {
+      throw new TypeError(
+        `Activity '${name}' no longer supports properties.resources.`,
+      );
+    }
     assertNoActivityEnvironmentVariables(
       untypedProperties.environmentVariables,
       name,
     );
-    const { external, resources } = properties;
+    const { external } = properties;
     const normalizedExternal = normalizeExternalDependencies(
       external,
       entrypoint?.path,
@@ -487,170 +421,12 @@ class Function {
     this.entrypoint = entrypoint;
     this.properties = {
       ...(normalizedExternal ? { external: normalizedExternal } : {}),
-      ...(resources ? { resources } : {}),
-    };
-    /** @type {Promise<{ resources: Record<string, any>, close: () => Promise<void> }> | null} */
-    this._runtimeResourcesPromise = null;
-  }
-
-  /**
-   * Lazily create and cache runtime resources from `properties.resources`.
-   * @returns {Promise<{ resources: Record<string, any>, close: () => Promise<void> }>} - Result.
-   */
-  async _ensureRuntimeResources() {
-    if (this._runtimeResourcesPromise) return this._runtimeResourcesPromise;
-
-    const specs = isObject(this.properties?.resources)
-      ? this.properties.resources
-      : {};
-
-    if (!hasAnyResources(specs)) {
-      this._runtimeResourcesPromise = Promise.resolve({
-        resources: {},
-        close: async () => {},
-      });
-      return this._runtimeResourcesPromise;
-    }
-
-    this._runtimeResourcesPromise = createActorSystemResources(specs);
-    return this._runtimeResourcesPromise;
-  }
-
-  /**
-   * Get the instantiated runtime resources for this Function.
-   * @returns {Promise<Record<string, any>>} - Result.
-   */
-  async getRuntimeResources() {
-    const { resources } = await this._ensureRuntimeResources();
-    return resources;
-  }
-
-  /**
-   * Close all cached runtime resources (best-effort).
-   * @returns {Promise<void>} - Result.
-   */
-  async closeRuntimeResources() {
-    if (!this._runtimeResourcesPromise) return;
-    const { close } = await this._ensureRuntimeResources();
-    await close();
-    this._runtimeResourcesPromise = null;
-  }
-
-  /**
-   * Build a context object for function invocation.
-   *
-   * Precedence is: base resources < function resources < caller-provided resources.
-   * @param {any} [context] - context.
-   * @param {Record<string, any>} [baseResources] - baseResources.
-   * @returns {Promise<any>} - Result.
-   */
-  async createContext(context = {}, baseResources = {}) {
-    const functionResources = await this.getRuntimeResources();
-    const overrideResources = isObject(context?.resources)
-      ? context.resources
-      : {};
-    const mergedResources = {
-      ...(baseResources || {}),
-      ...(functionResources || {}),
-      ...(overrideResources || {}),
-    };
-
-    const shouldAttachResources =
-      hasAnyResources(mergedResources) ||
-      (isObject(context) &&
-        Object.prototype.hasOwnProperty.call(context, 'resources'));
-
-    if (!shouldAttachResources) {
-      return context;
-    }
-
-    return {
-      ...context,
-      resources: mergedResources,
     };
   }
 
   /**
-   * Run a bundled function in the sandbox worker.
-   *
-   * If `options.resources` (or `context.resources.{db,queue,objectStorage}`) contains
-   * in-process resource client instances, they are exposed to the worker via an RPC
-   * bridge, and the worker sees them as `context.resources.*` proxies.
-   *
-   * Bundled functions can also embed `resourceSpecs`; Wharfie will instantiate those
-   * resources per invocation and merge them between host resources and caller overrides.
-   * @param {string} name - name.
-   * @param {PreparedFunctionBundle} bundle - Exact in-memory runtime bundle.
-   * @param {any} event - event.
-   * @param {any} context - context.
-   * @param {FunctionRunOptions} [options] - options.
-   * @returns {Promise<any>} - Result.
-   */
-  static async runPreparedBundle(
-    name,
-    bundle,
-    event,
-    context = {},
-    options = {},
-  ) {
-    const { functionCodeString, externalsTar, externalBundleDigest } =
-      validatePreparedBundle(bundle);
-
-    const split = splitContextForWorker(context);
-    const safeContext = split.safeContext;
-    const contextRpcResources = split.rpcResources || {};
-
-    /** @type {{ resources: Record<string, any>, close: () => Promise<void> } | null} */
-    let scopedResources = null;
-    const bundledResourceSpecs = isObject(bundle.resourceSpecs)
-      ? bundle.resourceSpecs
-      : null;
-
-    try {
-      if (bundledResourceSpecs && hasAnyResources(bundledResourceSpecs)) {
-        scopedResources =
-          await createActorSystemResources(bundledResourceSpecs);
-      }
-
-      const rpcResources = {
-        ...((options?.resources && isObject(options.resources)
-          ? options.resources
-          : {}) || {}),
-        ...(scopedResources?.resources || {} || {}),
-        ...(contextRpcResources || {}),
-      };
-
-      return await worker.runInSandbox(
-        name,
-        functionCodeString,
-        [event, safeContext],
-        {
-          ...(externalsTar && externalsTar.length > 0 ? { externalsTar } : {}),
-          externalBundleDigest,
-          rpc: hasAnyResources(rpcResources)
-            ? { resources: rpcResources, contextIndex: 1 }
-            : undefined,
-        },
-      );
-    } finally {
-      try {
-        if (scopedResources) {
-          await scopedResources.close();
-        }
-      } finally {
-        await worker._destroyWorker(
-          name,
-          functionCodeString,
-          externalBundleDigest,
-        );
-      }
-    }
-  }
-
-  /**
-   * Run the private Activity Protocol v1 bundle entrypoint. This is separate
-   * from runPreparedBundle on purpose: it never instantiates resource specs,
-   * merges caller resources, or creates the legacy arbitrary resource RPC.
+   * Run the private Activity Protocol v1 bundle entrypoint. It never
+   * constructs an invocation context or arbitrary resource RPC.
    * The worker transport is framed: the host emits start/cancel, validates and
    * acknowledges component frames in order, and builds evidence locally.
    * @param {string} name - Declared activity ID.
@@ -764,33 +540,12 @@ class Function {
       ...(externalDependencyReceipt
         ? { externalArchiveDigest: externalDependencyReceipt.archiveDigest }
         : {}),
-      resourceSpecs: assetDescription.resourceSpecs,
     };
   }
 
   /**
-   * Run one activity embedded in a packaged SEA asset.
-   * @param {string} name - name.
-   * @param {any} event - event.
-   * @param {any} context - context.
-   * @param {FunctionRunOptions} [options] - options.
-   * @returns {Promise<any>} - Result.
-   */
-  static async run(name, event, context = {}, options = {}) {
-    const bundle = await Function.readPackagedBundle(name);
-    return await Function.runPreparedBundle(
-      name,
-      bundle,
-      event,
-      context,
-      options,
-    );
-  }
-
-  /**
    * Run one packaged activity through the private Activity Protocol wrapper.
-   * Unlike legacy run(), this does not construct a context or expose resource
-   * RPC. It returns physical attempt evidence instead of an application value.
+   * This returns physical attempt evidence instead of an application value.
    * @param {string} name - Declared activity ID.
    * @param {unknown} startFrame - Host-owned Activity Protocol start frame.
    * @param {ActivityAttemptRunOptions} [options] - Optional host cancellation controls.
@@ -807,9 +562,7 @@ class Function {
   }
 
   /**
-   * Resolve the selected source export without constructing a legacy resource
-   * context. Both legacy fn() and the protocol attempt path use this exact
-   * module/export selection rule.
+   * Resolve the selected source export for the protocol attempt path.
    * @returns {Promise<(input: any, runtime: any) => any>} - Selected handler.
    */
   async _loadEntrypoint() {
@@ -858,38 +611,6 @@ class Function {
     const start = validateActivityAttemptStart(this.name, startFrame);
     const handler = await this._loadEntrypoint();
     return await runNodeActivityAttempt({ startFrame: start, handler });
-  }
-
-  /**
-   * Load the function entrypoint and invoke it in-process.
-   *
-   * This is primarily used by the (single-process) ActorSystem runtime.
-   * @param {any} [event] - event.
-   * @param {any} [context] - context.
-   * @param {FunctionInvokeOptions} [options] - options.
-   * @returns {Promise<any>} - Result.
-   */
-  async fn(event = {}, context = {}, options = {}) {
-    if (
-      Array.isArray(this.properties.external) &&
-      this.properties.external.length > 0
-    ) {
-      throw new Error(
-        `Source activity '${this.name}' declares external packages and must run through a prepared application revision; ambient node_modules are not execution inputs.`,
-      );
-    }
-    const invocationContext = await this.createContext(
-      context,
-      options.baseResources || {},
-    );
-    const candidate = await this._loadEntrypoint();
-
-    // Support both sync and async handlers.
-    const result = candidate(event, invocationContext);
-    if (result && typeof result.then === 'function') {
-      return await result;
-    }
-    return result;
   }
 }
 

@@ -60,7 +60,7 @@ describe('schemaVersion 2 app demos', () => {
     });
   });
 
-  it('rejects legacy resource declarations on the Activity Protocol path', async () => {
+  it('rejects the removed resources field at the app boundary', async () => {
     const dir = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-resource-rejection-example-'),
     );
@@ -98,7 +98,7 @@ describe('schemaVersion 2 app demos', () => {
           activityName: 'inspect',
           inputInput: JSON.stringify({ who: 'demo-user' }),
         }),
-      ).rejects.toThrow(/does not yet support manifest resources/i);
+      ).rejects.toThrow(/app\.resources is not supported by schemaVersion 2/i);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -132,7 +132,7 @@ describe('schemaVersion 2 app demos', () => {
     ).rejects.toThrow('invokeActivity.event is not supported');
   });
 
-  it('rejects caller-supplied legacy resources instead of merging them', async () => {
+  it('treats a resources key in caller metadata as ordinary inert JSON', async () => {
     const dir = path.join(examplesDir, 'apps', 'hello-world');
 
     await expect(
@@ -147,6 +147,13 @@ describe('schemaVersion 2 app demos', () => {
           },
         }),
       }),
-    ).rejects.toThrow(/caller metadata cannot supply resources/i);
+    ).resolves.toMatchObject({
+      result: {
+        ok: true,
+        who: 'world',
+        message: 'hello world',
+        requestId: 'req-456',
+      },
+    });
   });
 });

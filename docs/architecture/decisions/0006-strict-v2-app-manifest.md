@@ -1,6 +1,9 @@
 # 0006 — One strict version 2 application manifest
 
-**Status:** Accepted · **Date:** 2026-07-16
+**Status:** Accepted in part · **Date:** 2026-07-16
+
+The resource-declaration portion of this decision is superseded by
+[0012](0012-no-manifest-resource-injection.md). The rest remains accepted.
 
 ## Context
 
@@ -17,7 +20,7 @@ The version 2 manifest has these boundaries:
 - `app.id` is the sole application identity. Application and activity IDs use the canonical logical-ID grammar `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$` and are at most 63 ASCII bytes. Inputs are rejected rather than trimmed or case-folded.
 - Every application has a developer-owned CLI entrypoint. CLI and activity entrypoints are explicitly `{ kind: 'node', path, export }`. Authored paths are app-relative, must resolve to existing files inside the application directory without symbolic-link escape, and become normalized relative paths in the canonical manifest.
 - Targets are optional but exact when declared: an exact Node semantic version, `darwin`, `linux`, or `win32`, `arm64` or `x64`, and explicit `libc: 'glibc'` for Linux. Wharfie does not silently select target defaults in the manifest compiler.
-- Portable resource declarations are limited to the exact versioned adapter shapes currently understood by Wharfie: `db` with `vanilla` or `dynamodb`, `queue` with `vanilla` or `sqs`, and `objectStorage` with `vanilla` or `s3`. Adapter options are exact data fields, not arbitrary provider configuration.
+- Portable resource declarations are limited to the exact versioned adapter shapes currently understood by Wharfie: `db` with `vanilla` or `dynamodb`, `queue` with `vanilla` or `sqs`, and `objectStorage` with `vanilla` or `s3`. Adapter options are exact data fields, not arbitrary provider configuration. This bullet is superseded by [0012](0012-no-manifest-resource-injection.md).
 - Target-specific external activity packages use exact, canonically ordered `{ name, version }` records. Version ranges and package-manager tags are not manifest inputs.
 - The public manifest does not accept `ActorSystem` graphs, workflow definitions, scheduler configuration, provider infrastructure graphs, credentials, secrets, or compatibility names such as `name`, `functions`, and `capabilities`. Actor systems may remain private implementation machinery, but are not an application-authoring model.
 - Signing, additional packaged assets, and other build-host settings are packaging inputs, separate from the runtime application manifest.

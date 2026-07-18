@@ -211,7 +211,7 @@ describe('embedded app manifest asset helpers', () => {
     ).rejects.toThrow(/schemaVersion|not supported/i);
   });
 
-  it('rejects credential-bearing allowed options in provided manifests without rendering the secret', async () => {
+  it('rejects removed resources in provided manifests without rendering nested values', async () => {
     const secret = 'provided-manifest-password-sentinel';
     const credentialManifest = {
       ...embeddedManifest,
@@ -236,12 +236,12 @@ describe('embedded app manifest asset helpers', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).toMatch(
-      /provided manifest\.resources\.db\.options\.path.*credential-bearing URLs/i,
+      /provided manifest\.resources is not supported by schemaVersion 2/i,
     );
     expect(String(error)).not.toContain(secret);
   });
 
-  it('rejects credential-bearing allowed options in embedded manifests without rendering the secret', async () => {
+  it('rejects removed resources in embedded manifests without rendering nested values', async () => {
     const secret = 'embedded-manifest-password-sentinel';
     const credentialManifest = {
       ...embeddedManifest,
@@ -269,7 +269,7 @@ describe('embedded app manifest asset helpers', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).toMatch(
-      /embedded manifest\.resources\.db\.options\.path.*credential-bearing URLs/i,
+      /embedded manifest\.resources is not supported by schemaVersion 2/i,
     );
     expect(String(error)).not.toContain(secret);
   });
@@ -386,7 +386,6 @@ describe('embedded app manifest asset helpers', () => {
           ).toString('base64'),
           externalsTar: '',
           externalDependencyReceipt: null,
-          resourceSpecs: {},
         }),
       );
 

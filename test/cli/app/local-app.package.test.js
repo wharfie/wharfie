@@ -318,12 +318,6 @@ describe('packageLocalApp', () => {
       ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
     },
   ],
-  resources: {
-    db: {
-      adapter: 'vanilla',
-      options: { path: '.wharfie/runtime' },
-    },
-  },
   activities: {
     hello: {
       entrypoint: {
@@ -836,10 +830,10 @@ describe('packageLocalApp', () => {
       /must be a canonical logical ID/i,
     ],
     [
-      'an unembedded host-native resource adapter',
+      'the removed top-level resources field',
       'activity',
       "resources: { db: { adapter: 'lmdb' } },",
-      /not a supported portable db adapter/i,
+      /app\.resources is not supported by schemaVersion 2/i,
     ],
     [
       'a scheduler without a portable durable store',
@@ -970,10 +964,6 @@ export default {
         path.join(dir, 'wharfie.app.js'),
         `import ActorSystem from ${JSON.stringify(actorSystemUrl)};
 
-const selectorDependent = Boolean(
-  ActorSystem.getRequestedBuildTargetSelectors()?.length,
-);
-
 export default new ActorSystem({
   name: 'filtered-portability',
   properties: {
@@ -982,7 +972,6 @@ export default new ActorSystem({
       platform: process.platform,
       architecture: process.arch,
     }],
-    resources: selectorDependent ? { db: { adapter: 'lmdb' } } : {},
   },
 });
 `,
@@ -1238,7 +1227,7 @@ try {
     }
   });
 
-  it('rejects inline secret-like resource options without rendering values', async () => {
+  it('rejects removed top-level resources without rendering nested values', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-inline-secret-package-'),
     );
@@ -1279,7 +1268,7 @@ try {
 
       const result = packageLocalApp({ dir });
       await expect(result).rejects.toThrow(
-        /resources\.db\.options\.password is not supported/i,
+        /app\.resources is not supported by schemaVersion 2/i,
       );
       await expect(result).rejects.not.toThrow(secret);
     } finally {
@@ -1287,7 +1276,7 @@ try {
     }
   });
 
-  it('rejects unreviewed resource options without embedding or rendering values', async () => {
+  it('rejects removed activity resources without rendering nested values', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-unreviewed-resource-option-'),
     );
@@ -1305,6 +1294,10 @@ try {
           'export default async function cli() {}\n',
         ),
         fsp.writeFile(
+          path.join(dir, 'src', 'activity.js'),
+          'export default async function activity() {}\n',
+        ),
+        fsp.writeFile(
           path.join(dir, 'wharfie.app.js'),
           `export default {
   schemaVersion: 2,
@@ -1318,10 +1311,19 @@ try {
     architecture: process.arch,
     ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
   }],
-  resources: {
-    db: {
-      adapter: 'vanilla',
-      options: { opaqueRuntimeValue: '${secret}' },
+  activities: {
+    activity: {
+      entrypoint: {
+        kind: 'node',
+        path: './src/activity.js',
+        export: 'default',
+      },
+      resources: {
+        db: {
+          adapter: 'vanilla',
+          options: { opaqueRuntimeValue: '${secret}' },
+        },
+      },
     },
   },
 };
@@ -1331,7 +1333,7 @@ try {
 
       const result = packageLocalApp({ dir });
       await expect(result).rejects.toThrow(
-        /opaqueRuntimeValue is not supported by schemaVersion 2/i,
+        /app\.activities\.activity\.resources is not supported by schemaVersion 2/i,
       );
       await expect(result).rejects.not.toThrow(secret);
     } finally {

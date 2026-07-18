@@ -36,7 +36,6 @@ import {
 import {
   createManifestActivityFunction,
   getManifestActivityNames,
-  getManifestResourcesSpec,
   invokeManifestActivity,
 } from '../../core/runtime/app-runs.js';
 
@@ -407,7 +406,6 @@ function toPackageableActorSystem(loaded) {
 
   const properties = /** @type {any} */ ({
     targets: Array.isArray(manifest.targets) ? manifest.targets : [],
-    resources: getManifestResourcesSpec(manifest),
     cli: {
       entrypoint: cliEntrypoint,
       export: cliExportName,

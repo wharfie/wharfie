@@ -10,8 +10,6 @@ import { createMockedDynamoDB } from '../../helpers/db-adapters.js';
 
 const VANILLA_DB_IMPORT = '../../../src/core/lib/db/adapters/vanilla.js';
 const LMDB_DB_IMPORT = '../../../src/core/lib/db/adapters/lmdb.js';
-const DYNAMO_DB_IMPORT = '../../../src/core/lib/db/adapters/dynamodb.js';
-const RESOURCES_IMPORT = '../../../src/core/runtime/resources.js';
 
 /**
  * @returns {string} - Result.
@@ -1010,53 +1008,4 @@ describe('dynamodb transactionWrite contract', () => {
 runLocalDBContract({
   name: 'lmdb',
   create: createLMDBDB,
-});
-
-describe('db adapter wiring', () => {
-  afterEach(() => {
-    jest.resetModules();
-    jest.restoreAllMocks();
-  });
-
-  test('createActorSystemResources wires the dynamodb adapter without AWS calls', async () => {
-    const close = jest.fn(async () => {});
-    const factory = jest.fn((options = {}) => ({
-      query: jest.fn(async () => []),
-      put: jest.fn(async () => {}),
-      update: jest.fn(async () => {}),
-      get: jest.fn(async () => undefined),
-      remove: jest.fn(async () => {}),
-      batchWrite: jest.fn(async () => {}),
-      transactionWrite: jest.fn(async () => {}),
-      close,
-      options,
-    }));
-
-    jest.resetModules();
-    jest.unstable_mockModule(DYNAMO_DB_IMPORT, () => ({
-      default: factory,
-    }));
-
-    const { createActorSystemResources } = await import(RESOURCES_IMPORT);
-    const { resources, close: closeResources } =
-      await createActorSystemResources({
-        db: {
-          adapter: 'dynamodb',
-          options: {
-            region: 'us-east-1',
-            endpoint: 'http://localhost:8000',
-          },
-        },
-      });
-
-    expect(factory).toHaveBeenCalledWith({
-      region: 'us-east-1',
-      endpoint: 'http://localhost:8000',
-    });
-    expect(typeof resources.db?.get).toBe('function');
-
-    await closeResources();
-
-    expect(close).toHaveBeenCalledTimes(1);
-  });
 });

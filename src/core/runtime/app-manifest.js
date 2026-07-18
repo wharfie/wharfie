@@ -19,7 +19,6 @@ const TOP_LEVEL_KEYS = new Set([
   'app',
   'cli',
   'targets',
-  'resources',
   'activities',
 ]);
 const APP_KEYS = new Set(['id']);
@@ -33,27 +32,10 @@ const TARGET_KEYS = new Set([
 ]);
 const EXACT_RELEASE_SEMVER_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-const RESOURCE_KINDS = ['db', 'queue', 'objectStorage'];
-const RESOURCE_SPEC_KEYS = new Set(['adapter', 'options']);
-const ACTIVITY_KEYS = new Set(['entrypoint', 'externalPackages', 'resources']);
+const ACTIVITY_KEYS = new Set(['entrypoint', 'externalPackages']);
 const EXTERNAL_PACKAGE_KEYS = new Set(['name', 'version']);
 const NPM_PACKAGE_NAME_PATTERN =
   /^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/;
-
-const RESOURCE_ADAPTER_OPTIONS = {
-  db: {
-    vanilla: new Set(['path']),
-    dynamodb: new Set(['region']),
-  },
-  queue: {
-    vanilla: new Set(['path']),
-    sqs: new Set(['region']),
-  },
-  objectStorage: {
-    vanilla: new Set(['path', 'region']),
-    s3: new Set(['region']),
-  },
-};
 
 /**
  * @param {unknown} value - Candidate value.
@@ -219,48 +201,6 @@ function assertTargets(value, valuePath) {
 }
 
 /**
- * @param {unknown} value - Resource definitions.
- * @param {string} valuePath - Human-readable schema path.
- * @returns {void}
- */
-function assertResources(value, valuePath) {
-  assertPlainObject(value, valuePath);
-  assertExactKeys(value, new Set(RESOURCE_KINDS), valuePath);
-
-  for (const kind of RESOURCE_KINDS) {
-    if (!Object.prototype.hasOwnProperty.call(value, kind)) continue;
-    const spec = value[kind];
-    const specPath = `${valuePath}.${kind}`;
-    assertPlainObject(spec, specPath);
-    assertExactKeys(spec, RESOURCE_SPEC_KEYS, specPath);
-    assertNonemptyCanonicalString(spec.adapter, `${specPath}.adapter`);
-
-    const kindAdapters = /** @type {Record<string, Set<string>>} */ (
-      RESOURCE_ADAPTER_OPTIONS[
-        /** @type {'db'|'queue'|'objectStorage'} */ (kind)
-      ]
-    );
-    const optionKeys = kindAdapters[spec.adapter];
-    if (!optionKeys) {
-      throw new TypeError(
-        `${specPath}.adapter is not a supported portable ${kind} adapter.`,
-      );
-    }
-
-    if (!Object.prototype.hasOwnProperty.call(spec, 'options')) continue;
-    const optionsPath = `${specPath}.options`;
-    const options = cloneJsonObject(spec.options, optionsPath);
-    assertExactKeys(options, optionKeys, optionsPath);
-    for (const optionName of Object.keys(options)) {
-      assertNonemptyCanonicalString(
-        options[optionName],
-        `${optionsPath}.${optionName}`,
-      );
-    }
-  }
-}
-
-/**
  * @param {unknown} value - Canonical external package list.
  * @param {string} valuePath - Human-readable schema path.
  * @returns {void}
@@ -330,9 +270,6 @@ export function validateAppManifest(value, valuePath = 'manifest') {
   if (Object.prototype.hasOwnProperty.call(manifest, 'targets')) {
     assertTargets(manifest.targets, `${valuePath}.targets`);
   }
-  if (Object.prototype.hasOwnProperty.call(manifest, 'resources')) {
-    assertResources(manifest.resources, `${valuePath}.resources`);
-  }
   if (Object.prototype.hasOwnProperty.call(manifest, 'activities')) {
     assertPlainObject(manifest.activities, `${valuePath}.activities`);
     const activityIds = Object.keys(manifest.activities);
@@ -353,9 +290,6 @@ export function validateAppManifest(value, valuePath = 'manifest') {
           activity.externalPackages,
           `${activityPath}.externalPackages`,
         );
-      }
-      if (Object.prototype.hasOwnProperty.call(activity, 'resources')) {
-        assertResources(activity.resources, `${activityPath}.resources`);
       }
     }
   }

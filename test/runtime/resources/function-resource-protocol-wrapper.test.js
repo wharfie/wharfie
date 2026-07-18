@@ -76,7 +76,7 @@ function currentBuildTarget() {
 }
 
 describe('FunctionResource Activity Protocol v1 bundle wrapper', () => {
-  it('keeps the raw entrypoint while exposing a bounded attempt adapter for the selected export', async () => {
+  it('exposes only a bounded attempt adapter for the selected export', async () => {
     const tmp = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-function-attempt-wrapper-'),
     );
@@ -98,6 +98,8 @@ describe('FunctionResource Activity Protocol v1 bundle wrapper', () => {
         attemptSymbol,
       ),
     });
+    const rawEntrypointSentinel = () => 'preexisting-raw-symbol';
+    runtimeGlobal[rawSymbol] = rawEntrypointSentinel;
 
     await fsp.writeFile(
       entryPath,
@@ -106,7 +108,7 @@ describe('FunctionResource Activity Protocol v1 bundle wrapper', () => {
         "  runtime?.logger?.info('selected', { value: input.value });",
         '  return {',
         '    value: input.value,',
-        "    attemptId: runtime?.invocation?.attemptId ?? 'legacy-raw',",
+        '    attemptId: runtime.invocation.attemptId,',
         '    caller: runtime?.caller?.metadata?.traceId ?? null,',
         '  };',
         '}',
@@ -134,16 +136,9 @@ describe('FunctionResource Activity Protocol v1 bundle wrapper', () => {
     );
     runBundle(createRequire(import.meta.url), entryPath, tmp, process);
 
-    const rawEntrypoint = runtimeGlobal[rawSymbol];
     const attemptEntrypoint = runtimeGlobal[attemptSymbol];
-    expect(typeof rawEntrypoint).toBe('function');
+    expect(runtimeGlobal[rawSymbol]).toBe(rawEntrypointSentinel);
     expect(typeof attemptEntrypoint).toBe('function');
-
-    await expect(rawEntrypoint({ value: 'legacy' })).resolves.toEqual({
-      value: 'legacy',
-      attemptId: 'legacy-raw',
-      caller: null,
-    });
 
     const newTransport = () => ({
       onComponentFrame: () => {},

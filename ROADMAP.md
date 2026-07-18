@@ -60,7 +60,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 **Goal:** prove a normal CLI can become one self-contained application artifact without changing its programming model.
 
 - [x] Define the minimal TypeScript application manifest around a developer-owned CLI and named activities.
-- [x] Define the strict application/activity logical-ID contract plus exact target and portable-resource descriptors.
+- [x] Define the strict application/activity logical-ID contract plus exact target and external-package descriptors.
 - [x] Define schemas and stable identifiers for immutable logical revisions, target-specific artifacts, and deployment profiles.
 - [x] Compile one target-independent revision from the strict contract, dependency lock, Wharfie runtime, source, and behavior assets; consume a sealed application snapshot and audit the static bundled-module graph.
 - [x] Keep build-only settings outside the runtime manifest and reject ActorSystem, workflow, and scheduler public authoring until their contracts are designed.
@@ -70,7 +70,8 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 - [x] Prove the frozen-closure artifact on a clean hosted Linux target: Ubuntu 24.04 packed the published tarball, generated and ran the Linux SEA with locked LMDB, and confirmed that Node was unavailable on `PATH`; reproducible builds are a later hardening goal.
 - [x] Define a reserved, non-colliding dispatch mechanism for Wharfie operator commands inside an application-owned executable: `<app> wharfie <command>`.
 - [x] Define and harden the versioned activity protocol, including strict serialization, cancellation, deadline, ordered-log, structured-error, host-effect, termination, and delivery-uncertainty boundaries, without requiring a second language implementation yet.
-- [x] Route source and packaged SEA activity execution through that protocol with immutable revision identity, fresh local attempt identity, revalidated bundle evidence, and fail-closed resource injection. The packaged/external path now uses a host-owned framed per-attempt worker transport with authenticated runner lifecycle messages, bounded cancellation/deadline termination, and late-frame rejection; legacy `exec`/RPC remains only for legacy execution paths.
+- [x] Route source and packaged SEA activity execution through that protocol with immutable revision identity, fresh local attempt identity, and revalidated bundle evidence. Both paths use a host-owned framed per-attempt worker transport with authenticated runner lifecycle messages, bounded cancellation/deadline termination, and late-frame rejection.
+- [x] Delete manifest resource declarations, Function/ActorSystem runtime-injection lifecycle, the generic worker `exec`/RPC bridge, the shared-resource registry, and orphan queue/object-storage adapter layers. Caller metadata is inert JSON; durable capabilities and effects remain explicit future contracts.
 - [ ] Define an explicit declaration or rejection rule for runtime-computed module paths that cannot be proven by the static bundle graph.
 - [x] Build one executable example and an end-to-end test from authored TypeScript through a clean generated-SEA execution.
 - [x] Prove one real target-specific Node-API activity dependency from a moved Darwin SEA by opening, writing, and reading LMDB with Node absent from `PATH`; repeat the portable proof on hosted Linux above.
@@ -187,15 +188,12 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 ## Immediate queue
 
 1. Repair the clean-install lint dependency declaration after explicit approval, make draft PR #125 green in GitHub Actions, and review the reset stack for merge.
-2. Delete the unusable resource-injection and generic worker `exec`/RPC
-   compatibility paths before enlarging a public durable surface; retain only
-   the activity protocol and control-store pieces that serve the reset model.
-3. Build one shared source/SEA operator-command layer on the verified V3 run
+2. Build one shared source/SEA operator-command layer on the verified V3 run
    directory before exposing history; do not add a scan-based `ops list`.
-4. Design durable cancellation/reconciliation transitions before exposing an
+3. Design durable cancellation/reconciliation transitions before exposing an
    `ops cancel` replacement.
-5. Embed the full frozen core closure plan and preflight generic CommonJS
+4. Embed the full frozen core closure plan and preflight generic CommonJS
    package resolution before treating malformed-closure ambient-JS fallback as
    closed.
 
-The latest dated handoff at [llm/checkpoints/2026-07-17-mutable-operation-retirement.md](llm/checkpoints/2026-07-17-mutable-operation-retirement.md) records the deleted Operation/Action store, idempotency-key boundary, and next resource-injection cleanup. The preceding [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.
+The latest dated handoff at [llm/checkpoints/2026-07-17-resource-injection-retirement.md](llm/checkpoints/2026-07-17-resource-injection-retirement.md) records the narrowed manifest, function-asset schema v4, framed-only worker, and deleted provider compatibility island. The preceding [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.

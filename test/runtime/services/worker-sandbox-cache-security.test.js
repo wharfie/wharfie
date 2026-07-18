@@ -11,6 +11,11 @@ import { c } from 'tar';
 
 import paths from '../../../src/core/lib/paths.js';
 import sandboxWorker from '../../../src/core/lib/code-execution/worker.js';
+import { getActivityAttemptProtocolSymbol } from '../../../src/core/runtime/activity-attempt.js';
+import {
+  ACTIVITY_PROTOCOL_NAME,
+  ACTIVITY_PROTOCOL_VERSION,
+} from '../../../src/core/runtime/activity-protocol.js';
 
 const VM_PATH = path.join(paths.temp, 'vms');
 const TEST_PACKAGE = 'wharfie-worker-cache-boundary';
@@ -20,6 +25,48 @@ const testPaths = new Set();
 
 function makeName(/** @type {string} */ prefix) {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+}
+
+function startFrame(
+  /** @type {string} */ activityId,
+  /** @type {string} */ attemptId,
+) {
+  return {
+    protocol: ACTIVITY_PROTOCOL_NAME,
+    protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+    type: 'start',
+    revisionId: `wrv1_${'A'.repeat(43)}`,
+    activityId,
+    runId: `run-${attemptId}`,
+    invocationId: `invocation-${attemptId}`,
+    attemptId,
+    fencingToken: `fence-${attemptId}`,
+    input: {},
+    caller: { metadata: {} },
+  };
+}
+
+function protocolBundle(
+  /** @type {string} */ activityId,
+  /** @type {string} */ resultExpression,
+) {
+  const entrypointSymbol = getActivityAttemptProtocolSymbol(activityId);
+  return {
+    entrypointSymbol,
+    codeString: `
+      globalThis[Symbol.for(${JSON.stringify(entrypointSymbol)})] =
+        async ({ startFrame, transport }) => {
+          await transport.onComponentFrame({
+            protocol: 'wharfie.activity',
+            protocolVersion: 1,
+            type: 'completed',
+            attemptId: startFrame.attemptId,
+            sequence: 1,
+            result: ${resultExpression},
+          });
+        };
+    `,
+  };
 }
 
 function getBundleKey(
@@ -97,19 +144,20 @@ afterEach(async () => {
 
 describe('worker sandbox cache security', () => {
   it(
-    'ignores a preexisting deterministic cache and shares one fresh private root concurrently',
+    'ignores a preexisting deterministic cache and gives concurrent attempts fresh private roots',
     async () => {
       const name = makeName('preexisting-cache');
       const archive = await createExternalArchive('sealed-archive');
       const externalBundleDigest =
         sandboxWorker.getExternalBundleDigest(archive);
-      const codeString = `
-        const cacheBoundaryIdentity = require(${JSON.stringify(TEST_PACKAGE)});
-        global[Symbol.for(${JSON.stringify(name)})] = async () => ({
-          identity: cacheBoundaryIdentity.identity,
+      const { codeString, entrypointSymbol } = protocolBundle(
+        name,
+        `({
+          identity: require(${JSON.stringify(TEST_PACKAGE)}).identity,
           root: process.cwd(),
-        });
-      `;
+          mode: require('node:fs').statSync(process.cwd()).mode & 0o777,
+        })`,
+      );
       const key = getBundleKey(name, codeString, externalBundleDigest);
       const deterministicRoot = path.join(VM_PATH, key);
       const tamperedPackageRoot = path.join(
@@ -133,36 +181,39 @@ describe('worker sandbox cache security', () => {
       );
 
       const results = await Promise.all(
-        Array.from({ length: 4 }, () =>
-          sandboxWorker.runInSandbox(name, codeString, [], {
-            externalsTar: archive,
-            externalBundleDigest,
-          }),
+        Array.from({ length: 4 }, (_, index) =>
+          sandboxWorker.runActivityAttemptInSandbox(
+            name,
+            codeString,
+            startFrame(name, `attempt-${index}`),
+            {
+              externalsTar: archive,
+              externalBundleDigest,
+              entrypointSymbol,
+            },
+          ),
         ),
       );
-      const roots = new Set(results.map((result) => result.root));
+      const resultValues = results.map((result) => result.terminal.result);
+      const roots = new Set(resultValues.map((result) => result.root));
 
-      expect(results.map((result) => result.identity)).toEqual([
+      expect(resultValues.map((result) => result.identity)).toEqual([
         'sealed-archive',
         'sealed-archive',
         'sealed-archive',
         'sealed-archive',
       ]);
-      expect(roots).toHaveProperty('size', 1);
-      const [freshRoot] = roots;
-      expect(freshRoot).not.toBe(deterministicRoot);
-      expect(path.dirname(freshRoot)).toBe(VM_PATH);
-      expect(path.basename(freshRoot)).toMatch(new RegExp(`^${key}-`));
-      expect((await fsp.lstat(freshRoot)).mode & 0o777).toBe(0o700);
-
-      await sandboxWorker._destroyWorker(
-        name,
-        codeString,
-        externalBundleDigest,
-      );
-      await expect(fsp.lstat(freshRoot)).rejects.toMatchObject({
-        code: 'ENOENT',
-      });
+      expect(roots).toHaveProperty('size', 4);
+      expect(resultValues.map((result) => result.mode)).toEqual([
+        0o700, 0o700, 0o700, 0o700,
+      ]);
+      for (const freshRoot of roots) {
+        expect(freshRoot).not.toBe(deterministicRoot);
+        expect(path.dirname(freshRoot)).toBe(VM_PATH);
+        await expect(fsp.lstat(freshRoot)).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+      }
       await expect(
         fsp.readFile(path.join(tamperedPackageRoot, 'index.js'), 'utf8'),
       ).resolves.toContain('tampered-preexisting-cache');
@@ -170,21 +221,32 @@ describe('worker sandbox cache security', () => {
     TEST_TIMEOUT_MS,
   );
 
-  it('removes roots on cache clear and prepares a different root afterward', async () => {
+  it('removes each one-shot root and prepares a different root afterward', async () => {
     const name = makeName('cache-clear');
-    const codeString = `
-      global[Symbol.for(${JSON.stringify(name)})] = async () => process.cwd();
-    `;
+    const { codeString, entrypointSymbol } = protocolBundle(
+      name,
+      '({ root: process.cwd() })',
+    );
 
-    const firstRoot = await sandboxWorker.runInSandbox(name, codeString, []);
-    await sandboxWorker._clearSandboxCache();
+    const first = await sandboxWorker.runActivityAttemptInSandbox(
+      name,
+      codeString,
+      startFrame(name, 'attempt-first'),
+      { entrypointSymbol },
+    );
+    const firstRoot = first.terminal.result.root;
     await expect(fsp.lstat(firstRoot)).rejects.toMatchObject({
       code: 'ENOENT',
     });
 
-    const secondRoot = await sandboxWorker.runInSandbox(name, codeString, []);
+    const second = await sandboxWorker.runActivityAttemptInSandbox(
+      name,
+      codeString,
+      startFrame(name, 'attempt-second'),
+      { entrypointSymbol },
+    );
+    const secondRoot = second.terminal.result.root;
     expect(secondRoot).not.toBe(firstRoot);
-    await sandboxWorker._clearSandboxCache();
     await expect(fsp.lstat(secondRoot)).rejects.toMatchObject({
       code: 'ENOENT',
     });
@@ -196,22 +258,28 @@ describe('worker sandbox cache security', () => {
       symbolicLink: true,
     });
     const externalBundleDigest = sandboxWorker.getExternalBundleDigest(archive);
-    const codeString = `
-      global[Symbol.for(${JSON.stringify(name)})] = async () => 'unreachable';
-    `;
-    const key = getBundleKey(name, codeString, externalBundleDigest);
+    const { codeString, entrypointSymbol } = protocolBundle(
+      name,
+      "'unreachable'",
+    );
     await fsp.mkdir(VM_PATH, { recursive: true });
     const before = new Set(await fsp.readdir(VM_PATH));
 
     await expect(
-      sandboxWorker.runInSandbox(name, codeString, [], {
-        externalsTar: archive,
-        externalBundleDigest,
-      }),
+      sandboxWorker.runActivityAttemptInSandbox(
+        name,
+        codeString,
+        startFrame(name, 'attempt-symlink'),
+        {
+          externalsTar: archive,
+          externalBundleDigest,
+          entrypointSymbol,
+        },
+      ),
     ).rejects.toThrow(/unsupported entry type|symbolic link/i);
 
     const leakedRoots = (await fsp.readdir(VM_PATH)).filter(
-      (entry) => entry.startsWith(`${key}-`) && !before.has(entry),
+      (entry) => !before.has(entry),
     );
     expect(leakedRoots).toEqual([]);
   });

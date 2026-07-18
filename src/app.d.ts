@@ -89,51 +89,10 @@ export interface ExternalPackage {
   version: string;
 }
 
-export type DatabaseResourceSpec =
-  | {
-      adapter: 'vanilla';
-      options?: { path?: string };
-    }
-  | {
-      adapter: 'dynamodb';
-      options?: { region?: string };
-    };
-
-export type QueueResourceSpec =
-  | {
-      adapter: 'vanilla';
-      options?: { path?: string };
-    }
-  | {
-      adapter: 'sqs';
-      options?: { region?: string };
-    };
-
-export type ObjectStorageResourceSpec =
-  | {
-      adapter: 'vanilla';
-      options?: { path?: string; region?: string };
-    }
-  | {
-      adapter: 's3';
-      options?: { region?: string };
-    };
-
-export interface AppResources {
-  db?: DatabaseResourceSpec;
-  queue?: QueueResourceSpec;
-  objectStorage?: ObjectStorageResourceSpec;
-}
-
 export interface ActivityDefinition {
   entrypoint: NodeEntrypoint;
   /** Unique exact packages in ascending name order. */
   externalPackages?: readonly ExternalPackage[];
-  /**
-   * Reserved legacy schema field. Activity Protocol v1 rejects nonempty
-   * resource declarations until managed durable effects exist.
-   */
-  resources?: AppResources;
 }
 
 interface AppTargetBase {
@@ -161,11 +120,6 @@ export interface WharfieAppDefinition {
   app: AppIdentity;
   cli: AppCliDefinition;
   targets?: readonly AppTarget[];
-  /**
-   * Reserved legacy schema field. Activity Protocol v1 rejects nonempty
-   * resource declarations until managed durable effects exist.
-   */
-  resources?: AppResources;
   activities?: Readonly<Record<LogicalId, ActivityDefinition>>;
 }
 

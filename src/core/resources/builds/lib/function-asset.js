@@ -13,7 +13,7 @@ import {
 import { cloneJsonObject } from '../../../runtime/json-value.js';
 import { assertLogicalId } from '../../../runtime/logical-id.js';
 
-export const FUNCTION_ASSET_SCHEMA_VERSION = 3;
+export const FUNCTION_ASSET_SCHEMA_VERSION = 4;
 
 const FUNCTION_ASSET_KEYS = new Set([
   'schemaVersion',
@@ -23,7 +23,6 @@ const FUNCTION_ASSET_KEYS = new Set([
   'codeBundle',
   'externalsTar',
   'externalDependencyReceipt',
-  'resourceSpecs',
 ]);
 const EXTERNAL_DEPENDENCY_RECEIPT_KEYS = new Set([
   'dependencyLockInput',
@@ -43,14 +42,13 @@ const NPM_PACKAGE_NAME_PATTERN =
 
 /**
  * @typedef FunctionAssetDescription
- * @property {3} schemaVersion - Strict function asset schema.
+ * @property {4} schemaVersion - Strict function asset schema.
  * @property {string} activity - Canonical activity registered by the code bundle.
  * @property {import('../../../runtime/build-target.js').BuildTarget} target - Exact target for this function realization.
  * @property {{name: string, version: string}[]} externals - Exact direct external roots, including an exact empty list.
  * @property {string} codeBundle - Canonical base64 Brotli-compressed activity bundle.
  * @property {string} externalsTar - Canonical base64 target dependency archive, or empty.
  * @property {FunctionExternalDependencyReceipt | null} externalDependencyReceipt - Receipt bound to the exact archive bytes.
- * @property {Record<string, any>} resourceSpecs - Function-scoped runtime resource declarations.
  */
 
 /**
@@ -191,11 +189,6 @@ export function validateFunctionAssetDescription(
     `${valuePath}.externalsTar`,
     true,
   );
-  const resourceSpecs = cloneJsonObject(
-    candidate.resourceSpecs,
-    `${valuePath}.resourceSpecs`,
-  );
-
   /** @type {FunctionExternalDependencyReceipt | null} */
   let externalDependencyReceipt = null;
   if (candidate.externalDependencyReceipt !== null) {
@@ -244,7 +237,6 @@ export function validateFunctionAssetDescription(
       codeBundle: candidate.codeBundle,
       externalsTar: candidate.externalsTar,
       externalDependencyReceipt,
-      resourceSpecs,
     },
     codeBundleBytes,
     externalArchiveBytes,

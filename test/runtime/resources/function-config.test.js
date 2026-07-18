@@ -62,66 +62,34 @@ describe('Function configuration hard edges', () => {
     expect(fn.properties).not.toHaveProperty('environmentVariables');
   });
 
-  it('supports function-scoped resources and rejects ambient external invocation', async () => {
-    const tmp = await fsp.mkdtemp(
-      path.join(os.tmpdir(), 'wharfie-function-config-'),
-    );
-    const actorPath = fileURLToPath(
-      new URL('../../fixtures/actors/hello-resources.js', import.meta.url),
-    );
+  it('rejects the removed function-scoped resources property', () => {
+    const entrypoint = { path: fileURLToPath(import.meta.url) };
 
-    const externalFn = new Function({
-      name: 'hello-resources',
-      entrypoint: { path: actorPath, export: 'helloResources' },
-      properties: {
-        external: [
-          'lmdb@3.4.4',
-          { name: '@paralleldrive/cuid2', version: '2.2.2' },
-        ],
-      },
-    });
+    expect(
+      () =>
+        new Function({
+          name: 'legacy-function-resources',
+          entrypoint,
+          properties: /** @type {any} */ ({ resources: {} }),
+        }),
+    ).toThrow(/no longer supports properties\.resources/i);
 
-    expect(externalFn.properties.external).toEqual([
-      {
-        name: '@paralleldrive/cuid2',
-        version: '2.2.2',
-      },
-      {
-        name: 'lmdb',
-        version: '3.4.4',
-      },
-    ]);
-    await expect(externalFn.fn({ who: 'function-scope' })).rejects.toThrow(
-      /prepared application revision/i,
-    );
-
-    const fn = new Function({
-      name: 'hello-resources',
-      entrypoint: { path: actorPath, export: 'helloResources' },
-      properties: {
-        resources: {
-          db: { adapter: 'vanilla', options: { path: tmp } },
-          queue: { adapter: 'vanilla', options: { path: tmp } },
-          objectStorage: { adapter: 'vanilla', options: { path: tmp } },
-        },
-      },
-    });
-
-    const result = await fn.fn({ who: 'function-scope' });
-
-    expect(result.who).toBe('function-scope');
-    expect(result.dbRecord?.message).toBe('hello function-scope');
-    expect(result.queueBody).toBe(JSON.stringify({ hello: 'function-scope' }));
-    expect(result.objectBody).toBe('hello function-scope');
-
-    const r1 = await fn.getRuntimeResources();
-    const r2 = await fn.getRuntimeResources();
-
-    expect(r1.db).toBe(r2.db);
-    expect(r1.queue).toBe(r2.queue);
-    expect(r1.objectStorage).toBe(r2.objectStorage);
-
-    await fn.closeRuntimeResources();
+    expect(
+      () =>
+        new FunctionResource({
+          name: 'legacy-function-resource-resources',
+          properties: /** @type {any} */ ({
+            functionName: 'legacy-function-resources',
+            entrypoint,
+            buildTarget: {
+              nodeVersion: process.versions.node,
+              platform: process.platform,
+              architecture: process.arch,
+            },
+            resources: {},
+          }),
+        }),
+    ).toThrow(/no longer supports properties\.resources/i);
   });
 
   it('requires exact external dependencies for FunctionResource builds too', async () => {

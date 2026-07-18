@@ -1,6 +1,6 @@
 /**
- * Shared non-AWS typedefs used by local implementations (e.g. the object-storage
- * adapters) and referenced via JSDoc `import()` types.
+ * Shared provider-neutral typedefs used by the S3 deployment helper and
+ * referenced via JSDoc `import()` types.
  *
  * This repo is mid-refactor; keep this file lightweight and dependency-free.
  */
