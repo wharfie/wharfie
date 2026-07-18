@@ -62,6 +62,7 @@ import { normalizeExternalDependencies } from './lib/resolve-externals.js';
 /**
  * @typedef ActivityAttemptRunOptions
  * @property {AbortSignal} [signal] - Optional host cancellation signal.
+ * @property {(request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown>} [handleEffect] - Optional trusted host managed-effect handler. Once dispatched it must eventually settle after options.signal aborts; the attempt retains its lifetime until it does.
  * @property {number} [readyTimeoutMs] - Maximum time for the one-shot worker to load its private wrapper.
  * @property {number} [cancellationGraceMs] - Cooperative cancellation grace before the one-shot worker is terminated.
  */
@@ -208,7 +209,8 @@ function validateActivityAttemptStart(name, value) {
  * The worker never returns an aggregate transcript: every retained frame was
  * accepted by the host before its acknowledgement. This final clone still
  * protects callers from mutable references and keeps the public evidence ABI
- * strict. Cancellation is supported; generic effects remain unavailable.
+ * strict. Cancellation and correlated host-managed effects are replayed from
+ * host-owned evidence.
  * @param {unknown} value - Candidate worker result.
  * @param {Readonly<Record<string, any>>} expectedStart - Host-accepted start.
  * @returns {Readonly<import('../../runtime/activity-attempt.js').ActivityAttemptEvidence>} - Fresh frozen evidence.
@@ -258,15 +260,10 @@ function revalidateWorkerActivityAttemptEvidence(value, expectedStart) {
         continue;
       }
 
-      if (frame?.type === 'cancel') {
+      if (frame?.type === 'cancel' || frame?.type === 'effect-result') {
         const accepted = transcript.acceptHostFrame(frame);
         frames.push(accepted);
         continue;
-      }
-      if (frame?.type === 'effect-result') {
-        throw new TypeError(
-          'The framed activity transport does not expose managed effects yet.',
-        );
       }
       const accepted = validateActivityProtocolComponentFrame(
         frame,
@@ -279,11 +276,6 @@ function revalidateWorkerActivityAttemptEvidence(value, expectedStart) {
         'deadline-exceeded',
         'protocol-failed',
       ].includes(accepted.type);
-      if (accepted.type !== 'log' && !isTerminal) {
-        throw new TypeError(
-          'The framed activity transport cannot return managed-effect frames.',
-        );
-      }
       if (isTerminal && index !== evidence.frames.length - 1) {
         throw new TypeError(
           'The activity terminal must be the final worker evidence frame.',
@@ -459,6 +451,9 @@ class Function {
           ...(externalsTar && externalsTar.length > 0 ? { externalsTar } : {}),
           externalBundleDigest,
           entrypointSymbol: getActivityAttemptProtocolSymbol(name),
+          ...(options.handleEffect !== undefined
+            ? { handleEffect: options.handleEffect }
+            : {}),
           ...(options.signal !== undefined ? { signal: options.signal } : {}),
           ...(options.readyTimeoutMs !== undefined
             ? { readyTimeoutMs: options.readyTimeoutMs }
@@ -619,6 +614,9 @@ class Function {
     return await runNodeActivityAttempt({
       startFrame: start,
       handler,
+      ...(options.handleEffect === undefined
+        ? {}
+        : { handleEffect: options.handleEffect }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
   }

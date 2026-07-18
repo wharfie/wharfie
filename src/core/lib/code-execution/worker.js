@@ -14,7 +14,7 @@ import { x } from 'tar';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { buffer as streamToBuffer } from 'node:stream/consumers';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import {
   DEFAULT_ACTIVITY_CANCELLATION_GRACE_MS,
@@ -25,6 +25,7 @@ import {
   ACTIVITY_PROTOCOL_NAME,
   ACTIVITY_PROTOCOL_VERSION,
   ActivityProtocolTranscriptValidator,
+  validateActivityProtocolComponentFrame,
 } from '../../runtime/activity-protocol.js';
 
 // esbuild inlines this file as text (configure: loader { '.worker.js': 'text' })
@@ -74,6 +75,15 @@ const DEFAULT_ACTIVITY_WORKER_READY_TIMEOUT_MS = 5_000;
  * @property {Readonly<Record<string, any>> | null} pendingCancel - Host-accepted cancellation held until the start frame is physically sent.
  * @property {import('node:worker_threads').MessagePort} port - Private host/runner Activity Protocol port, never exposed to bundle code.
  * @property {string} transportAuth - Opaque per-attempt authenticator required on runner lifecycle messages.
+ * @property {number} nextHostControlSequence - Next authenticated host-to-runner control sequence.
+ * @property {((request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown>) | null} handleEffect - Host-owned managed-effect handler.
+ * @property {AbortController} effectController - Host-owned effect interruption boundary.
+ * @property {Map<string, Readonly<Record<string, any>>>} effectRequests - Exact host-accepted effect requests awaiting results.
+ * @property {Map<string, Promise<void>>} effectOperations - In-flight host handler operations retained through attempt close.
+ * @property {Readonly<Record<string, any>> | null} pendingTerminal - Statelessly validated terminal withheld until effect handlers settle.
+ * @property {boolean} effectHandlerFailed - Whether an adapter failure closed admission for new host effects.
+ * @property {boolean} closeRequested - Whether the runner finished while host effect operations were settling.
+ * @property {{error: Error, forceTerminate: boolean} | null} deferredFailure - Failure retained until host effect operations settle.
  * @property {number} readyTimeoutMs - Maximum time to load the private wrapper and report readiness.
  * @property {ReturnType<typeof setTimeout> | null} readyTimer - Runner readiness watchdog.
  * @property {number} cancellationGraceMs - Bounded cooperative-cancellation grace.
@@ -85,6 +95,42 @@ const DEFAULT_ACTIVITY_WORKER_READY_TIMEOUT_MS = 5_000;
 
 /** @type {Map<string, WorkerState>} */
 const workers = new Map();
+
+/**
+ * @param {any} value - JSON control value.
+ * @returns {any} - Canonically ordered JSON value.
+ */
+function canonicalizeHostControl(value) {
+  if (Array.isArray(value)) return value.map(canonicalizeHostControl);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, canonicalizeHostControl(value[key])]),
+  );
+}
+
+/**
+ * Send one host control message with a per-attempt monotonic sequence and an
+ * HMAC. Bundle code may discover the MessagePort and observe signed controls,
+ * but cannot forge a new payload or replay an already consumed sequence.
+ * @param {PendingActivityAttempt} attempt - Exact attempt transport.
+ * @param {Record<string, any>} message - Unsigned host control fields.
+ * @returns {void}
+ */
+function sendAuthenticatedActivityAttemptControl(attempt, message) {
+  const unsigned = {
+    ...message,
+    id: message.id,
+    controlSequence: attempt.nextHostControlSequence,
+  };
+  const transportAuth = createHmac('sha256', attempt.transportAuth)
+    .update('wharfie-activity-host-control-v1\0')
+    .update(JSON.stringify(canonicalizeHostControl(unsigned)))
+    .digest('base64url');
+  attempt.port.postMessage({ ...unsigned, transportAuth });
+  attempt.nextHostControlSequence += 1;
+}
 
 /**
  * @param {string} name - Activity name.
@@ -239,12 +285,9 @@ function stopActivityAttemptInterruptionWatchdogs(attempt) {
  * @returns {void}
  */
 function rejectPendingActivityAttempts(state, error) {
-  for (const attempt of state.activityAttempts.values()) {
-    cleanupPendingActivityAttempt(attempt);
-    closeActivityAttemptPort(attempt);
-    attempt.reject(error);
+  for (const [id] of [...state.activityAttempts.entries()]) {
+    failActivityAttempt(state, id, error, false);
   }
-  state.activityAttempts.clear();
 }
 
 /**
@@ -389,6 +432,15 @@ function createActivityAttemptEvidenceError(message, cause) {
 function failActivityAttempt(state, id, error, forceTerminate = true) {
   const attempt = state.activityAttempts.get(id);
   if (!attempt) return;
+  if (!attempt.effectController.signal.aborted) {
+    try {
+      attempt.effectController.abort(error);
+    } catch {}
+  }
+  if (attempt.effectOperations.size > 0) {
+    attempt.deferredFailure ||= { error, forceTerminate };
+    return;
+  }
   state.activityAttempts.delete(id);
   cleanupPendingActivityAttempt(attempt);
   closeActivityAttemptPort(attempt);
@@ -408,6 +460,10 @@ function failActivityAttempt(state, id, error, forceTerminate = true) {
  * @returns {void}
  */
 function closeVerifiedActivityAttempt(state, id, attempt) {
+  if (attempt.effectOperations.size > 0) {
+    attempt.closeRequested = true;
+    return;
+  }
   state.activityAttempts.delete(id);
   state.closingActivityAttempts.set(id, attempt);
   cleanupPendingActivityAttempt(attempt);
@@ -492,6 +548,13 @@ function armActivityAttemptDeadlineWatchdog(state, id, attempt) {
     if (Date.now() < attempt.start.deadlineUnixMs) {
       armActivityAttemptDeadlineWatchdog(state, id, attempt);
       return;
+    }
+    if (!attempt.effectController.signal.aborted) {
+      try {
+        attempt.effectController.abort(
+          new Error('The activity attempt deadline was exceeded.'),
+        );
+      } catch {}
     }
     armActivityAttemptForcedTermination(
       state,
@@ -581,6 +644,11 @@ function requestActivityAttemptCancellation(state, id, reason) {
     });
     attempt.frames.push(cancel);
     attempt.cancelRequested = true;
+    if (!attempt.effectController.signal.aborted) {
+      try {
+        attempt.effectController.abort(reason);
+      } catch {}
+    }
     if (!attempt.startSent) {
       attempt.pendingCancel = cancel;
       armActivityAttemptForcedTermination(
@@ -591,7 +659,7 @@ function requestActivityAttemptCancellation(state, id, reason) {
       );
       return;
     }
-    attempt.port.postMessage({
+    sendAuthenticatedActivityAttemptControl(attempt, {
       kind: 'activity-attempt-host-frame',
       id,
       frame: cancel,
@@ -635,14 +703,14 @@ function sendActivityAttemptStart(state, id, attempt) {
   }
   try {
     if (attempt.pendingCancel) {
-      attempt.port.postMessage({
+      sendAuthenticatedActivityAttemptControl(attempt, {
         kind: 'activity-attempt-pre-cancel',
         id,
         reason: attempt.pendingCancel.reason,
       });
     }
     attempt.startSent = true;
-    attempt.port.postMessage({
+    sendAuthenticatedActivityAttemptControl(attempt, {
       kind: 'activity-attempt-host-frame',
       id,
       frame: attempt.start,
@@ -650,7 +718,7 @@ function sendActivityAttemptStart(state, id, attempt) {
     if (attempt.pendingCancel) {
       const cancel = attempt.pendingCancel;
       attempt.pendingCancel = null;
-      attempt.port.postMessage({
+      sendAuthenticatedActivityAttemptControl(attempt, {
         kind: 'activity-attempt-host-frame',
         id,
         frame: cancel,
@@ -661,6 +729,165 @@ function sendActivityAttemptStart(state, id, attempt) {
     /** @type {Error & {cause?: unknown}} */ (error).cause = cause;
     failActivityAttempt(state, id, error);
   }
+}
+
+/**
+ * Accept and acknowledge a terminal only after every already-dispatched host
+ * effect handler has settled. Until this point the outer transcript remains
+ * active so successful handler receipts can still be recorded before terminal.
+ * @param {WorkerState} state - Worker state.
+ * @param {number} id - Transport session ID.
+ * @param {PendingActivityAttempt} attempt - Exact pending attempt.
+ * @param {Readonly<Record<string, any>>} candidate - Statelessly validated terminal.
+ * @returns {void}
+ */
+function acceptActivityAttemptTerminal(state, id, attempt, candidate) {
+  const terminal = attempt.transcript.acceptComponentFrame(candidate);
+  if (
+    terminal.type !== 'completed' &&
+    terminal.type !== 'failed' &&
+    terminal.type !== 'cancelled' &&
+    terminal.type !== 'deadline-exceeded' &&
+    terminal.type !== 'protocol-failed'
+  ) {
+    throw new TypeError('The buffered activity frame was not terminal.');
+  }
+  attempt.pendingTerminal = null;
+  attempt.frames.push(terminal);
+  attempt.terminal = terminal;
+  if (!attempt.effectController.signal.aborted) {
+    try {
+      attempt.effectController.abort(
+        new Error('The activity attempt emitted its terminal frame.'),
+      );
+    } catch {}
+  }
+  stopActivityAttemptInterruptionWatchdogs(attempt);
+  armActivityAttemptTerminalWatchdog(state, id, attempt);
+  sendAuthenticatedActivityAttemptControl(attempt, {
+    kind: 'activity-attempt-component-ack',
+    id,
+    sequence: terminal.sequence,
+    ok: true,
+  });
+}
+
+/**
+ * Finish whichever attempt transition was waiting for all host effect handlers
+ * to settle. The caller removes its own operation from effectOperations before
+ * entering this helper.
+ * @param {WorkerState} state - Worker state.
+ * @param {number} id - Transport session ID.
+ * @param {PendingActivityAttempt} attempt - Exact pending attempt.
+ * @returns {void}
+ */
+function settleActivityAttemptEffectOperations(state, id, attempt) {
+  if (
+    attempt.effectOperations.size > 0 ||
+    state.activityAttempts.get(id) !== attempt
+  ) {
+    return;
+  }
+  if (attempt.deferredFailure) {
+    const failure = attempt.deferredFailure;
+    attempt.deferredFailure = null;
+    failActivityAttempt(state, id, failure.error, failure.forceTerminate);
+    return;
+  }
+  if (attempt.pendingTerminal) {
+    const terminal = attempt.pendingTerminal;
+    try {
+      acceptActivityAttemptTerminal(state, id, attempt, terminal);
+    } catch (cause) {
+      failActivityAttempt(
+        state,
+        id,
+        createActivityAttemptEvidenceError(
+          'The activity runner emitted an invalid buffered terminal frame.',
+          cause,
+        ),
+      );
+    }
+    return;
+  }
+  if (attempt.closeRequested) {
+    closeVerifiedActivityAttempt(state, id, attempt);
+  }
+}
+
+/**
+ * Execute one already host-accepted effect request. The host transcript owns
+ * result validation and evidence ordering; the runner receives only the exact
+ * accepted host frame or a bounded local rejection notification.
+ * @param {WorkerState} state - Worker state.
+ * @param {number} id - Transport session ID.
+ * @param {PendingActivityAttempt} attempt - Exact active attempt.
+ * @param {Readonly<Record<string, any>>} request - Host-accepted request.
+ * @returns {void}
+ */
+function beginActivityAttemptEffect(state, id, attempt, request) {
+  const effectId = request.effectId;
+  const operation = Promise.resolve()
+    .then(() =>
+      attempt.handleEffect?.(request, {
+        signal: attempt.effectController.signal,
+      }),
+    )
+    .then((value) => {
+      if (state.activityAttempts.get(id) !== attempt) {
+        throw new Error(
+          'The activity effect handler settled after its attempt closed.',
+        );
+      }
+      if (
+        !value ||
+        typeof value !== 'object' ||
+        Array.isArray(value) ||
+        /** @type {Record<string, any>} */ (value).type !== 'effect-result' ||
+        /** @type {Record<string, any>} */ (value).attemptId !==
+          request.attemptId ||
+        /** @type {Record<string, any>} */ (value).effectId !== effectId
+      ) {
+        throw new TypeError(
+          'The activity effect handler returned an uncorrelated result.',
+        );
+      }
+      const frame = attempt.transcript.acceptHostFrame(value);
+      attempt.frames.push(frame);
+      attempt.effectRequests.delete(effectId);
+      sendAuthenticatedActivityAttemptControl(attempt, {
+        kind: 'activity-attempt-host-frame',
+        id,
+        frame,
+      });
+    })
+    .catch(() => {
+      if (state.activityAttempts.get(id) !== attempt) return;
+      attempt.effectHandlerFailed = true;
+      attempt.effectRequests.delete(effectId);
+      try {
+        sendAuthenticatedActivityAttemptControl(attempt, {
+          kind: 'activity-attempt-effect-rejected',
+          id,
+          effectId,
+          error: 'The host managed-effect handler failed.',
+        });
+      } catch (cause) {
+        const error = createActivityAttemptEvidenceError(
+          'The activity host could not report its effect-handler failure.',
+          cause,
+        );
+        attempt.deferredFailure ||= { error, forceTerminate: true };
+      }
+    })
+    .finally(() => {
+      attempt.effectOperations.delete(effectId);
+      settleActivityAttemptEffectOperations(state, id, attempt);
+    });
+  // The attempt retains and observes every operation until its own close path
+  // has run. No host handler may outlive the DB/catalog lifetime of its caller.
+  operation.catch(() => {});
+  attempt.effectOperations.set(effectId, operation);
 }
 
 /**
@@ -764,7 +991,7 @@ function handleActivityAttemptMessage(state, msg) {
       );
       return true;
     }
-    if (attempt.terminal) {
+    if (attempt.terminal || attempt.pendingTerminal) {
       failActivityAttempt(
         state,
         id,
@@ -781,7 +1008,11 @@ function handleActivityAttemptMessage(state, msg) {
       );
       const deadlinePassed =
         hasDeadline && Date.now() >= attempt.start.deadlineUnixMs;
-      const componentType = msg.frame?.type;
+      const candidate = validateActivityProtocolComponentFrame(
+        msg.frame,
+        'worker activity component frame',
+      );
+      const componentType = candidate.type;
       if (componentType === 'deadline-exceeded' && !deadlinePassed) {
         throw new Error(
           'The activity runner emitted deadline-exceeded before the host deadline.',
@@ -806,30 +1037,71 @@ function handleActivityAttemptMessage(state, msg) {
           'The activity runner emitted a component frame after the host deadline.',
         );
       }
-      if (msg.frame?.type === 'effect-request') {
+      if (componentType === 'effect-request' && !attempt.handleEffect) {
         throw new TypeError(
           'Activity Protocol effects are unavailable on this worker transport.',
         );
       }
-      const frame = attempt.transcript.acceptComponentFrame(msg.frame);
-      attempt.frames.push(frame);
-      if (
-        frame.type === 'completed' ||
-        frame.type === 'failed' ||
-        frame.type === 'cancelled' ||
-        frame.type === 'deadline-exceeded' ||
-        frame.type === 'protocol-failed'
-      ) {
-        attempt.terminal = frame;
-        stopActivityAttemptInterruptionWatchdogs(attempt);
-        armActivityAttemptTerminalWatchdog(state, id, attempt);
+      const isTerminal =
+        componentType === 'completed' ||
+        componentType === 'failed' ||
+        componentType === 'cancelled' ||
+        componentType === 'deadline-exceeded' ||
+        componentType === 'protocol-failed';
+      if (isTerminal) {
+        if (attempt.effectOperations.size > 0) {
+          const snapshot = attempt.transcript.snapshot();
+          if (
+            candidate.attemptId !== attempt.start.attemptId ||
+            candidate.sequence !== snapshot.nextComponentSequence ||
+            (componentType === 'cancelled' && !snapshot.cancelRequested) ||
+            (componentType === 'deadline-exceeded' && !hasDeadline)
+          ) {
+            throw new Error(
+              'The activity runner emitted an invalid terminal transition.',
+            );
+          }
+          attempt.pendingTerminal = candidate;
+          if (!attempt.effectController.signal.aborted) {
+            try {
+              attempt.effectController.abort(
+                new Error('The activity attempt emitted its terminal frame.'),
+              );
+            } catch {}
+          }
+          // The component is responsive and waiting for an ACK. Host handler
+          // settlement, not worker cancellation grace, now owns the lifetime.
+          stopActivityAttemptInterruptionWatchdogs(attempt);
+          return true;
+        }
+        acceptActivityAttemptTerminal(state, id, attempt, candidate);
+        return true;
       }
-      attempt.port.postMessage({
+
+      const frame = attempt.transcript.acceptComponentFrame(candidate);
+      attempt.frames.push(frame);
+      if (frame.type === 'effect-request') {
+        attempt.effectRequests.set(frame.effectId, frame);
+      }
+      sendAuthenticatedActivityAttemptControl(attempt, {
         kind: 'activity-attempt-component-ack',
         id,
         sequence: frame.sequence,
         ok: true,
       });
+      if (frame.type === 'effect-request') {
+        if (attempt.effectHandlerFailed) {
+          attempt.effectRequests.delete(frame.effectId);
+          sendAuthenticatedActivityAttemptControl(attempt, {
+            kind: 'activity-attempt-effect-rejected',
+            id,
+            effectId: frame.effectId,
+            error: 'The host managed-effect handler is closed.',
+          });
+        } else {
+          beginActivityAttemptEffect(state, id, attempt, frame);
+        }
+      }
     } catch (cause) {
       failActivityAttempt(
         state,
@@ -1251,6 +1523,7 @@ async function materializeExternalBundle(externalsTar) {
  * @property {Object<string,string>} [env] - Fixed sandbox environment additions.
  * @property {string} entrypointSymbol - Fixed private protocol wrapper symbol.
  * @property {AbortSignal} [signal] - Optional host cancellation signal.
+ * @property {(request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown>} [handleEffect] - Optional trusted host managed-effect handler. Once dispatched it must eventually settle after signal abort; the attempt retains its lifetime until it does.
  * @property {number} [readyTimeoutMs] - Maximum private-wrapper startup time.
  * @property {number} [cancellationGraceMs] - Cooperative cancellation grace before worker termination.
  */
@@ -1315,6 +1588,7 @@ async function runActivityAttemptInSandbox(
     env = {},
     entrypointSymbol,
     signal,
+    handleEffect,
     readyTimeoutMs,
     cancellationGraceMs,
   } = /** @type {ActivityAttemptSandboxOptions} */ ({}),
@@ -1333,6 +1607,11 @@ async function runActivityAttemptInSandbox(
   ) {
     throw new TypeError(
       'signal must be an AbortSignal with addEventListener and removeEventListener when provided.',
+    );
+  }
+  if (handleEffect !== undefined && typeof handleEffect !== 'function') {
+    throw new TypeError(
+      'handleEffect must be a function when provided to the worker transport.',
     );
   }
 
@@ -1414,6 +1693,15 @@ async function runActivityAttemptInSandbox(
         pendingCancel: null,
         port: port1,
         transportAuth,
+        nextHostControlSequence: 1,
+        handleEffect: handleEffect || null,
+        effectController: new AbortController(),
+        effectRequests: new Map(),
+        effectOperations: new Map(),
+        pendingTerminal: null,
+        effectHandlerFailed: false,
+        closeRequested: false,
+        deferredFailure: null,
         readyTimeoutMs: readyTimeout,
         readyTimer: null,
         cancellationGraceMs: grace,

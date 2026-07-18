@@ -246,16 +246,18 @@ class FunctionResource extends BuildResource {
           Array.isArray(transport) ||
           Object.getPrototypeOf(transport) !== Object.prototype ||
           !Object.prototype.hasOwnProperty.call(transport, 'onComponentFrame') ||
+          !Object.prototype.hasOwnProperty.call(transport, 'handleEffect') ||
           !Object.prototype.hasOwnProperty.call(transport, 'signal') ||
           !Object.prototype.hasOwnProperty.call(transport, 'forceTerminate') ||
-          Object.keys(transport).length !== 3
+          Object.keys(transport).length !== 4
         ) {
           throw new TypeError(${JSON.stringify(
-            `Activity '${functionName}' protocol wrapper requires a runner-owned transport with exactly { onComponentFrame, signal, forceTerminate }.`,
+            `Activity '${functionName}' protocol wrapper requires a runner-owned transport with exactly { onComponentFrame, handleEffect, signal, forceTerminate }.`,
           )});
         }
         if (
           typeof transport.onComponentFrame !== 'function' ||
+          typeof transport.handleEffect !== 'function' ||
           typeof transport.forceTerminate !== 'function' ||
           transport.signal === null ||
           typeof transport.signal !== 'object' ||
@@ -263,13 +265,14 @@ class FunctionResource extends BuildResource {
           typeof transport.signal.removeEventListener !== 'function'
         ) {
           throw new TypeError(${JSON.stringify(
-            `Activity '${functionName}' protocol wrapper requires transport.onComponentFrame and transport.forceTerminate functions plus an AbortSignal-like transport.signal.`,
+            `Activity '${functionName}' protocol wrapper requires transport.onComponentFrame, transport.handleEffect, and transport.forceTerminate functions plus an AbortSignal-like transport.signal.`,
           )});
         }
         return runNodeActivityAttempt({
           startFrame: request.startFrame,
           handler: entrypoint,
           onComponentFrame: transport.onComponentFrame,
+          handleEffect: transport.handleEffect,
           signal: transport.signal,
           forceTerminate: transport.forceTerminate,
         });
