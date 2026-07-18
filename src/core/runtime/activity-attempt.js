@@ -350,7 +350,7 @@ async function waitForGrace(execution, graceMs) {
  * @param {(request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown>} [options.handleEffect] - Host effect adapter returning an effect-result frame.
  * @param {AbortSignal} [options.signal] - External cancellation signal.
  * @param {number} [options.cancellationGraceMs] - Cooperative cancellation grace.
- * @param {number} [options.hostOperationTimeoutMs] - Finite host sink/effect/termination wait.
+ * @param {number} [options.hostOperationTimeoutMs] - Finite component-sink and force-termination wait.
  * @param {() => unknown | Promise<unknown>} [options.forceTerminate] - Terminates the adapter boundary after grace.
  * @param {() => number} [options.now] - Wall-clock source used for deadlines.
  * @returns {Promise<Readonly<ActivityAttemptEvidence>>} - Immutable physical-attempt evidence.
@@ -417,6 +417,8 @@ export async function runNodeActivityAttempt(options) {
   const controller = new AbortController();
   const componentSink = options.onComponentFrame;
   const effectHandler = options.handleEffect;
+  /** @type {Set<Promise<unknown>>} */
+  const activeEffectOperations = new Set();
   let nextSequence = 1;
   let componentSealed = false;
   let terminal = /** @type {Readonly<Record<string, any>> | null} */ (null);
@@ -438,6 +440,43 @@ export async function runNodeActivityAttempt(options) {
   const interrupted = new Promise((resolve) => {
     resolveInterruption = () => resolve(undefined);
   });
+
+  /**
+   * Retain every trusted host effect through settlement. Effect adapters own
+   * durable destination work and must not outlive the attempt scope that owns
+   * their DB/catalog resources. After interruption they are required to honor
+   * the supplied signal and eventually settle.
+   * @returns {Promise<void>} - Completion after the retained set is empty.
+   */
+  const settleActiveEffectOperations = async () => {
+    while (activeEffectOperations.size > 0) {
+      await Promise.allSettled([...activeEffectOperations]);
+    }
+  };
+
+  /**
+   * Retain and observe the exact promise returned to component code. Attaching
+   * the local rejection observer to an inner async promise is insufficient:
+   * an ignored `effects.request()` would leave its distinct outer promise as a
+   * process-level unhandled rejection.
+   * @param {Promise<any>} operation - Complete effect request lifecycle.
+   * @returns {Promise<any>} - Same retained outcome exposed to the component.
+   */
+  const retainEffectOperation = (operation) => {
+    const retained = operation.then(
+      (value) => {
+        activeEffectOperations.delete(retained);
+        return value;
+      },
+      (error) => {
+        activeEffectOperations.delete(retained);
+        throw error;
+      },
+    );
+    activeEffectOperations.add(retained);
+    retained.catch(() => {});
+    return retained;
+  };
 
   /**
    * @returns {Readonly<ActivityAttemptEvidenceSnapshot>} - Current locally accepted evidence.
@@ -749,94 +788,95 @@ export async function runNodeActivityAttempt(options) {
    * @param {{effectId: string, capability: string, operation: string, input: any, requestedReplayProperties: string[]}} request - Managed effect request.
    * @returns {Promise<any>} - Effect result.
    */
-  const requestEffect = async (request) => {
-    if (controller.signal.aborted) throw controller.signal.reason;
-    if (!effectHandler) {
-      throw new ActivityEffectUnavailableError(
-        'This activity host does not provide a managed effect handler.',
-      );
-    }
-    if (!request || typeof request !== 'object') {
-      const error = new ActivityAttemptProtocolError(
-        'effect-request-invalid',
-        'effects.request requires an effect request object.',
-      );
-      latchProtocolFailure(error);
-      throw error;
-    }
-
-    const effectRequest = acceptComponentFrame({
-      protocol: ACTIVITY_PROTOCOL_NAME,
-      protocolVersion: ACTIVITY_PROTOCOL_VERSION,
-      type: 'effect-request',
-      attemptId: start.attemptId,
-      sequence: nextSequence,
-      effectId: request.effectId,
-      capability: request.capability,
-      operation: request.operation,
-      input: request.input,
-      requestedReplayProperties: request.requestedReplayProperties,
-    });
-    await drainDelivery();
-    if (deliveryFailure)
-      throw latchProtocolFailure(
-        new ActivityAttemptProtocolError(
-          'frame-delivery-failed',
-          'Activity component-frame delivery failed.',
-        ),
-      );
-    if (controller.signal.aborted) throw controller.signal.reason;
-
-    let rawResponse;
-    try {
-      rawResponse = await runBoundedHostOperation(
-        () => effectHandler(effectRequest, { signal: controller.signal }),
-        hostOperationTimeoutMs,
-        'Activity effect handling',
-      );
-    } catch (cause) {
-      const error = asProtocolError(
-        cause,
-        'effect-handler-failed',
-        'The host effect handler failed without returning an effect result.',
-        { effectId: effectRequest.effectId },
-      );
-      latchProtocolFailure(error);
-      throw error;
-    }
-
-    let response;
-    try {
-      response = validateActivityProtocolHostFrame(rawResponse);
-      if (response.type !== 'effect-result') {
-        throw new TypeError('Host response is not an effect-result frame.');
+  const requestEffect = (request) => {
+    const operation = (async () => {
+      if (controller.signal.aborted) throw controller.signal.reason;
+      if (!effectHandler) {
+        throw new ActivityEffectUnavailableError(
+          'This activity host does not provide a managed effect handler.',
+        );
       }
-    } catch (cause) {
-      const error = asProtocolError(
-        cause,
-        'effect-result-invalid',
-        'The host effect handler returned an invalid effect result.',
-        { effectId: effectRequest.effectId },
-      );
-      latchProtocolFailure(error);
-      throw error;
-    }
+      if (!request || typeof request !== 'object') {
+        const error = new ActivityAttemptProtocolError(
+          'effect-request-invalid',
+          'effects.request requires an effect request object.',
+        );
+        latchProtocolFailure(error);
+        throw error;
+      }
 
-    let effectResult;
-    try {
-      effectResult = acceptHostFrame(response);
-    } catch (cause) {
-      const error = asProtocolError(
-        cause,
-        'effect-result-invalid',
-        'The host effect handler returned an invalid effect result.',
-        { effectId: effectRequest.effectId },
-      );
-      latchProtocolFailure(error);
-      throw error;
-    }
-    if (effectResult.ok !== true) throw new ActivityEffectError(effectResult);
-    return effectResult.result;
+      const effectRequest = acceptComponentFrame({
+        protocol: ACTIVITY_PROTOCOL_NAME,
+        protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+        type: 'effect-request',
+        attemptId: start.attemptId,
+        sequence: nextSequence,
+        effectId: request.effectId,
+        capability: request.capability,
+        operation: request.operation,
+        input: request.input,
+        requestedReplayProperties: request.requestedReplayProperties,
+      });
+      await drainDelivery();
+      if (deliveryFailure)
+        throw latchProtocolFailure(
+          new ActivityAttemptProtocolError(
+            'frame-delivery-failed',
+            'Activity component-frame delivery failed.',
+          ),
+        );
+      if (controller.signal.aborted) throw controller.signal.reason;
+
+      let rawResponse;
+      try {
+        rawResponse = await effectHandler(effectRequest, {
+          signal: controller.signal,
+        });
+      } catch (cause) {
+        const error = asProtocolError(
+          cause,
+          'effect-handler-failed',
+          'The host effect handler failed without returning an effect result.',
+          { effectId: effectRequest.effectId },
+        );
+        latchProtocolFailure(error);
+        throw error;
+      }
+
+      let response;
+      try {
+        response = validateActivityProtocolHostFrame(rawResponse);
+        if (response.type !== 'effect-result') {
+          throw new TypeError('Host response is not an effect-result frame.');
+        }
+      } catch (cause) {
+        const error = asProtocolError(
+          cause,
+          'effect-result-invalid',
+          'The host effect handler returned an invalid effect result.',
+          { effectId: effectRequest.effectId },
+        );
+        latchProtocolFailure(error);
+        throw error;
+      }
+
+      let effectResult;
+      try {
+        effectResult = acceptHostFrame(response);
+      } catch (cause) {
+        const error = asProtocolError(
+          cause,
+          'effect-result-invalid',
+          'The host effect handler returned an invalid effect result.',
+          { effectId: effectRequest.effectId },
+        );
+        latchProtocolFailure(error);
+        throw error;
+      }
+      if (effectResult.ok !== true) throw new ActivityEffectError(effectResult);
+      return effectResult.result;
+    })();
+    return retainEffectOperation(operation);
   };
 
   const invocation = deepFreeze({
@@ -923,7 +963,11 @@ export async function runNodeActivityAttempt(options) {
       if (raced.kind === 'execution') {
         executionResult = raced.result;
       } else {
-        const grace = await waitForGrace(execution, cancellationGraceMs);
+        let grace = await waitForGrace(execution, cancellationGraceMs);
+        if (!grace.settled && activeEffectOperations.size > 0) {
+          await settleActiveEffectOperations();
+          grace = await waitForGrace(execution, cancellationGraceMs);
+        }
         if (grace.settled) {
           executionResult = grace.execution;
         } else {
@@ -959,6 +1003,7 @@ export async function runNodeActivityAttempt(options) {
       }
     }
 
+    await settleActiveEffectOperations();
     componentSealed = true;
     await drainDelivery();
 

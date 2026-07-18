@@ -305,6 +305,60 @@ describe('Node Activity Protocol v1 attempt adapter', () => {
     expect(evidence.terminal.result).toEqual({ effect: { etag: 'abc' } });
   });
 
+  it('retains effect work beyond the bounded transport-operation timeout', async () => {
+    const evidence = await runNodeActivityAttempt({
+      startFrame: startFrame(),
+      hostOperationTimeoutMs: 5,
+      onComponentFrame: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      },
+      handleEffect: async (request) => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return effectResultFrame(request.effectId, { retained: true });
+      },
+      handler: (_input, runtime) => {
+        void runtime.effects.request(effectRequest());
+        return 'component-returned-before-effect';
+      },
+    });
+
+    expect(evidence.frames.map((frame) => frame.type)).toEqual([
+      'start',
+      'effect-request',
+      'effect-result',
+      'completed',
+    ]);
+    expect(evidence.terminal.result).toBe('component-returned-before-effect');
+  });
+
+  it('observes an ignored rejected effect without a process-level rejection', async () => {
+    const unhandled = /** @type {unknown[]} */ ([]);
+    const onUnhandled = (/** @type {unknown} */ reason) =>
+      unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const evidence = await runNodeActivityAttempt({
+        startFrame: startFrame(),
+        handleEffect: async () => {
+          throw new Error('destination unavailable');
+        },
+        handler: (_input, runtime) => {
+          void runtime.effects.request(effectRequest());
+          return 'component-ignored-rejection';
+        },
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(evidence.status).toBe('protocol-failed');
+      expect(evidence.terminal.error).toMatchObject({
+        code: 'effect-handler-failed',
+      });
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('turns a structured failed effect into a structured activity failure', async () => {
     let thrown;
     const evidence = await runNodeActivityAttempt({

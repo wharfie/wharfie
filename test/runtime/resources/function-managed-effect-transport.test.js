@@ -169,6 +169,47 @@ describe('Function managed-effect worker transport', () => {
     });
   });
 
+  it('allows a durable host effect to outlive the transport ACK timeout', async () => {
+    const activityId = `managed-effect-slow-${Date.now()}-${Math.floor(
+      Math.random() * 1e9,
+    )}`;
+    const bundle = await buildPreparedActivity(
+      activityId,
+      [
+        'export async function execute(_input, runtime) {',
+        '  void runtime.effects.request({',
+        "    effectId: 'slow-effect',",
+        "    capability: 'test-store',",
+        "    operation: 'put',",
+        '    input: { value: 42 },',
+        "    requestedReplayProperties: ['idempotent'],",
+        '  });',
+        "  return 'component-returned-before-effect';",
+        '}',
+      ].join('\n'),
+    );
+
+    const evidence = await WharfieFunction.runPreparedActivityAttempt(
+      activityId,
+      bundle,
+      startFrame(activityId),
+      {
+        handleEffect: async (request) => {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          return successfulEffectResult(request, { retained: true });
+        },
+      },
+    );
+
+    expect(evidence.frames.map((frame) => frame.type)).toEqual([
+      'start',
+      'effect-request',
+      'effect-result',
+      'completed',
+    ]);
+    expect(evidence.terminal.result).toBe('component-returned-before-effect');
+  });
+
   it('returns a structured failed effect result to catchable activity code', async () => {
     const activityId = `managed-effect-failure-${Date.now()}-${Math.floor(
       Math.random() * 1e9,
@@ -419,6 +460,49 @@ describe('Function managed-effect worker transport', () => {
         handleEffect: async () => {
           throw new Error('adapter unavailable');
         },
+      },
+    );
+
+    expect(evidence.frames.map((frame) => frame.type)).toEqual([
+      'start',
+      'effect-request',
+      'protocol-failed',
+    ]);
+    expect(evidence.terminal).toMatchObject({
+      type: 'protocol-failed',
+      error: { code: 'effect-handler-failed' },
+    });
+  });
+
+  it('turns an uncorrelated worker handler result into protocol-failed evidence', async () => {
+    const activityId = `managed-effect-uncorrelated-${Date.now()}-${Math.floor(
+      Math.random() * 1e9,
+    )}`;
+    const bundle = await buildPreparedActivity(
+      activityId,
+      [
+        'export async function execute(_input, runtime) {',
+        '  await runtime.effects.request({',
+        "    effectId: 'expected-effect',",
+        "    capability: 'test-store',",
+        "    operation: 'put',",
+        '    input: { value: 42 },',
+        "    requestedReplayProperties: ['idempotent'],",
+        '  });',
+        '}',
+      ].join('\n'),
+    );
+
+    const evidence = await WharfieFunction.runPreparedActivityAttempt(
+      activityId,
+      bundle,
+      startFrame(activityId),
+      {
+        handleEffect: (request) =>
+          successfulEffectResult(
+            { ...request, effectId: 'different-effect' },
+            { ignored: true },
+          ),
       },
     );
 

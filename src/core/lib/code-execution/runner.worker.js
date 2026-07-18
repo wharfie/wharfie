@@ -35,8 +35,10 @@ function getWorkerInitializationState() {
 
 const workerInitialization = getWorkerInitializationState();
 
-// Capture every intrinsic used by the private transport before bundle code can
-// mutate globals or built-in prototypes in this shared isolate.
+// Capture the transport-critical intrinsics before bundle code can mutate
+// globals or built-in prototypes in this shared isolate. Remaining dynamic
+// convenience globals can at most let component code deny service to itself;
+// the host still revalidates every evidence transition.
 const applyIntrinsic = Reflect.apply;
 const arrayIsArrayIntrinsic = Array.isArray;
 const arraySortIntrinsic = Array.prototype.sort;
@@ -69,8 +71,8 @@ applyIntrinsic(hmacDigestIntrinsic, hmacProbe, []);
  * Serialize one host control message before authenticating it. Control messages
  * contain strict JSON protocol frames and bounded transport fields; sorting
  * object keys prevents insertion-order differences across structured cloning
- * from changing the authenticator. Every intrinsic is captured before bundle
- * evaluation so app code cannot alter verification semantics.
+ * from changing the authenticator. Its critical intrinsics are captured before
+ * bundle evaluation so app code cannot alter verification semantics.
  * @param {any} value - JSON control value.
  * @returns {string} - Canonical JSON text.
  */
