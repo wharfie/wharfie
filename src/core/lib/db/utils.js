@@ -1,5 +1,45 @@
 import { CONDITION_TYPE, KEY_TYPE } from './base.js';
 
+const PORTABLE_PAGE_ASCII_PATTERN = /^[\x20-\x7e]+$/;
+
+/**
+ * Require the deliberately small string alphabet whose lexical ordering is
+ * identical in JavaScript, LMDB, and DynamoDB's UTF-8 string keys. Page
+ * cursors must never depend on locale collation or a provider-specific
+ * Unicode comparison.
+ * @param {unknown} value - Candidate portable page string.
+ * @param {string} label - Human-readable value path.
+ * @returns {string} - Validated printable-ASCII string.
+ */
+export function assertPortablePageAscii(value, label) {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    !PORTABLE_PAGE_ASCII_PATTERN.test(value)
+  ) {
+    throw new TypeError(`${label} must be a nonempty printable ASCII string.`);
+  }
+  return value;
+}
+
+/**
+ * Compare already-portable page keys exactly as DynamoDB compares UTF-8
+ * string sort keys. Printable ASCII has the same byte and code-unit order,
+ * but spelling this as a byte comparison prevents a future locale sort from
+ * reintroducing cursor skips.
+ * @param {string} left - First portable page key.
+ * @param {string} right - Second portable page key.
+ * @returns {number} - Negative, zero, or positive byte-order comparison.
+ */
+export function comparePortablePageKeys(left, right) {
+  const leftKey = assertPortablePageAscii(left, 'left page key');
+  const rightKey = assertPortablePageAscii(right, 'right page key');
+  return Buffer.compare(
+    Buffer.from(leftKey, 'ascii'),
+    Buffer.from(rightKey, 'ascii'),
+  );
+}
+
 /**
  * Parse and validate query conditions.
  *
@@ -89,4 +129,69 @@ export function assertTightQuery(params) {
   }
 
   return { pk, sk, filters };
+}
+
+/**
+ * Parse the deliberately narrow, portable paginated-query contract. A page
+ * is only available for one lexically ordered sort-key prefix. Supporting
+ * filters here would make provider page boundaries semantically different and
+ * invite a hidden scan-based history API.
+ * @param {import('./base.js').QueryPageParams} params - Candidate page request.
+ * @returns {{pk: import('./base.js').KeyCondition, sk: import('./base.js').KeyCondition, limit: number, startAfter?: string}} - Normalized page request.
+ */
+export function assertTightQueryPage(params) {
+  if (!params || typeof params !== 'object' || Array.isArray(params)) {
+    throw new TypeError('queryPage params must be an object');
+  }
+  if (
+    typeof params.tableName !== 'string' ||
+    params.tableName.trim().length === 0
+  ) {
+    throw new TypeError('queryPage.tableName must be a nonempty string');
+  }
+  if (typeof params.consistentRead !== 'boolean') {
+    throw new TypeError('queryPage.consistentRead must be a boolean');
+  }
+  const { pk, sk, filters } = assertTightQuery(params);
+  if (filters.length !== 0) {
+    throw new Error('queryPage does not support non-key filters');
+  }
+  if (!sk || sk.conditionType !== CONDITION_TYPE.BEGINS_WITH) {
+    throw new Error('queryPage requires one SORT BEGINS_WITH condition');
+  }
+  assertPortablePageAscii(pk.propertyName, 'queryPage PRIMARY property name');
+  assertPortablePageAscii(pk.propertyValue, 'queryPage PRIMARY value');
+  assertPortablePageAscii(sk.propertyName, 'queryPage SORT property name');
+  const sortPrefix = assertPortablePageAscii(
+    sk.propertyValue,
+    'queryPage SORT prefix',
+  );
+  if (
+    !Number.isSafeInteger(params?.limit) ||
+    params.limit < 1 ||
+    params.limit > 100
+  ) {
+    throw new Error(
+      'queryPage.limit must be a safe integer from 1 through 100',
+    );
+  }
+  if (params.startAfter !== undefined) {
+    const startAfter = assertPortablePageAscii(
+      params.startAfter,
+      'queryPage.startAfter',
+    );
+    if (!startAfter.startsWith(sortPrefix)) {
+      throw new TypeError(
+        'queryPage.startAfter must begin with the requested SORT prefix',
+      );
+    }
+  }
+  return {
+    pk,
+    sk,
+    limit: params.limit,
+    ...(params.startAfter === undefined
+      ? {}
+      : { startAfter: params.startAfter }),
+  };
 }

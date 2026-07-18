@@ -369,6 +369,36 @@ async function query(params) {
 }
 
 /**
+ * A deliberately narrow byte-sorted query page. The primary key, sort-key
+ * field, sort prefix, and cursor are nonempty printable ASCII, so JavaScript,
+ * LMDB, and DynamoDB agree on their UTF-8 lexical order. `startAfter` is the
+ * exact prior sort-key value returned by the same request, never a
+ * provider-native cursor.
+ * @typedef QueryPageParams
+ * @property {string} tableName - tableName.
+ * @property {boolean} consistentRead - consistentRead.
+ * @property {KeyCondition[]} keyConditions - One PRIMARY EQUALS and one SORT BEGINS_WITH condition.
+ * @property {number} limit - Maximum number of records, from 1 through 100.
+ * @property {string} [startAfter] - Exclusive prior sort-key value.
+ */
+
+/**
+ * @typedef QueryPageResult
+ * @property {DBRecord[]} items - One UTF-8-byte-ordered page.
+ * @property {string} [nextStartAfter] - Exact last sort key when another page exists.
+ */
+
+/** @typedef {Promise<QueryPageResult>} QueryPageReturn */
+
+/**
+ * @param {QueryPageParams} params - params.
+ * @returns {QueryPageReturn} - Result.
+ */
+async function queryPage(params) {
+  return { items: [] };
+}
+
+/**
  * Delete request where either:
  * - no sort key fields exist, OR
  * - both sortKeyName and sortKeyValue exist
@@ -567,6 +597,7 @@ async function close() {}
  * A DynamoDB wrapper client exposing the base DB methods.
  * @typedef {Object} DBClient
  * @property {(params: QueryParams) => QueryReturn} query - query.
+ * @property {(params: QueryPageParams) => QueryPageReturn} queryPage - queryPage.
  * @property {(params: PutParams) => PutReturn} put - put.
  * @property {(params: UpdateParams) => UpdateReturn} update - update.
  * @property {(params: GetParams) => GetReturn} get - get.
@@ -583,6 +614,7 @@ async function close() {}
 export default function createDB() {
   return {
     query,
+    queryPage,
     batchWrite,
     transactionWrite,
     update,

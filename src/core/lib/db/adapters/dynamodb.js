@@ -13,7 +13,12 @@ import {
   transactionRequestUpdates,
   validateTransactionWrite,
 } from '../base.js';
-import { assertTightQuery } from '../utils.js';
+import {
+  assertPortablePageAscii,
+  assertTightQuery,
+  assertTightQueryPage,
+  comparePortablePageKeys,
+} from '../utils.js';
 
 const MAX_TRANSACTION_CONFLICT_ATTEMPTS = 5;
 
@@ -245,6 +250,182 @@ export default function createDynamoDB(
     }
 
     return results;
+  }
+
+  /**
+   * Validate one DynamoDB page before exposing its records to the portable
+   * cursor layer. DynamoDB orders String keys by UTF-8 bytes; queryPage
+   * deliberately narrows keys to printable ASCII so every adapter can make
+   * that exact ordering promise.
+   * @param {unknown} rawItems - Provider response items.
+   * @param {string} sortKeyName - Requested sort-key field.
+   * @param {string} sortPrefix - Requested sort-key prefix.
+   * @returns {string[]} - Exact ordered sort keys for the returned items.
+   */
+  function validateDynamoPageItems(rawItems, sortKeyName, sortPrefix) {
+    if (!Array.isArray(rawItems)) {
+      throw new Error('DynamoDB queryPage returned non-array items');
+    }
+    /** @type {string[]} */
+    const sortKeys = [];
+    for (const item of rawItems) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error('DynamoDB queryPage returned an invalid item');
+      }
+      const sortKey = assertPortablePageAscii(
+        item[sortKeyName],
+        'DynamoDB queryPage item sort key',
+      );
+      if (!sortKey.startsWith(sortPrefix)) {
+        throw new Error(
+          'DynamoDB queryPage returned an item outside its requested sort prefix',
+        );
+      }
+      if (
+        sortKeys.length > 0 &&
+        comparePortablePageKeys(sortKeys[sortKeys.length - 1], sortKey) >= 0
+      ) {
+        throw new Error('DynamoDB queryPage returned unordered sort keys');
+      }
+      sortKeys.push(sortKey);
+    }
+    return sortKeys;
+  }
+
+  /**
+   * Validate that a DynamoDB continuation is usable for this exact portable
+   * request. A LastEvaluatedKey is provider state, not a public cursor, and
+   * must never be silently treated as an end-of-history signal when malformed.
+   * @param {unknown} rawKey - Candidate LastEvaluatedKey.
+   * @param {import('../base.js').KeyCondition} pk - Primary-key condition.
+   * @param {import('../base.js').KeyCondition} sk - Sort-key condition.
+   * @param {string} sortPrefix - Requested sort-key prefix.
+   * @param {string[]} itemSortKeys - Sort keys from the response page.
+   * @returns {Record<string, any> | undefined} - Validated provider continuation.
+   */
+  function validateDynamoContinuation(
+    rawKey,
+    pk,
+    sk,
+    sortPrefix,
+    itemSortKeys,
+  ) {
+    if (
+      rawKey === undefined ||
+      rawKey === null ||
+      (typeof rawKey === 'object' &&
+        !Array.isArray(rawKey) &&
+        Object.keys(rawKey).length === 0)
+    ) {
+      return undefined;
+    }
+    if (!rawKey || typeof rawKey !== 'object' || Array.isArray(rawKey)) {
+      throw new Error('DynamoDB queryPage returned an invalid continuation');
+    }
+    const continuation = /** @type {Record<string, any>} */ (rawKey);
+    if (continuation[pk.propertyName] !== pk.propertyValue) {
+      throw new Error(
+        'DynamoDB queryPage continuation does not match its primary key',
+      );
+    }
+    const sortKey = assertPortablePageAscii(
+      continuation[sk.propertyName],
+      'DynamoDB queryPage continuation sort key',
+    );
+    if (!sortKey.startsWith(sortPrefix) || itemSortKeys.length === 0) {
+      throw new Error('DynamoDB queryPage returned an invalid continuation');
+    }
+    if (
+      comparePortablePageKeys(
+        itemSortKeys[itemSortKeys.length - 1],
+        sortKey,
+      ) !== 0
+    ) {
+      throw new Error(
+        'DynamoDB queryPage continuation does not match its last returned item',
+      );
+    }
+    return continuation;
+  }
+
+  /**
+   * Read exactly one provider page under a sort-key prefix. The public cursor
+   * remains the preceding sort-key value rather than DynamoDB's schema-shaped
+   * LastEvaluatedKey, keeping the DB adapter contract portable.
+   * @param {import('../base.js').QueryPageParams} params - Page request.
+   * @returns {import('../base.js').QueryPageReturn} - Bounded page.
+   */
+  async function queryPage(params) {
+    const { pk, sk, limit, startAfter } = assertTightQueryPage(params);
+    const built = buildKeyConditionExpression([pk, sk]);
+    const queryBase = {
+      TableName: params.tableName,
+      ConsistentRead: params.consistentRead ?? true,
+      ScanIndexForward: true,
+      ...built,
+    };
+    const response = await docClient.query({
+      ...queryBase,
+      // Request one extra item so the normal case can prove that a public
+      // cursor has another record without exposing a provider continuation.
+      Limit: limit + 1,
+      ...(startAfter === undefined
+        ? {}
+        : {
+            ExclusiveStartKey: {
+              [pk.propertyName]: pk.propertyValue,
+              [sk.propertyName]: startAfter,
+            },
+          }),
+    });
+    const sortPrefix = /** @type {string} */ (sk.propertyValue);
+    const responseItems = response.Items || [];
+    const responseSortKeys = validateDynamoPageItems(
+      responseItems,
+      sk.propertyName,
+      sortPrefix,
+    );
+    const continuation = validateDynamoContinuation(
+      response.LastEvaluatedKey,
+      pk,
+      sk,
+      sortPrefix,
+      responseSortKeys,
+    );
+
+    let hasNext = responseItems.length > limit;
+    if (!hasNext && continuation) {
+      // DynamoDB documents that a nonempty LastEvaluatedKey is not itself a
+      // proof that another matching item exists. Confirm the rare byte-limit
+      // edge with one bounded provider probe before emitting a public cursor.
+      const probe = await docClient.query({
+        ...queryBase,
+        Limit: 1,
+        ExclusiveStartKey: continuation,
+      });
+      const probeItems = probe.Items || [];
+      const probeSortKeys = validateDynamoPageItems(
+        probeItems,
+        sk.propertyName,
+        sortPrefix,
+      );
+      validateDynamoContinuation(
+        probe.LastEvaluatedKey,
+        pk,
+        sk,
+        sortPrefix,
+        probeSortKeys,
+      );
+      hasNext = probeItems.length > 0;
+    }
+    const items = responseItems.slice(0, limit);
+    const nextStartAfter = hasNext
+      ? responseSortKeys[items.length - 1]
+      : undefined;
+    return {
+      items,
+      ...(nextStartAfter === undefined ? {} : { nextStartAfter }),
+    };
   }
 
   const MAX_PUT_RETRY_TIMEOUT_SECONDS = 20;
@@ -714,6 +895,7 @@ export default function createDynamoDB(
 
   return {
     query,
+    queryPage,
     put,
     update,
     get,

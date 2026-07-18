@@ -34,12 +34,14 @@ commands.
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
 The abandoned v1 source and dependency graph have been deleted. The strict v2
-manifest and an atomic, fenced named-activity snapshot store are now defined,
-and revision-backed source and SEA activities now consume one frozen target
-dependency closure instead of ambient `node_modules` or a newly resolved npm
-tree. The final run → invocation → attempt → effect ledger, recovery semantics,
-and release boundary still need focused review. The npm package remains
-deliberately private. It is not ready for production use.
+manifest, an atomic fenced named-activity snapshot store, and the first
+append-only V3 manual run → invocation → attempt ledger are now defined. Its
+redacted per-service history directory is transactionally bound to each run
+transition, while revision-backed source and SEA activities consume one frozen
+target dependency closure instead of ambient `node_modules` or a newly
+resolved npm tree. Scheduling, durable cancellation/effects, shared packaged
+operator history, and release hardening still need focused review. The npm
+package remains deliberately private. It is not ready for production use.
 
 ## Start here
 
@@ -52,7 +54,7 @@ deliberately private. It is not ready for production use.
 - [Strict v2 manifest checkpoint](llm/checkpoints/2026-07-16-strict-v2-manifest.md) — historical strict public-boundary handoff.
 - [Atomic operation-store checkpoint](llm/checkpoints/2026-07-16-atomic-operation-store.md) — historical atomic snapshot and fencing boundary.
 - [Immutable identity-spine checkpoint](llm/checkpoints/2026-07-17-immutable-identity-spine.md) — historical identity and artifact boundary.
-- [Portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md) — current restart point, verification evidence, remaining hard edges, and ordered next work.
+- [Atomic run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md) — current restart point, hosted SEA evidence, verified V3 history index, cleanup boundary, and ordered next work.
 
 The charter and accepted decisions are authoritative; the roadmap is expected to evolve, and dated checkpoints are historical snapshots. Older material under `docs/` and `llm/design/` describes prior iterations and can be stale.
 
@@ -118,8 +120,10 @@ packages must already contain usable locked target bytes. Windows SEA targets
 are deliberately deferred until private runtime extraction has a tested ACL and
 reparse-point design. Moved Darwin SEAs and the clean hosted-Linux verifier
 exercise a real LMDB dependency with Node absent from `PATH`; the verifier's
-new resident-service crash/recovery leg awaits its Node-24 CI run on this
-branch.
+resident-service crash/recovery leg passed under Node 24 in [GitHub Actions run
+29621495162](https://github.com/wharfie/wharfie/actions/runs/29621495162). The
+overall workflow remains red only because a clean install lacks ESLint's direct
+`@typescript-eslint/parser` dependency.
 
 ## Current development checks
 
@@ -131,6 +135,12 @@ and run:
 npm ci
 npm run test:ci
 ```
+
+Known temporary limitation: after a clean `npm ci`, the lint portion of
+`npm run test:ci` currently fails because `@typescript-eslint/parser` is not a
+direct dependency. Correcting the package metadata and lockfile requires
+explicit approval; see the current checkpoint for the hosted SEA proof that
+still ran under `if: always()`.
 
 Current source is organized as follows:
 

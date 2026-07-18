@@ -39,7 +39,7 @@ export function createManualLedgerRunId(options) {
   assertLogicalId(options?.appId, 'appId');
   const operationId = assertLedgerOpaqueId(options?.operationId, 'operationId');
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:manual-ledger-run:v2',
+    domain: 'wharfie:manual-ledger-run:v3',
     prefix: 'wlm',
     value: { appId: options.appId, operationId },
     valuePath: 'manual ledger run identity',

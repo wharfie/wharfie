@@ -282,7 +282,7 @@ migration.
 The ledger may retain small lifecycle summaries inline, but payload-bearing
 records use immutable, content-addressed payload references containing at
 least digest, byte size, media type, schema identity, and storage identity.
-The initial v2 manual vertical stores its `{input, callerMetadata}` request
+The initial V3 manual vertical stores its `{input, callerMetadata}` request
 envelope and complete terminal evidence behind those references; projections
 retain only the request/evidence descriptors and a minimal terminal summary.
 

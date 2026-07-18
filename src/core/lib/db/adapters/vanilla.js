@@ -9,7 +9,12 @@ import {
   transactionRequestUpdates,
   validateTransactionWrite,
 } from '../base.js';
-import { assertTightQuery } from '../utils.js';
+import {
+  assertPortablePageAscii,
+  assertTightQuery,
+  assertTightQueryPage,
+  comparePortablePageKeys,
+} from '../utils.js';
 
 const NO_SORT = '__no_sort__';
 
@@ -40,6 +45,15 @@ export default function createVanillaDB(options = {}) {
    * @type {Record<string, Record<string, Record<string, import('../base.js').DBRecord>>>}
    */
   let database = {};
+  /**
+   * The persisted JSON layout has no ordered key primitive. Build a small
+   * in-memory index lazily per live sort-key map and requested prefix so later
+   * cursor pages do not repeatedly materialize and sort an entire partition.
+   * Every mutation drops it; a transaction's cloned table naturally receives
+   * a fresh key.
+   * @type {WeakMap<object, Map<string, Array<{sortKey: string, record: import('../base.js').DBRecord}>>>}
+   */
+  let pageIndexByBucket = new WeakMap();
   const dbFilePath = options.path
     ? join(options.path, 'database.json')
     : join(paths.data, 'database.json');
@@ -65,6 +79,87 @@ export default function createVanillaDB(options = {}) {
   function deepClone(v) {
     if (v === undefined) return /** @type {any} */ (undefined);
     return JSON.parse(JSON.stringify(v));
+  }
+
+  /** @returns {void} - Drops stale in-memory page indexes after a write. */
+  function invalidatePageIndexes() {
+    pageIndexByBucket = new WeakMap();
+  }
+
+  /**
+   * Read the physical sort-key token and require that its record has not been
+   * corrupted into a different logical key by a direct update.
+   * @param {string} token - Stored sort-key token.
+   * @param {string} propertyName - Requested sort-key field.
+   * @param {import('../base.js').DBRecord} record - Stored record.
+   * @returns {string} - Exact portable sort key.
+   */
+  function assertPageIndexEntry(token, propertyName, record) {
+    const tokenPrefix = `${propertyName}=`;
+    const sortKey = assertPortablePageAscii(
+      token.slice(tokenPrefix.length),
+      'queryPage stored sort key',
+    );
+    if (!record || record[propertyName] !== sortKey) {
+      throw new Error(
+        'queryPage stored record sort key does not match its physical key',
+      );
+    }
+    return sortKey;
+  }
+
+  /**
+   * @param {Record<string, import('../base.js').DBRecord>} skMap - One primary-key bucket.
+   * @param {string} propertyName - Requested sort-key field.
+   * @param {string} prefix - Requested portable sort-key prefix.
+   * @returns {Array<{sortKey: string, record: import('../base.js').DBRecord}>} - Byte-sorted immutable index entries.
+   */
+  function getPageIndex(skMap, propertyName, prefix) {
+    let byProperty = pageIndexByBucket.get(skMap);
+    if (!byProperty) {
+      byProperty = new Map();
+      pageIndexByBucket.set(skMap, byProperty);
+    }
+    const cacheKey = `${propertyName}\u0000${prefix}`;
+    const cached = byProperty.get(cacheKey);
+    if (cached) return cached;
+
+    const tokenPrefix = `${propertyName}=${prefix}`;
+    const built = Object.entries(skMap)
+      .filter(([token]) => token.startsWith(tokenPrefix))
+      .map(([token, record]) => ({
+        sortKey: assertPageIndexEntry(token, propertyName, record),
+        record,
+      }))
+      .sort((left, right) =>
+        comparePortablePageKeys(left.sortKey, right.sortKey),
+      );
+    byProperty.set(cacheKey, built);
+    return built;
+  }
+
+  /**
+   * @param {Array<{sortKey: string}>} entries - Byte-sorted page entries.
+   * @param {string} value - Search key.
+   * @param {boolean} exclusive - Whether equal entries are skipped.
+   * @returns {number} - First matching index.
+   */
+  function findPageIndex(entries, value, exclusive) {
+    let low = 0;
+    let high = entries.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      const comparison = comparePortablePageKeys(
+        entries[middle].sortKey,
+        value,
+      );
+      if (comparison < 0 || (exclusive && comparison === 0)) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    return low;
   }
 
   /**
@@ -213,6 +308,47 @@ export default function createVanillaDB(options = {}) {
   }
 
   /**
+   * Read one bounded lexical page under a primary-key/sort-key prefix. Kept
+   * separate from query() so durable history never depends on slicing an
+   * already materialized partition.
+   * @param {import('../base.js').QueryPageParams} params - Page request.
+   * @returns {import('../base.js').QueryPageReturn} - Bounded page.
+   */
+  async function queryPage(params) {
+    const { pk, sk, limit, startAfter } = assertTightQueryPage(params);
+    const table = database[params.tableName];
+    if (!table) return { items: [] };
+    const pkTok = `${pk.propertyName}=${String(pk.propertyValue)}`;
+    const skMap = table[pkTok];
+    if (!skMap) return { items: [] };
+    const prefix = /** @type {string} */ (sk.propertyValue);
+    const candidates = getPageIndex(skMap, sk.propertyName, prefix);
+    let index =
+      startAfter === undefined
+        ? 0
+        : findPageIndex(candidates, startAfter, true);
+    /** @type {Array<{sortKey: string, record: import('../base.js').DBRecord}>} */
+    const page = [];
+    while (
+      index < candidates.length &&
+      candidates[index].sortKey.startsWith(prefix)
+    ) {
+      if (page.length === limit) break;
+      page.push(candidates[index]);
+      index += 1;
+    }
+    const items = page.map(({ record }) => deepClone(record));
+    return {
+      items,
+      ...(index < candidates.length &&
+      candidates[index].sortKey.startsWith(prefix) &&
+      page.length > 0
+        ? { nextStartAfter: page[page.length - 1].sortKey }
+        : {}),
+    };
+  }
+
+  /**
    * Put (insert/overwrite) an item.
    *
    * Requirements:
@@ -236,6 +372,7 @@ export default function createVanillaDB(options = {}) {
 
     if (!table[pkTok]) table[pkTok] = {};
     table[pkTok][skTok] = deepClone(record);
+    invalidatePageIndexes();
   }
 
   /**
@@ -319,6 +456,7 @@ export default function createVanillaDB(options = {}) {
     }
 
     table[pkTok][skTok] = next;
+    invalidatePageIndexes();
   }
 
   /**
@@ -340,6 +478,7 @@ export default function createVanillaDB(options = {}) {
     if (!table[pkTok]) return;
     delete table[pkTok][skTok];
     if (Object.keys(table[pkTok]).length === 0) delete table[pkTok];
+    invalidatePageIndexes();
   }
 
   /**
@@ -398,6 +537,7 @@ export default function createVanillaDB(options = {}) {
         if (!table[pkTok]) table[pkTok] = {};
         table[pkTok][skTok] = deepClone(record);
       });
+    invalidatePageIndexes();
   }
 
   /**
@@ -493,6 +633,7 @@ export default function createVanillaDB(options = {}) {
     }
 
     database[params.tableName] = nextTable;
+    invalidatePageIndexes();
   }
 
   /**
@@ -532,6 +673,7 @@ export default function createVanillaDB(options = {}) {
 
   return {
     query,
+    queryPage,
     batchWrite,
     transactionWrite,
     update,

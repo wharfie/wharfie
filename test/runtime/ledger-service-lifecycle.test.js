@@ -53,11 +53,11 @@ function createStore() {
     db,
     store: createLedgerServiceLifecycle({
       db,
-      tableName: 'execution-ledger-v2',
+      tableName: 'execution-ledger-v3',
     }),
     ownership: createLedgerServiceOwnership({
       db,
-      tableName: 'execution-ledger-v2',
+      tableName: 'execution-ledger-v3',
     }),
   };
 }
@@ -185,7 +185,7 @@ describe('ledger service lifecycle', () => {
     ).resolves.toEqual(stopped.lifecycle);
 
     const raw = await db.get({
-      tableName: 'execution-ledger-v2',
+      tableName: 'execution-ledger-v3',
       keyName: 'run_id',
       keyValue: getLedgerServiceLifecyclePartitionKey(
         started.lifecycle.serviceId,
@@ -309,14 +309,14 @@ describe('ledger service lifecycle', () => {
     };
     const racingStore = createLedgerServiceLifecycle({
       db: /** @type {any} */ (racingDb),
-      tableName: 'execution-ledger-v2',
+      tableName: 'execution-ledger-v3',
     });
     await expect(racingStore.start(createStartInput())).rejects.toMatchObject({
       name: 'LedgerServiceLifecycleConflictError',
       reason: 'concurrent lifecycle update',
     });
     expect(racingDb.transactionWrite).toHaveBeenCalledWith({
-      tableName: 'execution-ledger-v2',
+      tableName: 'execution-ledger-v3',
       putRequests: [
         expect.objectContaining({
           keyName: 'run_id',
@@ -369,7 +369,7 @@ describe('ledger service lifecycle', () => {
     ).resolves.toEqual({ applied: false, ownership: claimed.ownership });
 
     const raw = await db.get({
-      tableName: 'execution-ledger-v2',
+      tableName: 'execution-ledger-v3',
       keyName: 'run_id',
       keyValue: getLedgerServiceLifecyclePartitionKey(
         claimed.ownership.serviceId,
@@ -517,7 +517,7 @@ describe('ledger service lifecycle', () => {
     };
     const ownership = createLedgerServiceOwnership({
       db: /** @type {any} */ (racingDb),
-      tableName: 'execution-ledger-v2',
+      tableName: 'execution-ledger-v3',
     });
 
     await expect(
@@ -527,7 +527,7 @@ describe('ledger service lifecycle', () => {
       reason: 'concurrent ownership update',
     });
     expect(racingDb.transactionWrite).toHaveBeenCalledWith({
-      tableName: 'execution-ledger-v2',
+      tableName: 'execution-ledger-v3',
       putRequests: [
         expect.objectContaining({
           keyName: 'run_id',

@@ -61,11 +61,11 @@ function createDependencies(options = {}) {
   return {
     lifecycle: createLedgerServiceLifecycle({
       db,
-      tableName: 'wharfie-execution-ledger-v2',
+      tableName: 'wharfie-execution-ledger-v3',
     }),
     ownership: createLedgerServiceOwnership({
       db,
-      tableName: 'wharfie-execution-ledger-v2',
+      tableName: 'wharfie-execution-ledger-v3',
     }),
     sessionRoot: join(root, 'service-namespace'),
   };

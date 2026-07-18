@@ -20,6 +20,7 @@ import {
 } from '../../../runtime/json-value.js';
 import { assertLogicalId } from '../../../runtime/logical-id.js';
 import {
+  EXECUTION_LEDGER_SORT_KEY_PREFIX,
   MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES,
   assertLedgerOpaqueId,
   getAttemptProjectionSortKey,
@@ -29,7 +30,14 @@ import {
   getRunProjectionSortKey,
   getTransitionSortKey,
 } from '../../ledger/record-key.js';
+import {
+  EXECUTION_LEDGER_RUN_DIRECTORY_SORT_KEY_PREFIX,
+  createExecutionLedgerRunDirectoryScope,
+  getExecutionLedgerRunDirectorySortKey,
+  parseExecutionLedgerRunDirectorySortKey,
+} from '../../ledger/run-directory.js';
 import { CONDITION_TYPE, KEY_TYPE } from '../base.js';
+import { comparePortablePageKeys } from '../utils.js';
 
 /**
  * The first ledger schema deliberately covers one manual, single-activity
@@ -39,10 +47,11 @@ import { CONDITION_TYPE, KEY_TYPE } from '../base.js';
  * inconsistent records, but are not signatures against a writer that can
  * replace an entire semantically valid history.
  */
-// V2 intentionally does not read v1 records.  Manual request and terminal
-// evidence bytes now live behind immutable content-addressed references, so a
-// mixed namespace would make replay and recovery ambiguous.
-export const EXECUTION_LEDGER_SCHEMA_VERSION = 2;
+// V3 intentionally does not read v1/v2 records. V2 lacked the atomic
+// per-service run-history directory required for a safe paginated history
+// surface, so it has a fresh schema/table namespace instead of a partial
+// backfill or mixed-record migration.
+export const EXECUTION_LEDGER_SCHEMA_VERSION = 3;
 export const EXECUTION_LEDGER_MAX_OPAQUE_ID_BYTES =
   MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES;
 export const EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES = 64 * 1024;
@@ -86,6 +95,12 @@ export const AttemptStatus = Object.freeze({
 
 const KEY_NAME = 'run_id';
 const SORT_KEY_NAME = 'sort_key';
+const RUN_DIRECTORY_RECORD_TYPE = 'execution_ledger_run_directory';
+const RUN_DIRECTORY_RUN_KIND = 'manual';
+const RUN_DIRECTORY_CURSOR_SCHEMA_VERSION = 1;
+const RUN_DIRECTORY_DEFAULT_PAGE_SIZE = 50;
+const RUN_DIRECTORY_MAX_PAGE_SIZE = 100;
+const RUN_DIRECTORY_MAX_PAGE_RETRIES = 3;
 const EVENT_TYPES = new Set([
   'manual-run-created',
   'attempt-claimed',
@@ -173,6 +188,7 @@ export class ExecutionLedgerProjectionError extends Error {
     super(`Execution ledger projection is invalid: ${runId} (${reason})`);
     this.name = 'ExecutionLedgerProjectionError';
     this.runId = runId;
+    this.reason = reason;
   }
 }
 
@@ -209,6 +225,20 @@ function pkEq(propertyName, propertyValue) {
   return {
     keyType: KEY_TYPE.PRIMARY,
     conditionType: CONDITION_TYPE.EQUALS,
+    propertyName,
+    propertyValue,
+  };
+}
+
+/**
+ * @param {string} propertyName - Sort-key field.
+ * @param {string} propertyValue - Required sort-key prefix.
+ * @returns {import('../base.js').KeyCondition} - Sort-key prefix condition.
+ */
+function skBegins(propertyName, propertyValue) {
+  return {
+    keyType: KEY_TYPE.SORT,
+    conditionType: CONDITION_TYPE.BEGINS_WITH,
     propertyName,
     propertyValue,
   };
@@ -603,6 +633,256 @@ function createRunProjectionRecord(runId, data) {
 }
 
 /**
+ * Build the small, redacted projection used to locate a service's run history.
+ * The directory contains no payload references, terminal data, evidence, or
+ * fencing tokens; callers must rebuild the referenced run before relying on
+ * any state.
+ * @param {string} runId - Durable run identity.
+ * @param {Record<string, any>} data - Verified run snapshot.
+ * @returns {Record<string, any>} - Typed directory record.
+ */
+function createRunDirectoryRecord(runId, data) {
+  if (data.runId !== runId) {
+    throw new ExecutionLedgerProjectionError(runId, 'directory run identity');
+  }
+  const scope = createExecutionLedgerRunDirectoryScope({ appId: data.appId });
+  return {
+    [KEY_NAME]: scope.directoryId,
+    [SORT_KEY_NAME]: getExecutionLedgerRunDirectorySortKey({
+      createdAt: data.createdAt,
+      runId,
+    }),
+    record_type: RUN_DIRECTORY_RECORD_TYPE,
+    schema_version: EXECUTION_LEDGER_SCHEMA_VERSION,
+    service_id: scope.serviceId,
+    app_id: data.appId,
+    ledger_run_id: runId,
+    revision_id: data.revisionId,
+    run_kind: RUN_DIRECTORY_RUN_KIND,
+    status: data.status,
+    version: data.version,
+    sequence: data.lastSequence,
+    created_at: data.createdAt,
+    updated_at: data.updatedAt,
+  };
+}
+
+/**
+ * Strictly normalize a directory row before it becomes an index locator.
+ * @param {unknown} raw - Candidate persisted directory row.
+ * @param {string} appId - Expected application scope.
+ * @returns {Record<string, any>} - Validated directory record.
+ */
+function normalizeRunDirectoryRecord(raw, appId) {
+  const record = cloneBoundedJsonObject(
+    raw,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    'run directory record',
+  );
+  assertExactKeys(
+    record,
+    [
+      KEY_NAME,
+      SORT_KEY_NAME,
+      'record_type',
+      'schema_version',
+      'service_id',
+      'app_id',
+      'ledger_run_id',
+      'revision_id',
+      'run_kind',
+      'status',
+      'version',
+      'sequence',
+      'created_at',
+      'updated_at',
+    ],
+    'run directory record',
+  );
+  assertLogicalId(appId, 'run directory appId');
+  const scope = createExecutionLedgerRunDirectoryScope({ appId });
+  const runId = assertOpaqueId(
+    record.ledger_run_id,
+    'run directory record.ledger_run_id',
+  );
+  if (
+    record[KEY_NAME] !== scope.directoryId ||
+    record[SORT_KEY_NAME] !==
+      getExecutionLedgerRunDirectorySortKey({
+        createdAt: record.created_at,
+        runId,
+      }) ||
+    record.record_type !== RUN_DIRECTORY_RECORD_TYPE ||
+    record.schema_version !== EXECUTION_LEDGER_SCHEMA_VERSION ||
+    record.service_id !== scope.serviceId ||
+    record.app_id !== appId ||
+    record.run_kind !== RUN_DIRECTORY_RUN_KIND
+  ) {
+    throw new ExecutionLedgerProjectionError(runId, 'invalid run directory');
+  }
+  assertApplicationRevisionId(
+    record.revision_id,
+    'run directory record.revision_id',
+  );
+  if (!Object.values(RunStatus).includes(record.status)) {
+    throw new ExecutionLedgerProjectionError(runId, 'run directory status');
+  }
+  assertPositiveSafeInteger(record.version, 'run directory record.version');
+  assertPositiveSafeInteger(record.sequence, 'run directory record.sequence');
+  normalizeObservedAt(record.created_at, 'run directory record.created_at');
+  normalizeObservedAt(record.updated_at, 'run directory record.updated_at');
+  return record;
+}
+
+/**
+ * @param {Record<string, any>} directory - Validated directory record.
+ * @param {Record<string, any>} run - Rebuilt verified run snapshot.
+ * @returns {void} - Throws when the index and run projection disagree.
+ */
+function assertRunDirectoryMatchesRun(directory, run) {
+  const expected = createRunDirectoryRecord(run.runId, run);
+  if (!hasSameCanonicalJson(directory, expected)) {
+    throw new ExecutionLedgerProjectionError(
+      run.runId,
+      'run directory disagrees with projection',
+    );
+  }
+}
+
+/**
+ * @param {unknown} options - Candidate run-directory page request.
+ * @returns {{appId: string, limit: number, cursor?: string}} - Normalized request.
+ */
+function normalizeRunDirectoryPageOptions(options) {
+  const value = cloneBoundedJsonObject(
+    options,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    'listRuns',
+  );
+  assertSnapshotKeys(value, ['appId'], ['limit', 'cursor'], 'listRuns');
+  assertLogicalId(value.appId, 'listRuns.appId');
+  const limit = Object.prototype.hasOwnProperty.call(value, 'limit')
+    ? value.limit
+    : RUN_DIRECTORY_DEFAULT_PAGE_SIZE;
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > RUN_DIRECTORY_MAX_PAGE_SIZE
+  ) {
+    throw new TypeError(
+      `listRuns.limit must be a safe integer from 1 through ${RUN_DIRECTORY_MAX_PAGE_SIZE}.`,
+    );
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(value, 'cursor') &&
+    (typeof value.cursor !== 'string' || value.cursor.length === 0)
+  ) {
+    throw new TypeError('listRuns.cursor must be a nonempty opaque string.');
+  }
+  return {
+    appId: value.appId,
+    limit,
+    ...(Object.prototype.hasOwnProperty.call(value, 'cursor')
+      ? { cursor: value.cursor }
+      : {}),
+  };
+}
+
+/**
+ * @param {{appId: string, serviceId: string, directoryId: string}} scope - Exact directory scope.
+ * @param {string} startAfter - Exclusive sort key for a following page.
+ * @returns {string} - Canonical opaque cursor.
+ */
+function createRunDirectoryCursor(scope, startAfter) {
+  parseExecutionLedgerRunDirectorySortKey(
+    startAfter,
+    'listRuns.cursor.startAfter',
+  );
+  const value = {
+    schemaVersion: RUN_DIRECTORY_CURSOR_SCHEMA_VERSION,
+    appId: scope.appId,
+    serviceId: scope.serviceId,
+    directoryId: scope.directoryId,
+    startAfter,
+  };
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+}
+
+/**
+ * @param {string | undefined} cursor - Candidate opaque cursor.
+ * @param {{appId: string, serviceId: string, directoryId: string}} scope - Requested directory scope.
+ * @returns {string | undefined} - Exclusive cursor sort key.
+ */
+function parseRunDirectoryCursor(cursor, scope) {
+  if (cursor === undefined) return undefined;
+  if (Buffer.byteLength(cursor, 'utf8') > 4096) {
+    throw new TypeError('listRuns.cursor is too large.');
+  }
+  let text;
+  let parsed;
+  try {
+    const bytes = Buffer.from(cursor, 'base64url');
+    if (bytes.toString('base64url') !== cursor) {
+      throw new Error('noncanonical base64url');
+    }
+    text = bytes.toString('utf8');
+    if (!Buffer.from(text, 'utf8').equals(bytes)) {
+      throw new Error('invalid utf8');
+    }
+    parsed = JSON.parse(text);
+  } catch {
+    throw new TypeError('listRuns.cursor is not a valid opaque cursor.');
+  }
+  const value = cloneBoundedJsonObject(parsed, 4096, 'listRuns.cursor');
+  assertExactKeys(
+    value,
+    ['schemaVersion', 'appId', 'serviceId', 'directoryId', 'startAfter'],
+    'listRuns.cursor',
+  );
+  if (
+    value.schemaVersion !== RUN_DIRECTORY_CURSOR_SCHEMA_VERSION ||
+    value.appId !== scope.appId ||
+    value.serviceId !== scope.serviceId ||
+    value.directoryId !== scope.directoryId ||
+    typeof value.startAfter !== 'string' ||
+    value.startAfter.length === 0 ||
+    !value.startAfter.startsWith(
+      EXECUTION_LEDGER_RUN_DIRECTORY_SORT_KEY_PREFIX,
+    ) ||
+    text !== JSON.stringify(value)
+  ) {
+    throw new TypeError('listRuns.cursor does not match the requested scope.');
+  }
+  try {
+    parseExecutionLedgerRunDirectorySortKey(
+      value.startAfter,
+      'listRuns.cursor.startAfter',
+    );
+  } catch {
+    throw new TypeError('listRuns.cursor does not match the requested scope.');
+  }
+  return value.startAfter;
+}
+
+/**
+ * @param {Record<string, any>} directory - Verified directory row.
+ * @returns {{runId: string, appId: string, revisionId: string, kind: 'manual', status: string, version: number, lastSequence: number, createdAt: number, updatedAt: number}} - Redacted page item.
+ */
+function createRunDirectoryPageItem(directory) {
+  return {
+    runId: directory.ledger_run_id,
+    appId: directory.app_id,
+    revisionId: directory.revision_id,
+    kind: RUN_DIRECTORY_RUN_KIND,
+    status: directory.status,
+    version: directory.version,
+    lastSequence: directory.sequence,
+    createdAt: directory.created_at,
+    updatedAt: directory.updated_at,
+  };
+}
+
+/**
  * @param {string} runId - Run identity.
  * @param {Record<string, any>} data - Invocation projection.
  * @returns {Record<string, any>} - Invocation projection record.
@@ -661,7 +941,7 @@ function createEventId({
   payload,
 }) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v2',
+    domain: 'wharfie:execution-ledger-event:v3',
     prefix: 'wle',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -1787,7 +2067,13 @@ async function readRunRecords(db, tableName, runId) {
   return await db.query({
     tableName,
     consistentRead: true,
-    keyConditions: [pkEq(KEY_NAME, runId)],
+    // A custom V3 table may deliberately retain V2 or lifecycle rows in the
+    // same physical partition. Only the fresh V3 record namespace participates
+    // in replay; no old history is accidentally treated as a malformed V3 run.
+    keyConditions: [
+      pkEq(KEY_NAME, runId),
+      skBegins(SORT_KEY_NAME, EXECUTION_LEDGER_SORT_KEY_PREFIX),
+    ],
   });
 }
 
@@ -2140,7 +2426,7 @@ async function startedTransitionResult(result, runId, payloadStore) {
  */
 function createTransitionRequestDigest(type, value) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-transition:v2',
+    domain: 'wharfie:execution-ledger-transition:v3',
     prefix: 'wlt',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -2230,6 +2516,27 @@ function replacementConditions(record, extraConditions = []) {
     eq('status', record.status),
     eq('revision_id', record.revision_id),
     ...extraConditions,
+  ];
+}
+
+/**
+ * @param {Record<string, any>} record - Existing typed run-directory row.
+ * @returns {import('../base.js').KeyCondition[]} - Full stale-write fence.
+ */
+function runDirectoryReplacementConditions(record) {
+  return [
+    eq('record_type', record.record_type),
+    eq('schema_version', record.schema_version),
+    eq('service_id', record.service_id),
+    eq('app_id', record.app_id),
+    eq('ledger_run_id', record.ledger_run_id),
+    eq('revision_id', record.revision_id),
+    eq('run_kind', record.run_kind),
+    eq('status', record.status),
+    eq('version', record.version),
+    eq('sequence', record.sequence),
+    eq('created_at', record.created_at),
+    eq('updated_at', record.updated_at),
   ];
 }
 
@@ -2447,7 +2754,7 @@ function validateLedgerAttemptEvidence(value, expectedStart, label) {
  */
 function createAttemptId(runId, invocationId, generation) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-attempt:v2',
+    domain: 'wharfie:execution-ledger-attempt:v3',
     prefix: 'wla',
     value: { runId, invocationId, generation },
     valuePath: 'execution ledger attempt identity',
@@ -2535,6 +2842,10 @@ export function createExecutionLedger({
       input.nextRun.revisionId,
     );
     const runRecord = createRunProjectionRecord(input.runId, input.nextRun);
+    const directoryRecord = createRunDirectoryRecord(
+      input.runId,
+      input.nextRun,
+    );
     const invocationRecord = createInvocationProjectionRecord(
       input.runId,
       input.nextInvocation,
@@ -2591,6 +2902,16 @@ export function createExecutionLedger({
         conditions: input.state
           ? replacementConditions(
               createRunProjectionRecord(input.runId, input.state.run),
+            )
+          : [notExists(SORT_KEY_NAME)],
+      },
+      {
+        keyName: KEY_NAME,
+        sortKeyName: SORT_KEY_NAME,
+        record: directoryRecord,
+        conditions: input.state
+          ? runDirectoryReplacementConditions(
+              createRunDirectoryRecord(input.runId, input.state.run),
             )
           : [notExists(SORT_KEY_NAME)],
       },
@@ -3860,6 +4181,131 @@ export function createExecutionLedger({
   }
 
   /**
+   * Read a bounded, redacted page of one application's durable run history.
+   * The directory is only a locator: every row is matched to a fully rebuilt
+   * run projection before it is returned. This is deliberately not a ready
+   * queue and has no scheduling or cancellation authority.
+   * @param {{appId: string, limit?: number, cursor?: string}} options - Scoped page request.
+   * @returns {Promise<{items: ReturnType<typeof createRunDirectoryPageItem>[], nextCursor?: string}>} - Verified history page.
+   */
+  async function listRuns(options) {
+    if (typeof db.queryPage !== 'function') {
+      throw new Error(
+        'createExecutionLedger requires a DB client with queryPage for run history.',
+      );
+    }
+    const request = normalizeRunDirectoryPageOptions(options);
+    const scope = createExecutionLedgerRunDirectoryScope({
+      appId: request.appId,
+    });
+    const startAfter = parseRunDirectoryCursor(request.cursor, scope);
+    if (startAfter !== undefined) {
+      const cursorRow = await db.get({
+        tableName: resolvedTableName,
+        keyName: KEY_NAME,
+        keyValue: scope.directoryId,
+        sortKeyName: SORT_KEY_NAME,
+        sortKeyValue: startAfter,
+        consistentRead: true,
+      });
+      if (!cursorRow) {
+        throw new TypeError(
+          'listRuns.cursor no longer identifies a durable run-history boundary.',
+        );
+      }
+      normalizeRunDirectoryRecord(cursorRow, request.appId);
+    }
+
+    for (let retry = 0; retry < RUN_DIRECTORY_MAX_PAGE_RETRIES; retry += 1) {
+      const page = await db.queryPage({
+        tableName: resolvedTableName,
+        consistentRead: true,
+        keyConditions: [
+          pkEq(KEY_NAME, scope.directoryId),
+          {
+            keyType: KEY_TYPE.SORT,
+            conditionType: CONDITION_TYPE.BEGINS_WITH,
+            propertyName: SORT_KEY_NAME,
+            propertyValue: EXECUTION_LEDGER_RUN_DIRECTORY_SORT_KEY_PREFIX,
+          },
+        ],
+        limit: request.limit,
+        ...(startAfter === undefined ? {} : { startAfter }),
+      });
+      if (
+        !page ||
+        typeof page !== 'object' ||
+        !Array.isArray(page.items) ||
+        page.items.length > request.limit
+      ) {
+        throw new Error('DB queryPage returned an invalid run-history page.');
+      }
+
+      /** @type {Record<string, any>[]} */
+      const directories = [];
+      let previousSortKey = startAfter;
+      const seenRunIds = new Set();
+      for (const raw of page.items) {
+        const directory = normalizeRunDirectoryRecord(raw, request.appId);
+        const sortKey = directory[SORT_KEY_NAME];
+        if (
+          (previousSortKey !== undefined &&
+            comparePortablePageKeys(sortKey, previousSortKey) <= 0) ||
+          seenRunIds.has(directory.ledger_run_id)
+        ) {
+          throw new ExecutionLedgerProjectionError(
+            directory.ledger_run_id,
+            'run directory page order',
+          );
+        }
+        previousSortKey = sortKey;
+        seenRunIds.add(directory.ledger_run_id);
+        directories.push(directory);
+      }
+      const nextStartAfter = page.nextStartAfter;
+      if (
+        nextStartAfter !== undefined &&
+        (typeof nextStartAfter !== 'string' ||
+          directories.length === 0 ||
+          nextStartAfter !== directories[directories.length - 1][SORT_KEY_NAME])
+      ) {
+        throw new Error('DB queryPage returned an invalid run-history cursor.');
+      }
+
+      try {
+        for (const directory of directories) {
+          const state = await readVerifiedRun(directory.ledger_run_id);
+          if (!state) {
+            throw new ExecutionLedgerProjectionError(
+              directory.ledger_run_id,
+              'directory run missing',
+            );
+          }
+          assertRunDirectoryMatchesRun(directory, state.run);
+        }
+      } catch (error) {
+        if (
+          error instanceof ExecutionLedgerProjectionError &&
+          error.reason === 'run directory disagrees with projection' &&
+          retry + 1 < RUN_DIRECTORY_MAX_PAGE_RETRIES
+        ) {
+          continue;
+        }
+        throw error;
+      }
+
+      return {
+        items: directories.map(createRunDirectoryPageItem),
+        ...(nextStartAfter === undefined
+          ? {}
+          : { nextCursor: createRunDirectoryCursor(scope, nextStartAfter) }),
+      };
+    }
+
+    throw new Error('Run history changed too often to read a stable page.');
+  }
+
+  /**
    * @param {string} runId - Run identity.
    * @returns {Promise<Record<string, any> | null>} - Current run projection after an event/projection verification.
    */
@@ -3955,6 +4401,7 @@ export function createExecutionLedger({
     getEvents,
     getInvocation,
     getRun,
+    listRuns,
     markAttemptStarted,
     markAttemptUncertain,
     rebuildRun,
@@ -3973,6 +4420,7 @@ export function createExecutionLedger({
  * @property {(runId: string, invocationId: string) => Promise<Record<string, any> | null>} getInvocation - Reads a verified invocation projection.
  * @property {(runId: string, invocationId: string, attemptId: string) => Promise<Record<string, any> | null>} getAttempt - Reads a verified attempt projection.
  * @property {(runId: string) => Promise<Record<string, any>[]>} getEvents - Reads a verified event stream.
+ * @property {(options: {appId: string, limit?: number, cursor?: string}) => Promise<{items: Record<string, any>[], nextCursor?: string}>} listRuns - Reads a verified bounded run-history page.
  * @property {(runId: string) => Promise<Record<string, any> | null>} rebuildRun - Rebuilds and verifies a whole run.
  */
 

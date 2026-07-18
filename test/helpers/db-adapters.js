@@ -32,6 +32,13 @@ const clone = (obj) => JSON.parse(JSON.stringify(obj));
 const matchesDynamoCondition = (item, property, value) =>
   item?.[property] === value;
 
+// DynamoDB String sort keys use UTF-8 byte order, never locale collation.
+const compareDynamoStrings = (left, right) =>
+  Buffer.compare(
+    Buffer.from(String(left), 'utf8'),
+    Buffer.from(String(right), 'utf8'),
+  );
+
 const evalExpressions = ({
   item,
   expression,
@@ -93,9 +100,19 @@ const evalExpressions = ({
   return true;
 };
 
-export const createFakeDocClient = () => {
-  const state = { tables: {}, schemas: {} };
+export const createFakeDocClient = ({ tableSchemas = {} } = {}) => {
+  const state = {
+    tables: {},
+    schemas: Object.fromEntries(
+      Object.entries(tableSchemas).map(([tableName, keyNames]) => [
+        tableName,
+        [...keyNames],
+      ]),
+    ),
+  };
   const calls = { batchWrite: 0, transactWrite: 0 };
+  const queryCalls = [];
+  const scriptedQueryResponses = [];
   let nextTransactionError;
 
   const ensureTable = (name) => {
@@ -128,6 +145,22 @@ export const createFakeDocClient = () => {
     ) || [Object.keys(Item)[0]];
     state.schemas[tableName] = names;
     return names;
+  };
+
+  const learnSchemaFromQuery = (
+    tableName,
+    KeyConditionExpression,
+    ExpressionAttributeNames,
+  ) => {
+    if (state.schemas[tableName]) return state.schemas[tableName];
+    const tokens = Object.keys(ExpressionAttributeNames || {})
+      .filter((token) => /^#k\d+$/.test(token))
+      .sort((left, right) => Number(left.slice(2)) - Number(right.slice(2)));
+    const names = tokens
+      .filter((token) => String(KeyConditionExpression).includes(token))
+      .map((token) => ExpressionAttributeNames[token]);
+    if (names.length > 0) state.schemas[tableName] = names;
+    return state.schemas[tableName] || [];
   };
 
   const keyForItem = (tableName, Item) => {
@@ -197,8 +230,15 @@ export const createFakeDocClient = () => {
   return {
     __state: state,
     __calls: calls,
+    __queryCalls: queryCalls,
     __failNextTransaction(error) {
       nextTransactionError = error;
+    },
+    __queueQueryResponses(responses) {
+      if (!Array.isArray(responses)) {
+        throw new TypeError('scripted query responses must be an array');
+      }
+      scriptedQueryResponses.push(...responses.map(clone));
     },
 
     async put({ TableName, Item }) {
@@ -220,14 +260,29 @@ export const createFakeDocClient = () => {
       return {};
     },
 
-    async query({
-      TableName,
-      KeyConditionExpression,
-      FilterExpression,
-      ExpressionAttributeNames,
-      ExpressionAttributeValues,
-    }) {
+    async query(request) {
+      queryCalls.push(clone(request));
+      if (scriptedQueryResponses.length > 0) {
+        return scriptedQueryResponses.shift();
+      }
+      const {
+        TableName,
+        KeyConditionExpression,
+        FilterExpression,
+        ExpressionAttributeNames,
+        ExpressionAttributeValues,
+        ExclusiveStartKey,
+        Limit,
+        ScanIndexForward = true,
+      } = request;
       const table = ensureTable(TableName);
+      const keyNames =
+        state.schemas[TableName] ||
+        learnSchemaFromQuery(
+          TableName,
+          KeyConditionExpression,
+          ExpressionAttributeNames,
+        );
       const items = Object.values(table)
         .filter((item) =>
           evalExpressions({
@@ -244,9 +299,54 @@ export const createFakeDocClient = () => {
             expressionAttributeNames: ExpressionAttributeNames,
             expressionAttributeValues: ExpressionAttributeValues,
           }),
-        );
+        )
+        .sort((left, right) => {
+          for (const key of keyNames) {
+            const comparison = compareDynamoStrings(left[key], right[key]);
+            if (comparison !== 0) return comparison;
+          }
+          return compareDynamoStrings(
+            stableKeyString(left),
+            stableKeyString(right),
+          );
+        });
 
-      return { Items: clone(items) };
+      if (ScanIndexForward === false) items.reverse();
+
+      let start = 0;
+      if (ExclusiveStartKey) {
+        if (
+          Object.keys(ExclusiveStartKey).length !== keyNames.length ||
+          !keyNames.every((key) =>
+            Object.prototype.hasOwnProperty.call(ExclusiveStartKey, key),
+          )
+        ) {
+          throw new Error(
+            'ExclusiveStartKey must contain the complete table key schema',
+          );
+        }
+        const index = items.findIndex((item) =>
+          Object.keys(ExclusiveStartKey).every((key) =>
+            matchesDynamoCondition(item, key, ExclusiveStartKey[key]),
+          ),
+        );
+        if (index < 0) {
+          throw new Error('ExclusiveStartKey does not identify a query item');
+        }
+        start = index + 1;
+      }
+      const paged =
+        Number.isSafeInteger(Limit) && Limit > 0
+          ? items.slice(start, start + Limit)
+          : items.slice(start);
+      const hasMore = start + paged.length < items.length;
+
+      return {
+        Items: clone(paged),
+        ...(hasMore && paged.length > 0
+          ? { LastEvaluatedKey: keyForItem(TableName, paged[paged.length - 1]) }
+          : {}),
+      };
     },
 
     async update({
@@ -402,9 +502,9 @@ export async function createLMDBDB(tmpDataDir) {
   return createLMDB({ path: tmpDataDir });
 }
 
-export async function createMockedDynamoDB() {
+export async function createMockedDynamoDB(options = {}) {
   jest.resetModules();
-  const fakeDocClient = createFakeDocClient();
+  const fakeDocClient = createFakeDocClient(options);
 
   jest.unstable_mockModule('@aws-sdk/lib-dynamodb', () => ({
     DynamoDBDocument: { from: () => fakeDocClient },

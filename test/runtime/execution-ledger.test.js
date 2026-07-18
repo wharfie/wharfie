@@ -2,6 +2,7 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { afterAll, describe, expect, test } from '@jest/globals';
+import { Buffer } from 'node:buffer';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,6 +30,10 @@ import {
   getRunProjectionSortKey,
   getTransitionSortKey,
 } from '../../src/core/lib/ledger/record-key.js';
+import {
+  createExecutionLedgerRunDirectoryScope,
+  getExecutionLedgerRunDirectorySortKey,
+} from '../../src/core/lib/ledger/run-directory.js';
 
 const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
 const RUN_ID = 'run-1';
@@ -155,7 +160,7 @@ function completedEvidenceForStart(start, result = { greeting: 'hello' }) {
  */
 function eventIdFor(event) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v2',
+    domain: 'wharfie:execution-ledger-event:v3',
     prefix: 'wle',
     value: {
       schemaVersion: event.schema_version,
@@ -1421,6 +1426,334 @@ for (const adapter of getAdapterMatrix()) {
         await expect(ledger.rebuildRun(RUN_ID)).rejects.toBeInstanceOf(
           ExecutionLedgerProjectionError,
         );
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('maintains a redacted atomic, paginated run-history directory', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const tableName = 'execution-ledger-directory';
+        const ledger = createExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+        });
+        const appId = 'directory-demo';
+        /**
+         * @param {string} runId - Durable test run identity.
+         * @param {number} observedAt - Controlled durable timestamp.
+         * @returns {Promise<any>} - Created run result.
+         */
+        const create = async (runId, observedAt) =>
+          await ledger.createManualRun({
+            runId,
+            appId,
+            revisionId: REVISION_ID,
+            invocationId: INVOCATION_ID,
+            activityId: ACTIVITY_ID,
+            input: { secret: `input-${runId}` },
+            callerMetadata: { secret: `caller-${runId}` },
+            transitionId: `create-${runId}`,
+            observedAt,
+          });
+
+        await create('run-alpha', 100);
+        await create('run-charlie', 101);
+        await create('run-bravo', 102);
+        const claim = await ledger.claimInvocation({
+          runId: 'run-bravo',
+          invocationId: INVOCATION_ID,
+          fencingToken: 'bravo-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'claim-bravo',
+          observedAt: 200,
+        });
+        expect(claim.run).toMatchObject({ version: 2, lastSequence: 2 });
+
+        const first = await ledger.listRuns({ appId, limit: 2 });
+        expect(first.items).toEqual([
+          {
+            runId: 'run-bravo',
+            appId,
+            revisionId: REVISION_ID,
+            kind: 'manual',
+            status: RunStatus.RUNNING,
+            version: 2,
+            lastSequence: 2,
+            createdAt: 102,
+            updatedAt: 200,
+          },
+          {
+            runId: 'run-charlie',
+            appId,
+            revisionId: REVISION_ID,
+            kind: 'manual',
+            status: RunStatus.RUNNING,
+            version: 1,
+            lastSequence: 1,
+            createdAt: 101,
+            updatedAt: 101,
+          },
+        ]);
+        expect(first.items[0]).not.toHaveProperty('requestRef');
+        expect(first.items[0]).not.toHaveProperty('input');
+        expect(typeof first.nextCursor).toBe('string');
+
+        const second = await ledger.listRuns({
+          appId,
+          limit: 2,
+          cursor: first.nextCursor,
+        });
+        expect(second).toEqual({
+          items: [
+            {
+              runId: 'run-alpha',
+              appId,
+              revisionId: REVISION_ID,
+              kind: 'manual',
+              status: RunStatus.RUNNING,
+              version: 1,
+              lastSequence: 1,
+              createdAt: 100,
+              updatedAt: 100,
+            },
+          ],
+        });
+        const scope = createExecutionLedgerRunDirectoryScope({ appId });
+        await expect(
+          ledger.listRuns({
+            appId: 'another-directory-demo',
+            cursor: first.nextCursor,
+          }),
+        ).rejects.toThrow(/cursor.*scope/i);
+        const malformedCursor = Buffer.from(
+          JSON.stringify({
+            schemaVersion: 1,
+            appId,
+            serviceId: scope.serviceId,
+            directoryId: scope.directoryId,
+            startAfter: 'ledger-directory/v1/run/0000000000000000/not-base64!',
+          }),
+          'utf8',
+        ).toString('base64url');
+        await expect(
+          ledger.listRuns({ appId, cursor: malformedCursor }),
+        ).rejects.toThrow(/cursor.*scope/i);
+        const missingBoundaryCursor = Buffer.from(
+          JSON.stringify({
+            schemaVersion: 1,
+            appId,
+            serviceId: scope.serviceId,
+            directoryId: scope.directoryId,
+            startAfter: getExecutionLedgerRunDirectorySortKey({
+              runId: 'not-a-real-run',
+              createdAt: 99,
+            }),
+          }),
+          'utf8',
+        ).toString('base64url');
+        await expect(
+          ledger.listRuns({ appId, cursor: missingBoundaryCursor }),
+        ).rejects.toThrow(/no longer identifies/i);
+
+        const tieAppId = 'directory-tie-demo';
+        for (const runId of ['A', 'B']) {
+          await ledger.createManualRun({
+            runId,
+            appId: tieAppId,
+            revisionId: REVISION_ID,
+            invocationId: INVOCATION_ID,
+            activityId: ACTIVITY_ID,
+            transitionId: `create-tie-${runId}`,
+            observedAt: 300,
+          });
+        }
+        const tieFirst = await ledger.listRuns({
+          appId: tieAppId,
+          limit: 1,
+        });
+        expect(tieFirst.items.map((item) => item.runId)).toEqual(['A']);
+        const tieSecond = await ledger.listRuns({
+          appId: tieAppId,
+          limit: 1,
+          cursor: tieFirst.nextCursor,
+        });
+        expect(tieSecond).toMatchObject({
+          items: [expect.objectContaining({ runId: 'B' })],
+        });
+        expect(tieSecond.nextCursor).toBeUndefined();
+
+        // A user-controlled run ID can equal another app's internal directory
+        // partition. V3 replay is scoped to ledger/v3/, so that co-location
+        // remains harmless instead of treating the directory row as a run row.
+        const aliasTargetAppId = 'directory-alias-target';
+        const aliasRunId = createExecutionLedgerRunDirectoryScope({
+          appId: aliasTargetAppId,
+        }).directoryId;
+        await ledger.createManualRun({
+          runId: aliasRunId,
+          appId: 'directory-alias-source',
+          revisionId: REVISION_ID,
+          invocationId: INVOCATION_ID,
+          activityId: ACTIVITY_ID,
+          transitionId: 'create-directory-alias-source',
+          observedAt: 301,
+        });
+        await ledger.createManualRun({
+          runId: 'directory-alias-target-run',
+          appId: aliasTargetAppId,
+          revisionId: REVISION_ID,
+          invocationId: INVOCATION_ID,
+          activityId: ACTIVITY_ID,
+          transitionId: 'create-directory-alias-target',
+          observedAt: 302,
+        });
+        await expect(ledger.getRun(aliasRunId)).resolves.toMatchObject({
+          appId: 'directory-alias-source',
+        });
+        await expect(
+          ledger.listRuns({ appId: aliasTargetAppId }),
+        ).resolves.toMatchObject({
+          items: [
+            expect.objectContaining({ runId: 'directory-alias-target-run' }),
+          ],
+        });
+
+        const bravoDirectory = await db.get({
+          tableName,
+          keyName: 'run_id',
+          keyValue: scope.directoryId,
+          sortKeyName: 'sort_key',
+          sortKeyValue: getExecutionLedgerRunDirectorySortKey({
+            runId: 'run-bravo',
+            createdAt: 102,
+          }),
+          consistentRead: true,
+        });
+        expect(bravoDirectory).toMatchObject({
+          record_type: 'execution_ledger_run_directory',
+          service_id: scope.serviceId,
+          ledger_run_id: 'run-bravo',
+          status: RunStatus.RUNNING,
+          version: 2,
+          sequence: 2,
+        });
+        expect(bravoDirectory).not.toHaveProperty('data');
+        expect(bravoDirectory).not.toHaveProperty('request_ref');
+
+        await create('run-broken', 103);
+        const brokenSortKey = getExecutionLedgerRunDirectorySortKey({
+          runId: 'run-broken',
+          createdAt: 103,
+        });
+        await db.remove({
+          tableName,
+          keyName: 'run_id',
+          keyValue: scope.directoryId,
+          sortKeyName: 'sort_key',
+          sortKeyValue: brokenSortKey,
+        });
+        await expect(
+          ledger.claimInvocation({
+            runId: 'run-broken',
+            invocationId: INVOCATION_ID,
+            fencingToken: 'broken-fence',
+            expectedGeneration: 0,
+            expectedVersion: 1,
+            transitionId: 'claim-broken',
+            observedAt: 201,
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
+        await expect(ledger.getRun('run-broken')).resolves.toMatchObject({
+          version: 1,
+          lastSequence: 1,
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('keeps V2 records inert when V3 deliberately shares a custom table', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const tableName = 'operator-selected-shared-ledger-table';
+        const legacyRecords = [
+          {
+            run_id: 'legacy-run',
+            sort_key: 'ledger/v2/head',
+            record_type: 'execution_ledger_head',
+            schema_version: 2,
+            version: 1,
+            sequence: 1,
+            app_id: 'legacy-app',
+            revision_id: REVISION_ID,
+          },
+          {
+            run_id: 'legacy-run',
+            sort_key: 'ledger/v2/projection/run',
+            record_type: 'execution_ledger_run_projection',
+            schema_version: 2,
+            status: RunStatus.RUNNING,
+            version: 1,
+            sequence: 1,
+            app_id: 'legacy-app',
+            revision_id: REVISION_ID,
+            data: { schemaVersion: 2, runId: 'legacy-run' },
+          },
+        ];
+        await db.batchWrite({
+          tableName,
+          putRequests: legacyRecords.map((record) => ({
+            keyName: 'run_id',
+            sortKeyName: 'sort_key',
+            record,
+          })),
+        });
+        const legacyBefore = await db.get({
+          tableName,
+          keyName: 'run_id',
+          keyValue: 'legacy-run',
+          sortKeyName: 'sort_key',
+          sortKeyValue: 'ledger/v2/head',
+          consistentRead: true,
+        });
+        const ledger = createExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+        });
+
+        await expect(ledger.getRun('legacy-run')).resolves.toBeNull();
+        await expect(ledger.listRuns({ appId: 'legacy-app' })).resolves.toEqual(
+          { items: [] },
+        );
+        await ledger.createManualRun({
+          runId: 'v3-run',
+          appId: 'legacy-app',
+          revisionId: REVISION_ID,
+          invocationId: INVOCATION_ID,
+          activityId: ACTIVITY_ID,
+          transitionId: 'create-v3-run',
+          observedAt: 400,
+        });
+        await expect(
+          ledger.listRuns({ appId: 'legacy-app' }),
+        ).resolves.toMatchObject({
+          items: [expect.objectContaining({ runId: 'v3-run' })],
+        });
+        await expect(
+          db.get({
+            tableName,
+            keyName: 'run_id',
+            keyValue: 'legacy-run',
+            sortKeyName: 'sort_key',
+            sortKeyValue: 'ledger/v2/head',
+            consistentRead: true,
+          }),
+        ).resolves.toEqual(legacyBefore);
       } finally {
         await cleanup();
       }

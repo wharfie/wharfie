@@ -120,11 +120,11 @@ export function resolveOperationsTableName() {
 export function resolveExecutionLedgerTableName() {
   const name = process.env.WHARFIE_EXECUTION_LEDGER_TABLE;
   if (name && String(name).trim()) return String(name).trim();
-  return 'wharfie-execution-ledger-v2';
+  return 'wharfie-execution-ledger-v3';
 }
 
 /**
- * Resolve the immutable local execution-payload root.  The v2 ledger writes
+ * Resolve the immutable local execution-payload root. The v3 ledger writes
  * content before it appends a reference to the control store, so the default
  * lives beside that local control store when one is configured.  A future
  * shared payload provider can keep the same reference contract without

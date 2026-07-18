@@ -9,7 +9,11 @@ import {
   transactionRequestUpdates,
   validateTransactionWrite,
 } from '../base.js';
-import { assertTightQuery } from '../utils.js';
+import {
+  assertPortablePageAscii,
+  assertTightQuery,
+  assertTightQueryPage,
+} from '../utils.js';
 
 const NO_SORT = '__no_sort__';
 const SEP = '\u001f';
@@ -272,6 +276,59 @@ export default function createLMDB(options = {}) {
   }
 
   /**
+   * Read one bounded, lexically ordered page under a sort-key prefix. This is
+   * intentionally separate from query(): callers that need history cannot
+   * accidentally materialize an unbounded partition first.
+   * @param {import('../base.js').QueryPageParams} params - Page request.
+   * @returns {import('../base.js').QueryPageReturn} - Bounded page.
+   */
+  async function queryPage(params) {
+    const { pk, sk, limit, startAfter } = assertTightQueryPage(params);
+    const table = ensureTable(params.tableName);
+    const pkTok = pkTokenFromCondition(pk);
+    const basePrefix = makePrefix(pkTok);
+    const scanPrefix = `${basePrefix}${skPrefixFromCondition(sk)}`;
+    const startKey =
+      startAfter === undefined
+        ? scanPrefix
+        : makeKey(pkTok, `${sk.propertyName}=${startAfter}`);
+    /** @type {import('../base.js').DBRecord[]} */
+    const items = [];
+    let hasNext = false;
+    let lastSortKey;
+
+    // Do not invent an end sentinel: a generic Unicode suffix can sort after
+    // U+FFFF. The portable page contract constrains its keys to ASCII, and a
+    // prefix break keeps this iterator exact even if older rows are wider.
+    for (const { key, value } of table.getRange({ start: startKey })) {
+      if (!key.startsWith(scanPrefix)) break;
+      if (startAfter !== undefined && key === startKey) continue;
+      if (items.length === limit) {
+        hasNext = true;
+        break;
+      }
+      const tokenPrefix = `${sk.propertyName}=`;
+      const physicalSortToken = key.slice(basePrefix.length);
+      const sortKey = assertPortablePageAscii(
+        physicalSortToken.slice(tokenPrefix.length),
+        'queryPage stored sort key',
+      );
+      if (!value || value[sk.propertyName] !== sortKey) {
+        throw new Error(
+          'queryPage stored record sort key does not match its physical key',
+        );
+      }
+      items.push(deepClone(value));
+      lastSortKey = sortKey;
+    }
+
+    return {
+      items,
+      ...(hasNext && items.length > 0 ? { nextStartAfter: lastSortKey } : {}),
+    };
+  }
+
+  /**
    * Put (insert/overwrite) an item.
    * @param {import('../base.js').PutParams} params - params.
    */
@@ -514,6 +571,7 @@ export default function createLMDB(options = {}) {
 
   return {
     query,
+    queryPage,
     batchWrite,
     transactionWrite,
     update,

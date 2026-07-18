@@ -57,7 +57,7 @@ describe('Unified DB config', () => {
         expect(resolveOperationsAdapterName()).toBe('vanilla');
         expect(resolveOperationsTableName()).toBe('wharfie-operations');
         expect(resolveExecutionLedgerTableName()).toBe(
-          'wharfie-execution-ledger-v2',
+          'wharfie-execution-ledger-v3',
         );
 
         const first = await createOperationsDBClient();

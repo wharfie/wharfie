@@ -425,6 +425,132 @@ async function expectTransactionWriteContract(db) {
 }
 
 /**
+ * @param {import('../../../src/core/lib/db/base.js').DBClient} db - Adapter under test.
+ * @param {{tableName?: string, primaryKeyName?: string, sortKeyName?: string}} [options] - Optional physical key schema.
+ * @returns {Promise<void>} - Resolves after validating the bounded page contract.
+ */
+async function expectQueryPageContract(
+  db,
+  { tableName = 'paged-items', primaryKeyName = 'pk', sortKeyName = 'sk' } = {},
+) {
+  for (const sk of ['directory/a', 'directory/b', 'directory/c']) {
+    await db.put({
+      tableName,
+      keyName: primaryKeyName,
+      sortKeyName,
+      record: {
+        [primaryKeyName]: 'service',
+        [sortKeyName]: sk,
+        value: sk.slice(-1),
+      },
+    });
+  }
+
+  const first = await db.queryPage({
+    tableName,
+    consistentRead: true,
+    keyConditions: [
+      keyEquals('PRIMARY', primaryKeyName, 'service'),
+      beginsWith('SORT', sortKeyName, 'directory/'),
+    ],
+    limit: 2,
+  });
+  expect(first).toEqual({
+    items: [
+      {
+        [primaryKeyName]: 'service',
+        [sortKeyName]: 'directory/a',
+        value: 'a',
+      },
+      {
+        [primaryKeyName]: 'service',
+        [sortKeyName]: 'directory/b',
+        value: 'b',
+      },
+    ],
+    nextStartAfter: 'directory/b',
+  });
+
+  const second = await db.queryPage({
+    tableName,
+    consistentRead: true,
+    keyConditions: [
+      keyEquals('PRIMARY', primaryKeyName, 'service'),
+      beginsWith('SORT', sortKeyName, 'directory/'),
+    ],
+    limit: 2,
+    startAfter: first.nextStartAfter,
+  });
+  expect(second).toEqual({
+    items: [
+      {
+        [primaryKeyName]: 'service',
+        [sortKeyName]: 'directory/c',
+        value: 'c',
+      },
+    ],
+  });
+
+  await expect(
+    db.queryPage({
+      tableName,
+      consistentRead: true,
+      keyConditions: [
+        keyEquals('PRIMARY', primaryKeyName, 'service'),
+        beginsWith('SORT', sortKeyName, 'directory/'),
+        fieldEquals('value', 'a'),
+      ],
+      limit: 2,
+    }),
+  ).rejects.toThrow(/does not support non-key filters/i);
+
+  await db.put({
+    tableName,
+    keyName: primaryKeyName,
+    sortKeyName,
+    record: {
+      [primaryKeyName]: 'non-ascii',
+      [sortKeyName]: 'directory/é',
+      value: 'bad',
+    },
+  });
+  await expect(
+    db.queryPage({
+      tableName,
+      consistentRead: true,
+      keyConditions: [
+        keyEquals('PRIMARY', primaryKeyName, 'non-ascii'),
+        beginsWith('SORT', sortKeyName, 'directory/'),
+      ],
+      limit: 1,
+    }),
+  ).rejects.toThrow(/ASCII/i);
+  await expect(
+    db.queryPage({
+      tableName,
+      consistentRead: true,
+      keyConditions: [
+        keyEquals('PRIMARY', primaryKeyName, 'service'),
+        beginsWith('SORT', sortKeyName, 'directory/é'),
+      ],
+      limit: 1,
+    }),
+  ).rejects.toThrow(/ASCII/i);
+  await expect(
+    db.queryPage({
+      tableName,
+      consistentRead: true,
+      keyConditions: [
+        keyEquals('PRIMARY', primaryKeyName, 'service'),
+        beginsWith('SORT', sortKeyName, 'directory/'),
+      ],
+      limit: 1,
+      startAfter: 'other-directory/a',
+    }),
+  ).rejects.toThrow(/SORT prefix/i);
+}
+
+/**
  * @param {string} tmpDir - tmpDir.
  * @returns {Promise<import('../../../src/core/lib/db/base.js').DBClient>} - Result.
  */
@@ -669,6 +795,12 @@ function runLocalDBContract(adapter) {
       db = await adapter.create(tmpDir);
       await expectTransactionWriteContract(db);
     });
+
+    test('supports bounded lexical query pages', async () => {
+      tmpDir = makeTmpDir();
+      db = await adapter.create(tmpDir);
+      await expectQueryPageContract(db);
+    });
   });
 }
 
@@ -686,6 +818,128 @@ describe('dynamodb transactionWrite contract', () => {
         batchWrite: 1,
         transactWrite: 7,
       });
+    } finally {
+      await db.close();
+    }
+  });
+
+  test('supports bounded lexical query pages', async () => {
+    const { db } = await createMockedDynamoDB();
+    try {
+      await expectQueryPageContract(db);
+    } finally {
+      await db.close();
+    }
+  });
+
+  test('supports bounded pages for an explicitly configured non-default schema', async () => {
+    const { db } = await createMockedDynamoDB({
+      tableSchemas: {
+        'custom-paged-items': ['customer', 'timestamp'],
+      },
+    });
+    try {
+      await expectQueryPageContract(db, {
+        tableName: 'custom-paged-items',
+        primaryKeyName: 'customer',
+        sortKeyName: 'timestamp',
+      });
+    } finally {
+      await db.close();
+    }
+  });
+
+  test('probes an ambiguous provider continuation before exposing a public cursor', async () => {
+    const { db, fakeDocClient } = await createMockedDynamoDB();
+    try {
+      for (const sk of ['directory/a', 'directory/b', 'directory/c']) {
+        await db.put({
+          tableName: 'ambiguous-provider-page',
+          keyName: 'pk',
+          sortKeyName: 'sk',
+          record: { pk: 'service', sk },
+        });
+      }
+      fakeDocClient.__queueQueryResponses([
+        {
+          Items: [
+            { pk: 'service', sk: 'directory/a' },
+            { pk: 'service', sk: 'directory/b' },
+          ],
+          // Simulates DynamoDB hitting its byte cap at exactly the requested
+          // count: a nonempty LEK alone is not proof of another item.
+          LastEvaluatedKey: { pk: 'service', sk: 'directory/b' },
+        },
+        {
+          Items: [{ pk: 'service', sk: 'directory/c' }],
+        },
+      ]);
+
+      await expect(
+        db.queryPage({
+          tableName: 'ambiguous-provider-page',
+          consistentRead: true,
+          keyConditions: [
+            keyEquals('PRIMARY', 'pk', 'service'),
+            beginsWith('SORT', 'sk', 'directory/'),
+          ],
+          limit: 2,
+        }),
+      ).resolves.toEqual({
+        items: [
+          { pk: 'service', sk: 'directory/a' },
+          { pk: 'service', sk: 'directory/b' },
+        ],
+        nextStartAfter: 'directory/b',
+      });
+      expect(
+        fakeDocClient.__queryCalls.map((request) => ({
+          Limit: request.Limit,
+          ScanIndexForward: request.ScanIndexForward,
+          ExclusiveStartKey: request.ExclusiveStartKey,
+        })),
+      ).toEqual([
+        { Limit: 3, ScanIndexForward: true, ExclusiveStartKey: undefined },
+        {
+          Limit: 1,
+          ScanIndexForward: true,
+          ExclusiveStartKey: { pk: 'service', sk: 'directory/b' },
+        },
+      ]);
+    } finally {
+      await db.close();
+    }
+  });
+
+  test('treats an empty provider continuation key as terminal', async () => {
+    const { db, fakeDocClient } = await createMockedDynamoDB();
+    try {
+      fakeDocClient.__queueQueryResponses([
+        {
+          Items: [
+            { pk: 'service', sk: 'directory/a' },
+            { pk: 'service', sk: 'directory/b' },
+          ],
+          LastEvaluatedKey: {},
+        },
+      ]);
+      await expect(
+        db.queryPage({
+          tableName: 'terminal-empty-key',
+          consistentRead: true,
+          keyConditions: [
+            keyEquals('PRIMARY', 'pk', 'service'),
+            beginsWith('SORT', 'sk', 'directory/'),
+          ],
+          limit: 2,
+        }),
+      ).resolves.toEqual({
+        items: [
+          { pk: 'service', sk: 'directory/a' },
+          { pk: 'service', sk: 'directory/b' },
+        ],
+      });
+      expect(fakeDocClient.__queryCalls).toHaveLength(1);
     } finally {
       await db.close();
     }
