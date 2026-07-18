@@ -187,7 +187,7 @@ export async function runRuntimeBootstrap(runtimeModules, options = {}) {
 }
 
 /**
- * @param {{ developerCliModule?: Record<string, any> | null, cliModule?: Record<string, any> | null, cliExportName?: string, runtimeModules?: Record<string, any>, argv?: string[] }} [options] - options.
+ * @param {{ developerCliModule?: Record<string, any> | null, cliModule?: Record<string, any> | null, loadDeveloperCliModule?: function(): Promise<Record<string, any> | null> | Record<string, any> | null, cliExportName?: string, runtimeModules?: Record<string, any>, argv?: string[] }} [options] - options.
  * @returns {Promise<void>} - Result.
  */
 export async function runPackagedApp(options = {}) {
@@ -213,7 +213,12 @@ export async function runPackagedApp(options = {}) {
     return;
   }
 
-  const developerCliModule = options.developerCliModule ?? options.cliModule;
+  const developerCliModule =
+    options.developerCliModule ??
+    options.cliModule ??
+    (typeof options.loadDeveloperCliModule === 'function'
+      ? await options.loadDeveloperCliModule()
+      : null);
   if (developerCliModule) {
     await runDeveloperCli(developerCliModule, {
       cliExportName: options.cliExportName,

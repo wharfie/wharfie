@@ -477,7 +477,7 @@ function validatePreparedSourceExecution(value) {
 
 /**
  * @param {unknown} value - Candidate embedded execution identity.
- * @returns {{ manifest: Record<string, any>, revision: import('./application-revision.js').ApplicationRevision }} - Validated embedded manifest/revision pair.
+ * @returns {{ manifest: Record<string, any>, revision: import('./application-revision.js').ApplicationRevision, embeddedRevision: import('../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair }} - Validated embedded manifest/revision pair.
  */
 function validateEmbeddedExecution(value) {
   if (!isObjectRecord(value)) {
@@ -511,7 +511,7 @@ function validateEmbeddedExecution(value) {
       'Embedded manifest does not match the immutable embedded application revision contract.',
     );
   }
-  return { manifest, revision: pair.revision };
+  return { manifest, revision: pair.revision, embeddedRevision: pair };
 }
 
 /**
@@ -799,6 +799,70 @@ function resolveManifestActivityAttemptExecution(execution) {
 }
 
 /**
+ * Validate and snapshot one source or packaged execution descriptor before a
+ * durable host creates any ledger state. The physical executor receives only
+ * this normalized descriptor, never a caller-owned object that could change
+ * after preflight.
+ * @param {unknown} execution - Candidate immutable execution descriptor.
+ * @returns {Readonly<{identity: Readonly<{appId: string, revisionId: string, manifest: Record<string, any>}>, execution: {kind: 'prepared-source', prepared: import('../../cli/app/compile-application-revision.js').PreparedApplicationRevision} | {kind: 'embedded', manifest: any, embeddedRevision: import('../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair}}>} - Bound durable execution identity and normalized executor input.
+ */
+export function resolveManifestActivityExecutionBinding(execution) {
+  const resolved = resolveManifestActivityAttemptExecution(execution);
+  const manifest = deepFreeze(
+    resolved.kind === 'embedded'
+      ? resolved.embedded.manifest
+      : resolved.source.manifest,
+  );
+  const revision =
+    resolved.kind === 'embedded'
+      ? resolved.embedded.revision
+      : resolved.source.revision;
+  const identity = Object.freeze({
+    appId: manifest.app.id,
+    revisionId: revision.revisionId,
+    manifest,
+  });
+  if (resolved.kind === 'embedded') {
+    return Object.freeze({
+      identity,
+      execution: Object.freeze({
+        kind: /** @type {const} */ ('embedded'),
+        manifest: resolved.embedded.manifest,
+        embeddedRevision: resolved.embedded.embeddedRevision,
+      }),
+    });
+  }
+
+  const candidate = /** @type {Record<string, any>} */ (execution);
+  const prepared = candidate.prepared;
+  return Object.freeze({
+    identity,
+    execution: Object.freeze({
+      kind: /** @type {const} */ ('prepared-source'),
+      prepared: Object.freeze({
+        revision: resolved.source.revision,
+        appDir: resolved.source.appDir,
+        manifest: resolved.source.manifest,
+        assets: Object.freeze({ ...prepared.assets }),
+        dependencyLock: resolved.source.dependencyLock,
+        verifyRuntime: resolved.source.verifyRuntime,
+        cleanup: prepared.cleanup,
+      }),
+    }),
+  });
+}
+
+/**
+ * Return only the immutable app/revision identity for callers that do not
+ * retain a physical executor binding.
+ * @param {unknown} execution - Candidate immutable execution descriptor.
+ * @returns {Readonly<{appId: string, revisionId: string, manifest: Record<string, any>}>} - Bound durable execution identity.
+ */
+export function resolveManifestActivityExecutionIdentity(execution) {
+  return resolveManifestActivityExecutionBinding(execution).identity;
+}
+
+/**
  * Dispatch one physical attempt after its host start frame has been bound to
  * the selected immutable execution identity.
  * @param {{kind: 'prepared-source', source: ReturnType<typeof validatePreparedSourceExecution>} | {kind: 'embedded', embedded: ReturnType<typeof validateEmbeddedExecution>}} execution - Resolved execution identity.
@@ -985,5 +1049,7 @@ export default {
   invokeManifestActivity,
   invokeManifestActivityAttempt,
   invokeManifestActivityAttemptWithStart,
+  resolveManifestActivityExecutionBinding,
+  resolveManifestActivityExecutionIdentity,
   unwrapCompletedActivityAttempt,
 };

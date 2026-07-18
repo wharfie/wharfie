@@ -408,11 +408,13 @@ describe('packageLocalApp', () => {
             expect(entryCode).toContain('ledger-service-command.js');
             expect(entryCode).toContain("'ledger-service': ledgerServiceCmd");
             expect(entryCode).toContain('const loadDeveloperCliModule = () =>');
+            expect(entryCode).toContain('loadDeveloperCliModule,');
+            expect(entryCode).not.toContain('await loadDeveloperCliModule()');
             expect(
               entryCode.indexOf(
                 'await preparePackagedCoreRuntimeDependencies()',
               ),
-            ).toBeLessThan(entryCode.indexOf('await loadDeveloperCliModule()'));
+            ).toBeLessThan(entryCode.indexOf('await runPackagedApp({'));
             expect(entryCode).not.toContain('state_cmds');
             expect(entryCode).not.toContain("'serve-lambda':");
             expect(entryCode).not.toContain("'serve-queue':");

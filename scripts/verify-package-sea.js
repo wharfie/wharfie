@@ -345,7 +345,7 @@ async function createInstalledLedgerLifecycleObserver(options) {
  * operator fixtures. The moved SEA still performs every operation under test;
  * this host helper only prepares independently verifiable durable state.
  * @param {{installedPackageRoot: string, controlPath: string, tableName: string, payloadPath: string, applicationStatePath: string, revisionId: string}} options - Installed-package fixture inputs.
- * @returns {Promise<{createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, readRun: (runId: string) => Promise<Record<string, any> | null>, ApplicationStateAdapterDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
+ * @returns {Promise<{createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readRun: (runId: string) => Promise<Record<string, any> | null>, ApplicationStateAdapterDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
  */
 async function createInstalledExecutionLedgerFixture(options) {
   const installedModule = async (/** @type {string} */ relativePath) =>
@@ -373,6 +373,11 @@ async function createInstalledExecutionLedgerFixture(options) {
     .update(path.resolve(options.payloadPath), 'utf8')
     .digest('hex')
     .slice(0, 55)}`;
+  const createPayloadStore = () =>
+    payloadModule.createLocalExecutionPayloadStore({
+      path: options.payloadPath,
+      storeId: payloadStoreId,
+    });
 
   const openLedger = (/** @type {boolean} */ readOnly) => {
     const db = adapterModule.default({
@@ -384,10 +389,7 @@ async function createInstalledExecutionLedgerFixture(options) {
       ledger: ledgerModule.createExecutionLedger({
         db,
         tableName: options.tableName,
-        payloadStore: payloadModule.createLocalExecutionPayloadStore({
-          path: options.payloadPath,
-          storeId: payloadStoreId,
-        }),
+        payloadStore: createPayloadStore(),
         effectEvidenceVerifiers: [
           ...applicationStateEffectModule.APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS,
         ],
@@ -652,6 +654,8 @@ async function createInstalledExecutionLedgerFixture(options) {
         destinationEffectId,
       ) || null,
     readApplicationStateReceipts,
+    readExecutionPayload: async (reference) =>
+      await createPayloadStore().readJson(reference),
     readRun: async (runId) => {
       const { db, ledger } = openLedger(true);
       try {
@@ -1165,6 +1169,19 @@ try {
 
 type GreetInput = { name?: string };
 type GreetRuntime = { caller?: { metadata?: { requestId?: string } } };
+type PersistInput = { key?: string; value?: unknown };
+type PersistRuntime = {
+  caller?: { metadata?: { requestId?: string } };
+  effects: {
+    request(request: {
+      effectId: string;
+      capability: 'application-state';
+      operation: 'put-if-absent';
+      input: { key: string; value: unknown };
+      requestedReplayProperties: ['idempotent', 'transactional'];
+    }): Promise<{ inserted: boolean }>;
+  };
+};
 
 export async function greet(
   input: GreetInput = {},
@@ -1187,6 +1204,27 @@ export async function greet(
   } finally {
     await database.close();
   }
+}
+
+export async function persistOnce(
+  input: PersistInput,
+  runtime: PersistRuntime,
+) {
+  const effect = await runtime.effects.request({
+    effectId: 'persist-portable-state',
+    capability: 'application-state',
+    operation: 'put-if-absent',
+    input: {
+      key: input.key || 'packaged-durable-key',
+      value: input.value ?? null,
+    },
+    requestedReplayProperties: ['idempotent', 'transactional'],
+  });
+  return {
+    continuedAfterEffectDelivery: true,
+    effect,
+    requestId: runtime.caller?.metadata?.requestId || null,
+  };
 }
 
 export default greet;
@@ -1266,6 +1304,17 @@ export default defineApp({
         kind: 'node',
         path: './src/activity.ts',
         export: 'greet',
+      },
+      externalPackages: [{
+        name: 'lmdb',
+        version: ${JSON.stringify(installedLmdbMetadata.version)},
+      }],
+    },
+    'persist-once': {
+      entrypoint: {
+        kind: 'node',
+        path: './src/activity.ts',
+        export: 'persistOnce',
       },
       externalPackages: [{
         name: 'lmdb',
@@ -1441,6 +1490,16 @@ export default defineApp({
   assert.deepEqual(embeddedManifest.activities.greet.externalPackages, [
     { name: 'lmdb', version: installedLmdbMetadata.version },
   ]);
+  assert.deepEqual(embeddedManifest.activities['persist-once'], {
+    entrypoint: {
+      kind: 'node',
+      path: 'src/activity.ts',
+      export: 'persistOnce',
+    },
+    externalPackages: [
+      { name: 'lmdb', version: installedLmdbMetadata.version },
+    ],
+  });
 
   const embeddedMetadata = JSON.parse(
     runCommand(cleanArtifactPath, ['wharfie', 'metadata', '--no-pretty'], {
@@ -1501,6 +1560,216 @@ export default defineApp({
     ...operatorEnvironment,
     WHARFIE_RUNTIME_COMMAND: 'ledger-service',
   };
+  const ledgerFixture = await createInstalledExecutionLedgerFixture({
+    installedPackageRoot,
+    controlPath,
+    tableName: ledgerTableName,
+    payloadPath,
+    applicationStatePath,
+    revisionId: packagedArtifact.revisionId,
+  });
+  const durableIdempotencyKey = 'packaged-durable-managed-effect';
+  const durableRunId = ledgerFixture.createRunId(
+    embeddedManifest.app.id,
+    durableIdempotencyKey,
+  );
+  const durableInput = {
+    key: 'packaged-durable-key',
+    value: { message: 'packaged-durable-value', ordinal: 1 },
+  };
+  const durableCallerMetadata = {
+    requestId: 'packaged-durable-request',
+    channel: 'relocated-sea',
+  };
+  const durableRunArgs = [
+    'wharfie',
+    'run',
+    '--activity',
+    'persist-once',
+    '--idempotency-key',
+    durableIdempotencyKey,
+    '--input',
+    JSON.stringify(durableInput),
+    '--caller-metadata',
+    JSON.stringify(durableCallerMetadata),
+    '--json',
+  ];
+  const firstDurableRunText = runCommand(cleanArtifactPath, durableRunArgs, {
+    cwd: cleanRunDirectory,
+    capture: true,
+    env: operatorEnvironment,
+  }).stdout.trim();
+  assert.deepEqual(JSON.parse(firstDurableRunText), {
+    idempotency_key: durableIdempotencyKey,
+    run_id: durableRunId,
+    revision: packagedArtifact.revisionId,
+    activity: 'persist-once',
+    status: ledgerFixture.RunStatus.COMPLETED,
+    invocation_status: ledgerFixture.InvocationStatus.COMPLETED,
+    attempt_generation: 1,
+    attempt_status: ledgerFixture.AttemptStatus.COMPLETED,
+  });
+  for (const secret of [
+    durableInput.key,
+    durableInput.value.message,
+    durableCallerMetadata.requestId,
+    durableCallerMetadata.channel,
+    'continuedAfterEffectDelivery',
+  ]) {
+    assert.equal(
+      firstDurableRunText.includes(secret),
+      false,
+      `packaged durable-run row disclosed ${secret}`,
+    );
+  }
+
+  const durableRunBeforeRetry = await ledgerFixture.readRun(durableRunId);
+  assert.ok(durableRunBeforeRetry, 'packaged durable run was not retained');
+  assert.deepEqual(
+    {
+      runId: durableRunBeforeRetry.run.runId,
+      appId: durableRunBeforeRetry.run.appId,
+      revisionId: durableRunBeforeRetry.run.revisionId,
+      status: durableRunBeforeRetry.run.status,
+      version: durableRunBeforeRetry.run.version,
+    },
+    {
+      runId: durableRunId,
+      appId: embeddedManifest.app.id,
+      revisionId: packagedArtifact.revisionId,
+      status: ledgerFixture.RunStatus.COMPLETED,
+      version: 7,
+    },
+  );
+  assert.deepEqual(
+    durableRunBeforeRetry.invocations.map((invocation) => ({
+      activityId: invocation.activityId,
+      status: invocation.status,
+      generation: invocation.generation,
+    })),
+    [
+      {
+        activityId: 'persist-once',
+        status: ledgerFixture.InvocationStatus.COMPLETED,
+        generation: 1,
+      },
+    ],
+  );
+  assert.equal(durableRunBeforeRetry.attempts.length, 1);
+  assert.equal(
+    durableRunBeforeRetry.attempts[0].status,
+    ledgerFixture.AttemptStatus.COMPLETED,
+  );
+  assert.equal(durableRunBeforeRetry.attempts[0].generation, 1);
+  assert.equal(durableRunBeforeRetry.effects.length, 1);
+  const durableEffect = durableRunBeforeRetry.effects[0];
+  assert.equal(durableEffect.effectId, 'persist-portable-state');
+  assert.equal(durableEffect.status, ledgerFixture.EffectStatus.COMPLETED);
+  assert.deepEqual(
+    durableEffect.adapter,
+    ledgerFixture.ApplicationStateAdapterDescriptor,
+  );
+  assert.deepEqual(durableEffect.requestedReplayProperties, [
+    'idempotent',
+    'transactional',
+  ]);
+  assert.deepEqual(durableEffect.substantiatedReplayProperties, [
+    'idempotent',
+    'transactional',
+  ]);
+  assert.deepEqual(
+    {
+      kind: durableEffect.destination.kind,
+      namespace: durableEffect.destination.configuration.namespace,
+    },
+    {
+      kind: 'application-state',
+      namespace: embeddedManifest.app.id,
+    },
+  );
+  const durableEventTypes = durableRunBeforeRetry.events.map(
+    (event) => event.type,
+  );
+  assert.deepEqual(durableEventTypes, [
+    'manual-run-created',
+    'attempt-claimed',
+    'attempt-started',
+    'effect-requested',
+    'effect-started',
+    'effect-completed',
+    'attempt-terminal',
+  ]);
+  const packagedActor = {
+    kind: 'packaged-operator',
+    id: packagedArtifact.revisionId,
+  };
+  const managedEffectActor = { kind: 'runtime', id: 'managed-effect' };
+  assert.deepEqual(
+    durableRunBeforeRetry.events.map((event) => event.actor),
+    [
+      packagedActor,
+      packagedActor,
+      packagedActor,
+      managedEffectActor,
+      managedEffectActor,
+      managedEffectActor,
+      packagedActor,
+    ],
+  );
+  const durableEvidenceRef = durableRunBeforeRetry.attempts[0].evidenceRef;
+  assert.ok(durableEvidenceRef, 'packaged durable run omitted evidence');
+  const durableEvidence =
+    await ledgerFixture.readExecutionPayload(durableEvidenceRef);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(durableEvidence.terminal.result)),
+    {
+      continuedAfterEffectDelivery: true,
+      effect: { inserted: true },
+      requestId: durableCallerMetadata.requestId,
+    },
+  );
+  const durableReceiptBeforeRetry =
+    await ledgerFixture.readApplicationStateReceipt(
+      embeddedManifest.app.id,
+      durableEffect.destinationEffectId,
+    );
+  assert.ok(
+    durableReceiptBeforeRetry,
+    'packaged durable effect has no receipt',
+  );
+  assert.deepEqual(
+    {
+      destinationEffectId: durableReceiptBeforeRetry.destination_effect_id,
+      outcomeCode: durableReceiptBeforeRetry.outcome_code,
+      inserted: durableReceiptBeforeRetry.inserted,
+    },
+    {
+      destinationEffectId: durableEffect.destinationEffectId,
+      outcomeCode: 'inserted',
+      inserted: true,
+    },
+  );
+
+  const secondDurableRunText = runCommand(cleanArtifactPath, durableRunArgs, {
+    cwd: cleanRunDirectory,
+    capture: true,
+    env: operatorEnvironment,
+  }).stdout.trim();
+  assert.equal(secondDurableRunText, firstDurableRunText);
+  assert.deepEqual(
+    await ledgerFixture.readRun(durableRunId),
+    durableRunBeforeRetry,
+    'repeated packaged durable run changed ledger/effect history',
+  );
+  assert.deepEqual(
+    await ledgerFixture.readApplicationStateReceipt(
+      embeddedManifest.app.id,
+      durableEffect.destinationEffectId,
+    ),
+    durableReceiptBeforeRetry,
+    'repeated packaged durable run changed its destination receipt',
+  );
+
   /** @type {ReturnType<typeof spawnResidentService> | undefined} */
   let firstResidentService;
   /** @type {ReturnType<typeof spawnResidentService> | undefined} */
@@ -1534,14 +1803,6 @@ export default defineApp({
     assert.equal(firstOwnership?.ownerKind, 'resident');
     assert.equal(firstOwnership?.generation, 1);
 
-    const ledgerFixture = await createInstalledExecutionLedgerFixture({
-      installedPackageRoot,
-      controlPath,
-      tableName: ledgerTableName,
-      payloadPath,
-      applicationStatePath,
-      revisionId: packagedArtifact.revisionId,
-    });
     const claimedRunId = await ledgerFixture.createClaimedRun(
       embeddedManifest.app.id,
       'packaged-operator-claimed-run',
@@ -2345,7 +2606,7 @@ export default defineApp({
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, and clean generated ${process.platform} SEA activity plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();

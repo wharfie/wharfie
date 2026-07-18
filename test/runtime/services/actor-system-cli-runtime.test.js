@@ -66,6 +66,7 @@ describe('packaged application dispatch', () => {
     const help = writes.join('');
     expect(help).toContain('manifest');
     expect(help).toContain('metadata');
+    expect(help).toMatch(/\brun\b/);
     expect(help).toContain('inspect');
     expect(help).toContain('recover');
     expect(help).toContain('reconcile');
@@ -79,11 +80,15 @@ describe('packaged application dispatch', () => {
   it('honors the private ledger-service runtime command and arguments', async () => {
     const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
     const parseAsync = jest.fn(async (_argv, _options) => undefined);
+    const loadDeveloperCliModule = jest.fn(async () => ({
+      default: jest.fn(),
+    }));
     clearRuntimeEnvironment();
     process.env.WHARFIE_RUNTIME_COMMAND = 'ledger-service';
     process.env.WHARFIE_RUNTIME_ARGS = JSON.stringify(['--once']);
 
     await runPackagedApp({
+      loadDeveloperCliModule,
       runtimeModules: {
         'ledger-service': { parseAsync },
       },
@@ -94,6 +99,7 @@ describe('packaged application dispatch', () => {
       ['node', 'ledger-service', '--once'],
       { from: 'node' },
     );
+    expect(loadDeveloperCliModule).not.toHaveBeenCalled();
   });
 
   it('does not let retired bootstrap variables hijack application argv', async () => {
@@ -200,21 +206,76 @@ describe('packaged application dispatch', () => {
   it('routes the reserved namespace to the bundled operator CLI', async () => {
     const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
     const developerCli = jest.fn(async (_argv) => undefined);
+    const loadDeveloperCliModule = jest.fn(async () => ({
+      default: developerCli,
+    }));
     const operatorCli = jest.fn(async (_argv) => undefined);
     clearRuntimeEnvironment();
 
     await runPackagedApp({
-      developerCliModule: { default: developerCli },
+      loadDeveloperCliModule,
       runtimeModules: { operatorCli },
       argv: ['node', 'wharfie-artifact', 'wharfie', 'manifest'],
     });
 
+    expect(loadDeveloperCliModule).not.toHaveBeenCalled();
     expect(developerCli).not.toHaveBeenCalled();
     expect(operatorCli).toHaveBeenCalledWith([
       'node',
       'wharfie-artifact',
       'manifest',
     ]);
+  });
+
+  it('loads the developer CLI once only when developer argv is dispatched', async () => {
+    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    const developerCli = jest.fn(async (_argv) => undefined);
+    const loadDeveloperCliModule = jest.fn(async () => ({
+      default: developerCli,
+    }));
+    const argv = ['node', 'wharfie-artifact', 'serve'];
+    clearRuntimeEnvironment();
+
+    await runPackagedApp({ loadDeveloperCliModule, argv });
+
+    expect(loadDeveloperCliModule).toHaveBeenCalledTimes(1);
+    expect(developerCli).toHaveBeenCalledWith(argv);
+  });
+
+  it('isolates developer CLI loader failures from runtime and operator dispatch', async () => {
+    const { runPackagedApp } = await import(PACKAGED_APP_ENTRY_IMPORT);
+    const loadDeveloperCliModule = jest.fn(async () => {
+      throw new Error('developer CLI import failed');
+    });
+    const operatorCli = jest.fn(async (_argv) => undefined);
+    const runtimeCli = {
+      parseAsync: jest.fn(async (_argv, _options) => undefined),
+    };
+    clearRuntimeEnvironment();
+
+    await runPackagedApp({
+      loadDeveloperCliModule,
+      runtimeModules: { operatorCli },
+      argv: ['node', 'wharfie-artifact', 'wharfie', 'manifest'],
+    });
+    expect(loadDeveloperCliModule).not.toHaveBeenCalled();
+
+    process.env.WHARFIE_RUNTIME_COMMAND = 'ledger-service';
+    await runPackagedApp({
+      loadDeveloperCliModule,
+      runtimeModules: { 'ledger-service': runtimeCli },
+      argv: ['node', 'wharfie-artifact'],
+    });
+    expect(loadDeveloperCliModule).not.toHaveBeenCalled();
+
+    clearRuntimeEnvironment();
+    await expect(
+      runPackagedApp({
+        loadDeveloperCliModule,
+        argv: ['node', 'wharfie-artifact', 'serve'],
+      }),
+    ).rejects.toThrow('developer CLI import failed');
+    expect(loadDeveloperCliModule).toHaveBeenCalledTimes(1);
   });
 
   it('fails clearly when the reserved namespace has no operator CLI', async () => {

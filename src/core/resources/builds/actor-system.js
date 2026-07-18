@@ -385,11 +385,8 @@ class ActorSystem extends BuildResourceGroup {
               (async () => {
                 sourceMapSupport.install();
                 await preparePackagedCoreRuntimeDependencies();
-                const developerCliModule = loadDeveloperCliModule
-                  ? await loadDeveloperCliModule()
-                  : null;
                 await runPackagedApp({
-                  developerCliModule,
+                  loadDeveloperCliModule,
                   ${
                     developerCliExportName
                       ? `cliExportName: ${JSON.stringify(developerCliExportName)},`

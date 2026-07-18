@@ -4,11 +4,12 @@ import { createExecutionLedgerOperatorCommands } from '../../../runtime/operator
 import { readEmbeddedRevisionRuntimePair } from '../lib/revision-runtime-assets.js';
 import manifestCommand from './control_cmds/manifest.js';
 import metadataCommand from './control_cmds/metadata.js';
+import { createPackagedDurableRunCommand } from './control_cmds/run.js';
 
 /**
  * Build a fresh packaged operator program. Identity is read lazily so help and
  * immutable metadata commands do not open application control state.
- * @param {{resolveExpectedIdentity?: () => Promise<{appId: string, revisionId?: string}>}} [options] - Test or packaged identity provider.
+ * @param {{resolveExpectedIdentity?: () => Promise<{appId: string, revisionId?: string}>, loadDurableRunExecution?: () => Promise<import('../../../runtime/operator/durable-run-command.js').DurableRunExecutionHandle>, durableRunOutput?: Partial<import('../../../runtime/operator/durable-run-command.js').DurableRunCommandOutput>, runActivity?: typeof import('../../../runtime/durable-activity-host.js').runLocalDurableManifestActivity, processRef?: import('../../../runtime/operator/durable-run-command.js').DurableRunProcess}} [options] - Test or packaged identity and durable-run providers.
  * @returns {Command} - Packaged operator program.
  */
 export function createProgram(options = {}) {
@@ -26,12 +27,27 @@ export function createProgram(options = {}) {
       resolveExpectedIdentity,
       requireLocalOwnership: true,
     });
+  const runCommand = createPackagedDurableRunCommand({
+    ...(options.loadDurableRunExecution === undefined
+      ? {}
+      : { loadExecution: options.loadDurableRunExecution }),
+    ...(options.durableRunOutput === undefined
+      ? {}
+      : { output: options.durableRunOutput }),
+    ...(options.runActivity === undefined
+      ? {}
+      : { runActivity: options.runActivity }),
+    ...(options.processRef === undefined
+      ? {}
+      : { processRef: options.processRef }),
+  });
 
   return new Command()
     .name('wharfie')
     .description('Wharfie operator commands for this packaged application')
     .addCommand(manifestCommand)
     .addCommand(metadataCommand)
+    .addCommand(runCommand)
     .addCommand(inspectCommand)
     .addCommand(recoverCommand)
     .addCommand(reconcileCommand)
