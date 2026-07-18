@@ -121,7 +121,7 @@ function normalizeManagedEffectActor(value) {
  * The ledger remains the strict authority for descriptor and replay-property
  * schemas.
  * @param {unknown} value - Candidate managed-effect adapter.
- * @returns {{descriptor: {id: string, version: number}, verifier: {kind: string, version: number}, substantiatedReplayProperties: string[], execute: (input: Record<string, any>) => Promise<unknown>|unknown}} - Adapter contract.
+ * @returns {{descriptor: {id: string, version: number}, destination: {kind: string, version: number, bindingId: string, configuration: Record<string, any>}, verifier: {kind: string, version: number}, substantiatedReplayProperties: string[], execute: (input: Record<string, any>) => Promise<unknown>|unknown}} - Adapter contract.
  */
 function normalizeManagedEffectAdapter(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -131,6 +131,7 @@ function normalizeManagedEffectAdapter(value) {
   const keys = Object.keys(adapter);
   const expected = [
     'descriptor',
+    'destination',
     'verifier',
     'substantiatedReplayProperties',
     'execute',
@@ -147,7 +148,7 @@ function normalizeManagedEffectAdapter(value) {
     typeof properties.get('execute')?.value !== 'function'
   ) {
     throw new TypeError(
-      'executeManagedEffect.adapter requires exactly descriptor, verifier, substantiatedReplayProperties, and execute.',
+      'executeManagedEffect.adapter requires exactly descriptor, destination, verifier, substantiatedReplayProperties, and execute.',
     );
   }
   const replayProperties = deepFreezeJson(
@@ -166,6 +167,12 @@ function normalizeManagedEffectAdapter(value) {
       cloneJsonObject(
         properties.get('descriptor')?.value,
         'executeManagedEffect.adapter.descriptor',
+      ),
+    ),
+    destination: deepFreezeJson(
+      cloneJsonObject(
+        properties.get('destination')?.value,
+        'executeManagedEffect.adapter.destination',
       ),
     ),
     verifier: deepFreezeJson(
@@ -234,6 +241,7 @@ function assertMatchingRetainedDelivery(delivery, identity, request, adapter) {
     delivery.effect.requestedBy.protocolSequence !== request.sequence ||
     !hasSameCanonicalJson(delivery.request, logicalRequest) ||
     !hasSameCanonicalJson(delivery.effect.adapter, adapter.descriptor) ||
+    !hasSameCanonicalJson(delivery.effect.destination, adapter.destination) ||
     !hasSameCanonicalJson(delivery.effect.verifier, adapter.verifier) ||
     !hasSameCanonicalJson(
       delivery.effect.substantiatedReplayProperties,
@@ -395,7 +403,7 @@ async function blockUncertainManagedEffect(options) {
  * This is deliberately an internal runtime primitive; public Function/worker
  * paths are not wired to it until their complete transcript lifecycle can use
  * the same ledger aggregate.
- * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, invocationId: string, request: Record<string, any>, adapter: {descriptor: {id: string, version: number}, verifier: {kind: string, version: number}, substantiatedReplayProperties: string[], execute: (input: {destinationEffectId: string, identity: Readonly<Record<string, any>>, request: Readonly<Record<string, any>>, signal?: AbortSignal}) => Promise<unknown>|unknown}, actor?: {kind: string, id: string}, signal?: AbortSignal}} options - Managed delivery inputs.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, invocationId: string, request: Record<string, any>, adapter: {descriptor: {id: string, version: number}, destination: {kind: string, version: number, bindingId: string, configuration: Record<string, any>}, verifier: {kind: string, version: number}, substantiatedReplayProperties: string[], execute: (input: {destinationEffectId: string, destination: Readonly<Record<string, any>>, identity: Readonly<Record<string, any>>, request: Readonly<Record<string, any>>, signal?: AbortSignal}) => Promise<unknown>|unknown}, actor?: {kind: string, id: string}, signal?: AbortSignal}} options - Managed delivery inputs.
  * @returns {Promise<Readonly<Record<string, any>>>} - Durable verifier-backed effect-result host frame.
  */
 export async function executeManagedEffect(options) {
@@ -495,6 +503,7 @@ export async function executeManagedEffect(options) {
         transitionId: transition('request'),
         request,
         adapter: adapter.descriptor,
+        destination: adapter.destination,
         verifier: adapter.verifier,
         substantiatedReplayProperties: adapter.substantiatedReplayProperties,
         actor,
@@ -585,6 +594,7 @@ export async function executeManagedEffect(options) {
   try {
     outcome = await adapter.execute({
       destinationEffectId: started.effect.destinationEffectId,
+      destination: adapter.destination,
       identity,
       request,
       ...(signal ? { signal } : {}),

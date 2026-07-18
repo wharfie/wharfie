@@ -29,7 +29,7 @@ describe('execution ledger contract facade', () => {
     }
   });
 
-  test('preserves the V5 destination-effect identity vector', () => {
+  test('preserves the V6 destination-effect identity vector', () => {
     expect(
       ledgerFacade.createManagedEffectDestinationId({
         appId: 'contract-app',
@@ -37,6 +37,72 @@ describe('execution ledger contract facade', () => {
         invocationId: 'contract-invocation',
         effectId: 'contract-effect',
       }),
-    ).toBe('wfx_hVhZ-2ru1WjTXW08ht-j482ecKSplq7svM9wSTEVMf8');
+    ).toBe('wfx_wVxnc3no3HrFkicuryc_y0jOqrF0e27lU6RBxOb6PwU');
+  });
+
+  test('normalizes an exact immutable destination binding shape', () => {
+    const destination = {
+      kind: 'application-state',
+      version: 1,
+      bindingId: 'primary',
+      configuration: { namespace: 'contract-app', tableName: 'records' },
+    };
+    expect(
+      ledgerContract.normalizeEffectDestinationDescriptor(
+        destination,
+        'destination',
+      ),
+    ).toEqual(destination);
+    expect(
+      ledgerContract.normalizeEffectDestinationDescriptor(
+        { ...destination, bindingId: 'secondary' },
+        'destination',
+      ),
+    ).not.toEqual(destination);
+    expect(() =>
+      ledgerContract.normalizeEffectDestinationDescriptor(
+        { ...destination, unsupported: {} },
+        'destination',
+      ),
+    ).toThrow(/exactly/i);
+  });
+
+  test('rejects an outcome bound to a different destination', () => {
+    const destination = {
+      kind: 'application-state',
+      version: 1,
+      bindingId: 'primary',
+      configuration: { namespace: 'contract-app', tableName: 'records' },
+    };
+    const adapter = { id: 'application-state-put', version: 1 };
+    const verifier = { kind: 'application-state-receipt', version: 1 };
+    const outcome = ledgerContract.normalizeManagedEffectOutcome(
+      {
+        destinationEffectId: 'destination-effect',
+        adapter,
+        destination: { ...destination, bindingId: 'secondary' },
+        verifier,
+        ok: true,
+        result: { created: true },
+        substantiatedReplayProperties: ['transactional'],
+        evidence: { receipt: 'receipt-1' },
+      },
+      'outcome',
+    );
+    expect(() =>
+      ledgerContract.verifyManagedEffectOutcome(
+        new Map(),
+        {
+          destinationEffectId: 'destination-effect',
+          adapter,
+          destination,
+          verifier,
+          substantiatedReplayProperties: ['transactional'],
+        },
+        /** @type {any} */ ({}),
+        outcome,
+        'outcome',
+      ),
+    ).toThrow(/persisted effect contract/i);
   });
 });

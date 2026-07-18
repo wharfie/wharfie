@@ -46,6 +46,15 @@ const VERIFIER_DESCRIPTOR = Object.freeze({
   kind: 'test-destination',
   version: 1,
 });
+const DESTINATION_DESCRIPTOR = Object.freeze({
+  kind: 'test-store',
+  version: 1,
+  bindingId: 'primary',
+  configuration: Object.freeze({
+    namespace: 'managed-effect-test',
+    tableName: 'records',
+  }),
+});
 
 function createClock() {
   let now = 1_800_000_000_000;
@@ -100,6 +109,7 @@ function destinationVerifier(verify = undefined) {
 function managedAdapter(execute, overrides = {}) {
   return /** @type {Parameters<typeof executeManagedEffect>[0]['adapter']} */ ({
     descriptor: { id: 'test-adapter', version: 1 },
+    destination: DESTINATION_DESCRIPTOR,
     verifier: VERIFIER_DESCRIPTOR,
     substantiatedReplayProperties: ['idempotent'],
     execute,
@@ -295,7 +305,7 @@ async function rewriteEffectEvent(input) {
   });
   if (!event) throw new Error('Expected effect event to rewrite');
   const eventId = createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v5',
+    domain: 'wharfie:execution-ledger-event:v6',
     prefix: 'wle',
     value: {
       schemaVersion: event.schema_version,
@@ -359,10 +369,12 @@ for (const dbAdapter of getAdapterMatrix()) {
       try {
         const execute = jest.fn(
           async (
-            /** @type {{destinationEffectId: string}} */ {
+            /** @type {{destinationEffectId: string, destination: Record<string, any>}} */ {
               destinationEffectId,
+              destination,
             },
           ) => {
+            expect(destination).toEqual(DESTINATION_DESCRIPTOR);
             const effect = await harness.ledger.getEffect(
               RUN_ID,
               INVOCATION_ID,
@@ -480,6 +492,27 @@ for (const dbAdapter of getAdapterMatrix()) {
           }),
         ).resolves.toEqual(frame);
         expect(execute).toHaveBeenCalledTimes(1);
+
+        const redirectedExecute = jest.fn();
+        await expect(
+          executeManagedEffect({
+            ledger: harness.ledger,
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            request,
+            adapter: managedAdapter(redirectedExecute, {
+              destination: {
+                ...DESTINATION_DESCRIPTOR,
+                configuration: {
+                  ...DESTINATION_DESCRIPTOR.configuration,
+                  tableName: 'redirected-records',
+                },
+              },
+            }),
+            actor: ACTOR,
+          }),
+        ).rejects.toThrow(/conflicts with retained request/i);
+        expect(redirectedExecute).not.toHaveBeenCalled();
       } finally {
         await harness.cleanup();
       }
@@ -721,12 +754,16 @@ for (const dbAdapter of getAdapterMatrix()) {
         const originalSignal = new AbortController().signal;
         const originalExecute = jest.fn(
           async (
-            /** @type {{destinationEffectId: string, signal?: AbortSignal}} */ {
+            /** @type {{destinationEffectId: string, destination: Record<string, any>, signal?: AbortSignal}} */ {
               destinationEffectId,
+              destination,
               signal,
             },
           ) => {
             expect(signal).toBe(originalSignal);
+            expect(destination).toEqual(DESTINATION_DESCRIPTOR);
+            expect(Object.isFrozen(destination)).toBe(true);
+            expect(Object.isFrozen(destination.configuration)).toBe(true);
             return {
               ok: true,
               result: { implementation: 'original' },
@@ -746,6 +783,10 @@ for (const dbAdapter of getAdapterMatrix()) {
           }),
         );
         const adapter = managedAdapter(originalExecute, {
+          destination: {
+            ...DESTINATION_DESCRIPTOR,
+            configuration: { ...DESTINATION_DESCRIPTOR.configuration },
+          },
           verifier: { ...VERIFIER_DESCRIPTOR },
         });
         const actor = { kind: 'runtime', id: 'original-snapshot-actor' };
@@ -762,6 +803,8 @@ for (const dbAdapter of getAdapterMatrix()) {
         await firstReadEntered;
 
         adapter.descriptor.id = 'replacement-adapter';
+        adapter.destination.bindingId = 'replacement';
+        adapter.destination.configuration.tableName = 'replacement';
         adapter.verifier.kind = 'replacement-verifier';
         adapter.substantiatedReplayProperties[0] = 'unsafe';
         adapter.execute = replacementExecute;
@@ -780,6 +823,7 @@ for (const dbAdapter of getAdapterMatrix()) {
           harness.ledger.getEffect(RUN_ID, INVOCATION_ID, EFFECT_ID),
         ).resolves.toMatchObject({
           adapter: { id: 'test-adapter', version: 1 },
+          destination: DESTINATION_DESCRIPTOR,
           verifier: VERIFIER_DESCRIPTOR,
           substantiatedReplayProperties: ['idempotent'],
         });
@@ -815,6 +859,7 @@ for (const dbAdapter of getAdapterMatrix()) {
           transitionId: 'receipt-race-request',
           request: effectRequest(harness.started.attempt.attemptId),
           adapter: { id: 'test-adapter', version: 1 },
+          destination: DESTINATION_DESCRIPTOR,
           verifier: VERIFIER_DESCRIPTOR,
           substantiatedReplayProperties: ['idempotent'],
         });
@@ -862,6 +907,7 @@ for (const dbAdapter of getAdapterMatrix()) {
           transitionId: 'receipt-race-request',
           request: effectRequest(harness.started.attempt.attemptId),
           adapter: { id: 'test-adapter', version: 1 },
+          destination: DESTINATION_DESCRIPTOR,
           verifier: VERIFIER_DESCRIPTOR,
           substantiatedReplayProperties: ['idempotent'],
         };
@@ -898,6 +944,7 @@ for (const dbAdapter of getAdapterMatrix()) {
           transitionId: 'receipt-race-outcome-request',
           request: effectRequest(harness.started.attempt.attemptId),
           adapter: { id: 'test-adapter', version: 1 },
+          destination: DESTINATION_DESCRIPTOR,
           verifier: VERIFIER_DESCRIPTOR,
           substantiatedReplayProperties: ['idempotent'],
         });
@@ -1137,7 +1184,7 @@ for (const dbAdapter of getAdapterMatrix()) {
     });
 
     test('isolates verifiers from mutable fold and outcome state', async () => {
-      /** @type {{frozen: boolean, mutationRejected: boolean, operation: string}[]} */
+      /** @type {{frozen: boolean, mutationRejected: boolean, sameDestination: boolean, operation: string}[]} */
       const observations = [];
       const verifier = destinationVerifier((input) => {
         let mutationRejected = false;
@@ -1150,17 +1197,26 @@ for (const dbAdapter of getAdapterMatrix()) {
           frozen:
             Object.isFrozen(input) &&
             Object.isFrozen(input.effect) &&
+            Object.isFrozen(input.effect.destination) &&
+            Object.isFrozen(input.effect.destination.configuration) &&
             Object.isFrozen(input.request) &&
             Object.isFrozen(input.request.input) &&
             Object.isFrozen(input.outcome) &&
+            Object.isFrozen(input.outcome.destination) &&
+            Object.isFrozen(input.outcome.destination.configuration) &&
             Object.isFrozen(input.outcome.evidence),
           mutationRejected,
+          sameDestination:
+            JSON.stringify(input.effect.destination) ===
+            JSON.stringify(input.outcome.destination),
           operation: input.outcome.evidence.operation,
         });
         return (
           mutationRejected &&
           input.outcome.evidence.destinationEffectId ===
             input.effect.destinationEffectId &&
+          JSON.stringify(input.outcome.destination) ===
+            JSON.stringify(input.effect.destination) &&
           input.outcome.evidence.operation === input.request.operation
         );
       });
@@ -1189,6 +1245,7 @@ for (const dbAdapter of getAdapterMatrix()) {
           observations.map(() => ({
             frozen: true,
             mutationRejected: true,
+            sameDestination: true,
             operation: 'put',
           })),
         );
@@ -1229,6 +1286,7 @@ for (const dbAdapter of getAdapterMatrix()) {
           transitionId: 'immutable-effect-request',
           request,
           adapter: { id: 'test-adapter', version: 1 },
+          destination: DESTINATION_DESCRIPTOR,
           verifier: VERIFIER_DESCRIPTOR,
           substantiatedReplayProperties: ['idempotent'],
         };
@@ -1267,6 +1325,15 @@ for (const dbAdapter of getAdapterMatrix()) {
         await expect(
           harness.ledger.recordManagedEffectRequest({
             ...base,
+            destination: {
+              ...DESTINATION_DESCRIPTOR,
+              bindingId: 'alternate',
+            },
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerTransitionConflictError);
+        await expect(
+          harness.ledger.recordManagedEffectRequest({
+            ...base,
             verifier: {
               kind: alternateVerifier.kind,
               version: alternateVerifier.version,
@@ -1293,6 +1360,7 @@ for (const dbAdapter of getAdapterMatrix()) {
             transitionId: 'tamper-request',
             request,
             adapter: { id: 'test-adapter', version: 1 },
+            destination: DESTINATION_DESCRIPTOR,
             verifier: VERIFIER_DESCRIPTOR,
             substantiatedReplayProperties: ['idempotent'],
           },
@@ -1345,6 +1413,53 @@ for (const dbAdapter of getAdapterMatrix()) {
       } finally {
         await outcomeHarness.cleanup();
       }
+
+      const schemaHarness = await createHarness(dbAdapter);
+      try {
+        await executeManagedEffect({
+          ledger: schemaHarness.ledger,
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          request: effectRequest(schemaHarness.started.attempt.attemptId),
+          adapter: managedAdapter(
+            async (
+              /** @type {{destinationEffectId: string}} */ {
+                destinationEffectId,
+              },
+            ) => ({
+              ok: true,
+              result: { written: true },
+              evidence: { destinationEffectId, operation: 'put' },
+            }),
+          ),
+        });
+        const outcomeEvent = (
+          await schemaHarness.ledger.getEvents(RUN_ID)
+        ).find(
+          (/** @type {Record<string, any>} */ event) =>
+            event.type === 'effect-completed',
+        );
+        if (!outcomeEvent) throw new Error('Expected effect outcome event');
+        await rewriteEffectEvent({
+          db: schemaHarness.db,
+          sequence: outcomeEvent.sequence,
+          payload: {
+            ...outcomeEvent.payload,
+            effect: {
+              ...outcomeEvent.payload.effect,
+              outcomeRef: {
+                ...outcomeEvent.payload.effect.outcomeRef,
+                payloadSchema: 'wharfie.execution.managed-effect-outcome.v1',
+              },
+            },
+          },
+        });
+        await expect(schemaHarness.ledger.rebuildRun(RUN_ID)).rejects.toThrow(
+          /outcomeRef\.payloadSchema.*v2/i,
+        );
+      } finally {
+        await schemaHarness.cleanup();
+      }
     });
 
     test('requires a retained verifier before a pending effect can start', async () => {
@@ -1361,6 +1476,7 @@ for (const dbAdapter of getAdapterMatrix()) {
           transitionId: 'pending-before-verifier-loss',
           request,
           adapter: { id: 'test-adapter', version: 1 },
+          destination: DESTINATION_DESCRIPTOR,
           verifier: VERIFIER_DESCRIPTOR,
           substantiatedReplayProperties: ['idempotent'],
         });
@@ -1428,6 +1544,7 @@ for (const dbAdapter of getAdapterMatrix()) {
             transitionId: 'mutating-provider-request',
             request: effectRequest(harness.started.attempt.attemptId),
             adapter: { id: 'test-adapter', version: 1 },
+            destination: DESTINATION_DESCRIPTOR,
             verifier: VERIFIER_DESCRIPTOR,
             substantiatedReplayProperties: ['idempotent'],
           }),
@@ -1442,7 +1559,7 @@ for (const dbAdapter of getAdapterMatrix()) {
       }
     });
 
-    test('rejects rehashed effect events that rewrite generation or start evidence', async () => {
+    test('rejects rehashed effect events that rewrite generation, destination, or start evidence', async () => {
       const generationHarness = await createHarness(dbAdapter);
       try {
         await generationHarness.ledger.recordManagedEffectRequest({
@@ -1455,6 +1572,7 @@ for (const dbAdapter of getAdapterMatrix()) {
           transitionId: 'generation-tamper-request',
           request: effectRequest(generationHarness.started.attempt.attemptId),
           adapter: { id: 'test-adapter', version: 1 },
+          destination: DESTINATION_DESCRIPTOR,
           verifier: VERIFIER_DESCRIPTOR,
           substantiatedReplayProperties: ['idempotent'],
         });
@@ -1481,6 +1599,46 @@ for (const dbAdapter of getAdapterMatrix()) {
         await generationHarness.cleanup();
       }
 
+      const destinationHarness = await createHarness(dbAdapter);
+      try {
+        await destinationHarness.ledger.recordManagedEffectRequest({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId: destinationHarness.started.attempt.attemptId,
+          fencingToken: FENCING_TOKEN,
+          generation: 1,
+          expectedVersion: destinationHarness.started.run.version,
+          transitionId: 'destination-tamper-request',
+          request: effectRequest(destinationHarness.started.attempt.attemptId),
+          adapter: { id: 'test-adapter', version: 1 },
+          destination: DESTINATION_DESCRIPTOR,
+          verifier: VERIFIER_DESCRIPTOR,
+          substantiatedReplayProperties: ['idempotent'],
+        });
+        const requestEvent = (
+          await destinationHarness.ledger.getEvents(RUN_ID)
+        )[3];
+        await rewriteEffectEvent({
+          db: destinationHarness.db,
+          sequence: requestEvent.sequence,
+          payload: {
+            ...requestEvent.payload,
+            effect: {
+              ...requestEvent.payload.effect,
+              destination: {
+                ...requestEvent.payload.effect.destination,
+                bindingId: 'redirected',
+              },
+            },
+          },
+        });
+        await expect(
+          destinationHarness.ledger.rebuildRun(RUN_ID),
+        ).rejects.toMatchObject({ reason: 'event request digest' });
+      } finally {
+        await destinationHarness.cleanup();
+      }
+
       const startHarness = await createHarness(dbAdapter);
       try {
         const requested = await startHarness.ledger.recordManagedEffectRequest({
@@ -1493,6 +1651,7 @@ for (const dbAdapter of getAdapterMatrix()) {
           transitionId: 'uncertain-start-request',
           request: effectRequest(startHarness.started.attempt.attemptId),
           adapter: { id: 'test-adapter', version: 1 },
+          destination: DESTINATION_DESCRIPTOR,
           verifier: VERIFIER_DESCRIPTOR,
           substantiatedReplayProperties: ['idempotent'],
         });
@@ -1662,6 +1821,7 @@ for (const dbAdapter of getAdapterMatrix()) {
           transitionId: 'direct-effect-request',
           request,
           adapter: { id: 'test-adapter', version: 1 },
+          destination: DESTINATION_DESCRIPTOR,
           verifier: VERIFIER_DESCRIPTOR,
           substantiatedReplayProperties: ['idempotent'],
         });

@@ -19,7 +19,7 @@ import {
   assertLedgerOpaqueId,
 } from './record-key.js';
 
-export const EXECUTION_LEDGER_SCHEMA_VERSION = 5;
+export const EXECUTION_LEDGER_SCHEMA_VERSION = 6;
 export const EXECUTION_LEDGER_MAX_OPAQUE_ID_BYTES =
   MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES;
 export const EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES = 64 * 1024;
@@ -72,7 +72,7 @@ export const EffectStatus = Object.freeze({
 export const MANAGED_EFFECT_REQUEST_PAYLOAD_SCHEMA =
   'wharfie.execution.managed-effect-request.v1';
 export const MANAGED_EFFECT_OUTCOME_PAYLOAD_SCHEMA =
-  'wharfie.execution.managed-effect-outcome.v1';
+  'wharfie.execution.managed-effect-outcome.v2';
 const EFFECT_REPLAY_PROPERTIES = Object.freeze([
   'pure',
   'idempotent',
@@ -351,6 +351,43 @@ export function normalizeEffectAdapterDescriptor(value, label) {
 }
 
 /**
+ * Bind one logical effect to the exact durable destination selected by its
+ * trusted host. A logical binding name alone is not durable authority: the
+ * complete immutable configuration snapshot must survive retries so the same
+ * adapter version cannot silently point at a different store, table, or
+ * namespace. This common JSON codec cannot infer whether a value is a secret;
+ * the finite host catalog must validate its kind-specific configuration and
+ * keep credentials outside this descriptor before public dispatch is enabled.
+ * @param {unknown} value - Candidate versioned destination binding.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {{kind: string, version: number, bindingId: string, configuration: Record<string, any>}} - Strict destination descriptor.
+ */
+export function normalizeEffectDestinationDescriptor(value, label) {
+  const descriptor = cloneBoundedJsonObject(
+    value,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    label,
+  );
+  assertExactKeys(
+    descriptor,
+    ['kind', 'version', 'bindingId', 'configuration'],
+    label,
+  );
+  assertLogicalId(descriptor.kind, `${label}.kind`);
+  assertLogicalId(descriptor.bindingId, `${label}.bindingId`);
+  return {
+    kind: descriptor.kind,
+    version: assertPositiveSafeInteger(descriptor.version, `${label}.version`),
+    bindingId: descriptor.bindingId,
+    configuration: cloneBoundedJsonObject(
+      descriptor.configuration,
+      EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+      `${label}.configuration`,
+    ),
+  };
+}
+
+/**
  * @param {unknown} value - Candidate versioned evidence-verifier descriptor.
  * @param {string} label - Human-readable boundary label.
  * @returns {{kind: string, version: number}} - Strict verifier descriptor.
@@ -408,13 +445,14 @@ export function normalizeManagedEffectRequest(value, label) {
 /**
  * @param {unknown} value - Candidate logical effect outcome and destination evidence.
  * @param {string} label - Human-readable boundary label.
- * @returns {{destinationEffectId: string, adapter: {id: string, version: number}, verifier: {kind: string, version: number}, ok: boolean, substantiatedReplayProperties: string[], result?: any, error?: Record<string, any>, evidence: Record<string, any>}} - Strict outcome evidence.
+ * @returns {{destinationEffectId: string, adapter: {id: string, version: number}, destination: {kind: string, version: number, bindingId: string, configuration: Record<string, any>}, verifier: {kind: string, version: number}, ok: boolean, substantiatedReplayProperties: string[], result?: any, error?: Record<string, any>, evidence: Record<string, any>}} - Strict outcome evidence.
  */
 export function normalizeManagedEffectOutcome(value, label) {
   const outcome = cloneReferencedPayloadObject(value, label);
   const common = [
     'destinationEffectId',
     'adapter',
+    'destination',
     'verifier',
     'ok',
     'substantiatedReplayProperties',
@@ -431,6 +469,10 @@ export function normalizeManagedEffectOutcome(value, label) {
   const adapter = normalizeEffectAdapterDescriptor(
     outcome.adapter,
     `${label}.adapter`,
+  );
+  const destination = normalizeEffectDestinationDescriptor(
+    outcome.destination,
+    `${label}.destination`,
   );
   const verifier = normalizeEffectVerifierDescriptor(
     outcome.verifier,
@@ -462,6 +504,7 @@ export function normalizeManagedEffectOutcome(value, label) {
       `${label}.destinationEffectId`,
     ),
     adapter,
+    destination,
     verifier,
     ok: outcome.ok,
     substantiatedReplayProperties,
@@ -558,7 +601,7 @@ export function createManagedEffectDestinationId(input) {
   );
   const effectId = assertOpaqueId(input.effectId, 'managed effect effectId');
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-destination-effect:v5',
+    domain: 'wharfie:execution-ledger-destination-effect:v6',
     prefix: 'wfx',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -660,6 +703,7 @@ export function verifyManagedEffectOutcome(
   if (
     outcome.destinationEffectId !== effect.destinationEffectId ||
     !hasSameCanonicalJson(outcome.adapter, effect.adapter) ||
+    !hasSameCanonicalJson(outcome.destination, effect.destination) ||
     !hasSameCanonicalJson(outcome.verifier, effect.verifier) ||
     !hasSameCanonicalJson(
       outcome.substantiatedReplayProperties,
@@ -685,6 +729,7 @@ export function verifyManagedEffectOutcome(
           effectId: effect.effectId,
           destinationEffectId: effect.destinationEffectId,
           adapter: effect.adapter,
+          destination: effect.destination,
           verifier: effect.verifier,
           requestedReplayProperties: effect.requestedReplayProperties,
           substantiatedReplayProperties: effect.substantiatedReplayProperties,

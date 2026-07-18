@@ -45,6 +45,7 @@ import {
   effectVerifierKey,
   hasSameCanonicalJson,
   normalizeEffectAdapterDescriptor,
+  normalizeEffectDestinationDescriptor,
   normalizeEffectEvidenceVerifiers,
   normalizeEffectVerifierDescriptor,
   normalizeManagedEffectOutcome,
@@ -93,23 +94,24 @@ export {
 };
 
 /**
- * The V5 ledger deliberately covers one manual, single-activity invocation
+ * The V6 ledger deliberately covers one manual, single-activity invocation
  * plus its explicitly managed effects. It is the only writable durable run
  * boundary. Its table write authority is a trusted control-plane boundary:
  * content IDs and request digests detect inconsistent records, but are not
  * signatures against a writer that can replace an entire semantically valid
  * history.
  */
-// V5 intentionally does not read v1-v4 records. V4 had no durable effect
-// projections, so extending its namespace could let an older reader accept an
-// attempt terminal while ignoring managed-effect truth. Use a fresh namespace
-// instead of reinterpreting retained histories.
+// V6 intentionally does not read v1-v5 records. V5 effects did not bind the
+// exact durable destination instance, so extending its namespace could silently
+// retarget retained logical work. Use a fresh namespace instead of
+// reinterpreting retained histories. A finite catalog must separately enforce
+// that persisted destination configuration contains no credentials.
 
 const KEY_NAME = 'run_id';
 const SORT_KEY_NAME = 'sort_key';
 const RUN_DIRECTORY_RECORD_TYPE = 'execution_ledger_run_directory';
 const RUN_DIRECTORY_RUN_KIND = 'manual';
-const RUN_DIRECTORY_CURSOR_SCHEMA_VERSION = 3;
+const RUN_DIRECTORY_CURSOR_SCHEMA_VERSION = 4;
 const RUN_DIRECTORY_DEFAULT_PAGE_SIZE = 50;
 const RUN_DIRECTORY_MAX_PAGE_SIZE = 100;
 const RUN_DIRECTORY_MAX_PAGE_RETRIES = 3;
@@ -384,7 +386,7 @@ function normalizeTerminalSummary(value, label) {
 
 /**
  * Normalize the immutable evidence-backed decision that resolves one retained
- * uncertain attempt. The verifier is deliberately fixed in V5: accepting a
+ * uncertain attempt. The verifier is deliberately fixed in V6: accepting a
  * caller-selected verifier would make the durable event claim semantics that
  * this ledger does not actually implement.
  * @param {unknown} value - Candidate reconciliation event payload.
@@ -878,7 +880,7 @@ function createEventId({
   payload,
 }) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v5',
+    domain: 'wharfie:execution-ledger-event:v6',
     prefix: 'wle',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -1438,6 +1440,7 @@ function normalizeEffectSnapshot(effect, runId) {
       'activityId',
       'destinationEffectId',
       'adapter',
+      'destination',
       'verifier',
       'requestRef',
       'requestedReplayProperties',
@@ -1487,6 +1490,10 @@ function normalizeEffectSnapshot(effect, runId) {
   value.adapter = normalizeEffectAdapterDescriptor(
     value.adapter,
     'effect projection adapter',
+  );
+  value.destination = normalizeEffectDestinationDescriptor(
+    value.destination,
+    'effect projection destination',
   );
   value.verifier = normalizeEffectVerifierDescriptor(
     value.verifier,
@@ -1743,6 +1750,7 @@ function assertEffectAdvance(prior, next, event, runId) {
     next.activityId !== prior.activityId ||
     next.destinationEffectId !== prior.destinationEffectId ||
     !hasSameCanonicalJson(next.adapter, prior.adapter) ||
+    !hasSameCanonicalJson(next.destination, prior.destination) ||
     !hasSameCanonicalJson(next.verifier, prior.verifier) ||
     !hasSameCanonicalJson(next.requestRef, prior.requestRef) ||
     !hasSameCanonicalJson(
@@ -2199,6 +2207,7 @@ function assertEventRequestDigest(
       protocolSequence: effect?.requestedBy.protocolSequence,
       requestRef: effect?.requestRef,
       adapter: effect?.adapter,
+      destination: effect?.destination,
       verifier: effect?.verifier,
       substantiatedReplayProperties: effect?.substantiatedReplayProperties,
       actor: event.actor,
@@ -3098,9 +3107,9 @@ async function readRunRecords(db, tableName, runId) {
   return await db.query({
     tableName,
     consistentRead: true,
-    // A custom V5 table may deliberately retain older or lifecycle rows in the
-    // same physical partition. Only the fresh V5 record namespace participates
-    // in replay; no old history is accidentally treated as a malformed V5 run.
+    // A custom V6 table may deliberately retain older or lifecycle rows in the
+    // same physical partition. Only the fresh V6 record namespace participates
+    // in replay; no old history is accidentally treated as a malformed V6 run.
     keyConditions: [
       pkEq(KEY_NAME, runId),
       skBegins(SORT_KEY_NAME, EXECUTION_LEDGER_SORT_KEY_PREFIX),
@@ -3582,7 +3591,7 @@ async function startedTransitionResult(result, runId, payloadStore) {
  */
 function createTransitionRequestDigest(type, value) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-transition:v5',
+    domain: 'wharfie:execution-ledger-transition:v6',
     prefix: 'wlt',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -4076,7 +4085,7 @@ async function assertAttemptEvidenceMatchesManagedEffects(
  */
 function createAttemptId(runId, invocationId, generation) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-attempt:v5',
+    domain: 'wharfie:execution-ledger-attempt:v6',
     prefix: 'wla',
     value: { runId, invocationId, generation },
     valuePath: 'execution ledger attempt identity',
@@ -5408,7 +5417,7 @@ export function createExecutionLedger({
    * Persist a logical managed-effect request before any adapter is permitted
    * to begin. Physical protocol sequence belongs to the requesting attempt;
    * the referenced request contains only fields stable across future retries.
-   * @param {{runId: string, invocationId: string, attemptId: string, fencingToken: string, generation: number, expectedVersion: number, transitionId: string, request: Record<string, any>, adapter: {id: string, version: number}, verifier: {kind: string, version: number}, substantiatedReplayProperties: string[], actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Managed-effect request transition.
+   * @param {{runId: string, invocationId: string, attemptId: string, fencingToken: string, generation: number, expectedVersion: number, transitionId: string, request: Record<string, any>, adapter: {id: string, version: number}, destination: {kind: string, version: number, bindingId: string, configuration: Record<string, any>}, verifier: {kind: string, version: number}, substantiatedReplayProperties: string[], actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Managed-effect request transition.
    * @returns {Promise<Record<string, any>>} - Persisted transition and effect projection.
    */
   async function recordManagedEffectRequest(options) {
@@ -5429,6 +5438,7 @@ export function createExecutionLedger({
         'transitionId',
         'request',
         'adapter',
+        'destination',
         'verifier',
         'substantiatedReplayProperties',
         'actor',
@@ -5473,6 +5483,10 @@ export function createExecutionLedger({
     const adapter = normalizeEffectAdapterDescriptor(
       value.adapter,
       'recordManagedEffectRequest.adapter',
+    );
+    const destination = normalizeEffectDestinationDescriptor(
+      value.destination,
+      'recordManagedEffectRequest.destination',
     );
     const verifier = normalizeEffectVerifierDescriptor(
       value.verifier,
@@ -5532,6 +5546,7 @@ export function createExecutionLedger({
         retainedReceipt.effect_id !== effectId ||
         !retainedEffect ||
         !hasSameCanonicalJson(retainedEffect.adapter, adapter) ||
+        !hasSameCanonicalJson(retainedEffect.destination, destination) ||
         !hasSameCanonicalJson(retainedEffect.verifier, verifier) ||
         !hasSameCanonicalJson(
           retainedEffect.substantiatedReplayProperties,
@@ -5567,6 +5582,7 @@ export function createExecutionLedger({
         protocolSequence: requestFrame.sequence,
         requestRef: retainedEffect.requestRef,
         adapter,
+        destination,
         verifier,
         substantiatedReplayProperties,
         actor: common.actor,
@@ -5620,6 +5636,7 @@ export function createExecutionLedger({
       protocolSequence: requestFrame.sequence,
       requestRef,
       adapter,
+      destination,
       verifier,
       substantiatedReplayProperties,
       actor: common.actor,
@@ -5659,6 +5676,7 @@ export function createExecutionLedger({
         effectId,
       }),
       adapter,
+      destination,
       verifier,
       requestRef,
       requestedReplayProperties: logicalRequest.requestedReplayProperties,
@@ -5953,6 +5971,7 @@ export function createExecutionLedger({
       {
         destinationEffectId: effect.destinationEffectId,
         adapter: effect.adapter,
+        destination: effect.destination,
         verifier: effect.verifier,
         ok: value.outcome?.ok,
         ...(value.outcome?.ok === true

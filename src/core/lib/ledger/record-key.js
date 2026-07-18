@@ -8,11 +8,11 @@ import { createCanonicalJsonSha256Id } from '../../runtime/content-id.js';
  * digest to stay within the portable DynamoDB sort-key ceiling.
  */
 
-// Ledger v5 is intentionally a fresh namespace. It adds persisted managed
-// effects to v4's cancellation-capable manual state machine, so sharing
-// physical keys would let an older reader ignore effect truth while accepting
-// a terminal attempt from the same history.
-export const EXECUTION_LEDGER_SORT_KEY_PREFIX = 'ledger/v5/';
+// Ledger v6 is intentionally a fresh namespace. It extends v5's internal
+// managed-effect truth with the exact durable destination binding, so
+// sharing physical keys could let retained work silently target a different
+// physical store under the same adapter identity.
+export const EXECUTION_LEDGER_SORT_KEY_PREFIX = 'ledger/v6/';
 export const EXECUTION_LEDGER_EVENT_SEQUENCE_WIDTH = 16;
 export const MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES = 512;
 
@@ -122,7 +122,7 @@ export function getEffectProjectionSortKey(invocationId, effectId) {
   );
   const normalizedEffectId = assertLedgerOpaqueId(effectId, 'effectId');
   const tupleId = createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-effect-projection-key:v5',
+    domain: 'wharfie:execution-ledger-effect-projection-key:v6',
     prefix: 'wfk',
     value: {
       invocationId: normalizedInvocationId,
