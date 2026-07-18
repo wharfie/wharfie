@@ -10,6 +10,7 @@ import {
   resolveExecutionPayloadStoreId,
   resolveLedgerServiceSessionPath,
 } from '../../lib/config/db.js';
+import { APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS } from '../effects/application-state.js';
 import { acquireLocalLedgerServiceSession } from '../services/ledger-service.js';
 
 /**
@@ -74,6 +75,7 @@ export async function withExecutionLedger(handler, options = {}) {
             },
           }
         : payloadStore,
+      effectEvidenceVerifiers: [...APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS],
     });
     return await handler(ledger, {
       db,

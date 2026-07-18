@@ -34,6 +34,107 @@ const KEY_TYPE = {
   SORT: 'SORT',
 };
 
+/** @typedef {'vanilla' | 'lmdb' | 'dynamodb'} DBAdapterIdentity */
+
+/**
+ * Closed identities for the DB adapters shipped by Wharfie. Keep these values
+ * provider-neutral so callers can validate an injected DB client without
+ * depending on an adapter implementation module.
+ * @type {{readonly VANILLA: 'vanilla', readonly LMDB: 'lmdb', readonly DYNAMODB: 'dynamodb'}}
+ */
+const DB_ADAPTER_NAMES = Object.freeze({
+  VANILLA: 'vanilla',
+  LMDB: 'lmdb',
+  DYNAMODB: 'dynamodb',
+});
+
+/**
+ * Stable across duplicate module instances (including Jest isolation and SEA
+ * bundles). The branded property itself is enumerable so an object-spread
+ * wrapper used for instrumentation or failure injection retains the identity.
+ */
+const DB_ADAPTER_IDENTITY = Symbol.for(
+  '@wharfie/wharfie.db-client-adapter-identity.v1',
+);
+
+/**
+ * Require one of the closed built-in adapter identities.
+ * @param {unknown} identity - Candidate identity.
+ * @param {string} label - Human-readable source label.
+ * @returns {void} - Resolves for a known identity.
+ */
+function assertKnownDBAdapterIdentity(identity, label) {
+  if (
+    identity !== DB_ADAPTER_NAMES.VANILLA &&
+    identity !== DB_ADAPTER_NAMES.LMDB &&
+    identity !== DB_ADAPTER_NAMES.DYNAMODB
+  ) {
+    throw new TypeError(
+      `${label} must be one of: ${Object.values(DB_ADAPTER_NAMES).join(', ')}`,
+    );
+  }
+}
+
+/**
+ * Attach an immutable, enumerable adapter identity to a DB client.
+ * @template {object} T
+ * @param {T} db - DB client to brand.
+ * @param {DBAdapterIdentity} identity - Exact built-in adapter identity.
+ * @returns {T} - The same branded client.
+ */
+function brandDBClient(db, identity) {
+  assertKnownDBAdapterIdentity(identity, 'DB adapter identity');
+  Object.defineProperty(db, DB_ADAPTER_IDENTITY, {
+    configurable: false,
+    enumerable: true,
+    value: identity,
+    writable: false,
+  });
+  return db;
+}
+
+/**
+ * Read a DB client's exact own, enumerable built-in adapter identity.
+ * @param {unknown} db - Candidate DB client.
+ * @returns {DBAdapterIdentity} - Exact built-in adapter identity.
+ */
+function readDBClientAdapterIdentity(db) {
+  if (!db || typeof db !== 'object') {
+    throw new TypeError(
+      'DB client must be an object with an adapter identity.',
+    );
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(db, DB_ADAPTER_IDENTITY);
+  if (
+    !descriptor ||
+    descriptor.enumerable !== true ||
+    !('value' in descriptor)
+  ) {
+    throw new TypeError(
+      'DB client is missing its own enumerable adapter identity.',
+    );
+  }
+  assertKnownDBAdapterIdentity(descriptor.value, 'DB client adapter identity');
+  return descriptor.value;
+}
+
+/**
+ * Require a DB client to report one exact built-in adapter identity.
+ * @param {unknown} db - Candidate DB client.
+ * @param {DBAdapterIdentity} expected - Required adapter identity.
+ * @returns {DBAdapterIdentity} - The exact verified identity.
+ */
+function assertDBClientAdapterIdentity(db, expected) {
+  assertKnownDBAdapterIdentity(expected, 'Expected DB adapter identity');
+  const actual = readDBClientAdapterIdentity(db);
+  if (actual !== expected) {
+    throw new Error(
+      `DB client adapter identity mismatch: expected '${expected}', received '${actual}'.`,
+    );
+  }
+  return actual;
+}
+
 const TRANSACTION_REQUEST_KEYS = [
   'conditionChecks',
   'putRequests',
@@ -628,8 +729,13 @@ export default function createDB() {
 
 export {
   CONDITION_TYPE,
+  DB_ADAPTER_IDENTITY,
+  DB_ADAPTER_NAMES,
   KEY_TYPE,
+  assertDBClientAdapterIdentity,
+  brandDBClient,
   recordMatchesCondition,
+  readDBClientAdapterIdentity,
   transactionRequestKey,
   transactionRequestUpdates,
   validateTransactionWrite,

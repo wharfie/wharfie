@@ -9,6 +9,8 @@ import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import BaseAWS from '../../aws/base.js';
 import {
   CONDITION_TYPE,
+  DB_ADAPTER_NAMES,
+  brandDBClient,
   transactionRequestKey,
   transactionRequestUpdates,
   validateTransactionWrite,
@@ -907,22 +909,25 @@ export default function createDynamoDB({
     throw new Error('DynamoDB transaction conflict retry limit exceeded');
   }
 
-  return {
-    query,
-    queryPage,
-    put,
-    update,
-    get,
-    remove,
-    batchWrite,
-    transactionWrite,
-    /**
-     * Close underlying resources (best-effort).
-     * DynamoDB v3 clients keep sockets; destroy() closes them.
-     * @returns {import('../base.js').CloseReturn} - Result.
-     */
-    close: async () => {
-      if (typeof docClient.destroy === 'function') docClient.destroy();
+  return brandDBClient(
+    {
+      query,
+      queryPage,
+      put,
+      update,
+      get,
+      remove,
+      batchWrite,
+      transactionWrite,
+      /**
+       * Close underlying resources (best-effort).
+       * DynamoDB v3 clients keep sockets; destroy() closes them.
+       * @returns {import('../base.js').CloseReturn} - Result.
+       */
+      close: async () => {
+        if (typeof docClient.destroy === 'function') docClient.destroy();
+      },
     },
-  };
+    DB_ADAPTER_NAMES.DYNAMODB,
+  );
 }

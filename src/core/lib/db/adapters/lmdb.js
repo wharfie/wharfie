@@ -4,6 +4,8 @@ import paths from '../../paths.js';
 import { getLmdbModule } from '../../lmdb-module.js';
 import {
   CONDITION_TYPE,
+  DB_ADAPTER_NAMES,
+  brandDBClient,
   recordMatchesCondition,
   transactionRequestKey,
   transactionRequestUpdates,
@@ -678,15 +680,18 @@ export default function createLMDB(options = {}) {
     return closePromise;
   }
 
-  return {
-    query,
-    queryPage,
-    batchWrite,
-    transactionWrite,
-    update,
-    put,
-    get,
-    remove,
-    close,
-  };
+  return brandDBClient(
+    {
+      query,
+      queryPage,
+      batchWrite,
+      transactionWrite,
+      update,
+      put,
+      get,
+      remove,
+      close,
+    },
+    DB_ADAPTER_NAMES.LMDB,
+  );
 }

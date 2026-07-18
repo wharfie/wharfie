@@ -4,6 +4,8 @@ import { createId } from '../../id.js';
 import paths from '../../paths.js';
 import {
   CONDITION_TYPE,
+  DB_ADAPTER_NAMES,
+  brandDBClient,
   recordMatchesCondition,
   transactionRequestKey,
   transactionRequestUpdates,
@@ -692,15 +694,18 @@ export default function createVanillaDB(options = {}) {
     }
   }
 
-  return {
-    query,
-    queryPage,
-    batchWrite,
-    transactionWrite,
-    update,
-    put,
-    get,
-    remove,
-    close,
-  };
+  return brandDBClient(
+    {
+      query,
+      queryPage,
+      batchWrite,
+      transactionWrite,
+      update,
+      put,
+      get,
+      remove,
+      close,
+    },
+    DB_ADAPTER_NAMES.VANILLA,
+  );
 }
