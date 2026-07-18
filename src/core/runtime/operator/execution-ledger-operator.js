@@ -4,7 +4,9 @@ import { TextDecoder } from 'node:util';
 
 import { assertApplicationRevisionId } from '../application-revision.js';
 import {
+  AttemptStatus,
   EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+  EffectStatus,
   InvocationStatus,
   RunStatus,
 } from '../../lib/db/tables/execution-ledger.js';
@@ -22,6 +24,19 @@ import {
   reconcileManualLedgerActivity,
   recoverManualLedgerActivity,
 } from '../manual-ledger-run.js';
+import {
+  assertApplicationStateStoreIsolation,
+  openApplicationStateDB,
+  resolveApplicationStateStoreConfiguration,
+} from '../application-state-store.js';
+import {
+  APPLICATION_STATE_ADAPTER_DESCRIPTOR,
+  APPLICATION_STATE_SUBSTANTIATED_REPLAY_PROPERTIES,
+  APPLICATION_STATE_VERIFIER_DESCRIPTOR,
+  normalizeApplicationStateDestination,
+} from '../effects/application-state.js';
+import { createBuiltinManagedEffectRecoveryCatalog } from '../effects/builtin-catalog.js';
+import { recoverStartedManagedEffect } from '../managed-effect.js';
 import {
   getLocalServiceSessionPrincipalId,
   getLocalServiceSessionScopeId,
@@ -50,6 +65,42 @@ export const EXECUTION_LEDGER_RECONCILIATION_EVIDENCE_FILE_MAX_BYTES =
 export const EXECUTION_LEDGER_RECONCILIATION_REASON_MAX_BYTES = 4096;
 
 const RECONCILIATION_TRANSITION_PREFIX = 'reconcile:';
+const DEFAULT_RECOVERY_OPERATOR_ACTOR = Object.freeze({
+  kind: 'local',
+  id: 'cli',
+});
+
+/**
+ * Snapshot one exact recovery authority before any asynchronous read. The
+ * same immutable actor must identify both destination-receipt recovery and
+ * the following stopped-attempt transition.
+ * @param {unknown} value - Optional recovery actor.
+ * @returns {Readonly<{kind: string, id: string}>} - Exact immutable actor.
+ */
+function resolveRecoveryOperatorActor(value) {
+  const candidate =
+    value === undefined ? DEFAULT_RECOVERY_OPERATOR_ACTOR : value;
+  if (
+    !candidate ||
+    typeof candidate !== 'object' ||
+    Array.isArray(candidate) ||
+    Object.keys(candidate).length !== 2 ||
+    !Object.prototype.hasOwnProperty.call(candidate, 'kind') ||
+    !Object.prototype.hasOwnProperty.call(candidate, 'id')
+  ) {
+    throw new TypeError(
+      'Recovery operator actor requires exactly kind and id.',
+    );
+  }
+  const actor = /** @type {{kind: unknown, id: unknown}} */ (candidate);
+  return Object.freeze({
+    kind: assertLedgerOpaqueId(
+      actor.kind,
+      'recoverExecutionLedgerRun.actor.kind',
+    ),
+    id: assertLedgerOpaqueId(actor.id, 'recoverExecutionLedgerRun.actor.id'),
+  });
+}
 
 /** A packaged artifact was asked to operate outside its embedded app scope. */
 export class ExecutionLedgerOperatorScopeError extends Error {
@@ -357,6 +408,94 @@ function getManualInvocation(view) {
     (/** @type {Record<string, any>} */ invocation) =>
       invocation.invocationId === 'manual',
   );
+}
+
+/**
+ * @param {unknown} left - Candidate exact JSON tuple.
+ * @param {unknown} right - Expected exact JSON tuple.
+ * @returns {boolean} - Whether the arrays are positionally equal.
+ */
+function hasExactArray(left, right) {
+  return (
+    Array.isArray(left) &&
+    Array.isArray(right) &&
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+/**
+ * Require the one built-in destination contract this operator knows how to
+ * verify physically. Unknown adapters must not be converted into a generic
+ * missing-receipt uncertainty transition.
+ * @param {Record<string, any>} effect - Retained unresolved effect.
+ * @param {string} appId - Persisted application scope.
+ * @returns {void}
+ */
+function assertRecoverableApplicationStateEffect(effect, appId) {
+  const destination = normalizeApplicationStateDestination(effect.destination);
+  if (
+    effect.adapter?.id !== APPLICATION_STATE_ADAPTER_DESCRIPTOR.id ||
+    effect.adapter?.version !== APPLICATION_STATE_ADAPTER_DESCRIPTOR.version ||
+    effect.verifier?.kind !== APPLICATION_STATE_VERIFIER_DESCRIPTOR.kind ||
+    effect.verifier?.version !==
+      APPLICATION_STATE_VERIFIER_DESCRIPTOR.version ||
+    !hasExactArray(
+      effect.substantiatedReplayProperties,
+      APPLICATION_STATE_SUBSTANTIATED_REPLAY_PROPERTIES,
+    ) ||
+    destination.configuration.provider !== 'lmdb' ||
+    destination.configuration.namespace !== appId
+  ) {
+    throw new Error(
+      `Managed effect ${effect.effectId} is not the exact built-in LMDB application-state contract recoverable by this operator.`,
+    );
+  }
+}
+
+/**
+ * Select the deliberately narrow v1 recovery target. Concurrent effect
+ * execution is supported by the runtime, but partially settling a sibling set
+ * could strand remaining STARTED/PENDING work after the first uncertainty
+ * transition blocks the aggregate.
+ * @param {Record<string, any>} view - Fresh verified run projection.
+ * @returns {Record<string, any> | undefined} - Exact single STARTED effect.
+ */
+function getStartedEffectRecoveryTarget(view) {
+  const invocation = getManualInvocation(view);
+  if (
+    view.run.status !== RunStatus.RUNNING ||
+    invocation?.status !== InvocationStatus.RUNNING
+  ) {
+    return undefined;
+  }
+  const attempt = view.attempts.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.invocationId === invocation.invocationId &&
+      candidate.generation === invocation.generation,
+  );
+  if (attempt?.status !== AttemptStatus.STARTED) return undefined;
+
+  const unresolved = (view.effects || []).filter(
+    (/** @type {Record<string, any>} */ effect) =>
+      effect.invocationId === invocation.invocationId &&
+      effect.requestedBy?.attemptId === attempt.attemptId &&
+      ![EffectStatus.COMPLETED, EffectStatus.FAILED].includes(effect.status),
+  );
+  if (unresolved.length === 0) return undefined;
+  if (unresolved.length !== 1) {
+    throw new Error(
+      `Recovery requires exactly one unresolved managed effect for attempt ${attempt.attemptId}; found ${unresolved.length}.`,
+    );
+  }
+  const effect = unresolved[0];
+  if (effect.status !== EffectStatus.STARTED) {
+    throw new Error(
+      `Managed effect ${effect.effectId} is ${effect.status}; recovery currently requires the exact STARTED boundary.`,
+    );
+  }
+  assertRecoverableApplicationStateEffect(effect, view.run.appId);
+  return effect;
 }
 
 /**
@@ -697,10 +836,11 @@ export async function cancelExecutionLedgerRun(options) {
  * Reconcile one exact run after a read-only existence/scope preflight. The
  * mutable phase reacquires the store, takes local ownership when available,
  * and rechecks packaged app scope inside that fence before changing state.
- * @param {{runId: string, expectedAppId?: string, actor?: {kind: string, id: string}, requireLocalOwnership?: boolean, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>}} options - Exact recovery request.
+ * @param {{runId: string, expectedAppId?: string, actor?: {kind: string, id: string}, requireLocalOwnership?: boolean, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>}} options - Exact recovery request.
  * @returns {Promise<{recovery: Record<string, any>, view: Record<string, any>} | null>} - Recovery and verified readback, or null.
  */
 export async function recoverExecutionLedgerRun(options) {
+  const actor = resolveRecoveryOperatorActor(options.actor);
   const configuration =
     options.configuration || resolveExecutionLedgerStoreConfiguration();
   if (
@@ -718,24 +858,116 @@ export async function recoverExecutionLedgerRun(options) {
   });
   if (!preflight) return null;
 
+  // Refuse unsupported effect sets while every opened store is still
+  // read-only. The same selection is repeated under local ownership below so
+  // a concurrent transition cannot authorize work from this stale view.
+  getStartedEffectRecoveryTarget(preflight);
+
   return await withExecutionLedger(
     async (ledger, context) =>
       await withLocalLedgerServiceMutationOwnership({
         appId: options.expectedAppId || preflight.run.appId,
         context,
-        handler: async () => {
+        handler: async (localOwner) => {
           const current = await ledger.rebuildRun(options.runId);
           if (!current) return null;
           assertExpectedApp(current, options.expectedAppId);
-          const recovery = await recoverManualLedgerActivity({
-            ledger,
-            runId: options.runId,
-            ...(options.actor ? { actor: options.actor } : {}),
-          });
+          const target = getStartedEffectRecoveryTarget(current);
+          /** @type {Record<string, any> | undefined} */
+          let applicationState;
+          /** @type {Record<string, any> | undefined} */
+          let managedEffect;
+          /** @type {Record<string, any> | undefined} */
+          let recovery;
+          /** @type {unknown} */
+          let operationError;
+          let operationFailed = false;
+
+          try {
+            if (target) {
+              if (!localOwner || context.adapterName !== 'lmdb') {
+                throw new Error(
+                  'Recovery of a STARTED managed effect requires the held LMDB local-owner protocol.',
+                );
+              }
+              const applicationStateConfiguration =
+                options.applicationStateConfiguration ||
+                resolveApplicationStateStoreConfiguration();
+              if (applicationStateConfiguration.adapterName !== 'lmdb') {
+                throw new Error(
+                  'Recovery of a STARTED application-state effect requires the LMDB application-state adapter.',
+                );
+              }
+              assertApplicationStateStoreIsolation(
+                applicationStateConfiguration,
+                context,
+              );
+              applicationState = await openApplicationStateDB({
+                configuration: applicationStateConfiguration,
+                readOnly: true,
+              });
+              assertApplicationStateStoreIsolation(
+                applicationState.context,
+                context,
+              );
+              const catalog = await createBuiltinManagedEffectRecoveryCatalog({
+                db: applicationState.db,
+                appId: current.run.appId,
+                adapterName: applicationState.context.adapterName,
+                tableName: applicationState.context.tableName,
+              });
+              managedEffect = await recoverStartedManagedEffect({
+                ledger,
+                runId: current.run.runId,
+                invocationId: target.invocationId,
+                effectId: target.effectId,
+                recoverOutcome: catalog.recoverOutcome,
+                actor,
+              });
+            }
+
+            recovery = await recoverManualLedgerActivity({
+              ledger,
+              runId: options.runId,
+              actor,
+            });
+          } catch (error) {
+            operationFailed = true;
+            operationError = error;
+          }
+
+          /** @type {unknown} */
+          let closeError;
+          let closeFailed = false;
+          try {
+            await applicationState?.close();
+          } catch (error) {
+            closeFailed = true;
+            closeError = error;
+          }
+          if (operationFailed && closeFailed) {
+            throw new AggregateError(
+              [operationError, closeError],
+              'Managed-effect recovery and application-state cleanup both failed.',
+            );
+          }
+          if (operationFailed) throw operationError;
+          if (closeFailed) throw closeError;
+          if (!recovery) {
+            throw new Error('Durable recovery returned no result.');
+          }
+
           const view = await ledger.rebuildRun(options.runId);
           if (!recovery.found || !view) return null;
           assertExpectedApp(view, options.expectedAppId);
-          return { recovery, view };
+          return {
+            recovery: {
+              ...recovery,
+              changed: recovery.changed || managedEffect?.changed === true,
+              ...(managedEffect ? { managedEffect } : {}),
+            },
+            view,
+          };
         },
       }),
     { configuration },
@@ -808,14 +1040,24 @@ export async function reconcileExecutionLedgerRun(options) {
 }
 
 /**
- * @param {string} action - Named recovery action.
+ * @param {string | Record<string, any>} action - Named recovery action or combined managed-effect recovery.
  * @returns {string} - Human-readable completed recovery message.
  */
 function recoveryMessage(action) {
-  if (action === 'released-unstarted-claim') {
+  if (typeof action === 'object' && action?.managedEffect) {
+    if (action.managedEffect.action === 'outcome-recovered') {
+      return `Recovered managed effect ${action.managedEffect.effectId} from its permanent destination receipt, then marked the stopped begun attempt uncertain. No activity code was dispatched.`;
+    }
+    if (action.managedEffect.action === 'outcome-uncertain') {
+      return `No permanent destination receipt exists for managed effect ${action.managedEffect.effectId}; marked the effect and stopped begun attempt uncertain. No activity code was dispatched.`;
+    }
+  }
+  const recoveryAction =
+    typeof action === 'object' && action ? action.action : action;
+  if (recoveryAction === 'released-unstarted-claim') {
     return 'Released an unstarted claim. This command did not dispatch an activity.';
   }
-  if (action === 'marked-started-uncertain') {
+  if (recoveryAction === 'marked-started-uncertain') {
     return 'Marked a begun attempt uncertain. This command did not dispatch an activity.';
   }
   return 'Verified durable recovery state. No recovery transition was needed.';
@@ -1026,7 +1268,7 @@ export function createExecutionLedgerOperatorCommands(options = {}) {
           return;
         }
         output.table(formatExecutionLedgerOperatorRows(result.view));
-        output.success(recoveryMessage(result.recovery.action));
+        output.success(recoveryMessage(result.recovery));
       } catch (error) {
         output.failure(error);
         process.exitCode = 1;

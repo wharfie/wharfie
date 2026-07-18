@@ -195,7 +195,7 @@ export function assertExactKeys(value, keys, label) {
     Object.keys(value).length !== keys.length ||
     Object.keys(value).some((key) => !allowed.has(key))
   ) {
-    throw new TypeError(`${label} has unsupported or missing fields.`);
+    throw new TypeError(`${label} must contain exactly ${keys.join(', ')}.`);
   }
 }
 

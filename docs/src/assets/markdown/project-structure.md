@@ -65,7 +65,10 @@ separate finite API on `runtime.effects`; the first public request is
 `application-state` / `put-if-absent` with the exact replay properties
 `['idempotent', 'transactional']`. Durable `ops run` hosts fulfill it, while an
 ephemeral `invokeActivity` request rejects catchably with
-`effect-handler-unavailable`.
+`effect-handler-unavailable`. After confirmed runner loss, the shared source/SEA
+operator can recover one retained built-in `STARTED` request only through its
+read-only permanent LMDB receipt; it never invokes the adapter or application
+source again.
 
 An activity may pin target-specific dependencies with exact published versions:
 

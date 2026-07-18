@@ -1,4 +1,8 @@
-import { validateActivityProtocolComponentFrame } from './activity-protocol.js';
+import {
+  ACTIVITY_PROTOCOL_NAME,
+  ACTIVITY_PROTOCOL_VERSION,
+  validateActivityProtocolComponentFrame,
+} from './activity-protocol.js';
 import { createCanonicalJsonSha256Id } from './content-id.js';
 import { cloneJsonObject, cloneJsonValue } from './json-value.js';
 import {
@@ -19,6 +23,20 @@ const UNCERTAINTY_REASON = Object.freeze({
   phase: 'after-durable-start',
   message:
     'The adapter may have begun, but no verifier-backed destination outcome was durably committed.',
+});
+
+const RECOVERY_UNCERTAINTY_REASON = Object.freeze({
+  kind: 'managed-effect-recovery-outcome-unknown',
+  phase: 'after-runner-exclusion',
+  message:
+    'The retained effect was started, but its destination exposed no permanent verifier-backed outcome receipt.',
+});
+
+export const ManagedEffectRecoveryAction = Object.freeze({
+  OUTCOME_RECOVERED: 'outcome-recovered',
+  OUTCOME_UNCERTAIN: 'outcome-uncertain',
+  ALREADY_TERMINAL: 'already-terminal',
+  ALREADY_UNCERTAIN: 'already-uncertain',
 });
 
 /**
@@ -95,23 +113,27 @@ function deepFreezeJson(value) {
  * Snapshot audit identity before the first await so one managed delivery
  * cannot change actors between its durable phases.
  * @param {unknown} value - Candidate actor.
+ * @param {string} [label] - Boundary label.
  * @returns {{kind: string, id: string}} - Immutable actor snapshot.
  */
-function normalizeManagedEffectActor(value) {
+function normalizeManagedEffectActor(
+  value,
+  label = 'executeManagedEffect.actor',
+) {
   const actor = cloneJsonObject(
     value === undefined ? DEFAULT_ACTOR : value,
-    'executeManagedEffect.actor',
+    label,
   );
   if (
     Object.keys(actor).length !== 2 ||
     !Object.prototype.hasOwnProperty.call(actor, 'kind') ||
     !Object.prototype.hasOwnProperty.call(actor, 'id')
   ) {
-    throw new TypeError('executeManagedEffect.actor requires kind and id.');
+    throw new TypeError(`${label} requires kind and id.`);
   }
   return Object.freeze({
-    kind: assertLedgerOpaqueId(actor.kind, 'executeManagedEffect.actor.kind'),
-    id: assertLedgerOpaqueId(actor.id, 'executeManagedEffect.actor.id'),
+    kind: assertLedgerOpaqueId(actor.kind, `${label}.kind`),
+    id: assertLedgerOpaqueId(actor.id, `${label}.id`),
   });
 }
 
@@ -197,6 +219,23 @@ function createManagedEffectTransitionId(phase, identity) {
     prefix: 'wmt',
     value: { schemaVersion: 1, phase, ...identity },
     valuePath: 'managed effect transition identity',
+  });
+}
+
+/**
+ * Keep recovery receipts distinct from live-driver transitions. The physical
+ * destination identity participates so a retained transition can never be
+ * replayed against a retargeted effect contract.
+ * @param {'outcome'|'uncertain'} phase - Recovery phase.
+ * @param {{runId: string, invocationId: string, attemptId: string, effectId: string, destinationEffectId: string}} identity - Exact retained recovery identity.
+ * @returns {string} - Stable response-loss retry identity.
+ */
+function createManagedEffectRecoveryTransitionId(phase, identity) {
+  return createCanonicalJsonSha256Id({
+    domain: 'wharfie:managed-effect-recovery-transition:v1',
+    prefix: 'wmr',
+    value: { schemaVersion: 1, phase, ...identity },
+    valuePath: 'managed effect recovery transition identity',
   });
 }
 
@@ -395,14 +434,482 @@ async function blockUncertainManagedEffect(options) {
 }
 
 /**
+ * Return a compact recovery result without exposing the retained request,
+ * destination, evidence, or fencing material.
+ * @param {string} action - Stable recovery action.
+ * @param {boolean} changed - Whether this call appended its transition.
+ * @param {string} effectId - Logical effect identity.
+ * @returns {Readonly<{action: string, changed: boolean, effectId: string}>} - Redacted recovery result.
+ */
+function managedEffectRecoveryResult(action, changed, effectId) {
+  return Object.freeze({ action, changed, effectId });
+}
+
+/**
+ * A thrown transition is ambiguous: its write may have committed before the
+ * response was lost, or a different actor may have won the same lifecycle
+ * state. Prove only this recovery's exact verified event before attributing the
+ * change to this logical call.
+ * @param {Record<string, any>[]} events - Verified retained event stream.
+ * @param {{transitionId: string, eventType: string, actor: Record<string, any>, delivery: Record<string, any>, recoveredOutcome: Record<string, any> | null}} expected - Exact recovery event.
+ * @returns {boolean} - Whether this recovery transition is retained.
+ */
+function hasMatchingManagedEffectRecoveryEvent(events, expected) {
+  if (!Array.isArray(events)) {
+    throw new TypeError('Managed effect recovery events must be an array.');
+  }
+  const hasExpectedOutcome = (() => {
+    if (expected.recoveredOutcome === null) {
+      try {
+        return hasSameCanonicalJson(
+          expected.delivery.effect?.uncertainty,
+          RECOVERY_UNCERTAINTY_REASON,
+        );
+      } catch {
+        return false;
+      }
+    }
+    const ok = expected.recoveredOutcome.ok;
+    if ((ok !== true && ok !== false) || !expected.delivery.outcome) {
+      return false;
+    }
+    try {
+      return hasSameCanonicalJson(
+        {
+          ok,
+          ...(ok
+            ? { result: expected.recoveredOutcome.result }
+            : { error: expected.recoveredOutcome.error }),
+          evidence: expected.recoveredOutcome.evidence,
+        },
+        {
+          ok: expected.delivery.outcome.ok,
+          ...(expected.delivery.outcome.ok
+            ? { result: expected.delivery.outcome.result }
+            : { error: expected.delivery.outcome.error }),
+          evidence: expected.delivery.outcome.evidence,
+        },
+      );
+    } catch {
+      return false;
+    }
+  })();
+  return (
+    hasExpectedOutcome &&
+    events.some(
+      (event) =>
+        event?.transition_id === expected.transitionId &&
+        event.type === expected.eventType &&
+        hasSameCanonicalJson(event.actor, expected.actor) &&
+        hasSameCanonicalJson(event.payload?.effect, expected.delivery.effect),
+    )
+  );
+}
+
+/**
+ * Classify only states that are authoritative for one retained recovery. Any
+ * other lifecycle or aggregate combination fails closed before a destination
+ * probe or ledger mutation.
+ * @param {Record<string, any> | null} delivery - Verified delivery read.
+ * @param {{runId: string, invocationId: string, effectId: string}} identity - Requested logical identity.
+ * @returns {'started'|'terminal'|'uncertain'} - Supported recovery state.
+ */
+function classifyManagedEffectRecoveryDelivery(delivery, identity) {
+  if (!delivery) {
+    throw new Error(
+      `Managed effect recovery could not find retained work: ${identity.effectId}`,
+    );
+  }
+  if (
+    delivery.run.runId !== identity.runId ||
+    delivery.invocation.invocationId !== identity.invocationId ||
+    delivery.effect.effectId !== identity.effectId
+  ) {
+    throw new ManagedEffectDispatchNotAuthorizedError(identity.effectId);
+  }
+  if (
+    [EffectStatus.COMPLETED, EffectStatus.FAILED].includes(
+      delivery.effect.status,
+    ) &&
+    delivery.resultFrame
+  ) {
+    return 'terminal';
+  }
+  if (
+    delivery.effect.status === EffectStatus.UNCERTAIN &&
+    delivery.run.status === RunStatus.BLOCKED &&
+    delivery.invocation.status === InvocationStatus.UNCERTAIN &&
+    delivery.attempt.status === AttemptStatus.ABANDONED
+  ) {
+    return 'uncertain';
+  }
+  if (
+    delivery.run.status !== RunStatus.RUNNING ||
+    delivery.invocation.status !== InvocationStatus.RUNNING ||
+    delivery.attempt.status !== AttemptStatus.STARTED ||
+    delivery.effect.status !== EffectStatus.STARTED ||
+    delivery.invocation.generation !== delivery.attempt.generation ||
+    delivery.effect.requestedBy?.attemptId !== delivery.attempt.attemptId ||
+    delivery.effect.requestedBy?.generation !== delivery.attempt.generation ||
+    delivery.effect.requestedBy?.coordinatorEpoch !==
+      delivery.attempt.coordinatorEpoch ||
+    delivery.effect.requestedBy?.fencingToken !==
+      delivery.attempt.fencingToken ||
+    delivery.effect.startedBy?.attemptId !== delivery.attempt.attemptId ||
+    delivery.effect.startedBy?.generation !== delivery.attempt.generation ||
+    delivery.effect.startedBy?.coordinatorEpoch !==
+      delivery.attempt.coordinatorEpoch ||
+    delivery.effect.startedBy?.fencingToken !== delivery.attempt.fencingToken
+  ) {
+    throw new ManagedEffectDispatchNotAuthorizedError(identity.effectId);
+  }
+  return 'started';
+}
+
+/**
+ * Reconstruct the exact protocol request whose attempt-local fields were
+ * retained in the effect projection while its logical fields were retained in
+ * the referenced request payload.
+ * @param {Record<string, any>} delivery - Verified started delivery.
+ * @returns {Readonly<Record<string, any>>} - Exact validated component frame.
+ */
+function reconstructManagedEffectRecoveryRequest(delivery) {
+  return validateActivityProtocolComponentFrame(
+    {
+      protocol: ACTIVITY_PROTOCOL_NAME,
+      protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+      type: 'effect-request',
+      attemptId: delivery.effect.requestedBy.attemptId,
+      sequence: delivery.effect.requestedBy.protocolSequence,
+      effectId: delivery.effect.effectId,
+      capability: delivery.request.capability,
+      operation: delivery.request.operation,
+      input: delivery.request.input,
+      requestedReplayProperties: delivery.request.requestedReplayProperties,
+    },
+    'recoverStartedManagedEffect retained request',
+  );
+}
+
+/**
+ * Snapshot the immutable portion of a STARTED recovery so a callback cannot
+ * race this call into a different attempt or physical destination.
+ * @param {Record<string, any>} delivery - Verified started delivery.
+ * @returns {Readonly<Record<string, any>>} - Canonical comparison contract.
+ */
+function managedEffectRecoveryContract(delivery) {
+  return deepFreezeJson({
+    runId: delivery.run.runId,
+    appId: delivery.run.appId,
+    revisionId: delivery.run.revisionId,
+    invocationId: delivery.invocation.invocationId,
+    invocationGeneration: delivery.invocation.generation,
+    attempt: {
+      attemptId: delivery.attempt.attemptId,
+      fencingToken: delivery.attempt.fencingToken,
+      generation: delivery.attempt.generation,
+      coordinatorEpoch: delivery.attempt.coordinatorEpoch,
+    },
+    effect: {
+      effectId: delivery.effect.effectId,
+      destinationEffectId: delivery.effect.destinationEffectId,
+      adapter: delivery.effect.adapter,
+      destination: delivery.effect.destination,
+      verifier: delivery.effect.verifier,
+      requestedReplayProperties: delivery.effect.requestedReplayProperties,
+      substantiatedReplayProperties:
+        delivery.effect.substantiatedReplayProperties,
+      requestedBy: delivery.effect.requestedBy,
+      startedBy: delivery.effect.startedBy,
+    },
+    request: delivery.request,
+  });
+}
+
+/**
+ * Recover one retained STARTED effect strictly from a destination-specific
+ * receipt probe. The caller must already exclude the original runner. This
+ * function never accepts or invokes adapter execution code.
+ *
+ * A strict `null` probe result atomically blocks the aggregate through the
+ * existing managed-effect uncertainty transition. Any non-null result must
+ * pass the retained ledger verifier before its existing terminal transition
+ * can commit.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, invocationId: string, effectId: string, recoverOutcome: (input: Readonly<{destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}>) => Promise<unknown>|unknown, actor?: {kind: string, id: string}}} options - Exact receipt-recovery inputs.
+ * @returns {Promise<Readonly<{action: string, changed: boolean, effectId: string}>>} - Redacted recovery result.
+ */
+export async function recoverStartedManagedEffect(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError(
+      'recoverStartedManagedEffect options must be an object.',
+    );
+  }
+  const ledger = options.ledger;
+  if (
+    !ledger ||
+    typeof ledger.readManagedEffectDelivery !== 'function' ||
+    typeof ledger.commitManagedEffectOutcome !== 'function' ||
+    typeof ledger.markManagedEffectUncertain !== 'function' ||
+    typeof ledger.getEvents !== 'function'
+  ) {
+    throw new TypeError(
+      'recoverStartedManagedEffect requires an execution ledger.',
+    );
+  }
+  const runId = assertLedgerOpaqueId(
+    options.runId,
+    'recoverStartedManagedEffect.runId',
+  );
+  const invocationId = assertLedgerOpaqueId(
+    options.invocationId,
+    'recoverStartedManagedEffect.invocationId',
+  );
+  const effectId = assertLedgerOpaqueId(
+    options.effectId,
+    'recoverStartedManagedEffect.effectId',
+  );
+  const recoverOutcome = options.recoverOutcome;
+  if (typeof recoverOutcome !== 'function') {
+    throw new TypeError(
+      'recoverStartedManagedEffect.recoverOutcome must be a function.',
+    );
+  }
+  const actor = normalizeManagedEffectActor(
+    options.actor,
+    'recoverStartedManagedEffect.actor',
+  );
+  const identity = Object.freeze({ runId, invocationId, effectId });
+
+  // Retry a read once because it is side-effect free and recovery itself is
+  // explicitly response-loss safe.
+  const readDelivery = async () => {
+    try {
+      return await ledger.readManagedEffectDelivery(
+        runId,
+        invocationId,
+        effectId,
+      );
+    } catch (firstError) {
+      try {
+        return await ledger.readManagedEffectDelivery(
+          runId,
+          invocationId,
+          effectId,
+        );
+      } catch (secondError) {
+        throw new AggregateError(
+          [firstError, secondError],
+          `Could not read retained managed effect recovery state: ${effectId}`,
+        );
+      }
+    }
+  };
+
+  let delivery = await readDelivery();
+  let state = classifyManagedEffectRecoveryDelivery(delivery, identity);
+  if (state === 'terminal') {
+    return managedEffectRecoveryResult(
+      ManagedEffectRecoveryAction.ALREADY_TERMINAL,
+      false,
+      effectId,
+    );
+  }
+  if (state === 'uncertain') {
+    return managedEffectRecoveryResult(
+      ManagedEffectRecoveryAction.ALREADY_UNCERTAIN,
+      false,
+      effectId,
+    );
+  }
+  const retainedDelivery = /** @type {Record<string, any>} */ (delivery);
+  const retainedContract = managedEffectRecoveryContract(retainedDelivery);
+  const request = reconstructManagedEffectRecoveryRequest(retainedDelivery);
+  const callbackInput = deepFreezeJson({
+    destinationEffectId: retainedDelivery.effect.destinationEffectId,
+    destination: cloneJsonObject(
+      retainedDelivery.effect.destination,
+      'recoverStartedManagedEffect destination',
+    ),
+    identity: { runId, invocationId, effectId },
+    request,
+  });
+  const rawRecoveredOutcome = await recoverOutcome(callbackInput);
+  const recoveredOutcome =
+    rawRecoveredOutcome === null
+      ? null
+      : deepFreezeJson(
+          cloneJsonObject(
+            rawRecoveredOutcome,
+            'recoverStartedManagedEffect recovered outcome',
+          ),
+        );
+
+  // Close the destination-probe TOCTOU window before selecting a transition.
+  delivery = await readDelivery();
+  state = classifyManagedEffectRecoveryDelivery(delivery, identity);
+  if (state === 'terminal') {
+    return managedEffectRecoveryResult(
+      ManagedEffectRecoveryAction.ALREADY_TERMINAL,
+      false,
+      effectId,
+    );
+  }
+  if (state === 'uncertain') {
+    return managedEffectRecoveryResult(
+      ManagedEffectRecoveryAction.ALREADY_UNCERTAIN,
+      false,
+      effectId,
+    );
+  }
+  let currentDelivery = /** @type {Record<string, any>} */ (delivery);
+  if (
+    !hasSameCanonicalJson(
+      retainedContract,
+      managedEffectRecoveryContract(currentDelivery),
+    )
+  ) {
+    throw new ManagedEffectDispatchNotAuthorizedError(effectId);
+  }
+
+  const transitionIdentity = Object.freeze({
+    runId,
+    invocationId,
+    attemptId: currentDelivery.attempt.attemptId,
+    effectId,
+    destinationEffectId: currentDelivery.effect.destinationEffectId,
+  });
+  const expectedAction =
+    recoveredOutcome === null
+      ? ManagedEffectRecoveryAction.OUTCOME_UNCERTAIN
+      : ManagedEffectRecoveryAction.OUTCOME_RECOVERED;
+  const expectedState = recoveredOutcome === null ? 'uncertain' : 'terminal';
+  const transitionId = createManagedEffectRecoveryTransitionId(
+    recoveredOutcome === null ? 'uncertain' : 'outcome',
+    transitionIdentity,
+  );
+  const expectedEventType =
+    recoveredOutcome === null
+      ? 'effect-became-uncertain'
+      : recoveredOutcome.ok === true
+        ? 'effect-completed'
+        : 'effect-failed';
+
+  // Build a fresh optimistic request after any failed attempt. The immutable
+  // transition identity stays fixed while an unrelated accepted cancellation
+  // may legitimately advance only the aggregate version.
+  const applyTransition = async (
+    /** @type {Record<string, any>} */ current,
+  ) => {
+    const common = {
+      runId,
+      invocationId,
+      attemptId: current.attempt.attemptId,
+      effectId,
+      fencingToken: current.attempt.fencingToken,
+      generation: current.attempt.generation,
+      expectedVersion: current.run.version,
+      expectedEffectVersion: current.effect.version,
+      actor,
+      coordinatorEpoch: current.attempt.coordinatorEpoch,
+    };
+    if (recoveredOutcome === null) {
+      return await ledger.markManagedEffectUncertain({
+        ...common,
+        transitionId,
+        reason: RECOVERY_UNCERTAINTY_REASON,
+      });
+    }
+    return await ledger.commitManagedEffectOutcome({
+      ...common,
+      transitionId,
+      outcome: recoveredOutcome,
+    });
+  };
+
+  /** @type {unknown[]} */
+  const transitionErrors = [];
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let result;
+    try {
+      result = await applyTransition(currentDelivery);
+    } catch (error) {
+      transitionErrors.push(error);
+    }
+
+    const after = await readDelivery();
+    const afterState = classifyManagedEffectRecoveryDelivery(after, identity);
+    if (afterState === expectedState) {
+      if (!result) {
+        const retainedOwnTransition = hasMatchingManagedEffectRecoveryEvent(
+          await ledger.getEvents(runId),
+          {
+            transitionId,
+            eventType: expectedEventType,
+            actor,
+            delivery: /** @type {Record<string, any>} */ (after),
+            recoveredOutcome,
+          },
+        );
+        if (!retainedOwnTransition) {
+          return managedEffectRecoveryResult(
+            afterState === 'terminal'
+              ? ManagedEffectRecoveryAction.ALREADY_TERMINAL
+              : ManagedEffectRecoveryAction.ALREADY_UNCERTAIN,
+            false,
+            effectId,
+          );
+        }
+      }
+      return managedEffectRecoveryResult(
+        expectedAction,
+        result ? result.applied === true : true,
+        effectId,
+      );
+    }
+    if (afterState === 'terminal') {
+      return managedEffectRecoveryResult(
+        ManagedEffectRecoveryAction.ALREADY_TERMINAL,
+        false,
+        effectId,
+      );
+    }
+    if (afterState === 'uncertain') {
+      return managedEffectRecoveryResult(
+        ManagedEffectRecoveryAction.ALREADY_UNCERTAIN,
+        false,
+        effectId,
+      );
+    }
+    currentDelivery = /** @type {Record<string, any>} */ (after);
+    if (
+      !hasSameCanonicalJson(
+        retainedContract,
+        managedEffectRecoveryContract(currentDelivery),
+      )
+    ) {
+      throw new ManagedEffectDispatchNotAuthorizedError(effectId);
+    }
+    if (result) {
+      throw new Error(
+        `Managed effect recovery transition was not durably readable: ${effectId}`,
+      );
+    }
+  }
+  throw new AggregateError(
+    transitionErrors,
+    `Could not durably recover managed effect outcome: ${effectId}`,
+  );
+}
+
+/**
  * Execute one Activity Protocol effect request through a durable managed
  * adapter. The adapter is invoked only after this call wins the exact STARTED
  * transition, and its result is returned to the component only after a
  * registered verifier accepts and the outcome transition is durably rebuilt.
  *
- * This is deliberately an internal runtime primitive; public Function/worker
- * paths are not wired to it until their complete transcript lifecycle can use
- * the same ledger aggregate.
+ * This remains an internal runtime primitive. Public source and SEA workers
+ * reach it only through the finite host catalog and their complete framed
+ * attempt transcript lifecycle.
  * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, invocationId: string, request: Record<string, any>, adapter: {descriptor: {id: string, version: number}, destination: {kind: string, version: number, bindingId: string, configuration: Record<string, any>}, verifier: {kind: string, version: number}, substantiatedReplayProperties: string[], execute: (input: {destinationEffectId: string, destination: Readonly<Record<string, any>>, identity: Readonly<Record<string, any>>, request: Readonly<Record<string, any>>, signal?: AbortSignal}) => Promise<unknown>|unknown}, actor?: {kind: string, id: string}, signal?: AbortSignal}} options - Managed delivery inputs.
  * @returns {Promise<Readonly<Record<string, any>>>} - Durable verifier-backed effect-result host frame.
  */

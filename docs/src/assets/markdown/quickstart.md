@@ -184,21 +184,31 @@ its reserved operator namespace:
 Packaged inspection, recovery, reconciliation, and cancellation are scoped to
 the immutable app identity embedded in the artifact. They can operate an older
 revision of that same app, but reject another app's run ID before output or
-mutation. The source and packaged forms of `inspect` emit the same schema-v2
-redacted run view; `recover` emits that view plus recovery metadata;
-`reconcile` wraps that view with its stable reconciliation ID and whether it
-was newly applied. `cancel` instead emits a redacted schema-v1 cancellation
-result containing the request ID, outcome, delivery state, and safe lifecycle
-statuses.
+mutation. With `--json`, the source and packaged forms of `inspect` emit the
+same schema-v3 redacted run view, including effect
+identity/status/adapter-lifecycle rows but not requests, destinations,
+receipts, evidence, values, paths, or fencing tokens. `recover` emits that view
+plus recovery metadata, and `reconcile` wraps it with its stable reconciliation
+ID and whether it was newly applied. `cancel` instead emits a redacted
+schema-v1 cancellation result containing the request ID, outcome, delivery
+state, and safe lifecycle statuses. Without `--json`, these commands use the
+compact human-oriented table and message format shown above.
 
 Inspection opens existing control state read-only and never creates missing
 state. Recovery is deliberately explicit: use it only after confirming every
 prior runner is gone. It can release a claim that never started; a begun
-attempt becomes visibly blocked as `UNCERTAIN` instead of replaying code.
+attempt becomes visibly blocked as `UNCERTAIN` instead of replaying code. When
+that attempt retains exactly one unresolved built-in `STARTED`
+`application-state` effect, recovery requires both LMDB stores and the held
+local owner. It opens application state read-only and either commits the exact
+permanent receipt into the ledger before blocking the arbitrary activity
+attempt, or marks the effect itself `UNCERTAIN` only when the exact receipt is
+absent. A missing, replacement, or corrupt store is an error, not proof of
+absence. `PENDING` and multiple unresolved effects are refused unchanged.
 Packaged recovery requires the LMDB local-ownership protocol and refuses to
 race a live resident service. The same local exclusion applies to packaged
-reconciliation; source recovery and reconciliation retain their configured
-adapter's documented manual/diagnostic behavior.
+reconciliation; source effect-free recovery and reconciliation retain their
+configured adapter's documented manual/diagnostic behavior.
 
 Reconciliation is not a retry or an operator-selected status. It can address
 only a blocked `UNCERTAIN` run whose retained current attempt is `ABANDONED`.

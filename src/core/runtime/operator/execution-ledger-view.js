@@ -4,7 +4,7 @@
  * evidence, fencing tokens, or event payloads. Those need an explicit future
  * disclosure and authorization policy.
  */
-export const EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION = 2;
+export const EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION = 3;
 
 /**
  * Expose cancellation identity and ordering without disclosing its operator
@@ -71,6 +71,21 @@ export function createExecutionLedgerOperatorView(view) {
         lastSequence: attempt.lastSequence,
       }),
     ),
+    effects: (view.effects || []).map(
+      (/** @type {Record<string, any>} */ effect) => ({
+        invocationId: effect.invocationId,
+        effectId: effect.effectId,
+        status: effect.status,
+        adapter: {
+          id: effect.adapter.id,
+          version: effect.adapter.version,
+        },
+        version: effect.version,
+        lastSequence: effect.lastSequence,
+        createdAt: effect.createdAt,
+        updatedAt: effect.updatedAt,
+      }),
+    ),
     history: view.events.map((/** @type {Record<string, any>} */ event) => ({
       sequence: event.sequence,
       type: event.type,
@@ -116,7 +131,7 @@ export function formatExecutionLedgerOperatorRows(view) {
 }
 
 /**
- * @param {{action: string, changed: boolean}} recovery - Recovery result metadata.
+ * @param {{action: string, changed: boolean, managedEffect?: {action: string, changed: boolean, effectId: string}}} recovery - Recovery result metadata.
  * @param {Record<string, any>} view - Verified rebuilt execution-ledger view.
  * @returns {Record<string, any>} - Redacted recovery response.
  */
@@ -127,6 +142,15 @@ export function createExecutionLedgerRecoveryOperatorView(recovery, view) {
     recovery: {
       action: recovery.action,
       changed: recovery.changed,
+      ...(recovery.managedEffect
+        ? {
+            managedEffect: {
+              action: recovery.managedEffect.action,
+              changed: recovery.managedEffect.changed,
+              effectId: recovery.managedEffect.effectId,
+            },
+          }
+        : {}),
     },
   };
 }

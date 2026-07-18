@@ -172,6 +172,12 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       The first public request, `application-state` / `put-if-absent`, atomically
       commits its LMDB value and permanent receipt; source and packaged hosts
       share the same exact request and unavailable-host behavior.
+- [x] Recover one retained built-in `STARTED` application-state effect under
+      the held source/SEA LMDB owner without loading source or redispatching the
+      adapter. An exact read-only receipt commits through the original effect
+      fence before the stopped attempt becomes `UNCERTAIN`; strict receipt
+      absence atomically makes the effect uncertain. Missing/corrupt stores,
+      `PENDING`, and concurrent unresolved effects fail unchanged.
 - [ ] Implement destination-specific reconciliation and compensation for
       uncertain effects, plus actual retry policy for substantiated `pure`,
       `idempotent`, and `transactional` work. Begun in-process handlers remain
@@ -232,11 +238,11 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 ## Immediate queue
 
 1. Repair the clean-install lint dependency declaration after explicit approval, make draft PR #125 green in GitHub Actions, and review the reset stack for merge.
-2. Recover retained `STARTED` application-state effects only from their
-   permanent destination receipts, under exact runner exclusion and the
-   original durable attempt/effect fences.
+2. Design bounded recovery for concurrent unresolved effects and a safe
+   pre-start transition for retained `PENDING` requests without stranding
+   sibling work.
 3. Add adversarial crash tests at every request/start/destination/outcome
    boundary before enabling automatic retries or making an exactly-once effect
    claim beyond that destination-backed operation.
 
-The latest dated handoff at [llm/checkpoints/2026-07-18-v5-managed-effect-foundation.md](llm/checkpoints/2026-07-18-v5-managed-effect-foundation.md) records the complete frozen core-closure preflight and the internal V5 request/start/verifier-backed-outcome/uncertainty boundary, including response-loss behavior, exact proof, and deliberate public limits. The preceding [evidence-backed reconciliation checkpoint](llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md), [authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md), [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md), [shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md), [resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md), [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.
+The latest dated handoff at [llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md](llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md) records the finite public application-state effect, its source/SEA transport, and the first receipt-backed stopped-runner recovery boundary. The preceding [V5 managed-effect foundation checkpoint](llm/checkpoints/2026-07-18-v5-managed-effect-foundation.md), [evidence-backed reconciliation checkpoint](llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md), [authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md), [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md), [shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md), [resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md), [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.

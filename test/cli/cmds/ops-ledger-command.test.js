@@ -383,7 +383,7 @@ describe('ledger-native operator commands', () => {
       expect(inspected.stderr).toBe('');
       const inspection = JSON.parse(inspected.stdout);
       expect(inspection).toMatchObject({
-        schemaVersion: 2,
+        schemaVersion: 3,
         kind: 'wharfie.execution-ledger.run',
         integrity: { verified: true },
         run: { runId, appId, status: RunStatus.RUNNING },
@@ -431,7 +431,7 @@ describe('ledger-native operator commands', () => {
       expect(recovered.status).toBe(0);
       expect(recovered.stderr).toBe('');
       expect(JSON.parse(recovered.stdout)).toMatchObject({
-        schemaVersion: 2,
+        schemaVersion: 3,
         kind: 'wharfie.execution-ledger.recovery',
         recovery: { action: 'released-unstarted-claim', changed: true },
         run: { runId, status: RunStatus.RUNNING },
@@ -660,7 +660,7 @@ describe('ledger-native operator commands', () => {
       expect(first.stderr).toBe('');
       const firstView = JSON.parse(first.stdout);
       expect(firstView).toMatchObject({
-        schemaVersion: 2,
+        schemaVersion: 3,
         kind: 'wharfie.execution-ledger.reconciliation',
         reconciliation: {
           reconciliationId: 'source-free-reconciliation-1',

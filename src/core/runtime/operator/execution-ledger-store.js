@@ -52,6 +52,11 @@ export async function withExecutionLedger(handler, options = {}) {
   const readOnly = options.readOnly === true;
   /** @type {import('../../lib/db/base.js').DBClient | undefined} */
   let db;
+  /** @type {T | undefined} */
+  let result;
+  /** @type {unknown} */
+  let handlerError;
+  let handlerFailed = false;
 
   try {
     db = await createControlDBClient(configuration.adapterName, {
@@ -77,7 +82,7 @@ export async function withExecutionLedger(handler, options = {}) {
         : payloadStore,
       effectEvidenceVerifiers: [...APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS],
     });
-    return await handler(ledger, {
+    result = await handler(ledger, {
       db,
       adapterName: configuration.adapterName,
       controlPath: configuration.controlPath,
@@ -85,9 +90,29 @@ export async function withExecutionLedger(handler, options = {}) {
       sessionPath: configuration.sessionPath,
       readOnly,
     });
-  } finally {
-    await db?.close?.();
+  } catch (error) {
+    handlerFailed = true;
+    handlerError = error;
   }
+
+  /** @type {unknown} */
+  let closeError;
+  let closeFailed = false;
+  try {
+    await db?.close?.();
+  } catch (error) {
+    closeFailed = true;
+    closeError = error;
+  }
+  if (handlerFailed && closeFailed) {
+    throw new AggregateError(
+      [handlerError, closeError],
+      'Execution-ledger operation and control-store close both failed.',
+    );
+  }
+  if (handlerFailed) throw handlerError;
+  if (closeFailed) throw closeError;
+  return /** @type {T} */ (result);
 }
 
 /**
@@ -118,15 +143,41 @@ export async function withLocalLedgerServiceMutationOwnership(options) {
     ownership,
     sessionRoot: options.context.sessionPath,
   });
+
+  /** @type {T | undefined} */
+  let result;
+  /** @type {unknown} */
+  let handlerError;
+  let handlerFailed = false;
   try {
     // The held owner session is deliberately passed only to the mutation that
     // acquired it. This lets a foreground runner host authenticated local
     // commands on a distinct endpoint without teaching unrelated operators
     // how to acquire or mutate another owner's control volume.
-    return await options.handler(localSession);
-  } finally {
-    await localSession.release();
+    result = await options.handler(localSession);
+  } catch (error) {
+    handlerFailed = true;
+    handlerError = error;
   }
+
+  /** @type {unknown} */
+  let releaseError;
+  let releaseFailed = false;
+  try {
+    await localSession.release();
+  } catch (error) {
+    releaseFailed = true;
+    releaseError = error;
+  }
+  if (handlerFailed && releaseFailed) {
+    throw new AggregateError(
+      [handlerError, releaseError],
+      'Local ledger-service mutation and ownership release both failed.',
+    );
+  }
+  if (handlerFailed) throw handlerError;
+  if (releaseFailed) throw releaseError;
+  return /** @type {T} */ (result);
 }
 
 export default withExecutionLedger;

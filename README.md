@@ -58,17 +58,22 @@ physical attempt itself stays `ABANDONED`. The local command transport is not
 yet supported on Windows. V6 connects verifier-backed managed effects through
 the framed source/SEA worker boundary and exposes one finite public operation:
 `application-state` / `put-if-absent`. Its LMDB destination atomically commits
-the business value with a permanent effect receipt; retained `STARTED` effect
-recovery and any broader exactly-once claim remain unfinished. Public run
-history/listing, scheduling, effect reconciliation, and release hardening still
-need focused review. The npm package remains deliberately private. It is not
-ready for production use.
+the business value with a permanent effect receipt. Confirmed source/SEA
+recovery can now settle exactly one unresolved built-in `STARTED` effect from
+that receipt under the held LMDB owner, or block it as `UNCERTAIN` only when an
+exact read-only probe proves the receipt absent; it never reruns application
+code. `PENDING` and concurrent unresolved effect recovery, broader effect
+reconciliation, and any wider exactly-once claim remain unfinished. Public run
+history/listing, scheduling, and release hardening still need focused review.
+The npm package remains deliberately private. It is not ready for production
+use.
 
 ## Start here
 
 - [Project charter](PROJECT.md) — the canonical problem, scope, public concepts, boundaries, and success test.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
+- [Public effects and receipt-recovery checkpoint](llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md) — the current restart point after exposing finite application state and closing its first stopped-runner recovery window.
 - [July 2026 checkpoint](llm/checkpoints/2026-07-16-project-reset.md) — immutable historical evidence of the pre-reset state and conversation handoff.
 - [Packaging salvage checkpoint](llm/checkpoints/2026-07-16-packaging-salvage.md) — historical first implementation proof and the release blockers that existed before v1 deletion.
 - [V1 deletion checkpoint](llm/checkpoints/2026-07-16-v1-deletion.md) — historical deletion boundary and evidence.

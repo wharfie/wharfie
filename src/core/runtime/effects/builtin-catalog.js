@@ -2,7 +2,10 @@
 
 import { APPLICATION_STATE_TABLE_NAME } from '../../lib/config/db.js';
 import { assertDBClientAdapterIdentity } from '../../lib/db/base.js';
-import { createApplicationStateTable } from '../../lib/db/tables/application-state.js';
+import {
+  ApplicationStateStoreIdentityError,
+  createApplicationStateTable,
+} from '../../lib/db/tables/application-state.js';
 import { assertLedgerOpaqueId } from '../../lib/ledger/record-key.js';
 import { executeManagedEffect } from '../managed-effect.js';
 import { assertLogicalId } from '../logical-id.js';
@@ -27,6 +30,13 @@ const CATALOG_OPTION_KEYS = new Set([
   'allowTestAdapter',
   'createStoreId',
 ]);
+const RECOVERY_CATALOG_OPTION_KEYS = new Set([
+  'db',
+  'appId',
+  'adapterName',
+  'tableName',
+  'allowTestAdapter',
+]);
 const FROZEN_REPLAY_PROPERTIES = [
   ...APPLICATION_STATE_SUBSTANTIATED_REPLAY_PROPERTIES,
 ];
@@ -47,6 +57,15 @@ Object.freeze(FROZEN_REPLAY_PROPERTIES);
  * @property {Readonly<Record<string, any>>} destination - Credential-free retained destination.
  * @property {typeof APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS} effectEvidenceVerifiers - Pure ledger registrations.
  * @property {(request: Record<string, any>) => Readonly<BuiltinManagedEffectAdapter>} resolve - Closed adapter selection.
+ * @property {(input: {destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}) => Promise<Readonly<Record<string, any>> | null>} recoverOutcome - Receipt recovery probe.
+ * @property {(destinationEffectId: string) => Promise<Readonly<Record<string, any>> | null>} readReceipt - Direct verified receipt lookup.
+ */
+
+/**
+ * @typedef BuiltinManagedEffectRecoveryCatalog
+ * @property {string} storeId - Existing physical application-state store identity.
+ * @property {Readonly<Record<string, any>>} destination - Credential-free retained destination.
+ * @property {typeof APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS} effectEvidenceVerifiers - Pure ledger registrations.
  * @property {(input: {destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}) => Promise<Readonly<Record<string, any>> | null>} recoverOutcome - Receipt recovery probe.
  * @property {(destinationEffectId: string) => Promise<Readonly<Record<string, any>> | null>} readReceipt - Direct verified receipt lookup.
  */
@@ -133,6 +152,69 @@ function assertSameDestination(left, right) {
 }
 
 /**
+ * Build the exact credential-free destination for one already-verified store
+ * binding. Both execution and recovery use this constructor so recovery
+ * cannot silently reinterpret provider, store, table, or app namespace.
+ * @param {{adapterName: import('../../lib/config/db.js').DBAdapterName, storeId: string, tableName: string, appId: string}} options - Verified binding inputs.
+ * @returns {ReturnType<typeof normalizeApplicationStateDestination>} - Exact retained destination.
+ */
+function createApplicationStateDestination(options) {
+  return normalizeApplicationStateDestination({
+    kind: APPLICATION_STATE_CAPABILITY,
+    version: 1,
+    bindingId: APPLICATION_STATE_BINDING_ID,
+    configuration: {
+      provider: options.adapterName,
+      storeId: options.storeId,
+      tableName: options.tableName,
+      namespace: options.appId,
+    },
+  });
+}
+
+/**
+ * Create the read-only recovery methods shared by the executable catalog and
+ * the deliberately execution-free operator catalog.
+ * @param {{table: ReturnType<typeof createApplicationStateTable>, storeId: string, appId: string, destination: Readonly<Record<string, any>>}} options - Existing store binding.
+ * @returns {{recoverOutcome: BuiltinManagedEffectRecoveryCatalog['recoverOutcome'], readReceipt: BuiltinManagedEffectRecoveryCatalog['readReceipt']}} - Exact recovery surface.
+ */
+function createApplicationStateRecoverySurface(options) {
+  /** @param {{destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}} input - Retained delivery. @returns {Promise<Readonly<Record<string, any>> | null>} - Recovered outcome. */
+  async function recoverOutcome(input) {
+    assertExactObject(
+      input,
+      ['destinationEffectId', 'destination', 'identity', 'request'],
+      [],
+      'Application-state recovery input',
+    );
+    assertSameDestination(input.destination, options.destination);
+    const normalized = normalizeApplicationStatePutIfAbsentRequest(
+      input.request,
+    );
+    const contractDigest = createApplicationStateEffectContractDigest({
+      destinationEffectId: input.destinationEffectId,
+      identity: input.identity,
+      destination: options.destination,
+      request: normalized.frame,
+    });
+    const receipt = await options.table.recoverPutIfAbsent({
+      storeId: options.storeId,
+      namespace: options.appId,
+      key: normalized.input.key,
+      value: normalized.input.value,
+      destinationEffectId: input.destinationEffectId,
+      contractDigest,
+    });
+    return receipt ? createApplicationStateOutcomeFromReceipt(receipt) : null;
+  }
+
+  return Object.freeze({
+    recoverOutcome,
+    readReceipt: options.table.readReceipt,
+  });
+}
+
+/**
  * Open the closed built-in catalog over one already-owned application-state DB
  * client. The caller owns the DB lifetime; every returned adapter must settle
  * before that lifetime closes.
@@ -193,16 +275,17 @@ export async function createBuiltinManagedEffectCatalog(options) {
   });
   const identity = await table.ensureStoreIdentity();
   const storeId = identity.store_id;
-  const destination = normalizeApplicationStateDestination({
-    kind: APPLICATION_STATE_CAPABILITY,
-    version: 1,
-    bindingId: APPLICATION_STATE_BINDING_ID,
-    configuration: {
-      provider: adapterName,
-      storeId,
-      tableName,
-      namespace: appId,
-    },
+  const destination = createApplicationStateDestination({
+    adapterName,
+    storeId,
+    tableName,
+    appId,
+  });
+  const recovery = createApplicationStateRecoverySurface({
+    table,
+    storeId,
+    appId,
+    destination,
   });
 
   /** @param {Record<string, any>} request - Host-accepted component request. @returns {Readonly<BuiltinManagedEffectAdapter>} - Exact five-key managed-effect adapter. */
@@ -255,42 +338,95 @@ export async function createBuiltinManagedEffectCatalog(options) {
     });
   }
 
-  /** @param {{destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}} input - Retained delivery. @returns {Promise<Readonly<Record<string, any>> | null>} - Recovered outcome. */
-  async function recoverOutcome(input) {
-    assertExactObject(
-      input,
-      ['destinationEffectId', 'destination', 'identity', 'request'],
-      [],
-      'Application-state recovery input',
-    );
-    assertSameDestination(input.destination, destination);
-    const normalized = normalizeApplicationStatePutIfAbsentRequest(
-      input.request,
-    );
-    const contractDigest = createApplicationStateEffectContractDigest({
-      destinationEffectId: input.destinationEffectId,
-      identity: input.identity,
-      destination,
-      request: normalized.frame,
-    });
-    const receipt = await table.recoverPutIfAbsent({
-      storeId,
-      namespace: appId,
-      key: normalized.input.key,
-      value: normalized.input.value,
-      destinationEffectId: input.destinationEffectId,
-      contractDigest,
-    });
-    return receipt ? createApplicationStateOutcomeFromReceipt(receipt) : null;
-  }
-
   return Object.freeze({
     storeId,
     destination,
     effectEvidenceVerifiers: APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS,
     resolve,
-    recoverOutcome,
-    readReceipt: table.readReceipt,
+    ...recovery,
+  });
+}
+
+/**
+ * Open only the receipt-recovery half of the finite built-in catalog over an
+ * already-owned application-state DB client. This path reads an existing
+ * store identity and never calls `ensureStoreIdentity`, so a missing or
+ * replacement store fails closed without creating operator-visible state.
+ * No adapter resolver or executable callback is returned.
+ * @param {{db: import('../../lib/db/base.js').DBClient, appId: string, adapterName: import('../../lib/config/db.js').DBAdapterName, tableName?: string, allowTestAdapter?: boolean}} options - Trusted host recovery configuration.
+ * @returns {Promise<Readonly<BuiltinManagedEffectRecoveryCatalog>>} - Recovery-only catalog.
+ */
+export async function createBuiltinManagedEffectRecoveryCatalog(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError(
+      'Built-in managed-effect recovery catalog requires options.',
+    );
+  }
+  for (const key of Object.keys(options)) {
+    if (!RECOVERY_CATALOG_OPTION_KEYS.has(key)) {
+      throw new TypeError(
+        `Built-in managed-effect recovery catalog.${key} is unsupported.`,
+      );
+    }
+  }
+
+  // Snapshot every caller-owned route before the first read. The returned
+  // recovery closure must remain bound to this exact provider and namespace.
+  const db = options.db;
+  const appId = options.appId;
+  const adapterName = options.adapterName;
+  const configuredTableName = options.tableName;
+  const allowTestAdapter = options.allowTestAdapter;
+  if (!db || typeof db.transactionWrite !== 'function') {
+    throw new TypeError(
+      'Built-in managed-effect recovery catalog requires a transactional DB client.',
+    );
+  }
+  assertLogicalId(appId, 'built-in managed-effect recovery catalog appId');
+  const tableName = configuredTableName ?? APPLICATION_STATE_TABLE_NAME;
+  if (tableName !== APPLICATION_STATE_TABLE_NAME) {
+    throw new TypeError(
+      `Built-in managed-effect recovery catalog tableName must be ${APPLICATION_STATE_TABLE_NAME}.`,
+    );
+  }
+  if (allowTestAdapter !== undefined && typeof allowTestAdapter !== 'boolean') {
+    throw new TypeError('allowTestAdapter must be a boolean when provided.');
+  }
+  const testAdapterAllowed = allowTestAdapter === true;
+  if (
+    adapterName !== 'lmdb' &&
+    !(testAdapterAllowed && adapterName === 'vanilla')
+  ) {
+    throw new TypeError(
+      'Built-in application-state effect recovery requires LMDB; vanilla is available only through allowTestAdapter for semantic tests.',
+    );
+  }
+  assertDBClientAdapterIdentity(db, adapterName);
+  const table = createApplicationStateTable({ db, tableName });
+  const identity = await table.readStoreIdentity();
+  if (!identity) {
+    throw new ApplicationStateStoreIdentityError(
+      'Application-state recovery requires an existing verified store identity.',
+    );
+  }
+  const storeId = identity.store_id;
+  const destination = createApplicationStateDestination({
+    adapterName,
+    storeId,
+    tableName,
+    appId,
+  });
+  const recovery = createApplicationStateRecoverySurface({
+    table,
+    storeId,
+    appId,
+    destination,
+  });
+  return Object.freeze({
+    storeId,
+    destination,
+    effectEvidenceVerifiers: APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS,
+    ...recovery,
   });
 }
 

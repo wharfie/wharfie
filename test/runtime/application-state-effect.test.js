@@ -18,6 +18,7 @@ import {
   APPLICATION_STATE_STORE_SORT_KEY,
   ApplicationStateCorruptionError,
   ApplicationStateEffectConflictError,
+  ApplicationStateStoreIdentityError,
   createApplicationStateBusinessKey,
   createApplicationStateBusinessRecord,
   createApplicationStateReceiptRecord,
@@ -44,6 +45,7 @@ import {
 import {
   createBuiltinManagedEffectCatalog,
   createBuiltinManagedEffectHandler,
+  createBuiltinManagedEffectRecoveryCatalog,
 } from '../../src/core/runtime/effects/builtin-catalog.js';
 import { withExecutionLedger } from '../../src/core/runtime/operator/execution-ledger-store.js';
 
@@ -365,6 +367,145 @@ describe('application-state effect request and catalog boundary', () => {
       );
     } finally {
       await db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('opens an existing recovery-only binding without exposing or invoking execution', async () => {
+    const harness = await createCatalogHarness();
+    try {
+      const outcome = await executeCatalogEffect(harness.catalog);
+      const transactionWrite = jest.fn(async () => {
+        throw new Error('recovery must never write application state');
+      });
+      const recoveryDb = {
+        ...harness.baseDb,
+        transactionWrite,
+      };
+      const recovery = await createBuiltinManagedEffectRecoveryCatalog({
+        db: recoveryDb,
+        appId: APP_ID,
+        adapterName: 'vanilla',
+        allowTestAdapter: true,
+      });
+
+      expect(Object.keys(recovery)).toEqual([
+        'storeId',
+        'destination',
+        'effectEvidenceVerifiers',
+        'recoverOutcome',
+        'readReceipt',
+      ]);
+      expect(recovery).not.toHaveProperty('resolve');
+      expect(recovery).not.toHaveProperty('execute');
+      expect(recovery.storeId).toBe(STORE_ID);
+      await expect(
+        recovery.recoverOutcome({
+          destinationEffectId: destinationEffectId(),
+          destination: harness.catalog.destination,
+          identity: contractIdentity(),
+          request: effectRequest('application-state-attempt'),
+        }),
+      ).resolves.toEqual(outcome);
+      await expect(
+        recovery.readReceipt(destinationEffectId()),
+      ).resolves.toMatchObject({
+        destination_effect_id: destinationEffectId(),
+      });
+      expect(transactionWrite).not.toHaveBeenCalled();
+
+      const otherStoreId = createId(
+        'was',
+        'wharfie:test:recovery-store-mismatch:v1',
+        { fixture: 'other' },
+      );
+      for (const configuration of [
+        {
+          ...harness.catalog.destination.configuration,
+          provider: 'lmdb',
+        },
+        {
+          ...harness.catalog.destination.configuration,
+          storeId: otherStoreId,
+        },
+        {
+          ...harness.catalog.destination.configuration,
+          tableName: 'redirected-table',
+        },
+        {
+          ...harness.catalog.destination.configuration,
+          namespace: 'other-application',
+        },
+      ]) {
+        await expect(
+          recovery.recoverOutcome({
+            destinationEffectId: destinationEffectId(),
+            destination: {
+              ...harness.catalog.destination,
+              configuration,
+            },
+            identity: contractIdentity(),
+            request: effectRequest('application-state-attempt'),
+          }),
+        ).rejects.toThrow();
+      }
+      await expect(
+        recovery.recoverOutcome({
+          destinationEffectId: destinationEffectId(),
+          destination: harness.catalog.destination,
+          identity: contractIdentity(),
+          request: effectRequest('application-state-attempt', {
+            input: { key: 'answer', value: { value: 99 } },
+          }),
+        }),
+      ).rejects.toBeInstanceOf(ApplicationStateEffectConflictError);
+      expect(transactionWrite).not.toHaveBeenCalled();
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  test('fails closed on a missing store identity without attempting initialization', async () => {
+    const root = makeRoot('application-state-recovery-missing-identity');
+    const baseDb = createVanillaDB({ path: root });
+    const transactionWrite = jest.fn(async () => {
+      throw new Error('recovery must never initialize a store');
+    });
+    const recoveryDb = { ...baseDb, transactionWrite };
+    try {
+      await expect(
+        createBuiltinManagedEffectRecoveryCatalog({
+          db: recoveryDb,
+          appId: APP_ID,
+          adapterName: 'vanilla',
+          allowTestAdapter: true,
+        }),
+      ).rejects.toBeInstanceOf(ApplicationStateStoreIdentityError);
+      expect(transactionWrite).not.toHaveBeenCalled();
+      await expect(
+        baseDb.get({
+          tableName: APPLICATION_STATE_TABLE_NAME,
+          keyName: APPLICATION_STATE_KEY_NAME,
+          keyValue: APPLICATION_STATE_STORE_RESOURCE_ID,
+          sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+          sortKeyValue: APPLICATION_STATE_STORE_SORT_KEY,
+          consistentRead: true,
+        }),
+      ).resolves.toBeUndefined();
+      await expect(
+        createBuiltinManagedEffectRecoveryCatalog(
+          /** @type {any} */ ({
+            db: recoveryDb,
+            appId: APP_ID,
+            adapterName: 'vanilla',
+            allowTestAdapter: true,
+            createStoreId: () => STORE_ID,
+          }),
+        ),
+      ).rejects.toThrow(/createStoreId is unsupported/i);
+      expect(transactionWrite).not.toHaveBeenCalled();
+    } finally {
+      await baseDb.close();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -946,13 +1087,18 @@ describe('application-state production storage', () => {
       await db.close();
       db = undefined;
 
-      db = await createApplicationStateDBClient('lmdb', { path: root });
-      const reopened = await createBuiltinManagedEffectCatalog({
+      db = await createApplicationStateDBClient('lmdb', {
+        path: root,
+        readOnly: true,
+      });
+      const reopened = await createBuiltinManagedEffectRecoveryCatalog({
         db,
         appId: APP_ID,
         adapterName: 'lmdb',
       });
       expect(reopened.storeId).toBe(STORE_ID);
+      expect(reopened).not.toHaveProperty('resolve');
+      expect(reopened).not.toHaveProperty('execute');
       await expect(
         reopened.recoverOutcome({
           destinationEffectId: destinationEffectId(),
