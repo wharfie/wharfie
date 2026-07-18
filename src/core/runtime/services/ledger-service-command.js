@@ -145,8 +145,7 @@ export async function runLedgerServiceRuntime(options = {}) {
 /**
  * This commander command is intentionally not added to the public embedded
  * operator CLI. Generated SEA bootstrap code maps it only when
- * `WHARFIE_BOOTSTRAP_MODE=runtime` and
- * `WHARFIE_RUNTIME_COMMAND=ledger-service` are set by trusted service wiring.
+ * `WHARFIE_RUNTIME_COMMAND=ledger-service` is set by trusted service wiring.
  */
 const ledgerServiceCommand = new Command('ledger-service')
   .description('Internal resident execution-ledger lifecycle runtime')

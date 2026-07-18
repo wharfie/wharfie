@@ -117,6 +117,11 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       portable pagination primitive. Its internal API verifies every directory
       row against a rebuilt run projection; it deliberately does not create a
       ready-work queue or expose a source-only `ops list` command.
+- [x] Delete the disconnected pre-reset NodeAgent, state-command, systemd
+      release, and private DB/queue/Lambda gRPC runtime island. Packaged apps
+      now have one narrow private runtime-command selector, currently mapping
+      only the resident ledger service; future service installation will be
+      rebuilt around the durable runtime rather than the removed supervisor.
 - [ ] Persist immutable revision bindings, inputs, outputs, scheduling decisions, attempts, and operator actions in the full append-only ledger.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, cancellation, retry policy, and recovery.
 - [ ] Implement substantiated `pure`, `idempotent`, and `transactional` replay properties, make begun in-process handlers `unsafe` by default, and add a durable blocked `uncertain` state with explicit reconciliation/compensation paths.
@@ -176,10 +181,9 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 ## Immediate queue
 
 1. Repair the clean-install lint dependency declaration after explicit approval, make draft PR #125 green in GitHub Actions, and review the reset stack for merge.
-2. Delete the stale NodeAgent/systemd, mutable-operation, and unusable
-   resource-injection compatibility paths before enlarging a public durable
-   surface; retain only the activity protocol and control-store pieces that
-   serve the reset model.
+2. Delete the mutable Operation/Action and unusable resource-injection
+   compatibility paths before enlarging a public durable surface; retain only
+   the activity protocol and control-store pieces that serve the reset model.
 3. Build one shared source/SEA operator-command layer on the verified V3 run
    directory before exposing history; do not add a scan-based `ops list`.
 4. Design durable cancellation/reconciliation transitions before exposing an
@@ -188,4 +192,4 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
    package resolution before treating malformed-closure ambient-JS fallback as
    closed.
 
-The latest dated handoff at [llm/checkpoints/2026-07-17-run-directory-index.md](llm/checkpoints/2026-07-17-run-directory-index.md) records the V3 ledger index, hosted SEA evidence, and remaining cleanup boundary. The preceding [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.
+The latest dated handoff at [llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md) records the retired NodeAgent/systemd/private-gRPC island and the next deletion boundary. The preceding [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.

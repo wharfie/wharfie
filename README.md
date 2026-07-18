@@ -28,8 +28,8 @@ No separate service rewrite, preinstalled Node runtime, Dockerfile, Kubernetes c
 
 Inside a packaged application, normal argv belongs to the application. Wharfie
 reserves only `<app> wharfie <command>` for operator commands; internal service
-startup uses hidden environment-selected bootstrap instead of consuming public
-commands.
+startup uses a private environment-selected runtime command instead of
+consuming public commands.
 
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
@@ -54,7 +54,8 @@ package remains deliberately private. It is not ready for production use.
 - [Strict v2 manifest checkpoint](llm/checkpoints/2026-07-16-strict-v2-manifest.md) — historical strict public-boundary handoff.
 - [Atomic operation-store checkpoint](llm/checkpoints/2026-07-16-atomic-operation-store.md) — historical atomic snapshot and fencing boundary.
 - [Immutable identity-spine checkpoint](llm/checkpoints/2026-07-17-immutable-identity-spine.md) — historical identity and artifact boundary.
-- [Atomic run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md) — current restart point, hosted SEA evidence, verified V3 history index, cleanup boundary, and ordered next work.
+- [Obsolete runtime retirement checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md) — current restart point after deleting the disconnected NodeAgent/systemd/private-gRPC runtime island.
+- [Atomic run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md) — historical hosted SEA evidence, verified V3 history index, and the cleanup boundary that preceded the runtime deletion.
 
 The charter and accepted decisions are authoritative; the roadmap is expected to evolve, and dated checkpoints are historical snapshots. Older material under `docs/` and `llm/design/` describes prior iterations and can be stale.
 
@@ -145,6 +146,6 @@ still ran under `if: always()`.
 Current source is organized as follows:
 
 - `src/cli/` — the current developer and operator CLI implementation.
-- `src/core/` — runtime, durable graph, resource, provider, and packaging foundations.
+- `src/core/` — activity runtime, durable ledger, provider, and packaging foundations.
 - `apps/` — buildable reference and dogfood applications.
 - `llm/` — design notes, prompt templates, and dated project checkpoints.

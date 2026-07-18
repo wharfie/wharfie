@@ -4,7 +4,7 @@ import { stringifyAppManifest } from '../../../../runtime/app-manifest.js';
 import { resolveAppManifest } from '../lib/app-manifest.js';
 
 /**
- * @param {{ pretty?: boolean, manifestFile?: string, manifest_file?: string, manifest?: string }} options - options.
+ * @param {{ pretty?: boolean, manifestFile?: string, manifest?: string }} options - options.
  * @param {{ write?: (text: string) => void, assetProvider?: import('../../lib/app-manifest-asset.js').EmbeddedManifestAssetProvider }} [io] - io.
  * @returns {Promise<void>} - Result.
  */

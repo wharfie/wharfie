@@ -1,8 +1,3 @@
-import {
-  BOOTSTRAP_MODE_STATE_START,
-  resolveBootstrapInvocation,
-} from './actor-system-cli/lib/bootstrap-mode.js';
-
 /**
  * The one top-level word reserved by packaged applications for Wharfie-owned
  * operator commands. All other argv belongs to the application.
@@ -14,13 +9,9 @@ export const OPERATOR_NAMESPACE = 'wharfie';
  * @param {string} label - label.
  * @returns {string[]} - Result.
  */
-export function parseBootstrapArgs(
-  value = typeof process.env.WHARFIE_BOOTSTRAP_ARGS === 'string'
-    ? process.env.WHARFIE_BOOTSTRAP_ARGS
-    : process.env.WHARFIE_RUNTIME_ARGS,
-  label = typeof process.env.WHARFIE_BOOTSTRAP_ARGS === 'string'
-    ? 'WHARFIE_BOOTSTRAP_ARGS'
-    : 'WHARFIE_RUNTIME_ARGS',
+export function parseRuntimeArgs(
+  value = process.env.WHARFIE_RUNTIME_ARGS,
+  label = 'WHARFIE_RUNTIME_ARGS',
 ) {
   const raw = typeof value === 'string' ? value.trim() : '';
   if (!raw) {
@@ -32,19 +23,20 @@ export function parseBootstrapArgs(
     throw new Error(`${label} must be a JSON array of strings.`);
   }
 
-  return parsed.map((candidate) => String(candidate));
+  if (parsed.some((candidate) => typeof candidate !== 'string')) {
+    throw new Error(`${label} must be a JSON array of strings.`);
+  }
+
+  return parsed;
 }
 
 /**
  * @param {Record<string, string | undefined>} [environment] - environment.
  * @returns {'cli' | 'runtime'} - Result.
  */
-export function getBootstrapMode(environment = process.env) {
-  if (resolveBootstrapInvocation(environment)) {
-    return 'runtime';
-  }
-
-  return environment.WHARFIE_RUNTIME_COMMAND || environment.WHARFIE_RUNTIME_ARGS
+export function getDispatchMode(environment = process.env) {
+  const runtimeCommand = environment.WHARFIE_RUNTIME_COMMAND;
+  return typeof runtimeCommand === 'string' && runtimeCommand.trim()
     ? 'runtime'
     : 'cli';
 }
@@ -54,27 +46,18 @@ export function getBootstrapMode(environment = process.env) {
  * @returns {string} - Result.
  */
 export function getRuntimeCommand(environment = process.env) {
-  const bootstrapInvocation = resolveBootstrapInvocation(environment);
   const runtimeCommand =
     typeof environment.WHARFIE_RUNTIME_COMMAND === 'string'
       ? environment.WHARFIE_RUNTIME_COMMAND.trim()
       : '';
 
-  if (bootstrapInvocation) {
-    if (bootstrapInvocation.mode === BOOTSTRAP_MODE_STATE_START) {
-      return 'start';
-    }
-
-    if (bootstrapInvocation.mode === 'runtime') {
-      return runtimeCommand || 'start';
-    }
-
+  if (!runtimeCommand) {
     throw new Error(
-      `Unsupported packaged bootstrap mode '${bootstrapInvocation.mode}'.`,
+      'Packaged runtime dispatch requires WHARFIE_RUNTIME_COMMAND.',
     );
   }
 
-  return runtimeCommand || 'start';
+  return runtimeCommand;
 }
 
 /**
@@ -82,19 +65,7 @@ export function getRuntimeCommand(environment = process.env) {
  * @returns {string[]} - Result.
  */
 function getRuntimeArgs(environment = process.env) {
-  const bootstrapInvocation = resolveBootstrapInvocation(environment);
-  if (bootstrapInvocation) {
-    if (bootstrapInvocation.mode === 'runtime') {
-      const runtimeArgsValue = environment.WHARFIE_RUNTIME_ARGS;
-      return typeof runtimeArgsValue === 'string' && runtimeArgsValue.trim()
-        ? parseBootstrapArgs(runtimeArgsValue, 'WHARFIE_RUNTIME_ARGS')
-        : bootstrapInvocation.args;
-    }
-
-    return bootstrapInvocation.args;
-  }
-
-  return parseBootstrapArgs(
+  return parseRuntimeArgs(
     environment.WHARFIE_RUNTIME_ARGS,
     'WHARFIE_RUNTIME_ARGS',
   );
@@ -223,7 +194,7 @@ export async function runPackagedApp(options = {}) {
   const argv = Array.isArray(options.argv) ? options.argv : process.argv;
   const runtimeModules = options.runtimeModules || {};
 
-  if (getBootstrapMode() === 'runtime') {
+  if (getDispatchMode() === 'runtime') {
     await runRuntimeBootstrap(runtimeModules, { argv });
     return;
   }

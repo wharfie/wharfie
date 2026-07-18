@@ -773,8 +773,6 @@ export default defineApp({
   });
   const residentEnvironment = {
     ...cleanEnvironment,
-    WHARFIE_BOOTSTRAP_MODE: 'runtime',
-    WHARFIE_BOOTSTRAP_ARGS: '[]',
     WHARFIE_CONTROL_ADAPTER: 'lmdb',
     WHARFIE_CONTROL_PATH: controlPath,
     WHARFIE_EXECUTION_LEDGER_TABLE: ledgerTableName,

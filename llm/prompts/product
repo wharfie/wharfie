@@ -72,12 +72,12 @@ For Wharfie product/design work, start here unless the task clearly points elsew
 - src/app.d.ts
 - src/cli/app/load-app.js
 - src/cli/app/local-app.js
-- src/core/lib/graph/action.js
-- src/core/lib/graph/operation.js
 - src/core/runtime/app-runs.js
-- src/core/lib/graph/runner.js
-- src/core/lib/db/tables/operations.js
-- src/core/runtime/services/node-agent.js
+- src/core/runtime/activity-protocol.js
+- src/core/runtime/activity-attempt.js
+- src/core/runtime/manual-ledger-run.js
+- src/core/lib/db/tables/execution-ledger.js
+- src/core/runtime/services/ledger-service.js
 
 Expand only as needed.
 
