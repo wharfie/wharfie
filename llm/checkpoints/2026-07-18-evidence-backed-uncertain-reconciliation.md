@@ -121,8 +121,10 @@ package into a release certification.
 
 The current remote heads remain `master` and `agent/strict-manifest`; draft PR
 #125 is the only open PR and issues #126–#132 are the only open scoped future
-issues. The previous current-owner cancellation commit is `7a942cc`; this
-reconciliation/cleanup work is still uncommitted at this checkpoint.
+issues. The previous current-owner cancellation commit is `7a942cc`; the
+reconciliation/cleanup slice is committed and pushed as `b2d2bcc`
+(`feat: reconcile uncertain ledger attempts`). The draft PR description was
+refreshed to record this exact scope, proof, limits, and CI blocker.
 
 All remaining local historical `jvd/*` branch tips were audited and preserved
 as annotated **local** archive tags before branch deletion:
@@ -155,7 +157,7 @@ evidence. That is the prerequisite for any exactly-once effect claim or effect
 reconciliation. Automatic retries, compensation, deadlines, remote command
 routing, service installation, and coordinator failover remain separate work.
 
-When resuming: inspect the working tree and this checkpoint, run the complete
-verification matrix, commit only the reconciliation/docs/cleanup changes, push
-`agent/strict-manifest`, and update draft PR #125 with the final validation and
-the CI limitation. Do not reset or discard the worktree.
+When resuming: begin from the pushed `b2d2bcc` slice and this checkpoint, check
+draft PR #125 for CI/review changes, and keep the working tree clean. Do not
+reset or discard the historical archive tags; do not alter the lint dependency
+metadata without explicit user approval.
