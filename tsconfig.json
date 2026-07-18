@@ -23,6 +23,7 @@
     "test/graph/**/*.js",
     "test/db/**/*.js",
     "test/fixtures/actors/**/*.js",
+    "test/fixtures/managed-effect-crash-child.js",
     "test/types/**/*.ts",
     "types/**/*.d.ts"
   ]

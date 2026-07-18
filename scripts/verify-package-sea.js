@@ -26,6 +26,10 @@ import {
 
 const RESIDENT_SERVICE_TIMEOUT_MS = 20_000;
 const RESIDENT_SERVICE_POLL_INTERVAL_MS = 50;
+const CRASH_RECOVERY_TIMEOUT_MS = 60_000;
+const CRASH_RECOVERY_POLL_INTERVAL_MS = 100;
+const CRASH_RECOVERY_MIN_RESPONSE_BYTES = 512 * 1024;
+const CRASH_RECOVERY_TERMINAL_PADDING_EFFECTS = 20;
 
 /** @typedef {{code: number | null, signal: string | null}} ResidentServiceExit */
 
@@ -42,11 +46,11 @@ function delay(milliseconds) {
  * lifecycle assertion. This is deliberately asynchronous: ledger-service
  * does not terminate until it receives a signal.
  * @param {string} command - Copied SEA executable path.
- * @param {{cwd: string, env: Record<string, string>}} options - Child process options.
+ * @param {{cwd: string, env: Record<string, string>, args?: string[], consumeStdout?: boolean}} options - Child process options.
  * @returns {{child: import('node:child_process').ChildProcess, exited: Promise<ResidentServiceExit>, getExit: () => ResidentServiceExit | null, getOutput: () => {stdout: string, stderr: string}}} - Resident process handle.
  */
 function spawnResidentService(command, options) {
-  const child = spawn(command, [], {
+  const child = spawn(command, options.args || [], {
     cwd: options.cwd,
     env: options.env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -55,11 +59,18 @@ function spawnResidentService(command, options) {
   let stderr = '';
   /** @type {ResidentServiceExit | null} */
   let exitResult = null;
-  child.stdout?.setEncoding('utf8');
+  if (options.consumeStdout === false) {
+    // Leaving the pipe paused creates an external response-delivery boundary:
+    // the child can commit durable work, but an oversized response cannot
+    // drain before the verifier sends SIGKILL.
+    child.stdout?.pause();
+  } else {
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (chunk) => {
+      stdout = `${stdout}${String(chunk)}`.slice(-64 * 1024);
+    });
+  }
   child.stderr?.setEncoding('utf8');
-  child.stdout?.on('data', (chunk) => {
-    stdout = `${stdout}${String(chunk)}`.slice(-64 * 1024);
-  });
   child.stderr?.on('data', (chunk) => {
     stderr = `${stderr}${String(chunk)}`.slice(-64 * 1024);
   });
@@ -148,22 +159,95 @@ async function signalResidentService(service, signal) {
 }
 
 /**
+ * Start reading a deliberately paused stdout only far enough to prove the
+ * packaged response has begun. One byte is consumed; the stream is then left
+ * paused so the oversized remainder continues to backpressure the child.
+ * @param {{child: import('node:child_process').ChildProcess, getExit: () => ResidentServiceExit | null, getOutput: () => {stdout: string, stderr: string}}} service - Output-blocked relocated SEA.
+ * @returns {Promise<Buffer>} - The first response byte.
+ */
+async function waitForPausedStdoutByte(service) {
+  const stdout = service.child.stdout;
+  if (!stdout) {
+    throw residentServiceError(
+      service,
+      'Output-blocked relocated SEA has no readable stdout pipe.',
+    );
+  }
+  return await new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      stdout.removeListener('readable', readFirstByte);
+      stdout.removeListener('error', rejectFromStream);
+      service.child.removeListener('exit', rejectFromExit);
+      stdout.pause();
+    };
+    const rejectWith = (error) => {
+      cleanup();
+      reject(error);
+    };
+    const rejectFromStream = (error) => {
+      rejectWith(
+        residentServiceError(
+          service,
+          `Could not read the relocated SEA response boundary: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+    };
+    const rejectFromExit = () => {
+      rejectWith(
+        residentServiceError(
+          service,
+          `Relocated SEA exited before the response boundary was observed. Exit: ${JSON.stringify(service.getExit())}.`,
+        ),
+      );
+    };
+    const readFirstByte = () => {
+      const byte = stdout.read(1);
+      if (byte !== null) {
+        cleanup();
+        resolve(Buffer.from(byte));
+        return;
+      }
+      stdout.once('readable', readFirstByte);
+    };
+    const timer = setTimeout(
+      () =>
+        rejectWith(
+          residentServiceError(
+            service,
+            `Relocated SEA emitted no response byte within ${CRASH_RECOVERY_TIMEOUT_MS}ms after its durable commit.`,
+          ),
+        ),
+      CRASH_RECOVERY_TIMEOUT_MS,
+    );
+    stdout.once('error', rejectFromStream);
+    service.child.once('exit', rejectFromExit);
+    readFirstByte();
+  });
+}
+
+/**
  * Force cleanup without replacing the primary verifier error.
  * @param {{child: import('node:child_process').ChildProcess, exited: Promise<ResidentServiceExit>, getExit: () => ResidentServiceExit | null} | undefined} service - Optional resident process handle.
  * @returns {Promise<void>} - Best-effort cleanup completion.
  */
 async function stopResidentServiceForCleanup(service) {
-  if (!service || service.getExit()) return;
+  if (!service) return;
   try {
-    service.child.kill('SIGKILL');
-    await waitWithTimeout(
-      service.exited,
-      RESIDENT_SERVICE_TIMEOUT_MS,
-      'resident SEA cleanup',
-    );
+    if (!service.getExit()) {
+      service.child.kill('SIGKILL');
+      await waitWithTimeout(
+        service.exited,
+        RESIDENT_SERVICE_TIMEOUT_MS,
+        'resident SEA cleanup',
+      );
+    }
   } catch {
     // The outer verifier error remains the useful failure. CI worker teardown
     // will reap a pathological child that ignored SIGKILL.
+  } finally {
+    service.child.stdout?.destroy();
+    service.child.stderr?.destroy();
   }
 }
 
@@ -172,7 +256,7 @@ async function stopResidentServiceForCleanup(service) {
  * observer is intentionally not part of the clean process environment; it
  * only reads the control store written by the copied standalone SEA.
  * @param {{installedPackageRoot: string, controlPath: string, tableName: string, appId: string}} options - Observer inputs.
- * @returns {Promise<{serviceId: string, read: () => Promise<Record<string, any> | null>}>} - Lifecycle observer.
+ * @returns {Promise<{serviceId: string, getSessionEndpoint: (sessionId: string, sessionRoot: string) => string, read: () => Promise<Record<string, any> | null>, readOwnership: () => Promise<Record<string, any> | null>}>} - Lifecycle observer.
  */
 async function createInstalledLedgerLifecycleObserver(options) {
   const adapterModule = await import(
@@ -201,11 +285,28 @@ async function createInstalledLedgerLifecycleObserver(options) {
       ),
     ).href
   );
+  const localSessionModule = await import(
+    pathToFileURL(
+      path.join(
+        options.installedPackageRoot,
+        'src',
+        'core',
+        'runtime',
+        'local-service-session.js',
+      ),
+    ).href
+  );
   const serviceId = lifecycleModule.createLedgerServiceId({
     appId: options.appId,
   });
   return {
     serviceId,
+    getSessionEndpoint: (sessionId, sessionRoot) =>
+      localSessionModule.getLocalServiceSessionEndpoint({
+        serviceId,
+        sessionId,
+        sessionRoot,
+      }),
     read: async () => {
       const db = adapterModule.default({
         path: options.controlPath,
@@ -221,6 +322,21 @@ async function createInstalledLedgerLifecycleObserver(options) {
         await db.close();
       }
     },
+    readOwnership: async () => {
+      const db = adapterModule.default({
+        path: options.controlPath,
+        readOnly: true,
+      });
+      try {
+        const ownership = lifecycleModule.createLedgerServiceOwnership({
+          db,
+          tableName: options.tableName,
+        });
+        return await ownership.getOwnership({ serviceId });
+      } finally {
+        await db.close();
+      }
+    },
   };
 }
 
@@ -229,7 +345,7 @@ async function createInstalledLedgerLifecycleObserver(options) {
  * operator fixtures. The moved SEA still performs every operation under test;
  * this host helper only prepares independently verifiable durable state.
  * @param {{installedPackageRoot: string, controlPath: string, tableName: string, payloadPath: string, applicationStatePath: string, revisionId: string}} options - Installed-package fixture inputs.
- * @returns {Promise<{createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[]) => Promise<{runId: string, attemptId: string, storeId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, ApplicationStateAdapterDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
+ * @returns {Promise<{createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, readRun: (runId: string) => Promise<Record<string, any> | null>, ApplicationStateAdapterDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
  */
 async function createInstalledExecutionLedgerFixture(options) {
   const installedModule = async (/** @type {string} */ relativePath) =>
@@ -283,8 +399,9 @@ async function createInstalledExecutionLedgerFixture(options) {
     manualModule.createManualLedgerRunId({ appId, idempotencyKey });
   const seedClaimedRun = async (
     /** @type {Record<string, any>} */ ledger,
-    /** @type {{appId: string, idempotencyKey: string, inputSecret: string, callerSecret: string, fencingToken: string}} */ seed,
+    /** @type {{appId: string, idempotencyKey: string, inputSecret: string, callerSecret: string, fencingToken: string, actor?: {kind: string, id: string}}} */ seed,
   ) => {
+    const actor = seed.actor || { kind: 'local', id: 'sea-verifier' };
     const runId = createRunId(seed.appId, seed.idempotencyKey);
     const created = await ledger.createManualRun({
       runId,
@@ -295,7 +412,7 @@ async function createInstalledExecutionLedgerFixture(options) {
       input: { credential: seed.inputSecret },
       callerMetadata: { credential: seed.callerSecret },
       transitionId: 'create',
-      actor: { kind: 'local', id: 'sea-verifier' },
+      actor,
     });
     const claimed = await ledger.claimInvocation({
       runId,
@@ -304,9 +421,36 @@ async function createInstalledExecutionLedgerFixture(options) {
       expectedGeneration: 0,
       expectedVersion: created.run.version,
       transitionId: 'claim:1',
-      actor: { kind: 'local', id: 'sea-verifier' },
+      actor,
     });
     return { runId, claimed };
+  };
+  const readApplicationStateReceipts = async (
+    /** @type {string} */ appId,
+    /** @type {string[]} */ destinationEffectIds,
+  ) => {
+    const applicationDb = await dbConfigModule.createApplicationStateDBClient(
+      'lmdb',
+      { path: options.applicationStatePath, readOnly: true },
+    );
+    try {
+      const catalog =
+        await builtinCatalogModule.createBuiltinManagedEffectRecoveryCatalog({
+          db: applicationDb,
+          appId,
+          adapterName: 'lmdb',
+        });
+      const receipts = new Map();
+      for (const destinationEffectId of destinationEffectIds) {
+        receipts.set(
+          destinationEffectId,
+          await catalog.readReceipt(destinationEffectId),
+        );
+      }
+      return receipts;
+    } finally {
+      await applicationDb.close();
+    }
   };
   return {
     createRunId,
@@ -329,8 +473,13 @@ async function createInstalledExecutionLedgerFixture(options) {
       appId,
       idempotencyKey,
       effectSpecs,
+      fixtureOptions = {},
     ) => {
       assert.ok(effectSpecs.length > 0);
+      const actor = fixtureOptions.actor || {
+        kind: 'local',
+        id: 'sea-verifier',
+      };
       const inputSecret = `sea-effect-input-secret-${idempotencyKey}`;
       const callerSecret = `sea-effect-caller-secret-${idempotencyKey}`;
       const fencingToken = `sea-effect-fencing-secret-${idempotencyKey}`;
@@ -353,6 +502,7 @@ async function createInstalledExecutionLedgerFixture(options) {
           inputSecret,
           callerSecret,
           fencingToken,
+          actor,
         });
         const started = await ledger.markAttemptStarted({
           runId: seeded.runId,
@@ -362,7 +512,7 @@ async function createInstalledExecutionLedgerFixture(options) {
           generation: seeded.claimed.attempt.generation,
           expectedVersion: seeded.claimed.run.version,
           transitionId: `start:${seeded.claimed.attempt.attemptId}`,
-          actor: { kind: 'local', id: 'sea-verifier' },
+          actor,
         });
         let currentRun = started.run;
         const effects = [];
@@ -409,7 +559,7 @@ async function createInstalledExecutionLedgerFixture(options) {
             verifier: adapter.verifier,
             substantiatedReplayProperties:
               adapter.substantiatedReplayProperties,
-            actor: { kind: 'local', id: 'sea-verifier' },
+            actor,
           });
           currentRun = requested.run;
           let effect = requested.effect;
@@ -425,7 +575,7 @@ async function createInstalledExecutionLedgerFixture(options) {
               expectedVersion: currentRun.version,
               expectedEffectVersion: effect.version,
               transitionId: `effect-start:${spec.effectId}`,
-              actor: { kind: 'local', id: 'sea-verifier' },
+              actor,
             });
             currentRun = effectStarted.run;
             effect = effectStarted.effect;
@@ -454,7 +604,7 @@ async function createInstalledExecutionLedgerFixture(options) {
                   expectedEffectVersion: effect.version,
                   transitionId: `effect-outcome:${spec.effectId}`,
                   outcome,
-                  actor: { kind: 'local', id: 'sea-verifier' },
+                  actor,
                 });
                 currentRun = committed.run;
                 effect = committed.effect;
@@ -497,23 +647,11 @@ async function createInstalledExecutionLedgerFixture(options) {
         await db.close();
       }
     },
-    readApplicationStateReceipt: async (appId, destinationEffectId) => {
-      const applicationDb = await dbConfigModule.createApplicationStateDBClient(
-        'lmdb',
-        { path: options.applicationStatePath, readOnly: true },
-      );
-      try {
-        const catalog =
-          await builtinCatalogModule.createBuiltinManagedEffectRecoveryCatalog({
-            db: applicationDb,
-            appId,
-            adapterName: 'lmdb',
-          });
-        return await catalog.readReceipt(destinationEffectId);
-      } finally {
-        await applicationDb.close();
-      }
-    },
+    readApplicationStateReceipt: async (appId, destinationEffectId) =>
+      (await readApplicationStateReceipts(appId, [destinationEffectId])).get(
+        destinationEffectId,
+      ) || null,
+    readApplicationStateReceipts,
     readRun: async (runId) => {
       const { db, ledger } = openLedger(true);
       try {
@@ -769,6 +907,57 @@ async function waitForDurableLifecycle(observer, predicate, label) {
     : '';
   throw new Error(
     `Durable ledger-service lifecycle did not reach ${label}.${stateDetail}${errorDetail}`,
+  );
+}
+
+/**
+ * Wait for one durable run transition while failing immediately if the
+ * output-blocked relocated SEA exits. Diagnostics summarize the large run
+ * instead of copying its response-padding history into an error.
+ * @param {{read: () => Promise<Record<string, any> | null>}} observer - Exact-run reader.
+ * @param {(snapshot: Record<string, any> | null) => boolean} predicate - Required durable state.
+ * @param {{getExit: () => ResidentServiceExit | null, getOutput: () => {stdout: string, stderr: string}}} service - Relocated SEA child.
+ * @param {string} label - State being awaited.
+ * @returns {Promise<Record<string, any>>} - Matching durable run.
+ */
+async function waitForDurableRun(observer, predicate, service, label) {
+  const deadline = Date.now() + CRASH_RECOVERY_TIMEOUT_MS;
+  /** @type {unknown} */
+  let lastError;
+  /** @type {Record<string, any> | null} */
+  let lastSummary = null;
+  while (Date.now() < deadline) {
+    if (service.getExit()) {
+      throw residentServiceError(
+        service,
+        `Relocated SEA exited before durable run reached ${label}. Exit: ${JSON.stringify(service.getExit())}.`,
+      );
+    }
+    try {
+      const snapshot = await observer.read();
+      lastSummary = snapshot
+        ? {
+            runStatus: snapshot.run?.status,
+            invocationStatus: snapshot.invocations?.[0]?.status,
+            attemptStatus: snapshot.attempts?.[0]?.status,
+            effectCount: snapshot.effects?.length,
+            eventCount: snapshot.events?.length,
+            lastEventType: snapshot.events?.at(-1)?.type,
+          }
+        : null;
+      if (predicate(snapshot)) return snapshot;
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(CRASH_RECOVERY_POLL_INTERVAL_MS);
+  }
+  const errorDetail = lastError instanceof Error ? ` ${lastError.message}` : '';
+  const stateDetail = lastSummary
+    ? ` Last run summary: ${JSON.stringify(lastSummary)}.`
+    : '';
+  throw residentServiceError(
+    service,
+    `Durable run did not reach ${label}.${stateDetail}${errorDetail}`,
   );
 }
 
@@ -1316,6 +1505,10 @@ export default defineApp({
   let firstResidentService;
   /** @type {ReturnType<typeof spawnResidentService> | undefined} */
   let secondResidentService;
+  /** @type {ReturnType<typeof spawnResidentService> | undefined} */
+  let outputBlockedRecovery;
+  /** @type {string | undefined} */
+  let abruptlyTerminatedSessionEndpoint;
   try {
     firstResidentService = spawnResidentService(cleanArtifactPath, {
       cwd: cleanRunDirectory,
@@ -1332,6 +1525,14 @@ export default defineApp({
     assert.equal(firstReady.appId, embeddedManifest.app.id);
     assert.equal(firstReady.revisionId, packagedArtifact.revisionId);
     const firstSessionId = firstReady.sessionId;
+    abruptlyTerminatedSessionEndpoint = lifecycleObserver.getSessionEndpoint(
+      firstSessionId,
+      sessionPath,
+    );
+    const firstOwnership = await lifecycleObserver.readOwnership();
+    assert.equal(firstOwnership?.sessionId, firstSessionId);
+    assert.equal(firstOwnership?.ownerKind, 'resident');
+    assert.equal(firstOwnership?.generation, 1);
 
     const ledgerFixture = await createInstalledExecutionLedgerFixture({
       installedPackageRoot,
@@ -1383,6 +1584,40 @@ export default defineApp({
         'sea-mixed-effect-recovery',
         recoveryEffectSpecs('sea'),
       );
+    const crashEffectIdSuffix = 'e'.repeat(470);
+    const crashEffectSpecs = [
+      ...Array.from(
+        { length: CRASH_RECOVERY_TERMINAL_PADDING_EFFECTS },
+        (_value, index) => ({
+          effectId: `crash-terminal-${String(index).padStart(2, '0')}-${crashEffectIdSuffix}`,
+          state: /** @type {const} */ ('TERMINAL'),
+        }),
+      ),
+      {
+        effectId: `crash-pending-${crashEffectIdSuffix}`,
+        state: /** @type {const} */ ('PENDING'),
+      },
+      ...Array.from({ length: 15 }, (_value, index) => ({
+        effectId: `crash-started-${String(index).padStart(2, '0')}-${crashEffectIdSuffix}`,
+        state: /** @type {const} */ ('STARTED_ABSENT'),
+      })),
+    ];
+    const seaCrashEffectBatch =
+      await ledgerFixture.createApplicationStateRecoveryBatchRun(
+        embeddedManifest.app.id,
+        'sea-output-backpressure-crash-recovery',
+        crashEffectSpecs,
+        {
+          // These remain valid 500-byte opaque IDs. JSON's required control-
+          // character escaping expands each public history row enough to
+          // exceed ordinary Darwin/Linux child-pipe capacity with a modest
+          // durable fixture.
+          actor: {
+            kind: '\u0001'.repeat(500),
+            id: '\u0002'.repeat(500),
+          },
+        },
+      );
     const effectRecoveryTargets = [
       {
         label: 'source mixed-effect batch',
@@ -1416,6 +1651,29 @@ export default defineApp({
           `${target.label} ${effect.effectId} began with the wrong receipt state`,
         );
       }
+    }
+    const crashRunBeforeRecovery = await ledgerFixture.readRun(
+      seaCrashEffectBatch.runId,
+    );
+    assert.ok(crashRunBeforeRecovery);
+    assert.equal(
+      crashRunBeforeRecovery.effects.length,
+      crashEffectSpecs.length,
+    );
+    const crashReceiptIds = seaCrashEffectBatch.effects.map(
+      (effect) => effect.destinationEffectId,
+    );
+    const crashReceiptsBeforeRecovery =
+      await ledgerFixture.readApplicationStateReceipts(
+        embeddedManifest.app.id,
+        crashReceiptIds,
+      );
+    for (const effect of seaCrashEffectBatch.effects) {
+      assert.equal(
+        crashReceiptsBeforeRecovery.get(effect.destinationEffectId) !== null,
+        effect.receiptPresent,
+        `crash fixture ${effect.effectId} began with the wrong receipt state`,
+      );
     }
 
     const sourceInspectionText = runCommand(
@@ -1497,6 +1755,22 @@ export default defineApp({
         `${target.label} source and SEA effect inspections diverged`,
       );
     }
+    const crashInspectionBytes = Buffer.byteLength(
+      runCommand(
+        cleanArtifactPath,
+        ['wharfie', 'inspect', '--run-id', seaCrashEffectBatch.runId, '--json'],
+        {
+          cwd: cleanRunDirectory,
+          capture: true,
+          env: operatorEnvironment,
+        },
+      ).stdout,
+      'utf8',
+    );
+    assert.ok(
+      crashInspectionBytes >= CRASH_RECOVERY_MIN_RESPONSE_BYTES,
+      `crash fixture operator response is only ${crashInspectionBytes} bytes; ${CRASH_RECOVERY_MIN_RESPONSE_BYTES} bytes are required for deterministic stdout backpressure`,
+    );
 
     for (const command of ['list']) {
       const result = spawnSync(cleanArtifactPath, ['wharfie', command], {
@@ -1711,6 +1985,183 @@ export default defineApp({
       'READY generation 1 after abrupt termination',
     );
     assert.equal(afterKill.sessionId, firstSessionId);
+    const staleFirstOwnership = await lifecycleObserver.readOwnership();
+    assert.equal(staleFirstOwnership?.sessionId, firstSessionId);
+    assert.equal(staleFirstOwnership?.ownerKind, 'resident');
+    assert.equal(staleFirstOwnership?.generation, 1);
+    if (process.platform !== 'win32') {
+      assert.equal(
+        existsSync(abruptlyTerminatedSessionEndpoint),
+        true,
+        'abrupt resident termination did not retain its exact Unix liveness socket',
+      );
+    }
+
+    outputBlockedRecovery = spawnResidentService(cleanArtifactPath, {
+      cwd: cleanRunDirectory,
+      env: operatorEnvironment,
+      args: [
+        'wharfie',
+        'recover',
+        '--run-id',
+        seaCrashEffectBatch.runId,
+        '--confirm-runner-stopped',
+        '--json',
+      ],
+      consumeStdout: false,
+    });
+    const crashRecoverySequence = crashRunBeforeRecovery.events.length + 1;
+    await waitForDurableRun(
+      {
+        read: async () =>
+          await ledgerFixture.readRun(seaCrashEffectBatch.runId),
+      },
+      (snapshot) =>
+        snapshot?.events.length === crashRecoverySequence &&
+        snapshot.events.at(-1)?.type === 'attempt-became-uncertain' &&
+        snapshot.run.status === ledgerFixture.RunStatus.BLOCKED &&
+        snapshot.invocations[0]?.status ===
+          ledgerFixture.InvocationStatus.UNCERTAIN &&
+        snapshot.attempts[0]?.status === ledgerFixture.AttemptStatus.ABANDONED,
+      outputBlockedRecovery,
+      'one compound managed-effect settlement',
+    );
+    const firstRecoveryResponseByte = await waitForPausedStdoutByte(
+      outputBlockedRecovery,
+    );
+    assert.equal(firstRecoveryResponseByte.length, 1);
+    assert.equal(firstRecoveryResponseByte.toString('utf8'), '{');
+    // Mutation ownership is intentionally released before the command writes
+    // its response. The crash boundary is therefore durable settlement after
+    // a clean owner release, with only response delivery still in flight.
+    assert.equal(await lifecycleObserver.readOwnership(), null);
+    assert.equal(
+      outputBlockedRecovery.getExit(),
+      null,
+      `Relocated SEA drained a ${crashInspectionBytes}-byte response after the verifier consumed only its first byte.`,
+    );
+    const outputBlockedExit = await signalResidentService(
+      outputBlockedRecovery,
+      'SIGKILL',
+    );
+    assert.equal(outputBlockedExit.code, null);
+    assert.equal(outputBlockedExit.signal, 'SIGKILL');
+    outputBlockedRecovery.child.stdout?.destroy();
+    assert.equal(
+      await lifecycleObserver.readOwnership(),
+      null,
+      'response-loss SIGKILL resurrected released mutation ownership',
+    );
+
+    const crashRunAfterKill = await ledgerFixture.readRun(
+      seaCrashEffectBatch.runId,
+    );
+    assert.ok(crashRunAfterKill);
+    assert.equal(
+      crashRunAfterKill.events.length,
+      crashRecoverySequence,
+      'response-loss crash appended more than one compound recovery event',
+    );
+    assert.equal(
+      crashRunAfterKill.events.at(-1)?.type,
+      'attempt-became-uncertain',
+    );
+    assert.deepEqual(crashRunAfterKill.events.at(-1)?.actor, {
+      kind: 'packaged-operator',
+      id: packagedArtifact.revisionId,
+    });
+    const crashEffectsBeforeById = new Map(
+      crashRunBeforeRecovery.effects.map((effect) => [effect.effectId, effect]),
+    );
+    const crashEffectsAfterKillById = new Map(
+      crashRunAfterKill.effects.map((effect) => [effect.effectId, effect]),
+    );
+    const compoundRecoverySequence = crashRunAfterKill.events.at(-1).sequence;
+    for (const effect of seaCrashEffectBatch.effects) {
+      const before = crashEffectsBeforeById.get(effect.effectId);
+      const after = crashEffectsAfterKillById.get(effect.effectId);
+      assert.ok(before, `crash fixture lost pre-recovery ${effect.effectId}`);
+      assert.ok(after, `crash recovery lost ${effect.effectId}`);
+      assert.equal(
+        after.status,
+        effect.recoveredStatus || effect.initialStatus,
+        `crash recovery settled ${effect.effectId} incorrectly`,
+      );
+      if (effect.recoveryAction) {
+        assert.equal(
+          after.lastSequence,
+          compoundRecoverySequence,
+          `crash recovery did not atomically settle ${effect.effectId}`,
+        );
+      } else {
+        assert.deepEqual(
+          after,
+          before,
+          `crash recovery rewrote terminal padding effect ${effect.effectId}`,
+        );
+      }
+    }
+    const crashReceiptsAfterKill =
+      await ledgerFixture.readApplicationStateReceipts(
+        embeddedManifest.app.id,
+        crashReceiptIds,
+      );
+    assert.deepEqual(
+      crashReceiptsAfterKill,
+      crashReceiptsBeforeRecovery,
+      'response-loss recovery dispatched an unresolved effect or rewrote a permanent receipt',
+    );
+
+    const repeatedCrashRecoveryText = runCommand(
+      cleanArtifactPath,
+      [
+        'wharfie',
+        'recover',
+        '--run-id',
+        seaCrashEffectBatch.runId,
+        '--confirm-runner-stopped',
+        '--json',
+      ],
+      {
+        cwd: cleanRunDirectory,
+        capture: true,
+        env: operatorEnvironment,
+      },
+    ).stdout.trim();
+    assert.ok(
+      Buffer.byteLength(repeatedCrashRecoveryText, 'utf8') >=
+        CRASH_RECOVERY_MIN_RESPONSE_BYTES,
+      'restarted generic recovery response no longer exceeds the asserted backpressure floor',
+    );
+    const repeatedCrashRecovery = JSON.parse(repeatedCrashRecoveryText);
+    assert.deepEqual(repeatedCrashRecovery.recovery, {
+      action: 'none',
+      changed: false,
+    });
+    assert.equal(repeatedCrashRecovery.run.status, 'BLOCKED');
+    assert.equal(repeatedCrashRecovery.invocations[0].status, 'UNCERTAIN');
+    assert.equal(repeatedCrashRecovery.attempts[0].status, 'ABANDONED');
+    assert.equal(
+      await lifecycleObserver.readOwnership(),
+      null,
+      'restarted recovery retained manual mutation ownership after output',
+    );
+    const crashRunAfterRestart = await ledgerFixture.readRun(
+      seaCrashEffectBatch.runId,
+    );
+    assert.deepEqual(
+      crashRunAfterRestart,
+      crashRunAfterKill,
+      'restarted packaged recovery changed durable run/effect/event truth',
+    );
+    assert.deepEqual(
+      await ledgerFixture.readApplicationStateReceipts(
+        embeddedManifest.app.id,
+        crashReceiptIds,
+      ),
+      crashReceiptsBeforeRecovery,
+      'restarted packaged recovery dispatched an unresolved effect or changed a receipt',
+    );
 
     for (const target of effectRecoveryTargets) {
       const recoveryText = runCommand(
@@ -1877,12 +2328,24 @@ export default defineApp({
     await Promise.all([
       stopResidentServiceForCleanup(firstResidentService),
       stopResidentServiceForCleanup(secondResidentService),
+      stopResidentServiceForCleanup(outputBlockedRecovery),
     ]);
+    if (process.platform !== 'win32' && abruptlyTerminatedSessionEndpoint) {
+      rmSync(abruptlyTerminatedSessionEndpoint, { force: true });
+    }
+  }
+
+  if (process.platform !== 'win32' && abruptlyTerminatedSessionEndpoint) {
+    assert.equal(
+      existsSync(abruptlyTerminatedSessionEndpoint),
+      false,
+      'SEA verifier left the abruptly terminated resident socket behind',
+    );
   }
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, and clean generated ${process.platform} SEA activity plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, and clean generated ${process.platform} SEA activity plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();
