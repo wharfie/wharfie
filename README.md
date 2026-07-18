@@ -42,6 +42,11 @@ one frozen target dependency closure instead of ambient `node_modules` or a
 newly resolved npm tree. Exact-run inspection, confirmed recovery, and
 authenticated current-owner cancellation use one shared source/SEA operator
 layer; packaged commands bind authority to their embedded application identity.
+Source `wharfie ops run` and packaged `<app> wharfie run` now also use one
+durable activity host. The source adapter supplies a sealed prepared revision;
+the packaged adapter accepts only its cross-checked embedded manifest and
+revision/runtime pair and exposes no source-directory override. Operator and
+private runtime dispatch choose their path before authored CLI code is loaded.
 
 Foreground durable `ops run` execution has an authenticated current-owner
 cancellation path. Source `wharfie ops cancel` and packaged `<app> wharfie
@@ -71,19 +76,22 @@ reconciliation and any wider exactly-once claim remain unfinished. Real child
 processes now exercise seven source/core durable-run `SIGKILL` boundaries and
 three mixed-set recovery boundaries. A relocated SEA with Node absent from
 `PATH` also proves packaged compound recovery across response-delivery loss and
-restart. That packaged proof is deliberately narrower than durable activity
-parity: the SEA can operate on a retained run but cannot yet originate the
-source `ops run` execution path. A shared packaged durable-run host and the full
-moved-SEA activity crash matrix remain work. Public run history/listing,
-scheduling, and release hardening still need focused review. The npm package
-remains deliberately private. It is not ready for production use.
+restart, originates a durable managed-effect activity through its framed worker,
+demonstrates user continuation after effect-result delivery, and replays the
+same stable request without another event, attempt, effect, or receipt change.
+The full seven-boundary activity `SIGKILL` matrix has not yet been repeated
+through the moved SEA, so packaged process-crash parity remains work. Public run
+history/listing, scheduling, and release hardening still need focused review.
+The npm package remains deliberately private. It is not ready for production
+use.
 
 ## Start here
 
 - [Project charter](PROJECT.md) — the canonical problem, scope, public concepts, boundaries, and success test.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Real-process managed-effect crash checkpoint](llm/checkpoints/2026-07-18-real-process-managed-effect-crash-matrix.md) — the current restart point after proving the source/core and compound-recovery `SIGKILL` matrices and the narrower packaged-operator response-loss boundary.
+- [Shared packaged durable-run checkpoint](llm/checkpoints/2026-07-18-shared-packaged-durable-run-host.md) — the current restart point after unifying source and packaged foreground durable execution and proving a moved-SEA managed effect with exact replay.
+- [Real-process managed-effect crash checkpoint](llm/checkpoints/2026-07-18-real-process-managed-effect-crash-matrix.md) — the preceding restart point after proving the source/core and compound-recovery `SIGKILL` matrices and the narrower packaged-operator response-loss boundary.
 - [V7 atomic effect-settlement checkpoint](llm/checkpoints/2026-07-18-v7-atomic-effect-settlement.md) — the preceding restart point after closing stopped-attempt sibling sets in one bounded transaction.
 - [Public effects and receipt-recovery checkpoint](llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md) — the preceding restart point after exposing finite application state and closing its first singular stopped-runner recovery window.
 - [July 2026 checkpoint](llm/checkpoints/2026-07-16-project-reset.md) — immutable historical evidence of the pre-reset state and conversation handoff.

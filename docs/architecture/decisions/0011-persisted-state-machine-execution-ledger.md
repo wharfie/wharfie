@@ -350,9 +350,19 @@ After ownership is claimed, the service records `STARTING` → `READY` →
 `STOPPING` → `STOPPED`. A process crash removes its live socket listener (while
 the old pathname may remain), does not fabricate `STOPPED`, and lets one later
 owner conditionally replace the absent session with a new endpoint and higher
-generation. On the same local LMDB control volume, mutating manual `ops run`,
-`ops recover`, and `ops reconcile` acquire that same ownership fence and refuse
-to race a resident service; read-only inspection does not.
+generation. On the same local LMDB control volume, mutating source `wharfie ops
+run`, packaged `<app> wharfie run`, recovery, and reconciliation acquire that
+same ownership fence and refuse to race a resident service; read-only
+inspection does not.
+
+Foreground activity origination also shares one core host. The installed
+source command supplies one sealed prepared revision; the packaged command
+supplies only its validated embedded manifest and revision/runtime pair. Both
+derive the V7 manual run from app identity plus the caller's idempotency key and
+use the same claim, `STARTED`, managed-effect, framed-attempt, terminal,
+cancellation, and cleanup path. Unlike source-free operator transitions,
+packaged execution authority is exact-revision scoped: an artifact cannot
+override its app, revision, source directory, run ID, attempt, or fence.
 
 Exact-run inspection, confirmed recovery, evidence-backed reconciliation, and
 current-owner cancellation share one core implementation between the installed
