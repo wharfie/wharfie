@@ -66,14 +66,29 @@ function runCli(args, env) {
 }
 
 describe('wharfie ops run', () => {
+  it('exposes idempotency-key terminology without the legacy operation ID flag', () => {
+    const env = { ...process.env, NODE_ENV: 'development' };
+    const help = runCli(['ops', 'run', '--help'], env);
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain('--idempotency-key <idempotencyKey>');
+    expect(help.stdout).not.toContain('--operation-id');
+
+    const legacy = runCli(
+      ['ops', 'run', '--operation-id', 'legacy-operation-id'],
+      env,
+    );
+    expect(legacy.status).toBe(1);
+    expect(legacy.stderr).toMatch(/unknown option.*operation-id/i);
+  });
+
   it('refuses to claim work while the application resident session is active', async () => {
     const dbPath = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-ops-run-owner-'),
     );
     const tableName = 'execution-ledger-owner-test';
     const appId = 'hello-world-demo';
-    const operationId = 'blocked-by-resident-service';
-    const runId = createManualLedgerRunId({ appId, operationId });
+    const idempotencyKey = 'blocked-by-resident-service';
+    const runId = createManualLedgerRunId({ appId, idempotencyKey });
     const sessionRoot = path.join(dbPath, 'ledger-service-sessions');
     const ownerDb = createLMDB({ path: dbPath });
     const ownership = createLedgerServiceOwnership({
@@ -93,8 +108,8 @@ describe('wharfie ops run', () => {
           'run',
           '--activity',
           'echo-event',
-          '--operation-id',
-          operationId,
+          '--idempotency-key',
+          idempotencyKey,
           '--dir',
           helloWorldDir,
         ],
@@ -138,9 +153,8 @@ describe('wharfie ops run', () => {
     const dbPath = mkdtempSync(path.join(os.tmpdir(), 'wharfie-ops-run-'));
     const tableName = 'execution-ledger-test';
     const appId = 'hello-world-demo';
-    const resourceId = `app:${appId}`;
-    const operationId = 'op-1';
-    const runId = createManualLedgerRunId({ appId, operationId });
+    const idempotencyKey = 'op-1';
+    const runId = createManualLedgerRunId({ appId, idempotencyKey });
     /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
     let inspectDb;
 
@@ -155,8 +169,8 @@ describe('wharfie ops run', () => {
         'run',
         '--activity',
         'echo-event',
-        '--operation-id',
-        operationId,
+        '--idempotency-key',
+        idempotencyKey,
         '--dir',
         helloWorldDir,
         '--input',
@@ -180,8 +194,10 @@ describe('wharfie ops run', () => {
       expect(first.status).toBe(0);
       expect(first.stderr).toBe('');
       expect(first.stdout).toContain(
-        `${resourceId}#${operationId}@${expectedRevision.revisionId}`,
+        `app ${appId}, run ${runId}@${expectedRevision.revisionId}`,
       );
+      expect(first.stdout).toContain('idempotency_key');
+      expect(first.stdout).not.toContain('operation_id');
       expect(first.stdout).toContain(runId);
       expect(first.stdout).toContain("'COMPLETED'");
       expect(first.stdout).toContain(
@@ -260,7 +276,7 @@ describe('wharfie ops run', () => {
     }
   }, 20000);
 
-  it('rejects reusing an operation ID for a changed immutable revision', async () => {
+  it('rejects reusing an idempotency key for a changed immutable revision', async () => {
     const appDir = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-ops-run-revision-app-'),
     );
@@ -269,8 +285,8 @@ describe('wharfie ops run', () => {
     );
     const tableName = 'revision-fence-ledger';
     const appId = 'revision-fence-cli';
-    const operationId = 'stable-provider-operation';
-    const runId = createManualLedgerRunId({ appId, operationId });
+    const idempotencyKey = 'stable-provider-operation';
+    const runId = createManualLedgerRunId({ appId, idempotencyKey });
     const appApiUrl = pathToFileURL(path.join(repoRoot, 'src', 'app.js')).href;
     /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
     let inspectDb;
@@ -347,8 +363,8 @@ describe('wharfie ops run', () => {
         'run',
         '--activity',
         'work',
-        '--operation-id',
-        operationId,
+        '--idempotency-key',
+        idempotencyKey,
         '--dir',
         appDir,
         '--input',

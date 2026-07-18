@@ -87,7 +87,7 @@ function completedEvidence(start, result) {
 /**
  * @param {string} dbPath - Control-store directory.
  * @param {string} tableName - Ledger table name.
- * @param {{appId: string, operationId: string, started?: boolean, completed?: boolean}} options - Persisted run shape.
+ * @param {{appId: string, idempotencyKey: string, started?: boolean, completed?: boolean}} options - Persisted run shape.
  * @param {(options: {path: string}) => import('../../../src/core/lib/db/base.js').DBClient} [createDB] - Local test adapter factory.
  * @returns {Promise<{runId: string, attemptId: string}>} - Durable run identity.
  */
@@ -105,7 +105,7 @@ async function createManualRun(
   });
   const runId = createManualLedgerRunId({
     appId: options.appId,
-    operationId: options.operationId,
+    idempotencyKey: options.idempotencyKey,
   });
   try {
     await ledger.createManualRun({
@@ -205,7 +205,7 @@ describe('ledger-native operator commands', () => {
       tableName,
       {
         appId,
-        operationId: 'blocked-recovery',
+        idempotencyKey: 'blocked-recovery',
       },
       createLMDB,
     );
@@ -265,7 +265,7 @@ describe('ledger-native operator commands', () => {
     try {
       const { runId } = await createManualRun(dbPath, tableName, {
         appId,
-        operationId: 'claimed-run',
+        idempotencyKey: 'claimed-run',
       });
 
       const inspected = runCli(
@@ -380,7 +380,7 @@ describe('ledger-native operator commands', () => {
     try {
       const { runId } = await createManualRun(dbPath, tableName, {
         appId: 'source-free-terminal-operator',
-        operationId: 'terminal-run',
+        idempotencyKey: 'terminal-run',
         started: true,
         completed: true,
       });
@@ -436,7 +436,7 @@ describe('ledger-native operator commands', () => {
     try {
       const { runId } = await createManualRun(dbPath, tableName, {
         appId: 'source-free-started-operator',
-        operationId: 'started-run',
+        idempotencyKey: 'started-run',
         started: true,
       });
       const recovered = runCli(
@@ -509,7 +509,7 @@ describe('ledger-native operator commands', () => {
     const tableName = 'operator-missing-ledger-test';
     const missingRunId = createManualLedgerRunId({
       appId: 'source-free-missing-operator',
-      operationId: 'missing-run',
+      idempotencyKey: 'missing-run',
     });
     const env = {
       ...process.env,

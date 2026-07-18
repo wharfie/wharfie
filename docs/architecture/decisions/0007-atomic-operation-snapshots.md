@@ -1,6 +1,11 @@
 # 0007 — Atomic, fenced operation snapshots
 
-**Status:** Accepted · **Date:** 2026-07-16
+**Status:** Superseded by [0011](0011-persisted-state-machine-execution-ledger.md) · **Date:** 2026-07-16 · **Implementation retired:** 2026-07-17
+
+This record preserves the reasoning for an interim snapshot store. The
+`Operation`/`Action` implementation was deleted after the append-only V3 ledger
+became the only supported durable activity path. No snapshot data is migrated;
+there are no downstream compatibility requirements.
 
 ## Context
 

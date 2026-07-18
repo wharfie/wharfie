@@ -10,7 +10,7 @@ These records capture product-level decisions that should survive implementation
 | [0004 — One authoritative terminal outcome and explicit effects](0004-logical-outcomes-and-effects.md)     | Accepted |
 | [0005 — TypeScript control plane with a component boundary](0005-typescript-and-component-boundary.md)     | Accepted |
 | [0006 — One strict version 2 application manifest](0006-strict-v2-app-manifest.md)                         | Accepted |
-| [0007 — Atomic, fenced operation snapshots](0007-atomic-operation-snapshots.md)                            | Accepted |
+| [0007 — Atomic, fenced operation snapshots](0007-atomic-operation-snapshots.md)                            | Superseded by 0011 |
 | [0008 — Immutable revision, artifact, and deployment-profile identities](0008-immutable-identity-spine.md) | Accepted |
 | [0009 — Frozen target dependency closures](0009-frozen-target-dependency-closures.md)                      | Accepted |
 | [0010 — Versioned activity-attempt protocol](0010-versioned-activity-attempt-protocol.md)                  | Accepted |

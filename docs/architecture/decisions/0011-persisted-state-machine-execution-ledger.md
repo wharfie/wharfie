@@ -9,13 +9,14 @@ process or authoring session. Durable execution therefore has to preserve why
 work exists, which immutable code owns it, what physically ran, what effects
 may have happened, and which outcomes are authoritative after a crash.
 
-The current operation store, accepted as an interim boundary in
-[0007](0007-atomic-operation-snapshots.md), atomically persists a mutable
+The former operation store, accepted as an interim boundary in
+[0007](0007-atomic-operation-snapshots.md), atomically persisted a mutable
 `Operation` plus its current `Action` graph. Operation generations, record
-versions, and immutable revision bindings prevent several stale writes, but a
-process failure can leave an operation or action permanently `RUNNING`. Prior
-generations and attempts are overwritten, external effects are not represented,
-and there is no durable basis for recovery or coordinator replacement.
+versions, and immutable revision bindings prevented several stale writes, but a
+process failure could leave an operation or action permanently `RUNNING`. Prior
+generations and attempts were overwritten, external effects were not
+represented, and there was no durable basis for recovery or coordinator
+replacement.
 
 Deterministic workflow replay is one possible recovery model, but it is a poor
 default for Wharfie's application boundary. Initial Wharfie activities are
@@ -365,25 +366,19 @@ run semantics. Provider selection, enrollment, transport authentication, and
 automatic two-node failover remain later milestones; this decision does not
 pretend that an LMDB ledger provides them.
 
-### Relationship to the operation snapshot store
+### Retired operation snapshot store
 
-The `Operation`/`Action` snapshot store remains a transitional implementation
-boundary only. New ledger work does not add attempt, effect, lease, or
-coordinator semantics by extending its mutable records.
+The `Operation`/`Action` snapshot store, graph runner, and operation table were
+deleted on 2026-07-17 after manual execution, exact-run inspection, explicit
+recovery, immutable payload references, resident-service ownership, and the V3
+run directory all moved to this ledger. Its development-only records are not
+migrated or read. Keeping a second writable run system would make recovery and
+operator semantics ambiguous.
 
-The migration sequence is:
-
-1. implement one manual named activity on the new ledger;
-2. route queue-triggered named activities through the same path;
-3. expose ledger inspection and intervention through the reserved operator
-   namespace; and
-4. delete the mutable graph runner, operation table, and superseded tests once
-   the new path has equivalent atomicity and stronger crash-boundary coverage.
-
-There is no downstream compatibility requirement and no promise to migrate
-development-only snapshot records. If a pure DAG representation remains useful
-for workflow planning, it may produce invocation-creation decisions; it is not
-durable execution truth and cannot remain a second writable run system.
+Queue and schedule triggers remain future work and must create runs through
+this ledger rather than reintroducing mutable snapshots. If a pure DAG
+representation is useful for workflow planning, it may produce typed
+invocation-creation decisions; it is not durable execution truth.
 
 ## Consequences
 

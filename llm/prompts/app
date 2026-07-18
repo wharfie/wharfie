@@ -85,7 +85,7 @@ export default defineApp({
 
 - `schemaVersion: 2`, `app.id`, and `cli` are required.
 - `cli` is the human surface and its entrypoint must contain exact `kind`, `path`, and `export` fields.
-- `activities` are the optional machine surface used by `wharfie app run` and durable operation invocations.
+- `activities` are the optional machine surface used by `wharfie app run` and durable ledger invocations.
 - `resources` are only for Wharfie runtime capabilities: `db`, `queue`, `objectStorage`.
 - Public resource bindings are limited to `db` adapter `vanilla` or `dynamodb`, `queue` adapter `vanilla` or `sqs`, and `objectStorage` adapter `vanilla` or `s3`. Only documented `path` and `region` options are allowed.
 - External services like Datadog, OpenAI, GitHub, Slack, etc. are normal modules and environment-backed clients inside your app, not new Wharfie capability kinds.

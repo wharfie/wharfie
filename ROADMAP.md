@@ -84,14 +84,16 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 - [x] Decide and record that durable workflows use explicitly persisted state machines and continuations rather than replaying arbitrary application code, including timers, signals, cancellation, side effects, and revision changes.
 - [x] Define the append-only run → invocation → attempt → effect ledger, rebuildable projections, and state machines in ADR 0011.
-- [x] Bind current persisted operation snapshots, claims, retries, cancellation, and result commits to one immutable revision; persist stable user activity context separately from volatile delivery-attempt metadata.
+- [x] Bind persisted manual runs, invocations, attempts, and terminal commits
+      to one immutable revision; persist stable caller metadata separately from
+      volatile physical-attempt evidence.
 - [x] Build and prove the first isolated append-only ledger vertical: one manual
       activity with atomic event/head/projection/receipt writes, internally derived
       attempt identities, a durable `STARTED` boundary, full Protocol-v1 evidence
       validation, revision/fence checks, and conservative `UNCERTAIN` recovery.
 - [x] Route one local manual `ops run` activity through that ledger, with an
       exact post-`STARTED` host frame, terminal evidence commits, idempotent
-      operation IDs, and explicit operator-confirmed recovery only.
+      request keys, and explicit operator-confirmed recovery only.
 - [x] Add source-independent exact-run inspection and explicitly confirmed
       recovery, with redacted JSON output; remove the misleading mutable CLI
       `ops list` and `ops cancel` surfaces rather than dual-writing them.
@@ -117,6 +119,10 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       portable pagination primitive. Its internal API verifies every directory
       row against a rebuilt run projection; it deliberately does not create a
       ready-work queue or expose a source-only `ops list` command.
+- [x] Delete the superseded mutable Operation/Action graph, operation table,
+      queue-run bridge, and second writable run model. Manual durable execution
+      now distinguishes a caller idempotency key from the derived V4 manual
+      run identity and writes only the append-only V3 ledger.
 - [x] Delete the disconnected pre-reset NodeAgent, state-command, systemd
       release, and private DB/queue/Lambda gRPC runtime island. Packaged apps
       now have one narrow private runtime-command selector, currently mapping
@@ -181,7 +187,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 ## Immediate queue
 
 1. Repair the clean-install lint dependency declaration after explicit approval, make draft PR #125 green in GitHub Actions, and review the reset stack for merge.
-2. Delete the mutable Operation/Action and unusable resource-injection
+2. Delete the unusable resource-injection and generic worker `exec`/RPC
    compatibility paths before enlarging a public durable surface; retain only
    the activity protocol and control-store pieces that serve the reset model.
 3. Build one shared source/SEA operator-command layer on the verified V3 run
@@ -192,4 +198,4 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
    package resolution before treating malformed-closure ambient-JS fallback as
    closed.
 
-The latest dated handoff at [llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md) records the retired NodeAgent/systemd/private-gRPC island and the next deletion boundary. The preceding [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.
+The latest dated handoff at [llm/checkpoints/2026-07-17-mutable-operation-retirement.md](llm/checkpoints/2026-07-17-mutable-operation-retirement.md) records the deleted Operation/Action store, idempotency-key boundary, and next resource-injection cleanup. The preceding [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.

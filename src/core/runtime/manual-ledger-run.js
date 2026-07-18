@@ -29,19 +29,22 @@ export const ManualLedgerRecoveryAction = Object.freeze({
 const DEFAULT_ACTOR = Object.freeze({ kind: 'local', id: 'cli' });
 
 /**
- * Create the durable identity behind a user-facing manual operation ID. The
+ * Create the durable identity behind a user-facing manual idempotency key. The
  * app ID is part of the semantic input, so two apps can safely use the same
- * operator-provided ID in one shared control table.
- * @param {{appId: string, operationId: string}} options - Manual identity inputs.
+ * operator-provided key in one shared control table.
+ * @param {{appId: string, idempotencyKey: string}} options - Manual identity inputs.
  * @returns {string} - Stable opaque ledger run ID.
  */
 export function createManualLedgerRunId(options) {
   assertLogicalId(options?.appId, 'appId');
-  const operationId = assertLedgerOpaqueId(options?.operationId, 'operationId');
+  const idempotencyKey = assertLedgerOpaqueId(
+    options?.idempotencyKey,
+    'idempotencyKey',
+  );
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:manual-ledger-run:v3',
+    domain: 'wharfie:manual-ledger-run:v4',
     prefix: 'wlm',
-    value: { appId: options.appId, operationId },
+    value: { appId: options.appId, idempotencyKey },
     valuePath: 'manual ledger run identity',
   });
 }

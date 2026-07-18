@@ -24,7 +24,7 @@ describe('hidden ledger-service runtime command', () => {
     const readEmbeddedRevisionRuntimePair = jest.fn(async () => ({
       runtime: { appId: 'packaged-runtime', revisionId: REVISION_ID },
     }));
-    const createOperationsDBClient = jest.fn(async () => db);
+    const createControlDBClient = jest.fn(async () => db);
     const createLedgerServiceLifecycle = jest.fn(
       (/** @type {any} */ _options) => lifecycle,
     );
@@ -39,7 +39,7 @@ describe('hidden ledger-service runtime command', () => {
     await expect(
       runLedgerServiceRuntime({
         readEmbeddedRevisionRuntimePair,
-        createOperationsDBClient,
+        createControlDBClient,
         createLedgerServiceLifecycle,
         createLedgerServiceOwnership,
         createLedgerService,
@@ -121,7 +121,7 @@ describe('hidden ledger-service runtime command', () => {
         readEmbeddedRevisionRuntimePair: async () => ({
           runtime: { appId: 'packaged-runtime', revisionId: REVISION_ID },
         }),
-        createOperationsDBClient: async () => db,
+        createControlDBClient: async () => db,
         createLedgerServiceLifecycle: () => ({ kind: 'lifecycle-store' }),
         createLedgerServiceOwnership: () => ({ kind: 'ownership-store' }),
         createLedgerService: () => service,
@@ -150,7 +150,7 @@ describe('hidden ledger-service runtime command', () => {
         readEmbeddedRevisionRuntimePair: async () => ({
           runtime: { appId: 'packaged-runtime', revisionId: REVISION_ID },
         }),
-        createOperationsDBClient: async () => db,
+        createControlDBClient: async () => db,
         createLedgerServiceLifecycle: () => ({ kind: 'lifecycle-store' }),
         createLedgerServiceOwnership: () => ({ kind: 'ownership-store' }),
         createLedgerService: () => service,

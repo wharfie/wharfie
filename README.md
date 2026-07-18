@@ -34,8 +34,8 @@ consuming public commands.
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
 The abandoned v1 source and dependency graph have been deleted. The strict v2
-manifest, an atomic fenced named-activity snapshot store, and the first
-append-only V3 manual run → invocation → attempt ledger are now defined. Its
+manifest and the append-only V3 manual run → invocation → attempt ledger are
+now defined; the superseded mutable Operation/Action snapshot store is gone. Its
 redacted per-service history directory is transactionally bound to each run
 transition, while revision-backed source and SEA activities consume one frozen
 target dependency closure instead of ambient `node_modules` or a newly
@@ -54,7 +54,8 @@ package remains deliberately private. It is not ready for production use.
 - [Strict v2 manifest checkpoint](llm/checkpoints/2026-07-16-strict-v2-manifest.md) — historical strict public-boundary handoff.
 - [Atomic operation-store checkpoint](llm/checkpoints/2026-07-16-atomic-operation-store.md) — historical atomic snapshot and fencing boundary.
 - [Immutable identity-spine checkpoint](llm/checkpoints/2026-07-17-immutable-identity-spine.md) — historical identity and artifact boundary.
-- [Obsolete runtime retirement checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md) — current restart point after deleting the disconnected NodeAgent/systemd/private-gRPC runtime island.
+- [Mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md) — current restart point after making the append-only V3 ledger the only writable durable run model.
+- [Obsolete runtime retirement checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md) — historical deletion boundary for the disconnected NodeAgent/systemd/private-gRPC runtime island.
 - [Atomic run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md) — historical hosted SEA evidence, verified V3 history index, and the cleanup boundary that preceded the runtime deletion.
 
 The charter and accepted decisions are authoritative; the roadmap is expected to evolve, and dated checkpoints are historical snapshots. Older material under `docs/` and `llm/design/` describes prior iterations and can be stale.

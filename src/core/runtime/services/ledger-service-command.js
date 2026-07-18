@@ -1,10 +1,10 @@
 import { Command } from 'commander';
 
 import {
-  createOperationsDBClient,
+  createControlDBClient,
   resolveExecutionLedgerTableName,
   resolveLedgerServiceSessionPath,
-  resolveOperationsAdapterName,
+  resolveControlAdapterName,
 } from '../../lib/config/db.js';
 import {
   createLedgerServiceLifecycle,
@@ -60,16 +60,16 @@ export function waitForLedgerServiceShutdown(options = {}) {
  * to immutable metadata embedded in the SEA, opens the durable control store,
  * and owns only the empty lifecycle/session vertical. Scheduling and activity
  * execution intentionally remain unavailable here.
- * @param {{readEmbeddedRevisionRuntimePair?: () => Promise<{runtime: {appId: string, revisionId: string}}>, createOperationsDBClient?: () => Promise<any>, resolveOperationsAdapterName?: () => string, createLedgerServiceLifecycle?: (...args: any[]) => any, createLedgerServiceOwnership?: (...args: any[]) => any, createLedgerService?: (...args: any[]) => {start: () => Promise<any>, stop: () => Promise<any>}, waitForShutdown?: (options?: {signal?: AbortSignal}) => Promise<unknown>, tableName?: string, sessionRoot?: string}} [options] - Injected runtime dependencies for tests.
+ * @param {{readEmbeddedRevisionRuntimePair?: () => Promise<{runtime: {appId: string, revisionId: string}}>, createControlDBClient?: () => Promise<any>, resolveControlAdapterName?: () => string, createLedgerServiceLifecycle?: (...args: any[]) => any, createLedgerServiceOwnership?: (...args: any[]) => any, createLedgerService?: (...args: any[]) => {start: () => Promise<any>, stop: () => Promise<any>}, waitForShutdown?: (options?: {signal?: AbortSignal}) => Promise<unknown>, tableName?: string, sessionRoot?: string}} [options] - Injected runtime dependencies for tests.
  * @returns {Promise<any>} - Final durable STOPPED lifecycle snapshot.
  */
 export async function runLedgerServiceRuntime(options = {}) {
   const readIdentity =
     options.readEmbeddedRevisionRuntimePair || readEmbeddedRevisionRuntimePair;
   const openControlStore =
-    options.createOperationsDBClient || createOperationsDBClient;
+    options.createControlDBClient || createControlDBClient;
   const resolveControlAdapter =
-    options.resolveOperationsAdapterName || resolveOperationsAdapterName;
+    options.resolveControlAdapterName || resolveControlAdapterName;
   const createLifecycle =
     options.createLedgerServiceLifecycle || createLedgerServiceLifecycle;
   const createOwnership =
@@ -107,10 +107,7 @@ export async function runLedgerServiceRuntime(options = {}) {
     // transition.
     shutdownRequested = waitForShutdown({ signal: shutdownAbort.signal });
     const embedded = await readIdentity();
-    if (
-      !options.createOperationsDBClient &&
-      resolveControlAdapter() !== 'lmdb'
-    ) {
+    if (!options.createControlDBClient && resolveControlAdapter() !== 'lmdb') {
       throw new Error(
         'The resident ledger-service requires WHARFIE_CONTROL_ADAPTER=lmdb. Distributed and vanilla control stores are not supported by its local ownership protocol.',
       );

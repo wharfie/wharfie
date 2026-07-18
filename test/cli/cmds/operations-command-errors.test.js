@@ -82,8 +82,6 @@ beforeEach(() => {
   delete process.env.WHARFIE_DB_ADAPTER;
   delete process.env.WHARFIE_CONTROL_ADAPTER;
   delete process.env.WHARFIE_CONTROL_PATH;
-  delete process.env.WHARFIE_OPERATIONS_TABLE;
-  delete process.env.OPERATIONS_TABLE;
   delete process.env.WHARFIE_DB_PATH;
   delete process.env.AWS_REGION;
   process.exitCode = undefined;

@@ -141,16 +141,17 @@ an operator-chosen idempotency identity:
 
 ```bash
 wharfie ops run --activity <activity-id> --dir ./path/to/app \
-  --operation-id <stable-run-id> --input '{"who":"cli-user"}'
+  --idempotency-key <stable-key> --input '{"who":"cli-user"}'
 ```
 
 The first run writes an append-only run → invocation → attempt ledger. Reusing
-the same `--operation-id` with identical app revision, activity, input, and
+the same `--idempotency-key` with identical app revision, activity, input, and
 caller metadata returns its durable terminal without running the activity
-again. A changed request with that ID fails rather than silently deduplicating.
-The result table includes the durable `run_id`. Inspect it or perform an
-operator-confirmed recovery without loading an app manifest, parsing current
-input, compiling source, or dispatching user code:
+again. A changed request with that key fails rather than silently deduplicating.
+The result table includes the operator-provided `idempotency_key` and derived
+durable `run_id`. Inspect the run ID or perform an operator-confirmed recovery
+without loading an app manifest, parsing current input, compiling source, or
+dispatching user code:
 
 ```bash
 wharfie ops inspect --run-id <run-id>

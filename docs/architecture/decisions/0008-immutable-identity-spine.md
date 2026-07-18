@@ -205,24 +205,24 @@ and requires the artifact target to equal the profile-revision target. Changing
 any member of that tuple is a new deployment revision or an explicit deployment
 transition, never an in-place reinterpretation of history.
 
-Durable operation identity is fenced by revision. Persisted operations and the
-future run/invocation ledger bind `appId` and `revisionId`. Provider-message
-operation IDs remain revision-independent so deploying a new revision cannot
-turn one provider delivery into new work. A worker that observes the same
-provider message under a different revision fails closed and leaves it
-undeleted until old-revision routing or recovery can handle it. Caller-supplied
-operation IDs are likewise checked against the persisted revision and conflict
-visibly rather than deduplicating or continuing work under different code.
-Other derived trigger identities decide whether revision is part of their
-domain-separated preimage according to the trigger's replay semantics. Claims,
-retries, and result commits validate the mandatory persisted `revisionId` along
-with their other fencing values.
+Durable run and invocation identity is fenced by revision. Ledger records bind
+`appId` and `revisionId`. A provider-message trigger identity remains
+revision-independent when replay semantics require one delivery to name one
+logical request across a rollout. A worker that observes that request under a
+different revision fails closed until old-revision routing or explicit
+reconciliation handles it. A caller-supplied idempotency key is likewise
+checked against the immutable persisted request and conflicts visibly rather
+than deduplicating or continuing under different code. Other derived trigger
+identities decide whether revision participates in their domain-separated
+preimage according to the trigger's replay semantics. Claims, retries, and
+result commits validate the mandatory persisted `revisionId` with their other
+fencing values.
 
-The immutable operation association also contains the activity event and stable
-user-supplied activity context. Provider receipts, delivery observations, and
-other current-attempt metadata are excluded from durable identity and supplied
-separately as volatile `attemptContext`. Retrying may change attempt metadata;
-reusing the same operation ID with different stable context fails visibly.
+The immutable request contains the activity input and stable caller metadata.
+Provider receipts, delivery observations, and other physical-attempt metadata
+are excluded from that identity. Retrying may change attempt metadata; reusing
+one idempotency key with different revision, activity, input, or caller metadata
+fails visibly.
 
 ### Initial implementation boundary
 

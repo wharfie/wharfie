@@ -15,6 +15,7 @@ import {
 } from '../../src/core/lib/db/tables/execution-ledger.js';
 import { createLocalExecutionPayloadStore } from '../../src/core/lib/payload-store/local.js';
 import { ActivityProtocolTranscriptValidator } from '../../src/core/runtime/activity-protocol.js';
+import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
 import {
   MANUAL_LEDGER_INVOCATION_ID,
   ManualLedgerRecoveryAction,
@@ -126,13 +127,13 @@ async function withLedger(test) {
  */
 function runOptions(ledger, overrides = {}) {
   const appId = 'manual-demo';
-  const operationId = 'operator-run-1';
+  const idempotencyKey = 'operator-run-1';
   return {
     ledger,
     appId,
     revisionId: REVISION_ID,
     activityId: 'work',
-    runId: createManualLedgerRunId({ appId, operationId }),
+    runId: createManualLedgerRunId({ appId, idempotencyKey }),
     input: { who: 'Ada' },
     callerMetadata: { requestId: 'manual-request' },
     createFencingToken: () => 'local-test-fence',
@@ -144,6 +145,24 @@ function runOptions(ledger, overrides = {}) {
 }
 
 describe('manual ledger activity runner', () => {
+  it('derives manual run identity from the v4 idempotency-key contract', () => {
+    const appId = 'manual-demo';
+    const idempotencyKey = 'operator-run-1';
+    expect(createManualLedgerRunId({ appId, idempotencyKey })).toBe(
+      createCanonicalJsonSha256Id({
+        domain: 'wharfie:manual-ledger-run:v4',
+        prefix: 'wlm',
+        value: { appId, idempotencyKey },
+        valuePath: 'manual ledger run identity',
+      }),
+    );
+    expect(() =>
+      createManualLedgerRunId(
+        /** @type {any} */ ({ appId, operationId: idempotencyKey }),
+      ),
+    ).toThrow(/idempotencyKey/i);
+  });
+
   it('persists the exact durable start before dispatch and deduplicates a terminal retry', async () => {
     await withLedger(async (ledger) => {
       /** @type {Readonly<Record<string, any>>[]} */

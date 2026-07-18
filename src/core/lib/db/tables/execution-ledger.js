@@ -41,9 +41,8 @@ import { comparePortablePageKeys } from '../utils.js';
 
 /**
  * The first ledger schema deliberately covers one manual, single-activity
- * invocation. It is a separate append-only boundary, not an extension of the
- * mutable Operation/Action snapshot store. Its table write authority is a
- * trusted control-plane boundary: content IDs and request digests detect
+ * invocation. It is the only writable durable run boundary. Its table write
+ * authority is a trusted control-plane boundary: content IDs and request digests detect
  * inconsistent records, but are not signatures against a writer that can
  * replace an entire semantically valid history.
  */

@@ -31,6 +31,7 @@ const staleCommands = [
   'wharfie ops list',
   'wharfie ops cancel',
   'wharfie ops run --recover',
+  '--operation-id',
 ];
 
 describe('docs command surface', () => {
@@ -100,7 +101,8 @@ describe('docs command surface', () => {
     expect(quickstart).toContain(
       'wharfie ops run --activity <activity-id> --dir ./path/to/app',
     );
-    expect(quickstart).toContain('--operation-id <stable-run-id>');
+    expect(quickstart).toContain('--idempotency-key <stable-key>');
+    expect(quickstart).not.toContain('--operation-id');
     expect(quickstart).toContain('append-only run → invocation → attempt');
     expect(quickstart).toContain('wharfie ops inspect --run-id <run-id>');
     expect(quickstart).toContain(

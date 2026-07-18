@@ -79,16 +79,16 @@ export function resolveStateAdapterName() {
 }
 
 /**
- * Resolve the durable operations-control adapter independently from application
- * and actor-state resources.
+ * Resolve the durable control-store adapter independently from application and
+ * actor-state resources.
  *
  * Tests default to isolated vanilla stores. Normal local execution defaults to
- * LMDB so acknowledged operation transitions survive process termination.
+ * LMDB so acknowledged control-state transitions survive process termination.
  * `vanilla` remains an explicit test/diagnostic option, but it is not crash
  * durable because it flushes only when the client closes.
  * @returns {DBAdapterName} - Result.
  */
-export function resolveOperationsAdapterName() {
+export function resolveControlAdapterName() {
   const explicit = process.env.WHARFIE_CONTROL_ADAPTER;
   if (explicit) {
     return normalizeAdapterName(explicit, 'WHARFIE_CONTROL_ADAPTER');
@@ -98,23 +98,9 @@ export function resolveOperationsAdapterName() {
 }
 
 /**
- * Resolve the operations-control table name.
- *
- * This is intentionally resolved at call-time (not import-time) so tests and
- * runtimes can safely override env vars between uses.
- * @returns {string} - Result.
- */
-export function resolveOperationsTableName() {
-  const name = process.env.WHARFIE_OPERATIONS_TABLE;
-  if (name && String(name).trim()) return String(name).trim();
-  return 'wharfie-operations';
-}
-
-/**
- * Resolve the append-only execution-ledger table name. It is deliberately
- * separate from the legacy mutable operations table: DynamoDB needs a
+ * Resolve the append-only execution-ledger table name. DynamoDB needs its
  * distinct `run_id`/`sort_key` physical schema, while local adapters can
- * safely share the same control-store path under a different table name.
+ * safely share the control-store path under this explicit table name.
  * @returns {string} - Result.
  */
 export function resolveExecutionLedgerTableName() {
@@ -246,12 +232,12 @@ export async function createDBClient(adapterName = resolveDBAdapterName()) {
 }
 
 /**
- * Create the dedicated operations-control DB client.
+ * Create the dedicated durable control-store DB client.
  * @param {DBAdapterName} [adapterName] - Explicit adapter override.
  * @returns {Promise<import('../db/base.js').DBClient>} - Result.
  */
-export async function createOperationsDBClient(
-  adapterName = resolveOperationsAdapterName(),
+export async function createControlDBClient(
+  adapterName = resolveControlAdapterName(),
 ) {
   if (adapterName === 'dynamodb') {
     const { default: createDynamoDB } =
@@ -368,14 +354,13 @@ export async function closeDB() {
 export default {
   resolveDBAdapterName,
   resolveStateAdapterName,
-  resolveOperationsAdapterName,
-  resolveOperationsTableName,
+  resolveControlAdapterName,
   resolveExecutionLedgerTableName,
   resolveExecutionPayloadPath,
   resolveExecutionPayloadStoreId,
   resolveLedgerServiceSessionPath,
   createDBClient,
-  createOperationsDBClient,
+  createControlDBClient,
   createStateDBClient,
   getDB,
   resetDB,

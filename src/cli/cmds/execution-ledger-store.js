@@ -2,12 +2,12 @@ import { createExecutionLedger } from '../../core/lib/db/tables/execution-ledger
 import { createLedgerServiceOwnership } from '../../core/lib/db/tables/ledger-service-lifecycle.js';
 import { createLocalExecutionPayloadStore } from '../../core/lib/payload-store/local.js';
 import {
-  createOperationsDBClient,
+  createControlDBClient,
   resolveExecutionLedgerTableName,
   resolveExecutionPayloadPath,
   resolveExecutionPayloadStoreId,
   resolveLedgerServiceSessionPath,
-  resolveOperationsAdapterName,
+  resolveControlAdapterName,
 } from '../../core/lib/config/db.js';
 import { acquireLocalLedgerServiceSession } from '../../core/runtime/services/ledger-service.js';
 
@@ -18,7 +18,7 @@ import { acquireLocalLedgerServiceSession } from '../../core/runtime/services/le
 /**
  * Open the durable control store for one CLI operation and always close it.
  * The ledger gets its own table because its key shape and append-only records
- * are intentionally incompatible with the remaining legacy mutable OperationsStore.
+ * are an explicit durable control-state boundary.
  *
  * @template T
  * @param {(ledger: ExecutionLedgerStore, context: {db: import('../../core/lib/db/base.js').DBClient, tableName: string}) => Promise<T>} handler - Work to run against the ledger and its shared durable control client.
@@ -29,7 +29,7 @@ export async function withExecutionLedger(handler) {
   let db;
 
   try {
-    db = await createOperationsDBClient();
+    db = await createControlDBClient();
     const tableName = resolveExecutionLedgerTableName();
     const payloadPath = resolveExecutionPayloadPath();
     const ledger = createExecutionLedger({
@@ -61,7 +61,7 @@ export async function withExecutionLedger(handler) {
  * @returns {Promise<T>} - Handler result.
  */
 export async function withLocalLedgerServiceMutationOwnership(options) {
-  if (resolveOperationsAdapterName() !== 'lmdb') {
+  if (resolveControlAdapterName() !== 'lmdb') {
     return await options.handler();
   }
 

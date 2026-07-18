@@ -15,7 +15,6 @@ import {
   displaySuccess,
 } from '../../output/basic.js';
 import {
-  getAppResourceId,
   getManifestActivityNames,
   invokeManifestActivityAttemptWithStart,
 } from '../../../core/runtime/app-runs.js';
@@ -25,14 +24,14 @@ import {
 } from '../../../core/runtime/manual-ledger-run.js';
 
 /**
- * @param {unknown} value - User-supplied operation ID.
- * @returns {string} - Stable manual operation ID.
+ * @param {unknown} value - User-supplied idempotency key.
+ * @returns {string} - Stable manual idempotency key.
  */
-function resolveOperationId(value) {
+function resolveIdempotencyKey(value) {
   if (value === undefined) return `manual-${randomUUID()}`;
   if (typeof value !== 'string' || value.length === 0) {
     throw new TypeError(
-      '--operation-id must be a nonempty string when provided.',
+      '--idempotency-key must be a nonempty string when provided.',
     );
   }
   return value;
@@ -40,12 +39,12 @@ function resolveOperationId(value) {
 
 /**
  * @param {Record<string, any>} result - Ledger-run result.
- * @param {string} operationId - User-visible operation identity.
+ * @param {string} idempotencyKey - User-visible idempotency identity.
  * @returns {Record<string, any>} - Compact operator row.
  */
-function formatRunRow(result, operationId) {
+function formatRunRow(result, idempotencyKey) {
   return {
-    operation_id: operationId,
+    idempotency_key: idempotencyKey,
     run_id: result.run.runId,
     revision: result.run.revisionId,
     activity: result.invocation.activityId,
@@ -58,23 +57,23 @@ function formatRunRow(result, operationId) {
 
 /**
  * @param {Record<string, any>} result - Ledger-run result.
- * @param {string} resourceId - User-visible app resource ID.
- * @param {string} operationId - User-visible operation identity.
+ * @param {string} appId - Application identity.
+ * @param {string} runId - Durable run identity.
  * @returns {Error} - Human-readable non-completed outcome.
  */
-function outcomeError(result, resourceId, operationId) {
+function outcomeError(result, appId, runId) {
   if (result.disposition === 'failed') {
     return new Error(
-      `Run ${resourceId}#${operationId} finished ${result.run.status}. Terminal details are retained as immutable evidence and are not exposed by this command.`,
+      `Run ${runId} for app ${appId} finished ${result.run.status}. Terminal details are retained as immutable evidence and are not exposed by this command.`,
     );
   }
   if (result.disposition === 'blocked') {
     return new Error(
-      `Run ${resourceId}#${operationId} is BLOCKED because attempt ${result.attempt?.attemptId || '(unknown)'} crossed STARTED without a durably confirmed terminal. Reconcile the outcome before any retry.`,
+      `Run ${runId} for app ${appId} is BLOCKED because attempt ${result.attempt?.attemptId || '(unknown)'} crossed STARTED without a durably confirmed terminal. Reconcile the outcome before any retry.`,
     );
   }
   return new Error(
-    `Run ${resourceId}#${operationId} is already in progress (attempt ${result.attempt?.attemptId || '(unknown)'}). Inspect it with \`wharfie ops inspect --run-id ${result.run.runId}\`; after confirming every runner stopped, use \`wharfie ops recover --run-id ${result.run.runId} --confirm-runner-stopped\`.`,
+    `Run ${runId} for app ${appId} is already in progress (attempt ${result.attempt?.attemptId || '(unknown)'}). Inspect it with \`wharfie ops inspect --run-id ${runId}\`; after confirming every runner stopped, use \`wharfie ops recover --run-id ${runId} --confirm-runner-stopped\`.`,
   );
 }
 
@@ -87,16 +86,15 @@ const runCommand = new Command('run')
   )
   .option('--input <json>', 'Activity input JSON (default: {})')
   .option('--caller-metadata <json>', 'Caller metadata JSON (default: {})')
-  .option('--operation-id <operationId>', 'Stable manual operation identity')
+  .option('--idempotency-key <idempotencyKey>', 'Stable manual idempotency key')
   .action(async (options) => {
     try {
       const appDir = options.dir || process.cwd();
       const loadedApp = await loadApp({ dir: appDir });
       const { manifest } = loadedApp;
       const appId = manifest.app.id;
-      const resourceId = getAppResourceId(appId);
-      const operationId = resolveOperationId(options.operationId);
-      const runId = createManualLedgerRunId({ appId, operationId });
+      const idempotencyKey = resolveIdempotencyKey(options.idempotencyKey);
+      const runId = createManualLedgerRunId({ appId, idempotencyKey });
 
       const activityName =
         typeof options.activity === 'string' ? options.activity : '';
@@ -143,7 +141,7 @@ const runCommand = new Command('run')
         await preparedRevision.verifyRuntime();
         const revisionId = preparedRevision.revision.revisionId;
         displayInfo(
-          `Running activity: ${resourceId}#${operationId}@${revisionId} (${activityName})`,
+          `Running activity: app ${appId}, run ${runId}@${revisionId} (${activityName})`,
         );
 
         const result = await withExecutionLedger(
@@ -173,9 +171,9 @@ const runCommand = new Command('run')
             }),
         );
 
-        console.table([formatRunRow(result, operationId)]);
+        console.table([formatRunRow(result, idempotencyKey)]);
         if (result.disposition !== 'completed') {
-          throw outcomeError(result, resourceId, operationId);
+          throw outcomeError(result, appId, runId);
         }
         displaySuccess(
           `Executed durable activity through attempt ${result.attempt?.generation || 0}.`,
