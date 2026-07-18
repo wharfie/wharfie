@@ -19,7 +19,7 @@ import {
   assertLedgerOpaqueId,
 } from './record-key.js';
 
-export const EXECUTION_LEDGER_SCHEMA_VERSION = 6;
+export const EXECUTION_LEDGER_SCHEMA_VERSION = 7;
 export const EXECUTION_LEDGER_MAX_OPAQUE_ID_BYTES =
   MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES;
 export const EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES = 64 * 1024;
@@ -34,6 +34,9 @@ export const EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES =
 // Bound transcript replay independently of its byte cap. Without this, a
 // caller can make validation work scale with a large number of tiny frames.
 export const EXECUTION_LEDGER_MAX_EVIDENCE_FRAMES = 512;
+// Recovery must settle the complete unresolved effect set in one transaction.
+// Keep that set below every supported adapter's portable transaction ceiling.
+export const EXECUTION_LEDGER_MAX_UNRESOLVED_MANAGED_EFFECTS = 16;
 
 export const RunStatus = Object.freeze({
   RUNNING: 'RUNNING',
@@ -66,6 +69,7 @@ export const EffectStatus = Object.freeze({
   STARTED: 'STARTED',
   COMPLETED: 'COMPLETED',
   FAILED: 'FAILED',
+  CANCELLED: 'CANCELLED',
   UNCERTAIN: 'UNCERTAIN',
 });
 
@@ -601,7 +605,7 @@ export function createManagedEffectDestinationId(input) {
   );
   const effectId = assertOpaqueId(input.effectId, 'managed effect effectId');
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-destination-effect:v6',
+    domain: 'wharfie:execution-ledger-destination-effect:v7',
     prefix: 'wfx',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,

@@ -13,6 +13,7 @@ describe('execution ledger contract facade', () => {
       'EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES',
       'EXECUTION_LEDGER_MAX_OPAQUE_ID_BYTES',
       'EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES',
+      'EXECUTION_LEDGER_MAX_UNRESOLVED_MANAGED_EFFECTS',
       'EXECUTION_LEDGER_SCHEMA_VERSION',
       'ExecutionLedgerConflictError',
       'ExecutionLedgerNotFoundError',
@@ -29,7 +30,7 @@ describe('execution ledger contract facade', () => {
     }
   });
 
-  test('preserves the V6 destination-effect identity vector', () => {
+  test('preserves the V7 destination-effect identity vector', () => {
     expect(
       ledgerFacade.createManagedEffectDestinationId({
         appId: 'contract-app',
@@ -37,7 +38,7 @@ describe('execution ledger contract facade', () => {
         invocationId: 'contract-invocation',
         effectId: 'contract-effect',
       }),
-    ).toBe('wfx_wVxnc3no3HrFkicuryc_y0jOqrF0e27lU6RBxOb6PwU');
+    ).toBe('wfx_hxhCj7CTX6fvvMcmG3TGEW_ZiG3vQfvGF7a4pArrfuc');
   });
 
   test('normalizes an exact immutable destination binding shape', () => {

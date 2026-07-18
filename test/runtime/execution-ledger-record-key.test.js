@@ -25,23 +25,23 @@ describe('execution ledger record key codec', () => {
     const effectId = 'effect/#/海';
     const transitionId = 'transition/#/雪';
 
-    expect(EXECUTION_LEDGER_SORT_KEY_PREFIX).toBe('ledger/v6/');
+    expect(EXECUTION_LEDGER_SORT_KEY_PREFIX).toBe('ledger/v7/');
     expect(encodeLedgerKeySegment(invocationId)).toBe(
       Buffer.from(invocationId, 'utf8').toString('base64url'),
     );
-    expect(getRunHeadSortKey()).toBe('ledger/v6/head');
-    expect(getRunProjectionSortKey()).toBe('ledger/v6/projection/run');
+    expect(getRunHeadSortKey()).toBe('ledger/v7/head');
+    expect(getRunProjectionSortKey()).toBe('ledger/v7/projection/run');
     expect(getInvocationProjectionSortKey(invocationId)).toBe(
-      `ledger/v6/projection/invocation/${Buffer.from(invocationId, 'utf8').toString('base64url')}`,
+      `ledger/v7/projection/invocation/${Buffer.from(invocationId, 'utf8').toString('base64url')}`,
     );
     expect(getAttemptProjectionSortKey(attemptId)).toBe(
-      `ledger/v6/projection/attempt/${Buffer.from(attemptId, 'utf8').toString('base64url')}`,
+      `ledger/v7/projection/attempt/${Buffer.from(attemptId, 'utf8').toString('base64url')}`,
     );
     expect(getEffectProjectionSortKey(invocationId, effectId)).toMatch(
-      /^ledger\/v6\/projection\/effect\/wfk_[A-Za-z0-9_-]{43}$/,
+      /^ledger\/v7\/projection\/effect\/wfk_[A-Za-z0-9_-]{43}$/,
     );
     expect(getTransitionSortKey(transitionId)).toBe(
-      `ledger/v6/transition/${Buffer.from(transitionId, 'utf8').toString('base64url')}`,
+      `ledger/v7/transition/${Buffer.from(transitionId, 'utf8').toString('base64url')}`,
     );
 
     expect(getInvocationProjectionSortKey('a/b')).not.toBe(
@@ -69,9 +69,9 @@ describe('execution ledger record key codec', () => {
 
   test('uses lexically ordered fixed-width event sequences', () => {
     expect(EXECUTION_LEDGER_EVENT_SEQUENCE_WIDTH).toBe(16);
-    expect(getEventSortKey(1)).toBe('ledger/v6/event/0000000000000001');
+    expect(getEventSortKey(1)).toBe('ledger/v7/event/0000000000000001');
     expect(getEventSortKey(Number.MAX_SAFE_INTEGER)).toBe(
-      'ledger/v6/event/9007199254740991',
+      'ledger/v7/event/9007199254740991',
     );
 
     const keys = [100, 2, 10, 1].map(getEventSortKey).sort();

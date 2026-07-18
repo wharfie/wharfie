@@ -292,7 +292,7 @@ describe('application-state store boundary', () => {
       validateApplicationStateStoreConfiguration({
         adapterName: 'vanilla',
         storePath: '/tmp/application-state',
-        tableName: 'wharfie-execution-ledger-v6',
+        tableName: 'wharfie-execution-ledger-v7',
       }),
     ).toThrow(/tableName must be 'wharfie-application-state-v1'/i);
     expect(() =>

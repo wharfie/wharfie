@@ -185,26 +185,34 @@ Packaged inspection, recovery, reconciliation, and cancellation are scoped to
 the immutable app identity embedded in the artifact. They can operate an older
 revision of that same app, but reject another app's run ID before output or
 mutation. With `--json`, the source and packaged forms of `inspect` emit the
-same schema-v3 redacted run view, including effect
+same schema-v4 redacted run view, including effect
 identity/status/adapter-lifecycle rows but not requests, destinations,
 receipts, evidence, values, paths, or fencing tokens. `recover` emits that view
-plus recovery metadata, and `reconcile` wraps it with its stable reconciliation
-ID and whether it was newly applied. `cancel` instead emits a redacted
-schema-v1 cancellation result containing the request ID, outcome, delivery
-state, and safe lifecycle statuses. Without `--json`, these commands use the
-compact human-oriented table and message format shown above.
+plus recovery action `settled-managed-effect-set` and one sorted
+`managedEffects` result for the atomically settled active set; `reconcile`
+wraps the view with its stable reconciliation ID and whether it was newly
+applied. `cancel` instead emits a redacted schema-v1 cancellation result
+containing the request ID, outcome, delivery state, and safe lifecycle
+statuses. Without `--json`, these commands use the compact human-oriented table
+and message format shown above.
 
 Inspection opens existing control state read-only and never creates missing
 state. Recovery is deliberately explicit: use it only after confirming every
 prior runner is gone. It can release a claim that never started; a begun
-attempt becomes visibly blocked as `UNCERTAIN` instead of replaying code. When
-that attempt retains exactly one unresolved built-in `STARTED`
-`application-state` effect, recovery requires both LMDB stores and the held
-local owner. It opens application state read-only and either commits the exact
-permanent receipt into the ledger before blocking the arbitrary activity
-attempt, or marks the effect itself `UNCERTAIN` only when the exact receipt is
-absent. A missing, replacement, or corrupt store is an error, not proof of
-absence. `PENDING` and multiple unresolved effects are refused unchanged.
+attempt becomes visibly blocked as `UNCERTAIN` instead of replaying code. V7
+recovers the complete active-effect set, bounded to 16 unresolved effects, for
+that exact attempt under the held local owner. Every `PENDING` request becomes
+`CANCELLED` without a destination probe because its durable start authorization
+never committed.
+
+When any sibling is `STARTED`, recovery also opens application state read-only
+and probes each exact destination receipt before changing the control ledger.
+A verified receipt makes that effect `COMPLETED` or `FAILED`; strict absence
+makes it `UNCERTAIN`. One compound event then applies every sibling disposition,
+abandons the stopped physical attempt, makes its invocation `UNCERTAIN`, and
+blocks the run. A missing or replacement store, unsupported contract, corrupt
+receipt or business row, thrown probe, or verifier failure leaves the entire
+set unchanged. Recovery never invokes the application or adapter executable.
 Packaged recovery requires the LMDB local-ownership protocol and refuses to
 race a live resident service. The same local exclusion applies to packaged
 reconciliation; source effect-free recovery and reconciliation retain their
@@ -222,7 +230,7 @@ never rewritten, and the transcript, result, reason, and fence are never echoed
 in the operator response. A `cancelled` result still requires the matching
 earlier durable cancellation request and host cancellation frame.
 
-The V6 ledger supports cancellation by the foreground active owner. During
+The V7 ledger supports cancellation by the foreground active owner. During
 `wharfie ops run`, the first `SIGINT` or `SIGTERM` becomes a durable request
 before the owner signals the physical attempt. While an LMDB-backed `ops run`
 owns the exact `STARTED` attempt, source `wharfie ops cancel` or packaged
@@ -242,9 +250,13 @@ cancellation evidence can commit `CANCELLED`; a verified completion or failure
 may still win, while unconfirmed post-cancellation termination becomes blocked
 `UNCERTAIN` work; later reconciliation needs evidence rather than another
 cancel request. There is still no public run-history/list: the verified bounded
-V4 run directory paired with the V6 ledger is internal rather than the retired
+V5 run directory paired with the V7 ledger is internal rather than the retired
 `ops list` surface. The resident service currently owns only local lifecycle
-and exclusion state; it does not schedule, claim, or execute work.
+and exclusion state; it does not schedule, claim, or execute work. The bounded
+recovery transaction and the built-in application-state receipt tests do not
+replace real subprocess and SEA crashes at request, start, destination commit,
+ledger settlement, and response-delivery boundaries; that adversarial matrix
+remains release-blocking work.
 
 ## Package the app
 

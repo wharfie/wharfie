@@ -6,6 +6,7 @@ import { assertApplicationRevisionId } from '../application-revision.js';
 import {
   AttemptStatus,
   EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+  EXECUTION_LEDGER_MAX_UNRESOLVED_MANAGED_EFFECTS,
   EffectStatus,
   InvocationStatus,
   RunStatus,
@@ -21,6 +22,7 @@ import {
 } from '../../lib/ledger/record-key.js';
 import { assertLogicalId } from '../logical-id.js';
 import {
+  ManualLedgerRecoveryAction,
   reconcileManualLedgerActivity,
   recoverManualLedgerActivity,
 } from '../manual-ledger-run.js';
@@ -29,6 +31,7 @@ import {
   openApplicationStateDB,
   resolveApplicationStateStoreConfiguration,
 } from '../application-state-store.js';
+import { createCanonicalJsonSha256Id } from '../content-id.js';
 import {
   APPLICATION_STATE_ADAPTER_DESCRIPTOR,
   APPLICATION_STATE_SUBSTANTIATED_REPLAY_PROPERTIES,
@@ -36,7 +39,7 @@ import {
   normalizeApplicationStateDestination,
 } from '../effects/application-state.js';
 import { createBuiltinManagedEffectRecoveryCatalog } from '../effects/builtin-catalog.js';
-import { recoverStartedManagedEffect } from '../managed-effect.js';
+import { recoverStoppedManagedEffects } from '../managed-effect.js';
 import {
   getLocalServiceSessionPrincipalId,
   getLocalServiceSessionScopeId,
@@ -454,14 +457,14 @@ function assertRecoverableApplicationStateEffect(effect, appId) {
 }
 
 /**
- * Select the deliberately narrow v1 recovery target. Concurrent effect
- * execution is supported by the runtime, but partially settling a sibling set
- * could strand remaining STARTED/PENDING work after the first uncertainty
- * transition blocks the aggregate.
+ * Select and fingerprint the complete bounded unresolved effect set before
+ * ownership mutation. PENDING is safe from the ledger's generic no-dispatch
+ * authority; only STARTED members require the exact built-in LMDB receipt
+ * contract. Both statuses settle in one later ledger transition.
  * @param {Record<string, any>} view - Fresh verified run projection.
- * @returns {Record<string, any> | undefined} - Exact single STARTED effect.
+ * @returns {{invocationId: string, attemptId: string, effects: Record<string, any>[], hasStarted: boolean, fingerprint: string} | undefined} - Exact recovery set.
  */
-function getStartedEffectRecoveryTarget(view) {
+function getStoppedEffectRecoveryTarget(view) {
   const invocation = getManualInvocation(view);
   if (
     view.run.status !== RunStatus.RUNNING ||
@@ -480,22 +483,81 @@ function getStartedEffectRecoveryTarget(view) {
     (/** @type {Record<string, any>} */ effect) =>
       effect.invocationId === invocation.invocationId &&
       effect.requestedBy?.attemptId === attempt.attemptId &&
-      ![EffectStatus.COMPLETED, EffectStatus.FAILED].includes(effect.status),
+      ![
+        EffectStatus.COMPLETED,
+        EffectStatus.FAILED,
+        EffectStatus.CANCELLED,
+      ].includes(effect.status),
   );
   if (unresolved.length === 0) return undefined;
-  if (unresolved.length !== 1) {
-    throw new Error(
-      `Recovery requires exactly one unresolved managed effect for attempt ${attempt.attemptId}; found ${unresolved.length}.`,
+  if (unresolved.length > EXECUTION_LEDGER_MAX_UNRESOLVED_MANAGED_EFFECTS) {
+    throw new RangeError(
+      `Recovery supports at most ${EXECUTION_LEDGER_MAX_UNRESOLVED_MANAGED_EFFECTS} unresolved managed effects for one attempt; found ${unresolved.length}.`,
     );
   }
-  const effect = unresolved[0];
-  if (effect.status !== EffectStatus.STARTED) {
-    throw new Error(
-      `Managed effect ${effect.effectId} is ${effect.status}; recovery currently requires the exact STARTED boundary.`,
-    );
+  unresolved.sort(
+    (
+      /** @type {Record<string, any>} */ left,
+      /** @type {Record<string, any>} */ right,
+    ) =>
+      left.effectId < right.effectId
+        ? -1
+        : left.effectId > right.effectId
+          ? 1
+          : 0,
+  );
+  for (const effect of unresolved) {
+    const requestedBy = effect.requestedBy;
+    const exactRequestFence =
+      requestedBy?.attemptId === attempt.attemptId &&
+      requestedBy?.generation === attempt.generation &&
+      requestedBy?.coordinatorEpoch === attempt.coordinatorEpoch &&
+      requestedBy?.fencingToken === attempt.fencingToken;
+    const exactStartFence =
+      effect.status !== EffectStatus.STARTED ||
+      (effect.startedBy?.attemptId === attempt.attemptId &&
+        effect.startedBy?.generation === attempt.generation &&
+        effect.startedBy?.coordinatorEpoch === attempt.coordinatorEpoch &&
+        effect.startedBy?.fencingToken === attempt.fencingToken);
+    if (
+      effect.status !== EffectStatus.PENDING &&
+      effect.status !== EffectStatus.STARTED
+    ) {
+      throw new Error(
+        `Managed effect ${effect.effectId} has unsupported recovery status ${effect.status}.`,
+      );
+    }
+    if (!exactRequestFence || !exactStartFence) {
+      throw new Error(
+        `Managed effect ${effect.effectId} does not belong to the exact current attempt fence.`,
+      );
+    }
+    if (effect.status === EffectStatus.STARTED) {
+      assertRecoverableApplicationStateEffect(effect, view.run.appId);
+    }
   }
-  assertRecoverableApplicationStateEffect(effect, view.run.appId);
-  return effect;
+  const fingerprint = createCanonicalJsonSha256Id({
+    domain: 'wharfie:operator-stopped-managed-effect-set:v1',
+    prefix: 'wor',
+    value: {
+      schemaVersion: 1,
+      run: view.run,
+      invocation,
+      attempt,
+      effects: unresolved,
+    },
+    valuePath: 'operator stopped managed-effect recovery set',
+  });
+  return {
+    invocationId: invocation.invocationId,
+    attemptId: attempt.attemptId,
+    effects: unresolved,
+    hasStarted: unresolved.some(
+      (/** @type {Record<string, any>} */ effect) =>
+        effect.status === EffectStatus.STARTED,
+    ),
+    fingerprint,
+  };
 }
 
 /**
@@ -504,6 +566,141 @@ function getStartedEffectRecoveryTarget(view) {
  */
 function isTerminalRun(run) {
   return ['COMPLETED', 'FAILED', 'CANCELLED'].includes(run.status);
+}
+
+const TERMINAL_INVOCATION_STATUSES = new Set([
+  InvocationStatus.COMPLETED,
+  InvocationStatus.FAILED,
+  InvocationStatus.CANCELLED,
+]);
+
+const TERMINAL_ATTEMPT_STATUSES = new Set([
+  AttemptStatus.COMPLETED,
+  AttemptStatus.FAILED,
+  AttemptStatus.CANCELLED,
+  AttemptStatus.ABANDONED,
+]);
+
+/**
+ * A different transition is authoritative only after a verified read proves
+ * that this exact invocation and attempt can no longer own physical work.
+ * Merely observing a new run version is insufficient: a still-RUNNING or
+ * partially active set must surface the original recovery failure.
+ * @param {Record<string, any>} view - Fresh verified run projection.
+ * @param {{invocationId: string, attemptId: string, effects: Record<string, any>[]}} target - Original exact active set.
+ * @returns {boolean} - Whether a different durable outcome is authoritative.
+ */
+function hasCompetingManagedEffectRecoveryAuthority(view, target) {
+  const invocation = view.invocations.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.invocationId === target.invocationId,
+  );
+  const attempt = view.attempts.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.invocationId === target.invocationId &&
+      candidate.attemptId === target.attemptId,
+  );
+  if (!invocation || !attempt) return false;
+
+  const activeEffects = (view.effects || []).filter(
+    (/** @type {Record<string, any>} */ effect) =>
+      effect.invocationId === target.invocationId &&
+      effect.requestedBy?.attemptId === target.attemptId &&
+      [EffectStatus.PENDING, EffectStatus.STARTED].includes(effect.status),
+  );
+  if (activeEffects.length !== 0) return false;
+
+  const blockedAuthority =
+    view.run.status === RunStatus.BLOCKED &&
+    invocation.status === InvocationStatus.UNCERTAIN &&
+    attempt.status === AttemptStatus.ABANDONED &&
+    invocation.generation === attempt.generation;
+  const terminalAuthority =
+    isTerminalRun(view.run) &&
+    TERMINAL_INVOCATION_STATUSES.has(invocation.status) &&
+    TERMINAL_ATTEMPT_STATUSES.has(attempt.status) &&
+    invocation.generation === attempt.generation;
+  return blockedAuthority || terminalAuthority;
+}
+
+/**
+ * Keep competing authority handling at the operator boundary. The managed
+ * effect helper may attribute a thrown write only to its own exact retained
+ * transition; if a different transition won, this wrapper performs a fresh
+ * verified read and returns the existing generic no-change result only for an
+ * authoritative blocked or terminal state.
+ *
+ * This internal operator seam isolates the authority decision from store and
+ * catalog plumbing; packaged command construction calls it only under held
+ * local mutation ownership.
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, target: {invocationId: string, attemptId: string, effects: Record<string, any>[]}, recoverOutcome?: (input: {destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}) => Promise<unknown>|unknown, actor: {kind: string, id: string}}} options - Exact operator recovery inputs.
+ * @returns {Promise<Record<string, any>>} - Plural recovery or retained generic authority.
+ */
+export async function recoverStoppedManagedEffectsAtOperatorBoundary(options) {
+  try {
+    const managedEffects = await recoverStoppedManagedEffects({
+      ledger: options.ledger,
+      runId: options.runId,
+      invocationId: options.target.invocationId,
+      ...(options.recoverOutcome
+        ? { recoverOutcome: options.recoverOutcome }
+        : {}),
+      actor: options.actor,
+    });
+    return {
+      found: true,
+      mayExecute: false,
+      ...managedEffects,
+    };
+  } catch (recoveryError) {
+    let authority;
+    try {
+      authority = await options.ledger.rebuildRun(options.runId);
+    } catch (readError) {
+      throw new AggregateError(
+        [recoveryError, readError],
+        `Managed-effect recovery lost authority and the verified readback failed for run ${options.runId}.`,
+      );
+    }
+    if (
+      !authority ||
+      !hasCompetingManagedEffectRecoveryAuthority(authority, options.target)
+    ) {
+      throw recoveryError;
+    }
+
+    let retained;
+    try {
+      retained = await recoverManualLedgerActivity({
+        ledger: options.ledger,
+        runId: options.runId,
+        invocationId: options.target.invocationId,
+        actor: options.actor,
+      });
+    } catch (readError) {
+      throw new AggregateError(
+        [recoveryError, readError],
+        `Managed-effect recovery lost to authoritative state, but its generic readback failed for run ${options.runId}.`,
+      );
+    }
+    if (
+      retained.found !== true ||
+      retained.mayExecute !== false ||
+      retained.action !== ManualLedgerRecoveryAction.NONE ||
+      retained.changed !== false
+    ) {
+      throw new AggregateError(
+        [
+          recoveryError,
+          new Error(
+            'Competing managed-effect authority did not remain a generic no-change outcome.',
+          ),
+        ],
+        `Managed-effect recovery authority changed again for run ${options.runId}.`,
+      );
+    }
+    return retained;
+  }
 }
 
 /**
@@ -861,7 +1058,7 @@ export async function recoverExecutionLedgerRun(options) {
   // Refuse unsupported effect sets while every opened store is still
   // read-only. The same selection is repeated under local ownership below so
   // a concurrent transition cannot authorize work from this stale view.
-  getStartedEffectRecoveryTarget(preflight);
+  const preflightTarget = getStoppedEffectRecoveryTarget(preflight);
 
   return await withExecutionLedger(
     async (ledger, context) =>
@@ -872,11 +1069,14 @@ export async function recoverExecutionLedgerRun(options) {
           const current = await ledger.rebuildRun(options.runId);
           if (!current) return null;
           assertExpectedApp(current, options.expectedAppId);
-          const target = getStartedEffectRecoveryTarget(current);
+          const target = getStoppedEffectRecoveryTarget(current);
+          if (target?.fingerprint !== preflightTarget?.fingerprint) {
+            throw new Error(
+              'The managed-effect recovery set changed before local ownership was acquired; retry from a fresh read-only preflight.',
+            );
+          }
           /** @type {Record<string, any> | undefined} */
           let applicationState;
-          /** @type {Record<string, any> | undefined} */
-          let managedEffect;
           /** @type {Record<string, any> | undefined} */
           let recovery;
           /** @type {unknown} */
@@ -884,10 +1084,12 @@ export async function recoverExecutionLedgerRun(options) {
           let operationFailed = false;
 
           try {
-            if (target) {
+            /** @type {((input: {destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}) => Promise<unknown>|unknown) | undefined} */
+            let recoverOutcome;
+            if (target?.hasStarted) {
               if (!localOwner || context.adapterName !== 'lmdb') {
                 throw new Error(
-                  'Recovery of a STARTED managed effect requires the held LMDB local-owner protocol.',
+                  'Recovery of STARTED managed effects requires the held LMDB local-owner protocol.',
                 );
               }
               const applicationStateConfiguration =
@@ -916,21 +1118,29 @@ export async function recoverExecutionLedgerRun(options) {
                 adapterName: applicationState.context.adapterName,
                 tableName: applicationState.context.tableName,
               });
-              managedEffect = await recoverStartedManagedEffect({
+              recoverOutcome = catalog.recoverOutcome;
+            }
+
+            if (target) {
+              if (!localOwner || context.adapterName !== 'lmdb') {
+                throw new Error(
+                  'Recovery of managed effects requires the held LMDB local-owner protocol.',
+                );
+              }
+              recovery = await recoverStoppedManagedEffectsAtOperatorBoundary({
                 ledger,
                 runId: current.run.runId,
-                invocationId: target.invocationId,
-                effectId: target.effectId,
-                recoverOutcome: catalog.recoverOutcome,
+                target,
+                ...(recoverOutcome ? { recoverOutcome } : {}),
+                actor,
+              });
+            } else {
+              recovery = await recoverManualLedgerActivity({
+                ledger,
+                runId: options.runId,
                 actor,
               });
             }
-
-            recovery = await recoverManualLedgerActivity({
-              ledger,
-              runId: options.runId,
-              actor,
-            });
           } catch (error) {
             operationFailed = true;
             operationError = error;
@@ -961,11 +1171,7 @@ export async function recoverExecutionLedgerRun(options) {
           if (!recovery.found || !view) return null;
           assertExpectedApp(view, options.expectedAppId);
           return {
-            recovery: {
-              ...recovery,
-              changed: recovery.changed || managedEffect?.changed === true,
-              ...(managedEffect ? { managedEffect } : {}),
-            },
+            recovery,
             view,
           };
         },
@@ -1044,13 +1250,17 @@ export async function reconcileExecutionLedgerRun(options) {
  * @returns {string} - Human-readable completed recovery message.
  */
 function recoveryMessage(action) {
-  if (typeof action === 'object' && action?.managedEffect) {
-    if (action.managedEffect.action === 'outcome-recovered') {
-      return `Recovered managed effect ${action.managedEffect.effectId} from its permanent destination receipt, then marked the stopped begun attempt uncertain. No activity code was dispatched.`;
-    }
-    if (action.managedEffect.action === 'outcome-uncertain') {
-      return `No permanent destination receipt exists for managed effect ${action.managedEffect.effectId}; marked the effect and stopped begun attempt uncertain. No activity code was dispatched.`;
-    }
+  if (typeof action === 'object' && Array.isArray(action?.managedEffects)) {
+    const counts = action.managedEffects.reduce(
+      (summary, effect) => {
+        if (effect.action === 'cancelled-before-start') summary.cancelled += 1;
+        if (effect.action === 'outcome-recovered') summary.recovered += 1;
+        if (effect.action === 'outcome-uncertain') summary.uncertain += 1;
+        return summary;
+      },
+      { cancelled: 0, recovered: 0, uncertain: 0 },
+    );
+    return `Settled ${action.managedEffects.length} managed effects atomically after runner exclusion (${counts.cancelled} cancelled before start, ${counts.recovered} recovered from permanent receipts, ${counts.uncertain} uncertain without receipts) and blocked the stopped attempt. No activity code was dispatched.`;
   }
   const recoveryAction =
     typeof action === 'object' && action ? action.action : action;

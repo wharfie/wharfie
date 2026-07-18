@@ -1,6 +1,7 @@
 # 0015 — Destination-bound managed effects and finite host catalogs
 
-**Status:** Accepted · **Date:** 2026-07-18
+**Status:** Accepted; V6 namespace superseded by
+[0016](0016-atomic-stopped-attempt-effect-settlement.md) · **Date:** 2026-07-18
 
 ## Context
 

@@ -229,7 +229,7 @@ async function createInstalledLedgerLifecycleObserver(options) {
  * operator fixtures. The moved SEA still performs every operation under test;
  * this host helper only prepares independently verifiable durable state.
  * @param {{installedPackageRoot: string, controlPath: string, tableName: string, payloadPath: string, applicationStatePath: string, revisionId: string}} options - Installed-package fixture inputs.
- * @returns {Promise<{createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createStartedApplicationStateRun: (appId: string, idempotencyKey: string, effectId: string, commitReceipt: boolean) => Promise<{runId: string, effectId: string, destinationEffectId: string, storeId: string, requestKey: string, secrets: string[]}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, ApplicationStateAdapterDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
+ * @returns {Promise<{createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[]) => Promise<{runId: string, attemptId: string, storeId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, ApplicationStateAdapterDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
  */
 async function createInstalledExecutionLedgerFixture(options) {
   const installedModule = async (/** @type {string} */ relativePath) =>
@@ -325,17 +325,16 @@ async function createInstalledExecutionLedgerFixture(options) {
         await db.close();
       }
     },
-    createStartedApplicationStateRun: async (
+    createApplicationStateRecoveryBatchRun: async (
       appId,
       idempotencyKey,
-      effectId,
-      commitReceipt,
+      effectSpecs,
     ) => {
-      const inputSecret = `sea-effect-input-secret-${effectId}`;
-      const callerSecret = `sea-effect-caller-secret-${effectId}`;
-      const fencingToken = `sea-effect-fencing-secret-${effectId}`;
-      const stateSecret = `sea-application-state-secret-${effectId}`;
-      const requestKey = `sea-recovery-key-${effectId}`;
+      assert.ok(effectSpecs.length > 0);
+      const inputSecret = `sea-effect-input-secret-${idempotencyKey}`;
+      const callerSecret = `sea-effect-caller-secret-${idempotencyKey}`;
+      const fencingToken = `sea-effect-fencing-secret-${idempotencyKey}`;
+      const secrets = [inputSecret, callerSecret, fencingToken];
       const { db, ledger } = openLedger(false);
       const applicationDb = await dbConfigModule.createApplicationStateDBClient(
         'lmdb',
@@ -365,69 +364,133 @@ async function createInstalledExecutionLedgerFixture(options) {
           transitionId: `start:${seeded.claimed.attempt.attemptId}`,
           actor: { kind: 'local', id: 'sea-verifier' },
         });
-        const request = {
-          protocol: 'wharfie.activity',
-          protocolVersion: 1,
-          type: 'effect-request',
-          attemptId: started.attempt.attemptId,
-          sequence: 1,
-          effectId,
-          capability: 'application-state',
-          operation: 'put-if-absent',
-          input: {
-            key: requestKey,
-            value: { credential: stateSecret },
-          },
-          requestedReplayProperties: ['idempotent', 'transactional'],
-        };
-        const adapter = catalog.resolve(request);
-        const requested = await ledger.recordManagedEffectRequest({
-          runId: seeded.runId,
-          invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
-          attemptId: started.attempt.attemptId,
-          fencingToken,
-          generation: started.attempt.generation,
-          expectedVersion: started.run.version,
-          transitionId: `effect-request:${effectId}`,
-          request,
-          adapter: adapter.descriptor,
-          destination: adapter.destination,
-          verifier: adapter.verifier,
-          substantiatedReplayProperties: adapter.substantiatedReplayProperties,
-          actor: { kind: 'local', id: 'sea-verifier' },
-        });
-        const effectStarted = await ledger.markManagedEffectStarted({
-          runId: seeded.runId,
-          invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
-          attemptId: started.attempt.attemptId,
-          effectId,
-          fencingToken,
-          generation: started.attempt.generation,
-          expectedVersion: requested.run.version,
-          expectedEffectVersion: requested.effect.version,
-          transitionId: `effect-start:${effectId}`,
-          actor: { kind: 'local', id: 'sea-verifier' },
-        });
-        if (commitReceipt) {
-          await adapter.execute({
-            destinationEffectId: effectStarted.effect.destinationEffectId,
+        let currentRun = started.run;
+        const effects = [];
+        for (const [index, spec] of effectSpecs.entries()) {
+          assert.match(spec.effectId, /^[A-Za-z0-9-]+$/);
+          assert.ok(
+            [
+              'PENDING',
+              'STARTED_RECEIPT',
+              'STARTED_ABSENT',
+              'TERMINAL',
+            ].includes(spec.state),
+          );
+          const stateSecret = `sea-application-state-secret-${spec.effectId}`;
+          const requestKey = `sea-recovery-key-${spec.effectId}`;
+          secrets.push(stateSecret);
+          const request = {
+            protocol: 'wharfie.activity',
+            protocolVersion: 1,
+            type: 'effect-request',
+            attemptId: started.attempt.attemptId,
+            sequence: index + 1,
+            effectId: spec.effectId,
+            capability: 'application-state',
+            operation: 'put-if-absent',
+            input: {
+              key: requestKey,
+              value: { credential: stateSecret },
+            },
+            requestedReplayProperties: ['idempotent', 'transactional'],
+          };
+          const adapter = catalog.resolve(request);
+          const requested = await ledger.recordManagedEffectRequest({
+            runId: seeded.runId,
+            invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
+            attemptId: started.attempt.attemptId,
+            fencingToken,
+            generation: started.attempt.generation,
+            expectedVersion: currentRun.version,
+            transitionId: `effect-request:${spec.effectId}`,
+            request,
+            adapter: adapter.descriptor,
             destination: adapter.destination,
-            identity: {
+            verifier: adapter.verifier,
+            substantiatedReplayProperties:
+              adapter.substantiatedReplayProperties,
+            actor: { kind: 'local', id: 'sea-verifier' },
+          });
+          currentRun = requested.run;
+          let effect = requested.effect;
+          let receiptPresent = false;
+          if (spec.state !== 'PENDING') {
+            const effectStarted = await ledger.markManagedEffectStarted({
               runId: seeded.runId,
               invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
               attemptId: started.attempt.attemptId,
-              effectId,
-            },
-            request,
+              effectId: spec.effectId,
+              fencingToken,
+              generation: started.attempt.generation,
+              expectedVersion: currentRun.version,
+              expectedEffectVersion: effect.version,
+              transitionId: `effect-start:${spec.effectId}`,
+              actor: { kind: 'local', id: 'sea-verifier' },
+            });
+            currentRun = effectStarted.run;
+            effect = effectStarted.effect;
+            if (spec.state !== 'STARTED_ABSENT') {
+              const outcome = await adapter.execute({
+                destinationEffectId: effect.destinationEffectId,
+                destination: adapter.destination,
+                identity: {
+                  runId: seeded.runId,
+                  invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
+                  attemptId: started.attempt.attemptId,
+                  effectId: spec.effectId,
+                },
+                request,
+              });
+              receiptPresent = true;
+              if (spec.state === 'TERMINAL') {
+                const committed = await ledger.commitManagedEffectOutcome({
+                  runId: seeded.runId,
+                  invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
+                  attemptId: started.attempt.attemptId,
+                  effectId: spec.effectId,
+                  fencingToken,
+                  generation: started.attempt.generation,
+                  expectedVersion: currentRun.version,
+                  expectedEffectVersion: effect.version,
+                  transitionId: `effect-outcome:${spec.effectId}`,
+                  outcome,
+                  actor: { kind: 'local', id: 'sea-verifier' },
+                });
+                currentRun = committed.run;
+                effect = committed.effect;
+              }
+            }
+          }
+          effects.push({
+            effectId: spec.effectId,
+            initialStatus: effect.status,
+            destinationEffectId: effect.destinationEffectId,
+            requestKey,
+            receiptPresent,
+            ...(spec.state === 'PENDING'
+              ? {
+                  recoveryAction: 'cancelled-before-start',
+                  recoveredStatus: ledgerModule.EffectStatus.CANCELLED,
+                }
+              : spec.state === 'STARTED_RECEIPT'
+                ? {
+                    recoveryAction: 'outcome-recovered',
+                    recoveredStatus: ledgerModule.EffectStatus.COMPLETED,
+                  }
+                : spec.state === 'STARTED_ABSENT'
+                  ? {
+                      recoveryAction: 'outcome-uncertain',
+                      recoveredStatus: ledgerModule.EffectStatus.UNCERTAIN,
+                    }
+                  : {}),
           });
         }
         return {
           runId: seeded.runId,
-          effectId,
-          destinationEffectId: effectStarted.effect.destinationEffectId,
+          attemptId: started.attempt.attemptId,
           storeId: catalog.storeId,
-          requestKey,
-          secrets: [inputSecret, callerSecret, fencingToken, stateSecret],
+          effects,
+          secrets,
         };
       } finally {
         await applicationDb.close();
@@ -472,9 +535,9 @@ async function createInstalledExecutionLedgerFixture(options) {
  * Assert the effect/history surface has one exact public shape and contains no
  * retained destination or logical-request material.
  * @param {string} serialized - Exact CLI JSON output.
- * @param {{runId: string, effectId: string, destinationEffectId: string, storeId: string, requestKey: string, secrets: string[]}} fixture - Seeded retained effect.
+ * @param {{runId: string, storeId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}} fixture - Seeded retained effect set.
  * @param {Record<string, any>} view - Parsed operator view.
- * @param {{adapter: Record<string, any>, effectStatus: string}} expected - Public effect row.
+ * @param {{adapter: Record<string, any>, statuses: Map<string, string>}} expected - Public effect rows.
  */
 function assertManagedEffectOperatorRedaction(
   serialized,
@@ -482,20 +545,29 @@ function assertManagedEffectOperatorRedaction(
   view,
   expected,
 ) {
-  assert.equal(view.effects.length, 1);
-  assert.deepEqual(Object.keys(view.effects[0]).sort(), [
-    'adapter',
-    'createdAt',
-    'effectId',
-    'invocationId',
-    'lastSequence',
-    'status',
-    'updatedAt',
-    'version',
-  ]);
-  assert.equal(view.effects[0].effectId, fixture.effectId);
-  assert.equal(view.effects[0].status, expected.effectStatus);
-  assert.deepEqual(view.effects[0].adapter, expected.adapter);
+  assert.equal(view.effects.length, fixture.effects.length);
+  const rowsByEffectId = new Map(
+    view.effects.map((/** @type {Record<string, any>} */ effect) => [
+      effect.effectId,
+      effect,
+    ]),
+  );
+  for (const effect of fixture.effects) {
+    const row = rowsByEffectId.get(effect.effectId);
+    assert.ok(row, `operator view omitted managed effect ${effect.effectId}`);
+    assert.deepEqual(Object.keys(row).sort(), [
+      'adapter',
+      'createdAt',
+      'effectId',
+      'invocationId',
+      'lastSequence',
+      'status',
+      'updatedAt',
+      'version',
+    ]);
+    assert.equal(row.status, expected.statuses.get(effect.effectId));
+    assert.deepEqual(row.adapter, expected.adapter);
+  }
   for (const event of view.history) {
     assert.deepEqual(Object.keys(event).sort(), [
       'actor',
@@ -507,8 +579,10 @@ function assertManagedEffectOperatorRedaction(
   }
   for (const secret of [
     ...fixture.secrets,
-    fixture.requestKey,
-    fixture.destinationEffectId,
+    ...fixture.effects.flatMap((effect) => [
+      effect.requestKey,
+      effect.destinationEffectId,
+    ]),
     fixture.storeId,
     'destinationEffectId',
     'destination',
@@ -524,18 +598,34 @@ function assertManagedEffectOperatorRedaction(
 }
 
 /**
+ * @param {{effects: {initialStatus: string}[]}} fixture - Seeded effect set.
+ * @returns {string[]} - Exact event vocabulary before stopped recovery.
+ */
+function seededManagedEffectEventTypes(fixture) {
+  const eventTypes = [
+    'manual-run-created',
+    'attempt-claimed',
+    'attempt-started',
+  ];
+  for (const effect of fixture.effects) {
+    eventTypes.push('effect-requested');
+    if (effect.initialStatus !== 'PENDING') eventTypes.push('effect-started');
+    if (effect.initialStatus === 'COMPLETED') {
+      eventTypes.push('effect-completed');
+    }
+  }
+  return eventTypes;
+}
+
+/**
  * Assert source and packaged pre-recovery inspection expose the same exact
- * schema-v3 STARTED effect row without its retained request or destination.
+ * schema-v4 mixed effect set without retained requests or destinations.
  * @param {string} serialized - Exact CLI JSON output.
- * @param {{runId: string, effectId: string, destinationEffectId: string, storeId: string, requestKey: string, secrets: string[]}} fixture - Seeded retained effect.
+ * @param {{runId: string, storeId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}} fixture - Seeded retained effect set.
  * @param {Record<string, any>} adapter - Expected public adapter descriptor.
  * @returns {Record<string, any>} - Parsed inspection view.
  */
-function assertStartedManagedEffectInspectionView(
-  serialized,
-  fixture,
-  adapter,
-) {
+function assertManagedEffectBatchInspectionView(serialized, fixture, adapter) {
   const view = JSON.parse(serialized);
   assert.deepEqual(Object.keys(view).sort(), [
     'attempts',
@@ -547,7 +637,7 @@ function assertStartedManagedEffectInspectionView(
     'run',
     'schemaVersion',
   ]);
-  assert.equal(view.schemaVersion, 3);
+  assert.equal(view.schemaVersion, 4);
   assert.equal(view.kind, 'wharfie.execution-ledger.run');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, fixture.runId);
@@ -558,21 +648,18 @@ function assertStartedManagedEffectInspectionView(
   assert.equal(view.attempts[0].status, 'STARTED');
   assertManagedEffectOperatorRedaction(serialized, fixture, view, {
     adapter,
-    effectStatus: 'STARTED',
+    statuses: new Map(
+      fixture.effects.map((effect) => [effect.effectId, effect.initialStatus]),
+    ),
   });
+  const expectedEventTypes = seededManagedEffectEventTypes(fixture);
   assert.deepEqual(
     view.history.map((/** @type {Record<string, any>} */ event) => event.type),
-    [
-      'manual-run-created',
-      'attempt-claimed',
-      'attempt-started',
-      'effect-requested',
-      'effect-started',
-    ],
+    expectedEventTypes,
   );
   assert.deepEqual(
     view.history.map((/** @type {Record<string, any>} */ event) => event.actor),
-    Array.from({ length: 5 }, () => ({
+    Array.from({ length: expectedEventTypes.length }, () => ({
       kind: 'local',
       id: 'sea-verifier',
     })),
@@ -584,11 +671,11 @@ function assertStartedManagedEffectInspectionView(
  * Assert one CLI recovery response remains both semantically complete and
  * operator-redacted.
  * @param {string} serialized - Exact CLI JSON output.
- * @param {{runId: string, effectId: string, destinationEffectId: string, storeId: string, requestKey: string, secrets: string[]}} fixture - Seeded retained effect.
- * @param {{adapter: Record<string, any>, recoveryAction: string, managedEffectAction: string, effectStatus: string, eventTypes: string[], eventActors: Record<string, any>[]}} expected - Recovery truth.
+ * @param {{runId: string, storeId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}} fixture - Seeded retained effect set.
+ * @param {{adapter: Record<string, any>, actor: Record<string, any>}} expected - Recovery truth.
  * @returns {Record<string, any>} - Parsed recovery view.
  */
-function assertManagedEffectRecoveryView(serialized, fixture, expected) {
+function assertManagedEffectBatchRecoveryView(serialized, fixture, expected) {
   const view = JSON.parse(serialized);
   assert.deepEqual(Object.keys(view).sort(), [
     'attempts',
@@ -601,7 +688,7 @@ function assertManagedEffectRecoveryView(serialized, fixture, expected) {
     'run',
     'schemaVersion',
   ]);
-  assert.equal(view.schemaVersion, 3);
+  assert.equal(view.schemaVersion, 4);
   assert.equal(view.kind, 'wharfie.execution-ledger.recovery');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, fixture.runId);
@@ -610,26 +697,46 @@ function assertManagedEffectRecoveryView(serialized, fixture, expected) {
   assert.equal(view.invocations[0].status, 'UNCERTAIN');
   assert.equal(view.attempts.length, 1);
   assert.equal(view.attempts[0].status, 'ABANDONED');
+  const managedEffects = fixture.effects
+    .filter((effect) => effect.recoveryAction)
+    .map((effect) => ({
+      effectId: effect.effectId,
+      action: effect.recoveryAction,
+      status: effect.recoveredStatus,
+    }))
+    .sort((left, right) => left.effectId.localeCompare(right.effectId));
   assert.deepEqual(view.recovery, {
-    action: expected.recoveryAction,
+    action: 'settled-managed-effect-set',
     changed: true,
-    managedEffect: {
-      action: expected.managedEffectAction,
-      changed: true,
-      effectId: fixture.effectId,
-    },
+    managedEffects,
   });
   assertManagedEffectOperatorRedaction(serialized, fixture, view, {
     adapter: expected.adapter,
-    effectStatus: expected.effectStatus,
+    statuses: new Map(
+      fixture.effects.map((effect) => [
+        effect.effectId,
+        effect.recoveredStatus || effect.initialStatus,
+      ]),
+    ),
   });
+  const eventTypes = [
+    ...seededManagedEffectEventTypes(fixture),
+    'attempt-became-uncertain',
+  ];
+  const eventActors = [
+    ...Array.from({ length: view.history.length - 1 }, () => ({
+      kind: 'local',
+      id: 'sea-verifier',
+    })),
+    expected.actor,
+  ];
   assert.deepEqual(
     view.history.map((/** @type {Record<string, any>} */ event) => event.type),
-    expected.eventTypes,
+    eventTypes,
   );
   assert.deepEqual(
     view.history.map((/** @type {Record<string, any>} */ event) => event.actor),
-    expected.eventActors,
+    eventActors,
   );
   return view;
 }
@@ -1246,66 +1353,47 @@ export default defineApp({
       embeddedManifest.app.id,
       'packaged-operator-missing-run',
     );
-    const sourceReceiptEffect =
-      await ledgerFixture.createStartedApplicationStateRun(
+    const recoveryEffectSpecs = (/** @type {string} */ prefix) => [
+      {
+        effectId: `${prefix}-01-pending`,
+        state: /** @type {const} */ ('PENDING'),
+      },
+      {
+        effectId: `${prefix}-02-receipt`,
+        state: /** @type {const} */ ('STARTED_RECEIPT'),
+      },
+      {
+        effectId: `${prefix}-03-absent`,
+        state: /** @type {const} */ ('STARTED_ABSENT'),
+      },
+      {
+        effectId: `${prefix}-04-terminal`,
+        state: /** @type {const} */ ('TERMINAL'),
+      },
+    ];
+    const sourceEffectBatch =
+      await ledgerFixture.createApplicationStateRecoveryBatchRun(
         embeddedManifest.app.id,
-        'source-started-effect-with-receipt',
-        'source-receipt-effect',
-        true,
+        'source-mixed-effect-recovery',
+        recoveryEffectSpecs('source'),
       );
-    const sourceAbsentEffect =
-      await ledgerFixture.createStartedApplicationStateRun(
+    const seaEffectBatch =
+      await ledgerFixture.createApplicationStateRecoveryBatchRun(
         embeddedManifest.app.id,
-        'source-started-effect-without-receipt',
-        'source-absent-effect',
-        false,
-      );
-    const seaReceiptEffect =
-      await ledgerFixture.createStartedApplicationStateRun(
-        embeddedManifest.app.id,
-        'sea-started-effect-with-receipt',
-        'sea-receipt-effect',
-        true,
-      );
-    const seaAbsentEffect =
-      await ledgerFixture.createStartedApplicationStateRun(
-        embeddedManifest.app.id,
-        'sea-started-effect-without-receipt',
-        'sea-absent-effect',
-        false,
+        'sea-mixed-effect-recovery',
+        recoveryEffectSpecs('sea'),
       );
     const effectRecoveryTargets = [
       {
-        label: 'source receipt-present',
-        fixture: sourceReceiptEffect,
-        receiptPresent: true,
+        label: 'source mixed-effect batch',
+        fixture: sourceEffectBatch,
         command: process.execPath,
         operatorPrefix: [wharfieBin, 'ops'],
         actor: { kind: 'local', id: 'cli' },
       },
       {
-        label: 'source strict-absent',
-        fixture: sourceAbsentEffect,
-        receiptPresent: false,
-        command: process.execPath,
-        operatorPrefix: [wharfieBin, 'ops'],
-        actor: { kind: 'local', id: 'cli' },
-      },
-      {
-        label: 'SEA receipt-present',
-        fixture: seaReceiptEffect,
-        receiptPresent: true,
-        command: cleanArtifactPath,
-        operatorPrefix: ['wharfie'],
-        actor: {
-          kind: 'packaged-operator',
-          id: packagedArtifact.revisionId,
-        },
-      },
-      {
-        label: 'SEA strict-absent',
-        fixture: seaAbsentEffect,
-        receiptPresent: false,
+        label: 'SEA mixed-effect batch',
+        fixture: seaEffectBatch,
         command: cleanArtifactPath,
         operatorPrefix: ['wharfie'],
         actor: {
@@ -1314,16 +1402,20 @@ export default defineApp({
         },
       },
     ];
+    const effectReceiptsBeforeRecovery = new Map();
     for (const target of effectRecoveryTargets) {
-      const receipt = await ledgerFixture.readApplicationStateReceipt(
-        embeddedManifest.app.id,
-        target.fixture.destinationEffectId,
-      );
-      assert.equal(
-        receipt !== null,
-        target.receiptPresent,
-        `${target.label} fixture began with the wrong receipt state`,
-      );
+      for (const effect of target.fixture.effects) {
+        const receipt = await ledgerFixture.readApplicationStateReceipt(
+          embeddedManifest.app.id,
+          effect.destinationEffectId,
+        );
+        effectReceiptsBeforeRecovery.set(effect.destinationEffectId, receipt);
+        assert.equal(
+          receipt !== null,
+          effect.receiptPresent,
+          `${target.label} ${effect.effectId} began with the wrong receipt state`,
+        );
+      }
     }
 
     const sourceInspectionText = runCommand(
@@ -1389,12 +1481,12 @@ export default defineApp({
           env: operatorEnvironment,
         },
       ).stdout.trim();
-      const sourceEffectInspection = assertStartedManagedEffectInspectionView(
+      const sourceEffectInspection = assertManagedEffectBatchInspectionView(
         sourceEffectInspectionText,
         target.fixture,
         ledgerFixture.ApplicationStateAdapterDescriptor,
       );
-      const seaEffectInspection = assertStartedManagedEffectInspectionView(
+      const seaEffectInspection = assertManagedEffectBatchInspectionView(
         seaEffectInspectionText,
         target.fixture,
         ledgerFixture.ApplicationStateAdapterDescriptor,
@@ -1620,17 +1712,6 @@ export default defineApp({
     );
     assert.equal(afterKill.sessionId, firstSessionId);
 
-    const seededEffectEventTypes = [
-      'manual-run-created',
-      'attempt-claimed',
-      'attempt-started',
-      'effect-requested',
-      'effect-started',
-    ];
-    const seededEffectEventActors = Array.from({ length: 5 }, () => ({
-      kind: 'local',
-      id: 'sea-verifier',
-    }));
     for (const target of effectRecoveryTargets) {
       const recoveryText = runCommand(
         target.command,
@@ -1648,31 +1729,9 @@ export default defineApp({
           env: operatorEnvironment,
         },
       ).stdout.trim();
-      const eventTypes = target.receiptPresent
-        ? [
-            ...seededEffectEventTypes,
-            'effect-completed',
-            'attempt-became-uncertain',
-          ]
-        : [...seededEffectEventTypes, 'effect-became-uncertain'];
-      const eventActors = [
-        ...seededEffectEventActors,
-        target.actor,
-        ...(target.receiptPresent ? [target.actor] : []),
-      ];
-      assertManagedEffectRecoveryView(recoveryText, target.fixture, {
+      assertManagedEffectBatchRecoveryView(recoveryText, target.fixture, {
         adapter: ledgerFixture.ApplicationStateAdapterDescriptor,
-        recoveryAction: target.receiptPresent
-          ? 'marked-started-uncertain'
-          : 'none',
-        managedEffectAction: target.receiptPresent
-          ? 'outcome-recovered'
-          : 'outcome-uncertain',
-        effectStatus: target.receiptPresent
-          ? ledgerFixture.EffectStatus.COMPLETED
-          : ledgerFixture.EffectStatus.UNCERTAIN,
-        eventTypes,
-        eventActors,
+        actor: target.actor,
       });
 
       const durable = await ledgerFixture.readRun(target.fixture.runId);
@@ -1685,12 +1744,42 @@ export default defineApp({
         durable?.attempts[0].status,
         ledgerFixture.AttemptStatus.ABANDONED,
       );
-      assert.equal(
-        durable?.effects[0].status,
-        target.receiptPresent
-          ? ledgerFixture.EffectStatus.COMPLETED
-          : ledgerFixture.EffectStatus.UNCERTAIN,
+      const effectsById = new Map(
+        durable?.effects.map((effect) => [effect.effectId, effect]),
       );
+      const recoverySequence = durable?.events.at(-1)?.sequence;
+      for (const effect of target.fixture.effects) {
+        const retained = effectsById.get(effect.effectId);
+        assert.ok(retained, `${target.label} lost ${effect.effectId}`);
+        assert.equal(
+          retained.status,
+          effect.recoveredStatus || effect.initialStatus,
+          `${target.label} settled ${effect.effectId} incorrectly`,
+        );
+        if (effect.recoveryAction) {
+          assert.equal(
+            retained.lastSequence,
+            recoverySequence,
+            `${target.label} did not settle ${effect.effectId} atomically`,
+          );
+        } else {
+          assert.ok(
+            retained.lastSequence < recoverySequence,
+            `${target.label} rewrote terminal sibling ${effect.effectId}`,
+          );
+        }
+      }
+      const eventTypes = [
+        ...seededManagedEffectEventTypes(target.fixture),
+        'attempt-became-uncertain',
+      ];
+      const eventActors = [
+        ...Array.from({ length: eventTypes.length - 1 }, () => ({
+          kind: 'local',
+          id: 'sea-verifier',
+        })),
+        target.actor,
+      ];
       assert.deepEqual(
         durable?.events.map((/** @type {Record<string, any>} */ event) => ({
           type: event.type,
@@ -1702,17 +1791,24 @@ export default defineApp({
         })),
         `${target.label} durable event truth diverged from its operator view`,
       );
-      const durableReceipt = await ledgerFixture.readApplicationStateReceipt(
-        embeddedManifest.app.id,
-        target.fixture.destinationEffectId,
-      );
       assert.equal(
-        durableReceipt !== null,
-        target.receiptPresent,
-        target.receiptPresent
-          ? `${target.label} recovery lost its permanent destination receipt`
-          : `${target.label} recovery unexpectedly created a destination receipt`,
+        durable?.events.length,
+        effectsBeforeActiveRefusal.get(target.fixture.runId).events.length + 1,
+        `${target.label} recovery was not one compound ledger event`,
       );
+      for (const effect of target.fixture.effects) {
+        const durableReceipt = await ledgerFixture.readApplicationStateReceipt(
+          embeddedManifest.app.id,
+          effect.destinationEffectId,
+        );
+        assert.deepEqual(
+          durableReceipt,
+          effectReceiptsBeforeRecovery.get(effect.destinationEffectId),
+          effect.receiptPresent
+            ? `${target.label} recovery rewrote ${effect.effectId}'s permanent receipt`
+            : `${target.label} recovery created a receipt for ${effect.effectId}`,
+        );
+      }
     }
 
     const packagedRecovery = JSON.parse(
@@ -1786,7 +1882,7 @@ export default defineApp({
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, and clean generated ${process.platform} SEA activity plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, STARTED managed-effect receipt/absence recovery, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, and clean generated ${process.platform} SEA activity plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();

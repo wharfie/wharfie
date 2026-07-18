@@ -26,12 +26,6 @@ import {
   RunStatus,
   createExecutionLedger,
 } from '../../src/core/lib/db/tables/execution-ledger.js';
-import {
-  LedgerServiceOwnerKind,
-  createLedgerServiceId,
-  createLedgerServiceOwnership,
-  createLedgerServiceSessionId,
-} from '../../src/core/lib/db/tables/ledger-service-lifecycle.js';
 import { createLocalExecutionPayloadStore } from '../../src/core/lib/payload-store/local.js';
 import {
   APPLICATION_STATE_ADAPTER_DESCRIPTOR,
@@ -43,18 +37,18 @@ import {
   createManualLedgerRunId,
 } from '../../src/core/runtime/manual-ledger-run.js';
 import {
-  getLocalServiceSessionPrincipalId,
-  getLocalServiceSessionScopeId,
-} from '../../src/core/runtime/local-service-session.js';
-import {
   ExecutionLedgerOperatorScopeError,
   EXECUTION_LEDGER_RECONCILIATION_EVIDENCE_FILE_MAX_BYTES,
   inspectExecutionLedgerRun,
   readExecutionLedgerReconciliationEvidenceFile,
   reconcileExecutionLedgerRun,
   recoverExecutionLedgerRun,
+  recoverStoppedManagedEffectsAtOperatorBoundary,
 } from '../../src/core/runtime/operator/execution-ledger-operator.js';
-import { createExecutionLedgerOperatorView } from '../../src/core/runtime/operator/execution-ledger-view.js';
+import {
+  createExecutionLedgerOperatorView,
+  createExecutionLedgerRecoveryOperatorView,
+} from '../../src/core/runtime/operator/execution-ledger-view.js';
 
 const RUN_REVISION_ID = `wrv1_${'A'.repeat(43)}`;
 const OPERATOR_REVISION_ID = `wrv1_${'B'.repeat(43)}`;
@@ -115,14 +109,14 @@ function createLmdbLedger(configuration, options = {}) {
   };
 }
 
-/** @param {string} attemptId @param {string} effectId */
-function applicationStateEffectRequest(attemptId, effectId) {
+/** @param {string} attemptId @param {string} effectId @param {number} sequence */
+function applicationStateEffectRequest(attemptId, effectId, sequence) {
   return {
     protocol: 'wharfie.activity',
     protocolVersion: 1,
     type: 'effect-request',
     attemptId,
-    sequence: effectId === 'remember-value-2' ? 2 : 1,
+    sequence,
     effectId,
     capability: 'application-state',
     operation: 'put-if-absent',
@@ -136,7 +130,7 @@ function applicationStateEffectRequest(attemptId, effectId) {
 
 /**
  * @param {string} root
- * @param {{effectStates?: Array<'PENDING'|'STARTED'>, commitReceipt?: boolean}} [options]
+ * @param {{effectStates?: Array<'PENDING'|'STARTED'>, commitReceipt?: boolean, receiptIndexes?: number[], overridePendingContract?: boolean, overrideStartedContract?: boolean}} [options]
  */
 async function seedApplicationStateRecoveryRun(root, options = {}) {
   const appId = 'application-state-recovery-operator';
@@ -197,11 +191,13 @@ async function seedApplicationStateRecoveryRun(root, options = {}) {
     /** @type {string[]} */
     const effectIds = [];
     for (let index = 0; index < effectStates.length; index += 1) {
-      const effectId = index === 0 ? 'remember-value' : 'remember-value-2';
+      const effectId =
+        index === 0 ? 'remember-value' : `remember-value-${index + 1}`;
       effectIds.push(effectId);
       const request = applicationStateEffectRequest(
         started.attempt.attemptId,
         effectId,
+        index + 1,
       );
       const adapter = catalog.resolve(request);
       const beforeRequest = await ledger.rebuildRun(runId);
@@ -215,8 +211,21 @@ async function seedApplicationStateRecoveryRun(root, options = {}) {
         expectedVersion: beforeRequest.run.version,
         transitionId: `request:${effectId}`,
         request,
-        adapter: adapter.descriptor,
-        destination: adapter.destination,
+        adapter:
+          (options.overridePendingContract &&
+            effectStates[index] === 'PENDING') ||
+          (options.overrideStartedContract && effectStates[index] === 'STARTED')
+            ? { id: 'unsupported-managed-adapter', version: 7 }
+            : adapter.descriptor,
+        destination:
+          options.overridePendingContract && effectStates[index] === 'PENDING'
+            ? {
+                kind: 'unsupported-store',
+                version: 3,
+                bindingId: 'foreign',
+                configuration: { provider: 'unavailable' },
+              }
+            : adapter.destination,
         verifier: adapter.verifier,
         substantiatedReplayProperties: adapter.substantiatedReplayProperties,
       });
@@ -232,7 +241,9 @@ async function seedApplicationStateRecoveryRun(root, options = {}) {
           expectedEffectVersion: requested.effect.version,
           transitionId: `effect-start:${effectId}`,
         });
-        if (index === 0 && options.commitReceipt === true) {
+        const receiptIndexes =
+          options.receiptIndexes || (options.commitReceipt === true ? [0] : []);
+        if (receiptIndexes.includes(index)) {
           await adapter.execute({
             destinationEffectId: effectStarted.effect.destinationEffectId,
             destination: adapter.destination,
@@ -269,58 +280,6 @@ async function readLmdbRun(configuration, runId) {
   const { db, ledger } = createLmdbLedger(configuration, { readOnly: true });
   try {
     return await ledger.rebuildRun(runId);
-  } finally {
-    await db.close();
-  }
-}
-
-/**
- * @param {ReturnType<typeof createLmdbConfiguration>} configuration
- * @param {string} appId
- */
-async function seedStaleLmdbOwnership(configuration, appId) {
-  const db = createLMDB({ path: configuration.controlPath });
-  try {
-    const ownership = createLedgerServiceOwnership({
-      db,
-      tableName: configuration.tableName,
-    });
-    const serviceId = createLedgerServiceId({ appId });
-    const claimed = await ownership.claimOwnership({
-      serviceId,
-      appId,
-      scopeId: getLocalServiceSessionScopeId({
-        sessionRoot: configuration.sessionPath,
-      }),
-      principalId: getLocalServiceSessionPrincipalId(),
-      sessionId: createLedgerServiceSessionId(),
-      ownerKind: LedgerServiceOwnerKind.MANUAL,
-      expected: null,
-      claimedAt: 1,
-    });
-    return claimed.ownership;
-  } finally {
-    await db.close();
-  }
-}
-
-/**
- * @param {ReturnType<typeof createLmdbConfiguration>} configuration
- * @param {string} appId
- */
-async function readLmdbOwnership(configuration, appId) {
-  const db = createLMDB({
-    path: configuration.controlPath,
-    readOnly: true,
-  });
-  try {
-    const ownership = createLedgerServiceOwnership({
-      db,
-      tableName: configuration.tableName,
-    });
-    return await ownership.getOwnership({
-      serviceId: createLedgerServiceId({ appId }),
-    });
   } finally {
     await db.close();
   }
@@ -469,7 +428,7 @@ describe('shared execution-ledger operator boundary', () => {
     });
 
     expect(view).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       run: {
         cancellationRequest: {
           requestId: 'cancel-request-1',
@@ -570,30 +529,39 @@ describe('shared execution-ledger operator boundary', () => {
     }
   });
 
-  it('recovers one STARTED application-state effect from its permanent receipt before blocking the stopped attempt', async () => {
+  it('settles a PENDING-only set without opening application state', async () => {
     const root = mkdtempSync(
-      path.join(os.tmpdir(), 'wharfie-operator-effect-receipt-'),
+      path.join(os.tmpdir(), 'wharfie-operator-effect-pending-'),
     );
     try {
       const fixture = await seedApplicationStateRecoveryRun(root, {
-        commitReceipt: true,
+        effectStates: ['PENDING'],
+        overridePendingContract: true,
       });
+      const missingStorePath = path.join(root, 'must-remain-absent');
+      const before = await readLmdbRun(fixture.configuration, fixture.runId);
       const result = await recoverExecutionLedgerRun({
         runId: fixture.runId,
         expectedAppId: fixture.appId,
         configuration: fixture.configuration,
-        applicationStateConfiguration: fixture.applicationStateConfiguration,
+        applicationStateConfiguration: Object.freeze({
+          ...fixture.applicationStateConfiguration,
+          storePath: missingStorePath,
+        }),
       });
 
+      expect(existsSync(missingStorePath)).toBe(false);
       expect(result).toMatchObject({
         recovery: {
-          action: 'marked-started-uncertain',
+          action: 'settled-managed-effect-set',
           changed: true,
-          managedEffect: {
-            action: 'outcome-recovered',
-            changed: true,
-            effectId: fixture.effectIds[0],
-          },
+          managedEffects: [
+            {
+              effectId: fixture.effectIds[0],
+              action: 'cancelled-before-start',
+              status: EffectStatus.CANCELLED,
+            },
+          ],
         },
         view: {
           run: { status: RunStatus.BLOCKED },
@@ -604,156 +572,283 @@ describe('shared execution-ledger operator boundary', () => {
             expect.objectContaining({ status: AttemptStatus.ABANDONED }),
           ],
           effects: [
-            expect.objectContaining({ status: EffectStatus.COMPLETED }),
+            expect.objectContaining({ status: EffectStatus.CANCELLED }),
           ],
         },
       });
-      expect(
-        result?.view.events.map(
-          (/** @type {Record<string, any>} */ event) => event.type,
-        ),
-      ).toEqual([
-        'manual-run-created',
-        'attempt-claimed',
-        'attempt-started',
-        'effect-requested',
-        'effect-started',
-        'effect-completed',
-        'attempt-became-uncertain',
-      ]);
-      expect(
-        result?.view.events
-          .slice(-2)
-          .map((/** @type {Record<string, any>} */ event) => event.actor),
-      ).toEqual([
-        { kind: 'local', id: 'cli' },
-        { kind: 'local', id: 'cli' },
-      ]);
-
-      if (!result) throw new Error('Expected managed-effect recovery result.');
-      const operatorView = createExecutionLedgerOperatorView(result.view);
-      expect(operatorView).toMatchObject({
-        schemaVersion: 3,
-        effects: [
-          {
-            invocationId: MANUAL_LEDGER_INVOCATION_ID,
-            effectId: fixture.effectIds[0],
-            status: EffectStatus.COMPLETED,
-            adapter: {
-              id: APPLICATION_STATE_ADAPTER_DESCRIPTOR.id,
-              version: 1,
-            },
-          },
-        ],
+      expect(result?.view.events).toHaveLength(
+        (before?.events.length || 0) + 1,
+      );
+      expect(result?.view.events.at(-1)).toMatchObject({
+        type: 'attempt-became-uncertain',
+        actor: { kind: 'local', id: 'cli' },
       });
-      const serialized = JSON.stringify(operatorView);
-      expect(serialized).not.toContain(fixture.storeId);
-      expect(serialized).not.toContain('state-secret');
-      expect(serialized).not.toContain('recovery-fence-secret');
-      expect(serialized).not.toContain('destinationEffectId');
-      expect(serialized).not.toContain('evidence');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   }, 20000);
 
-  it('blocks one STARTED application-state effect when its exact permanent receipt is absent', async () => {
+  it('reports a competing stopped-effect settlement as generic authoritative state', async () => {
     const root = mkdtempSync(
-      path.join(os.tmpdir(), 'wharfie-operator-effect-absent-'),
+      path.join(os.tmpdir(), 'wharfie-operator-effect-competing-settlement-'),
+    );
+    const competitor = Object.freeze({
+      kind: 'packaged-operator',
+      id: OPERATOR_REVISION_ID,
+    });
+    try {
+      const fixture = await seedApplicationStateRecoveryRun(root, {
+        effectStates: ['PENDING'],
+      });
+      const { db, ledger } = createLmdbLedger(fixture.configuration);
+      try {
+        const before = await ledger.rebuildRun(fixture.runId);
+        if (!before) throw new Error('Expected competing recovery run.');
+        const invocation = before.invocations.find(
+          (/** @type {Record<string, any>} */ candidate) =>
+            candidate.invocationId === MANUAL_LEDGER_INVOCATION_ID,
+        );
+        const attempt = before.attempts.find(
+          (/** @type {Record<string, any>} */ candidate) =>
+            candidate.invocationId === MANUAL_LEDGER_INVOCATION_ID &&
+            candidate.generation === invocation?.generation,
+        );
+        if (!attempt) throw new Error('Expected competing recovery attempt.');
+        const target = {
+          invocationId: MANUAL_LEDGER_INVOCATION_ID,
+          attemptId: attempt.attemptId,
+          effects: before.effects,
+        };
+        const competingLedger = {
+          ...ledger,
+          async settleStoppedAttemptManagedEffects(
+            /** @type {Record<string, any>} */ options,
+          ) {
+            await ledger.settleStoppedAttemptManagedEffects({
+              ...options,
+              transitionId: 'competing-stopped-effect-settlement',
+              actor: competitor,
+            });
+            throw new Error('operator settlement lost to competing authority');
+          },
+        };
+
+        await expect(
+          recoverStoppedManagedEffectsAtOperatorBoundary({
+            ledger: /** @type {any} */ (competingLedger),
+            runId: fixture.runId,
+            target,
+            actor: { kind: 'local', id: 'cli' },
+          }),
+        ).resolves.toMatchObject({
+          found: true,
+          mayExecute: false,
+          action: 'none',
+          changed: false,
+          outcome: {
+            disposition: 'blocked',
+            reused: true,
+            run: { status: RunStatus.BLOCKED },
+            invocation: { status: InvocationStatus.UNCERTAIN },
+            attempt: { status: AttemptStatus.ABANDONED },
+          },
+        });
+        const after = await ledger.rebuildRun(fixture.runId);
+        expect(after?.events).toHaveLength(before.events.length + 1);
+        expect(after?.events.at(-1)).toMatchObject({
+          transition_id: 'competing-stopped-effect-settlement',
+          type: 'attempt-became-uncertain',
+          actor: competitor,
+        });
+      } finally {
+        await db.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  it('rethrows a stopped-effect recovery failure while its set remains active', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-effect-active-failure-'),
     );
     try {
-      const fixture = await seedApplicationStateRecoveryRun(root);
+      const fixture = await seedApplicationStateRecoveryRun(root, {
+        effectStates: ['PENDING'],
+      });
+      const { db, ledger } = createLmdbLedger(fixture.configuration);
+      try {
+        const before = await ledger.rebuildRun(fixture.runId);
+        if (!before) throw new Error('Expected active recovery run.');
+        const invocation = before.invocations.find(
+          (/** @type {Record<string, any>} */ candidate) =>
+            candidate.invocationId === MANUAL_LEDGER_INVOCATION_ID,
+        );
+        const attempt = before.attempts.find(
+          (/** @type {Record<string, any>} */ candidate) =>
+            candidate.invocationId === MANUAL_LEDGER_INVOCATION_ID &&
+            candidate.generation === invocation?.generation,
+        );
+        if (!attempt) throw new Error('Expected active recovery attempt.');
+        const failedLedger = {
+          ...ledger,
+          async settleStoppedAttemptManagedEffects() {
+            throw new Error('uncommitted stopped-effect settlement failure');
+          },
+        };
+
+        await expect(
+          recoverStoppedManagedEffectsAtOperatorBoundary({
+            ledger: /** @type {any} */ (failedLedger),
+            runId: fixture.runId,
+            target: {
+              invocationId: MANUAL_LEDGER_INVOCATION_ID,
+              attemptId: attempt.attemptId,
+              effects: before.effects,
+            },
+            actor: { kind: 'local', id: 'cli' },
+          }),
+        ).rejects.toThrow('uncommitted stopped-effect settlement failure');
+        await expect(ledger.rebuildRun(fixture.runId)).resolves.toEqual(before);
+      } finally {
+        await db.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  it('settles a mixed PENDING/receipt/null set in one redacted transition', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-effect-mixed-'),
+    );
+    try {
+      const fixture = await seedApplicationStateRecoveryRun(root, {
+        effectStates: ['PENDING', 'STARTED', 'STARTED'],
+        receiptIndexes: [1],
+      });
+      const before = await readLmdbRun(fixture.configuration, fixture.runId);
       const result = await recoverExecutionLedgerRun({
         runId: fixture.runId,
+        expectedAppId: fixture.appId,
+        actor: { kind: 'packaged-operator', id: OPERATOR_REVISION_ID },
         configuration: fixture.configuration,
         applicationStateConfiguration: fixture.applicationStateConfiguration,
       });
+      if (!result) throw new Error('Expected managed-effect recovery result.');
 
-      expect(result).toMatchObject({
-        recovery: {
-          action: 'none',
-          changed: true,
-          managedEffect: {
-            action: 'outcome-uncertain',
-            changed: true,
+      expect(result.recovery).toEqual({
+        found: true,
+        mayExecute: false,
+        action: 'settled-managed-effect-set',
+        changed: true,
+        managedEffects: [
+          {
             effectId: fixture.effectIds[0],
+            action: 'cancelled-before-start',
+            status: EffectStatus.CANCELLED,
           },
-        },
-        view: {
-          run: { status: RunStatus.BLOCKED },
-          invocations: [
-            expect.objectContaining({ status: InvocationStatus.UNCERTAIN }),
-          ],
-          attempts: [
-            expect.objectContaining({ status: AttemptStatus.ABANDONED }),
-          ],
-          effects: [
-            expect.objectContaining({ status: EffectStatus.UNCERTAIN }),
-          ],
-        },
+          {
+            effectId: fixture.effectIds[1],
+            action: 'outcome-recovered',
+            status: EffectStatus.COMPLETED,
+          },
+          {
+            effectId: fixture.effectIds[2],
+            action: 'outcome-uncertain',
+            status: EffectStatus.UNCERTAIN,
+          },
+        ],
       });
       expect(
-        result?.view.events.map(
-          (/** @type {Record<string, any>} */ event) => event.type,
+        result.view.effects.map(
+          (/** @type {Record<string, any>} */ effect) => effect.status,
         ),
       ).toEqual([
-        'manual-run-created',
-        'attempt-claimed',
-        'attempt-started',
-        'effect-requested',
-        'effect-started',
-        'effect-became-uncertain',
+        EffectStatus.CANCELLED,
+        EffectStatus.COMPLETED,
+        EffectStatus.UNCERTAIN,
       ]);
+      expect(result.view.events).toHaveLength((before?.events.length || 0) + 1);
+      expect(result.view.events.at(-1)).toMatchObject({
+        type: 'attempt-became-uncertain',
+        actor: { kind: 'packaged-operator', id: OPERATOR_REVISION_ID },
+        payload: { effects: expect.any(Array) },
+      });
+
+      const operatorView = createExecutionLedgerRecoveryOperatorView(
+        /** @type {{action: string, changed: boolean, managedEffects: Array<{effectId: string, action: string, status: string}>}} */ ({
+          ...result.recovery,
+          managedEffects: [...result.recovery.managedEffects].reverse(),
+        }),
+        result.view,
+      );
+      expect(operatorView).toMatchObject({
+        schemaVersion: 4,
+        recovery: {
+          action: 'settled-managed-effect-set',
+          changed: true,
+          managedEffects: result.recovery.managedEffects,
+        },
+        effects: fixture.effectIds.map((effectId, index) => ({
+          invocationId: MANUAL_LEDGER_INVOCATION_ID,
+          effectId,
+          status: [
+            EffectStatus.CANCELLED,
+            EffectStatus.COMPLETED,
+            EffectStatus.UNCERTAIN,
+          ][index],
+          adapter: {
+            id: APPLICATION_STATE_ADAPTER_DESCRIPTOR.id,
+            version: 1,
+          },
+        })),
+      });
+      const serialized = JSON.stringify(operatorView);
+      for (const secret of [
+        fixture.storeId,
+        'state-secret',
+        'recovery-fence-secret',
+        'destinationEffectId',
+        'evidence',
+      ]) {
+        expect(serialized).not.toContain(secret);
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   }, 20000);
 
-  it.each([
-    [['PENDING'], /requires the exact STARTED boundary/i],
-    [['STARTED', 'STARTED'], /requires exactly one unresolved managed effect/i],
-  ])(
-    'refuses unsupported unresolved effect set %j without changing its ledger aggregate',
-    async (effectStates, expectedError) => {
-      const root = mkdtempSync(
-        path.join(os.tmpdir(), 'wharfie-operator-effect-refusal-'),
-      );
-      try {
-        const fixture = await seedApplicationStateRecoveryRun(root, {
-          effectStates: /** @type {Array<'PENDING'|'STARTED'>} */ (
-            effectStates
-          ),
-        });
-        const ownershipBefore = await seedStaleLmdbOwnership(
-          fixture.configuration,
-          fixture.appId,
-        );
-        const before = await readLmdbRun(fixture.configuration, fixture.runId);
-        await expect(
-          readLmdbOwnership(fixture.configuration, fixture.appId),
-        ).resolves.toEqual(ownershipBefore);
-        expect(existsSync(fixture.configuration.sessionPath)).toBe(false);
-        await expect(
-          recoverExecutionLedgerRun({
-            runId: fixture.runId,
-            configuration: fixture.configuration,
-            applicationStateConfiguration:
-              fixture.applicationStateConfiguration,
+  it('refuses an unsupported STARTED effect during read-only preflight', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-effect-unsupported-started-'),
+    );
+    try {
+      const fixture = await seedApplicationStateRecoveryRun(root, {
+        effectStates: ['STARTED'],
+        overrideStartedContract: true,
+      });
+      const missingStorePath = path.join(root, 'must-remain-absent');
+      const before = await readLmdbRun(fixture.configuration, fixture.runId);
+      await expect(
+        recoverExecutionLedgerRun({
+          runId: fixture.runId,
+          expectedAppId: fixture.appId,
+          configuration: fixture.configuration,
+          applicationStateConfiguration: Object.freeze({
+            ...fixture.applicationStateConfiguration,
+            storePath: missingStorePath,
           }),
-        ).rejects.toThrow(expectedError);
-        await expect(
-          readLmdbRun(fixture.configuration, fixture.runId),
-        ).resolves.toEqual(before);
-        await expect(
-          readLmdbOwnership(fixture.configuration, fixture.appId),
-        ).resolves.toEqual(ownershipBefore);
-        expect(existsSync(fixture.configuration.sessionPath)).toBe(false);
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    },
-    20000,
-  );
+        }),
+      ).rejects.toThrow(/not the exact built-in LMDB application-state/i);
+      expect(existsSync(missingStorePath)).toBe(false);
+      await expect(
+        readLmdbRun(fixture.configuration, fixture.runId),
+      ).resolves.toEqual(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20000);
 
   it('leaves a STARTED effect unchanged when the configured application-state store is missing', async () => {
     const root = mkdtempSync(

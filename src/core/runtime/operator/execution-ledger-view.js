@@ -4,7 +4,7 @@
  * evidence, fencing tokens, or event payloads. Those need an explicit future
  * disclosure and authorization policy.
  */
-export const EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION = 3;
+export const EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION = 4;
 
 /**
  * Expose cancellation identity and ordering without disclosing its operator
@@ -131,7 +131,7 @@ export function formatExecutionLedgerOperatorRows(view) {
 }
 
 /**
- * @param {{action: string, changed: boolean, managedEffect?: {action: string, changed: boolean, effectId: string}}} recovery - Recovery result metadata.
+ * @param {{action: string, changed: boolean, managedEffects?: Array<{effectId: string, action: string, status: string}>}} recovery - Recovery result metadata.
  * @param {Record<string, any>} view - Verified rebuilt execution-ledger view.
  * @returns {Record<string, any>} - Redacted recovery response.
  */
@@ -142,13 +142,21 @@ export function createExecutionLedgerRecoveryOperatorView(recovery, view) {
     recovery: {
       action: recovery.action,
       changed: recovery.changed,
-      ...(recovery.managedEffect
+      ...(recovery.managedEffects
         ? {
-            managedEffect: {
-              action: recovery.managedEffect.action,
-              changed: recovery.managedEffect.changed,
-              effectId: recovery.managedEffect.effectId,
-            },
+            managedEffects: recovery.managedEffects
+              .map((effect) => ({
+                effectId: effect.effectId,
+                action: effect.action,
+                status: effect.status,
+              }))
+              .sort((left, right) =>
+                left.effectId < right.effectId
+                  ? -1
+                  : left.effectId > right.effectId
+                    ? 1
+                    : 0,
+              ),
           }
         : {}),
     },

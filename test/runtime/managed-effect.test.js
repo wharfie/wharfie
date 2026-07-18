@@ -34,7 +34,7 @@ import {
   ManagedEffectRecoveryAction,
   ManagedEffectUncertainError,
   executeManagedEffect,
-  recoverStartedManagedEffect,
+  recoverStoppedManagedEffects,
 } from '../../src/core/runtime/managed-effect.js';
 
 const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
@@ -119,19 +119,26 @@ function managedAdapter(execute, overrides = {}) {
   });
 }
 
-/** Persist one exact request and STARTED boundary without invoking an adapter. */
-async function startRetainedManagedEffect(
+/** Persist one exact request and optional STARTED boundary without dispatch. */
+async function retainManagedEffect(
   /** @type {Record<string, any>} */ harness,
-  prefix = 'recovery',
+  /** @type {{effectId?: string, status?: 'PENDING'|'STARTED', sequence?: number, prefix?: string}} */ options = {},
 ) {
-  const request = effectRequest(harness.started.attempt.attemptId);
+  const effectId = options.effectId || EFFECT_ID;
+  const prefix = options.prefix || `recovery-${effectId}`;
+  const request = effectRequest(harness.started.attempt.attemptId, {
+    effectId,
+    sequence: options.sequence || 1,
+  });
+  const current = await harness.ledger.rebuildRun(RUN_ID);
+  if (!current) throw new Error('Expected retained recovery run.');
   const requested = await harness.ledger.recordManagedEffectRequest({
     runId: RUN_ID,
     invocationId: INVOCATION_ID,
     attemptId: harness.started.attempt.attemptId,
     fencingToken: FENCING_TOKEN,
     generation: 1,
-    expectedVersion: harness.started.run.version,
+    expectedVersion: current.run.version,
     transitionId: `${prefix}-request`,
     request,
     adapter: { id: 'test-adapter', version: 1 },
@@ -139,11 +146,14 @@ async function startRetainedManagedEffect(
     verifier: VERIFIER_DESCRIPTOR,
     substantiatedReplayProperties: ['idempotent'],
   });
+  if (options.status === 'PENDING') {
+    return { request, requested };
+  }
   const started = await harness.ledger.markManagedEffectStarted({
     runId: RUN_ID,
     invocationId: INVOCATION_ID,
     attemptId: harness.started.attempt.attemptId,
-    effectId: EFFECT_ID,
+    effectId,
     fencingToken: FENCING_TOKEN,
     generation: 1,
     expectedVersion: requested.run.version,
@@ -341,7 +351,7 @@ async function rewriteEffectEvent(input) {
   });
   if (!event) throw new Error('Expected effect event to rewrite');
   const eventId = createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v6',
+    domain: 'wharfie:execution-ledger-event:v7',
     prefix: 'wle',
     value: {
       schemaVersion: event.schema_version,
@@ -697,110 +707,33 @@ for (const dbAdapter of getAdapterMatrix()) {
       }
     });
 
-    test('recovers a retained STARTED outcome only from the receipt callback', async () => {
+    test('cancels a PENDING-only set atomically without a destination probe', async () => {
       const harness = await createHarness(dbAdapter);
       try {
-        const retained = await startRetainedManagedEffect(harness);
-        const recoverOutcome = jest.fn(
-          async (/** @type {Record<string, any>} */ input) => {
-            expect(input).toEqual({
-              destinationEffectId: retained.started.effect.destinationEffectId,
-              destination: DESTINATION_DESCRIPTOR,
-              identity: {
-                runId: RUN_ID,
-                invocationId: INVOCATION_ID,
-                effectId: EFFECT_ID,
-              },
-              request: retained.request,
-            });
-            expect(Object.isFrozen(input)).toBe(true);
-            expect(Object.isFrozen(input.request)).toBe(true);
-            return {
-              ok: true,
-              result: { written: true },
-              evidence: {
-                destinationEffectId:
-                  retained.started.effect.destinationEffectId,
-                operation: 'put',
-              },
-            };
-          },
-        );
-
+        const retained = await retainManagedEffect(harness, {
+          status: 'PENDING',
+        });
+        const beforeEvents = await harness.ledger.getEvents(RUN_ID);
         await expect(
-          recoverStartedManagedEffect({
+          recoverStoppedManagedEffects({
             ledger: harness.ledger,
             runId: RUN_ID,
             invocationId: INVOCATION_ID,
-            effectId: EFFECT_ID,
-            recoverOutcome,
             actor: ACTOR,
           }),
         ).resolves.toEqual({
-          action: ManagedEffectRecoveryAction.OUTCOME_RECOVERED,
+          action: ManagedEffectRecoveryAction.SETTLED_MANAGED_EFFECT_SET,
           changed: true,
-          effectId: EFFECT_ID,
+          managedEffects: [
+            {
+              effectId: EFFECT_ID,
+              action: ManagedEffectRecoveryAction.CANCELLED_BEFORE_START,
+              status: EffectStatus.CANCELLED,
+            },
+          ],
         });
-        expect(recoverOutcome).toHaveBeenCalledTimes(1);
-        await expect(
-          harness.ledger.readManagedEffectDelivery(
-            RUN_ID,
-            INVOCATION_ID,
-            EFFECT_ID,
-          ),
-        ).resolves.toMatchObject({
-          effect: { status: EffectStatus.COMPLETED },
-          resultFrame: {
-            type: 'effect-result',
-            effectId: EFFECT_ID,
-            ok: true,
-            result: { written: true },
-          },
-        });
-        expect((await harness.ledger.getEvents(RUN_ID)).at(-1)).toMatchObject({
-          type: 'effect-completed',
-          actor: ACTOR,
-        });
-
-        await expect(
-          recoverStartedManagedEffect({
-            ledger: harness.ledger,
-            runId: RUN_ID,
-            invocationId: INVOCATION_ID,
-            effectId: EFFECT_ID,
-            recoverOutcome,
-          }),
-        ).resolves.toEqual({
-          action: ManagedEffectRecoveryAction.ALREADY_TERMINAL,
-          changed: false,
-          effectId: EFFECT_ID,
-        });
-        expect(recoverOutcome).toHaveBeenCalledTimes(1);
-      } finally {
-        await harness.cleanup();
-      }
-    });
-
-    test('makes a retained STARTED effect uncertain only for strict null recovery', async () => {
-      const harness = await createHarness(dbAdapter);
-      try {
-        await startRetainedManagedEffect(harness, 'null-recovery');
-        const recoverOutcome = jest.fn(async () => null);
-
-        await expect(
-          recoverStartedManagedEffect({
-            ledger: harness.ledger,
-            runId: RUN_ID,
-            invocationId: INVOCATION_ID,
-            effectId: EFFECT_ID,
-            recoverOutcome,
-          }),
-        ).resolves.toEqual({
-          action: ManagedEffectRecoveryAction.OUTCOME_UNCERTAIN,
-          changed: true,
-          effectId: EFFECT_ID,
-        });
-        await expect(harness.ledger.rebuildRun(RUN_ID)).resolves.toMatchObject({
+        const after = await harness.ledger.rebuildRun(RUN_ID);
+        expect(after).toMatchObject({
           run: { status: RunStatus.BLOCKED },
           invocations: [
             expect.objectContaining({ status: InvocationStatus.UNCERTAIN }),
@@ -809,266 +742,232 @@ for (const dbAdapter of getAdapterMatrix()) {
             expect.objectContaining({ status: AttemptStatus.ABANDONED }),
           ],
           effects: [
-            expect.objectContaining({ status: EffectStatus.UNCERTAIN }),
+            expect.objectContaining({ status: EffectStatus.CANCELLED }),
           ],
         });
-
+        expect(after?.events).toHaveLength(beforeEvents.length + 1);
+        expect(after?.events.at(-1)).toMatchObject({
+          type: 'attempt-became-uncertain',
+          actor: ACTOR,
+          payload: {
+            effects: [
+              expect.objectContaining({ status: EffectStatus.CANCELLED }),
+            ],
+          },
+        });
+        const execute = jest.fn();
         await expect(
-          recoverStartedManagedEffect({
+          executeManagedEffect({
             ledger: harness.ledger,
             runId: RUN_ID,
             invocationId: INVOCATION_ID,
-            effectId: EFFECT_ID,
-            recoverOutcome,
+            request: retained.request,
+            adapter: managedAdapter(execute),
           }),
-        ).resolves.toEqual({
-          action: ManagedEffectRecoveryAction.ALREADY_UNCERTAIN,
-          changed: false,
-          effectId: EFFECT_ID,
-        });
-        expect(recoverOutcome).toHaveBeenCalledTimes(1);
+        ).rejects.toBeInstanceOf(ManagedEffectDispatchNotAuthorizedError);
+        expect(execute).not.toHaveBeenCalled();
       } finally {
         await harness.cleanup();
       }
     });
 
-    test('recovers idempotently when reads and recovery-transition responses are lost', async () => {
-      const outcomeHarness = await createHarness(dbAdapter);
+    test('probes every STARTED sibling before one mixed-set settlement', async () => {
+      const harness = await createHarness(dbAdapter);
       try {
-        const retained = await startRetainedManagedEffect(
-          outcomeHarness,
-          'lost-recovery-outcome',
-        );
-        const ledger = withLostResponses(
-          withLostResponses(
-            outcomeHarness.ledger,
-            'readManagedEffectDelivery',
-            1,
-          ),
-          'commitManagedEffectOutcome',
-          1,
-        );
-        const recoverOutcome = jest.fn(async () => ({
-          ok: true,
-          result: { written: true },
-          evidence: {
-            destinationEffectId: retained.started.effect.destinationEffectId,
-            operation: 'put',
-          },
-        }));
-        await expect(
-          recoverStartedManagedEffect({
-            ledger: /** @type {any} */ (ledger),
-            runId: RUN_ID,
-            invocationId: INVOCATION_ID,
-            effectId: EFFECT_ID,
-            recoverOutcome,
-          }),
-        ).resolves.toEqual({
-          action: ManagedEffectRecoveryAction.OUTCOME_RECOVERED,
-          changed: true,
-          effectId: EFFECT_ID,
+        await retainManagedEffect(harness, {
+          effectId: 'a-pending',
+          status: 'PENDING',
+          sequence: 1,
         });
-        expect(recoverOutcome).toHaveBeenCalledTimes(1);
-      } finally {
-        await outcomeHarness.cleanup();
-      }
-
-      const uncertainHarness = await createHarness(dbAdapter);
-      try {
-        await startRetainedManagedEffect(
-          uncertainHarness,
-          'lost-recovery-uncertain',
-        );
-        const ledger = withLostResponses(
-          uncertainHarness.ledger,
-          'markManagedEffectUncertain',
-          1,
-        );
-        const recoverOutcome = jest.fn(async () => null);
-        await expect(
-          recoverStartedManagedEffect({
-            ledger: /** @type {any} */ (ledger),
-            runId: RUN_ID,
-            invocationId: INVOCATION_ID,
-            effectId: EFFECT_ID,
-            recoverOutcome,
-          }),
-        ).resolves.toEqual({
-          action: ManagedEffectRecoveryAction.OUTCOME_UNCERTAIN,
-          changed: true,
-          effectId: EFFECT_ID,
+        const recovered = await retainManagedEffect(harness, {
+          effectId: 'b-recovered',
+          sequence: 2,
         });
-        expect(recoverOutcome).toHaveBeenCalledTimes(1);
-      } finally {
-        await uncertainHarness.cleanup();
-      }
-    });
-
-    test('does not attribute a competing recovery transition to the current call', async () => {
-      const outcomeHarness = await createHarness(dbAdapter);
-      try {
-        const retained = await startRetainedManagedEffect(
-          outcomeHarness,
-          'competing-recovery-outcome',
-        );
-        const competingLedger = {
-          ...outcomeHarness.ledger,
-          async commitManagedEffectOutcome(
-            /** @type {Record<string, any>} */ options,
-          ) {
-            await outcomeHarness.ledger.commitManagedEffectOutcome({
-              ...options,
-              outcome: {
-                ok: true,
-                result: { winner: 'competing-recoverer' },
-                evidence: {
-                  destinationEffectId:
-                    retained.started.effect.destinationEffectId,
-                  operation: 'put',
-                },
+        await retainManagedEffect(harness, {
+          effectId: 'c-absent',
+          sequence: 3,
+        });
+        const beforeEvents = await harness.ledger.getEvents(RUN_ID);
+        const recoverOutcome = jest.fn(
+          async (/** @type {Record<string, any>} */ input) => {
+            expect(Object.isFrozen(input)).toBe(true);
+            expect(Object.isFrozen(input.request)).toBe(true);
+            if (input.identity.effectId === 'c-absent') return null;
+            return {
+              ok: true,
+              result: { written: true },
+              evidence: {
+                destinationEffectId: input.destinationEffectId,
+                operation: 'put',
               },
-            });
-            throw new Error('competing outcome won before recovery commit');
+            };
           },
-        };
-        const recoverOutcome = jest.fn(async () => ({
-          ok: true,
-          result: { winner: 'current-recoverer' },
-          evidence: {
-            destinationEffectId: retained.started.effect.destinationEffectId,
-            operation: 'put',
-          },
-        }));
-
-        await expect(
-          recoverStartedManagedEffect({
-            ledger: /** @type {any} */ (competingLedger),
-            runId: RUN_ID,
-            invocationId: INVOCATION_ID,
-            effectId: EFFECT_ID,
-            recoverOutcome,
-          }),
-        ).resolves.toEqual({
-          action: ManagedEffectRecoveryAction.ALREADY_TERMINAL,
-          changed: false,
-          effectId: EFFECT_ID,
-        });
-        expect(recoverOutcome).toHaveBeenCalledTimes(1);
-        await expect(
-          outcomeHarness.ledger.readManagedEffectDelivery(
-            RUN_ID,
-            INVOCATION_ID,
-            EFFECT_ID,
-          ),
-        ).resolves.toMatchObject({
-          resultFrame: { result: { winner: 'competing-recoverer' } },
-        });
-      } finally {
-        await outcomeHarness.cleanup();
-      }
-
-      const uncertainHarness = await createHarness(dbAdapter);
-      try {
-        await startRetainedManagedEffect(
-          uncertainHarness,
-          'competing-recovery-uncertainty',
         );
-        const competingLedger = {
-          ...uncertainHarness.ledger,
-          async markManagedEffectUncertain(
-            /** @type {Record<string, any>} */ options,
-          ) {
-            await uncertainHarness.ledger.markManagedEffectUncertain({
-              ...options,
-              reason: {
-                kind: 'competing-recovery-outcome-unknown',
-                phase: 'after-runner-exclusion',
-              },
-            });
-            throw new Error('competing uncertainty won before recovery commit');
-          },
-        };
-        const recoverOutcome = jest.fn(async () => null);
-
-        await expect(
-          recoverStartedManagedEffect({
-            ledger: /** @type {any} */ (competingLedger),
-            runId: RUN_ID,
-            invocationId: INVOCATION_ID,
-            effectId: EFFECT_ID,
-            recoverOutcome,
-          }),
-        ).resolves.toEqual({
-          action: ManagedEffectRecoveryAction.ALREADY_UNCERTAIN,
-          changed: false,
-          effectId: EFFECT_ID,
-        });
-        expect(recoverOutcome).toHaveBeenCalledTimes(1);
-      } finally {
-        await uncertainHarness.cleanup();
-      }
-    });
-
-    test('fails closed before probing PENDING work or mutating after a recovery probe error', async () => {
-      const pendingHarness = await createHarness(dbAdapter);
-      try {
-        const request = effectRequest(pendingHarness.started.attempt.attemptId);
-        await pendingHarness.ledger.recordManagedEffectRequest({
+        const result = await recoverStoppedManagedEffects({
+          ledger: harness.ledger,
           runId: RUN_ID,
           invocationId: INVOCATION_ID,
-          attemptId: pendingHarness.started.attempt.attemptId,
-          fencingToken: FENCING_TOKEN,
-          generation: 1,
-          expectedVersion: pendingHarness.started.run.version,
-          transitionId: 'pending-recovery-request',
-          request,
-          adapter: { id: 'test-adapter', version: 1 },
-          destination: DESTINATION_DESCRIPTOR,
-          verifier: VERIFIER_DESCRIPTOR,
-          substantiatedReplayProperties: ['idempotent'],
+          recoverOutcome,
+          actor: ACTOR,
         });
-        const recoverOutcome = jest.fn();
-        await expect(
-          recoverStartedManagedEffect({
-            ledger: pendingHarness.ledger,
-            runId: RUN_ID,
-            invocationId: INVOCATION_ID,
-            effectId: EFFECT_ID,
-            recoverOutcome,
-          }),
-        ).rejects.toBeInstanceOf(ManagedEffectDispatchNotAuthorizedError);
-        expect(recoverOutcome).not.toHaveBeenCalled();
-        await expect(
-          pendingHarness.ledger.getEffect(RUN_ID, INVOCATION_ID, EFFECT_ID),
-        ).resolves.toMatchObject({ status: EffectStatus.PENDING, version: 1 });
+        expect(result).toEqual({
+          action: ManagedEffectRecoveryAction.SETTLED_MANAGED_EFFECT_SET,
+          changed: true,
+          managedEffects: [
+            {
+              effectId: 'a-pending',
+              action: ManagedEffectRecoveryAction.CANCELLED_BEFORE_START,
+              status: EffectStatus.CANCELLED,
+            },
+            {
+              effectId: 'b-recovered',
+              action: ManagedEffectRecoveryAction.OUTCOME_RECOVERED,
+              status: EffectStatus.COMPLETED,
+            },
+            {
+              effectId: 'c-absent',
+              action: ManagedEffectRecoveryAction.OUTCOME_UNCERTAIN,
+              status: EffectStatus.UNCERTAIN,
+            },
+          ],
+        });
+        expect(recoverOutcome).toHaveBeenCalledTimes(2);
+        expect(
+          recoverOutcome.mock.calls.map(([input]) => input.identity.effectId),
+        ).toEqual(['b-recovered', 'c-absent']);
+        expect(recovered.started?.effect.status).toBe(EffectStatus.STARTED);
+        const after = await harness.ledger.rebuildRun(RUN_ID);
+        expect(
+          after?.effects.map(
+            (/** @type {Record<string, any>} */ effect) => effect.status,
+          ),
+        ).toEqual([
+          EffectStatus.CANCELLED,
+          EffectStatus.COMPLETED,
+          EffectStatus.UNCERTAIN,
+        ]);
+        expect(after?.events).toHaveLength(beforeEvents.length + 1);
+        expect(after?.events.at(-1)).toMatchObject({
+          type: 'attempt-became-uncertain',
+          actor: ACTOR,
+        });
       } finally {
-        await pendingHarness.cleanup();
+        await harness.cleanup();
       }
+    });
 
-      const rejectingHarness = await createHarness(dbAdapter);
+    test('leaves the complete set unchanged when any receipt probe fails', async () => {
+      const harness = await createHarness(dbAdapter);
       try {
-        await startRetainedManagedEffect(
-          rejectingHarness,
-          'rejecting-recovery',
-        );
-        const recoverOutcome = jest.fn(async () => {
-          throw new Error('destination receipt is corrupt');
+        await retainManagedEffect(harness, {
+          effectId: 'a-pending',
+          status: 'PENDING',
+          sequence: 1,
         });
+        await retainManagedEffect(harness, {
+          effectId: 'b-started',
+          sequence: 2,
+        });
+        await retainManagedEffect(harness, {
+          effectId: 'c-corrupt',
+          sequence: 3,
+        });
+        const before = await harness.ledger.rebuildRun(RUN_ID);
+        const recoverOutcome = jest.fn(
+          async (/** @type {Record<string, any>} */ input) => {
+            if (input.identity.effectId === 'c-corrupt') {
+              throw new Error('destination receipt is corrupt');
+            }
+            return null;
+          },
+        );
         await expect(
-          recoverStartedManagedEffect({
-            ledger: rejectingHarness.ledger,
+          recoverStoppedManagedEffects({
+            ledger: harness.ledger,
             runId: RUN_ID,
             invocationId: INVOCATION_ID,
-            effectId: EFFECT_ID,
             recoverOutcome,
           }),
         ).rejects.toThrow('destination receipt is corrupt');
-        await expect(
-          rejectingHarness.ledger.getEffect(RUN_ID, INVOCATION_ID, EFFECT_ID),
-        ).resolves.toMatchObject({ status: EffectStatus.STARTED, version: 2 });
+        await expect(harness.ledger.rebuildRun(RUN_ID)).resolves.toEqual(
+          before,
+        );
+        expect(recoverOutcome).toHaveBeenCalledTimes(2);
       } finally {
-        await rejectingHarness.cleanup();
+        await harness.cleanup();
+      }
+    });
+
+    test('rejects a complete-set contract race after probes without settling it', async () => {
+      const harness = await createHarness(dbAdapter);
+      try {
+        await retainManagedEffect(harness, {
+          effectId: 'a-started',
+          sequence: 1,
+        });
+        const beforeEvents = await harness.ledger.getEvents(RUN_ID);
+        const recoverOutcome = jest.fn(async () => {
+          await retainManagedEffect(harness, {
+            effectId: 'b-raced-pending',
+            status: 'PENDING',
+            sequence: 2,
+          });
+          return null;
+        });
+        await expect(
+          recoverStoppedManagedEffects({
+            ledger: harness.ledger,
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            recoverOutcome,
+          }),
+        ).rejects.toBeInstanceOf(ManagedEffectDispatchNotAuthorizedError);
+        const after = await harness.ledger.rebuildRun(RUN_ID);
+        expect(after?.run.status).toBe(RunStatus.RUNNING);
+        expect(
+          after?.effects.map(
+            (/** @type {Record<string, any>} */ effect) => effect.status,
+          ),
+        ).toEqual([EffectStatus.STARTED, EffectStatus.PENDING]);
+        expect(after?.events).toHaveLength(beforeEvents.length + 1);
+        expect(after?.events.at(-1)?.type).toBe('effect-requested');
+      } finally {
+        await harness.cleanup();
+      }
+    });
+
+    test('attributes a lost settlement response only to its exact retained event', async () => {
+      const harness = await createHarness(dbAdapter);
+      try {
+        await retainManagedEffect(harness, { status: 'PENDING' });
+        const lostResponseLedger = {
+          ...harness.ledger,
+          async settleStoppedAttemptManagedEffects(
+            /** @type {Record<string, any>} */ options,
+          ) {
+            await harness.ledger.settleStoppedAttemptManagedEffects(options);
+            throw new Error('settlement response lost');
+          },
+        };
+        await expect(
+          recoverStoppedManagedEffects({
+            ledger: /** @type {any} */ (lostResponseLedger),
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            actor: ACTOR,
+          }),
+        ).resolves.toMatchObject({
+          action: ManagedEffectRecoveryAction.SETTLED_MANAGED_EFFECT_SET,
+          changed: true,
+          managedEffects: [
+            {
+              effectId: EFFECT_ID,
+              status: EffectStatus.CANCELLED,
+            },
+          ],
+        });
+      } finally {
+        await harness.cleanup();
       }
     });
 

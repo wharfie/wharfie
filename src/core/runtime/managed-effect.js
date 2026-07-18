@@ -7,6 +7,7 @@ import { createCanonicalJsonSha256Id } from './content-id.js';
 import { cloneJsonObject, cloneJsonValue } from './json-value.js';
 import {
   AttemptStatus,
+  EXECUTION_LEDGER_MAX_UNRESOLVED_MANAGED_EFFECTS,
   EffectStatus,
   InvocationStatus,
   RunStatus,
@@ -32,11 +33,25 @@ const RECOVERY_UNCERTAINTY_REASON = Object.freeze({
     'The retained effect was started, but its destination exposed no permanent verifier-backed outcome receipt.',
 });
 
+const RECOVERY_CANCELLATION_REASON = Object.freeze({
+  kind: 'managed-effect-cancelled-before-start',
+  phase: 'before-durable-effect-start',
+  message:
+    'The retained request never crossed the durable adapter-dispatch boundary before runner exclusion.',
+});
+
+const STOPPED_ATTEMPT_RECOVERY_REASON = Object.freeze({
+  kind: 'operator-recovery-after-start',
+  phase: 'after-runner-exclusion',
+  message:
+    'The prior runner stopped after durable attempt start; its physical activity outcome is unknown.',
+});
+
 export const ManagedEffectRecoveryAction = Object.freeze({
+  SETTLED_MANAGED_EFFECT_SET: 'settled-managed-effect-set',
+  CANCELLED_BEFORE_START: 'cancelled-before-start',
   OUTCOME_RECOVERED: 'outcome-recovered',
   OUTCOME_UNCERTAIN: 'outcome-uncertain',
-  ALREADY_TERMINAL: 'already-terminal',
-  ALREADY_UNCERTAIN: 'already-uncertain',
 });
 
 /**
@@ -223,19 +238,18 @@ function createManagedEffectTransitionId(phase, identity) {
 }
 
 /**
- * Keep recovery receipts distinct from live-driver transitions. The physical
- * destination identity participates so a retained transition can never be
- * replayed against a retargeted effect contract.
- * @param {'outcome'|'uncertain'} phase - Recovery phase.
- * @param {{runId: string, invocationId: string, attemptId: string, effectId: string, destinationEffectId: string}} identity - Exact retained recovery identity.
+ * Keep stopped-runner recovery receipts distinct from live-driver
+ * transitions. The complete frozen recovery plan participates so one ID can
+ * never be replayed against a changed sibling set, actor, or receipt result.
+ * @param {Record<string, any>} plan - Exact retained recovery plan.
  * @returns {string} - Stable response-loss retry identity.
  */
-function createManagedEffectRecoveryTransitionId(phase, identity) {
+function createManagedEffectRecoveryTransitionId(plan) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:managed-effect-recovery-transition:v1',
+    domain: 'wharfie:managed-effect-set-recovery-transition:v2',
     prefix: 'wmr',
-    value: { schemaVersion: 1, phase, ...identity },
-    valuePath: 'managed effect recovery transition identity',
+    value: { schemaVersion: 2, ...plan },
+    valuePath: 'managed effect set recovery transition identity',
   });
 }
 
@@ -433,145 +447,95 @@ async function blockUncertainManagedEffect(options) {
   }
 }
 
-/**
- * Return a compact recovery result without exposing the retained request,
- * destination, evidence, or fencing material.
- * @param {string} action - Stable recovery action.
- * @param {boolean} changed - Whether this call appended its transition.
- * @param {string} effectId - Logical effect identity.
- * @returns {Readonly<{action: string, changed: boolean, effectId: string}>} - Redacted recovery result.
- */
-function managedEffectRecoveryResult(action, changed, effectId) {
-  return Object.freeze({ action, changed, effectId });
-}
+const TERMINAL_EFFECT_STATUSES = new Set([
+  EffectStatus.COMPLETED,
+  EffectStatus.FAILED,
+  EffectStatus.CANCELLED,
+]);
 
 /**
- * A thrown transition is ambiguous: its write may have committed before the
- * response was lost, or a different actor may have won the same lifecycle
- * state. Prove only this recovery's exact verified event before attributing the
- * change to this logical call.
- * @param {Record<string, any>[]} events - Verified retained event stream.
- * @param {{transitionId: string, eventType: string, actor: Record<string, any>, delivery: Record<string, any>, recoveredOutcome: Record<string, any> | null}} expected - Exact recovery event.
- * @returns {boolean} - Whether this recovery transition is retained.
+ * Select the complete unresolved set for one exact current begun attempt.
+ * @param {Record<string, any>} view - Verified run projection.
+ * @param {string} invocationId - Invocation identity.
+ * @returns {{invocation: Record<string, any>, attempt: Record<string, any>, effects: Record<string, any>[]}} - Canonically sorted set.
  */
-function hasMatchingManagedEffectRecoveryEvent(events, expected) {
-  if (!Array.isArray(events)) {
-    throw new TypeError('Managed effect recovery events must be an array.');
-  }
-  const hasExpectedOutcome = (() => {
-    if (expected.recoveredOutcome === null) {
-      try {
-        return hasSameCanonicalJson(
-          expected.delivery.effect?.uncertainty,
-          RECOVERY_UNCERTAINTY_REASON,
-        );
-      } catch {
-        return false;
-      }
-    }
-    const ok = expected.recoveredOutcome.ok;
-    if ((ok !== true && ok !== false) || !expected.delivery.outcome) {
-      return false;
-    }
-    try {
-      return hasSameCanonicalJson(
-        {
-          ok,
-          ...(ok
-            ? { result: expected.recoveredOutcome.result }
-            : { error: expected.recoveredOutcome.error }),
-          evidence: expected.recoveredOutcome.evidence,
-        },
-        {
-          ok: expected.delivery.outcome.ok,
-          ...(expected.delivery.outcome.ok
-            ? { result: expected.delivery.outcome.result }
-            : { error: expected.delivery.outcome.error }),
-          evidence: expected.delivery.outcome.evidence,
-        },
-      );
-    } catch {
-      return false;
-    }
-  })();
-  return (
-    hasExpectedOutcome &&
-    events.some(
-      (event) =>
-        event?.transition_id === expected.transitionId &&
-        event.type === expected.eventType &&
-        hasSameCanonicalJson(event.actor, expected.actor) &&
-        hasSameCanonicalJson(event.payload?.effect, expected.delivery.effect),
-    )
+function selectStoppedManagedEffectSet(view, invocationId) {
+  const invocation = view?.invocations?.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.invocationId === invocationId,
   );
-}
-
-/**
- * Classify only states that are authoritative for one retained recovery. Any
- * other lifecycle or aggregate combination fails closed before a destination
- * probe or ledger mutation.
- * @param {Record<string, any> | null} delivery - Verified delivery read.
- * @param {{runId: string, invocationId: string, effectId: string}} identity - Requested logical identity.
- * @returns {'started'|'terminal'|'uncertain'} - Supported recovery state.
- */
-function classifyManagedEffectRecoveryDelivery(delivery, identity) {
-  if (!delivery) {
+  const attempt = view?.attempts?.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.invocationId === invocationId &&
+      candidate.generation === invocation?.generation,
+  );
+  if (
+    view?.run?.status !== RunStatus.RUNNING ||
+    invocation?.status !== InvocationStatus.RUNNING ||
+    attempt?.status !== AttemptStatus.STARTED ||
+    invocation.generation !== attempt.generation
+  ) {
     throw new Error(
-      `Managed effect recovery could not find retained work: ${identity.effectId}`,
+      `Managed-effect set recovery requires the exact current STARTED attempt for invocation ${invocationId}.`,
     );
   }
-  if (
-    delivery.run.runId !== identity.runId ||
-    delivery.invocation.invocationId !== identity.invocationId ||
-    delivery.effect.effectId !== identity.effectId
-  ) {
-    throw new ManagedEffectDispatchNotAuthorizedError(identity.effectId);
+  const effects = (view.effects || [])
+    .filter(
+      (/** @type {Record<string, any>} */ effect) =>
+        effect.invocationId === invocationId &&
+        effect.requestedBy?.attemptId === attempt.attemptId &&
+        !TERMINAL_EFFECT_STATUSES.has(effect.status),
+    )
+    .sort(
+      (
+        /** @type {Record<string, any>} */ left,
+        /** @type {Record<string, any>} */ right,
+      ) =>
+        left.effectId < right.effectId
+          ? -1
+          : left.effectId > right.effectId
+            ? 1
+            : 0,
+    );
+  if (effects.length === 0) {
+    throw new Error(
+      `Managed-effect set recovery found no unresolved work for attempt ${attempt.attemptId}.`,
+    );
   }
-  if (
-    [EffectStatus.COMPLETED, EffectStatus.FAILED].includes(
-      delivery.effect.status,
-    ) &&
-    delivery.resultFrame
-  ) {
-    return 'terminal';
+  if (effects.length > EXECUTION_LEDGER_MAX_UNRESOLVED_MANAGED_EFFECTS) {
+    throw new RangeError(
+      `Managed-effect set recovery supports at most ${EXECUTION_LEDGER_MAX_UNRESOLVED_MANAGED_EFFECTS} unresolved effects; found ${effects.length}.`,
+    );
   }
-  if (
-    delivery.effect.status === EffectStatus.UNCERTAIN &&
-    delivery.run.status === RunStatus.BLOCKED &&
-    delivery.invocation.status === InvocationStatus.UNCERTAIN &&
-    delivery.attempt.status === AttemptStatus.ABANDONED
-  ) {
-    return 'uncertain';
+  for (const effect of effects) {
+    const requestedBy = effect.requestedBy;
+    const exactRequestFence =
+      requestedBy?.attemptId === attempt.attemptId &&
+      requestedBy?.generation === attempt.generation &&
+      requestedBy?.coordinatorEpoch === attempt.coordinatorEpoch &&
+      requestedBy?.fencingToken === attempt.fencingToken;
+    const exactStartFence =
+      effect.status !== EffectStatus.STARTED ||
+      (effect.startedBy?.attemptId === attempt.attemptId &&
+        effect.startedBy?.generation === attempt.generation &&
+        effect.startedBy?.coordinatorEpoch === attempt.coordinatorEpoch &&
+        effect.startedBy?.fencingToken === attempt.fencingToken);
+    if (
+      (effect.status !== EffectStatus.PENDING &&
+        effect.status !== EffectStatus.STARTED) ||
+      !exactRequestFence ||
+      !exactStartFence
+    ) {
+      throw new ManagedEffectDispatchNotAuthorizedError(effect.effectId);
+    }
   }
-  if (
-    delivery.run.status !== RunStatus.RUNNING ||
-    delivery.invocation.status !== InvocationStatus.RUNNING ||
-    delivery.attempt.status !== AttemptStatus.STARTED ||
-    delivery.effect.status !== EffectStatus.STARTED ||
-    delivery.invocation.generation !== delivery.attempt.generation ||
-    delivery.effect.requestedBy?.attemptId !== delivery.attempt.attemptId ||
-    delivery.effect.requestedBy?.generation !== delivery.attempt.generation ||
-    delivery.effect.requestedBy?.coordinatorEpoch !==
-      delivery.attempt.coordinatorEpoch ||
-    delivery.effect.requestedBy?.fencingToken !==
-      delivery.attempt.fencingToken ||
-    delivery.effect.startedBy?.attemptId !== delivery.attempt.attemptId ||
-    delivery.effect.startedBy?.generation !== delivery.attempt.generation ||
-    delivery.effect.startedBy?.coordinatorEpoch !==
-      delivery.attempt.coordinatorEpoch ||
-    delivery.effect.startedBy?.fencingToken !== delivery.attempt.fencingToken
-  ) {
-    throw new ManagedEffectDispatchNotAuthorizedError(identity.effectId);
-  }
-  return 'started';
+  return { invocation, attempt, effects };
 }
 
 /**
- * Reconstruct the exact protocol request whose attempt-local fields were
- * retained in the effect projection while its logical fields were retained in
- * the referenced request payload.
- * @param {Record<string, any>} delivery - Verified started delivery.
- * @returns {Readonly<Record<string, any>>} - Exact validated component frame.
+ * Reconstruct the exact component request retained across physical transport.
+ * @param {Record<string, any>} delivery - Verified delivery.
+ * @returns {Readonly<Record<string, any>>} - Exact component frame.
  */
 function reconstructManagedEffectRecoveryRequest(delivery) {
   return validateActivityProtocolComponentFrame(
@@ -587,317 +551,324 @@ function reconstructManagedEffectRecoveryRequest(delivery) {
       input: delivery.request.input,
       requestedReplayProperties: delivery.request.requestedReplayProperties,
     },
-    'recoverStartedManagedEffect retained request',
+    'recoverStoppedManagedEffects retained request',
   );
 }
 
 /**
- * Snapshot the immutable portion of a STARTED recovery so a callback cannot
- * race this call into a different attempt or physical destination.
- * @param {Record<string, any>} delivery - Verified started delivery.
- * @returns {Readonly<Record<string, any>>} - Canonical comparison contract.
+ * Read one coherent complete recovery set, including referenced requests.
+ * Repeated delivery folds are compared with the first fold so a concurrent
+ * change can never produce a mixed snapshot.
+ * @param {Record<string, any>} ledger - Execution ledger.
+ * @param {string} runId - Run identity.
+ * @param {string} invocationId - Invocation identity.
+ * @returns {Promise<{view: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, deliveries: Record<string, any>[], contract: Readonly<Record<string, any>>}>} - Exact frozen set.
  */
-function managedEffectRecoveryContract(delivery) {
-  return deepFreezeJson({
-    runId: delivery.run.runId,
-    appId: delivery.run.appId,
-    revisionId: delivery.run.revisionId,
-    invocationId: delivery.invocation.invocationId,
-    invocationGeneration: delivery.invocation.generation,
-    attempt: {
-      attemptId: delivery.attempt.attemptId,
-      fencingToken: delivery.attempt.fencingToken,
-      generation: delivery.attempt.generation,
-      coordinatorEpoch: delivery.attempt.coordinatorEpoch,
-    },
-    effect: {
-      effectId: delivery.effect.effectId,
-      destinationEffectId: delivery.effect.destinationEffectId,
-      adapter: delivery.effect.adapter,
-      destination: delivery.effect.destination,
-      verifier: delivery.effect.verifier,
-      requestedReplayProperties: delivery.effect.requestedReplayProperties,
-      substantiatedReplayProperties:
-        delivery.effect.substantiatedReplayProperties,
-      requestedBy: delivery.effect.requestedBy,
-      startedBy: delivery.effect.startedBy,
-    },
-    request: delivery.request,
+async function readStoppedManagedEffectSet(ledger, runId, invocationId) {
+  const view = await ledger.rebuildRun(runId);
+  if (!view) {
+    throw new Error(`Managed-effect recovery run was not found: ${runId}`);
+  }
+  const selected = selectStoppedManagedEffectSet(view, invocationId);
+  const deliveries = [];
+  for (const selectedEffect of selected.effects) {
+    const delivery = await ledger.readManagedEffectDelivery(
+      runId,
+      invocationId,
+      selectedEffect.effectId,
+    );
+    if (
+      !delivery ||
+      !hasSameCanonicalJson(delivery.run, view.run) ||
+      !hasSameCanonicalJson(delivery.invocation, selected.invocation) ||
+      !hasSameCanonicalJson(delivery.attempt, selected.attempt) ||
+      !hasSameCanonicalJson(delivery.effect, selectedEffect)
+    ) {
+      throw new ManagedEffectDispatchNotAuthorizedError(
+        selectedEffect.effectId,
+      );
+    }
+    reconstructManagedEffectRecoveryRequest(delivery);
+    deliveries.push(delivery);
+  }
+  const contract = deepFreezeJson({
+    run: cloneJsonObject(view.run, 'managed-effect recovery run'),
+    invocation: cloneJsonObject(
+      selected.invocation,
+      'managed-effect recovery invocation',
+    ),
+    attempt: cloneJsonObject(
+      selected.attempt,
+      'managed-effect recovery attempt',
+    ),
+    effects: deliveries.map((delivery) => ({
+      effect: cloneJsonObject(
+        delivery.effect,
+        'managed-effect recovery effect',
+      ),
+      request: cloneJsonObject(
+        delivery.request,
+        'managed-effect recovery request',
+      ),
+    })),
+  });
+  return {
+    view,
+    invocation: selected.invocation,
+    attempt: selected.attempt,
+    deliveries,
+    contract,
+  };
+}
+
+/**
+ * Return a compact plural result without destination or receipt material.
+ * @param {boolean} changed - Whether this logical call appended the batch.
+ * @param {Array<{effectId: string, action: string, status: string}>} managedEffects - Canonical public rows.
+ * @returns {Readonly<{action: string, changed: boolean, managedEffects: Readonly<Readonly<{effectId: string, action: string, status: string}>[]>}>} - Redacted result.
+ */
+function stoppedManagedEffectRecoveryResult(changed, managedEffects) {
+  return Object.freeze({
+    action: ManagedEffectRecoveryAction.SETTLED_MANAGED_EFFECT_SET,
+    changed,
+    managedEffects: Object.freeze(
+      managedEffects.map((effect) => Object.freeze({ ...effect })),
+    ),
   });
 }
 
 /**
- * Recover one retained STARTED effect strictly from a destination-specific
- * receipt probe. The caller must already exclude the original runner. This
- * function never accepts or invokes adapter execution code.
- *
- * A strict `null` probe result atomically blocks the aggregate through the
- * existing managed-effect uncertainty transition. Any non-null result must
- * pass the retained ledger verifier before its existing terminal transition
- * can commit.
- * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, invocationId: string, effectId: string, recoverOutcome: (input: Readonly<{destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}>) => Promise<unknown>|unknown, actor?: {kind: string, id: string}}} options - Exact receipt-recovery inputs.
- * @returns {Promise<Readonly<{action: string, changed: boolean, effectId: string}>>} - Redacted recovery result.
+ * Prove that a thrown settlement retained this exact logical batch. The event
+ * stream was fully verified by the ledger before this comparison.
+ * @param {Record<string, any>[]} events - Verified event stream.
+ * @param {{transitionId: string, actor: Record<string, any>, attemptId: string, managedEffects: Array<{effectId: string, action: string, status: string}>}} expected - Exact public batch.
+ * @returns {boolean} - Whether this call's event is retained.
  */
-export async function recoverStartedManagedEffect(options) {
+function hasMatchingStoppedManagedEffectRecoveryEvent(events, expected) {
+  return events.some((event) => {
+    const effects = event?.payload?.effects;
+    return (
+      event?.transition_id === expected.transitionId &&
+      event.type === 'attempt-became-uncertain' &&
+      hasSameCanonicalJson(event.actor, expected.actor) &&
+      event.payload?.attempt?.attemptId === expected.attemptId &&
+      event.payload?.attempt?.status === AttemptStatus.ABANDONED &&
+      event.payload?.invocation?.status === InvocationStatus.UNCERTAIN &&
+      event.payload?.run?.status === RunStatus.BLOCKED &&
+      Array.isArray(effects) &&
+      hasSameCanonicalJson(
+        effects.map((effect) => ({
+          effectId: effect.effectId,
+          status: effect.status,
+        })),
+        expected.managedEffects.map((effect) => ({
+          effectId: effect.effectId,
+          status: effect.status,
+        })),
+      )
+    );
+  });
+}
+
+/**
+ * Recover the complete bounded unresolved effect set after the caller has
+ * excluded the prior runner. PENDING work is cancelled from ledger authority
+ * without destination access. Every STARTED effect is probed read-only before
+ * one atomic attempt-level settlement. Adapter execution is never accepted.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, invocationId: string, recoverOutcome?: (input: Readonly<{destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}>) => Promise<unknown>|unknown, actor?: {kind: string, id: string}}} options - Stopped-runner recovery inputs.
+ * @returns {Promise<ReturnType<typeof stoppedManagedEffectRecoveryResult>>} - Redacted atomic result.
+ */
+export async function recoverStoppedManagedEffects(options) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) {
     throw new TypeError(
-      'recoverStartedManagedEffect options must be an object.',
+      'recoverStoppedManagedEffects options must be an object.',
     );
   }
   const ledger = options.ledger;
   if (
     !ledger ||
+    typeof ledger.rebuildRun !== 'function' ||
     typeof ledger.readManagedEffectDelivery !== 'function' ||
-    typeof ledger.commitManagedEffectOutcome !== 'function' ||
-    typeof ledger.markManagedEffectUncertain !== 'function' ||
+    typeof ledger.settleStoppedAttemptManagedEffects !== 'function' ||
     typeof ledger.getEvents !== 'function'
   ) {
     throw new TypeError(
-      'recoverStartedManagedEffect requires an execution ledger.',
+      'recoverStoppedManagedEffects requires an execution ledger.',
     );
   }
   const runId = assertLedgerOpaqueId(
     options.runId,
-    'recoverStartedManagedEffect.runId',
+    'recoverStoppedManagedEffects.runId',
   );
   const invocationId = assertLedgerOpaqueId(
     options.invocationId,
-    'recoverStartedManagedEffect.invocationId',
+    'recoverStoppedManagedEffects.invocationId',
   );
-  const effectId = assertLedgerOpaqueId(
-    options.effectId,
-    'recoverStartedManagedEffect.effectId',
-  );
-  const recoverOutcome = options.recoverOutcome;
-  if (typeof recoverOutcome !== 'function') {
-    throw new TypeError(
-      'recoverStartedManagedEffect.recoverOutcome must be a function.',
-    );
-  }
   const actor = normalizeManagedEffectActor(
     options.actor,
-    'recoverStartedManagedEffect.actor',
+    'recoverStoppedManagedEffects.actor',
   );
-  const identity = Object.freeze({ runId, invocationId, effectId });
-
-  // Retry a read once because it is side-effect free and recovery itself is
-  // explicitly response-loss safe.
-  const readDelivery = async () => {
-    try {
-      return await ledger.readManagedEffectDelivery(
-        runId,
-        invocationId,
-        effectId,
-      );
-    } catch (firstError) {
-      try {
-        return await ledger.readManagedEffectDelivery(
-          runId,
-          invocationId,
-          effectId,
-        );
-      } catch (secondError) {
-        throw new AggregateError(
-          [firstError, secondError],
-          `Could not read retained managed effect recovery state: ${effectId}`,
-        );
-      }
-    }
-  };
-
-  let delivery = await readDelivery();
-  let state = classifyManagedEffectRecoveryDelivery(delivery, identity);
-  if (state === 'terminal') {
-    return managedEffectRecoveryResult(
-      ManagedEffectRecoveryAction.ALREADY_TERMINAL,
-      false,
-      effectId,
-    );
-  }
-  if (state === 'uncertain') {
-    return managedEffectRecoveryResult(
-      ManagedEffectRecoveryAction.ALREADY_UNCERTAIN,
-      false,
-      effectId,
-    );
-  }
-  const retainedDelivery = /** @type {Record<string, any>} */ (delivery);
-  const retainedContract = managedEffectRecoveryContract(retainedDelivery);
-  const request = reconstructManagedEffectRecoveryRequest(retainedDelivery);
-  const callbackInput = deepFreezeJson({
-    destinationEffectId: retainedDelivery.effect.destinationEffectId,
-    destination: cloneJsonObject(
-      retainedDelivery.effect.destination,
-      'recoverStartedManagedEffect destination',
-    ),
-    identity: { runId, invocationId, effectId },
-    request,
-  });
-  const rawRecoveredOutcome = await recoverOutcome(callbackInput);
-  const recoveredOutcome =
-    rawRecoveredOutcome === null
-      ? null
-      : deepFreezeJson(
-          cloneJsonObject(
-            rawRecoveredOutcome,
-            'recoverStartedManagedEffect recovered outcome',
-          ),
-        );
-
-  // Close the destination-probe TOCTOU window before selecting a transition.
-  delivery = await readDelivery();
-  state = classifyManagedEffectRecoveryDelivery(delivery, identity);
-  if (state === 'terminal') {
-    return managedEffectRecoveryResult(
-      ManagedEffectRecoveryAction.ALREADY_TERMINAL,
-      false,
-      effectId,
-    );
-  }
-  if (state === 'uncertain') {
-    return managedEffectRecoveryResult(
-      ManagedEffectRecoveryAction.ALREADY_UNCERTAIN,
-      false,
-      effectId,
-    );
-  }
-  let currentDelivery = /** @type {Record<string, any>} */ (delivery);
-  if (
-    !hasSameCanonicalJson(
-      retainedContract,
-      managedEffectRecoveryContract(currentDelivery),
-    )
-  ) {
-    throw new ManagedEffectDispatchNotAuthorizedError(effectId);
-  }
-
-  const transitionIdentity = Object.freeze({
+  const retained = await readStoppedManagedEffectSet(
+    ledger,
     runId,
     invocationId,
-    attemptId: currentDelivery.attempt.attemptId,
-    effectId,
-    destinationEffectId: currentDelivery.effect.destinationEffectId,
-  });
-  const expectedAction =
-    recoveredOutcome === null
-      ? ManagedEffectRecoveryAction.OUTCOME_UNCERTAIN
-      : ManagedEffectRecoveryAction.OUTCOME_RECOVERED;
-  const expectedState = recoveredOutcome === null ? 'uncertain' : 'terminal';
-  const transitionId = createManagedEffectRecoveryTransitionId(
-    recoveredOutcome === null ? 'uncertain' : 'outcome',
-    transitionIdentity,
   );
-  const expectedEventType =
-    recoveredOutcome === null
-      ? 'effect-became-uncertain'
-      : recoveredOutcome.ok === true
-        ? 'effect-completed'
-        : 'effect-failed';
+  const hasStarted = retained.deliveries.some(
+    (delivery) => delivery.effect.status === EffectStatus.STARTED,
+  );
+  const recoverOutcome = options.recoverOutcome;
+  if (hasStarted && typeof recoverOutcome !== 'function') {
+    throw new TypeError(
+      'recoverStoppedManagedEffects.recoverOutcome is required for STARTED effects.',
+    );
+  }
 
-  // Build a fresh optimistic request after any failed attempt. The immutable
-  // transition identity stays fixed while an unrelated accepted cancellation
-  // may legitimately advance only the aggregate version.
-  const applyTransition = async (
-    /** @type {Record<string, any>} */ current,
-  ) => {
-    const common = {
+  /** @type {Record<string, any>[]} */
+  const decisions = [];
+  /** @type {Array<{effectId: string, action: string, status: string}>} */
+  const managedEffects = [];
+  for (const delivery of retained.deliveries) {
+    const effectId = delivery.effect.effectId;
+    if (delivery.effect.status === EffectStatus.PENDING) {
+      decisions.push({
+        effectId,
+        expectedEffectVersion: delivery.effect.version,
+        disposition: ManagedEffectRecoveryAction.CANCELLED_BEFORE_START,
+        reason: RECOVERY_CANCELLATION_REASON,
+      });
+      managedEffects.push({
+        effectId,
+        action: ManagedEffectRecoveryAction.CANCELLED_BEFORE_START,
+        status: EffectStatus.CANCELLED,
+      });
+      continue;
+    }
+    const request = reconstructManagedEffectRecoveryRequest(delivery);
+    const callbackInput = deepFreezeJson({
+      destinationEffectId: delivery.effect.destinationEffectId,
+      destination: cloneJsonObject(
+        delivery.effect.destination,
+        'recoverStoppedManagedEffects destination',
+      ),
+      identity: { runId, invocationId, effectId },
+      request,
+    });
+    const rawOutcome = await /** @type {Function} */ (recoverOutcome)(
+      callbackInput,
+    );
+    const outcome =
+      rawOutcome === null
+        ? null
+        : deepFreezeJson(
+            cloneJsonObject(
+              rawOutcome,
+              'recoverStoppedManagedEffects recovered outcome',
+            ),
+          );
+    if (outcome === null) {
+      decisions.push({
+        effectId,
+        expectedEffectVersion: delivery.effect.version,
+        disposition: ManagedEffectRecoveryAction.OUTCOME_UNCERTAIN,
+        reason: RECOVERY_UNCERTAINTY_REASON,
+      });
+      managedEffects.push({
+        effectId,
+        action: ManagedEffectRecoveryAction.OUTCOME_UNCERTAIN,
+        status: EffectStatus.UNCERTAIN,
+      });
+    } else {
+      decisions.push({
+        effectId,
+        expectedEffectVersion: delivery.effect.version,
+        disposition: ManagedEffectRecoveryAction.OUTCOME_RECOVERED,
+        outcome,
+      });
+      managedEffects.push({
+        effectId,
+        action: ManagedEffectRecoveryAction.OUTCOME_RECOVERED,
+        status:
+          outcome.ok === true ? EffectStatus.COMPLETED : EffectStatus.FAILED,
+      });
+    }
+  }
+
+  // Close the probe TOCTOU window over the complete sibling set.
+  const current = await readStoppedManagedEffectSet(
+    ledger,
+    runId,
+    invocationId,
+  );
+  if (!hasSameCanonicalJson(retained.contract, current.contract)) {
+    throw new ManagedEffectDispatchNotAuthorizedError(
+      retained.deliveries[0].effect.effectId,
+    );
+  }
+  const transitionId = createManagedEffectRecoveryTransitionId({
+    runId,
+    invocationId,
+    attemptId: current.attempt.attemptId,
+    actor,
+    contract: retained.contract,
+    decisions,
+  });
+  let settlement;
+  try {
+    settlement = await ledger.settleStoppedAttemptManagedEffects({
       runId,
       invocationId,
       attemptId: current.attempt.attemptId,
-      effectId,
       fencingToken: current.attempt.fencingToken,
       generation: current.attempt.generation,
-      expectedVersion: current.run.version,
-      expectedEffectVersion: current.effect.version,
+      expectedVersion: current.view.run.version,
+      transitionId,
+      decisions,
+      reason: STOPPED_ATTEMPT_RECOVERY_REASON,
       actor,
       coordinatorEpoch: current.attempt.coordinatorEpoch,
-    };
-    if (recoveredOutcome === null) {
-      return await ledger.markManagedEffectUncertain({
-        ...common,
-        transitionId,
-        reason: RECOVERY_UNCERTAINTY_REASON,
-      });
-    }
-    return await ledger.commitManagedEffectOutcome({
-      ...common,
-      transitionId,
-      outcome: recoveredOutcome,
     });
-  };
-
-  /** @type {unknown[]} */
-  const transitionErrors = [];
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    let result;
+  } catch (settlementError) {
+    let retainedOwnEvent = false;
     try {
-      result = await applyTransition(currentDelivery);
-    } catch (error) {
-      transitionErrors.push(error);
-    }
-
-    const after = await readDelivery();
-    const afterState = classifyManagedEffectRecoveryDelivery(after, identity);
-    if (afterState === expectedState) {
-      if (!result) {
-        const retainedOwnTransition = hasMatchingManagedEffectRecoveryEvent(
-          await ledger.getEvents(runId),
-          {
-            transitionId,
-            eventType: expectedEventType,
-            actor,
-            delivery: /** @type {Record<string, any>} */ (after),
-            recoveredOutcome,
-          },
-        );
-        if (!retainedOwnTransition) {
-          return managedEffectRecoveryResult(
-            afterState === 'terminal'
-              ? ManagedEffectRecoveryAction.ALREADY_TERMINAL
-              : ManagedEffectRecoveryAction.ALREADY_UNCERTAIN,
-            false,
-            effectId,
-          );
-        }
-      }
-      return managedEffectRecoveryResult(
-        expectedAction,
-        result ? result.applied === true : true,
-        effectId,
+      retainedOwnEvent = hasMatchingStoppedManagedEffectRecoveryEvent(
+        await ledger.getEvents(runId),
+        {
+          transitionId,
+          actor,
+          attemptId: current.attempt.attemptId,
+          managedEffects,
+        },
+      );
+    } catch (readError) {
+      throw new AggregateError(
+        [settlementError, readError],
+        `Could not settle or verify stopped managed effects for run ${runId}.`,
       );
     }
-    if (afterState === 'terminal') {
-      return managedEffectRecoveryResult(
-        ManagedEffectRecoveryAction.ALREADY_TERMINAL,
-        false,
-        effectId,
-      );
-    }
-    if (afterState === 'uncertain') {
-      return managedEffectRecoveryResult(
-        ManagedEffectRecoveryAction.ALREADY_UNCERTAIN,
-        false,
-        effectId,
-      );
-    }
-    currentDelivery = /** @type {Record<string, any>} */ (after);
-    if (
-      !hasSameCanonicalJson(
-        retainedContract,
-        managedEffectRecoveryContract(currentDelivery),
-      )
-    ) {
-      throw new ManagedEffectDispatchNotAuthorizedError(effectId);
-    }
-    if (result) {
-      throw new Error(
-        `Managed effect recovery transition was not durably readable: ${effectId}`,
-      );
-    }
+    if (!retainedOwnEvent) throw settlementError;
+    return stoppedManagedEffectRecoveryResult(true, managedEffects);
   }
-  throw new AggregateError(
-    transitionErrors,
-    `Could not durably recover managed effect outcome: ${effectId}`,
+
+  if (
+    !Array.isArray(settlement.effects) ||
+    !hasSameCanonicalJson(
+      settlement.effects.map((/** @type {Record<string, any>} */ effect) => ({
+        effectId: effect.effectId,
+        status: effect.status,
+      })),
+      managedEffects.map((effect) => ({
+        effectId: effect.effectId,
+        status: effect.status,
+      })),
+    )
+  ) {
+    throw new Error(
+      `Stopped managed-effect settlement returned an unexpected effect set for run ${runId}.`,
+    );
+  }
+  return stoppedManagedEffectRecoveryResult(
+    settlement.applied === true,
+    managedEffects,
   );
 }
 

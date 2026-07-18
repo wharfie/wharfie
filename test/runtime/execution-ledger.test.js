@@ -12,12 +12,14 @@ import { ActivityProtocolTranscriptValidator } from '../../src/core/runtime/acti
 import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
 import {
   AttemptStatus,
+  EffectStatus,
   ExecutionLedgerConflictError,
   ExecutionLedgerProjectionError,
   ExecutionLedgerRunConflictError,
   ExecutionLedgerTransitionConflictError,
   EXECUTION_LEDGER_MAX_EVIDENCE_FRAMES,
   EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+  EXECUTION_LEDGER_MAX_UNRESOLVED_MANAGED_EFFECTS,
   InvocationStatus,
   RunStatus,
   createExecutionLedger as createProductionExecutionLedger,
@@ -25,6 +27,7 @@ import {
 import { createLocalExecutionPayloadStore } from '../../src/core/lib/payload-store/local.js';
 import {
   getAttemptProjectionSortKey,
+  getEffectProjectionSortKey,
   getEventSortKey,
   getInvocationProjectionSortKey,
   getRunProjectionSortKey,
@@ -193,6 +196,38 @@ function cancelledEvidenceForStart(start, reason = CANCELLATION_REASON) {
   };
 }
 
+function cancelledEvidenceWithEffectRequest(
+  /** @type {Readonly<Record<string, any>>} */ start,
+  /** @type {Record<string, any>} */ request,
+  /** @type {Record<string, any>} */ reason = CANCELLATION_REASON,
+) {
+  const transcript = new ActivityProtocolTranscriptValidator();
+  const acceptedStart = transcript.acceptHostFrame(start);
+  const acceptedRequest = transcript.acceptComponentFrame(request);
+  const cancel = transcript.acceptHostFrame({
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'cancel',
+    attemptId: acceptedStart.attemptId,
+    reason,
+  });
+  const terminal = transcript.acceptComponentFrame({
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'cancelled',
+    attemptId: acceptedStart.attemptId,
+    sequence: 2,
+    error: reason,
+  });
+  return {
+    status: terminal.type,
+    start: acceptedStart,
+    terminal,
+    frames: [acceptedStart, acceptedRequest, cancel, terminal],
+    transcript: transcript.snapshot(),
+  };
+}
+
 /**
  * @param {Readonly<Record<string, any>>} start - Exact durable start frame.
  * @param {'completed'|'failed'} terminalType - Physical terminal that won the cancellation race.
@@ -322,7 +357,7 @@ function failedCancellationEvidenceForStart(
  */
 function eventIdFor(event) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v6',
+    domain: 'wharfie:execution-ledger-event:v7',
     prefix: 'wle',
     value: {
       schemaVersion: event.schema_version,
@@ -424,6 +459,108 @@ function manualCancellationRequest(overrides = {}) {
   };
 }
 
+const TEST_EFFECT_VERIFIER = Object.freeze({
+  kind: 'ledger-test-destination',
+  version: 1,
+});
+const TEST_EFFECT_DESTINATION = Object.freeze({
+  kind: 'ledger-test-store',
+  version: 1,
+  bindingId: 'primary',
+  configuration: Object.freeze({ tableName: 'records' }),
+});
+
+function effectVerifierRegistration() {
+  return {
+    ...TEST_EFFECT_VERIFIER,
+    verify: (/** @type {Record<string, any>} */ input) =>
+      input.outcome.evidence.destinationEffectId ===
+        input.effect.destinationEffectId &&
+      input.outcome.evidence.operation === input.request.operation,
+  };
+}
+
+function effectRequestFrame(
+  /** @type {string} */ attemptId,
+  /** @type {string} */ effectId,
+  /** @type {number} */ sequence,
+) {
+  return {
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'effect-request',
+    attemptId,
+    sequence,
+    effectId,
+    capability: 'key-value',
+    operation: 'put',
+    input: { key: effectId, value: sequence },
+    requestedReplayProperties: ['idempotent'],
+  };
+}
+
+async function createStartedManagedAttempt(
+  /** @type {ReturnType<typeof createProductionExecutionLedger>} */ ledger,
+) {
+  const created = await ledger.createManualRun(manualRun());
+  const claimed = await ledger.claimInvocation({
+    runId: RUN_ID,
+    invocationId: INVOCATION_ID,
+    fencingToken: 'effect-fence',
+    expectedGeneration: 0,
+    expectedVersion: created.run.version,
+    transitionId: 'effect-claim',
+  });
+  return await ledger.markAttemptStarted({
+    runId: RUN_ID,
+    invocationId: INVOCATION_ID,
+    attemptId: claimed.attempt.attemptId,
+    fencingToken: 'effect-fence',
+    generation: 1,
+    expectedVersion: claimed.run.version,
+    transitionId: 'effect-attempt-start',
+  });
+}
+
+async function retainEffect(
+  /** @type {ReturnType<typeof createProductionExecutionLedger>} */ ledger,
+  /** @type {Record<string, any>} */ started,
+  /** @type {{effectId: string, sequence: number, status: string, destination?: Record<string, any>}} */ options,
+) {
+  const current = await ledger.getRun(RUN_ID);
+  if (!current) throw new Error('Expected managed-effect run.');
+  const requested = await ledger.recordManagedEffectRequest({
+    runId: RUN_ID,
+    invocationId: INVOCATION_ID,
+    attemptId: started.attempt.attemptId,
+    fencingToken: 'effect-fence',
+    generation: 1,
+    expectedVersion: current.version,
+    transitionId: `${options.effectId}-request`,
+    request: effectRequestFrame(
+      started.attempt.attemptId,
+      options.effectId,
+      options.sequence,
+    ),
+    adapter: { id: 'ledger-test-adapter', version: 1 },
+    destination: options.destination || TEST_EFFECT_DESTINATION,
+    verifier: TEST_EFFECT_VERIFIER,
+    substantiatedReplayProperties: ['idempotent'],
+  });
+  if (options.status === EffectStatus.PENDING) return requested;
+  return await ledger.markManagedEffectStarted({
+    runId: RUN_ID,
+    invocationId: INVOCATION_ID,
+    attemptId: started.attempt.attemptId,
+    effectId: options.effectId,
+    fencingToken: 'effect-fence',
+    generation: 1,
+    expectedVersion: requested.run.version,
+    expectedEffectVersion: requested.effect.version,
+    transitionId: `${options.effectId}-start`,
+  });
+}
+
 /**
  * @returns {() => number} - Deterministic increasing observation clock.
  */
@@ -437,6 +574,323 @@ function createClock() {
 
 for (const adapter of getAdapterMatrix()) {
   describe(`${adapter.name} execution ledger contract`, () => {
+    test('settles the exact mixed managed-effect set atomically and rejects stale or partial plans', async () => {
+      const { db, cleanup } = await adapter.create();
+      const tableName = 'execution-ledger-effect-settlement';
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName,
+          effectEvidenceVerifiers: [effectVerifierRegistration()],
+          now: createClock(),
+        });
+        const started = await createStartedManagedAttempt(ledger);
+        const pending = await retainEffect(ledger, started, {
+          effectId: 'a-pending',
+          sequence: 1,
+          status: EffectStatus.PENDING,
+        });
+        const recovered = await retainEffect(ledger, started, {
+          effectId: 'b-recovered',
+          sequence: 2,
+          status: EffectStatus.STARTED,
+        });
+        const uncertain = await retainEffect(ledger, started, {
+          effectId: 'c-uncertain',
+          sequence: 3,
+          status: EffectStatus.STARTED,
+        });
+        const before = await ledger.rebuildRun(RUN_ID);
+        if (!before) throw new Error('Expected managed-effect ledger state.');
+        const reason = { kind: 'stopped-attempt' };
+        const decisions = [
+          {
+            effectId: 'a-pending',
+            expectedEffectVersion: pending.effect.version,
+            disposition: 'cancelled-before-start',
+          },
+          {
+            effectId: 'b-recovered',
+            expectedEffectVersion: recovered.effect.version,
+            disposition: 'outcome-recovered',
+            outcome: {
+              ok: true,
+              result: { written: true },
+              evidence: {
+                destinationEffectId: recovered.effect.destinationEffectId,
+                operation: 'put',
+              },
+            },
+          },
+          {
+            effectId: 'c-uncertain',
+            expectedEffectVersion: uncertain.effect.version,
+            disposition: 'outcome-uncertain',
+          },
+        ];
+        const settle = (overrides = {}) =>
+          ledger.settleStoppedAttemptManagedEffects({
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            attemptId: started.attempt.attemptId,
+            fencingToken: 'effect-fence',
+            generation: 1,
+            expectedVersion: before.run.version,
+            transitionId: 'settle-effect-set',
+            decisions,
+            reason,
+            ...overrides,
+          });
+
+        await expect(
+          settle({
+            transitionId: 'settle-subset',
+            decisions: decisions.slice(0, 2),
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
+        await expect(
+          settle({
+            transitionId: 'settle-duplicate',
+            decisions: [decisions[0], decisions[0], decisions[2]],
+          }),
+        ).rejects.toThrow(/unique.*sorted/i);
+        await expect(
+          settle({
+            transitionId: 'settle-status-mismatch',
+            decisions: [
+              {
+                ...decisions[0],
+                disposition: 'outcome-uncertain',
+              },
+              decisions[1],
+              decisions[2],
+            ],
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
+        await expect(
+          settle({
+            transitionId: 'settle-stale-effect',
+            decisions: [
+              decisions[0],
+              {
+                ...decisions[1],
+                expectedEffectVersion: decisions[1].expectedEffectVersion + 1,
+              },
+              decisions[2],
+            ],
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
+        await expect(
+          settle({ transitionId: 'settle-stale-fence', fencingToken: 'stale' }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
+        await expect(
+          ledger.markManagedEffectUncertain({
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            attemptId: started.attempt.attemptId,
+            effectId: 'c-uncertain',
+            fencingToken: 'effect-fence',
+            generation: 1,
+            expectedVersion: before.run.version,
+            expectedEffectVersion: uncertain.effect.version,
+            transitionId: 'singular-uncertainty-with-siblings',
+            reason,
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
+        await expect(ledger.rebuildRun(RUN_ID)).resolves.toEqual(before);
+
+        const settled = await settle();
+        expect(settled).toMatchObject({
+          applied: true,
+          run: { status: RunStatus.BLOCKED },
+          invocation: { status: InvocationStatus.UNCERTAIN },
+          attempt: { status: AttemptStatus.ABANDONED },
+          effects: [
+            { effectId: 'a-pending', status: EffectStatus.CANCELLED },
+            { effectId: 'b-recovered', status: EffectStatus.COMPLETED },
+            { effectId: 'c-uncertain', status: EffectStatus.UNCERTAIN },
+          ],
+        });
+        await expect(settle()).resolves.toMatchObject({ applied: false });
+        await expect(
+          settle({ reason: { kind: 'different-recovery' } }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerTransitionConflictError);
+
+        const settlementEvents = await ledger.getEvents(RUN_ID);
+        const settlementEvent = settlementEvents[settlementEvents.length - 1];
+        await forgeEventSnapshots({
+          db,
+          tableName,
+          sequence: settlementEvent.sequence,
+          transitionId: 'settle-effect-set',
+          payload: {
+            ...settlementEvent.payload,
+            effects: settlementEvent.payload.effects.slice(1),
+          },
+        });
+        await expect(ledger.getRun(RUN_ID)).rejects.toBeInstanceOf(
+          ExecutionLedgerProjectionError,
+        );
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('admits at most sixteen unresolved effects and reserves byte-safe closure before publication', async () => {
+      const countHarness = await adapter.create();
+      const counted = createCountingPayloadStore();
+      try {
+        const ledger = createProductionExecutionLedger({
+          db: countHarness.db,
+          tableName: 'execution-ledger-effect-count-bound',
+          payloadStore: counted.payloadStore,
+          effectEvidenceVerifiers: [effectVerifierRegistration()],
+          now: createClock(),
+        });
+        const started = await createStartedManagedAttempt(ledger);
+        for (
+          let index = 0;
+          index < EXECUTION_LEDGER_MAX_UNRESOLVED_MANAGED_EFFECTS;
+          index += 1
+        ) {
+          await retainEffect(ledger, started, {
+            effectId: `pending-${String(index).padStart(2, '0')}`,
+            sequence: index + 1,
+            status: EffectStatus.PENDING,
+          });
+        }
+        const writesAtLimit = counted.writes.length;
+        const runAtLimit = await ledger.rebuildRun(RUN_ID);
+        await expect(
+          retainEffect(ledger, started, {
+            effectId: 'pending-17',
+            sequence: 17,
+            status: EffectStatus.PENDING,
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
+        expect(counted.writes).toHaveLength(writesAtLimit);
+        await expect(ledger.rebuildRun(RUN_ID)).resolves.toEqual(runAtLimit);
+      } finally {
+        await countHarness.cleanup();
+      }
+
+      const byteHarness = await adapter.create();
+      const byteCounted = createCountingPayloadStore();
+      try {
+        const ledger = createProductionExecutionLedger({
+          db: byteHarness.db,
+          tableName: 'execution-ledger-effect-byte-bound',
+          payloadStore: byteCounted.payloadStore,
+          effectEvidenceVerifiers: [effectVerifierRegistration()],
+          now: createClock(),
+        });
+        const started = await createStartedManagedAttempt(ledger);
+        const writesBefore = byteCounted.writes.length;
+        const eventsBefore = await ledger.getEvents(RUN_ID);
+        await expect(
+          retainEffect(ledger, started, {
+            effectId: 'oversized-closure',
+            sequence: 1,
+            status: EffectStatus.PENDING,
+            destination: {
+              ...TEST_EFFECT_DESTINATION,
+              configuration: { padding: 'x'.repeat(63_500) },
+            },
+          }),
+        ).rejects.toThrow(/closure reserve|64 KiB/i);
+        expect(byteCounted.writes).toHaveLength(writesBefore);
+        await expect(ledger.getEvents(RUN_ID)).resolves.toEqual(eventsBefore);
+        await expect(
+          ledger.getEffect(RUN_ID, INVOCATION_ID, 'oversized-closure'),
+        ).resolves.toBeNull();
+      } finally {
+        await byteHarness.cleanup();
+      }
+    });
+
+    test('reconciles a cancelled terminal that omits the result of a durably cancelled effect', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-cancelled-effect-reconciliation',
+          effectEvidenceVerifiers: [effectVerifierRegistration()],
+          now: createClock(),
+        });
+        const started = await createStartedManagedAttempt(ledger);
+        const requested = await retainEffect(ledger, started, {
+          effectId: 'cancelled-pending',
+          sequence: 1,
+          status: EffectStatus.PENDING,
+        });
+        const cancellation = await ledger.requestManualRunCancellation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          expectedVersion: requested.run.version,
+          expectedGeneration: 1,
+          transitionId: 'request-effect-cancellation',
+          requestId: 'request-effect-cancellation',
+          reason: CANCELLATION_REASON,
+          attemptId: started.attempt.attemptId,
+          fencingToken: 'effect-fence',
+        });
+        const settled = await ledger.settleStoppedAttemptManagedEffects({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId: started.attempt.attemptId,
+          fencingToken: 'effect-fence',
+          generation: 1,
+          expectedVersion: cancellation.run.version,
+          transitionId: 'settle-cancelled-effect',
+          decisions: [
+            {
+              effectId: 'cancelled-pending',
+              expectedEffectVersion: requested.effect.version,
+              disposition: 'cancelled-before-start',
+            },
+          ],
+          reason: { kind: 'stopped-after-cancel' },
+        });
+        const events = await ledger.getEvents(RUN_ID);
+        const uncertaintyEvent = events[events.length - 1];
+        const reconciled = await ledger.reconcileUncertainManualAttempt({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId: started.attempt.attemptId,
+          fencingToken: 'effect-fence',
+          generation: 1,
+          coordinatorEpoch: 0,
+          expectedVersion: settled.run.version,
+          uncertaintyEventId: uncertaintyEvent.event_id,
+          uncertaintySequence: uncertaintyEvent.sequence,
+          transitionId: 'reconcile-cancelled-effect',
+          reconciliationId: 'reconcile-cancelled-effect',
+          reason: { kind: 'recovered-cancelled-transcript' },
+          evidence: cancelledEvidenceWithEffectRequest(
+            started.startFrame,
+            effectRequestFrame(
+              started.attempt.attemptId,
+              'cancelled-pending',
+              1,
+            ),
+          ),
+        });
+        expect(reconciled).toMatchObject({
+          run: { status: RunStatus.CANCELLED },
+          invocation: { status: InvocationStatus.CANCELLED },
+          attempt: { status: AttemptStatus.ABANDONED },
+        });
+        await expect(
+          ledger.getEffect(RUN_ID, INVOCATION_ID, 'cancelled-pending'),
+        ).resolves.toMatchObject({
+          status: EffectStatus.CANCELLED,
+          cancellation: expect.any(Object),
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
     test('appends and folds one terminal manual activity with durable receipts', async () => {
       const { db, cleanup } = await adapter.create();
       try {
@@ -3404,11 +3858,11 @@ for (const adapter of getAdapterMatrix()) {
         ).rejects.toThrow(/cursor.*scope/i);
         const malformedCursor = Buffer.from(
           JSON.stringify({
-            schemaVersion: 4,
+            schemaVersion: 5,
             appId,
             serviceId: scope.serviceId,
             directoryId: scope.directoryId,
-            startAfter: 'ledger-directory/v4/run/0000000000000000/not-base64!',
+            startAfter: 'ledger-directory/v5/run/0000000000000000/not-base64!',
           }),
           'utf8',
         ).toString('base64url');
@@ -3417,7 +3871,7 @@ for (const adapter of getAdapterMatrix()) {
         ).rejects.toThrow(/cursor.*scope/i);
         const missingBoundaryCursor = Buffer.from(
           JSON.stringify({
-            schemaVersion: 4,
+            schemaVersion: 5,
             appId,
             serviceId: scope.serviceId,
             directoryId: scope.directoryId,
@@ -3460,7 +3914,7 @@ for (const adapter of getAdapterMatrix()) {
         expect(tieSecond.nextCursor).toBeUndefined();
 
         // A user-controlled run ID can equal another app's internal directory
-        // partition. V6 replay is scoped to ledger/v6/, so that co-location
+        // partition. V7 replay is scoped to ledger/v7/, so that co-location
         // remains harmless instead of treating the directory row as a run row.
         const aliasTargetAppId = 'directory-alias-target';
         const aliasRunId = createExecutionLedgerRunDirectoryScope({
@@ -3549,7 +4003,7 @@ for (const adapter of getAdapterMatrix()) {
       }
     });
 
-    test('keeps V5 records and its V3 directory inert when V6 deliberately shares a custom table', async () => {
+    test('keeps V6 records and its V4 directory inert when V7 deliberately shares a custom table', async () => {
       const { db, cleanup } = await adapter.create();
       try {
         const tableName = 'operator-selected-shared-ledger-table';
@@ -3557,15 +4011,15 @@ for (const adapter of getAdapterMatrix()) {
           appId: 'legacy-app',
         });
         const legacyDirectoryId = createCanonicalJsonSha256Id({
-          domain: 'wharfie:execution-ledger-run-directory:v3',
+          domain: 'wharfie:execution-ledger-run-directory:v4',
           prefix: 'wld',
           value: {
-            schemaVersion: 3,
+            schemaVersion: 4,
             serviceId: legacyScope.serviceId,
           },
           valuePath: 'legacy execution ledger run directory partition',
         });
-        const legacyDirectorySortKey = `ledger-directory/v3/run/${String(
+        const legacyDirectorySortKey = `ledger-directory/v4/run/${String(
           Number.MAX_SAFE_INTEGER - 399,
         ).padStart(
           16,
@@ -3574,9 +4028,9 @@ for (const adapter of getAdapterMatrix()) {
         const legacyRecords = [
           {
             run_id: 'legacy-run',
-            sort_key: 'ledger/v5/head',
+            sort_key: 'ledger/v6/head',
             record_type: 'execution_ledger_head',
-            schema_version: 5,
+            schema_version: 6,
             version: 1,
             sequence: 1,
             app_id: 'legacy-app',
@@ -3584,21 +4038,21 @@ for (const adapter of getAdapterMatrix()) {
           },
           {
             run_id: 'legacy-run',
-            sort_key: 'ledger/v5/projection/run',
+            sort_key: 'ledger/v6/projection/run',
             record_type: 'execution_ledger_run_projection',
-            schema_version: 5,
+            schema_version: 6,
             status: RunStatus.RUNNING,
             version: 1,
             sequence: 1,
             app_id: 'legacy-app',
             revision_id: REVISION_ID,
-            data: { schemaVersion: 5, runId: 'legacy-run' },
+            data: { schemaVersion: 6, runId: 'legacy-run' },
           },
           {
             run_id: legacyDirectoryId,
             sort_key: legacyDirectorySortKey,
             record_type: 'execution_ledger_run_directory',
-            schema_version: 5,
+            schema_version: 6,
             service_id: legacyScope.serviceId,
             ledger_run_id: 'legacy-run',
             app_id: 'legacy-app',
@@ -3624,7 +4078,7 @@ for (const adapter of getAdapterMatrix()) {
           keyName: 'run_id',
           keyValue: 'legacy-run',
           sortKeyName: 'sort_key',
-          sortKeyValue: 'ledger/v5/head',
+          sortKeyValue: 'ledger/v6/head',
           consistentRead: true,
         });
         const legacyDirectoryBefore = await db.get({
@@ -3647,17 +4101,17 @@ for (const adapter of getAdapterMatrix()) {
         );
         await ledger.createManualRun({
           // Reuse the exact physical partition to prove the fresh sort-key
-          // namespace coexists without reinterpreting its V5 records.
+          // namespace coexists without reinterpreting its V6 records.
           runId: 'legacy-run',
           appId: 'legacy-app',
           revisionId: REVISION_ID,
           invocationId: INVOCATION_ID,
           activityId: ACTIVITY_ID,
-          transitionId: 'create-v6-legacy-run',
+          transitionId: 'create-v7-legacy-run',
           observedAt: 400,
         });
         await expect(ledger.getRun('legacy-run')).resolves.toMatchObject({
-          schemaVersion: 6,
+          schemaVersion: 7,
           appId: 'legacy-app',
         });
         await expect(
@@ -3671,7 +4125,7 @@ for (const adapter of getAdapterMatrix()) {
             keyName: 'run_id',
             keyValue: 'legacy-run',
             sortKeyName: 'sort_key',
-            sortKeyValue: 'ledger/v5/head',
+            sortKeyValue: 'ledger/v6/head',
             consistentRead: true,
           }),
         ).resolves.toEqual(legacyBefore);

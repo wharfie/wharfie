@@ -34,7 +34,7 @@ consuming public commands.
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
 The abandoned v1 source and dependency graph have been deleted. The strict v2
-manifest and the append-only V6 manual run → invocation → attempt → effect
+manifest and the append-only V7 manual run → invocation → attempt → effect
 ledger are now defined; the superseded mutable Operation/Action snapshot store
 is gone. Its redacted per-service history directory is transactionally bound to
 each run transition, while revision-backed source and SEA activities consume
@@ -55,25 +55,29 @@ ledger race, while ambiguous post-cancellation termination becomes blocked
 evidence-backed reconciliation event: a complete bounded Activity Protocol
 transcript proves one retained abandoned attempt's terminal outcome, while the
 physical attempt itself stays `ABANDONED`. The local command transport is not
-yet supported on Windows. V6 connects verifier-backed managed effects through
+yet supported on Windows. V7 connects verifier-backed managed effects through
 the framed source/SEA worker boundary and exposes one finite public operation:
 `application-state` / `put-if-absent`. Its LMDB destination atomically commits
 the business value with a permanent effect receipt. Confirmed source/SEA
-recovery can now settle exactly one unresolved built-in `STARTED` effect from
-that receipt under the held LMDB owner, or block it as `UNCERTAIN` only when an
-exact read-only probe proves the receipt absent; it never reruns application
-code. `PENDING` and concurrent unresolved effect recovery, broader effect
-reconciliation, and any wider exactly-once claim remain unfinished. Public run
-history/listing, scheduling, and release hardening still need focused review.
-The npm package remains deliberately private. It is not ready for production
-use.
+recovery now settles the complete active-effect set—at most 16 unresolved
+effects—for one stopped attempt under the held LMDB owner. A retained `PENDING`
+request becomes `CANCELLED` without opening application state; every `STARTED`
+sibling is probed read-only, with an exact receipt becoming `COMPLETED` or
+`FAILED` and strict absence becoming `UNCERTAIN`. One append-only transaction
+applies all sibling dispositions and blocks the arbitrary stopped activity
+attempt. Unsupported, missing, or corrupt destination evidence leaves the whole
+set unchanged. Recovery never reruns application or adapter code. Broader effect
+reconciliation, real boundary-by-boundary process-crash coverage, and any wider
+exactly-once claim remain unfinished. Public run history/listing, scheduling,
+and release hardening still need focused review. The npm package remains
+deliberately private. It is not ready for production use.
 
 ## Start here
 
 - [Project charter](PROJECT.md) — the canonical problem, scope, public concepts, boundaries, and success test.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Public effects and receipt-recovery checkpoint](llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md) — the current restart point after exposing finite application state and closing its first stopped-runner recovery window.
+- [Public effects and receipt-recovery checkpoint](llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md) — the preceding restart point after exposing finite application state and closing its first stopped-runner recovery window.
 - [July 2026 checkpoint](llm/checkpoints/2026-07-16-project-reset.md) — immutable historical evidence of the pre-reset state and conversation handoff.
 - [Packaging salvage checkpoint](llm/checkpoints/2026-07-16-packaging-salvage.md) — historical first implementation proof and the release blockers that existed before v1 deletion.
 - [V1 deletion checkpoint](llm/checkpoints/2026-07-16-v1-deletion.md) — historical deletion boundary and evidence.
