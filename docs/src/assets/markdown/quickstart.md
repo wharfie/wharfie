@@ -207,7 +207,7 @@ never rewritten, and the transcript, result, reason, and fence are never echoed
 in the operator response. A `cancelled` result still requires the matching
 earlier durable cancellation request and host cancellation frame.
 
-The V4 ledger supports cancellation by the foreground active owner. During
+The V5 ledger supports cancellation by the foreground active owner. During
 `wharfie ops run`, the first `SIGINT` or `SIGTERM` becomes a durable request
 before the owner signals the physical attempt. While an LMDB-backed `ops run`
 owns the exact `STARTED` attempt, source `wharfie ops cancel` or packaged
@@ -227,9 +227,9 @@ cancellation evidence can commit `CANCELLED`; a verified completion or failure
 may still win, while unconfirmed post-cancellation termination becomes blocked
 `UNCERTAIN` work; later reconciliation needs evidence rather than another
 cancel request. There is still no public run-history/list: the verified bounded
-V4 run directory is internal rather than the retired `ops list` surface. The
-resident service currently owns only local lifecycle and exclusion state; it
-does not schedule, claim, or execute work.
+V3 run directory paired with the V5 ledger is internal rather than the retired
+`ops list` surface. The resident service currently owns only local lifecycle
+and exclusion state; it does not schedule, claim, or execute work.
 
 ## Package the app
 

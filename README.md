@@ -34,14 +34,14 @@ consuming public commands.
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
 The abandoned v1 source and dependency graph have been deleted. The strict v2
-manifest and the append-only V4 manual run → invocation → attempt ledger are
-now defined; the superseded mutable Operation/Action snapshot store is gone. Its
-redacted per-service history directory is transactionally bound to each run
-transition, while revision-backed source and SEA activities consume one frozen
-target dependency closure instead of ambient `node_modules` or a newly resolved
-npm tree. Exact-run inspection, confirmed recovery, and authenticated
-current-owner cancellation use one shared source/SEA operator layer; packaged
-commands bind authority to their embedded application identity.
+manifest and the append-only V5 manual run → invocation → attempt → effect
+ledger are now defined; the superseded mutable Operation/Action snapshot store
+is gone. Its redacted per-service history directory is transactionally bound to
+each run transition, while revision-backed source and SEA activities consume
+one frozen target dependency closure instead of ambient `node_modules` or a
+newly resolved npm tree. Exact-run inspection, confirmed recovery, and
+authenticated current-owner cancellation use one shared source/SEA operator
+layer; packaged commands bind authority to their embedded application identity.
 
 Foreground durable `ops run` execution has an authenticated current-owner
 cancellation path. Source `wharfie ops cancel` and packaged `<app> wharfie
@@ -55,9 +55,12 @@ ledger race, while ambiguous post-cancellation termination becomes blocked
 evidence-backed reconciliation event: a complete bounded Activity Protocol
 transcript proves one retained abandoned attempt's terminal outcome, while the
 physical attempt itself stays `ABANDONED`. The local command transport is not
-yet supported on Windows. Public run history/listing, scheduling, durable
-effects, and release hardening still need focused review. The npm package
-remains deliberately private. It is not ready for production use.
+yet supported on Windows. V5 also has an internal verifier-backed managed-effect
+foundation, but it is not connected to source/SEA activity transport and has no
+production adapter or exactly-once claim. Public run history/listing,
+scheduling, effect reconciliation, and release hardening still need focused
+review. The npm package remains deliberately private. It is not ready for
+production use.
 
 ## Start here
 
@@ -117,9 +120,10 @@ does not trim or rewrite them. The CLI is required; activities and package
 targets are optional. Application- and activity-level `resources` are not part
 of the schema and are rejected as unknown fields. A caller-metadata object may
 contain a property named `resources`, but it is ordinary inert JSON—not an
-injection request. Managed capabilities and effects will gain separate durable
-contracts in later milestones. Workflows and schedules are intentionally not in
-this schema until their durable semantics are ready. Build credentials, signing
+injection request. Public managed-capability and managed-effect APIs remain
+separate future contracts; the internal V5 effect ledger is not exposed through
+the activity runtime. Workflows and schedules are intentionally not in this
+schema until their durable semantics are ready. Build credentials, signing
 material, and extra asset configuration are also outside the public manifest.
 
 See the [quickstart](docs/src/assets/markdown/quickstart.md) and [application
@@ -136,11 +140,11 @@ SHA-512 integrity, and binds semantic closure plus archive receipts to the
 application revision and artifact provenance. Revision-backed source execution
 uses the same closure rather than the author's ambient install.
 
-Closure v1 deliberately ignores package lifecycle scripts, creates no package
-`bin` links, and treats failure of a selected optional package as fatal. It
-rejects aliases, links, bundled dependencies, unsupported targets, and
-non-registry edges. Private-registry authentication, workspace-lock selection,
-musl Linux, and reproducible builds are not yet supported. Published native
+The frozen-lock contract deliberately ignores package lifecycle scripts,
+creates no package `bin` links, and treats failure of a selected optional
+package as fatal. It rejects aliases, links, bundled dependencies, unsupported
+targets, and non-registry edges. Private-registry authentication, workspace-lock
+selection, musl Linux, and reproducible builds are not yet supported. Published native
 packages must already contain usable locked target bytes. Windows SEA targets
 are deliberately deferred until private runtime extraction has a tested ACL and
 reparse-point design. Moved Darwin SEAs and the clean hosted-Linux verifier

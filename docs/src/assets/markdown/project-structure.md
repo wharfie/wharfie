@@ -60,8 +60,9 @@ normalizing them. The v2 schema has no `ActorSystem`, `functions`,
 
 The schema does not accept application- or activity-level `resources`; those
 are unknown fields. A property named `resources` inside caller metadata remains
-ordinary cloned JSON and does not request injection. Managed capabilities and
-effects will use separate durable contracts in a later milestone.
+ordinary cloned JSON and does not request injection. Public managed-capability
+and managed-effect APIs remain separate future contracts; the internal V5
+effect ledger is not exposed through the activity runtime.
 
 An activity may pin target-specific dependencies with exact published versions:
 

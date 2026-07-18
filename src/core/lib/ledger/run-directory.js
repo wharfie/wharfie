@@ -11,12 +11,15 @@ import { assertLedgerOpaqueId, encodeLedgerKeySegment } from './record-key.js';
  * runs. It is deliberately not a ready-work queue: directory membership says
  * only that a durable run exists, never that a resident worker may execute it.
  */
-export const EXECUTION_LEDGER_RUN_DIRECTORY_SCHEMA_VERSION = 2;
+// V3 is paired with the V5 ledger namespace. Reusing V2 would place V4 and V5
+// run projections in one directory partition even though their histories have
+// intentionally incompatible semantics.
+export const EXECUTION_LEDGER_RUN_DIRECTORY_SCHEMA_VERSION = 3;
 export const EXECUTION_LEDGER_RUN_DIRECTORY_PARTITION_DOMAIN =
-  'wharfie:execution-ledger-run-directory:v2';
+  'wharfie:execution-ledger-run-directory:v3';
 export const EXECUTION_LEDGER_RUN_DIRECTORY_PARTITION_PREFIX = 'wld';
 export const EXECUTION_LEDGER_RUN_DIRECTORY_SORT_KEY_PREFIX =
-  'ledger-directory/v2/run/';
+  'ledger-directory/v3/run/';
 export const EXECUTION_LEDGER_RUN_DIRECTORY_TIMESTAMP_WIDTH = 16;
 
 /**

@@ -1,13 +1,18 @@
+import { createCanonicalJsonSha256Id } from '../../runtime/content-id.js';
+
 /**
  * The append-only execution ledger keeps one run in one database partition.
- * Dynamic identities are base64url encoded before entering a sort key so a
- * caller-controlled delimiter can never make two typed records alias.
+ * Dynamic identities are encoded into typed collision-safe sort keys so a
+ * caller-controlled delimiter can never make two records alias. Single
+ * segments use base64url; composite effect identity uses a domain-separated
+ * digest to stay within the portable DynamoDB sort-key ceiling.
  */
 
-// Ledger v4 is intentionally a fresh namespace. It adds durable cancellation
-// decisions to v3's manual state machine, so sharing physical keys with a
-// prior record would let old readers reject or misinterpret new histories.
-export const EXECUTION_LEDGER_SORT_KEY_PREFIX = 'ledger/v4/';
+// Ledger v5 is intentionally a fresh namespace. It adds persisted managed
+// effects to v4's cancellation-capable manual state machine, so sharing
+// physical keys would let an older reader ignore effect truth while accepting
+// a terminal attempt from the same history.
+export const EXECUTION_LEDGER_SORT_KEY_PREFIX = 'ledger/v5/';
 export const EXECUTION_LEDGER_EVENT_SEQUENCE_WIDTH = 16;
 export const MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES = 512;
 
@@ -103,6 +108,32 @@ export function getAttemptProjectionSortKey(attemptId) {
 }
 
 /**
+ * Effect IDs are stable only within one logical invocation. Hash the validated
+ * tuple so caller-controlled delimiters cannot alias two projections and two
+ * maximum-size IDs still fit DynamoDB's portable 1,024-byte sort-key limit.
+ * @param {string} invocationId - Opaque invocation identity.
+ * @param {string} effectId - Opaque logical effect identity.
+ * @returns {string} - Effect-projection sort key.
+ */
+export function getEffectProjectionSortKey(invocationId, effectId) {
+  const normalizedInvocationId = assertLedgerOpaqueId(
+    invocationId,
+    'invocationId',
+  );
+  const normalizedEffectId = assertLedgerOpaqueId(effectId, 'effectId');
+  const tupleId = createCanonicalJsonSha256Id({
+    domain: 'wharfie:execution-ledger-effect-projection-key:v5',
+    prefix: 'wfk',
+    value: {
+      invocationId: normalizedInvocationId,
+      effectId: normalizedEffectId,
+    },
+    valuePath: 'execution ledger effect projection identity',
+  });
+  return `${EXECUTION_LEDGER_SORT_KEY_PREFIX}projection/effect/${tupleId}`;
+}
+
+/**
  * @param {string} transitionId - Opaque caller transition identity.
  * @returns {string} - Transition-receipt sort key.
  */
@@ -121,6 +152,7 @@ export default {
   encodeLedgerKeySegment,
   encodeLedgerSequence,
   getAttemptProjectionSortKey,
+  getEffectProjectionSortKey,
   getEventSortKey,
   getInvocationProjectionSortKey,
   getRunHeadSortKey,

@@ -123,11 +123,11 @@ export function resolveControlStorePath() {
 export function resolveExecutionLedgerTableName() {
   const name = process.env.WHARFIE_EXECUTION_LEDGER_TABLE;
   if (name && String(name).trim()) return String(name).trim();
-  return 'wharfie-execution-ledger-v4';
+  return 'wharfie-execution-ledger-v5';
 }
 
 /**
- * Resolve the immutable local execution-payload root. The v4 ledger writes
+ * Resolve the immutable local execution-payload root. The v5 ledger writes
  * content before it appends a reference to the control store, so the default
  * lives beside that local control store when one is configured.  A future
  * shared payload provider can keep the same reference contract without

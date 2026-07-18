@@ -49,7 +49,7 @@ describe('Unified DB config', () => {
       async () => {
         expect(resolveControlAdapterName()).toBe('vanilla');
         expect(resolveExecutionLedgerTableName()).toBe(
-          'wharfie-execution-ledger-v4',
+          'wharfie-execution-ledger-v5',
         );
 
         const first = await createControlDBClient();

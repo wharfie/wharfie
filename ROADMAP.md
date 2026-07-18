@@ -1,6 +1,6 @@
 # Wharfie roadmap
 
-**Status:** project reset in progress · **Last updated:** 2026-07-17
+**Status:** project reset in progress · **Last updated:** 2026-07-18
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -71,7 +71,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 - [x] Define a reserved, non-colliding dispatch mechanism for Wharfie operator commands inside an application-owned executable: `<app> wharfie <command>`.
 - [x] Define and harden the versioned activity protocol, including strict serialization, cancellation, deadline, ordered-log, structured-error, host-effect, termination, and delivery-uncertainty boundaries, without requiring a second language implementation yet.
 - [x] Route source and packaged SEA activity execution through that protocol with immutable revision identity, fresh local attempt identity, and revalidated bundle evidence. Both paths use a host-owned framed per-attempt worker transport with authenticated runner lifecycle messages, bounded cancellation/deadline termination, and late-frame rejection.
-- [x] Delete manifest resource declarations, Function/ActorSystem runtime-injection lifecycle, the generic worker `exec`/RPC bridge, the shared-resource registry, and orphan queue/object-storage adapter layers. Caller metadata is inert JSON; durable capabilities and effects remain explicit future contracts.
+- [x] Delete manifest resource declarations, Function/ActorSystem runtime-injection lifecycle, the generic worker `exec`/RPC bridge, the shared-resource registry, and orphan queue/object-storage adapter layers. Caller metadata is inert JSON; public durable capability and effect APIs remain explicit separate contracts.
 - [ ] Define an explicit declaration or rejection rule for runtime-computed module paths that cannot be proven by the static bundle graph.
 - [x] Build one executable example and an end-to-end test from authored TypeScript through a clean generated-SEA execution.
 - [x] Prove one real target-specific Node-API activity dependency from a moved Darwin SEA by opening, writing, and reading LMDB with Node absent from `PATH`; repeat the portable proof on hosted Linux above.
@@ -116,7 +116,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       proved graceful `STOPPED` on `SIGTERM` with Node absent from `PATH`.
       Windows targets remain explicitly deferred pending a hardened
       private-extraction design.
-- [x] Add the current V4 execution-ledger namespace with a typed, redacted,
+- [x] Add a typed, redacted,
       atomically maintained per-service run-history directory and a bounded
       portable pagination primitive. Its internal API verifies every directory
       row against a rebuilt run projection; it deliberately does not create a
@@ -124,7 +124,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 - [x] Delete the superseded mutable Operation/Action graph, operation table,
       queue-run bridge, and second writable run model. Manual durable execution
       now distinguishes a caller idempotency key from the derived V5 manual
-      run identity and writes only the append-only V4 ledger.
+      run identity and writes only the append-only V5 ledger.
 - [x] Delete the disconnected pre-reset NodeAgent, state-command, systemd
       release, and private DB/queue/Lambda gRPC runtime island. Packaged apps
       now have one narrow private runtime-command selector, currently mapping
@@ -155,11 +155,26 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       packaged `<app> wharfie reconcile` require a stable reconciliation ID, a
       bounded evidence file, and explicit confirmation that every prior runner
       has stopped; they are source-free, app-scoped, fenced, and redacted.
-- [ ] Persist immutable revision bindings, inputs, outputs, scheduling decisions, attempts, and operator actions in the full append-only ledger.
+- [x] Establish the internal V5 managed-effect truth boundary. A fresh ledger
+      namespace persists invocation-scoped request, start, verifier-backed
+      outcome, and blocked uncertainty transitions; immutable request/outcome
+      references are rehashed on every fold, exact versioned destination
+      verifiers run synchronously during every fold, response-loss retries never
+      redispatch a retained `STARTED` effect, and attempt terminals cannot omit
+      or invent effect state. V4 records and its V2 directory remain inert.
+- [ ] Extend the manual ledger to workflow continuations, scheduling decisions,
+      durable outputs, and the remaining operator actions.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, retry policy,
       broader recovery, and multi-host authenticated current-owner command
       routing.
-- [ ] Implement substantiated `pure`, `idempotent`, and `transactional` replay properties, make begun in-process handlers `unsafe` by default, and add a durable blocked `uncertain` state with explicit reconciliation/compensation paths.
+- [ ] Connect the managed-effect driver to authenticated source and SEA
+      Activity Protocol transports through one finite capability/adapter
+      catalog; implement one real destination verifier before exposing the
+      public effect API.
+- [ ] Implement destination-specific reconciliation and compensation for
+      uncertain effects, plus actual retry policy for substantiated `pure`,
+      `idempotent`, and `transactional` work. Begun in-process handlers remain
+      `unsafe` by default.
 - [ ] Provide transactional inbox/outbox behavior for Wharfie-managed state and queues, with destination-side deduplication committed atomically with consumer mutations where exactly-once processing is claimed.
 - [ ] Support manual, cron, and workflow-triggered runs through one execution path.
 - [ ] Install/uninstall the artifact as an OS-managed resident service, initially systemd, with startup on boot, health reporting, graceful shutdown/restart, and reboot recovery.
@@ -216,10 +231,11 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 ## Immediate queue
 
 1. Repair the clean-install lint dependency declaration after explicit approval, make draft PR #125 green in GitHub Actions, and review the reset stack for merge.
-2. Define persisted managed-effect records and destination evidence before
-   making any exactly-once effect claim or adding effect reconciliation.
-3. Embed the full frozen core closure plan and preflight generic CommonJS
-   package resolution before treating malformed-closure ambient-JS fallback as
-   closed.
+2. Wire the internal managed-effect driver through the complete source/SEA
+   attempt transcript lifecycle with one finite real adapter and deterministic
+   destination verifier.
+3. Add destination-backed effect reconciliation and adversarial crash tests at
+   every request/start/outcome boundary before enabling automatic retries or
+   making an exactly-once effect claim.
 
 The latest dated handoff at [llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md](llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md) records the V4 path from a blocked `UNCERTAIN` attempt to one evidence-proven terminal outcome: source `wharfie ops reconcile` and packaged `<app> wharfie reconcile` use a retry-stable reconciliation ID, a bounded transcript file, explicit prior-runner confirmation, and no outcome-selection flag. The preceding [authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md), [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md), [shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md), [resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md), [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.

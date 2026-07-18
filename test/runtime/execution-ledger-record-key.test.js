@@ -10,6 +10,7 @@ import {
   assertLedgerOpaqueId,
   encodeLedgerKeySegment,
   getAttemptProjectionSortKey,
+  getEffectProjectionSortKey,
   getEventSortKey,
   getInvocationProjectionSortKey,
   getRunHeadSortKey,
@@ -21,22 +22,26 @@ describe('execution ledger record key codec', () => {
   test('creates typed collision-safe keys for opaque IDs', () => {
     const invocationId = 'invoke/#/运行';
     const attemptId = 'attempt/#/café';
+    const effectId = 'effect/#/海';
     const transitionId = 'transition/#/雪';
 
-    expect(EXECUTION_LEDGER_SORT_KEY_PREFIX).toBe('ledger/v4/');
+    expect(EXECUTION_LEDGER_SORT_KEY_PREFIX).toBe('ledger/v5/');
     expect(encodeLedgerKeySegment(invocationId)).toBe(
       Buffer.from(invocationId, 'utf8').toString('base64url'),
     );
-    expect(getRunHeadSortKey()).toBe('ledger/v4/head');
-    expect(getRunProjectionSortKey()).toBe('ledger/v4/projection/run');
+    expect(getRunHeadSortKey()).toBe('ledger/v5/head');
+    expect(getRunProjectionSortKey()).toBe('ledger/v5/projection/run');
     expect(getInvocationProjectionSortKey(invocationId)).toBe(
-      `ledger/v4/projection/invocation/${Buffer.from(invocationId, 'utf8').toString('base64url')}`,
+      `ledger/v5/projection/invocation/${Buffer.from(invocationId, 'utf8').toString('base64url')}`,
     );
     expect(getAttemptProjectionSortKey(attemptId)).toBe(
-      `ledger/v4/projection/attempt/${Buffer.from(attemptId, 'utf8').toString('base64url')}`,
+      `ledger/v5/projection/attempt/${Buffer.from(attemptId, 'utf8').toString('base64url')}`,
+    );
+    expect(getEffectProjectionSortKey(invocationId, effectId)).toMatch(
+      /^ledger\/v5\/projection\/effect\/wfk_[A-Za-z0-9_-]{43}$/,
     );
     expect(getTransitionSortKey(transitionId)).toBe(
-      `ledger/v4/transition/${Buffer.from(transitionId, 'utf8').toString('base64url')}`,
+      `ledger/v5/transition/${Buffer.from(transitionId, 'utf8').toString('base64url')}`,
     );
 
     expect(getInvocationProjectionSortKey('a/b')).not.toBe(
@@ -48,13 +53,25 @@ describe('execution ledger record key codec', () => {
     expect(getAttemptProjectionSortKey('same')).not.toBe(
       getTransitionSortKey('same'),
     );
+    expect(getEffectProjectionSortKey('a/b', 'c')).not.toBe(
+      getEffectProjectionSortKey('a', 'b/c'),
+    );
+    expect(
+      Buffer.byteLength(
+        getEffectProjectionSortKey(
+          'i'.repeat(MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES),
+          'e'.repeat(MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES),
+        ),
+        'utf8',
+      ),
+    ).toBeLessThanOrEqual(1024);
   });
 
   test('uses lexically ordered fixed-width event sequences', () => {
     expect(EXECUTION_LEDGER_EVENT_SEQUENCE_WIDTH).toBe(16);
-    expect(getEventSortKey(1)).toBe('ledger/v4/event/0000000000000001');
+    expect(getEventSortKey(1)).toBe('ledger/v5/event/0000000000000001');
     expect(getEventSortKey(Number.MAX_SAFE_INTEGER)).toBe(
-      'ledger/v4/event/9007199254740991',
+      'ledger/v5/event/9007199254740991',
     );
 
     const keys = [100, 2, 10, 1].map(getEventSortKey).sort();
