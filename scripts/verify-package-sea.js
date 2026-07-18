@@ -1018,11 +1018,46 @@ export default defineApp({
     if (missingRecovery.error) throw missingRecovery.error;
     assert.equal(missingRecovery.status, 1);
     assert.match(missingRecovery.stderr, /refuses to create work/);
+    const missingReconciliation = spawnSync(
+      cleanArtifactPath,
+      [
+        'wharfie',
+        'reconcile',
+        '--run-id',
+        missingRunId,
+        '--reconciliation-id',
+        'sea-missing-reconciliation-request',
+        '--evidence-file',
+        'evidence-is-not-read-for-a-missing-run.json',
+        '--confirm-runner-stopped',
+        '--json',
+      ],
+      {
+        cwd: cleanRunDirectory,
+        encoding: 'utf8',
+        env: operatorEnvironment,
+      },
+    );
+    if (missingReconciliation.error) throw missingReconciliation.error;
+    assert.equal(missingReconciliation.status, 1);
+    assert.match(
+      missingReconciliation.stderr,
+      /reconciliation refuses to create work/,
+    );
     assert.equal(await ledgerFixture.readRun(missingRunId), null);
 
-    for (const command of ['inspect', 'recover', 'cancel']) {
+    for (const command of ['inspect', 'recover', 'reconcile', 'cancel']) {
       const args = ['wharfie', command, '--run-id', crossAppRunId, '--json'];
       if (command === 'recover') args.push('--confirm-runner-stopped');
+      if (command === 'reconcile') {
+        args.push(
+          '--reconciliation-id',
+          'sea-cross-app-reconciliation-request',
+          '--evidence-file',
+          'evidence-is-not-read-for-a-cross-app-run.json',
+          '--confirm-runner-stopped',
+        );
+      }
       if (command === 'cancel') {
         args.push('--request-id', 'sea-cross-app-cancel-request');
       }
@@ -1152,7 +1187,7 @@ export default defineApp({
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, and clean generated ${process.platform} SEA activity plus app-scoped exact-run inspection/recovery/cancellation command boundaries and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, and clean generated ${process.platform} SEA activity plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();

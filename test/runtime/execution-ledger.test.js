@@ -755,6 +755,280 @@ for (const adapter of getAdapterMatrix()) {
       }
     });
 
+    test('reconciles an exact uncertain attempt without rewriting its abandoned physical lifecycle', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-reconciliation',
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        const claimed = await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'reconcile-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'reconcile-claim',
+        });
+        const attemptId = claimed.attempt?.attemptId;
+        expect(typeof attemptId).toBe('string');
+        const started = await ledger.markAttemptStarted({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'reconcile-fence',
+          generation: 1,
+          expectedVersion: 2,
+          transitionId: 'reconcile-start',
+        });
+        const uncertain = await ledger.markAttemptUncertain({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'reconcile-fence',
+          generation: 1,
+          expectedVersion: 3,
+          transitionId: 'reconcile-uncertain',
+          reason: { code: 'runner-outcome-lost' },
+        });
+        const uncertaintyEvent = (await ledger.getEvents(RUN_ID)).find(
+          (event) => event.type === 'attempt-became-uncertain',
+        );
+        expect(uncertaintyEvent).toMatchObject({
+          sequence: 4,
+          event_id: expect.any(String),
+        });
+        const attemptBefore = await ledger.getAttempt(
+          RUN_ID,
+          INVOCATION_ID,
+          /** @type {string} */ (attemptId),
+        );
+        const evidence = completedEvidenceForStart(started.startFrame, {
+          greeting: `reconciled-${adapter.name}`,
+        });
+        const reconciliation = {
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'reconcile-fence',
+          generation: 1,
+          coordinatorEpoch: 0,
+          expectedVersion: uncertain.run.version,
+          uncertaintyEventId: uncertaintyEvent?.event_id,
+          uncertaintySequence: uncertaintyEvent?.sequence,
+          transitionId: 'reconcile-1',
+          reconciliationId: 'reconciliation-request-1',
+          reason: { code: 'host-transcript-recovered' },
+          evidence,
+        };
+
+        await expect(
+          ledger.reconcileUncertainManualAttempt({
+            ...reconciliation,
+            transitionId: 'reconcile-wrong-link',
+            reconciliationId: 'reconciliation-request-wrong-link',
+            uncertaintyEventId: 'different-uncertainty-event',
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
+        await expect(
+          ledger.reconcileUncertainManualAttempt({
+            ...reconciliation,
+            transitionId: 'reconcile-missing-link',
+            reconciliationId: 'reconciliation-request-missing-link',
+            uncertaintyEventId: 'missing-uncertainty-event',
+            uncertaintySequence: 99,
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
+
+        const reconciled =
+          await ledger.reconcileUncertainManualAttempt(reconciliation);
+        expect(reconciled).toMatchObject({
+          applied: true,
+          receipt: {
+            type: 'uncertain-attempt-reconciled',
+            invocation_id: INVOCATION_ID,
+            attempt_id: attemptId,
+          },
+          run: { status: RunStatus.COMPLETED, version: 5, lastSequence: 5 },
+          invocation: {
+            status: InvocationStatus.COMPLETED,
+            terminal: { type: 'completed', attemptId },
+          },
+          attempt: { status: AttemptStatus.ABANDONED },
+        });
+        expect(reconciled.invocation).not.toHaveProperty('uncertainty');
+        expect(reconciled.attempt).toEqual(attemptBefore);
+        expect(reconciled.attempt).not.toHaveProperty('evidenceRef');
+
+        await expect(
+          ledger.reconcileUncertainManualAttempt(reconciliation),
+        ).resolves.toMatchObject({
+          applied: false,
+          receipt: { transition_id: 'reconcile-1' },
+          run: { status: RunStatus.COMPLETED },
+          attempt: attemptBefore,
+        });
+        await expect(
+          ledger.reconcileUncertainManualAttempt({
+            ...reconciliation,
+            reason: { code: 'different-reconciliation-reason' },
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerTransitionConflictError);
+
+        await expect(ledger.rebuildRun(RUN_ID)).resolves.toMatchObject({
+          head: { version: 5, sequence: 5 },
+          run: { status: RunStatus.COMPLETED },
+          invocations: [
+            {
+              invocationId: INVOCATION_ID,
+              status: InvocationStatus.COMPLETED,
+              terminal: { type: 'completed', attemptId },
+            },
+          ],
+          attempts: [attemptBefore],
+          events: [
+            expect.any(Object),
+            expect.any(Object),
+            expect.any(Object),
+            expect.any(Object),
+            expect.objectContaining({
+              type: 'uncertain-attempt-reconciled',
+              payload: expect.objectContaining({
+                reconciliation: expect.objectContaining({
+                  reconciliationId: 'reconciliation-request-1',
+                  uncertaintyEventId: uncertaintyEvent?.event_id,
+                  uncertaintySequence: uncertaintyEvent?.sequence,
+                  terminal: { type: 'completed', attemptId },
+                  evidenceRef: expect.objectContaining({
+                    payloadSchema: 'wharfie.execution.activity-evidence.v1',
+                  }),
+                }),
+              }),
+            }),
+          ],
+        });
+        const reconciliationEvent = (await ledger.getEvents(RUN_ID))[4];
+        expect(reconciliationEvent?.payload).not.toHaveProperty('attempt');
+        const evidenceRef =
+          reconciliationEvent?.payload?.reconciliation?.evidenceRef;
+        if (!evidenceRef) {
+          throw new Error('Expected retained reconciliation evidence ref');
+        }
+        writeFileSync(
+          PAYLOAD_STORE.getPath(evidenceRef),
+          '{"tampered":true}',
+          'utf8',
+        );
+        await expect(ledger.rebuildRun(RUN_ID)).rejects.toBeInstanceOf(
+          ExecutionLedgerProjectionError,
+        );
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('reconciles a cancelled uncertain attempt only from matching durable cancellation authority', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-reconciliation-cancelled',
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        const claimed = await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'reconcile-cancel-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'reconcile-cancel-claim',
+        });
+        const attemptId = claimed.attempt?.attemptId;
+        expect(typeof attemptId).toBe('string');
+        const started = await ledger.markAttemptStarted({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'reconcile-cancel-fence',
+          generation: 1,
+          expectedVersion: 2,
+          transitionId: 'reconcile-cancel-start',
+        });
+        await ledger.requestManualRunCancellation({
+          ...manualCancellationRequest({
+            expectedVersion: 3,
+            expectedGeneration: 1,
+            transitionId: 'reconcile-cancel-request',
+            attemptId,
+            fencingToken: 'reconcile-cancel-fence',
+          }),
+        });
+        const uncertain = await ledger.markAttemptUncertain({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'reconcile-cancel-fence',
+          generation: 1,
+          expectedVersion: 4,
+          transitionId: 'reconcile-cancel-uncertain',
+          reason: { code: 'cancellation-delivery-outcome-lost' },
+        });
+        const uncertaintyEvent = (await ledger.getEvents(RUN_ID)).find(
+          (event) => event.type === 'attempt-became-uncertain',
+        );
+        const baseReconciliation = {
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'reconcile-cancel-fence',
+          generation: 1,
+          coordinatorEpoch: 0,
+          expectedVersion: uncertain.run.version,
+          uncertaintyEventId: uncertaintyEvent?.event_id,
+          uncertaintySequence: uncertaintyEvent?.sequence,
+          reason: { code: 'host-cancellation-transcript-recovered' },
+        };
+
+        await expect(
+          ledger.reconcileUncertainManualAttempt({
+            ...baseReconciliation,
+            transitionId: 'reconcile-cancel-protocol-failed',
+            reconciliationId: 'reconciliation-cancel-protocol-failed',
+            evidence: failedCancellationEvidenceForStart(started.startFrame),
+          }),
+        ).rejects.toThrow(/protocol-failed.*after cancellation/i);
+
+        const reconciled = await ledger.reconcileUncertainManualAttempt({
+          ...baseReconciliation,
+          transitionId: 'reconcile-cancelled',
+          reconciliationId: 'reconciliation-cancelled',
+          evidence: cancelledEvidenceForStart(started.startFrame),
+        });
+        expect(reconciled).toMatchObject({
+          run: {
+            status: RunStatus.CANCELLED,
+            cancellationRequest: { requestId: 'cancel-request-1' },
+          },
+          invocation: {
+            status: InvocationStatus.CANCELLED,
+            cancellationRequest: { requestId: 'cancel-request-1' },
+            terminal: { type: 'cancelled', attemptId },
+          },
+          attempt: {
+            status: AttemptStatus.ABANDONED,
+            cancellationRequest: { requestId: 'cancel-request-1' },
+          },
+        });
+        expect(reconciled.attempt).not.toHaveProperty('terminal');
+        expect(reconciled.attempt).not.toHaveProperty('evidenceRef');
+      } finally {
+        await cleanup();
+      }
+    });
+
     test('cancels a runnable manual invocation without creating a physical attempt', async () => {
       const { db, cleanup } = await adapter.create();
       try {

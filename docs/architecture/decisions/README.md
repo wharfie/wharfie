@@ -16,6 +16,6 @@ These records capture product-level decisions that should survive implementation
 | [0010 — Versioned activity-attempt protocol](0010-versioned-activity-attempt-protocol.md)                                  | Accepted                                       |
 | [0011 — Persisted state-machine execution ledger](0011-persisted-state-machine-execution-ledger.md)                        | Accepted                                       |
 | [0012 — No manifest resource injection](0012-no-manifest-resource-injection.md)                                            | Accepted                                       |
-| [0013 — Durable cancellation and evidence-backed reconciliation](0013-durable-cancellation-and-evidence-reconciliation.md) | Accepted; V4 and local owner slice implemented |
+| [0013 — Durable cancellation and evidence-backed reconciliation](0013-durable-cancellation-and-evidence-reconciliation.md) | Accepted; V4 cancellation, local-owner, and evidence-reconciliation slices implemented |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).

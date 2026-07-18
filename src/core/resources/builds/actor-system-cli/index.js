@@ -21,7 +21,7 @@ export function createProgram(options = {}) {
         revisionId: pair.runtime.revisionId,
       };
     });
-  const { inspectCommand, recoverCommand, cancelCommand } =
+  const { inspectCommand, recoverCommand, reconcileCommand, cancelCommand } =
     createExecutionLedgerOperatorCommands({
       resolveExpectedIdentity,
       requireLocalOwnership: true,
@@ -34,6 +34,7 @@ export function createProgram(options = {}) {
     .addCommand(metadataCommand)
     .addCommand(inspectCommand)
     .addCommand(recoverCommand)
+    .addCommand(reconcileCommand)
     .addCommand(cancelCommand);
 }
 

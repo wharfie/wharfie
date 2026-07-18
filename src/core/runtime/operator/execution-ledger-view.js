@@ -131,9 +131,33 @@ export function createExecutionLedgerRecoveryOperatorView(recovery, view) {
   };
 }
 
+/**
+ * Render only the stable operator reconciliation identity and whether this
+ * invocation appended the durable event. Evidence, evidence references,
+ * terminal values/errors, fences, and optional reason prose deliberately stay
+ * inside the trusted ledger boundary.
+ * @param {{reconciliationId: string, changed: boolean}} reconciliation - Safe helper result metadata.
+ * @param {Record<string, any>} view - Verified rebuilt execution-ledger view.
+ * @returns {Record<string, any>} - Redacted reconciliation response.
+ */
+export function createExecutionLedgerReconciliationOperatorView(
+  reconciliation,
+  view,
+) {
+  return {
+    ...createExecutionLedgerOperatorView(view),
+    kind: 'wharfie.execution-ledger.reconciliation',
+    reconciliation: {
+      reconciliationId: reconciliation.reconciliationId,
+      changed: reconciliation.changed,
+    },
+  };
+}
+
 export default {
   EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION,
   createExecutionLedgerOperatorView,
+  createExecutionLedgerReconciliationOperatorView,
   createExecutionLedgerRecoveryOperatorView,
   formatExecutionLedgerOperatorRows,
 };

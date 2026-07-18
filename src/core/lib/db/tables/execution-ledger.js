@@ -108,6 +108,7 @@ const EVENT_TYPES = new Set([
   'attempt-terminal',
   'attempt-abandoned-before-start',
   'attempt-became-uncertain',
+  'uncertain-attempt-reconciled',
 ]);
 const TERMINAL_TYPES = new Set(ACTIVITY_PROTOCOL_TERMINAL_TYPES);
 const SUPPORTED_MANUAL_TERMINAL_TYPES = new Set([
@@ -119,6 +120,11 @@ const SUPPORTED_MANUAL_TERMINAL_TYPES = new Set([
 const MANUAL_REQUEST_PAYLOAD_SCHEMA = 'wharfie.execution.manual-request.v1';
 const ACTIVITY_EVIDENCE_PAYLOAD_SCHEMA =
   'wharfie.execution.activity-evidence.v1';
+const UNCERTAIN_ATTEMPT_RECONCILIATION_VERIFIER = Object.freeze({
+  kind: 'wharfie.activity-protocol',
+  protocol: ACTIVITY_PROTOCOL_NAME,
+  protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+});
 /**
  * @typedef {import('../base.js').DBClient} DBClient
  */
@@ -601,6 +607,108 @@ function normalizeTerminalSummary(value, label) {
 }
 
 /**
+ * Normalize the immutable evidence-backed decision that resolves one retained
+ * uncertain attempt. The verifier is deliberately fixed in V4: accepting a
+ * caller-selected verifier would make the durable event claim semantics that
+ * this ledger does not actually implement.
+ * @param {unknown} value - Candidate reconciliation event payload.
+ * @param {string} label - Human-readable value path.
+ * @returns {{reconciliationId: string, invocationId: string, attemptId: string, generation: number, coordinatorEpoch: number, fencingToken: string, uncertaintyEventId: string, uncertaintySequence: number, verifier: {kind: 'wharfie.activity-protocol', protocol: string, protocolVersion: number}, evidenceRef: Readonly<import('../../../runtime/execution-payload.js').ExecutionPayloadReference>, terminal: {type: string, attemptId: string}, reason: any}} - Strict reconciliation proof reference.
+ */
+function normalizeUncertainAttemptReconciliation(value, label) {
+  const reconciliation = cloneBoundedJsonObject(
+    value,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    label,
+  );
+  assertExactKeys(
+    reconciliation,
+    [
+      'reconciliationId',
+      'invocationId',
+      'attemptId',
+      'generation',
+      'coordinatorEpoch',
+      'fencingToken',
+      'uncertaintyEventId',
+      'uncertaintySequence',
+      'verifier',
+      'evidenceRef',
+      'terminal',
+      'reason',
+    ],
+    label,
+  );
+  const verifier = cloneBoundedJsonObject(
+    reconciliation.verifier,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    `${label}.verifier`,
+  );
+  assertExactKeys(
+    verifier,
+    ['kind', 'protocol', 'protocolVersion'],
+    `${label}.verifier`,
+  );
+  if (
+    !hasSameCanonicalJson(verifier, UNCERTAIN_ATTEMPT_RECONCILIATION_VERIFIER)
+  ) {
+    throw new TypeError(`${label}.verifier is not supported.`);
+  }
+  const terminal = normalizeTerminalSummary(
+    reconciliation.terminal,
+    `${label}.terminal`,
+  );
+  if (!SUPPORTED_MANUAL_TERMINAL_TYPES.has(terminal.type)) {
+    throw new TypeError(`${label}.terminal.type is not supported.`);
+  }
+  return {
+    reconciliationId: assertOpaqueId(
+      reconciliation.reconciliationId,
+      `${label}.reconciliationId`,
+    ),
+    invocationId: assertOpaqueId(
+      reconciliation.invocationId,
+      `${label}.invocationId`,
+    ),
+    attemptId: assertOpaqueId(reconciliation.attemptId, `${label}.attemptId`),
+    generation: assertPositiveSafeInteger(
+      reconciliation.generation,
+      `${label}.generation`,
+    ),
+    coordinatorEpoch: assertNonnegativeSafeInteger(
+      reconciliation.coordinatorEpoch,
+      `${label}.coordinatorEpoch`,
+    ),
+    fencingToken: assertOpaqueId(
+      reconciliation.fencingToken,
+      `${label}.fencingToken`,
+    ),
+    uncertaintyEventId: assertOpaqueId(
+      reconciliation.uncertaintyEventId,
+      `${label}.uncertaintyEventId`,
+    ),
+    uncertaintySequence: assertPositiveSafeInteger(
+      reconciliation.uncertaintySequence,
+      `${label}.uncertaintySequence`,
+    ),
+    verifier:
+      /** @type {{kind: 'wharfie.activity-protocol', protocol: string, protocolVersion: number}} */ (
+        cloneInlinePayload(
+          UNCERTAIN_ATTEMPT_RECONCILIATION_VERIFIER,
+          `${label}.verifier`,
+        )
+      ),
+    evidenceRef: normalizePayloadReference(
+      reconciliation.evidenceRef,
+      ACTIVITY_EVIDENCE_PAYLOAD_SCHEMA,
+      `${label}.evidenceRef`,
+    ),
+    terminal,
+    reason: cloneInlinePayload(reconciliation.reason, `${label}.reason`),
+  };
+}
+
+/**
  * @param {unknown} left - First JSON value.
  * @param {unknown} right - Second JSON value.
  * @returns {boolean} - Whether both values have identical canonical JSON.
@@ -1076,6 +1184,8 @@ function createEventRecord(
  */
 function createTransitionRecord(runId, transitionId, requestDigest, event) {
   const attempt = event.payload?.attempt;
+  const reconciliation = event.payload?.reconciliation;
+  const target = attempt || reconciliation;
   return {
     [KEY_NAME]: runId,
     [SORT_KEY_NAME]: getTransitionSortKey(transitionId),
@@ -1086,10 +1196,10 @@ function createTransitionRecord(runId, transitionId, requestDigest, event) {
     event_id: event.event_id,
     sequence: event.sequence,
     type: event.type,
-    ...(attempt
+    ...(target
       ? {
-          invocation_id: attempt.invocationId,
-          attempt_id: attempt.attemptId,
+          invocation_id: target.invocationId,
+          attempt_id: target.attemptId,
         }
       : {}),
   };
@@ -1759,7 +1869,7 @@ function normalizeTransitionReceipt(value, runId) {
 /**
  * @param {Record<string, any>} event - Event being folded.
  * @param {string} runId - Expected run identity.
- * @returns {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} - Event projection snapshots.
+ * @returns {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, reconciliation?: ReturnType<typeof normalizeUncertainAttemptReconciliation>}} - Event projection snapshots.
  */
 function eventSnapshots(event, runId) {
   const payload = cloneBoundedJsonObject(
@@ -1774,6 +1884,12 @@ function eventSnapshots(event, runId) {
       ['attempt'],
       'event payload',
     );
+  } else if (event.type === 'uncertain-attempt-reconciled') {
+    assertExactKeys(
+      payload,
+      ['run', 'invocation', 'reconciliation'],
+      'event payload',
+    );
   } else {
     assertExactKeys(
       payload,
@@ -1785,12 +1901,65 @@ function eventSnapshots(event, runId) {
   }
   const run = normalizeRunSnapshot(payload.run, runId);
   const invocation = normalizeInvocationSnapshot(payload.invocation, runId);
-  /** @type {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} */
+  /** @type {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, reconciliation?: ReturnType<typeof normalizeUncertainAttemptReconciliation>}} */
   const result = { run, invocation };
   if (Object.prototype.hasOwnProperty.call(payload, 'attempt')) {
     result.attempt = normalizeAttemptSnapshot(payload.attempt, runId);
   }
+  if (Object.prototype.hasOwnProperty.call(payload, 'reconciliation')) {
+    result.reconciliation = normalizeUncertainAttemptReconciliation(
+      payload.reconciliation,
+      'event payload reconciliation',
+    );
+  }
   return result;
+}
+
+/**
+ * Prove that a reconciliation addresses the retained uncertainty boundary for
+ * this exact attempt. A later terminal may only resolve the current blocked
+ * state; it cannot cite an arbitrary historical abandonment or relabel a
+ * different physical attempt.
+ * @param {{run: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, reconciliation: {invocationId: string, attemptId: string, generation: number, coordinatorEpoch: number, fencingToken: string, uncertaintyEventId: string, uncertaintySequence: number}, uncertaintyEvent?: Record<string, any>, runId: string}} input - Current state and claimed uncertainty evidence.
+ * @returns {boolean} - Whether the retained uncertainty event is exact.
+ */
+function hasExactUncertaintyEventLink(input) {
+  const { run, invocation, attempt, reconciliation, uncertaintyEvent, runId } =
+    input;
+  if (
+    !uncertaintyEvent ||
+    uncertaintyEvent.type !== 'attempt-became-uncertain' ||
+    uncertaintyEvent.sequence !== reconciliation.uncertaintySequence ||
+    uncertaintyEvent.event_id !== reconciliation.uncertaintyEventId ||
+    uncertaintyEvent.sequence !== run.lastSequence ||
+    uncertaintyEvent.fence.coordinatorEpoch !==
+      reconciliation.coordinatorEpoch ||
+    uncertaintyEvent.fence.invocationGeneration !== reconciliation.generation
+  ) {
+    return false;
+  }
+  const snapshots = eventSnapshots(uncertaintyEvent, runId);
+  const uncertaintyAttempt = snapshots.attempt;
+  if (!uncertaintyAttempt) return false;
+  return (
+    snapshots.run.status === RunStatus.BLOCKED &&
+    snapshots.invocation.status === InvocationStatus.UNCERTAIN &&
+    uncertaintyAttempt.status === AttemptStatus.ABANDONED &&
+    snapshots.invocation.invocationId === reconciliation.invocationId &&
+    uncertaintyAttempt.invocationId === reconciliation.invocationId &&
+    uncertaintyAttempt.attemptId === reconciliation.attemptId &&
+    uncertaintyAttempt.generation === reconciliation.generation &&
+    uncertaintyAttempt.coordinatorEpoch === reconciliation.coordinatorEpoch &&
+    uncertaintyAttempt.fencingToken === reconciliation.fencingToken &&
+    hasSameCanonicalJson(
+      snapshots.invocation.uncertainty,
+      uncertaintyAttempt.abandonment,
+    ) &&
+    hasSameCanonicalJson(invocation.uncertainty, attempt.abandonment) &&
+    sameSnapshot(snapshots.run, run) &&
+    sameSnapshot(snapshots.invocation, invocation) &&
+    sameSnapshot(uncertaintyAttempt, attempt)
+  );
 }
 
 /**
@@ -1804,6 +1973,7 @@ function eventSnapshots(event, runId) {
  * @param {Record<string, any>} run - Next run snapshot.
  * @param {Record<string, any>} invocation - Next invocation snapshot.
  * @param {Record<string, any> | undefined} attempt - Next attempt snapshot.
+ * @param {ReturnType<typeof normalizeUncertainAttemptReconciliation> | undefined} reconciliation - Reconciliation payload for an event that deliberately retains its attempt unchanged.
  * @param {string} runId - Durable run identity.
  * @returns {void}
  */
@@ -1815,6 +1985,7 @@ function assertEventRequestDigest(
   run,
   invocation,
   attempt,
+  reconciliation,
   runId,
 ) {
   /** @type {Record<string, any>} */
@@ -1900,6 +2071,25 @@ function assertEventRequestDigest(
       reason: attempt?.abandonment,
       actor: event.actor,
       coordinatorEpoch: attempt?.coordinatorEpoch,
+    };
+  } else if (event.type === 'uncertain-attempt-reconciled') {
+    value = {
+      runId,
+      invocationId: reconciliation?.invocationId,
+      attemptId: reconciliation?.attemptId,
+      fencingToken: reconciliation?.fencingToken,
+      generation: reconciliation?.generation,
+      expectedVersion: currentRun?.version,
+      transitionId: event.transition_id,
+      reconciliationId: reconciliation?.reconciliationId,
+      uncertaintyEventId: reconciliation?.uncertaintyEventId,
+      uncertaintySequence: reconciliation?.uncertaintySequence,
+      verifier: reconciliation?.verifier,
+      evidenceRef: reconciliation?.evidenceRef,
+      terminal: reconciliation?.terminal,
+      reason: reconciliation?.reason,
+      actor: event.actor,
+      coordinatorEpoch: reconciliation?.coordinatorEpoch,
     };
   } else {
     value = {
@@ -1997,8 +2187,9 @@ function createLedgerPayloadReader(payloadStore, runId) {
  * @param {Record<string, any>} run - Run snapshot.
  * @param {Record<string, any>} invocation - Invocation snapshot.
  * @param {Record<string, any> | undefined} attempt - Attempt snapshot.
+ * @param {ReturnType<typeof normalizeUncertainAttemptReconciliation> | undefined} reconciliation - Reconciliation payload when the retained attempt is deliberately unchanged.
  * @param {Record<string, any>} event - Event being folded.
- * @param {{run?: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>}} state - Mutable fold state.
+ * @param {{run?: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, eventsBySequence: Map<number, Record<string, any>>, eventsById: Map<string, Record<string, any>>}} state - Mutable fold state.
  * @param {string} runId - Run identity.
  * @param {{readManualRequest: (reference: unknown) => Promise<Record<string, any>>, readEvidence: (reference: unknown) => Promise<Record<string, any>>}} payloadReader - Per-fold verified immutable payload reader.
  * @returns {Promise<void>}
@@ -2007,6 +2198,7 @@ async function applyEvent(
   run,
   invocation,
   attempt,
+  reconciliation,
   event,
   state,
   runId,
@@ -2016,7 +2208,11 @@ async function applyEvent(
   const currentInvocation = state.invocations.get(invocation.invocationId);
   const currentAttempt = attempt
     ? state.attempts.get(attemptMapKey(attempt.invocationId, attempt.attemptId))
-    : undefined;
+    : reconciliation
+      ? state.attempts.get(
+          attemptMapKey(reconciliation.invocationId, reconciliation.attemptId),
+        )
+      : undefined;
 
   if (event.type === 'manual-run-created') {
     if (
@@ -2052,6 +2248,7 @@ async function applyEvent(
       run,
       invocation,
       undefined,
+      undefined,
       runId,
     );
     state.run = run;
@@ -2062,7 +2259,9 @@ async function applyEvent(
   if (
     !currentRun ||
     !currentInvocation ||
-    (!attempt && event.type !== 'manual-cancellation-requested')
+    (!attempt &&
+      !reconciliation &&
+      event.type !== 'manual-cancellation-requested')
   ) {
     throw new ExecutionLedgerProjectionError(runId, 'event lacks prior state');
   }
@@ -2083,7 +2282,8 @@ async function applyEvent(
       !hasSameCancellationRequest(currentRun, run) ||
       !hasSameCancellationRequest(currentInvocation, invocation) ||
       (currentAttempt &&
-        (!attempt || !hasSameCancellationRequest(currentAttempt, attempt)))
+        attempt &&
+        !hasSameCancellationRequest(currentAttempt, attempt))
     ) {
       throw new ExecutionLedgerProjectionError(
         runId,
@@ -2180,6 +2380,86 @@ async function applyEvent(
       }
       assertAttemptBelongsToInvocation(attempt, run, invocation, runId);
       assertAttemptAdvance(currentAttempt, attempt, event, runId);
+    }
+  } else if (event.type === 'uncertain-attempt-reconciled') {
+    if (!reconciliation || !currentAttempt) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'reconciliation lacks retained attempt state',
+      );
+    }
+    const uncertaintyBySequence = state.eventsBySequence.get(
+      reconciliation.uncertaintySequence,
+    );
+    const uncertaintyById = state.eventsById.get(
+      reconciliation.uncertaintyEventId,
+    );
+    const terminal = reconciliation.terminal;
+    const statuses = statusesForTerminal(terminal);
+    const verifiedEvidence = validateLedgerAttemptEvidence(
+      await payloadReader.readEvidence(reconciliation.evidenceRef),
+      await createLedgerAttemptStart(
+        currentRun,
+        currentInvocation,
+        currentAttempt,
+        payloadReader,
+      ),
+      'persisted uncertain-attempt reconciliation evidence',
+    );
+    try {
+      assertSupportedManualTerminal(
+        verifiedEvidence.terminal,
+        verifiedEvidence.evidence,
+        currentRun.cancellationRequest,
+        'persisted uncertain-attempt reconciliation',
+      );
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'unsupported or unauthorized uncertain-attempt reconciliation terminal',
+      );
+    }
+    if (
+      !uncertaintyBySequence ||
+      uncertaintyBySequence !== uncertaintyById ||
+      currentRun.status !== RunStatus.BLOCKED ||
+      currentInvocation.status !== InvocationStatus.UNCERTAIN ||
+      currentInvocation.invocationId !== reconciliation.invocationId ||
+      currentInvocation.generation !== reconciliation.generation ||
+      currentAttempt.status !== AttemptStatus.ABANDONED ||
+      currentAttempt.invocationId !== reconciliation.invocationId ||
+      currentAttempt.attemptId !== reconciliation.attemptId ||
+      currentAttempt.generation !== reconciliation.generation ||
+      currentAttempt.coordinatorEpoch !== reconciliation.coordinatorEpoch ||
+      currentAttempt.fencingToken !== reconciliation.fencingToken ||
+      event.fence.coordinatorEpoch !== reconciliation.coordinatorEpoch ||
+      event.fence.invocationGeneration !== reconciliation.generation ||
+      !hasExactUncertaintyEventLink({
+        run: currentRun,
+        invocation: currentInvocation,
+        attempt: currentAttempt,
+        reconciliation,
+        uncertaintyEvent: uncertaintyBySequence,
+        runId,
+      }) ||
+      run.status !== statuses.run ||
+      invocation.status !== statuses.invocation ||
+      invocation.generation !== currentInvocation.generation ||
+      terminal.attemptId !== currentAttempt.attemptId ||
+      !hasSameCanonicalJson(
+        createTerminalSummary(verifiedEvidence.terminal),
+        terminal,
+      ) ||
+      !hasSameCanonicalJson(invocation.terminal, terminal) ||
+      Object.prototype.hasOwnProperty.call(invocation, 'uncertainty') ||
+      !hasSameOptionalFields(currentInvocation, invocation, [
+        'cancellationRequest',
+      ])
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid uncertain-attempt reconciliation',
+      );
     }
   } else {
     if (!attempt) {
@@ -2350,6 +2630,7 @@ async function applyEvent(
     run,
     invocation,
     attempt,
+    reconciliation,
     runId,
   );
 
@@ -2556,10 +2837,12 @@ async function foldAndVerifyRun(records, runId, payloadStore) {
     receiptsByTransition.set(receipt.transition_id, receipt);
   }
 
-  /** @type {{run?: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>}} */
+  /** @type {{run?: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, eventsBySequence: Map<number, Record<string, any>>, eventsById: Map<string, Record<string, any>>}} */
   const state = {
     invocations: new Map(),
     attempts: new Map(),
+    eventsBySequence: new Map(),
+    eventsById: new Map(),
   };
   const payloadReader = createLedgerPayloadReader(payloadStore, runId);
   for (const [index, event] of events.entries()) {
@@ -2587,10 +2870,11 @@ async function foldAndVerifyRun(records, runId, payloadStore) {
         'transition receipt disagrees with event',
       );
     }
+    const receiptTarget = snapshots.attempt || snapshots.reconciliation;
     if (
-      snapshots.attempt
-        ? receipt.invocation_id !== snapshots.attempt.invocationId ||
-          receipt.attempt_id !== snapshots.attempt.attemptId
+      receiptTarget
+        ? receipt.invocation_id !== receiptTarget.invocationId ||
+          receipt.attempt_id !== receiptTarget.attemptId
         : Object.prototype.hasOwnProperty.call(receipt, 'invocation_id') ||
           Object.prototype.hasOwnProperty.call(receipt, 'attempt_id')
     ) {
@@ -2603,11 +2887,23 @@ async function foldAndVerifyRun(records, runId, payloadStore) {
       snapshots.run,
       snapshots.invocation,
       snapshots.attempt,
+      snapshots.reconciliation,
       event,
       state,
       runId,
       payloadReader,
     );
+    if (
+      state.eventsBySequence.has(event.sequence) ||
+      state.eventsById.has(event.event_id)
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'duplicate event identity',
+      );
+    }
+    state.eventsBySequence.set(event.sequence, event);
+    state.eventsById.set(event.event_id, event);
   }
 
   if (!state.run) {
@@ -4802,6 +5098,315 @@ export function createExecutionLedger({
   }
 
   /**
+   * Resolve one retained uncertain physical attempt from a complete, exact
+   * Activity Protocol transcript. The physical attempt remains ABANDONED: this
+   * transition only gives the previously blocked invocation and run their one
+   * authoritative logical terminal outcome.
+   * @param {{runId: string, invocationId: string, attemptId: string, fencingToken: string, generation: number, coordinatorEpoch: number, expectedVersion: number, uncertaintyEventId: string, uncertaintySequence: number, transitionId: string, reconciliationId: string, actor?: {kind: string, id: string}, reason: Record<string, any>, evidence: Record<string, any>, observedAt?: number}} options - Evidence-backed uncertain-attempt reconciliation request.
+   * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}>} - Reconciliation outcome.
+   */
+  async function reconcileUncertainManualAttempt(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+      'reconcileUncertainManualAttempt',
+    );
+    const common = normalizeTransitionOptions(
+      value,
+      [
+        'runId',
+        'invocationId',
+        'attemptId',
+        'fencingToken',
+        'generation',
+        'coordinatorEpoch',
+        'expectedVersion',
+        'uncertaintyEventId',
+        'uncertaintySequence',
+        'transitionId',
+        'reconciliationId',
+        'actor',
+        'reason',
+        'evidence',
+        'observedAt',
+      ],
+      'reconcileUncertainManualAttempt',
+      now,
+    );
+    const invocationId = assertOpaqueId(
+      value.invocationId,
+      'reconcileUncertainManualAttempt.invocationId',
+    );
+    const attemptId = assertOpaqueId(
+      value.attemptId,
+      'reconcileUncertainManualAttempt.attemptId',
+    );
+    const fencingToken = assertOpaqueId(
+      value.fencingToken,
+      'reconcileUncertainManualAttempt.fencingToken',
+    );
+    const generation = assertPositiveSafeInteger(
+      value.generation,
+      'reconcileUncertainManualAttempt.generation',
+    );
+    const reconciliationId = assertOpaqueId(
+      value.reconciliationId,
+      'reconcileUncertainManualAttempt.reconciliationId',
+    );
+    const uncertaintyEventId = assertOpaqueId(
+      value.uncertaintyEventId,
+      'reconcileUncertainManualAttempt.uncertaintyEventId',
+    );
+    const uncertaintySequence = assertPositiveSafeInteger(
+      value.uncertaintySequence,
+      'reconcileUncertainManualAttempt.uncertaintySequence',
+    );
+    const reason = cloneInlinePayload(
+      value.reason,
+      'reconcileUncertainManualAttempt.reason',
+    );
+    const state = await readVerifiedRun(common.runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    const invocation = state.invocations.get(invocationId);
+    const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
+    if (!invocation || !attempt) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'attempt does not belong to this invocation',
+      );
+    }
+    const payloadReader = createLedgerPayloadReader(payloadStore, common.runId);
+    const verifiedEvidence = validateLedgerAttemptEvidence(
+      value.evidence,
+      await createLedgerAttemptStart(
+        state.run,
+        invocation,
+        attempt,
+        payloadReader,
+      ),
+      'reconcileUncertainManualAttempt.evidence',
+    );
+    const terminal = verifiedEvidence.terminal;
+    const evidence = verifiedEvidence.evidence;
+    if (
+      !TERMINAL_TYPES.has(terminal.type) ||
+      terminal.attemptId !== attemptId
+    ) {
+      throw new TypeError(
+        'reconcileUncertainManualAttempt.evidence must end with a terminal for the exact retained attempt.',
+      );
+    }
+    assertSupportedManualTerminal(
+      terminal,
+      evidence,
+      state.run.cancellationRequest,
+      'reconcileUncertainManualAttempt',
+    );
+    const terminalSummary = createTerminalSummary(terminal);
+    const existingReceipt = await getTransitionReceipt(
+      db,
+      resolvedTableName,
+      common.runId,
+      common.transitionId,
+    );
+    if (existingReceipt) {
+      if (
+        existingReceipt.type !== 'uncertain-attempt-reconciled' ||
+        existingReceipt.invocation_id !== invocationId ||
+        existingReceipt.attempt_id !== attemptId
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      const existingEvent = state.events[existingReceipt.sequence - 1];
+      if (
+        !existingEvent ||
+        existingEvent.event_id !== existingReceipt.event_id ||
+        existingEvent.transition_id !== common.transitionId
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          common.runId,
+          'reconciliation receipt event is unavailable',
+        );
+      }
+      const existingReconciliation = eventSnapshots(
+        existingEvent,
+        common.runId,
+      ).reconciliation;
+      if (!existingReconciliation) {
+        throw new ExecutionLedgerProjectionError(
+          common.runId,
+          'reconciliation receipt lacks reconciliation payload',
+        );
+      }
+      if (
+        !hasSameCanonicalJson(
+          await payloadReader.readEvidence(existingReconciliation.evidenceRef),
+          evidence,
+        )
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      const existingRequestDigest = createTransitionRequestDigest(
+        'uncertain-attempt-reconciled',
+        {
+          runId: common.runId,
+          invocationId,
+          attemptId,
+          fencingToken,
+          generation,
+          expectedVersion: common.expectedVersion,
+          transitionId: common.transitionId,
+          reconciliationId,
+          uncertaintyEventId,
+          uncertaintySequence,
+          verifier: existingReconciliation.verifier,
+          evidenceRef: existingReconciliation.evidenceRef,
+          terminal: terminalSummary,
+          reason,
+          actor: common.actor,
+          coordinatorEpoch: common.coordinatorEpoch,
+        },
+      );
+      const existing = assertMatchingReceipt(
+        state,
+        existingReceipt,
+        existingRequestDigest,
+      );
+      if (!existing) {
+        throw new ExecutionLedgerProjectionError(
+          common.runId,
+          'reconciliation receipt disappeared',
+        );
+      }
+      return existingTransitionResult(state, existing);
+    }
+    if (state.head.version !== common.expectedVersion) {
+      throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
+    }
+    const uncertaintyEvent = state.events[uncertaintySequence - 1];
+    if (
+      state.run.status !== RunStatus.BLOCKED ||
+      invocation.status !== InvocationStatus.UNCERTAIN ||
+      invocation.generation !== generation ||
+      attempt.status !== AttemptStatus.ABANDONED ||
+      !hasExactUncertaintyEventLink({
+        run: state.run,
+        invocation,
+        attempt,
+        reconciliation: {
+          invocationId,
+          attemptId,
+          generation,
+          coordinatorEpoch: common.coordinatorEpoch,
+          fencingToken,
+          uncertaintyEventId,
+          uncertaintySequence,
+        },
+        uncertaintyEvent,
+        runId: common.runId,
+      })
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'attempt is not the retained uncertain attempt',
+      );
+    }
+    assertCurrentAttemptFence(
+      attempt,
+      { coordinatorEpoch: common.coordinatorEpoch, fencingToken, generation },
+      common.runId,
+    );
+    const evidenceRef = await putVerifiedPayload(payloadStore, {
+      value: evidence,
+      payloadSchema: ACTIVITY_EVIDENCE_PAYLOAD_SCHEMA,
+      label: 'reconcileUncertainManualAttempt.evidenceRef',
+    });
+    const reconciliation = {
+      reconciliationId,
+      invocationId,
+      attemptId,
+      generation,
+      coordinatorEpoch: common.coordinatorEpoch,
+      fencingToken,
+      uncertaintyEventId,
+      uncertaintySequence,
+      verifier: cloneInlinePayload(
+        UNCERTAIN_ATTEMPT_RECONCILIATION_VERIFIER,
+        'reconcileUncertainManualAttempt.verifier',
+      ),
+      evidenceRef,
+      terminal: terminalSummary,
+      reason,
+    };
+    const requestDigest = createTransitionRequestDigest(
+      'uncertain-attempt-reconciled',
+      {
+        runId: common.runId,
+        invocationId,
+        attemptId,
+        fencingToken,
+        generation,
+        expectedVersion: common.expectedVersion,
+        transitionId: common.transitionId,
+        reconciliationId,
+        uncertaintyEventId,
+        uncertaintySequence,
+        verifier: reconciliation.verifier,
+        evidenceRef,
+        terminal: terminalSummary,
+        reason,
+        actor: common.actor,
+        coordinatorEpoch: common.coordinatorEpoch,
+      },
+    );
+    const statuses = statusesForTerminal(terminal);
+    const sequence = state.head.sequence + 1;
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current run'),
+      status: statuses.run,
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextInvocation = cloneJsonObject(invocation, 'current invocation');
+    delete nextInvocation.uncertainty;
+    nextInvocation.status = statuses.invocation;
+    nextInvocation.version = invocation.version + 1;
+    nextInvocation.lastSequence = sequence;
+    nextInvocation.updatedAt = common.observedAt;
+    nextInvocation.terminal = terminalSummary;
+    const event = createEventRecord(
+      common.runId,
+      sequence,
+      common.transitionId,
+      requestDigest,
+      'uncertain-attempt-reconciled',
+      common.observedAt,
+      common.actor,
+      {
+        coordinatorEpoch: common.coordinatorEpoch,
+        invocationGeneration: generation,
+      },
+      { run: nextRun, invocation: nextInvocation, reconciliation },
+    );
+    return await appendOrReplay({
+      state,
+      runId: common.runId,
+      transitionId: common.transitionId,
+      requestDigest,
+      event,
+      nextRun,
+      nextInvocation,
+    });
+  }
+
+  /**
    * Recover a claim that demonstrably never crossed `STARTED`. It is safe to
    * abandon the physical attempt and return its invocation to `RUNNABLE`; this
    * method deliberately refuses a begun attempt, which must become uncertain.
@@ -5175,6 +5780,7 @@ export function createExecutionLedger({
     listRuns,
     markAttemptStarted,
     markAttemptUncertain,
+    reconcileUncertainManualAttempt,
     rebuildRun,
     requestManualRunCancellation,
   };
@@ -5187,6 +5793,7 @@ export function createExecutionLedger({
  * @property {(...args: any[]) => Promise<any>} markAttemptStarted - Persists the handler-start boundary.
  * @property {(...args: any[]) => Promise<any>} commitVerifiedAttemptTerminal - Commits validated terminal evidence.
  * @property {(...args: any[]) => Promise<any>} markAttemptUncertain - Blocks a begun ambiguous attempt.
+ * @property {(...args: any[]) => Promise<any>} reconcileUncertainManualAttempt - Resolves one retained uncertain attempt from exact durable evidence.
  * @property {(...args: any[]) => Promise<any>} abandonUnstartedAttempt - Safely releases an unstarted claim.
  * @property {(...args: any[]) => Promise<any>} requestManualRunCancellation - Persists the first cancellation request or returns authoritative terminal/uncertain state.
  * @property {(runId: string) => Promise<Record<string, any> | null>} getRun - Reads a verified run projection.

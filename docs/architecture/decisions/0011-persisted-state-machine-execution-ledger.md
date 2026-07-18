@@ -350,26 +350,31 @@ After ownership is claimed, the service records `STARTING` → `READY` →
 `STOPPING` → `STOPPED`. A process crash removes its live socket listener (while
 the old pathname may remain), does not fabricate `STOPPED`, and lets one later
 owner conditionally replace the absent session with a new endpoint and higher
-generation. On the same local LMDB control volume, mutating manual `ops run`
-and `ops recover` acquire that same ownership fence and refuse to race a
-resident service; read-only inspection does not.
+generation. On the same local LMDB control volume, mutating manual `ops run`,
+`ops recover`, and `ops reconcile` acquire that same ownership fence and refuse
+to race a resident service; read-only inspection does not.
 
-Exact-run inspection, confirmed recovery, and current-owner cancellation share
-one core implementation between the installed CLI and packaged artifacts. The
-installed form is `wharfie ops inspect|recover|cancel`; the packaged form is
-`<app> wharfie inspect|recover|cancel`. A packaged operator derives its
-authority only from the validated embedded revision/runtime pair and rejects a
-run whose app identity differs before output or mutation. Authority is
-app-scoped across successor revisions because these transitions never execute
-app code; the run's pinned revision remains unchanged. Inspection opens existing
-local control state read-only and never creates a missing volume or table.
-Recovery is an explicitly confirmed mutation after every runner has stopped;
-packaged recovery requires the local LMDB protocol, while source recovery
-retains its documented configured-adapter behavior. External cancellation
-requires LMDB: it reads the current owner read-only, then uses an authenticated
-per-session command endpoint only for that exact live same-principal foreground
-`STARTED` attempt. It requires a stable request ID for retries and never falls
-back to a direct mutation or treats a resident lifecycle owner as a worker.
+Exact-run inspection, confirmed recovery, evidence-backed reconciliation, and
+current-owner cancellation share one core implementation between the installed
+CLI and packaged artifacts. The installed form is `wharfie ops
+inspect|recover|reconcile|cancel`; the packaged form is `<app> wharfie
+inspect|recover|reconcile|cancel`. A packaged operator derives its authority
+only from the validated embedded revision/runtime pair and rejects a run whose
+app identity differs before output or mutation. Authority is app-scoped across
+successor revisions because these transitions never execute app code; the run's
+pinned revision remains unchanged. Inspection opens existing local control
+state read-only and never creates a missing volume or table. Recovery and
+reconciliation are explicitly confirmed mutations after every runner has
+stopped; reconciliation additionally accepts only a bounded transcript file,
+uses a stable caller reconciliation ID, and lets the ledger verify the exact
+prior uncertainty event rather than accept an operator-selected outcome.
+Packaged recovery and reconciliation require the local LMDB protocol, while
+source forms retain their documented configured-adapter behavior. External
+cancellation requires LMDB: it reads the current owner read-only, then uses an
+authenticated per-session command endpoint only for that exact live
+same-principal foreground `STARTED` attempt. It requires a stable request ID
+for retries and never falls back to a direct mutation or treats a resident
+lifecycle owner as a worker.
 
 This is deliberately not a lease, heartbeat, scheduler, work claim, or
 distributed coordinator protocol. It can recover after process restart on one

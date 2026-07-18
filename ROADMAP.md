@@ -147,6 +147,14 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       requires matching terminal evidence, completion or failure can still win,
       and an unconfirmed post-cancellation termination becomes blocked
       `UNCERTAIN` work.
+- [x] Add evidence-backed resolution for blocked `UNCERTAIN` manual attempts.
+      One append-only V4 reconciliation event retains the physical attempt as
+      `ABANDONED`, binds a fixed Activity Protocol verifier to the exact prior
+      uncertainty event and immutable transcript, and establishes only the
+      transcript-proven logical terminal. Source `wharfie ops reconcile` and
+      packaged `<app> wharfie reconcile` require a stable reconciliation ID, a
+      bounded evidence file, and explicit confirmation that every prior runner
+      has stopped; they are source-free, app-scoped, fenced, and redacted.
 - [ ] Persist immutable revision bindings, inputs, outputs, scheduling decisions, attempts, and operator actions in the full append-only ledger.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, retry policy,
       broader recovery, and multi-host authenticated current-owner command
@@ -208,10 +216,10 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 ## Immediate queue
 
 1. Repair the clean-install lint dependency declaration after explicit approval, make draft PR #125 green in GitHub Actions, and review the reset stack for merge.
-2. Add evidence-backed reconciliation for blocked `UNCERTAIN` attempts; the
-   local authenticated current-owner cancel path is now available.
+2. Define persisted managed-effect records and destination evidence before
+   making any exactly-once effect claim or adding effect reconciliation.
 3. Embed the full frozen core closure plan and preflight generic CommonJS
    package resolution before treating malformed-closure ambient-JS fallback as
    closed.
 
-The latest dated handoff at [llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md) records the narrow external cancellation contract: source `wharfie ops cancel` and packaged `<app> wharfie cancel` route only to an exact live same-principal LMDB `STARTED` owner, with a required retry-stable request ID and no direct-write fallback. The preceding [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md), [shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md), [resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md), [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.
+The latest dated handoff at [llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md](llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md) records the V4 path from a blocked `UNCERTAIN` attempt to one evidence-proven terminal outcome: source `wharfie ops reconcile` and packaged `<app> wharfie reconcile` use a retry-stable reconciliation ID, a bounded transcript file, explicit prior-runner confirmation, and no outcome-selection flag. The preceding [authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md), [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md), [shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md), [resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md), [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.

@@ -2,7 +2,7 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { describe, expect, it } from '@jest/globals';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -87,9 +87,9 @@ function completedEvidence(start, result) {
 /**
  * @param {string} dbPath - Control-store directory.
  * @param {string} tableName - Ledger table name.
- * @param {{appId: string, idempotencyKey: string, started?: boolean, completed?: boolean}} options - Persisted run shape.
+ * @param {{appId: string, idempotencyKey: string, started?: boolean, completed?: boolean, uncertain?: boolean}} options - Persisted run shape.
  * @param {(options: {path: string}) => import('../../../src/core/lib/db/base.js').DBClient} [createDB] - Local test adapter factory.
- * @returns {Promise<{runId: string, attemptId: string}>} - Durable run identity.
+ * @returns {Promise<{runId: string, attemptId: string, evidence?: Record<string, any>}>} - Durable run identity and optional reconciliation evidence.
  */
 async function createManualRun(
   dbPath,
@@ -154,6 +154,27 @@ async function createManualRun(
             credential: 'terminal-secret',
           }),
         });
+      }
+      if (options.uncertain === true) {
+        const evidence = completedEvidence(started.startFrame, {
+          credential: 'reconciliation-terminal-secret',
+        });
+        await ledger.markAttemptUncertain({
+          runId,
+          invocationId: MANUAL_LEDGER_INVOCATION_ID,
+          attemptId: claim.attempt.attemptId,
+          fencingToken: 'fence-secret',
+          generation: claim.attempt.generation,
+          expectedVersion: started.run.version,
+          transitionId: `uncertain:${claim.attempt.attemptId}`,
+          actor: { kind: 'local', id: 'cli' },
+          coordinatorEpoch: 0,
+          reason: {
+            kind: 'test-uncertain-attempt',
+            credential: 'uncertainty-secret',
+          },
+        });
+        return { runId, attemptId: claim.attempt.attemptId, evidence };
       }
     }
     return { runId, attemptId: claim.attempt.attemptId };
@@ -237,6 +258,91 @@ describe('ledger-native operator commands', () => {
         }).rebuildRun(runId),
       ).resolves.toMatchObject({
         attempts: [expect.objectContaining({ status: AttemptStatus.CLAIMED })],
+      });
+    } finally {
+      await owner.release();
+      await ownerDb.close();
+      rmSync(dbPath, { recursive: true, force: true });
+      rmSync(emptyDir, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  it('refuses evidence reconciliation while its application resident session is active', async () => {
+    const dbPath = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-ops-reconcile-owner-'),
+    );
+    const emptyDir = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-ops-reconcile-owner-no-manifest-'),
+    );
+    const tableName = 'operator-reconcile-owner-test';
+    const appId = 'source-free-reconcile-owner-operator';
+    const sessionRoot = path.join(dbPath, 'ledger-service-sessions');
+    const evidenceFile = path.join(emptyDir, 'host-evidence.json');
+    const env = {
+      ...process.env,
+      NODE_ENV: 'development',
+      WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
+      WHARFIE_CONTROL_ADAPTER: 'lmdb',
+      WHARFIE_CONTROL_PATH: dbPath,
+      WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(dbPath, 'execution-payloads'),
+      WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionRoot,
+    };
+    const { runId, evidence } = await createManualRun(
+      dbPath,
+      tableName,
+      {
+        appId,
+        idempotencyKey: 'blocked-reconciliation',
+        started: true,
+        uncertain: true,
+      },
+      createLMDB,
+    );
+    writeFileSync(evidenceFile, JSON.stringify(evidence), 'utf8');
+    const ownerDb = createLMDB({ path: dbPath });
+    const ownership = createLedgerServiceOwnership({ db: ownerDb, tableName });
+    const owner = await acquireLocalLedgerServiceSession({
+      appId,
+      ownership,
+      ownerKind: 'resident',
+      sessionRoot,
+    });
+
+    try {
+      const result = runCli(
+        [
+          'ops',
+          'reconcile',
+          '--run-id',
+          runId,
+          '--reconciliation-id',
+          'blocked-owner-reconciliation',
+          '--evidence-file',
+          evidenceFile,
+          '--confirm-runner-stopped',
+        ],
+        env,
+        emptyDir,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        'Local service session is already active',
+      );
+      await expect(
+        createExecutionLedger({
+          db: ownerDb,
+          tableName,
+          payloadStore: createPayloadStore(dbPath),
+        }).rebuildRun(runId),
+      ).resolves.toMatchObject({
+        run: { status: RunStatus.BLOCKED },
+        invocations: [
+          expect.objectContaining({ status: InvocationStatus.UNCERTAIN }),
+        ],
+        attempts: [
+          expect.objectContaining({ status: AttemptStatus.ABANDONED }),
+        ],
       });
     } finally {
       await owner.release();
@@ -480,12 +586,194 @@ describe('ledger-native operator commands', () => {
     }
   }, 20000);
 
+  it('reconciles a source-free uncertain run from a bounded evidence file without leaking it', async () => {
+    const dbPath = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-ops-reconcile-'),
+    );
+    const emptyDir = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-ops-reconcile-no-manifest-'),
+    );
+    const tableName = 'operator-reconcile-ledger-test';
+    const appId = 'source-free-reconciliation-operator';
+    const evidenceFile = path.join(emptyDir, 'host-evidence.json');
+    const env = {
+      ...process.env,
+      NODE_ENV: 'development',
+      WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
+      WHARFIE_CONTROL_ADAPTER: 'vanilla',
+      WHARFIE_CONTROL_PATH: dbPath,
+      WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(dbPath, 'execution-payloads'),
+    };
+
+    try {
+      const { runId, evidence } = await createManualRun(dbPath, tableName, {
+        appId,
+        idempotencyKey: 'reconcile-uncertain-run',
+        started: true,
+        uncertain: true,
+      });
+      expect(evidence).toBeDefined();
+      writeFileSync(evidenceFile, JSON.stringify(evidence), 'utf8');
+
+      const missingConfirmation = runCli(
+        [
+          'ops',
+          'reconcile',
+          '--run-id',
+          runId,
+          '--reconciliation-id',
+          'source-free-reconciliation-1',
+          '--evidence-file',
+          path.join(emptyDir, 'does-not-need-to-exist.json'),
+        ],
+        env,
+        emptyDir,
+      );
+      expect(missingConfirmation.status).toBe(1);
+      expect(missingConfirmation.stderr).toContain('confirm-runner-stopped');
+      await expect(readRun(dbPath, tableName, runId)).resolves.toMatchObject({
+        run: { status: RunStatus.BLOCKED },
+        invocations: [
+          expect.objectContaining({ status: InvocationStatus.UNCERTAIN }),
+        ],
+      });
+
+      const first = runCli(
+        [
+          'ops',
+          'reconcile',
+          '--run-id',
+          runId,
+          '--reconciliation-id',
+          'source-free-reconciliation-1',
+          '--evidence-file',
+          evidenceFile,
+          '--confirm-runner-stopped',
+          '--reason',
+          'private-reconciliation-reason',
+          '--json',
+        ],
+        env,
+        emptyDir,
+      );
+      expect(first.status).toBe(0);
+      expect(first.stderr).toBe('');
+      const firstView = JSON.parse(first.stdout);
+      expect(firstView).toMatchObject({
+        schemaVersion: 2,
+        kind: 'wharfie.execution-ledger.reconciliation',
+        reconciliation: {
+          reconciliationId: 'source-free-reconciliation-1',
+          changed: true,
+        },
+        run: { runId, appId, status: RunStatus.COMPLETED },
+        invocations: [
+          expect.objectContaining({ status: InvocationStatus.COMPLETED }),
+        ],
+        attempts: [
+          expect.objectContaining({ status: AttemptStatus.ABANDONED }),
+        ],
+        history: expect.arrayContaining([
+          expect.objectContaining({ type: 'uncertain-attempt-reconciled' }),
+        ]),
+      });
+      const serialized = JSON.stringify(firstView);
+      expect(serialized).not.toContain('input-secret');
+      expect(serialized).not.toContain('caller-secret');
+      expect(serialized).not.toContain('fence-secret');
+      expect(serialized).not.toContain('uncertainty-secret');
+      expect(serialized).not.toContain('reconciliation-terminal-secret');
+      expect(serialized).not.toContain('private-reconciliation-reason');
+      expect(serialized).not.toContain('evidenceRef');
+
+      const durable = await readRun(dbPath, tableName, runId);
+      expect(durable).toMatchObject({
+        run: { status: RunStatus.COMPLETED },
+        invocations: [
+          expect.objectContaining({ status: InvocationStatus.COMPLETED }),
+        ],
+        attempts: [
+          expect.objectContaining({ status: AttemptStatus.ABANDONED }),
+        ],
+      });
+      expect(
+        durable?.events.map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual([
+        'manual-run-created',
+        'attempt-claimed',
+        'attempt-started',
+        'attempt-became-uncertain',
+        'uncertain-attempt-reconciled',
+      ]);
+
+      const replay = runCli(
+        [
+          'ops',
+          'reconcile',
+          '--run-id',
+          runId,
+          '--reconciliation-id',
+          'source-free-reconciliation-1',
+          '--evidence-file',
+          evidenceFile,
+          '--confirm-runner-stopped',
+          '--reason',
+          'private-reconciliation-reason',
+          '--json',
+        ],
+        env,
+        emptyDir,
+      );
+      expect(replay.status).toBe(0);
+      expect(JSON.parse(replay.stdout)).toMatchObject({
+        kind: 'wharfie.execution-ledger.reconciliation',
+        reconciliation: {
+          reconciliationId: 'source-free-reconciliation-1',
+          changed: false,
+        },
+        run: { status: RunStatus.COMPLETED },
+      });
+
+      const competing = runCli(
+        [
+          'ops',
+          'reconcile',
+          '--run-id',
+          runId,
+          '--reconciliation-id',
+          'source-free-reconciliation-2',
+          '--evidence-file',
+          evidenceFile,
+          '--confirm-runner-stopped',
+          '--reason',
+          'private-reconciliation-reason',
+        ],
+        env,
+        emptyDir,
+      );
+      expect(competing.status).toBe(1);
+      expect(competing.stderr).toMatch(/conflict|stale run version/i);
+      await expect(readRun(dbPath, tableName, runId)).resolves.toMatchObject({
+        run: { status: RunStatus.COMPLETED },
+        events: expect.arrayContaining([
+          expect.objectContaining({ type: 'uncertain-attempt-reconciled' }),
+        ]),
+      });
+    } finally {
+      rmSync(dbPath, { recursive: true, force: true });
+      rmSync(emptyDir, { recursive: true, force: true });
+    }
+  }, 20000);
+
   it('removes legacy list while exposing the current-owner cancel command', () => {
     const env = { ...process.env, NODE_ENV: 'development' };
     const help = runCli(['ops', '--help'], env, repoRoot);
     expect(help.status).toBe(0);
     expect(help.stdout).toContain('inspect');
     expect(help.stdout).toContain('recover');
+    expect(help.stdout).toContain('reconcile');
     expect(help.stdout).toContain('cancel');
     expect(help.stdout).toContain('run');
     expect(help.stdout).not.toContain('list');
@@ -501,6 +789,22 @@ describe('ledger-native operator commands', () => {
     );
     expect(cancel.status).toBe(1);
     expect(cancel.stderr).toMatch(/cancel requires --run-id/i);
+
+    const reconcile = runCli(
+      [
+        'ops',
+        'reconcile',
+        '--reconciliation-id',
+        'missing-run-id-reconciliation',
+        '--evidence-file',
+        'unused.json',
+        '--confirm-runner-stopped',
+      ],
+      env,
+      repoRoot,
+    );
+    expect(reconcile.status).toBe(1);
+    expect(reconcile.stderr).toMatch(/reconcile requires --run-id/i);
 
     const legacyRecovery = runCli(['ops', 'run', '--recover'], env, repoRoot);
     expect(legacyRecovery.status).toBe(1);

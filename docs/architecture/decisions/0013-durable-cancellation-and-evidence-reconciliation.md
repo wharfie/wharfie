@@ -120,31 +120,55 @@ have preceded termination.
 
 ### Evidence-backed reconciliation
 
-Reconciliation is a subsequent API over this V4 event model, not a prerequisite
-for shipping the first active-owner cancellation slice. Until that API exists,
-`UNCERTAIN` remains durably blocked.
+The implemented V4 reconciliation API resolves a durably blocked `UNCERTAIN`
+invocation only from one complete, host-owned Activity Protocol transcript. A
+request carries a stable reconciliation identity, actor, reason, expected run
+version, applicable fence, the exact uncertainty event it addresses, and an
+immutable evidence reference. The fixed initial verifier is
+`wharfie.activity-protocol` version 1; callers cannot select a verifier whose
+semantics the ledger does not implement.
 
-A reconciliation request must have a stable identity, actor, reason, expected
-run version, applicable fence, the exact uncertainty event it addresses, an
-immutable evidence reference, and the verifier that substantiates the
-evidence. The first supported evidence class should be a complete host-owned
-Activity Protocol transcript revalidated against the persisted revision,
-invocation, attempt, start frame, and fence. A reconciled `cancelled` outcome
-additionally requires the matching earlier cancellation request.
+The ledger revalidates the transcript against the persisted revision,
+invocation, attempt, start frame, input, caller metadata, and fence. It also
+proves that the cited event is the retained `attempt-became-uncertain` event
+for the current abandoned attempt. A reconciled `cancelled` outcome additionally
+requires the matching earlier cancellation request and host cancellation frame;
+`protocol-failed` evidence after that frame remains insufficient.
 
-Reconciliation may move the invocation and aggregate run from `UNCERTAIN` and
-`BLOCKED` to the terminal outcome established by that evidence. It does not
-change the original attempt from `ABANDONED` to another terminal state. The new
-reconciliation event links that attempt, its uncertainty event, the evidence,
-and the resulting invocation outcome. Repeating the same reconciliation is
-idempotent; conflicting evidence or an already committed terminal outcome
-fails closed.
+The append-only `uncertain-attempt-reconciled` event may move the invocation and
+aggregate run from `UNCERTAIN`/`BLOCKED` to only the evidence-established
+terminal outcome. It deliberately does not change the original physical attempt
+from `ABANDONED`, add a terminal to it, or replace its uncertainty evidence. The
+event instead links that retained attempt, its exact uncertainty event, the
+immutable transcript reference, and the resulting invocation terminal. Every
+rebuild re-reads and re-hashes the transcript reference. Repeating the same
+stable reconciliation returns its receipt; altered evidence, target, reason,
+actor, fence, or ID conflicts, and another terminal outcome fails closed.
 
 An operator-selected status, prose assertion, retry count, absence of an
 observed error, or incomplete transcript is not outcome evidence. Such
 material may remain attached as diagnostic evidence in a future operator-note
 facility, but it cannot resolve uncertainty. Adapter-specific destination
 evidence can be added later only with a verifier that defines what it proves.
+
+### External reconciliation requires a quiescent operator path
+
+The implemented operator surface is source `wharfie ops reconcile` and the
+flat packaged `<app> wharfie reconcile`. Both require `--run-id`, a stable
+`--reconciliation-id` to reuse after a lost response, a bounded UTF-8 JSON
+`--evidence-file`, and `--confirm-runner-stopped`. The transcript is never
+accepted in argv and is never echoed in output. The command first confirms the
+exact existing run and packaged app scope before it opens the evidence file,
+then repeats the check while it holds the ordinary local mutation ownership
+fence. It does not load application source, dispatch code, contact a live
+owner, rebase to a newer attempt, or offer an outcome/status flag.
+
+Packaged reconciliation currently requires the LMDB local-ownership protocol
+and refuses to race a live resident service. Source reconciliation remains an
+explicit configured-adapter diagnostic/operator action. Its redacted response
+reports only safe lifecycle history and the stable reconciliation ID; it omits
+the transcript, evidence reference, terminal result/error, operator reason,
+caller metadata, and fencing token.
 
 ### Deferred boundaries
 
@@ -199,12 +223,15 @@ semantics are established.
 - `CANCELLED`, `UNCERTAIN`, effect outcome, and compensation remain distinct
   concepts that inspection can explain.
 - The implemented slice stays narrow: core V4 transitions, foreground and
-  exact-current-owner delivery, rebuild validation, and crash/race tests.
-  Evidence-backed reconciliation can follow without changing event meaning.
+  exact-current-owner delivery, evidence-backed terminal resolution, rebuild
+  validation, and crash/race tests. Managed effects, compensation, deadlines,
+  automatic retry, and remote operator routing remain separate work.
 - Tests cover request idempotency and conflict handling, `RUNNABLE` and
   `CLAIMED` cancellation, durable-before-signal ordering, both request/terminal
   race orders, rejection of unmatched cancelled evidence, loss to `UNCERTAIN`,
-  projection rebuild, and failure before signal when persistence fails.
+  projection rebuild, failure before signal when persistence fails, exact
+  uncertainty linkage, reconciliation replay/conflict, cancellation authority,
+  and rejection of altered reconciliation evidence on rebuild.
 
 ## Rejected alternatives
 

@@ -7,7 +7,10 @@ import {
   InvocationStatus,
   RunStatus,
 } from '../lib/db/tables/execution-ledger.js';
-import { assertLedgerOpaqueId } from '../lib/ledger/record-key.js';
+import {
+  MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES,
+  assertLedgerOpaqueId,
+} from '../lib/ledger/record-key.js';
 import { createCanonicalJsonSha256Id } from './content-id.js';
 import { assertLogicalId } from './logical-id.js';
 import { serializeActivityAttemptError } from './activity-attempt.js';
@@ -74,7 +77,13 @@ export const MANUAL_LEDGER_ACTIVE_ATTEMPT_CANCELLATION_PORT_VERSION = 1;
  * @typedef {{found: boolean, mayExecute: boolean, action: ManualLedgerRecoveryActionValue, changed: boolean, outcome?: ReturnType<typeof outcomeFromState>}} ManualLedgerRecoveryResult
  */
 
+/**
+ * @typedef {{found: boolean, changed: boolean, reconciliationId?: string, outcome?: ReturnType<typeof outcomeFromState>, view?: Record<string, any>}} ManualLedgerReconciliationResult
+ */
+
 const DEFAULT_ACTOR = Object.freeze({ kind: 'local', id: 'cli' });
+
+const MANUAL_RECONCILIATION_TRANSITION_PREFIX = 'reconcile:';
 
 const DEFAULT_OWNER_CANCELLATION_REASON = Object.freeze({
   code: 'operator-cancel-requested',
@@ -123,6 +132,28 @@ function createActiveOwnerCancellationTransitionId(options) {
     },
     valuePath: 'active owner cancellation transition identity',
   });
+}
+
+/**
+ * A reconciliation ID is public retry identity. Its durable receipt uses the
+ * simple, inspectable `reconcile:` namespace rather than a generated ID so a
+ * response-loss retry reaches exactly the original transition. Reserve room
+ * for that namespace before accepting the caller's opaque identity.
+ * @param {unknown} value - Candidate stable reconciliation identity.
+ * @returns {{reconciliationId: string, transitionId: string}} - Caller and receipt identities.
+ */
+function resolveManualReconciliationIdentity(value) {
+  const reconciliationId = assertLedgerOpaqueId(value, 'reconciliationId');
+  const transitionId = `${MANUAL_RECONCILIATION_TRANSITION_PREFIX}${reconciliationId}`;
+  if (
+    Buffer.byteLength(transitionId, 'utf8') >
+    MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES
+  ) {
+    throw new RangeError(
+      `reconciliationId must leave room for the ${MANUAL_RECONCILIATION_TRANSITION_PREFIX} transition namespace.`,
+    );
+  }
+  return { reconciliationId, transitionId };
 }
 
 /**
@@ -851,6 +882,147 @@ export async function recoverManualLedgerActivity(options) {
     action: ManualLedgerRecoveryAction.NONE,
     changed: false,
     outcome: outcomeFromView(view, invocationId),
+  };
+}
+
+/**
+ * Locate the immutable uncertainty transition which created the current
+ * abandoned physical attempt. The attempt deliberately remains unchanged by
+ * reconciliation, so its `lastSequence` keeps naming this exact event even
+ * after a terminal reconciliation is appended. That also lets a same-ID
+ * response-loss retry supply the original expected version and target.
+ * @param {Record<string, any>} view - Verified run history.
+ * @param {Record<string, any>} invocation - Current manual invocation.
+ * @param {Record<string, any>} attempt - Retained physical attempt.
+ * @returns {Record<string, any>} - Exact prior uncertainty event.
+ */
+function getRetainedUncertaintyEvent(view, invocation, attempt) {
+  const event = view.events.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.type === 'attempt-became-uncertain' &&
+      candidate.sequence === attempt.lastSequence &&
+      candidate.fence?.coordinatorEpoch === attempt.coordinatorEpoch &&
+      candidate.fence?.invocationGeneration === attempt.generation &&
+      candidate.payload?.attempt?.invocationId === invocation.invocationId &&
+      candidate.payload?.attempt?.attemptId === attempt.attemptId &&
+      candidate.payload?.attempt?.generation === attempt.generation &&
+      candidate.payload?.attempt?.fencingToken === attempt.fencingToken &&
+      candidate.payload?.attempt?.status === AttemptStatus.ABANDONED,
+  );
+  if (!event) {
+    throw new ExecutionLedgerConflictError(
+      view.run.runId,
+      'manual attempt has no retained uncertainty transition',
+    );
+  }
+  return event;
+}
+
+/**
+ * Reconcile a retained uncertain manual attempt with host transcript evidence
+ * only. This helper neither loads application source nor retries/rebases a
+ * race: the core transition owns the exact original uncertainty fence and
+ * its stable receipt identity. A live LMDB runner must be excluded by the
+ * caller's local ownership fence before this helper is entered.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, reconciliationId: string, evidence: Record<string, any>, reason?: Record<string, any>, actor?: {kind: string, id: string}}} options - Exact source-independent reconciliation request.
+ * @returns {Promise<ManualLedgerReconciliationResult>} - Reconciliation result and verified readback.
+ */
+export async function reconcileManualLedgerActivity(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError('reconcileManualLedgerActivity requires options.');
+  }
+  if (!options.ledger) {
+    throw new TypeError('reconcileManualLedgerActivity requires ledger.');
+  }
+  if (
+    !options.evidence ||
+    typeof options.evidence !== 'object' ||
+    Array.isArray(options.evidence)
+  ) {
+    throw new TypeError(
+      'reconcileManualLedgerActivity.evidence must be a JSON object.',
+    );
+  }
+  if (
+    options.reason !== undefined &&
+    (!options.reason ||
+      typeof options.reason !== 'object' ||
+      Array.isArray(options.reason))
+  ) {
+    throw new TypeError(
+      'reconcileManualLedgerActivity.reason must be an object when provided.',
+    );
+  }
+
+  const ledger = options.ledger;
+  const runId = assertLedgerOpaqueId(options.runId, 'runId');
+  const { reconciliationId, transitionId } =
+    resolveManualReconciliationIdentity(options.reconciliationId);
+  const actor = options.actor || DEFAULT_ACTOR;
+  const reason =
+    options.reason ||
+    Object.freeze({
+      kind: 'operator-evidence-reconciliation',
+      reconciliationId,
+    });
+  const view = await ledger.rebuildRun(runId);
+  if (!view) {
+    return { found: false, changed: false };
+  }
+
+  const invocation = getInvocation(view, MANUAL_LEDGER_INVOCATION_ID);
+  if (invocation.generation === 0) {
+    throw new ExecutionLedgerConflictError(
+      runId,
+      'manual invocation has no retained uncertain attempt',
+    );
+  }
+  const attempt = getCurrentAttempt(view, invocation);
+  if (attempt.status !== AttemptStatus.ABANDONED) {
+    throw new ExecutionLedgerConflictError(
+      runId,
+      'manual invocation has no retained uncertain attempt',
+    );
+  }
+  const uncertaintyEvent = getRetainedUncertaintyEvent(
+    view,
+    invocation,
+    attempt,
+  );
+  const expectedVersion = uncertaintyEvent.payload?.run?.version;
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+    throw new ExecutionLedgerConflictError(
+      runId,
+      'retained uncertainty transition has no valid run version',
+    );
+  }
+
+  const result = await ledger.reconcileUncertainManualAttempt({
+    runId,
+    invocationId: invocation.invocationId,
+    attemptId: attempt.attemptId,
+    fencingToken: attempt.fencingToken,
+    generation: attempt.generation,
+    coordinatorEpoch: attempt.coordinatorEpoch,
+    expectedVersion,
+    uncertaintyEventId: uncertaintyEvent.event_id,
+    uncertaintySequence: uncertaintyEvent.sequence,
+    transitionId,
+    reconciliationId,
+    actor,
+    reason,
+    evidence: options.evidence,
+  });
+  const current = await ledger.rebuildRun(runId);
+  if (!current) {
+    throw new Error(`Execution ledger run disappeared: ${runId}`);
+  }
+  return {
+    found: true,
+    changed: result.applied,
+    reconciliationId,
+    outcome: outcomeFromView(current, invocation.invocationId, !result.applied),
+    view: current,
   };
 }
 

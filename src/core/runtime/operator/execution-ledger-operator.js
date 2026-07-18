@@ -1,7 +1,10 @@
 import { Command } from 'commander';
+import { open } from 'node:fs/promises';
+import { TextDecoder } from 'node:util';
 
 import { assertApplicationRevisionId } from '../application-revision.js';
 import {
+  EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
   InvocationStatus,
   RunStatus,
 } from '../../lib/db/tables/execution-ledger.js';
@@ -10,9 +13,15 @@ import {
   createLedgerServiceId,
   createLedgerServiceOwnership,
 } from '../../lib/db/tables/ledger-service-lifecycle.js';
-import { assertLedgerOpaqueId } from '../../lib/ledger/record-key.js';
+import {
+  MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES,
+  assertLedgerOpaqueId,
+} from '../../lib/ledger/record-key.js';
 import { assertLogicalId } from '../logical-id.js';
-import { recoverManualLedgerActivity } from '../manual-ledger-run.js';
+import {
+  reconcileManualLedgerActivity,
+  recoverManualLedgerActivity,
+} from '../manual-ledger-run.js';
 import {
   getLocalServiceSessionPrincipalId,
   getLocalServiceSessionScopeId,
@@ -25,9 +34,22 @@ import {
 import { sendLocalOwnerCommand } from './local-owner-command.js';
 import {
   createExecutionLedgerOperatorView,
+  createExecutionLedgerReconciliationOperatorView,
   createExecutionLedgerRecoveryOperatorView,
   formatExecutionLedgerOperatorRows,
 } from './execution-ledger-view.js';
+
+/**
+ * The evidence is published into the ledger's immutable referenced-payload
+ * store, so use that exact ceiling before parsing a host-provided file.
+ */
+export const EXECUTION_LEDGER_RECONCILIATION_EVIDENCE_FILE_MAX_BYTES =
+  EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES;
+
+/** Keep optional operator prose comfortably inside the inline event cap. */
+export const EXECUTION_LEDGER_RECONCILIATION_REASON_MAX_BYTES = 4096;
+
+const RECONCILIATION_TRANSITION_PREFIX = 'reconcile:';
 
 /** A packaged artifact was asked to operate outside its embedded app scope. */
 export class ExecutionLedgerOperatorScopeError extends Error {
@@ -47,7 +69,7 @@ export class ExecutionLedgerOperatorScopeError extends Error {
 
 /**
  * @param {unknown} value - Candidate durable run ID.
- * @param {'inspect'|'recover'|'cancel'} command - Operator command.
+ * @param {'inspect'|'recover'|'reconcile'|'cancel'} command - Operator command.
  * @returns {string} - Exact requested run ID.
  */
 function requireRunId(value, command) {
@@ -55,6 +77,161 @@ function requireRunId(value, command) {
     throw new Error(`${command} requires --run-id <runId>.`);
   }
   return value;
+}
+
+/**
+ * @param {unknown} value - Candidate stable operator reconciliation identity.
+ * @returns {string} - Validated stable caller identity.
+ */
+function resolveReconciliationId(value) {
+  if (value === undefined) {
+    throw new Error(
+      'reconcile requires --reconciliation-id <reconciliationId>; reuse the same value after a lost response.',
+    );
+  }
+  const reconciliationId = assertLedgerOpaqueId(
+    value,
+    'reconcile reconciliationId',
+  );
+  if (
+    Buffer.byteLength(
+      `${RECONCILIATION_TRANSITION_PREFIX}${reconciliationId}`,
+      'utf8',
+    ) > MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES
+  ) {
+    throw new RangeError(
+      `reconcile --reconciliation-id must leave room for the ${RECONCILIATION_TRANSITION_PREFIX} transition namespace.`,
+    );
+  }
+  return reconciliationId;
+}
+
+/**
+ * @param {unknown} value - Candidate optional operator explanation.
+ * @returns {string | undefined} - Bounded well-formed explanation.
+ */
+function resolveReconciliationReasonText(value) {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new TypeError('reconcile --reason must be a nonempty string.');
+  }
+  const isWellFormed = /** @type {any} */ (String.prototype).isWellFormed;
+  if (typeof isWellFormed === 'function' && !isWellFormed.call(value)) {
+    throw new TypeError('reconcile --reason must be well-formed Unicode.');
+  }
+  if (
+    Buffer.byteLength(value, 'utf8') >
+    EXECUTION_LEDGER_RECONCILIATION_REASON_MAX_BYTES
+  ) {
+    throw new RangeError(
+      `reconcile --reason must not exceed ${EXECUTION_LEDGER_RECONCILIATION_REASON_MAX_BYTES} UTF-8 bytes.`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Create deterministic, structured durable reason metadata without exposing
+ * the optional prose in any operator response.
+ * @param {string} reconciliationId - Stable caller reconciliation identity.
+ * @param {unknown} reasonText - Optional operator explanation.
+ * @returns {Record<string, any>} - Bounded durable reason.
+ */
+function createReconciliationReason(reconciliationId, reasonText) {
+  const message = resolveReconciliationReasonText(reasonText);
+  return {
+    kind: 'operator-evidence-reconciliation',
+    reconciliationId,
+    ...(message === undefined ? {} : { message }),
+  };
+}
+
+/**
+ * @param {unknown} value - Candidate evidence file path.
+ * @returns {string} - Nonempty evidence file path.
+ */
+function requireEvidenceFile(value) {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error('reconcile requires --evidence-file <path>.');
+  }
+  if (value.includes('\0')) {
+    throw new TypeError('reconcile --evidence-file must not contain NUL.');
+  }
+  return value;
+}
+
+/**
+ * Read a complete regular evidence file through one file descriptor. The
+ * allocation occurs only after a byte-size preflight, and a final byte/read
+ * size check rejects a file that grew or changed while it was read. The
+ * parsed transcript is intentionally returned only to the durable validator;
+ * callers must never echo it in command output.
+ * @param {string} evidenceFile - Host path to a JSON transcript.
+ * @returns {Promise<Record<string, any>>} - Raw bounded JSON evidence.
+ */
+export async function readExecutionLedgerReconciliationEvidenceFile(
+  evidenceFile,
+) {
+  const filePath = requireEvidenceFile(evidenceFile);
+  const handle = await open(filePath, 'r');
+  try {
+    const before = await handle.stat();
+    if (!before.isFile()) {
+      throw new Error('reconcile --evidence-file must name a regular file.');
+    }
+    if (
+      !Number.isSafeInteger(before.size) ||
+      before.size < 0 ||
+      before.size > EXECUTION_LEDGER_RECONCILIATION_EVIDENCE_FILE_MAX_BYTES
+    ) {
+      throw new RangeError(
+        `reconcile evidence file must not exceed ${EXECUTION_LEDGER_RECONCILIATION_EVIDENCE_FILE_MAX_BYTES} bytes.`,
+      );
+    }
+    const bytes = Buffer.alloc(before.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const { bytesRead } = await handle.read(
+        bytes,
+        offset,
+        bytes.length - offset,
+        offset,
+      );
+      if (bytesRead === 0) {
+        throw new Error('reconcile evidence file changed while it was read.');
+      }
+      offset += bytesRead;
+    }
+    const extra = Buffer.alloc(1);
+    const { bytesRead: extraBytes } = await handle.read(
+      extra,
+      0,
+      extra.length,
+      bytes.length,
+    );
+    const after = await handle.stat();
+    if (extraBytes !== 0 || after.size !== before.size) {
+      throw new Error('reconcile evidence file changed while it was read.');
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(
+        new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+      );
+    } catch {
+      throw new Error(
+        'reconcile --evidence-file must contain valid UTF-8 JSON evidence.',
+      );
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new TypeError(
+        'reconcile --evidence-file must contain a JSON object evidence record.',
+      );
+    }
+    return /** @type {Record<string, any>} */ (parsed);
+  } finally {
+    await handle.close();
+  }
 }
 
 /**
@@ -566,6 +743,71 @@ export async function recoverExecutionLedgerRun(options) {
 }
 
 /**
+ * Reconcile one exact retained uncertain run using evidence supplied by the
+ * operator. Like recovery, this is source-free and performs a fresh
+ * read-only scope/existence preflight before it acquires the mutation fence.
+ * It deliberately does not contact a live owner, retry against a new head,
+ * or select a new attempt: the core transition validates the original
+ * uncertainty fence and stable reconciliation receipt.
+ * @param {{runId: string, reconciliationId: string, evidence: Record<string, any>, reason?: string, expectedAppId?: string, actor?: {kind: string, id: string}, requireLocalOwnership?: boolean, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>}} options - Exact evidence-backed reconciliation request.
+ * @returns {Promise<{reconciliation: {reconciliationId?: string, changed: boolean}, view: Record<string, any>} | null>} - Reconciliation and verified redaction source, or null.
+ */
+export async function reconcileExecutionLedgerRun(options) {
+  const configuration =
+    options.configuration || resolveExecutionLedgerStoreConfiguration();
+  if (
+    options.requireLocalOwnership === true &&
+    configuration.adapterName !== 'lmdb'
+  ) {
+    throw new Error(
+      `Packaged reconciliation requires the LMDB control adapter until '${configuration.adapterName}' has a coordinator ownership contract.`,
+    );
+  }
+  const reconciliationId = resolveReconciliationId(options.reconciliationId);
+  const reason = createReconciliationReason(reconciliationId, options.reason);
+  if (
+    !options.evidence ||
+    typeof options.evidence !== 'object' ||
+    Array.isArray(options.evidence)
+  ) {
+    throw new TypeError(
+      'reconcileExecutionLedgerRun.evidence must be a JSON object.',
+    );
+  }
+  const preflight = await inspectExecutionLedgerRun({
+    runId: options.runId,
+    expectedAppId: options.expectedAppId,
+    configuration,
+  });
+  if (!preflight) return null;
+
+  return await withExecutionLedger(
+    async (ledger, context) =>
+      await withLocalLedgerServiceMutationOwnership({
+        appId: options.expectedAppId || preflight.run.appId,
+        context,
+        handler: async () => {
+          const current = await ledger.rebuildRun(options.runId);
+          if (!current) return null;
+          assertExpectedApp(current, options.expectedAppId);
+          const reconciliation = await reconcileManualLedgerActivity({
+            ledger,
+            runId: options.runId,
+            reconciliationId,
+            evidence: options.evidence,
+            reason,
+            ...(options.actor ? { actor: options.actor } : {}),
+          });
+          if (!reconciliation.found || !reconciliation.view) return null;
+          assertExpectedApp(reconciliation.view, options.expectedAppId);
+          return { reconciliation, view: reconciliation.view };
+        },
+      }),
+    { configuration },
+  );
+}
+
+/**
  * @param {string} action - Named recovery action.
  * @returns {string} - Human-readable completed recovery message.
  */
@@ -577,6 +819,17 @@ function recoveryMessage(action) {
     return 'Marked a begun attempt uncertain. This command did not dispatch an activity.';
   }
   return 'Verified durable recovery state. No recovery transition was needed.';
+}
+
+/**
+ * @param {{reconciliationId?: string, changed: boolean}} reconciliation - Safe reconciliation result.
+ * @returns {string} - Human-readable completed reconciliation message.
+ */
+function reconciliationMessage(reconciliation) {
+  if (reconciliation.changed) {
+    return `Reconciliation ${reconciliation.reconciliationId} was durably applied from verified evidence.`;
+  }
+  return `Reconciliation ${reconciliation.reconciliationId} was already durably applied.`;
 }
 
 /**
@@ -674,6 +927,7 @@ function resolveOutput(provided) {
  * @typedef CreateExecutionLedgerOperatorCommandsOptions
  * @property {() => Promise<{appId: string, revisionId?: string}>} [resolveExpectedIdentity] - Lazy packaged artifact authority.
  * @property {boolean} [requireLocalOwnership] - Require the current LMDB ownership protocol for recovery.
+ * @property {(evidenceFile: string) => Promise<Record<string, any>>} [readReconciliationEvidenceFile] - Bounded evidence-reader seam for tests or hosts.
  * @property {Partial<ExecutionLedgerOperatorOutput>} [output] - Test or host output hooks.
  */
 
@@ -681,10 +935,13 @@ function resolveOutput(provided) {
  * Create fresh exact-run leaf commands. Source and packaged parents must never
  * share Commander instances because addCommand reparents its child.
  * @param {CreateExecutionLedgerOperatorCommandsOptions} [options] - Host behavior.
- * @returns {{inspectCommand: Command, recoverCommand: Command, cancelCommand: Command}} - Fresh commands.
+ * @returns {{inspectCommand: Command, recoverCommand: Command, reconcileCommand: Command, cancelCommand: Command}} - Fresh commands.
  */
 export function createExecutionLedgerOperatorCommands(options = {}) {
   const output = resolveOutput(options.output);
+  const readReconciliationEvidenceFile =
+    options.readReconciliationEvidenceFile ||
+    readExecutionLedgerReconciliationEvidenceFile;
 
   const resolveIdentity = async () =>
     normalizeExpectedIdentity(
@@ -776,6 +1033,98 @@ export function createExecutionLedgerOperatorCommands(options = {}) {
       }
     });
 
+  const reconcileCommand = new Command('reconcile')
+    .description(
+      'Resolve one blocked uncertain ledger run from a verified host transcript without loading app source',
+    )
+    .option('--run-id <runId>', 'Persisted execution-ledger run ID')
+    .requiredOption(
+      '--reconciliation-id <reconciliationId>',
+      'Required stable reconciliation ID; reuse it when retrying a lost response',
+    )
+    .requiredOption(
+      '--evidence-file <path>',
+      'Required bounded JSON host transcript file; its contents are never echoed',
+    )
+    .option(
+      '--confirm-runner-stopped',
+      'Confirm that every prior runner for this run has stopped',
+    )
+    .option('--reason <text>', 'Optional private durable operator explanation')
+    .option('--json', 'Write a redacted machine-readable reconciliation view')
+    .action(async (commandOptions) => {
+      try {
+        const runId = requireRunId(commandOptions.runId, 'reconcile');
+        if (commandOptions.confirmRunnerStopped !== true) {
+          throw new Error(
+            'reconcile requires --confirm-runner-stopped before it can change durable state.',
+          );
+        }
+        const reconciliationId = resolveReconciliationId(
+          commandOptions.reconciliationId,
+        );
+        const evidenceFile = requireEvidenceFile(commandOptions.evidenceFile);
+        const reasonText = resolveReconciliationReasonText(
+          commandOptions.reason,
+        );
+        const identity = await resolveIdentity();
+        const configuration = resolveExecutionLedgerStoreConfiguration();
+
+        // Establish exact existence and packaged app scope before opening a
+        // potentially sensitive evidence file. `reconcileExecutionLedgerRun`
+        // repeats this preflight before its mutation fence to close the race.
+        const preflight = await inspectExecutionLedgerRun({
+          runId,
+          expectedAppId: identity?.appId,
+          configuration,
+        });
+        if (!preflight) {
+          throw new Error(
+            `No durable execution-ledger run exists; reconciliation refuses to create work: ${runId}`,
+          );
+        }
+        const evidence = await readReconciliationEvidenceFile(evidenceFile);
+        const result = await reconcileExecutionLedgerRun({
+          runId,
+          reconciliationId,
+          evidence,
+          ...(reasonText === undefined ? {} : { reason: reasonText }),
+          expectedAppId: identity?.appId,
+          requireLocalOwnership: options.requireLocalOwnership === true,
+          configuration,
+          ...(identity?.revisionId
+            ? {
+                actor: {
+                  kind: 'packaged-operator',
+                  id: identity.revisionId,
+                },
+              }
+            : {}),
+        });
+        if (!result) {
+          throw new Error(
+            `No durable execution-ledger run exists; reconciliation refuses to create work: ${runId}`,
+          );
+        }
+        if (commandOptions.json === true) {
+          output.json(
+            createExecutionLedgerReconciliationOperatorView(
+              /** @type {{reconciliationId: string, changed: boolean}} */ (
+                result.reconciliation
+              ),
+              result.view,
+            ),
+          );
+          return;
+        }
+        output.table(formatExecutionLedgerOperatorRows(result.view));
+        output.success(reconciliationMessage(result.reconciliation));
+      } catch (error) {
+        output.failure(error);
+        process.exitCode = 1;
+      }
+    });
+
   const cancelCommand = new Command('cancel')
     .description(
       'Ask the current local owner to durably cancel one exact active ledger run',
@@ -816,7 +1165,7 @@ export function createExecutionLedgerOperatorCommands(options = {}) {
       }
     });
 
-  return { inspectCommand, recoverCommand, cancelCommand };
+  return { inspectCommand, recoverCommand, reconcileCommand, cancelCommand };
 }
 
 export default createExecutionLedgerOperatorCommands;

@@ -160,6 +160,8 @@ Cancellation is a separate request to an already active owner:
 ```bash
 wharfie ops inspect --run-id <run-id>
 wharfie ops recover --run-id <run-id> --confirm-runner-stopped
+wharfie ops reconcile --run-id <run-id> --reconciliation-id <stable-id> \
+  --evidence-file <host-transcript.json> --confirm-runner-stopped [--reason <text>]
 wharfie ops cancel --run-id <run-id> --request-id <stable-request-id>
 ```
 
@@ -169,24 +171,41 @@ its reserved operator namespace:
 ```bash
 <app> wharfie inspect --run-id <run-id>
 <app> wharfie recover --run-id <run-id> --confirm-runner-stopped
+<app> wharfie reconcile --run-id <run-id> --reconciliation-id <stable-id> \
+  --evidence-file <host-transcript.json> --confirm-runner-stopped [--reason <text>]
 <app> wharfie cancel --run-id <run-id> --request-id <stable-request-id>
 ```
 
-Packaged inspection, recovery, and cancellation are scoped to the immutable app
-identity embedded in the artifact. They can operate an older revision of that
-same app, but reject another app's run ID before output or mutation. The source
-and packaged forms of `inspect` emit the same schema-v2 redacted run view;
-`recover` emits that view plus recovery metadata. `cancel` instead emits a
-redacted schema-v1 cancellation result containing the request ID, outcome,
-delivery state, and safe lifecycle statuses.
+Packaged inspection, recovery, reconciliation, and cancellation are scoped to
+the immutable app identity embedded in the artifact. They can operate an older
+revision of that same app, but reject another app's run ID before output or
+mutation. The source and packaged forms of `inspect` emit the same schema-v2
+redacted run view; `recover` emits that view plus recovery metadata;
+`reconcile` wraps that view with its stable reconciliation ID and whether it
+was newly applied. `cancel` instead emits a redacted schema-v1 cancellation
+result containing the request ID, outcome, delivery state, and safe lifecycle
+statuses.
 
 Inspection opens existing control state read-only and never creates missing
 state. Recovery is deliberately explicit: use it only after confirming every
 prior runner is gone. It can release a claim that never started; a begun
 attempt becomes visibly blocked as `UNCERTAIN` instead of replaying code.
 Packaged recovery requires the LMDB local-ownership protocol and refuses to
-race a live resident service. Source recovery retains its configured adapter's
-documented manual/diagnostic behavior.
+race a live resident service. The same local exclusion applies to packaged
+reconciliation; source recovery and reconciliation retain their configured
+adapter's documented manual/diagnostic behavior.
+
+Reconciliation is not a retry or an operator-selected status. It can address
+only a blocked `UNCERTAIN` run whose retained current attempt is `ABANDONED`.
+The command requires a stable `--reconciliation-id` for response-loss retries,
+a bounded UTF-8 JSON file containing the complete host Activity Protocol
+transcript, and `--confirm-runner-stopped`. Wharfie revalidates that transcript
+against the retained revision, input, caller metadata, attempt identity,
+fencing token, and exact earlier uncertainty event. It appends one terminal
+resolution only when the evidence proves it; the abandoned physical attempt is
+never rewritten, and the transcript, result, reason, and fence are never echoed
+in the operator response. A `cancelled` result still requires the matching
+earlier durable cancellation request and host cancellation frame.
 
 The V4 ledger supports cancellation by the foreground active owner. During
 `wharfie ops run`, the first `SIGINT` or `SIGTERM` becomes a durable request
@@ -206,10 +225,11 @@ The external command intentionally cannot directly cancel `RUNNABLE`,
 `STARTED` attempt can accept it. Once that attempt is started, only matching
 cancellation evidence can commit `CANCELLED`; a verified completion or failure
 may still win, while unconfirmed post-cancellation termination becomes blocked
-`UNCERTAIN` work. There is still no public run-history/list: the verified
-bounded V4 run directory is internal rather than the retired `ops list`
-surface. The resident service currently owns only local lifecycle and exclusion
-state; it does not schedule, claim, or execute work.
+`UNCERTAIN` work; later reconciliation needs evidence rather than another
+cancel request. There is still no public run-history/list: the verified bounded
+V4 run directory is internal rather than the retired `ops list` surface. The
+resident service currently owns only local lifecycle and exclusion state; it
+does not schedule, claim, or execute work.
 
 ## Package the app
 

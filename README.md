@@ -51,10 +51,13 @@ a lost response. That owner persists intent before beginning physical delivery;
 an inactive, stale, unreachable, or merely resident owner never triggers a
 direct-write fallback. A verified completion or failure may still win the
 ledger race, while ambiguous post-cancellation termination becomes blocked
-`UNCERTAIN` work. The local command transport is not yet supported on Windows.
-Public run history/listing, scheduling, durable effects, evidence
-reconciliation, and release hardening still need focused review. The npm
-package remains deliberately private. It is not ready for production use.
+`UNCERTAIN` work. Blocked work can now be resolved only through an explicit,
+evidence-backed reconciliation event: a complete bounded Activity Protocol
+transcript proves one retained abandoned attempt's terminal outcome, while the
+physical attempt itself stays `ABANDONED`. The local command transport is not
+yet supported on Windows. Public run history/listing, scheduling, durable
+effects, and release hardening still need focused review. The npm package
+remains deliberately private. It is not ready for production use.
 
 ## Start here
 
@@ -68,7 +71,8 @@ package remains deliberately private. It is not ready for production use.
 - [Atomic operation-store checkpoint](llm/checkpoints/2026-07-16-atomic-operation-store.md) — historical atomic snapshot and fencing boundary.
 - [Immutable identity-spine checkpoint](llm/checkpoints/2026-07-17-immutable-identity-spine.md) — historical identity and artifact boundary.
 - [Mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md) — historical deletion boundary after making the append-only V3 ledger the only writable durable run model.
-- [Authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md) — current restart point for the narrow external cancellation contract and its remaining verification work.
+- [Evidence-backed uncertain-reconciliation checkpoint](llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md) — current restart point for the V4 terminal-resolution event, shared source/SEA operator command, and final local branch cleanup.
+- [Authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md) — parent checkpoint for the narrow external cancellation contract.
 - [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md) — historical foreground durable-before-signal boundary.
 - [Shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md) — historical boundary after unifying exact-run inspection/recovery and binding packaged operators to embedded app identity.
 - [Resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md) — historical boundary after narrowing activities to the framed protocol and deleting the unusable injected-resource/runtime-RPC island.

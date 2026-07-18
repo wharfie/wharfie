@@ -68,6 +68,7 @@ describe('packaged application dispatch', () => {
     expect(help).toContain('metadata');
     expect(help).toContain('inspect');
     expect(help).toContain('recover');
+    expect(help).toContain('reconcile');
     expect(help).toContain('cancel');
     expect(help).not.toMatch(/\blist\b/);
     expect(help).not.toMatch(/\bfunc\b/);

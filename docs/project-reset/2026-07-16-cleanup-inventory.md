@@ -17,6 +17,7 @@ The user authorized the current session to commit, push, and work through this c
 - PRs #100, #99, and #25 were closed with exact archive and supersession notes. PR #125 is the only open pull request.
 - Four roadmap milestones were created. Replacement issues #126–#132 were created first; all 24 legacy issues were then closed with duplicate or not-planned reasons and preservation context. The seven replacements are the only open issues.
 - Every superseded branch was compared with its peeled archive target immediately before deletion. The only live remote head names are `master` and `agent/strict-manifest`; cleanup commit `25d40d4` is on the active branch.
+- On 2026-07-18, the local refs `agent/packaging-salvage`, `agent/project-reset`, and `agent/v1-deletion` were removed after confirming they were merged into `agent/strict-manifest`. The exact tips of `agent/cleanup-inventory`, `jvd/examples`, `jvd/pr4`, and the local `master` were separately confirmed against annotated archive tags before their local refs were removed. A later audit found all seven remaining local `jvd/*` refs superseded or absorbed; each exact tip is now preserved under `archive/2026-07-18/local/jvd/*` before its local branch name was removed.
 - The local-only unpublished-master and stash tags remain local and were not pushed.
 
 - Reset base: `f31595a6048a2aa1593a4d9023c6d82cff01a823`
@@ -65,6 +66,24 @@ Every branch listed below has an annotated remote archive tag whose peeled commi
 | `jvd/side-effects`       |      155/166 | Parallel history from the initial commit; 133 patches are equivalent to mainline and later v2 work hardened its useful actor/SEA/worker concepts. Remaining Raft/Pear experiments conflict with the accepted coordinator design. | **Supersede.** Carry no code directly; close PR #100 and delete.                                                                                                                           |
 | `jvd/tsc`                |          5/5 | Old-path type/dependency work; useful operation and import-meta fixes already landed, while lock changes and v1 edits are stale.                                                                                                 | **Absorbed/superseded.** Delete.                                                                                                                                                           |
 | `jvd/tsc-lint`           |         11/6 | Broad pre-`src/` typing experiment; current `master` adopted strict `checkJs` but not every safe narrowing.                                                                                                                      | **Selective manual salvage.** Later port only worker-global typing, AWS tag-map accumulator typing, and safe AWS error narrowing; reject broad `any` shims and v1/mock churn, then delete. |
+
+## Final local branch audit — 2026-07-18
+
+The final seven local-only `jvd/*` heads were compared to
+`agent/strict-manifest`, existing archive tags, and their patch-equivalent
+history. None carried a safe unported slice. Each exact tip was preserved under
+the named annotated local tag, then its local branch name was deleted. These
+tags are local preservation records, not a request to publish old work.
+
+| Former local branch | Archive tag | Decision | Evidence |
+| --- | --- | --- | --- |
+| `jvd/bug-fix` | `archive/2026-07-18/local/jvd/bug-fix` | **Superseded.** | Its async Commander handling is already covered by current `src/cli/entry.js` and its async entry tests; the rest targets retired v1 paths. |
+| `jvd/fixups` | `archive/2026-07-18/local/jvd/fixups` | **Superseded.** | It mixes old CLI, operation-store, graph persistence, init, and dependency work with the retired runtime model. |
+| `jvd/hard-edges` | `archive/2026-07-18/local/jvd/hard-edges` | **Absorbed.** | Its patch is equivalent to `ddcd5d9`, already an ancestor of the active branch. |
+| `jvd/pr1` | `archive/2026-07-18/local/jvd/pr1` | **Superseded.** | Early manifest/compiler and systemd/deploy work conflicts with the strict manifest and deliberate infrastructure reset. |
+| `jvd/pr2` | `archive/2026-07-18/local/jvd/pr2` | **Superseded; research only.** | Earlier source reorganization, docs, and SEA experiments were deliberately replaced by immutable artifacts and the V4 ledger. |
+| `jvd/pr3` | `archive/2026-07-18/local/jvd/pr3` | **Superseded.** | Mutable app-run graphs, NodeAgent services, shared-resource registry, and systemd paths were explicitly retired. |
+| `jvd/tsc` | `archive/2026-07-18/local/jvd/tsc` | **Superseded.** | The existing older archive did not contain this tip; remaining type/dependency/import-meta work targets old paths and current SEA handling supersedes the useful parts. |
 
 ## Unpublished local work and `jvd/pr4`
 

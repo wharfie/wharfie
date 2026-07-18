@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createExecutionLedgerOperatorCommands } from '../../../src/core/runtime/operator/execution-ledger-operator.js';
 import runCommand from '../../../src/cli/cmds/ops_cmds/run.js';
 
-const { inspectCommand, recoverCommand, cancelCommand } =
+const { inspectCommand, recoverCommand, reconcileCommand, cancelCommand } =
   createExecutionLedgerOperatorCommands();
 
 const ORIGINAL_ENV = process.env;
@@ -127,6 +127,24 @@ describe.each([
           'wlm_missing-cancellation-run',
           '--request-id',
           'missing-cancellation-request',
+        ],
+        { from: 'node' },
+      ),
+  ],
+  [
+    'wharfie ops reconcile',
+    () =>
+      reconcileCommand.parseAsync(
+        [
+          'node',
+          'reconcile',
+          '--run-id',
+          'wlm_missing-reconciliation-run',
+          '--reconciliation-id',
+          'missing-reconciliation-request',
+          '--evidence-file',
+          'unused-evidence.json',
+          '--confirm-runner-stopped',
         ],
         { from: 'node' },
       ),

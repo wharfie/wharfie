@@ -2,7 +2,13 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { describe, expect, it } from '@jest/globals';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  truncateSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -19,7 +25,10 @@ import {
 } from '../../src/core/runtime/manual-ledger-run.js';
 import {
   ExecutionLedgerOperatorScopeError,
+  EXECUTION_LEDGER_RECONCILIATION_EVIDENCE_FILE_MAX_BYTES,
   inspectExecutionLedgerRun,
+  readExecutionLedgerReconciliationEvidenceFile,
+  reconcileExecutionLedgerRun,
   recoverExecutionLedgerRun,
 } from '../../src/core/runtime/operator/execution-ledger-operator.js';
 import { createExecutionLedgerOperatorView } from '../../src/core/runtime/operator/execution-ledger-view.js';
@@ -117,6 +126,40 @@ async function readRun(root, configuration, runId) {
 }
 
 describe('shared execution-ledger operator boundary', () => {
+  it('reads only a bounded regular JSON evidence file', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-evidence-file-'),
+    );
+    const evidenceFile = path.join(root, 'evidence.json');
+    const oversizedFile = path.join(root, 'oversized.json');
+    try {
+      const evidence = {
+        protocol: 'wharfie.activity',
+        transcript: { terminal: 'completed' },
+      };
+      writeFileSync(evidenceFile, JSON.stringify(evidence), 'utf8');
+      await expect(
+        readExecutionLedgerReconciliationEvidenceFile(evidenceFile),
+      ).resolves.toEqual(evidence);
+
+      writeFileSync(evidenceFile, '{not-json', 'utf8');
+      await expect(
+        readExecutionLedgerReconciliationEvidenceFile(evidenceFile),
+      ).rejects.toThrow(/valid UTF-8 JSON evidence/i);
+
+      writeFileSync(oversizedFile, '', 'utf8');
+      truncateSync(
+        oversizedFile,
+        EXECUTION_LEDGER_RECONCILIATION_EVIDENCE_FILE_MAX_BYTES + 1,
+      );
+      await expect(
+        readExecutionLedgerReconciliationEvidenceFile(oversizedFile),
+      ).rejects.toThrow(/must not exceed/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('exposes cancellation ordering while redacting its reason', () => {
     const requestedAt = 1_700_000_000_000;
     const view = createExecutionLedgerOperatorView({
@@ -168,7 +211,7 @@ describe('shared execution-ledger operator boundary', () => {
     expect(JSON.stringify(view)).not.toContain('reason-details-secret');
   });
 
-  it('rejects cross-app inspection and recovery before changing the run', async () => {
+  it('rejects cross-app inspection, recovery, and reconciliation before changing the run', async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), 'wharfie-operator-scope-'));
     const configuration = createConfiguration(root, 'operator-scope');
     try {
@@ -190,6 +233,15 @@ describe('shared execution-ledger operator boundary', () => {
       await expect(
         recoverExecutionLedgerRun({
           runId,
+          expectedAppId: 'application-a',
+          configuration,
+        }),
+      ).rejects.toBeInstanceOf(ExecutionLedgerOperatorScopeError);
+      await expect(
+        reconcileExecutionLedgerRun({
+          runId,
+          reconciliationId: 'cross-app-reconciliation',
+          evidence: { credential: 'must-not-be-persisted' },
           expectedAppId: 'application-a',
           configuration,
         }),
@@ -247,7 +299,7 @@ describe('shared execution-ledger operator boundary', () => {
     }
   });
 
-  it('does not materialize a missing local store during inspection or recovery', async () => {
+  it('does not materialize a missing local store during inspection, recovery, or reconciliation', async () => {
     const parent = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-operator-missing-'),
     );
@@ -264,13 +316,21 @@ describe('shared execution-ledger operator boundary', () => {
       await expect(
         recoverExecutionLedgerRun({ runId, configuration }),
       ).resolves.toBeNull();
+      await expect(
+        reconcileExecutionLedgerRun({
+          runId,
+          reconciliationId: 'missing-run-reconciliation',
+          evidence: {},
+          configuration,
+        }),
+      ).resolves.toBeNull();
       expect(existsSync(root)).toBe(false);
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }
   });
 
-  it('does not let packaged recovery downgrade to an unfenced adapter', async () => {
+  it('does not let packaged recovery or reconciliation downgrade to an unfenced adapter', async () => {
     const parent = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-operator-adapter-'),
     );
@@ -284,6 +344,15 @@ describe('shared execution-ledger operator boundary', () => {
       await expect(
         recoverExecutionLedgerRun({
           runId,
+          requireLocalOwnership: true,
+          configuration,
+        }),
+      ).rejects.toThrow(/requires the LMDB control adapter/i);
+      await expect(
+        reconcileExecutionLedgerRun({
+          runId,
+          reconciliationId: 'unfenced-adapter-reconciliation',
+          evidence: {},
           requireLocalOwnership: true,
           configuration,
         }),
