@@ -8,9 +8,14 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
+import {
+  CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
+  CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME,
+} from '../../../src/core/resources/builds/lib/core-runtime-dependency-asset.js';
 import { DEPENDENCY_LOCK_INPUT_FORMAT } from '../../../src/core/runtime/application-revision.js';
 import { sortCanonicalJsonValue } from '../../../src/core/runtime/canonical-order.js';
 import { sha256Base64Url } from '../../../src/core/runtime/content-id.js';
+import { digestFrozenDependencyClosurePlan } from '../../../src/core/resources/builds/lib/frozen-dependency-closure-plan.js';
 
 const INSTALL_DEPS_IMPORT =
   '../../../src/core/resources/builds/lib/install-deps.js';
@@ -159,14 +164,8 @@ describe('CoreRuntimeDependenciesResource', () => {
     const tmpRoot = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-core-runtime-dependencies-'),
     );
-    const closureDigest = {
-      algorithm: /** @type {const} */ ('sha256'),
-      value: createHash('sha256')
-        .update('core runtime closure')
-        .digest('base64url'),
-    };
     const installForTarget = jest.fn(
-      async ({ tmpBuildDir, dependencyLock }) => {
+      async ({ tmpBuildDir, dependencyLock, buildTarget }) => {
         const lmdbPath = path.join(tmpBuildDir, 'node_modules', 'lmdb');
         await fsp.mkdir(lmdbPath, { recursive: true });
         await fsp.writeFile(
@@ -181,18 +180,44 @@ describe('CoreRuntimeDependenciesResource', () => {
           path.join(lmdbPath, 'index.js'),
           'exports.open = () => {};',
         );
-        return {
-          dependencyLockInput: dependencyLock.input,
-          closureDigest,
-          plan: {
-            roots: [
-              {
+        const plan = {
+          schemaVersion: 2,
+          kind: 'frozenDependencyClosure',
+          activity: 'core-local-control-store',
+          lock: dependencyLock.input,
+          target: buildTarget,
+          installScripts: 'ignored',
+          binLinks: 'not-created',
+          selectedOptionalFailures: 'fatal',
+          roots: [
+            {
+              name: 'lmdb',
+              version: '3.4.4',
+              location: 'node_modules/lmdb',
+            },
+          ],
+          packages: [
+            {
+              location: 'node_modules/lmdb',
+              name: 'lmdb',
+              version: '3.4.4',
+              resolved: 'https://registry.npmjs.org/lmdb/-/lmdb-3.4.4.tgz',
+              integrity: `sha512-${Buffer.alloc(64).toString('base64')}`,
+              hasInstallScript: false,
+              manifestContract: sortCanonicalJsonValue({
                 name: 'lmdb',
                 version: '3.4.4',
-                location: 'node_modules/lmdb',
-              },
-            ],
-          },
+                bundleDependencies: [],
+                hasInstallScript: false,
+              }),
+              edges: [],
+            },
+          ],
+        };
+        return {
+          dependencyLockInput: dependencyLock.input,
+          closureDigest: digestFrozenDependencyClosurePlan(plan),
+          plan,
         };
       },
     );
@@ -220,12 +245,12 @@ describe('CoreRuntimeDependenciesResource', () => {
       const receipt = resource.get('receipt');
       const manifest = JSON.parse(
         await fsp.readFile(
-          assets['<WHARFIE_CORE>/dependencies/v1/manifest.json'],
+          assets[CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME],
           'utf8',
         ),
       );
       const archive = await fsp.readFile(
-        assets['<WHARFIE_CORE>/dependencies/v1/local-control-store.tgz'],
+        assets[CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME],
       );
 
       expect(installForTarget).toHaveBeenCalledWith(
@@ -251,18 +276,17 @@ describe('CoreRuntimeDependenciesResource', () => {
         value: createHash('sha256').update(archive).digest('base64url'),
       });
       expect(resource.get('assetDigests')).toEqual({
-        '<WHARFIE_CORE>/dependencies/v1/manifest.json': {
+        [CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME]: {
           algorithm: 'sha256',
           value: createHash('sha256')
             .update(
               await fsp.readFile(
-                assets['<WHARFIE_CORE>/dependencies/v1/manifest.json'],
+                assets[CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME],
               ),
             )
             .digest('base64url'),
         },
-        '<WHARFIE_CORE>/dependencies/v1/local-control-store.tgz':
-          manifest.archive.digest,
+        [CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME]: manifest.archive.digest,
       });
     } finally {
       await fsp.rm(tmpRoot, { force: true, recursive: true });

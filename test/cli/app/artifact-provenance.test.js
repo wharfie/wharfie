@@ -30,6 +30,7 @@ import {
   CORE_RUNTIME_DEPENDENCY_PURPOSE,
   CORE_RUNTIME_DEPENDENCY_ROOT,
 } from '../../../src/core/resources/builds/lib/core-runtime-dependency-asset.js';
+import { digestFrozenDependencyClosurePlan } from '../../../src/core/resources/builds/lib/frozen-dependency-closure-plan.js';
 import {
   APP_MANIFEST_ASSET_NAME,
   stringifyEmbeddedAppManifest,
@@ -43,6 +44,7 @@ import {
   stringifyEmbeddedArtifactRuntime,
 } from '../../../src/core/resources/builds/lib/revision-runtime-assets.js';
 import { createApplicationRevision } from '../../../src/core/runtime/application-revision.js';
+import { sortCanonicalJsonValue } from '../../../src/core/runtime/canonical-order.js';
 import { sha256Base64Url } from '../../../src/core/runtime/content-id.js';
 
 const BUILDER_VERSION = '0.0.15';
@@ -223,17 +225,50 @@ function makeCoreRuntimeDependenciesResource(target, marker) {
     properties: { buildTarget: target },
   });
   const archiveDigest = digest(`${marker} core archive`);
+  const dependencyLockInput = {
+    format: 'wharfie-npm-package-lock-v3-closure-v1',
+    digest: digest(`${marker} core dependency lock`),
+  };
+  const plan = {
+    schemaVersion: 2,
+    kind: 'frozenDependencyClosure',
+    activity: 'core-local-control-store',
+    lock: dependencyLockInput,
+    target,
+    installScripts: 'ignored',
+    binLinks: 'not-created',
+    selectedOptionalFailures: 'fatal',
+    roots: [
+      {
+        ...CORE_RUNTIME_DEPENDENCY_ROOT,
+        location: 'node_modules/lmdb',
+      },
+    ],
+    packages: [
+      {
+        location: 'node_modules/lmdb',
+        ...CORE_RUNTIME_DEPENDENCY_ROOT,
+        resolved: 'https://registry.npmjs.org/lmdb/-/lmdb-3.4.4.tgz',
+        integrity: `sha512-${Buffer.alloc(64).toString('base64')}`,
+        hasInstallScript: false,
+        manifestContract: sortCanonicalJsonValue({
+          ...CORE_RUNTIME_DEPENDENCY_ROOT,
+          bundleDependencies: [],
+          hasInstallScript: false,
+        }),
+        edges: [],
+      },
+    ],
+  };
   const receipt = {
     schemaVersion: CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
     kind: CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
     purpose: CORE_RUNTIME_DEPENDENCY_PURPOSE,
     target,
     roots: [{ ...CORE_RUNTIME_DEPENDENCY_ROOT }],
-    dependencyLockInput: {
-      format: 'wharfie-npm-package-lock-v3-closure-v1',
-      digest: digest(`${marker} core dependency lock`),
-    },
-    closureDigest: digest(`${marker} core closure`),
+    dependencyLockInput,
+    closureDigest: digestFrozenDependencyClosurePlan(plan),
+    plan,
     archive: {
       assetName: CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
       digest: archiveDigest,
@@ -423,6 +458,7 @@ async function makeBuild(target, binaryPath, dependencies, revision) {
       roots: coreReceipt.roots,
       dependencyLockInput: coreReceipt.dependencyLockInput,
       closureDigest: coreReceipt.closureDigest,
+      plan: coreReceipt.plan,
       archive: coreReceipt.archive,
     };
   }

@@ -74,7 +74,7 @@ It then extracts those same validated bytes at the exact locked physical
 dependency, peer, target, engine, bundle, and install-script contract; the
 resulting tree may contain no unplanned roots, links, or special files. Wharfie
 does not run lifecycle scripts and does not create package `bin` links. These
-are explicit closure-v1 semantics, not a claim of complete `npm install`
+are explicit frozen-lock semantics, not a claim of complete `npm install`
 compatibility. A package that requires an install script to become usable is
 unsupported unless its published locked bytes are already usable for the
 selected target.
@@ -87,10 +87,17 @@ fixed install semantics above. Its semantic receipt is:
 
 ```text
 SHA-256(
-  UTF-8("wharfie:frozen-dependency-closure:v1\0") ||
+  UTF-8("wharfie:frozen-dependency-closure:v2\0") ||
     canonicalJson(plan)
 )
 ```
+
+Plan schema v2 makes every dependency edge explicit. Required edges name one
+exact physical package, while a target-incompatible optional dependency or an
+absent optional peer retains a typed null-location omission and its reason.
+The pure plan contract verifies exact edge coverage, reachability, target
+constraints, package-manifest behavior, and the domain-separated digest
+without importing registry or npm planning tools.
 
 Wharfie archives the materialized closure and separately hashes the exact
 archive bytes. Each strict function asset seals the activity name, target,
@@ -99,8 +106,11 @@ digest, archive digest, and archive bytes in one canonical receipt. Artifact
 provenance consumes receipt evidence derived from the exact bytes selected for
 SEA and only uses mutable resource outputs as fail-closed consistency checks.
 Changing a producer field after SEA sealing therefore cannot relabel an
-unchanged archive or closure. The closure plan itself is digested rather than
-embedded in the executable or artifact record.
+unchanged archive or closure. Activity closure plans remain represented by
+their semantic digest in function assets. Wharfie's core local-control-store
+closure additionally embeds its complete canonical plan in a strict v2 SEA
+manifest so the packaged runtime can independently preflight its extracted
+tree.
 
 Before SEA generation, every configured asset is stably read and copied into a
 private build directory. Function-asset digests and strict receipts are parsed
@@ -114,6 +124,15 @@ Runtime execution checks the embedded archive's raw digest before starting a
 worker, extracts it into a fresh private mode-0700 root, rejects links and
 special entries, never reuses a deterministic on-disk cache, and removes the
 root when its worker or cache entry is destroyed.
+
+Before packaged core code is required, Wharfie verifies the exact planned
+package-location set and every extracted package manifest. It resolves every
+root and dependency edge from its real CommonJS caller and requires the entry
+to belong to the exact planned package rather than an ancestor, parent,
+nested-package, or other ambient location. An explicitly omitted optional edge
+must resolve to `MODULE_NOT_FOUND`; finding an ambient implementation is a
+hard failure. Runtime-computed non-package paths remain outside this static
+preflight and do not make the SEA a hostile-code sandbox.
 
 Revision-backed source activity execution uses the same closure planner,
 materializer, archive verification, and private worker-root boundary for the
@@ -152,6 +171,7 @@ dependency lock.
   and revision/source identity directly. The current official builder is
   trusted to derive both the revision and coherent FunctionResource inputs from
   one private prepared snapshot.
-- A moved Darwin SEA has executed a real locked LMDB dependency with Node absent
-  from `PATH`. The equivalent clean hosted-Linux proof remains required before
-  the portable application milestone is complete.
+
+The frozen core closure has run from moved Darwin and clean hosted-Linux SEAs
+with Node absent from `PATH`. Those portability proofs do not make final SEA
+bytes reproducible or add Windows extraction support.

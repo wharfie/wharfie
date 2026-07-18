@@ -188,13 +188,14 @@ class CoreRuntimeDependenciesResource extends BuildResource {
         value: createHash('sha256').update(archiveBytes).digest('base64url'),
       };
       const receipt = {
-        schemaVersion: /** @type {const} */ (1),
+        schemaVersion: /** @type {const} */ (2),
         kind: /** @type {const} */ ('coreRuntimeDependencyClosure'),
         purpose: /** @type {const} */ ('localControlStore'),
         target,
         roots: [{ ...CORE_LMDB_ROOT }],
         dependencyLockInput: installed.dependencyLockInput,
         closureDigest: installed.closureDigest,
+        plan: installed.plan,
         archive: {
           assetName: CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
           digest: archiveDigest,

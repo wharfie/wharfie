@@ -13,10 +13,8 @@ import pacote from 'pacote';
 import { extract as extractTar, list as listTar } from 'tar';
 
 import { compareCanonicalStrings } from '../../../runtime/canonical-order.js';
-import {
-  createFrozenDependencyClosurePlan,
-  verifyExtractedPackageManifest,
-} from './frozen-dependency-closure.js';
+import { createFrozenDependencyClosurePlan } from './frozen-dependency-closure.js';
+import { verifyExtractedPackageManifest } from './frozen-dependency-closure-plan.js';
 
 /**
  * @typedef {import('node:process')['platform']} TargetPlatform

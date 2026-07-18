@@ -64,7 +64,7 @@ let _originalStderrWrite = null;
  * @property {{path: string, digest: import('../../runtime/application-revision.js').Sha256Digest, size: number, archive: null | {fileName: string, digest: import('../../runtime/application-revision.js').Sha256Digest}}} nodeSource - Exact pre-injection Node source and same-generation archive evidence.
  * @property {Record<string, import('../../runtime/application-revision.js').Sha256Digest>} assets - Exact generic asset bytes consumed by SEA.
  * @property {Record<string, any>} functionAssets - Strict parsed function-asset evidence.
- * @property {null | {manifestDigest: import('../../runtime/application-revision.js').Sha256Digest, target: import('../../runtime/build-target.js').BuildTarget, roots: {name: string, version: string}[], dependencyLockInput: import('../../runtime/application-revision.js').LockedInputDescriptor, closureDigest: import('../../runtime/application-revision.js').Sha256Digest, archive: {assetName: string, digest: import('../../runtime/application-revision.js').Sha256Digest}}} [coreRuntimeDependencies] - Strict core-native closure receipt when embedded.
+ * @property {null | {manifestDigest: import('../../runtime/application-revision.js').Sha256Digest, target: import('../../runtime/build-target.js').BuildTarget, roots: {name: string, version: string}[], dependencyLockInput: import('../../runtime/application-revision.js').LockedInputDescriptor, closureDigest: import('../../runtime/application-revision.js').Sha256Digest, plan: Readonly<Record<string, any>>, archive: {assetName: string, digest: import('../../runtime/application-revision.js').Sha256Digest}}} [coreRuntimeDependencies] - Strict core-native closure receipt when embedded.
  * @property {{mode: 'unsigned'} | {mode: 'ad-hoc'} | {mode: 'identity', signer: string}} signing - Generation signing state.
  */
 
@@ -1031,6 +1031,7 @@ class SeaBuild extends BaseResource {
         roots: manifest.roots,
         dependencyLockInput: manifest.dependencyLockInput,
         closureDigest: manifest.closureDigest,
+        plan: manifest.plan,
         archive: manifest.archive,
       };
     }

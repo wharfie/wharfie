@@ -15,6 +15,8 @@ import {
   CORE_RUNTIME_DEPENDENCY_PURPOSE,
   CORE_RUNTIME_DEPENDENCY_ROOT,
 } from '../../../src/core/resources/builds/lib/core-runtime-dependency-asset.js';
+import { digestFrozenDependencyClosurePlan } from '../../../src/core/resources/builds/lib/frozen-dependency-closure-plan.js';
+import { sortCanonicalJsonValue } from '../../../src/core/runtime/canonical-order.js';
 
 const CHILD_PROCESS_IMPORT = 'node:child_process';
 const MISMATCHED_NODE_VERSION =
@@ -771,17 +773,50 @@ describe('SeaBuild', () => {
       algorithm: /** @type {'sha256'} */ ('sha256'),
       value: createHash('sha256').update(value).digest('base64url'),
     });
+    const dependencyLockInput = {
+      format: 'wharfie-npm-package-lock-v3-closure-v1',
+      digest: digest('core lock'),
+    };
+    const plan = {
+      schemaVersion: 2,
+      kind: 'frozenDependencyClosure',
+      activity: 'core-local-control-store',
+      lock: dependencyLockInput,
+      target,
+      installScripts: 'ignored',
+      binLinks: 'not-created',
+      selectedOptionalFailures: 'fatal',
+      roots: [
+        {
+          ...CORE_RUNTIME_DEPENDENCY_ROOT,
+          location: 'node_modules/lmdb',
+        },
+      ],
+      packages: [
+        {
+          location: 'node_modules/lmdb',
+          ...CORE_RUNTIME_DEPENDENCY_ROOT,
+          resolved: 'https://registry.npmjs.org/lmdb/-/lmdb-3.4.4.tgz',
+          integrity: `sha512-${Buffer.alloc(64).toString('base64')}`,
+          hasInstallScript: false,
+          manifestContract: sortCanonicalJsonValue({
+            ...CORE_RUNTIME_DEPENDENCY_ROOT,
+            bundleDependencies: [],
+            hasInstallScript: false,
+          }),
+          edges: [],
+        },
+      ],
+    };
     const manifest = {
       schemaVersion: CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
       kind: CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
       purpose: CORE_RUNTIME_DEPENDENCY_PURPOSE,
       target,
       roots: [{ ...CORE_RUNTIME_DEPENDENCY_ROOT }],
-      dependencyLockInput: {
-        format: 'wharfie-npm-package-lock-v3-closure-v1',
-        digest: digest('core lock'),
-      },
-      closureDigest: digest('core closure'),
+      dependencyLockInput,
+      closureDigest: digestFrozenDependencyClosurePlan(plan),
+      plan,
       archive: {
         assetName: CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME,
         digest: digest(archiveBytes),
@@ -822,6 +857,7 @@ describe('SeaBuild', () => {
         roots: [{ ...CORE_RUNTIME_DEPENDENCY_ROOT }],
         dependencyLockInput: manifest.dependencyLockInput,
         closureDigest: manifest.closureDigest,
+        plan: manifest.plan,
         archive: manifest.archive,
       });
 

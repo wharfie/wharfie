@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createFrozenDependencyClosurePlan } from '../../../src/core/resources/builds/lib/frozen-dependency-closure.js';
+import { validateFrozenDependencyClosurePlan } from '../../../src/core/resources/builds/lib/frozen-dependency-closure-plan.js';
 import { sortCanonicalJsonValue } from '../../../src/core/runtime/canonical-order.js';
 import { sha256Base64Url } from '../../../src/core/runtime/content-id.js';
 import { DEPENDENCY_LOCK_INPUT_FORMAT } from '../../../src/core/runtime/application-revision.js';
@@ -382,6 +383,7 @@ describe('frozen dependency closure planning', () => {
             type: 'peerOptional',
             spec: '1.0.0',
             location: null,
+            omission: 'absent-optional-peer',
           },
         ],
       }),
@@ -445,6 +447,32 @@ describe('frozen dependency closure planning', () => {
       "External 'alpha' does not support target linux/x64",
     );
   });
+
+  it.each([
+    { os: ['darwin'] },
+    { cpu: ['arm64'] },
+    { libc: ['musl'] },
+    { node: '<24' },
+  ])(
+    'rejects a pure plan whose included package constraints do not match target: %j',
+    async (targetConstraints) => {
+      const lock = createLock(
+        { dependencies: { alpha: '1.0.0' } },
+        {
+          'node_modules/alpha': registryPackage('alpha', '1.0.0'),
+        },
+      );
+      const result = await plan(lock);
+      const candidate = JSON.parse(JSON.stringify(result.plan));
+      candidate.packages[0].targetConstraints = targetConstraints;
+      candidate.packages[0].manifestContract.targetConstraints =
+        targetConstraints;
+
+      expect(() =>
+        validateFrozenDependencyClosurePlan(sortCanonicalJsonValue(candidate)),
+      ).toThrow(/targetConstraints do not match the closure target/i);
+    },
+  );
 
   it('rejects externals that are only development dependencies', async () => {
     const lock = createLock(

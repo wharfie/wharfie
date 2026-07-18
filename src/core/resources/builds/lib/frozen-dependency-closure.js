@@ -21,11 +21,20 @@ import {
 import { sha256Base64Url } from '../../../runtime/content-id.js';
 import { cloneJsonObject } from '../../../runtime/json-value.js';
 import { assertLogicalId } from '../../../runtime/logical-id.js';
+import {
+  FROZEN_DEPENDENCY_CLOSURE_DIGEST_DOMAIN,
+  FROZEN_DEPENDENCY_CLOSURE_KIND,
+  FROZEN_DEPENDENCY_CLOSURE_SCHEMA_VERSION,
+  digestFrozenDependencyClosurePlan,
+  frozenTargetConstraintsMatch,
+  validateFrozenDependencyClosurePlan,
+} from './frozen-dependency-closure-plan.js';
 
-export const FROZEN_DEPENDENCY_CLOSURE_SCHEMA_VERSION = 1;
-export const FROZEN_DEPENDENCY_CLOSURE_KIND = 'frozenDependencyClosure';
-export const FROZEN_DEPENDENCY_CLOSURE_DIGEST_DOMAIN =
-  'wharfie:frozen-dependency-closure:v1';
+export {
+  FROZEN_DEPENDENCY_CLOSURE_DIGEST_DOMAIN,
+  FROZEN_DEPENDENCY_CLOSURE_KIND,
+  FROZEN_DEPENDENCY_CLOSURE_SCHEMA_VERSION,
+};
 
 const SUPPORTED_EDGE_TYPES = new Set([
   'optional',
@@ -246,30 +255,6 @@ function normalizeConstraintList(value, valuePath) {
 }
 
 /**
- * Apply npm's positive/negative target-list semantics.
- * @param {string | undefined} targetValue - Target field.
- * @param {string[] | undefined} constraints - Package constraints.
- * @returns {boolean} - Whether the package supports the target.
- */
-function constraintListMatches(targetValue, constraints) {
-  if (!constraints || constraints.length === 0) return true;
-  if (constraints.length === 1 && constraints[0] === 'any') return true;
-  let negated = 0;
-  let match = false;
-  for (const entry of constraints) {
-    const negate = entry.startsWith('!');
-    const test = negate ? entry.slice(1) : entry;
-    if (negate) {
-      negated += 1;
-      if (targetValue === test) return false;
-    } else {
-      match = match || targetValue === test;
-    }
-  }
-  return match || negated === constraints.length;
-}
-
-/**
  * @param {any} node - Arborist virtual node.
  * @param {import('../../../runtime/build-target.js').BuildTarget} target - Canonical target.
  * @returns {boolean} - Whether one locked package applies to the target.
@@ -299,14 +284,14 @@ function packageMatchesTarget(node, target) {
       `${node.location}.engines.node must be a canonical semantic-version range.`,
     );
   }
-  const targetLibc = target.platform === 'linux' ? target.libc : undefined;
-  return (
-    constraintListMatches(target.platform, osConstraints) &&
-    constraintListMatches(target.architecture, cpuConstraints) &&
-    (libcConstraints === undefined ||
-      (targetLibc !== undefined &&
-        constraintListMatches(targetLibc, libcConstraints))) &&
-    (nodeRange === undefined || semver.satisfies(target.nodeVersion, nodeRange))
+  return frozenTargetConstraintsMatch(
+    {
+      ...(osConstraints ? { os: osConstraints } : {}),
+      ...(cpuConstraints ? { cpu: cpuConstraints } : {}),
+      ...(libcConstraints ? { libc: libcConstraints } : {}),
+      ...(nodeRange ? { node: nodeRange } : {}),
+    },
+    target,
   );
 }
 
@@ -891,6 +876,7 @@ export async function createFrozenDependencyClosurePlan(options) {
             type: edge.type,
             spec: edge.spec,
             location: null,
+            omission: 'absent-optional-peer',
           });
           continue;
         }
@@ -909,7 +895,16 @@ export async function createFrozenDependencyClosurePlan(options) {
         );
       }
       if (!packageMatchesTarget(edge.to, target)) {
-        if (isOptional) continue;
+        if (isOptional) {
+          edges.push({
+            name: edge.name,
+            type: edge.type,
+            spec: edge.spec,
+            location: null,
+            omission: 'target-incompatible',
+          });
+          continue;
+        }
         throw new Error(
           `Locked package '${location}' requires '${edge.name}', which does not support target ${target.platform}/${target.architecture}.`,
         );
@@ -933,27 +928,22 @@ export async function createFrozenDependencyClosurePlan(options) {
   const packages = Array.from(packagesByLocation.values()).sort((left, right) =>
     compareCanonicalStrings(left.location, right.location),
   );
-  const plan = sortCanonicalJsonValue({
-    schemaVersion: FROZEN_DEPENDENCY_CLOSURE_SCHEMA_VERSION,
-    kind: FROZEN_DEPENDENCY_CLOSURE_KIND,
-    activity: options.activity,
-    lock: consumed.handle.input,
-    target,
-    installScripts: 'ignored',
-    binLinks: 'not-created',
-    selectedOptionalFailures: 'fatal',
-    roots,
-    packages,
-  });
-  const digest = validateSha256Digest(
-    {
-      algorithm: 'sha256',
-      value: sha256Base64Url(
-        `${FROZEN_DEPENDENCY_CLOSURE_DIGEST_DOMAIN}\0${JSON.stringify(plan)}`,
-      ),
-    },
-    'frozen dependency closure digest',
+  const plan = validateFrozenDependencyClosurePlan(
+    sortCanonicalJsonValue({
+      schemaVersion: FROZEN_DEPENDENCY_CLOSURE_SCHEMA_VERSION,
+      kind: FROZEN_DEPENDENCY_CLOSURE_KIND,
+      activity: options.activity,
+      lock: consumed.handle.input,
+      target,
+      installScripts: 'ignored',
+      binLinks: 'not-created',
+      selectedOptionalFailures: 'fatal',
+      roots,
+      packages,
+    }),
+    'frozen dependency closure plan',
   );
+  const digest = digestFrozenDependencyClosurePlan(plan);
 
   return {
     plan: freezeJsonSnapshot(plan),

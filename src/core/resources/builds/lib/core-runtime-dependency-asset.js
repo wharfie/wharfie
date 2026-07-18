@@ -4,20 +4,27 @@ import {
   validateDependencyLockInput,
   validateSha256Digest,
 } from '../../../runtime/application-revision.js';
-import { validateBuildTarget } from '../../../runtime/build-target.js';
+import {
+  getBuildTargetId,
+  validateBuildTarget,
+} from '../../../runtime/build-target.js';
 import {
   compareCanonicalStrings,
   sortCanonicalJsonValue,
 } from '../../../runtime/canonical-order.js';
 import { cloneJsonObject } from '../../../runtime/json-value.js';
+import {
+  digestFrozenDependencyClosurePlan,
+  validateFrozenDependencyClosurePlan,
+} from './frozen-dependency-closure-plan.js';
 
-export const CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION = 1;
+export const CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION = 2;
 export const CORE_RUNTIME_DEPENDENCY_ASSET_KIND =
   'coreRuntimeDependencyClosure';
 export const CORE_RUNTIME_DEPENDENCY_ASSET_PREFIX =
   '<WHARFIE_CORE>/dependencies/';
-export const CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME = `${CORE_RUNTIME_DEPENDENCY_ASSET_PREFIX}v1/manifest.json`;
-export const CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME = `${CORE_RUNTIME_DEPENDENCY_ASSET_PREFIX}v1/local-control-store.tgz`;
+export const CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME = `${CORE_RUNTIME_DEPENDENCY_ASSET_PREFIX}v2/manifest.json`;
+export const CORE_RUNTIME_DEPENDENCY_ARCHIVE_ASSET_NAME = `${CORE_RUNTIME_DEPENDENCY_ASSET_PREFIX}v2/local-control-store.tgz`;
 export const CORE_RUNTIME_DEPENDENCY_PURPOSE = 'localControlStore';
 export const CORE_RUNTIME_DEPENDENCY_ROOT = Object.freeze({
   name: 'lmdb',
@@ -54,6 +61,7 @@ const MANIFEST_KEYS = new Set([
   'roots',
   'dependencyLockInput',
   'closureDigest',
+  'plan',
   'archive',
 ]);
 const ARCHIVE_KEYS = new Set(['assetName', 'digest']);
@@ -69,13 +77,14 @@ const NPM_PACKAGE_NAME_PATTERN =
 
 /**
  * @typedef CoreRuntimeDependencyManifest
- * @property {1} schemaVersion - Strict document schema version.
+ * @property {2} schemaVersion - Strict document schema version.
  * @property {'coreRuntimeDependencyClosure'} kind - Fixed document kind.
  * @property {'localControlStore'} purpose - Fixed runtime use.
  * @property {import('../../../runtime/build-target.js').BuildTarget} target - Exact target.
  * @property {CoreRuntimeDependencyRoot[]} roots - Exact root packages.
  * @property {import('../../../runtime/application-revision.js').LockedInputDescriptor} dependencyLockInput - Core-owned frozen lock receipt.
  * @property {import('../../../runtime/application-revision.js').Sha256Digest} closureDigest - Target-specific semantic closure receipt.
+ * @property {Readonly<Record<string, any>>} plan - Full canonical target closure plan.
  * @property {{assetName: string, digest: import('../../../runtime/application-revision.js').Sha256Digest}} archive - Exact SEA archive asset receipt.
  */
 
@@ -175,20 +184,67 @@ export function validateCoreRuntimeDependencyManifest(
     );
   }
 
+  const target = validateBuildTarget(manifest.target, `${valuePath}.target`);
+  const dependencyLockInput = validateDependencyLockInput(
+    manifest.dependencyLockInput,
+    `${valuePath}.dependencyLockInput`,
+  );
+  const closureDigest = validateSha256Digest(
+    manifest.closureDigest,
+    `${valuePath}.closureDigest`,
+  );
+  const plan = validateFrozenDependencyClosurePlan(
+    manifest.plan,
+    `${valuePath}.plan`,
+  );
+  const actualClosureDigest = digestFrozenDependencyClosurePlan(
+    plan,
+    `${valuePath}.plan`,
+  );
+  if (actualClosureDigest.value !== closureDigest.value) {
+    throw new TypeError(
+      `${valuePath}.closureDigest does not match its embedded closure plan.`,
+    );
+  }
+  if (plan.activity !== 'core-local-control-store') {
+    throw new TypeError(
+      `${valuePath}.plan.activity must be 'core-local-control-store'.`,
+    );
+  }
+  if (getBuildTargetId(plan.target) !== getBuildTargetId(target)) {
+    throw new TypeError(
+      `${valuePath}.plan.target does not match the manifest target.`,
+    );
+  }
+  if (
+    JSON.stringify(sortCanonicalJsonValue(plan.lock)) !==
+    JSON.stringify(sortCanonicalJsonValue(dependencyLockInput))
+  ) {
+    throw new TypeError(
+      `${valuePath}.plan.lock does not match the manifest dependency lock.`,
+    );
+  }
+  const planRoots = plan.roots.map(
+    (/** @type {Record<string, any>} */ root) => ({
+      name: root.name,
+      version: root.version,
+    }),
+  );
+  if (JSON.stringify(planRoots) !== JSON.stringify(roots)) {
+    throw new TypeError(
+      `${valuePath}.plan.roots does not match the manifest roots.`,
+    );
+  }
+
   return {
     schemaVersion: CORE_RUNTIME_DEPENDENCY_ASSET_SCHEMA_VERSION,
     kind: CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
     purpose: CORE_RUNTIME_DEPENDENCY_PURPOSE,
-    target: validateBuildTarget(manifest.target, `${valuePath}.target`),
+    target,
     roots,
-    dependencyLockInput: validateDependencyLockInput(
-      manifest.dependencyLockInput,
-      `${valuePath}.dependencyLockInput`,
-    ),
-    closureDigest: validateSha256Digest(
-      manifest.closureDigest,
-      `${valuePath}.closureDigest`,
-    ),
+    dependencyLockInput,
+    closureDigest,
+    plan,
     archive: {
       assetName: archive.assetName,
       digest: validateSha256Digest(

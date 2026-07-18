@@ -25,8 +25,10 @@ import {
   CORE_RUNTIME_DEPENDENCY_MANIFEST_ASSET_NAME,
   validateCoreRuntimeDependencyManifest,
 } from '../resources/builds/lib/core-runtime-dependency-asset.js';
+import { verifyExtractedPackageManifest } from '../resources/builds/lib/frozen-dependency-closure-plan.js';
 import { readEmbeddedRevisionRuntimePair } from '../resources/builds/lib/revision-runtime-assets.js';
 import { getBuildTargetId } from './build-target.js';
+import { compareCanonicalStrings } from './canonical-order.js';
 
 const CORE_RUNTIME_DEPENDENCY_TEMP_DIRECTORY =
   'wharfie-core-runtime-dependencies';
@@ -50,6 +52,7 @@ let processExitCleanupInstalled = false;
  * @property {import('../resources/builds/lib/core-runtime-dependency-asset.js').CoreRuntimeDependencyManifest} manifest - Exact validated receipt.
  * @property {Buffer} archiveBytes - Exact verified archive bytes.
  * @property {any | null} lmdbModule - Loaded trusted LMDB module when requested.
+ * @property {Map<string, string>} packageDirectories - Planned package locations to verified canonical directories.
  */
 
 /**
@@ -158,6 +161,99 @@ async function assertRegularExtractedTree(root) {
   }
 
   await visit(root);
+}
+
+/**
+ * Discover package roots strictly through physical node_modules boundaries.
+ * The resulting locations are compared to the embedded plan before any
+ * closure package code is resolved or executed.
+ * @param {string} root - Fresh extraction root.
+ * @returns {Promise<string[]>} - Canonical package-lock locations.
+ */
+async function discoverExtractedPackageLocations(root) {
+  /** @type {string[]} */
+  const found = [];
+
+  /**
+   * @param {string} nodeModulesPath - Physical node_modules directory.
+   * @param {string} logicalPrefix - Canonical package-lock prefix.
+   * @returns {Promise<void>}
+   */
+  async function scanNodeModules(nodeModulesPath, logicalPrefix) {
+    const entries = await readdir(nodeModulesPath, { withFileTypes: true });
+    entries.sort((left, right) =>
+      compareCanonicalStrings(left.name, right.name),
+    );
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        throw new Error(
+          `Core runtime dependency node_modules contains non-directory '${entry.name}'.`,
+        );
+      }
+      if (entry.name.startsWith('@')) {
+        const scopePath = path.join(nodeModulesPath, entry.name);
+        const scopedEntries = await readdir(scopePath, {
+          withFileTypes: true,
+        });
+        scopedEntries.sort((left, right) =>
+          compareCanonicalStrings(left.name, right.name),
+        );
+        if (scopedEntries.length === 0) {
+          throw new Error(
+            `Core runtime dependency closure contains empty scope '${entry.name}'.`,
+          );
+        }
+        for (const scopedEntry of scopedEntries) {
+          if (!scopedEntry.isDirectory()) {
+            throw new Error(
+              `Core runtime dependency scope '${entry.name}' contains a non-directory entry.`,
+            );
+          }
+          await recordPackage(
+            path.join(scopePath, scopedEntry.name),
+            `${logicalPrefix}/${entry.name}/${scopedEntry.name}`,
+          );
+        }
+      } else {
+        await recordPackage(
+          path.join(nodeModulesPath, entry.name),
+          `${logicalPrefix}/${entry.name}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * @param {string} packagePath - Physical package root.
+   * @param {string} location - Canonical package-lock location.
+   * @returns {Promise<void>}
+   */
+  async function recordPackage(packagePath, location) {
+    found.push(location);
+    const nestedNodeModules = path.join(packagePath, 'node_modules');
+    try {
+      const stats = await lstat(nestedNodeModules);
+      if (stats.isSymbolicLink() || !stats.isDirectory()) {
+        throw new Error(
+          `Core runtime dependency package '${location}' has an invalid node_modules boundary.`,
+        );
+      }
+      await scanNodeModules(nestedNodeModules, `${location}/node_modules`);
+    } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        error.code === 'ENOENT'
+      ) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  await scanNodeModules(path.join(root, 'node_modules'), 'node_modules');
+  return found.sort(compareCanonicalStrings);
 }
 
 /**
@@ -415,34 +511,21 @@ function getVerifiedPackageDirectory(prepared, packageName, expectedVersion) {
   ) {
     throw new Error(`Invalid verified package name '${packageName}'.`);
   }
-  const packageDirectory = assertVerifiedDirectory(
-    prepared,
-    path.join(prepared.root, 'node_modules', ...segments),
-    `Verified package '${packageName}'`,
+  const matches = prepared.manifest.plan.packages.filter(
+    (/** @type {Record<string, any>} */ packageEntry) =>
+      packageEntry.name === packageName &&
+      (expectedVersion === undefined ||
+        packageEntry.version === expectedVersion),
   );
-  const packageManifestPath = assertVerifiedRegularFile(
-    prepared,
-    path.join(packageDirectory, 'package.json'),
-    `Verified package '${packageName}' manifest`,
-  );
-  let packageManifest;
-  try {
-    packageManifest = JSON.parse(readFileSync(packageManifestPath, 'utf8'));
-  } catch (error) {
-    const detail = error instanceof Error ? ` ${error.message}` : '';
+  if (matches.length !== 1) {
     throw new Error(
-      `Verified package '${packageName}' manifest must be valid JSON.${detail}`,
+      `Verified package '${packageName}' must name exactly one package in the sealed closure plan.`,
     );
   }
-  if (
-    !packageManifest ||
-    typeof packageManifest !== 'object' ||
-    packageManifest.name !== packageName ||
-    (expectedVersion !== undefined &&
-      packageManifest.version !== expectedVersion)
-  ) {
+  const packageDirectory = prepared.packageDirectories.get(matches[0].location);
+  if (!packageDirectory) {
     throw new Error(
-      `Verified package '${packageName}' does not match its sealed identity.`,
+      `Verified package '${packageName}' was not prepared from its sealed closure plan.`,
     );
   }
   return packageDirectory;
@@ -580,7 +663,128 @@ function assertResolvedClosurePackage(
       `${label} resolved '${packageName}' outside its sealed closure package.`,
     );
   }
+  const nestedNodeModules = path.join(expectedDirectory, 'node_modules');
+  if (isPathInside(nestedNodeModules, entry)) {
+    throw new Error(
+      `${label} resolved '${packageName}' from a nested package instead of its exact sealed closure package.`,
+    );
+  }
   return entry;
+}
+
+/**
+ * Verify the complete plan/archive package set and every generic CommonJS
+ * package edge before loading any code from the closure. This makes a missing
+ * or misdirected planned package fail at preparation instead of allowing
+ * Node's upward/global module search to select ambient JavaScript.
+ * @param {PreparedCoreRuntimeDependencies} prepared - Fresh extracted closure.
+ * @returns {Promise<Map<string, string>>} - Planned locations to canonical package roots.
+ */
+async function preflightCoreRuntimeDependencyClosure(prepared) {
+  const plan = prepared.manifest.plan;
+  const expectedLocations = plan.packages.map(
+    (/** @type {Record<string, any>} */ packageEntry) => packageEntry.location,
+  );
+  const actualLocations = await discoverExtractedPackageLocations(
+    prepared.root,
+  );
+  if (
+    actualLocations.length !== expectedLocations.length ||
+    actualLocations.some(
+      (location, index) => location !== expectedLocations[index],
+    )
+  ) {
+    throw new Error(
+      `Core runtime dependency archive does not match its exact closure plan package roots. Expected ${JSON.stringify(expectedLocations)}, received ${JSON.stringify(actualLocations)}.`,
+    );
+  }
+
+  /** @type {Map<string, string>} */
+  const packageDirectories = new Map();
+  for (const packageEntry of plan.packages) {
+    const packageDirectory = assertVerifiedDirectory(
+      prepared,
+      path.join(prepared.root, ...packageEntry.location.split('/')),
+      `Planned package '${packageEntry.location}'`,
+    );
+    const manifestPath = assertVerifiedRegularFile(
+      prepared,
+      path.join(packageDirectory, 'package.json'),
+      `Planned package '${packageEntry.location}' manifest`,
+    );
+    let packageManifest;
+    try {
+      packageManifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    } catch (error) {
+      const detail = error instanceof Error ? ` ${error.message}` : '';
+      throw new Error(
+        `Planned package '${packageEntry.location}' manifest must be valid JSON.${detail}`,
+      );
+    }
+    verifyExtractedPackageManifest(packageManifest, packageEntry);
+    packageDirectories.set(packageEntry.location, packageDirectory);
+  }
+
+  for (const root of plan.roots) {
+    const expectedDirectory = packageDirectories.get(root.location);
+    if (!expectedDirectory) {
+      throw new Error(
+        `Core runtime dependency root '${root.name}' is absent from its closure plan.`,
+      );
+    }
+    assertResolvedClosurePackage(
+      prepared,
+      prepared.require,
+      root.name,
+      expectedDirectory,
+      'Core runtime dependency root',
+    );
+  }
+  for (const packageEntry of plan.packages) {
+    const callerDirectory = packageDirectories.get(packageEntry.location);
+    if (!callerDirectory) {
+      throw new Error(
+        `Core runtime dependency caller '${packageEntry.location}' is absent from its closure plan.`,
+      );
+    }
+    const packageRequire = createRequire(
+      path.join(callerDirectory, 'package.json'),
+    );
+    for (const edge of packageEntry.edges) {
+      if (edge.location === null) {
+        try {
+          const ambientEntry = packageRequire.resolve(edge.name);
+          throw new Error(
+            `Planned package '${packageEntry.location}' omitted '${edge.name}', but generic CommonJS resolution selected ambient entry '${ambientEntry}'.`,
+          );
+        } catch (error) {
+          if (
+            error &&
+            typeof error === 'object' &&
+            'code' in error &&
+            error.code === 'MODULE_NOT_FOUND'
+          ) {
+            continue;
+          }
+          throw error;
+        }
+      }
+      const expectedDirectory = packageDirectories.get(edge.location);
+      if (!expectedDirectory) {
+        throw new Error(
+          `Core runtime dependency edge '${packageEntry.location}' -> '${edge.name}' is absent from its closure plan.`,
+        );
+      }
+      assertResolvedClosurePackage(
+        prepared,
+        packageRequire,
+        edge.name,
+        expectedDirectory,
+        `Planned package '${packageEntry.location}'`,
+      );
+    }
+  }
+  return packageDirectories;
 }
 
 /**
@@ -803,7 +1007,10 @@ export async function preparePackagedCoreRuntimeDependencies(options = {}) {
         manifest,
         archiveBytes,
         lmdbModule: null,
+        packageDirectories: /** @type {Map<string, string>} */ (new Map()),
       };
+      prepared.packageDirectories =
+        await preflightCoreRuntimeDependencyClosure(prepared);
       preparedDependencies = prepared;
       installPreparedDependencyExitCleanup();
       return prepared;
