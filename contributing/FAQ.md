@@ -15,9 +15,30 @@ and evolve it later.
 
 The shipped CLI exposes two top-level commands: `wharfie app` and `wharfie ops`.
 The repository contains working foundations for loading manifests, invoking
-activities locally, persisting local operations, and packaging target-specific
-Node SEA executables. A standalone Wharfie builder binary is withheld until its
-build-host dependencies can be embedded. It is not production ready.
+activities locally, persisting an append-only manual run → invocation → attempt
+ledger, inspecting/recovering exact runs from source or a packaged artifact,
+asking an exact live owner to cancel a foreground run, and packaging
+target-specific Node SEA executables. A standalone Wharfie builder binary is
+withheld until its build-host dependencies can be embedded. It is not
+production ready.
+
+## How do `inspect`, `recover`, and `cancel` differ?
+
+`wharfie ops inspect --run-id <run-id>` (or `<app> wharfie inspect`) is a
+read-only verified view of one existing run; it never creates a control volume
+or durable run. `recover` is a deliberate mutation after every prior runner
+has stopped and requires `--confirm-runner-stopped`. It can release an
+unstarted claim or mark a begun, abandoned attempt `UNCERTAIN`; it does not
+replay user code. A packaged recovery uses the local LMDB ownership protocol.
+
+`wharfie ops cancel --run-id <run-id> --request-id <stable-request-id>` (or
+`<app> wharfie cancel`) is narrower still. It is not a generic ledger write:
+it reaches only the same-principal, LMDB-backed foreground `ops run` owner of
+that exact `STARTED` manual attempt. The request ID is required and must be
+reused after a lost response. The owner durably records intent before beginning
+physical delivery; absent, stale, unreachable, unstarted, or merely resident
+owners cannot be bypassed with a direct write. The local command transport is
+not yet available on Windows.
 
 ## Is this the old Athena and table framework?
 
@@ -57,9 +78,10 @@ reconciliation instead of silently retried.
 
 TypeScript and Node are the initial authoring and orchestration model. The
 intended activity boundary leaves room for target-specific Node-API
-dependencies, WASI/WASM, or persistent subprocess workers later, but only the
-pure TypeScript path has a clean generated-SEA release proof today. Wharfie is
-not a general multi-language build system.
+dependencies, WASI/WASM, or persistent subprocess workers later. Clean moved
+Darwin and hosted Linux SEA proofs already exercise a real target-specific
+LMDB Node-API dependency with Node absent from `PATH`. Wharfie is not a general
+multi-language build system.
 
 ## Do target machines need Node installed?
 

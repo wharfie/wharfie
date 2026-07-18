@@ -4,7 +4,21 @@
  * evidence, fencing tokens, or event payloads. Those need an explicit future
  * disclosure and authorization policy.
  */
-export const EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION = 1;
+export const EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION = 2;
+
+/**
+ * Expose cancellation identity and ordering without disclosing its operator
+ * reason. The event actor remains visible in the already-redacted history.
+ * @param {Record<string, any> | undefined} request - Durable request metadata.
+ * @returns {{requestId: string, requestedAt: number} | undefined} - Redacted cancellation summary.
+ */
+function cancellationSummary(request) {
+  if (!request) return undefined;
+  return {
+    requestId: request.requestId,
+    requestedAt: request.requestedAt,
+  };
+}
 
 /**
  * @param {Record<string, any>} view - Verified rebuilt execution-ledger view.
@@ -25,6 +39,9 @@ export function createExecutionLedgerOperatorView(view) {
       lastSequence: run.lastSequence,
       createdAt: run.createdAt,
       updatedAt: run.updatedAt,
+      ...(run.cancellationRequest
+        ? { cancellationRequest: cancellationSummary(run.cancellationRequest) }
+        : {}),
     },
     invocations: view.invocations.map(
       (/** @type {Record<string, any>} */ invocation) => ({
@@ -91,6 +108,7 @@ export function formatExecutionLedgerOperatorRows(view) {
         attempt_generation: invocation.generation,
         attempt_id: attempt?.attemptId || '',
         attempt_status: attempt?.status || '',
+        cancellation_request: view.run.cancellationRequest?.requestId || '',
         event_count: view.events.length,
       };
     },

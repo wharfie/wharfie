@@ -4,10 +4,10 @@
  * caller-controlled delimiter can never make two typed records alias.
  */
 
-// Ledger v3 is intentionally a fresh namespace. It adds an atomic typed
-// run-history directory to v2's immutable payload references, so sharing
-// physical keys with a prior record would make recovery ambiguous.
-export const EXECUTION_LEDGER_SORT_KEY_PREFIX = 'ledger/v3/';
+// Ledger v4 is intentionally a fresh namespace. It adds durable cancellation
+// decisions to v3's manual state machine, so sharing physical keys with a
+// prior record would let old readers reject or misinterpret new histories.
+export const EXECUTION_LEDGER_SORT_KEY_PREFIX = 'ledger/v4/';
 export const EXECUTION_LEDGER_EVENT_SEQUENCE_WIDTH = 16;
 export const MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES = 512;
 

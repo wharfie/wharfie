@@ -110,10 +110,12 @@ describe('CoreRuntimeDependenciesResource', () => {
       const { createFrozenDependencyClosurePlan } = await import(
         FROZEN_CLOSURE_IMPORT
       );
+      const dependencyLock = await getCoreLmdbDependencyLock();
+      expect(dependencyLock.path).toBe(CORE_LOCK_PATH);
       const plan = await createFrozenDependencyClosurePlan({
         activity: 'core-local-control-store',
         buildTarget: target,
-        dependencyLock: await getCoreLmdbDependencyLock(),
+        dependencyLock,
         externals: [{ name: 'lmdb', version: '3.4.4' }],
       });
 

@@ -8,7 +8,10 @@ import { parseJsonInput } from '../../app/local-app.js';
 import {
   withExecutionLedger,
   withLocalLedgerServiceMutationOwnership,
-} from '../execution-ledger-store.js';
+} from '../../../core/runtime/operator/execution-ledger-store.js';
+import { createLedgerServiceOwnership } from '../../../core/lib/db/tables/ledger-service-lifecycle.js';
+import { EXECUTION_LEDGER_CANCEL_OWNER_COMMAND } from '../../../core/runtime/operator/execution-ledger-operator.js';
+import { createLocalOwnerCommandServer } from '../../../core/runtime/operator/local-owner-command.js';
 import {
   displayFailure,
   displayInfo,
@@ -22,6 +25,53 @@ import {
   createManualLedgerRunId,
   runManualLedgerActivity,
 } from '../../../core/runtime/manual-ledger-run.js';
+
+/**
+ * @param {Readonly<Record<string, any>> | null} observed - Fresh durable owner record.
+ * @param {Readonly<Record<string, any>>} held - Owner record held by this runner.
+ * @returns {boolean} - Whether the durable record still names this exact owner generation.
+ */
+function isCurrentManualOwner(observed, held) {
+  return Boolean(
+    observed &&
+    observed.serviceId === held.serviceId &&
+    observed.appId === held.appId &&
+    observed.scopeId === held.scopeId &&
+    observed.principalId === held.principalId &&
+    observed.sessionId === held.sessionId &&
+    observed.ownerKind === held.ownerKind &&
+    observed.generation === held.generation,
+  );
+}
+
+/**
+ * @param {unknown} value - Authenticated but still command-specific request payload.
+ * @param {string} runId - Exact active durable run.
+ * @returns {boolean} - Whether this command names only the runner's exact run.
+ */
+function isExactOwnerCancelRequest(value, runId) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const request = /** @type {Record<string, unknown>} */ (value);
+  return Object.keys(request).length === 1 && request.runId === runId;
+}
+
+/**
+ * @param {Record<string, any>} result - Active-port cancellation result.
+ * @returns {{outcome: string, delivery: 'started'|'not-delivered'|'not-required', runStatus: string, invocationStatus: string}} - Redacted owner response.
+ */
+function formatOwnerCancellationResponse(result) {
+  return {
+    outcome: result.outcome,
+    delivery:
+      result.outcome === 'cancellation-requested'
+        ? result.signalDelivered
+          ? 'started'
+          : 'not-delivered'
+        : 'not-required',
+    runStatus: result.run.status,
+    invocationStatus: result.invocation.status,
+  };
+}
 
 /**
  * @param {unknown} value - User-supplied idempotency key.
@@ -75,6 +125,56 @@ function outcomeError(result, appId, runId) {
   return new Error(
     `Run ${runId} for app ${appId} is already in progress (attempt ${result.attempt?.attemptId || '(unknown)'}). Inspect it with \`wharfie ops inspect --run-id ${runId}\`; after confirming every runner stopped, use \`wharfie ops recover --run-id ${runId} --confirm-runner-stopped\`.`,
   );
+}
+
+/**
+ * Convert the first foreground process-manager signal into a host cancellation
+ * request. The runner persists that request before it forwards this signal to
+ * the physical attempt; removing the one-shot listener restores the ordinary
+ * process behavior for any later signal.
+ * @param {{once: Function, removeListener: Function}} [processRef] - Injectable process signal source.
+ * @returns {{signal: AbortSignal, close: () => void}} - Host cancellation handle.
+ */
+export function createForegroundCancellation(processRef = process) {
+  const controller = new AbortController();
+
+  /** Remove only the foreground cancellation listeners installed here. */
+  function close() {
+    processRef.removeListener('SIGINT', onSigint);
+    processRef.removeListener('SIGTERM', onSigterm);
+  }
+
+  /** @param {'SIGINT'|'SIGTERM'} signal - Received shutdown signal. */
+  function request(signal) {
+    // The first signal is a cooperative cancellation request. Restore the
+    // process's ordinary handling before abort listeners run so any later
+    // signal can force termination, including the other signal kind.
+    close();
+    const reason = new Error(
+      `The foreground operator requested cancellation with ${signal}.`,
+    );
+    reason.name = 'CancellationRequested';
+    Object.assign(reason, {
+      code: 'operator-cancel-requested',
+      details: { signal },
+    });
+    controller.abort(reason);
+  }
+
+  function onSigint() {
+    request('SIGINT');
+  }
+
+  function onSigterm() {
+    request('SIGTERM');
+  }
+
+  processRef.once('SIGINT', onSigint);
+  processRef.once('SIGTERM', onSigterm);
+  return {
+    signal: controller.signal,
+    close,
+  };
 }
 
 const runCommand = new Command('run')
@@ -139,32 +239,131 @@ const runCommand = new Command('run')
           `Running activity: app ${appId}, run ${runId}@${revisionId} (${activityName})`,
         );
 
-        const result = await withExecutionLedger(
-          async (ledger, context) =>
-            await withLocalLedgerServiceMutationOwnership({
-              appId,
-              context,
-              handler: async () =>
-                await runManualLedgerActivity({
-                  ledger,
-                  runId,
-                  appId,
-                  revisionId,
-                  activityId: activityName,
-                  input,
-                  callerMetadata,
-                  executeAttempt: async (startFrame) =>
-                    await invokeManifestActivityAttemptWithStart({
-                      activityName,
-                      startFrame,
-                      execution: {
-                        kind: 'prepared-source',
-                        prepared: preparedRevision,
+        const cancellation = createForegroundCancellation();
+        let result;
+        try {
+          result = await withExecutionLedger(
+            async (ledger, context) =>
+              await withLocalLedgerServiceMutationOwnership({
+                appId,
+                context,
+                handler: async (localOwner) => {
+                  /**
+                   * The manual runner is still usable with adapters that do
+                   * not implement local ownership. Only an LMDB-held owner
+                   * exposes a companion command server; there is never a
+                   * direct external mutation fallback.
+                   */
+                  if (!localOwner) {
+                    return await runManualLedgerActivity({
+                      ledger,
+                      runId,
+                      appId,
+                      revisionId,
+                      activityId: activityName,
+                      input,
+                      callerMetadata,
+                      signal: cancellation.signal,
+                      executeAttempt: async (startFrame, { signal }) =>
+                        await invokeManifestActivityAttemptWithStart({
+                          activityName,
+                          startFrame,
+                          signal,
+                          execution: {
+                            kind: 'prepared-source',
+                            prepared: preparedRevision,
+                          },
+                        }),
+                    });
+                  }
+
+                  const ownership = createLedgerServiceOwnership({
+                    db: context.db,
+                    tableName: context.tableName,
+                  });
+                  /** @type {{requestCancellation: (request: {requestId: string}) => Promise<Record<string, any>>} | undefined} */
+                  let activeCancellationPort;
+                  const commandServer = await createLocalOwnerCommandServer({
+                    session: localOwner.commandSession,
+                    isCurrentOwner: async () =>
+                      isCurrentManualOwner(
+                        await ownership.getOwnership({
+                          serviceId: localOwner.ownership.serviceId,
+                        }),
+                        localOwner.ownership,
+                      ),
+                    handleCommand: async (command) => {
+                      if (
+                        command.command !==
+                          EXECUTION_LEDGER_CANCEL_OWNER_COMMAND ||
+                        !isExactOwnerCancelRequest(command.request, runId)
+                      ) {
+                        return {
+                          outcome: 'request-unavailable',
+                          delivery: 'not-delivered',
+                        };
+                      }
+                      if (!activeCancellationPort) {
+                        return {
+                          outcome: 'owner-not-ready',
+                          delivery: 'not-delivered',
+                        };
+                      }
+                      return formatOwnerCancellationResponse(
+                        await activeCancellationPort.requestCancellation({
+                          requestId: command.requestId,
+                        }),
+                      );
+                    },
+                  });
+                  try {
+                    return await runManualLedgerActivity({
+                      ledger,
+                      runId,
+                      appId,
+                      revisionId,
+                      activityId: activityName,
+                      input,
+                      callerMetadata,
+                      signal: cancellation.signal,
+                      ownerCancellation: {
+                        actor: {
+                          kind: 'local-owner-command',
+                          id: appId,
+                        },
                       },
-                    }),
-                }),
-            }),
-        );
+                      registerActiveAttemptCancellationPort: (port) => {
+                        activeCancellationPort = port;
+                        return () => {
+                          if (activeCancellationPort === port) {
+                            activeCancellationPort = undefined;
+                          }
+                        };
+                      },
+                      executeAttempt: async (startFrame, { signal }) =>
+                        await invokeManifestActivityAttemptWithStart({
+                          activityName,
+                          startFrame,
+                          signal,
+                          execution: {
+                            kind: 'prepared-source',
+                            prepared: preparedRevision,
+                          },
+                        }),
+                    });
+                  } finally {
+                    // The command endpoint must disappear before the durable
+                    // owner release can make a successor eligible. A request
+                    // can therefore never reach an old server after its
+                    // generation ceased to be current.
+                    await commandServer.close();
+                  }
+                },
+              }),
+          );
+        } finally {
+          cancellation.close();
+        }
 
         console.table([formatRunRow(result, idempotencyKey)]);
         if (result.disposition !== 'completed') {

@@ -591,6 +591,7 @@ async function close() {}
  * Factory options for creating a DynamoDB wrapper client.
  * @typedef CreateDynamoDBOptions
  * @property {string} [region] AWS region to use. Defaults to `process.env.AWS_REGION`.
+ * @property {boolean} [readOnly] Reject every mutation before contacting DynamoDB.
  */
 
 /**

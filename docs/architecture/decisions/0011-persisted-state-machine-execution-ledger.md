@@ -264,6 +264,17 @@ Compensation is new work. It creates a distinct invocation and effects with a
 causal link to the work being compensated. The original attempt, effect, and
 outcome remain in history; a `compensated` label cannot replace their evidence.
 
+[0013](0013-durable-cancellation-and-evidence-reconciliation.md) specializes
+these rules for the implemented cancellation-capable V4 manual ledger. The
+foreground active owner and an authenticated same-principal current-owner
+command both commit a request before physical delivery. The owner-controlled
+V4 transition can make unstarted work `CANCELLED`; the external command itself
+only targets a live `STARTED` attempt. Begun work remains nonterminal until a
+matching cancellation transcript or other verified terminal evidence
+establishes its outcome; ambiguous post-cancellation termination becomes
+`UNCERTAIN`. Later reconciliation cannot rewrite the original abandoned
+attempt.
+
 ### Revision pinning and upgrades
 
 A run binds one exact immutable application `revisionId`. Its invocations and
@@ -283,7 +294,7 @@ migration.
 The ledger may retain small lifecycle summaries inline, but payload-bearing
 records use immutable, content-addressed payload references containing at
 least digest, byte size, media type, schema identity, and storage identity.
-The initial V3 manual vertical stores its `{input, callerMetadata}` request
+The current V4 manual vertical stores its `{input, callerMetadata}` request
 envelope and complete terminal evidence behind those references; projections
 retain only the request/evidence descriptors and a minimal terminal summary.
 
@@ -343,6 +354,23 @@ generation. On the same local LMDB control volume, mutating manual `ops run`
 and `ops recover` acquire that same ownership fence and refuse to race a
 resident service; read-only inspection does not.
 
+Exact-run inspection, confirmed recovery, and current-owner cancellation share
+one core implementation between the installed CLI and packaged artifacts. The
+installed form is `wharfie ops inspect|recover|cancel`; the packaged form is
+`<app> wharfie inspect|recover|cancel`. A packaged operator derives its
+authority only from the validated embedded revision/runtime pair and rejects a
+run whose app identity differs before output or mutation. Authority is
+app-scoped across successor revisions because these transitions never execute
+app code; the run's pinned revision remains unchanged. Inspection opens existing
+local control state read-only and never creates a missing volume or table.
+Recovery is an explicitly confirmed mutation after every runner has stopped;
+packaged recovery requires the local LMDB protocol, while source recovery
+retains its documented configured-adapter behavior. External cancellation
+requires LMDB: it reads the current owner read-only, then uses an authenticated
+per-session command endpoint only for that exact live same-principal foreground
+`STARTED` attempt. It requires a stable request ID for retries and never falls
+back to a direct mutation or treats a resident lifecycle owner as a worker.
+
 This is deliberately not a lease, heartbeat, scheduler, work claim, or
 distributed coordinator protocol. It can recover after process restart on one
 local volume, host/network namespace, and operating-system principal, but it
@@ -370,8 +398,8 @@ pretend that an LMDB ledger provides them.
 
 The `Operation`/`Action` snapshot store, graph runner, and operation table were
 deleted on 2026-07-17 after manual execution, exact-run inspection, explicit
-recovery, immutable payload references, resident-service ownership, and the V3
-run directory all moved to this ledger. Its development-only records are not
+recovery, immutable payload references, resident-service ownership, and the run
+directory all moved to this ledger. Its development-only records are not
 migrated or read. Keeping a second writable run system would make recovery and
 operator semantics ambiguous.
 

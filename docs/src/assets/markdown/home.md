@@ -20,9 +20,10 @@ framework is no longer part of the product, and breaking changes are expected.
 4. Promote that executable to a persistent single-node service.
 5. Enroll more trusted nodes when placement or recovery requires them.
 
-The current implementation proves parts of the first three steps. Durable
-resident services, provider-backed deployment, and the trusted-node mesh remain
-roadmap work; Wharfie is not production ready.
+The current implementation proves the first three steps plus a narrow resident
+ledger-service lifecycle and local ownership boundary. Scheduling and executing
+durable work as a service, provider-backed deployment, and the trusted-node mesh
+remain roadmap work; Wharfie is not production ready.
 
 ## Start locally
 

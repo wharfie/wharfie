@@ -21,10 +21,26 @@ import {
   stringifyCoreRuntimeDependencyManifest,
 } from './lib/core-runtime-dependency-asset.js';
 
-const CORE_LMDB_LOCK_PATH = fileURLToPath(
-  new URL('./assets/core-lmdb.package-lock.json', import.meta.url),
-);
 const CORE_LMDB_ROOT = CORE_RUNTIME_DEPENDENCY_ROOT;
+
+/**
+ * Resolve the source-tree lock only when a core dependency build is actually
+ * requested. Packaged CommonJS/SEA bundles replace `import.meta.url` with a
+ * filesystem string, which is not a valid URL base and must not be evaluated
+ * while booting a runtime-only command.
+ * @returns {string} - Absolute source lock path.
+ */
+function getCoreLmdbLockPath() {
+  const moduleUrl = import.meta.url;
+  if (typeof moduleUrl !== 'string' || !moduleUrl.startsWith('file:')) {
+    throw new Error(
+      'This packaged Wharfie runtime cannot resolve source core dependency build assets.',
+    );
+  }
+  return fileURLToPath(
+    new URL('./assets/core-lmdb.package-lock.json', moduleUrl),
+  );
+}
 
 /**
  * @typedef CoreRuntimeDependenciesProperties
@@ -50,7 +66,8 @@ const CORE_LMDB_ROOT = CORE_RUNTIME_DEPENDENCY_ROOT;
  * @returns {Promise<{path: string, input: import('../../runtime/application-revision.js').LockedInputDescriptor}>} - Stable lock handle.
  */
 async function getCoreLmdbDependencyLock() {
-  const bytes = await fsp.readFile(CORE_LMDB_LOCK_PATH);
+  const lockPath = getCoreLmdbLockPath();
+  const bytes = await fsp.readFile(lockPath);
   let parsed;
   try {
     parsed = JSON.parse(bytes.toString('utf8'));
@@ -69,7 +86,7 @@ async function getCoreLmdbDependencyLock() {
   }
   const canonicalLock = JSON.stringify(sortCanonicalJsonValue(parsed));
   return {
-    path: CORE_LMDB_LOCK_PATH,
+    path: lockPath,
     input: {
       format: DEPENDENCY_LOCK_INPUT_FORMAT,
       digest: {
@@ -236,5 +253,5 @@ CoreRuntimeDependenciesResource.DefaultProperties = {
 };
 CoreRuntimeDependenciesResource.BUILD_DIR = join(paths.temp, 'builds');
 
-export { CORE_LMDB_LOCK_PATH, CORE_LMDB_ROOT, getCoreLmdbDependencyLock };
+export { CORE_LMDB_ROOT, getCoreLmdbDependencyLock };
 export default CoreRuntimeDependenciesResource;

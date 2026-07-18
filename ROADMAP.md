@@ -97,7 +97,8 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       request keys, and explicit operator-confirmed recovery only.
 - [x] Add source-independent exact-run inspection and explicitly confirmed
       recovery, with redacted JSON output; remove the misleading mutable CLI
-      `ops list` and `ops cancel` surfaces rather than dual-writing them.
+      `ops list` and direct-write `ops cancel` surfaces rather than
+      dual-writing them.
 - [x] Move the manual request envelope and complete terminal evidence to
       immutable, canonical local content references; rehash them before every
       ledger replay/read and fail closed on missing or altered content. V1
@@ -115,22 +116,41 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       proved graceful `STOPPED` on `SIGTERM` with Node absent from `PATH`.
       Windows targets remain explicitly deferred pending a hardened
       private-extraction design.
-- [x] Add a fresh V3 execution-ledger namespace with a typed, redacted,
+- [x] Add the current V4 execution-ledger namespace with a typed, redacted,
       atomically maintained per-service run-history directory and a bounded
       portable pagination primitive. Its internal API verifies every directory
       row against a rebuilt run projection; it deliberately does not create a
       ready-work queue or expose a source-only `ops list` command.
 - [x] Delete the superseded mutable Operation/Action graph, operation table,
       queue-run bridge, and second writable run model. Manual durable execution
-      now distinguishes a caller idempotency key from the derived V4 manual
-      run identity and writes only the append-only V3 ledger.
+      now distinguishes a caller idempotency key from the derived V5 manual
+      run identity and writes only the append-only V4 ledger.
 - [x] Delete the disconnected pre-reset NodeAgent, state-command, systemd
       release, and private DB/queue/Lambda gRPC runtime island. Packaged apps
       now have one narrow private runtime-command selector, currently mapping
       only the resident ledger service; future service installation will be
       rebuilt around the durable runtime rather than the removed supervisor.
+- [x] Move exact-run inspection, confirmed recovery, and authenticated
+      current-owner cancellation into one shared core operator layer. The source
+      CLI mounts `wharfie ops inspect|recover|cancel`; a packaged artifact
+      mounts `<app> wharfie inspect|recover|cancel`, lazily binds authority to
+      its embedded app identity, rejects cross-app run IDs, and preserves
+      redacted JSON. Inspection is read-only; recovery remains explicitly
+      confirmed after a runner stops. Cancellation is an HMAC-authenticated,
+      same-principal LMDB command to the exact live manual owner, never a
+      direct-write fallback or a list/history scan.
+- [x] Add the V4 durable cancellation boundary for foreground and authenticated
+      external current owners. `ops run` persists intent before signalling its
+      attempt; the external command requires a stable request ID and is fenced
+      to the exact live session and `STARTED` attempt. It cannot directly cancel
+      unstarted, inactive, stale, or merely resident work. A started attempt
+      requires matching terminal evidence, completion or failure can still win,
+      and an unconfirmed post-cancellation termination becomes blocked
+      `UNCERTAIN` work.
 - [ ] Persist immutable revision bindings, inputs, outputs, scheduling decisions, attempts, and operator actions in the full append-only ledger.
-- [ ] Implement leases, monotonic fencing tokens, heartbeats, cancellation, retry policy, and recovery.
+- [ ] Implement leases, monotonic fencing tokens, heartbeats, retry policy,
+      broader recovery, and multi-host authenticated current-owner command
+      routing.
 - [ ] Implement substantiated `pure`, `idempotent`, and `transactional` replay properties, make begun in-process handlers `unsafe` by default, and add a durable blocked `uncertain` state with explicit reconciliation/compensation paths.
 - [ ] Provide transactional inbox/outbox behavior for Wharfie-managed state and queues, with destination-side deduplication committed atomically with consumer mutations where exactly-once processing is claimed.
 - [ ] Support manual, cron, and workflow-triggered runs through one execution path.
@@ -188,12 +208,10 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 ## Immediate queue
 
 1. Repair the clean-install lint dependency declaration after explicit approval, make draft PR #125 green in GitHub Actions, and review the reset stack for merge.
-2. Build one shared source/SEA operator-command layer on the verified V3 run
-   directory before exposing history; do not add a scan-based `ops list`.
-3. Design durable cancellation/reconciliation transitions before exposing an
-   `ops cancel` replacement.
-4. Embed the full frozen core closure plan and preflight generic CommonJS
+2. Add evidence-backed reconciliation for blocked `UNCERTAIN` attempts; the
+   local authenticated current-owner cancel path is now available.
+3. Embed the full frozen core closure plan and preflight generic CommonJS
    package resolution before treating malformed-closure ambient-JS fallback as
    closed.
 
-The latest dated handoff at [llm/checkpoints/2026-07-17-resource-injection-retirement.md](llm/checkpoints/2026-07-17-resource-injection-retirement.md) records the narrowed manifest, function-asset schema v4, framed-only worker, and deleted provider compatibility island. The preceding [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.
+The latest dated handoff at [llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md) records the narrow external cancellation contract: source `wharfie ops cancel` and packaged `<app> wharfie cancel` route only to an exact live same-principal LMDB `STARTED` owner, with a required retry-stable request ID and no direct-write fallback. The preceding [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md), [shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md), [resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md), [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.

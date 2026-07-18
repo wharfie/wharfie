@@ -74,9 +74,10 @@ run, invocation, physical attempt, and fencing token. Activity code should use
 cancellation and deadline interruption through the framed worker attempt
 transport. The currently shipped source/SEA invocation API does not expose an
 interactive caller-cancellation control yet. The initial Activity Protocol v1
-execution path does not inject resource handles or managed effects. The app
-schema rejects application- and activity-level `resources`; a caller-metadata
-property with that name is ordinary inert JSON.
+execution path does not inject resource handles or managed effects. Foreground
+durable `ops run` handles process-signal cancellation separately, as described
+below. The app schema rejects application- and activity-level `resources`; a
+caller-metadata property with that name is ordinary inert JSON.
 
 ```ts
 import type { ActivityHandler } from '@wharfie/wharfie/app';
@@ -151,26 +152,64 @@ the same `--idempotency-key` with identical app revision, activity, input, and
 caller metadata returns its durable terminal without running the activity
 again. A changed request with that key fails rather than silently deduplicating.
 The result table includes the operator-provided `idempotency_key` and derived
-durable `run_id`. Inspect the run ID or perform an operator-confirmed recovery
-without loading an app manifest, parsing current input, compiling source, or
-dispatching user code:
+durable `run_id`. Inspection is read-only. Recovery is an explicit durable
+mutation to use only after every prior runner has stopped; it does not load an
+app manifest, parse current input, compile source, or dispatch user code.
+Cancellation is a separate request to an already active owner:
 
 ```bash
 wharfie ops inspect --run-id <run-id>
 wharfie ops recover --run-id <run-id> --confirm-runner-stopped
+wharfie ops cancel --run-id <run-id> --request-id <stable-request-id>
 ```
 
-Recovery is deliberately explicit: use it only after confirming every prior
-runner is gone. It can release a claim that never started; a begun attempt
-becomes visibly blocked as `UNCERTAIN` instead of replaying code. Both commands
-also support `--json`, which emits a redacted verified lifecycle view for
-automation. It intentionally excludes activity inputs, caller metadata,
-terminal results, evidence, and fencing tokens.
+The packaged executable exposes the same exact-run operations directly under
+its reserved operator namespace:
 
-There is no global/app-wide run list or cancellation command yet. The ledger
-currently has only exact `run_id` partitions, so an honest list requires a
-durable run-directory index and cancellation requires a separate durable
-decision contract. A resident service lifecycle is also not available yet.
+```bash
+<app> wharfie inspect --run-id <run-id>
+<app> wharfie recover --run-id <run-id> --confirm-runner-stopped
+<app> wharfie cancel --run-id <run-id> --request-id <stable-request-id>
+```
+
+Packaged inspection, recovery, and cancellation are scoped to the immutable app
+identity embedded in the artifact. They can operate an older revision of that
+same app, but reject another app's run ID before output or mutation. The source
+and packaged forms of `inspect` emit the same schema-v2 redacted run view;
+`recover` emits that view plus recovery metadata. `cancel` instead emits a
+redacted schema-v1 cancellation result containing the request ID, outcome,
+delivery state, and safe lifecycle statuses.
+
+Inspection opens existing control state read-only and never creates missing
+state. Recovery is deliberately explicit: use it only after confirming every
+prior runner is gone. It can release a claim that never started; a begun
+attempt becomes visibly blocked as `UNCERTAIN` instead of replaying code.
+Packaged recovery requires the LMDB local-ownership protocol and refuses to
+race a live resident service. Source recovery retains its configured adapter's
+documented manual/diagnostic behavior.
+
+The V4 ledger supports cancellation by the foreground active owner. During
+`wharfie ops run`, the first `SIGINT` or `SIGTERM` becomes a durable request
+before the owner signals the physical attempt. While an LMDB-backed `ops run`
+owns the exact `STARTED` attempt, source `wharfie ops cancel` or packaged
+`<app> wharfie cancel` can reach that owner through a bounded, authenticated
+same-principal local command endpoint. `--request-id` is required; reuse the
+same value after a lost response. The owner persists durable intent before it
+begins delivery. The command reports `delivery: "started"` only after that
+handoff begins; a timeout, stale/moved owner, unavailable endpoint, inactive
+run, wrong run, or merely resident lifecycle owner reports no delivery and
+never falls back to a direct ledger write. The local transport is deliberately
+unsupported on Windows.
+
+The external command intentionally cannot directly cancel `RUNNABLE`,
+`CLAIMED`, or otherwise unstarted work: only the active foreground owner's
+`STARTED` attempt can accept it. Once that attempt is started, only matching
+cancellation evidence can commit `CANCELLED`; a verified completion or failure
+may still win, while unconfirmed post-cancellation termination becomes blocked
+`UNCERTAIN` work. There is still no public run-history/list: the verified
+bounded V4 run directory is internal rather than the retired `ops list`
+surface. The resident service currently owns only local lifecycle and exclusion
+state; it does not schedule, claim, or execute work.
 
 ## Package the app
 

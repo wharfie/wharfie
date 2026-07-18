@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   copyFileSync,
@@ -220,6 +221,94 @@ async function createInstalledLedgerLifecycleObserver(options) {
         await db.close();
       }
     },
+  };
+}
+
+/**
+ * Load the installed ledger implementation used to seed and observe exact-run
+ * operator fixtures. The moved SEA still performs every operation under test;
+ * this host helper only prepares independently verifiable durable state.
+ * @param {{installedPackageRoot: string, controlPath: string, tableName: string, payloadPath: string, revisionId: string}} options - Installed-package fixture inputs.
+ * @returns {Promise<{createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, readRun: (runId: string) => Promise<Record<string, any> | null>, AttemptStatus: Record<string, string>, InvocationStatus: Record<string, string>}>} - Exact-run fixture API.
+ */
+async function createInstalledExecutionLedgerFixture(options) {
+  const installedModule = async (/** @type {string} */ relativePath) =>
+    await import(
+      pathToFileURL(path.join(options.installedPackageRoot, relativePath)).href
+    );
+  const [adapterModule, ledgerModule, payloadModule, manualModule] =
+    await Promise.all([
+      installedModule('src/core/lib/db/adapters/lmdb.js'),
+      installedModule('src/core/lib/db/tables/execution-ledger.js'),
+      installedModule('src/core/lib/payload-store/local.js'),
+      installedModule('src/core/runtime/manual-ledger-run.js'),
+    ]);
+  const payloadStoreId = `payload-${createHash('sha256')
+    .update(path.resolve(options.payloadPath), 'utf8')
+    .digest('hex')
+    .slice(0, 55)}`;
+
+  const openLedger = (/** @type {boolean} */ readOnly) => {
+    const db = adapterModule.default({
+      path: options.controlPath,
+      readOnly,
+    });
+    return {
+      db,
+      ledger: ledgerModule.createExecutionLedger({
+        db,
+        tableName: options.tableName,
+        payloadStore: payloadModule.createLocalExecutionPayloadStore({
+          path: options.payloadPath,
+          storeId: payloadStoreId,
+        }),
+      }),
+    };
+  };
+
+  const createRunId = (appId, idempotencyKey) =>
+    manualModule.createManualLedgerRunId({ appId, idempotencyKey });
+  return {
+    createRunId,
+    createClaimedRun: async (appId, idempotencyKey) => {
+      const { db, ledger } = openLedger(false);
+      const runId = createRunId(appId, idempotencyKey);
+      try {
+        await ledger.createManualRun({
+          runId,
+          appId,
+          revisionId: options.revisionId,
+          invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
+          activityId: 'greet',
+          input: { credential: 'sea-input-secret' },
+          callerMetadata: { credential: 'sea-caller-secret' },
+          transitionId: 'create',
+          actor: { kind: 'local', id: 'sea-verifier' },
+        });
+        await ledger.claimInvocation({
+          runId,
+          invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
+          fencingToken: 'sea-fencing-secret',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'claim:1',
+          actor: { kind: 'local', id: 'sea-verifier' },
+        });
+        return runId;
+      } finally {
+        await db.close();
+      }
+    },
+    readRun: async (runId) => {
+      const { db, ledger } = openLedger(true);
+      try {
+        return await ledger.rebuildRun(runId);
+      } finally {
+        await db.close();
+      }
+    },
+    AttemptStatus: ledgerModule.AttemptStatus,
+    InvocationStatus: ledgerModule.InvocationStatus,
   };
 }
 
@@ -764,6 +853,7 @@ export default defineApp({
 
   const controlPath = path.join(cleanRunDirectory, 'resident-control');
   const sessionPath = path.join(cleanRunDirectory, 'resident-sessions');
+  const payloadPath = path.join(controlPath, 'execution-payloads');
   const ledgerTableName = 'wharfie-package-sea-ledger-service';
   const lifecycleObserver = await createInstalledLedgerLifecycleObserver({
     installedPackageRoot,
@@ -771,12 +861,16 @@ export default defineApp({
     tableName: ledgerTableName,
     appId: embeddedManifest.app.id,
   });
-  const residentEnvironment = {
+  const operatorEnvironment = {
     ...cleanEnvironment,
     WHARFIE_CONTROL_ADAPTER: 'lmdb',
     WHARFIE_CONTROL_PATH: controlPath,
     WHARFIE_EXECUTION_LEDGER_TABLE: ledgerTableName,
+    WHARFIE_EXECUTION_PAYLOAD_PATH: payloadPath,
     WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
+  };
+  const residentEnvironment = {
+    ...operatorEnvironment,
     WHARFIE_RUNTIME_COMMAND: 'ledger-service',
   };
   /** @type {ReturnType<typeof spawnResidentService> | undefined} */
@@ -800,6 +894,180 @@ export default defineApp({
     assert.equal(firstReady.revisionId, packagedArtifact.revisionId);
     const firstSessionId = firstReady.sessionId;
 
+    const ledgerFixture = await createInstalledExecutionLedgerFixture({
+      installedPackageRoot,
+      controlPath,
+      tableName: ledgerTableName,
+      payloadPath,
+      revisionId: packagedArtifact.revisionId,
+    });
+    const claimedRunId = await ledgerFixture.createClaimedRun(
+      embeddedManifest.app.id,
+      'packaged-operator-claimed-run',
+    );
+    const crossAppRunId = await ledgerFixture.createClaimedRun(
+      'other-portable-app',
+      'packaged-operator-cross-app-run',
+    );
+    const missingRunId = ledgerFixture.createRunId(
+      embeddedManifest.app.id,
+      'packaged-operator-missing-run',
+    );
+
+    const sourceInspectionText = runCommand(
+      process.execPath,
+      [wharfieBin, 'ops', 'inspect', '--run-id', claimedRunId, '--json'],
+      {
+        cwd: cleanRunDirectory,
+        capture: true,
+        env: operatorEnvironment,
+      },
+    ).stdout.trim();
+    const packagedInspectionText = runCommand(
+      cleanArtifactPath,
+      ['wharfie', 'inspect', '--run-id', claimedRunId, '--json'],
+      {
+        cwd: cleanRunDirectory,
+        capture: true,
+        env: operatorEnvironment,
+      },
+    ).stdout.trim();
+    assert.deepEqual(
+      JSON.parse(packagedInspectionText),
+      JSON.parse(sourceInspectionText),
+      'source and packaged exact-run inspection views diverged',
+    );
+    for (const secret of [
+      'sea-input-secret',
+      'sea-caller-secret',
+      'sea-fencing-secret',
+      'payload',
+      'evidence',
+      'transcript',
+    ]) {
+      assert.equal(
+        packagedInspectionText.includes(secret),
+        false,
+        `packaged inspection disclosed ${secret}`,
+      );
+    }
+
+    for (const command of ['list']) {
+      const result = spawnSync(cleanArtifactPath, ['wharfie', command], {
+        cwd: cleanRunDirectory,
+        encoding: 'utf8',
+        env: operatorEnvironment,
+      });
+      if (result.error) throw result.error;
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /unknown command/i);
+    }
+
+    const missingCancellation = spawnSync(
+      cleanArtifactPath,
+      [
+        'wharfie',
+        'cancel',
+        '--run-id',
+        missingRunId,
+        '--request-id',
+        'sea-missing-cancel-request',
+        '--json',
+      ],
+      {
+        cwd: cleanRunDirectory,
+        encoding: 'utf8',
+        env: operatorEnvironment,
+      },
+    );
+    if (missingCancellation.error) throw missingCancellation.error;
+    assert.equal(missingCancellation.status, 1);
+    assert.match(
+      missingCancellation.stderr,
+      /cancellation refuses to create work/,
+    );
+
+    const missingInspection = spawnSync(
+      cleanArtifactPath,
+      ['wharfie', 'inspect', '--run-id', missingRunId, '--json'],
+      {
+        cwd: cleanRunDirectory,
+        encoding: 'utf8',
+        env: operatorEnvironment,
+      },
+    );
+    if (missingInspection.error) throw missingInspection.error;
+    assert.equal(missingInspection.status, 1);
+    assert.match(missingInspection.stderr, /No durable execution-ledger run/);
+    const missingRecovery = spawnSync(
+      cleanArtifactPath,
+      [
+        'wharfie',
+        'recover',
+        '--run-id',
+        missingRunId,
+        '--confirm-runner-stopped',
+        '--json',
+      ],
+      {
+        cwd: cleanRunDirectory,
+        encoding: 'utf8',
+        env: operatorEnvironment,
+      },
+    );
+    if (missingRecovery.error) throw missingRecovery.error;
+    assert.equal(missingRecovery.status, 1);
+    assert.match(missingRecovery.stderr, /refuses to create work/);
+    assert.equal(await ledgerFixture.readRun(missingRunId), null);
+
+    for (const command of ['inspect', 'recover', 'cancel']) {
+      const args = ['wharfie', command, '--run-id', crossAppRunId, '--json'];
+      if (command === 'recover') args.push('--confirm-runner-stopped');
+      if (command === 'cancel') {
+        args.push('--request-id', 'sea-cross-app-cancel-request');
+      }
+      const result = spawnSync(cleanArtifactPath, args, {
+        cwd: cleanRunDirectory,
+        encoding: 'utf8',
+        env: operatorEnvironment,
+      });
+      if (result.error) throw result.error;
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /does not belong to packaged application/);
+    }
+    assert.equal(
+      (await ledgerFixture.readRun(crossAppRunId))?.attempts[0].status,
+      ledgerFixture.AttemptStatus.CLAIMED,
+    );
+
+    const activeRecovery = spawnSync(
+      cleanArtifactPath,
+      [
+        'wharfie',
+        'recover',
+        '--run-id',
+        claimedRunId,
+        '--confirm-runner-stopped',
+        '--json',
+      ],
+      {
+        cwd: cleanRunDirectory,
+        encoding: 'utf8',
+        env: operatorEnvironment,
+      },
+    );
+    if (activeRecovery.error) throw activeRecovery.error;
+    assert.equal(activeRecovery.status, 1);
+    assert.match(
+      activeRecovery.stderr,
+      /Local service session is already active/,
+    );
+    assert.equal(
+      (await ledgerFixture.readRun(claimedRunId))?.attempts[0].status,
+      ledgerFixture.AttemptStatus.CLAIMED,
+    );
+
     const firstExit = await signalResidentService(
       firstResidentService,
       'SIGKILL',
@@ -812,6 +1080,42 @@ export default defineApp({
       'READY generation 1 after abrupt termination',
     );
     assert.equal(afterKill.sessionId, firstSessionId);
+
+    const packagedRecovery = JSON.parse(
+      runCommand(
+        cleanArtifactPath,
+        [
+          'wharfie',
+          'recover',
+          '--run-id',
+          claimedRunId,
+          '--confirm-runner-stopped',
+          '--json',
+        ],
+        {
+          cwd: cleanRunDirectory,
+          capture: true,
+          env: operatorEnvironment,
+        },
+      ).stdout,
+    );
+    assert.deepEqual(packagedRecovery.recovery, {
+      action: 'released-unstarted-claim',
+      changed: true,
+    });
+    assert.equal(packagedRecovery.run.revisionId, packagedArtifact.revisionId);
+    assert.equal(
+      packagedRecovery.invocations[0].status,
+      ledgerFixture.InvocationStatus.RUNNABLE,
+    );
+    assert.equal(
+      packagedRecovery.attempts[0].status,
+      ledgerFixture.AttemptStatus.ABANDONED,
+    );
+    assert.equal(
+      (await ledgerFixture.readRun(claimedRunId))?.attempts[0].status,
+      ledgerFixture.AttemptStatus.ABANDONED,
+    );
 
     secondResidentService = spawnResidentService(cleanArtifactPath, {
       cwd: cleanRunDirectory,
@@ -848,7 +1152,7 @@ export default defineApp({
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, and clean generated ${process.platform} SEA activity plus durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, and clean generated ${process.platform} SEA activity plus app-scoped exact-run inspection/recovery/cancellation command boundaries and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();

@@ -11,12 +11,12 @@ import { assertLedgerOpaqueId, encodeLedgerKeySegment } from './record-key.js';
  * runs. It is deliberately not a ready-work queue: directory membership says
  * only that a durable run exists, never that a resident worker may execute it.
  */
-export const EXECUTION_LEDGER_RUN_DIRECTORY_SCHEMA_VERSION = 1;
+export const EXECUTION_LEDGER_RUN_DIRECTORY_SCHEMA_VERSION = 2;
 export const EXECUTION_LEDGER_RUN_DIRECTORY_PARTITION_DOMAIN =
-  'wharfie:execution-ledger-run-directory:v1';
+  'wharfie:execution-ledger-run-directory:v2';
 export const EXECUTION_LEDGER_RUN_DIRECTORY_PARTITION_PREFIX = 'wld';
 export const EXECUTION_LEDGER_RUN_DIRECTORY_SORT_KEY_PREFIX =
-  'ledger-directory/v1/run/';
+  'ledger-directory/v2/run/';
 export const EXECUTION_LEDGER_RUN_DIRECTORY_TIMESTAMP_WIDTH = 16;
 
 /**

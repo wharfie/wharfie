@@ -26,6 +26,7 @@ const MAX_TRANSACTION_CONFLICT_ATTEMPTS = 5;
  * Factory options for creating a DynamoDB wrapper client.
  * @typedef CreateDynamoDBOptions
  * @property {string} [region] AWS region to use. Defaults to `process.env.AWS_REGION`.
+ * @property {boolean} [readOnly] Reject every mutation before contacting DynamoDB.
  */
 
 /**
@@ -39,9 +40,10 @@ const MAX_TRANSACTION_CONFLICT_ATTEMPTS = 5;
  * @param {CreateDynamoDBOptions} [options] - options.
  * @returns {import('../base.js').DBClient} - Result.
  */
-export default function createDynamoDB(
-  { region } = { region: process.env.AWS_REGION },
-) {
+export default function createDynamoDB({
+  region = process.env.AWS_REGION,
+  readOnly = false,
+} = {}) {
   const credentials = fromNodeProviderChain();
   const docClient = DynamoDBDocument.from(
     new DynamoDB({
@@ -53,6 +55,13 @@ export default function createDynamoDB(
     }),
     { marshallOptions: { removeUndefinedValues: true } },
   );
+
+  /** @returns {void} - Throws when this client cannot mutate state. */
+  function assertWritable() {
+    if (readOnly) {
+      throw new Error('DynamoDB client is read-only.');
+    }
+  }
 
   /**
    * @param {number} attempt 0-based attempt number
@@ -445,6 +454,7 @@ export default function createDynamoDB(
    * @returns {import('../base.js').PutReturn} - Result.
    */
   async function put(params) {
+    assertWritable();
     if (!params.record || typeof params.record !== 'object')
       throw new Error('record is required');
     if (
@@ -499,6 +509,7 @@ export default function createDynamoDB(
    * @returns {import('../base.js').UpdateReturn} - Result.
    */
   async function update(params) {
+    assertWritable();
     const Key = buildKey(params);
 
     /** @type {import('../base.js').UpdateDefinition[]} */
@@ -604,6 +615,7 @@ export default function createDynamoDB(
    * @returns {import('../base.js').RemoveReturn} - Result.
    */
   async function remove(params) {
+    assertWritable();
     const dynamoParams = {
       TableName: params.tableName,
       Key: buildKey(params),
@@ -674,6 +686,7 @@ export default function createDynamoDB(
    * @returns {import('../base.js').BatchWriteReturn} - Result.
    */
   async function batchWrite(params) {
+    assertWritable();
     const puts = (
       Array.isArray(params.putRequests) ? params.putRequests : []
     ).filter((v) => v !== undefined && v !== null);
@@ -762,6 +775,7 @@ export default function createDynamoDB(
    * @returns {import('../base.js').TransactionWriteReturn} - Result.
    */
   async function transactionWrite(params) {
+    assertWritable();
     const requests = validateTransactionWrite(params);
     /** @type {any[]} */
     const TransactItems = [];

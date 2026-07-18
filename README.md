@@ -34,13 +34,26 @@ consuming public commands.
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
 The abandoned v1 source and dependency graph have been deleted. The strict v2
-manifest and the append-only V3 manual run → invocation → attempt ledger are
+manifest and the append-only V4 manual run → invocation → attempt ledger are
 now defined; the superseded mutable Operation/Action snapshot store is gone. Its
 redacted per-service history directory is transactionally bound to each run
 transition, while revision-backed source and SEA activities consume one frozen
-target dependency closure instead of ambient `node_modules` or a newly
-resolved npm tree. Scheduling, durable cancellation/effects, shared packaged
-operator history, and release hardening still need focused review. The npm
+target dependency closure instead of ambient `node_modules` or a newly resolved
+npm tree. Exact-run inspection, confirmed recovery, and authenticated
+current-owner cancellation use one shared source/SEA operator layer; packaged
+commands bind authority to their embedded application identity.
+
+Foreground durable `ops run` execution has an authenticated current-owner
+cancellation path. Source `wharfie ops cancel` and packaged `<app> wharfie
+cancel` can reach only the exact live, same-principal LMDB foreground owner of
+a `STARTED` manual attempt. The required stable `--request-id` is reused after
+a lost response. That owner persists intent before beginning physical delivery;
+an inactive, stale, unreachable, or merely resident owner never triggers a
+direct-write fallback. A verified completion or failure may still win the
+ledger race, while ambiguous post-cancellation termination becomes blocked
+`UNCERTAIN` work. The local command transport is not yet supported on Windows.
+Public run history/listing, scheduling, durable effects, evidence
+reconciliation, and release hardening still need focused review. The npm
 package remains deliberately private. It is not ready for production use.
 
 ## Start here
@@ -55,7 +68,10 @@ package remains deliberately private. It is not ready for production use.
 - [Atomic operation-store checkpoint](llm/checkpoints/2026-07-16-atomic-operation-store.md) — historical atomic snapshot and fencing boundary.
 - [Immutable identity-spine checkpoint](llm/checkpoints/2026-07-17-immutable-identity-spine.md) — historical identity and artifact boundary.
 - [Mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md) — historical deletion boundary after making the append-only V3 ledger the only writable durable run model.
-- [Resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md) — current restart point after narrowing activities to the framed protocol and deleting the unusable injected-resource/runtime-RPC island.
+- [Authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md) — current restart point for the narrow external cancellation contract and its remaining verification work.
+- [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md) — historical foreground durable-before-signal boundary.
+- [Shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md) — historical boundary after unifying exact-run inspection/recovery and binding packaged operators to embedded app identity.
+- [Resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md) — historical boundary after narrowing activities to the framed protocol and deleting the unusable injected-resource/runtime-RPC island.
 - [Obsolete runtime retirement checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md) — historical deletion boundary for the disconnected NodeAgent/systemd/private-gRPC runtime island.
 - [Atomic run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md) — historical hosted SEA evidence, verified V3 history index, and the cleanup boundary that preceded the runtime deletion.
 

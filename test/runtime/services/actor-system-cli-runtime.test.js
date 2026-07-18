@@ -66,6 +66,10 @@ describe('packaged application dispatch', () => {
     const help = writes.join('');
     expect(help).toContain('manifest');
     expect(help).toContain('metadata');
+    expect(help).toContain('inspect');
+    expect(help).toContain('recover');
+    expect(help).toContain('cancel');
+    expect(help).not.toMatch(/\blist\b/);
     expect(help).not.toMatch(/\bfunc\b/);
     expect(help).not.toMatch(/\binfra\b/);
     expect(help).not.toMatch(/\bctl\b/);

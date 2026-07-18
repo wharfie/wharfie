@@ -5,9 +5,11 @@ import { jest } from '@jest/globals';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import inspectCommand from '../../../src/cli/cmds/ops_cmds/inspect.js';
-import recoverCommand from '../../../src/cli/cmds/ops_cmds/recover.js';
+import { createExecutionLedgerOperatorCommands } from '../../../src/core/runtime/operator/execution-ledger-operator.js';
 import runCommand from '../../../src/cli/cmds/ops_cmds/run.js';
+
+const { inspectCommand, recoverCommand, cancelCommand } =
+  createExecutionLedgerOperatorCommands();
 
 const ORIGINAL_ENV = process.env;
 
@@ -110,6 +112,21 @@ describe.each([
           '--run-id',
           'wlm_missing-recovery-run',
           '--confirm-runner-stopped',
+        ],
+        { from: 'node' },
+      ),
+  ],
+  [
+    'wharfie ops cancel',
+    () =>
+      cancelCommand.parseAsync(
+        [
+          'node',
+          'cancel',
+          '--run-id',
+          'wlm_missing-cancellation-run',
+          '--request-id',
+          'missing-cancellation-request',
         ],
         { from: 'node' },
       ),

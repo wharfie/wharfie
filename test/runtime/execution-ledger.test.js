@@ -154,13 +154,175 @@ function completedEvidenceForStart(start, result = { greeting: 'hello' }) {
   };
 }
 
+const CANCELLATION_REASON = Object.freeze({
+  code: 'operator-requested-cancellation',
+  name: 'CancellationError',
+  message: 'The operator requested that this durable run stop.',
+  details: { requestId: 'cancel-request-1' },
+});
+
+/**
+ * @param {Readonly<Record<string, any>>} start - Exact durable start frame.
+ * @param {Record<string, any>} [reason] - Host cancellation reason.
+ * @returns {Record<string, any>} - Host-verified cancelled attempt evidence.
+ */
+function cancelledEvidenceForStart(start, reason = CANCELLATION_REASON) {
+  const transcript = new ActivityProtocolTranscriptValidator();
+  const acceptedStart = transcript.acceptHostFrame(start);
+  const cancel = transcript.acceptHostFrame({
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'cancel',
+    attemptId: acceptedStart.attemptId,
+    reason,
+  });
+  const terminal = transcript.acceptComponentFrame({
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'cancelled',
+    attemptId: acceptedStart.attemptId,
+    sequence: 1,
+    error: reason,
+  });
+  return {
+    status: terminal.type,
+    start: acceptedStart,
+    terminal,
+    frames: [acceptedStart, cancel, terminal],
+    transcript: transcript.snapshot(),
+  };
+}
+
+/**
+ * @param {Readonly<Record<string, any>>} start - Exact durable start frame.
+ * @param {'completed'|'failed'} terminalType - Physical terminal that won the cancellation race.
+ * @param {Record<string, any>} [reason] - Exact authorized cancellation reason.
+ * @returns {Record<string, any>} - Host-verified non-cancelled evidence after cancellation delivery.
+ */
+function terminalEvidenceAfterCancelForStart(
+  start,
+  terminalType,
+  reason = CANCELLATION_REASON,
+) {
+  const transcript = new ActivityProtocolTranscriptValidator();
+  const acceptedStart = transcript.acceptHostFrame(start);
+  const cancel = transcript.acceptHostFrame({
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'cancel',
+    attemptId: acceptedStart.attemptId,
+    reason,
+  });
+  const terminal = transcript.acceptComponentFrame(
+    terminalType === 'completed'
+      ? {
+          protocol: 'wharfie.activity',
+          protocolVersion: 1,
+          type: 'completed',
+          attemptId: acceptedStart.attemptId,
+          sequence: 1,
+          result: { outcome: 'completed-after-cancel' },
+        }
+      : {
+          protocol: 'wharfie.activity',
+          protocolVersion: 1,
+          type: 'failed',
+          attemptId: acceptedStart.attemptId,
+          sequence: 1,
+          error: {
+            code: 'activity-failed',
+            name: 'ActivityError',
+            message: 'The activity failed after cancellation was delivered.',
+            details: {},
+          },
+        },
+  );
+  return {
+    status: terminal.type,
+    start: acceptedStart,
+    terminal,
+    frames: [acceptedStart, cancel, terminal],
+    transcript: transcript.snapshot(),
+  };
+}
+
+/**
+ * @param {Readonly<Record<string, any>>} start - Exact durable start frame.
+ * @returns {Record<string, any>} - Protocol failure evidence with no physical cancellation delivery.
+ */
+function protocolFailedEvidenceForStart(start) {
+  const transcript = new ActivityProtocolTranscriptValidator();
+  const acceptedStart = transcript.acceptHostFrame(start);
+  const terminal = transcript.acceptComponentFrame({
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'protocol-failed',
+    attemptId: acceptedStart.attemptId,
+    sequence: 1,
+    error: {
+      code: 'transport-failed',
+      name: 'ActivityAttemptProtocolError',
+      message:
+        'The attempt transport failed before cancellation was delivered.',
+      details: {},
+    },
+  });
+  return {
+    status: terminal.type,
+    start: acceptedStart,
+    terminal,
+    frames: [acceptedStart, terminal],
+    transcript: transcript.snapshot(),
+  };
+}
+
+/**
+ * @param {Readonly<Record<string, any>>} start - Exact durable start frame.
+ * @param {Record<string, any>} [reason] - Host cancellation reason.
+ * @returns {Record<string, any>} - Evidence that cancellation delivery ended ambiguously.
+ */
+function failedCancellationEvidenceForStart(
+  start,
+  reason = CANCELLATION_REASON,
+) {
+  const transcript = new ActivityProtocolTranscriptValidator();
+  const acceptedStart = transcript.acceptHostFrame(start);
+  const cancel = transcript.acceptHostFrame({
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'cancel',
+    attemptId: acceptedStart.attemptId,
+    reason,
+  });
+  const terminal = transcript.acceptComponentFrame({
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'protocol-failed',
+    attemptId: acceptedStart.attemptId,
+    sequence: 1,
+    error: {
+      code: 'termination-failed',
+      name: 'ActivityAttemptProtocolError',
+      message: 'The adapter could not prove that cancellation stopped work.',
+      details: {},
+    },
+  });
+  return {
+    status: terminal.type,
+    start: acceptedStart,
+    terminal,
+    frames: [acceptedStart, cancel, terminal],
+    transcript: transcript.snapshot(),
+  };
+}
+
 /**
  * @param {Record<string, any>} event - Raw immutable event record.
  * @returns {string} - Content-bound event identity as production code computes it.
  */
 function eventIdFor(event) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v3',
+    domain: 'wharfie:execution-ledger-event:v4',
     prefix: 'wle',
     value: {
       schemaVersion: event.schema_version,
@@ -179,6 +341,54 @@ function eventIdFor(event) {
 }
 
 /**
+ * Replace one event and all affected projections with rehashed snapshots. A
+ * replay test using this helper reaches semantic fold validation instead of
+ * failing earlier on a detached event ID or an ordinary projection mismatch.
+ * @param {{db: any, tableName: string, sequence: number, transitionId: string, payload: Record<string, any>}} input - Forged but structurally consistent event state.
+ * @returns {Promise<void>} - Resolves after all test records are rewritten.
+ */
+async function forgeEventSnapshots(input) {
+  const event = await input.db.get({
+    tableName: input.tableName,
+    keyName: 'run_id',
+    keyValue: RUN_ID,
+    sortKeyName: 'sort_key',
+    sortKeyValue: getEventSortKey(input.sequence),
+    consistentRead: true,
+  });
+  if (!event) throw new Error('Expected event to forge');
+  const forgedEventId = eventIdFor({ ...event, payload: input.payload });
+  /** @param {string} sortKeyValue - Ledger record sort key. @param {any[]} updates - Atomic field updates. */
+  const update = async (sortKeyValue, updates) =>
+    await input.db.update({
+      tableName: input.tableName,
+      keyName: 'run_id',
+      keyValue: RUN_ID,
+      sortKeyName: 'sort_key',
+      sortKeyValue,
+      updates,
+    });
+  await update(getEventSortKey(input.sequence), [
+    { property: ['payload'], propertyValue: input.payload },
+    { property: ['event_id'], propertyValue: forgedEventId },
+  ]);
+  await update(getTransitionSortKey(input.transitionId), [
+    { property: ['event_id'], propertyValue: forgedEventId },
+  ]);
+  await update(getRunProjectionSortKey(), [
+    { property: ['data'], propertyValue: input.payload.run },
+  ]);
+  await update(getInvocationProjectionSortKey(INVOCATION_ID), [
+    { property: ['data'], propertyValue: input.payload.invocation },
+  ]);
+  if (input.payload.attempt) {
+    await update(getAttemptProjectionSortKey(input.payload.attempt.attemptId), [
+      { property: ['data'], propertyValue: input.payload.attempt },
+    ]);
+  }
+}
+
+/**
  * @param {Record<string, any>} [overrides] - Immutable run definition overrides.
  * @returns {Record<string, any>} - First-slice manual run request.
  */
@@ -192,6 +402,24 @@ function manualRun(overrides = {}) {
     input: { name: 'Ada' },
     callerMetadata: { source: 'test' },
     transitionId: 'create-run',
+    ...overrides,
+  };
+}
+
+/**
+ * @param {Record<string, any>} [overrides] - Cancellation request overrides.
+ * @returns {Record<string, any>} - Fenced first-wins manual cancellation request.
+ */
+function manualCancellationRequest(overrides = {}) {
+  return {
+    runId: RUN_ID,
+    invocationId: INVOCATION_ID,
+    expectedVersion: 1,
+    expectedGeneration: 0,
+    transitionId: 'cancel-request-1',
+    requestId: 'cancel-request-1',
+    actor: { kind: 'operator', id: 'ledger-contract-test' },
+    reason: CANCELLATION_REASON,
     ...overrides,
   };
 }
@@ -522,6 +750,1322 @@ for (const adapter of getAdapterMatrix()) {
             transitionId: 'unsafe-retry',
           }),
         ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('cancels a runnable manual invocation without creating a physical attempt', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-cancel-runnable',
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+
+        const cancelled = await ledger.requestManualRunCancellation(
+          manualCancellationRequest(),
+        );
+
+        expect(cancelled).toMatchObject({
+          applied: true,
+          outcome: 'cancellation-requested',
+          run: {
+            status: RunStatus.CANCELLED,
+            version: 2,
+            cancellationRequest: {
+              requestId: 'cancel-request-1',
+              requestedAt: expect.any(Number),
+              actor: { kind: 'operator', id: 'ledger-contract-test' },
+              reason: CANCELLATION_REASON,
+            },
+          },
+          invocation: {
+            status: InvocationStatus.CANCELLED,
+            generation: 0,
+            cancellationRequest: {
+              requestId: 'cancel-request-1',
+              reason: CANCELLATION_REASON,
+            },
+          },
+        });
+        expect(cancelled.attempt).toBeUndefined();
+        await expect(ledger.rebuildRun(RUN_ID)).resolves.toMatchObject({
+          run: { status: RunStatus.CANCELLED },
+          invocations: [{ status: InvocationStatus.CANCELLED }],
+          attempts: [],
+          events: [
+            { type: 'manual-run-created' },
+            { type: 'manual-cancellation-requested' },
+          ],
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('keeps the caller retry ID separate from the immutable cancellation receipt', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-cancel-request-identity',
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        const request = manualCancellationRequest({
+          // A caller may legitimately choose a lifecycle-looking retry key.
+          // It must not collide with receipt storage or event identity.
+          requestId: 'create',
+          transitionId: 'internal-cancel-receipt',
+        });
+
+        await expect(
+          ledger.requestManualRunCancellation(request),
+        ).resolves.toMatchObject({
+          applied: true,
+          receipt: { transition_id: 'internal-cancel-receipt' },
+          run: {
+            cancellationRequest: {
+              requestId: 'create',
+              transitionId: 'internal-cancel-receipt',
+            },
+          },
+        });
+        await expect(ledger.rebuildRun(RUN_ID)).resolves.toMatchObject({
+          run: {
+            cancellationRequest: {
+              requestId: 'create',
+              transitionId: 'internal-cancel-receipt',
+            },
+          },
+          events: [
+            expect.any(Object),
+            expect.objectContaining({
+              type: 'manual-cancellation-requested',
+              transition_id: 'internal-cancel-receipt',
+            }),
+          ],
+        });
+        await expect(
+          ledger.requestManualRunCancellation(request),
+        ).resolves.toMatchObject({
+          applied: false,
+          receipt: { transition_id: 'internal-cancel-receipt' },
+          run: { cancellationRequest: { requestId: 'create' } },
+        });
+        await expect(
+          ledger.requestManualRunCancellation({
+            ...request,
+            requestId: 'different-caller-retry-key',
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerTransitionConflictError);
+
+        const missingRequestId = { ...request };
+        delete missingRequestId.requestId;
+        await expect(
+          ledger.requestManualRunCancellation(missingRequestId),
+        ).rejects.toThrow(/requestId/i);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('rejects an explicit null actor while defaulting an omitted actor', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-cancel-actor-boundary',
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+
+        await expect(
+          ledger.requestManualRunCancellation(
+            manualCancellationRequest({ actor: null }),
+          ),
+        ).rejects.toThrow(/actor/i);
+        await expect(ledger.getEvents(RUN_ID)).resolves.toHaveLength(1);
+
+        const requestWithoutActor = manualCancellationRequest();
+        delete requestWithoutActor.actor;
+        await expect(
+          ledger.requestManualRunCancellation(requestWithoutActor),
+        ).resolves.toMatchObject({
+          applied: true,
+          outcome: 'cancellation-requested',
+          run: {
+            status: RunStatus.CANCELLED,
+            cancellationRequest: {
+              actor: { kind: 'local', id: 'local' },
+            },
+          },
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('classifies the durable first writer when distinct cancellation IDs race', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const tableName = 'execution-ledger-cancel-first-writer-race';
+        const directLedger = createExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+        });
+        await directLedger.createManualRun(manualRun());
+        let injectWinner = true;
+        const guardedDb = {
+          ...db,
+          /** @param {any} params - Transaction forwarded after the injected cancellation wins. */
+          transactionWrite: async (params) => {
+            const isCancellation = params.putRequests.some(
+              (/** @type {any} */ request) =>
+                request.record.record_type === 'execution_ledger_event' &&
+                request.record.type === 'manual-cancellation-requested',
+            );
+            if (injectWinner && isCancellation) {
+              injectWinner = false;
+              await directLedger.requestManualRunCancellation(
+                manualCancellationRequest({
+                  transitionId: 'cancel-request-winner',
+                  requestId: 'cancel-request-winner',
+                  reason: {
+                    ...CANCELLATION_REASON,
+                    details: { requestId: 'cancel-request-winner' },
+                  },
+                }),
+              );
+            }
+            return await db.transactionWrite(params);
+          },
+        };
+        const racingLedger = createExecutionLedger({
+          db: guardedDb,
+          tableName,
+          now: createClock(),
+        });
+
+        const classified = await racingLedger.requestManualRunCancellation(
+          manualCancellationRequest({
+            transitionId: 'cancel-request-loser',
+            requestId: 'cancel-request-loser',
+            reason: {
+              ...CANCELLATION_REASON,
+              details: { requestId: 'cancel-request-loser' },
+            },
+          }),
+        );
+        expect(classified).toMatchObject({
+          applied: false,
+          outcome: 'cancellation-requested',
+          receipt: { transition_id: 'cancel-request-winner' },
+          run: {
+            status: RunStatus.CANCELLED,
+            cancellationRequest: { requestId: 'cancel-request-winner' },
+          },
+          invocation: {
+            status: InvocationStatus.CANCELLED,
+            cancellationRequest: { requestId: 'cancel-request-winner' },
+          },
+        });
+        expect(
+          (await directLedger.getEvents(RUN_ID)).map(({ type }) => type),
+        ).toEqual(['manual-run-created', 'manual-cancellation-requested']);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('cancels an exactly fenced claimed attempt before handler start', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-cancel-claimed',
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        const claim = await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'cancel-claimed-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'cancel-claimed-claim',
+        });
+        const attemptId = claim.attempt?.attemptId;
+        if (!attemptId)
+          throw new Error('Expected claimed cancellation attempt');
+
+        const cancelled = await ledger.requestManualRunCancellation(
+          manualCancellationRequest({
+            expectedVersion: claim.run.version,
+            expectedGeneration: claim.invocation.generation,
+            attemptId,
+            fencingToken: 'cancel-claimed-fence',
+          }),
+        );
+
+        expect(cancelled).toMatchObject({
+          applied: true,
+          outcome: 'cancellation-requested',
+          run: { status: RunStatus.CANCELLED },
+          invocation: {
+            status: InvocationStatus.CANCELLED,
+            generation: 1,
+          },
+          attempt: {
+            attemptId,
+            status: AttemptStatus.CANCELLED,
+            cancellationRequest: {
+              requestId: 'cancel-request-1',
+              reason: CANCELLATION_REASON,
+            },
+          },
+        });
+        expect(cancelled.attempt).not.toHaveProperty('startedAt');
+        expect(cancelled.attempt).not.toHaveProperty('terminal');
+        expect(cancelled.attempt).not.toHaveProperty('evidenceRef');
+        await expect(
+          ledger.markAttemptStarted({
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            attemptId,
+            fencingToken: 'cancel-claimed-fence',
+            generation: 1,
+            expectedVersion: claim.run.version,
+            transitionId: 'cancelled-claim-cannot-start',
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('records cancellation intent without inventing a terminal for started or uncertain work', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-cancel-started',
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        const claim = await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'cancel-started-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'cancel-started-claim',
+        });
+        const attemptId = claim.attempt?.attemptId;
+        if (!attemptId)
+          throw new Error('Expected started cancellation attempt');
+        const started = await ledger.markAttemptStarted({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'cancel-started-fence',
+          generation: 1,
+          expectedVersion: claim.run.version,
+          transitionId: 'cancel-started-start',
+        });
+
+        const requested = await ledger.requestManualRunCancellation(
+          manualCancellationRequest({
+            expectedVersion: started.run.version,
+            expectedGeneration: started.invocation.generation,
+            attemptId,
+            fencingToken: 'cancel-started-fence',
+          }),
+        );
+        expect(requested).toMatchObject({
+          applied: true,
+          outcome: 'cancellation-requested',
+          run: {
+            status: RunStatus.RUNNING,
+            cancellationRequest: { requestId: 'cancel-request-1' },
+          },
+          invocation: {
+            status: InvocationStatus.RUNNING,
+            cancellationRequest: { requestId: 'cancel-request-1' },
+          },
+          attempt: {
+            status: AttemptStatus.STARTED,
+            cancellationRequest: { requestId: 'cancel-request-1' },
+          },
+        });
+        expect(requested.invocation).not.toHaveProperty('terminal');
+        expect(requested.attempt).not.toHaveProperty('terminal');
+
+        const uncertain = await ledger.markAttemptUncertain({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'cancel-started-fence',
+          generation: 1,
+          expectedVersion: requested.run.version,
+          transitionId: 'cancel-started-uncertain',
+          reason: { code: 'cancel-delivery-unknown' },
+        });
+        expect(uncertain).toMatchObject({
+          run: {
+            status: RunStatus.BLOCKED,
+            cancellationRequest: { requestId: 'cancel-request-1' },
+          },
+          invocation: {
+            status: InvocationStatus.UNCERTAIN,
+            cancellationRequest: { requestId: 'cancel-request-1' },
+          },
+          attempt: {
+            status: AttemptStatus.ABANDONED,
+            cancellationRequest: { requestId: 'cancel-request-1' },
+          },
+        });
+
+        const repeated = await ledger.requestManualRunCancellation(
+          manualCancellationRequest({
+            expectedVersion: started.run.version,
+            expectedGeneration: started.invocation.generation,
+            attemptId,
+            fencingToken: 'cancel-started-fence',
+          }),
+        );
+        expect(repeated).toMatchObject({
+          applied: false,
+          outcome: 'cancellation-requested',
+          run: { status: RunStatus.BLOCKED },
+          invocation: { status: InvocationStatus.UNCERTAIN },
+          attempt: { status: AttemptStatus.ABANDONED },
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('does not reinterpret an uncertain outcome as a new cancellation request', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-cancel-uncertain',
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        const claim = await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'cancel-uncertain-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'cancel-uncertain-claim',
+        });
+        const attemptId = claim.attempt?.attemptId;
+        if (!attemptId)
+          throw new Error('Expected uncertain cancellation attempt');
+        const started = await ledger.markAttemptStarted({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'cancel-uncertain-fence',
+          generation: 1,
+          expectedVersion: claim.run.version,
+          transitionId: 'cancel-uncertain-start',
+        });
+        const uncertain = await ledger.markAttemptUncertain({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'cancel-uncertain-fence',
+          generation: 1,
+          expectedVersion: started.run.version,
+          transitionId: 'cancel-uncertain-transition',
+          reason: { code: 'physical-outcome-unknown' },
+        });
+        const beforeEvents = await ledger.getEvents(RUN_ID);
+
+        const refused = await ledger.requestManualRunCancellation(
+          manualCancellationRequest({
+            expectedVersion: uncertain.run.version,
+            expectedGeneration: uncertain.invocation.generation,
+            attemptId,
+            fencingToken: 'cancel-uncertain-fence',
+          }),
+        );
+        expect(refused).toMatchObject({
+          applied: false,
+          outcome: 'outcome-uncertain',
+          run: { status: RunStatus.BLOCKED },
+          invocation: { status: InvocationStatus.UNCERTAIN },
+          attempt: { status: AttemptStatus.ABANDONED },
+        });
+        expect(refused.run).not.toHaveProperty('cancellationRequest');
+        expect(refused.invocation).not.toHaveProperty('cancellationRequest');
+        expect(refused.attempt).not.toHaveProperty('cancellationRequest');
+        expect(await ledger.getEvents(RUN_ID)).toEqual(beforeEvents);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('requires a matching durable request before accepting cancelled evidence', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-cancel-evidence',
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        const claim = await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'cancel-evidence-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'cancel-evidence-claim',
+        });
+        const attemptId = claim.attempt?.attemptId;
+        if (!attemptId)
+          throw new Error('Expected cancellation evidence attempt');
+        const started = await ledger.markAttemptStarted({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'cancel-evidence-fence',
+          generation: 1,
+          expectedVersion: claim.run.version,
+          transitionId: 'cancel-evidence-start',
+        });
+        const matchingEvidence = cancelledEvidenceForStart(started.startFrame);
+
+        await expect(
+          ledger.commitVerifiedAttemptTerminal({
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            attemptId,
+            fencingToken: 'cancel-evidence-fence',
+            generation: 1,
+            expectedVersion: started.run.version,
+            transitionId: 'cancel-without-request',
+            evidence: matchingEvidence,
+          }),
+        ).rejects.toThrow(/durable cancellation request/i);
+
+        const requested = await ledger.requestManualRunCancellation(
+          manualCancellationRequest({
+            expectedVersion: started.run.version,
+            expectedGeneration: started.invocation.generation,
+            attemptId,
+            fencingToken: 'cancel-evidence-fence',
+          }),
+        );
+        const mismatchedReason = {
+          ...CANCELLATION_REASON,
+          message: 'A different cancellation request must not be substituted.',
+        };
+        await expect(
+          ledger.commitVerifiedAttemptTerminal({
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            attemptId,
+            fencingToken: 'cancel-evidence-fence',
+            generation: 1,
+            expectedVersion: requested.run.version,
+            transitionId: 'cancel-termination-unproven',
+            evidence: failedCancellationEvidenceForStart(started.startFrame),
+          }),
+        ).rejects.toThrow();
+        await expect(
+          ledger.commitVerifiedAttemptTerminal({
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            attemptId,
+            fencingToken: 'cancel-evidence-fence',
+            generation: 1,
+            expectedVersion: requested.run.version,
+            transitionId: 'cancel-mismatched-reason',
+            evidence: cancelledEvidenceForStart(
+              started.startFrame,
+              mismatchedReason,
+            ),
+          }),
+        ).rejects.toThrow(/cancellation request|cancel frame|reason/i);
+
+        const committed = await ledger.commitVerifiedAttemptTerminal({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'cancel-evidence-fence',
+          generation: 1,
+          expectedVersion: requested.run.version,
+          transitionId: 'cancel-matching-terminal',
+          evidence: matchingEvidence,
+        });
+        expect(committed).toMatchObject({
+          run: { status: RunStatus.CANCELLED },
+          invocation: { status: InvocationStatus.CANCELLED },
+          attempt: {
+            status: AttemptStatus.CANCELLED,
+            terminal: { type: 'cancelled', attemptId },
+          },
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('accepts completed and failed evidence with the exact authorized cancel frame', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        /** @type {Array<{terminalType: 'completed'|'failed', runStatus: string, invocationStatus: string, attemptStatus: string}>} */
+        const cases = [
+          {
+            terminalType: 'completed',
+            runStatus: RunStatus.COMPLETED,
+            invocationStatus: InvocationStatus.COMPLETED,
+            attemptStatus: AttemptStatus.COMPLETED,
+          },
+          {
+            terminalType: 'failed',
+            runStatus: RunStatus.FAILED,
+            invocationStatus: InvocationStatus.FAILED,
+            attemptStatus: AttemptStatus.FAILED,
+          },
+        ];
+        for (const terminalCase of cases) {
+          const suffix = terminalCase.terminalType;
+          const fencingToken = `cancel-${suffix}-frame-fence`;
+          const ledger = createExecutionLedger({
+            db,
+            tableName: `execution-ledger-cancel-${suffix}-frame`,
+            now: createClock(),
+          });
+          await ledger.createManualRun(manualRun());
+          const claim = await ledger.claimInvocation({
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            fencingToken,
+            expectedGeneration: 0,
+            expectedVersion: 1,
+            transitionId: `cancel-${suffix}-frame-claim`,
+          });
+          const attemptId = claim.attempt?.attemptId;
+          if (!attemptId) throw new Error(`Expected ${suffix} race attempt`);
+          const started = await ledger.markAttemptStarted({
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            attemptId,
+            fencingToken,
+            generation: 1,
+            expectedVersion: claim.run.version,
+            transitionId: `cancel-${suffix}-frame-start`,
+          });
+          const requested = await ledger.requestManualRunCancellation(
+            manualCancellationRequest({
+              expectedVersion: started.run.version,
+              expectedGeneration: started.invocation.generation,
+              attemptId,
+              fencingToken,
+            }),
+          );
+
+          const committed = await ledger.commitVerifiedAttemptTerminal({
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            attemptId,
+            fencingToken,
+            generation: 1,
+            expectedVersion: requested.run.version,
+            transitionId: `cancel-${suffix}-frame-terminal`,
+            evidence: terminalEvidenceAfterCancelForStart(
+              started.startFrame,
+              terminalCase.terminalType,
+            ),
+          });
+          expect(committed).toMatchObject({
+            run: {
+              status: terminalCase.runStatus,
+              cancellationRequest: { requestId: 'cancel-request-1' },
+            },
+            invocation: {
+              status: terminalCase.invocationStatus,
+              cancellationRequest: { requestId: 'cancel-request-1' },
+            },
+            attempt: {
+              status: terminalCase.attemptStatus,
+              terminal: { type: terminalCase.terminalType, attemptId },
+              cancellationRequest: { requestId: 'cancel-request-1' },
+            },
+          });
+        }
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('accepts protocol failure after a durable request when no cancel frame was delivered', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-cancel-protocol-failed-no-frame',
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        const claim = await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'cancel-protocol-failed-no-frame-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'cancel-protocol-failed-no-frame-claim',
+        });
+        const attemptId = claim.attempt?.attemptId;
+        if (!attemptId) throw new Error('Expected protocol-failure attempt');
+        const started = await ledger.markAttemptStarted({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'cancel-protocol-failed-no-frame-fence',
+          generation: 1,
+          expectedVersion: claim.run.version,
+          transitionId: 'cancel-protocol-failed-no-frame-start',
+        });
+        const requested = await ledger.requestManualRunCancellation(
+          manualCancellationRequest({
+            expectedVersion: started.run.version,
+            expectedGeneration: started.invocation.generation,
+            attemptId,
+            fencingToken: 'cancel-protocol-failed-no-frame-fence',
+          }),
+        );
+
+        const committed = await ledger.commitVerifiedAttemptTerminal({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'cancel-protocol-failed-no-frame-fence',
+          generation: 1,
+          expectedVersion: requested.run.version,
+          transitionId: 'cancel-protocol-failed-no-frame-terminal',
+          evidence: protocolFailedEvidenceForStart(started.startFrame),
+        });
+        expect(committed).toMatchObject({
+          run: {
+            status: RunStatus.FAILED,
+            cancellationRequest: { requestId: 'cancel-request-1' },
+          },
+          invocation: { status: InvocationStatus.FAILED },
+          attempt: {
+            status: AttemptStatus.FAILED,
+            terminal: { type: 'protocol-failed', attemptId },
+          },
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('allows a verified completion to remain authoritative after cancellation was requested', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-cancel-completion-race',
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        const claim = await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'cancel-completion-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'cancel-completion-claim',
+        });
+        const attemptId = claim.attempt?.attemptId;
+        if (!attemptId) throw new Error('Expected completion-race attempt');
+        const started = await ledger.markAttemptStarted({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'cancel-completion-fence',
+          generation: 1,
+          expectedVersion: claim.run.version,
+          transitionId: 'cancel-completion-start',
+        });
+        const requested = await ledger.requestManualRunCancellation(
+          manualCancellationRequest({
+            expectedVersion: started.run.version,
+            expectedGeneration: started.invocation.generation,
+            attemptId,
+            fencingToken: 'cancel-completion-fence',
+          }),
+        );
+
+        const committed = await ledger.commitVerifiedAttemptTerminal({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'cancel-completion-fence',
+          generation: 1,
+          expectedVersion: requested.run.version,
+          transitionId: 'completion-after-cancel-request',
+          evidence: completedEvidenceForStart(started.startFrame),
+        });
+        expect(committed).toMatchObject({
+          run: {
+            status: RunStatus.COMPLETED,
+            cancellationRequest: { requestId: 'cancel-request-1' },
+          },
+          invocation: {
+            status: InvocationStatus.COMPLETED,
+            cancellationRequest: { requestId: 'cancel-request-1' },
+          },
+          attempt: {
+            status: AttemptStatus.COMPLETED,
+            cancellationRequest: { requestId: 'cancel-request-1' },
+          },
+        });
+
+        const tooLate = await ledger.requestManualRunCancellation(
+          manualCancellationRequest({
+            transitionId: 'later-cancel-request',
+            expectedVersion: committed.run.version,
+            expectedGeneration: committed.invocation.generation,
+            attemptId,
+            fencingToken: 'cancel-completion-fence',
+            reason: {
+              ...CANCELLATION_REASON,
+              details: { requestId: 'later-cancel-request' },
+            },
+          }),
+        );
+        expect(tooLate).toMatchObject({
+          applied: false,
+          outcome: 'cancellation-requested',
+          run: { status: RunStatus.COMPLETED },
+        });
+        expect(tooLate.run.cancellationRequest.requestId).toBe(
+          'cancel-request-1',
+        );
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('does not append cancellation intent after a terminal already became authoritative', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-cancel-terminal-first',
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        const claim = await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'cancel-terminal-first-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'cancel-terminal-first-claim',
+        });
+        const attemptId = claim.attempt?.attemptId;
+        if (!attemptId) throw new Error('Expected terminal-first attempt');
+        const started = await ledger.markAttemptStarted({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'cancel-terminal-first-fence',
+          generation: 1,
+          expectedVersion: claim.run.version,
+          transitionId: 'cancel-terminal-first-start',
+        });
+        const terminal = await ledger.commitVerifiedAttemptTerminal({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'cancel-terminal-first-fence',
+          generation: 1,
+          expectedVersion: started.run.version,
+          transitionId: 'cancel-terminal-first-completed',
+          evidence: completedEvidenceForStart(started.startFrame),
+        });
+        const beforeEvents = await ledger.getEvents(RUN_ID);
+
+        const refused = await ledger.requestManualRunCancellation(
+          manualCancellationRequest({
+            expectedVersion: terminal.run.version,
+            expectedGeneration: terminal.invocation.generation,
+            attemptId,
+            fencingToken: 'cancel-terminal-first-fence',
+          }),
+        );
+        expect(refused).toMatchObject({
+          applied: false,
+          outcome: 'terminal-authoritative',
+          run: { status: RunStatus.COMPLETED },
+          invocation: { status: InvocationStatus.COMPLETED },
+          attempt: { status: AttemptStatus.COMPLETED },
+        });
+        expect(refused).not.toHaveProperty('receipt');
+        expect(refused.run).not.toHaveProperty('cancellationRequest');
+        expect(await ledger.getEvents(RUN_ID)).toEqual(beforeEvents);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('returns the terminal that wins between cancellation read and append', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const tableName = 'execution-ledger-cancel-terminal-interleaving';
+        const directLedger = createExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+        });
+        await directLedger.createManualRun(manualRun());
+        const claim = await directLedger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'cancel-terminal-interleaving-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'cancel-terminal-interleaving-claim',
+        });
+        const attemptId = claim.attempt?.attemptId;
+        if (!attemptId)
+          throw new Error('Expected interleaved terminal attempt');
+        const started = await directLedger.markAttemptStarted({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'cancel-terminal-interleaving-fence',
+          generation: 1,
+          expectedVersion: claim.run.version,
+          transitionId: 'cancel-terminal-interleaving-start',
+        });
+
+        let injectTerminal = true;
+        const guardedDb = {
+          ...db,
+          /** @param {any} params - Transaction forwarded after the injected terminal wins. */
+          transactionWrite: async (params) => {
+            const isCancellation = params.putRequests.some(
+              (/** @type {any} */ request) =>
+                request.record.record_type === 'execution_ledger_event' &&
+                request.record.type === 'manual-cancellation-requested',
+            );
+            if (injectTerminal && isCancellation) {
+              injectTerminal = false;
+              await directLedger.commitVerifiedAttemptTerminal({
+                runId: RUN_ID,
+                invocationId: INVOCATION_ID,
+                attemptId,
+                fencingToken: 'cancel-terminal-interleaving-fence',
+                generation: 1,
+                expectedVersion: started.run.version,
+                transitionId: 'cancel-terminal-interleaving-completed',
+                evidence: completedEvidenceForStart(started.startFrame),
+              });
+            }
+            return await db.transactionWrite(params);
+          },
+        };
+        const cancellingLedger = createExecutionLedger({
+          db: guardedDb,
+          tableName,
+          now: createClock(),
+        });
+
+        const refused = await cancellingLedger.requestManualRunCancellation(
+          manualCancellationRequest({
+            expectedVersion: started.run.version,
+            expectedGeneration: started.invocation.generation,
+            attemptId,
+            fencingToken: 'cancel-terminal-interleaving-fence',
+          }),
+        );
+        expect(refused).toMatchObject({
+          applied: false,
+          outcome: 'terminal-authoritative',
+          run: { status: RunStatus.COMPLETED },
+          invocation: { status: InvocationStatus.COMPLETED },
+          attempt: { status: AttemptStatus.COMPLETED },
+        });
+        expect(refused).not.toHaveProperty('receipt');
+        expect(refused.run).not.toHaveProperty('cancellationRequest');
+        expect(
+          (await directLedger.getEvents(RUN_ID)).map(({ type }) => type),
+        ).toEqual([
+          'manual-run-created',
+          'attempt-claimed',
+          'attempt-started',
+          'attempt-terminal',
+        ]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('makes cancellation request identity idempotent and fences stale observations', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-cancel-idempotency',
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        const claim = await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'cancel-current-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'cancel-idempotency-claim',
+        });
+        const attemptId = claim.attempt?.attemptId;
+        if (!attemptId) throw new Error('Expected fenced cancellation attempt');
+        const currentRequest = manualCancellationRequest({
+          expectedVersion: claim.run.version,
+          expectedGeneration: claim.invocation.generation,
+          attemptId,
+          fencingToken: 'cancel-current-fence',
+          observedAt: 1_700_000_100_000,
+        });
+
+        for (const staleRequest of [
+          { ...currentRequest, expectedVersion: claim.run.version - 1 },
+          { ...currentRequest, expectedGeneration: 0 },
+          { ...currentRequest, attemptId: 'wrong-attempt' },
+          { ...currentRequest, fencingToken: 'stale-fence' },
+        ]) {
+          await expect(
+            ledger.requestManualRunCancellation(staleRequest),
+          ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
+        }
+        expect(await ledger.getEvents(RUN_ID)).toHaveLength(2);
+
+        const accepted =
+          await ledger.requestManualRunCancellation(currentRequest);
+        expect(accepted).toMatchObject({
+          applied: true,
+          outcome: 'cancellation-requested',
+        });
+        await expect(
+          ledger.requestManualRunCancellation(currentRequest),
+        ).resolves.toMatchObject({
+          applied: false,
+          outcome: 'cancellation-requested',
+          receipt: { transition_id: 'cancel-request-1' },
+        });
+        for (const conflictingReplay of [
+          {
+            ...currentRequest,
+            expectedVersion: currentRequest.expectedVersion + 1,
+          },
+          {
+            ...currentRequest,
+            expectedGeneration: currentRequest.expectedGeneration + 1,
+          },
+          { ...currentRequest, attemptId: 'different-attempt' },
+          { ...currentRequest, fencingToken: 'different-fence' },
+          { ...currentRequest, coordinatorEpoch: 1 },
+          {
+            ...currentRequest,
+            reason: {
+              ...CANCELLATION_REASON,
+              message: 'The same transition cannot name different intent.',
+            },
+          },
+        ]) {
+          await expect(
+            ledger.requestManualRunCancellation(conflictingReplay),
+          ).rejects.toBeInstanceOf(ExecutionLedgerTransitionConflictError);
+        }
+        expect(
+          (await ledger.getEvents(RUN_ID)).map(({ type }) => type),
+        ).toEqual([
+          'manual-run-created',
+          'attempt-claimed',
+          'manual-cancellation-requested',
+        ]);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('rejects a rehashed claimed cancellation that invents terminal evidence', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const tableName = 'execution-ledger-cancel-claimed-evidence-forgery';
+        const ledger = createExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        const claim = await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'cancel-claimed-forgery-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'cancel-claimed-forgery-claim',
+        });
+        const attemptId = claim.attempt?.attemptId;
+        if (!attemptId) throw new Error('Expected claimed forged attempt');
+        await ledger.requestManualRunCancellation(
+          manualCancellationRequest({
+            expectedVersion: claim.run.version,
+            expectedGeneration: claim.invocation.generation,
+            attemptId,
+            fencingToken: 'cancel-claimed-forgery-fence',
+          }),
+        );
+
+        const event = await db.get({
+          tableName,
+          keyName: 'run_id',
+          keyValue: RUN_ID,
+          sortKeyName: 'sort_key',
+          sortKeyValue: getEventSortKey(3),
+          consistentRead: true,
+        });
+        const forgedPayload = JSON.parse(JSON.stringify(event?.payload));
+        const terminal = { type: 'completed', attemptId };
+        forgedPayload.attempt.startedAt = forgedPayload.attempt.updatedAt;
+        forgedPayload.attempt.terminal = terminal;
+        forgedPayload.attempt.evidenceRef = await PAYLOAD_STORE.putJson({
+          value: { forged: 'claimed cancellation evidence' },
+          payloadSchema: 'wharfie.execution.activity-evidence.v1',
+        });
+        await forgeEventSnapshots({
+          db,
+          tableName,
+          sequence: 3,
+          transitionId: 'cancel-request-1',
+          payload: forgedPayload,
+        });
+
+        await expect(ledger.rebuildRun(RUN_ID)).rejects.toMatchObject({
+          reason: 'cancellation rewrote attempt lifecycle evidence',
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('rejects a rehashed cancellation that invents an invocation terminal', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const tableName = 'execution-ledger-cancel-invocation-forgery';
+        const ledger = createExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        await ledger.requestManualRunCancellation(manualCancellationRequest());
+
+        const event = await db.get({
+          tableName,
+          keyName: 'run_id',
+          keyValue: RUN_ID,
+          sortKeyName: 'sort_key',
+          sortKeyValue: getEventSortKey(2),
+          consistentRead: true,
+        });
+        const forgedPayload = JSON.parse(JSON.stringify(event?.payload));
+        forgedPayload.invocation.terminal = {
+          type: 'completed',
+          attemptId: 'invented-cancellation-attempt',
+        };
+        await forgeEventSnapshots({
+          db,
+          tableName,
+          sequence: 2,
+          transitionId: 'cancel-request-1',
+          payload: forgedPayload,
+        });
+
+        await expect(ledger.rebuildRun(RUN_ID)).rejects.toMatchObject({
+          reason: 'invalid manual cancellation request',
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('rejects a rehashed started cancellation that rewrites start evidence', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const tableName = 'execution-ledger-cancel-started-evidence-forgery';
+        const ledger = createExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        const claim = await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'cancel-started-forgery-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'cancel-started-forgery-claim',
+        });
+        const attemptId = claim.attempt?.attemptId;
+        if (!attemptId) throw new Error('Expected started forged attempt');
+        const started = await ledger.markAttemptStarted({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'cancel-started-forgery-fence',
+          generation: 1,
+          expectedVersion: claim.run.version,
+          transitionId: 'cancel-started-forgery-start',
+        });
+        await ledger.requestManualRunCancellation(
+          manualCancellationRequest({
+            expectedVersion: started.run.version,
+            expectedGeneration: started.invocation.generation,
+            attemptId,
+            fencingToken: 'cancel-started-forgery-fence',
+          }),
+        );
+
+        const event = await db.get({
+          tableName,
+          keyName: 'run_id',
+          keyValue: RUN_ID,
+          sortKeyName: 'sort_key',
+          sortKeyValue: getEventSortKey(4),
+          consistentRead: true,
+        });
+        const forgedPayload = JSON.parse(JSON.stringify(event?.payload));
+        forgedPayload.attempt.startedAt += 1;
+        await forgeEventSnapshots({
+          db,
+          tableName,
+          sequence: 4,
+          transitionId: 'cancel-request-1',
+          payload: forgedPayload,
+        });
+
+        await expect(ledger.rebuildRun(RUN_ID)).rejects.toMatchObject({
+          reason: 'cancellation rewrote attempt lifecycle evidence',
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('rejects a rehashed runnable cancellation that rewrites abandoned evidence', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const tableName = 'execution-ledger-cancel-abandoned-evidence-forgery';
+        const ledger = createExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        const claim = await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'cancel-abandoned-forgery-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'cancel-abandoned-forgery-claim',
+        });
+        const attemptId = claim.attempt?.attemptId;
+        if (!attemptId) throw new Error('Expected abandoned forged attempt');
+        const abandoned = await ledger.abandonUnstartedAttempt({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId,
+          fencingToken: 'cancel-abandoned-forgery-fence',
+          generation: 1,
+          expectedVersion: claim.run.version,
+          transitionId: 'cancel-abandoned-forgery-abandon',
+          reason: { code: 'coordinator-restarted' },
+        });
+        await ledger.requestManualRunCancellation(
+          manualCancellationRequest({
+            expectedVersion: abandoned.run.version,
+            expectedGeneration: abandoned.invocation.generation,
+            attemptId,
+            fencingToken: 'cancel-abandoned-forgery-fence',
+          }),
+        );
+
+        const event = await db.get({
+          tableName,
+          keyName: 'run_id',
+          keyValue: RUN_ID,
+          sortKeyName: 'sort_key',
+          sortKeyValue: getEventSortKey(4),
+          consistentRead: true,
+        });
+        const forgedPayload = JSON.parse(JSON.stringify(event?.payload));
+        forgedPayload.attempt.startedAt = forgedPayload.attempt.updatedAt;
+        forgedPayload.attempt.abandonment = { code: 'forged-abandonment' };
+        await forgeEventSnapshots({
+          db,
+          tableName,
+          sequence: 4,
+          transitionId: 'cancel-request-1',
+          payload: forgedPayload,
+        });
+
+        await expect(ledger.rebuildRun(RUN_ID)).rejects.toMatchObject({
+          reason: 'cancellation rewrote attempt lifecycle evidence',
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('rejects a cancellation projection that no longer matches its event', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const tableName = 'execution-ledger-cancel-projection-corruption';
+        const ledger = createExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        await ledger.requestManualRunCancellation(manualCancellationRequest());
+        await db.update({
+          tableName,
+          keyName: 'run_id',
+          keyValue: RUN_ID,
+          sortKeyName: 'sort_key',
+          sortKeyValue: getRunProjectionSortKey(),
+          updates: [
+            {
+              property: ['data', 'cancellationRequest', 'reason', 'message'],
+              propertyValue: 'forged cancellation reason',
+            },
+          ],
+        });
+
+        await expect(ledger.rebuildRun(RUN_ID)).rejects.toBeInstanceOf(
+          ExecutionLedgerProjectionError,
+        );
       } finally {
         await cleanup();
       }
@@ -1522,7 +3066,62 @@ for (const adapter of getAdapterMatrix()) {
             },
           ],
         });
+
+        const cancelledAlpha = await ledger.requestManualRunCancellation({
+          runId: 'run-alpha',
+          invocationId: INVOCATION_ID,
+          expectedVersion: 1,
+          expectedGeneration: 0,
+          transitionId: 'cancel-run-alpha',
+          requestId: 'cancel-run-alpha',
+          actor: { kind: 'operator', id: 'directory-contract-test' },
+          reason: {
+            ...CANCELLATION_REASON,
+            details: { requestId: 'cancel-run-alpha' },
+          },
+          observedAt: 210,
+        });
+        expect(cancelledAlpha.run).toMatchObject({
+          status: RunStatus.CANCELLED,
+          version: 2,
+          lastSequence: 2,
+          updatedAt: 210,
+        });
+        const cancelledDirectoryItem = (
+          await ledger.listRuns({ appId })
+        ).items.find(({ runId }) => runId === 'run-alpha');
+        expect(cancelledDirectoryItem).toEqual({
+          runId: 'run-alpha',
+          appId,
+          revisionId: REVISION_ID,
+          kind: 'manual',
+          status: RunStatus.CANCELLED,
+          version: 2,
+          lastSequence: 2,
+          createdAt: 100,
+          updatedAt: 210,
+        });
         const scope = createExecutionLedgerRunDirectoryScope({ appId });
+        await expect(
+          db.get({
+            tableName,
+            keyName: 'run_id',
+            keyValue: scope.directoryId,
+            sortKeyName: 'sort_key',
+            sortKeyValue: getExecutionLedgerRunDirectorySortKey({
+              runId: 'run-alpha',
+              createdAt: 100,
+            }),
+            consistentRead: true,
+          }),
+        ).resolves.toMatchObject({
+          record_type: 'execution_ledger_run_directory',
+          ledger_run_id: 'run-alpha',
+          status: RunStatus.CANCELLED,
+          version: 2,
+          sequence: 2,
+          updated_at: 210,
+        });
         await expect(
           ledger.listRuns({
             appId: 'another-directory-demo',
@@ -1531,11 +3130,11 @@ for (const adapter of getAdapterMatrix()) {
         ).rejects.toThrow(/cursor.*scope/i);
         const malformedCursor = Buffer.from(
           JSON.stringify({
-            schemaVersion: 1,
+            schemaVersion: 2,
             appId,
             serviceId: scope.serviceId,
             directoryId: scope.directoryId,
-            startAfter: 'ledger-directory/v1/run/0000000000000000/not-base64!',
+            startAfter: 'ledger-directory/v2/run/0000000000000000/not-base64!',
           }),
           'utf8',
         ).toString('base64url');
@@ -1544,7 +3143,7 @@ for (const adapter of getAdapterMatrix()) {
         ).rejects.toThrow(/cursor.*scope/i);
         const missingBoundaryCursor = Buffer.from(
           JSON.stringify({
-            schemaVersion: 1,
+            schemaVersion: 2,
             appId,
             serviceId: scope.serviceId,
             directoryId: scope.directoryId,
@@ -1587,7 +3186,7 @@ for (const adapter of getAdapterMatrix()) {
         expect(tieSecond.nextCursor).toBeUndefined();
 
         // A user-controlled run ID can equal another app's internal directory
-        // partition. V3 replay is scoped to ledger/v3/, so that co-location
+        // partition. V4 replay is scoped to ledger/v4/, so that co-location
         // remains harmless instead of treating the directory row as a run row.
         const aliasTargetAppId = 'directory-alias-target';
         const aliasRunId = createExecutionLedgerRunDirectoryScope({
@@ -1676,16 +3275,34 @@ for (const adapter of getAdapterMatrix()) {
       }
     });
 
-    test('keeps V2 records inert when V3 deliberately shares a custom table', async () => {
+    test('keeps V3 records and its V1 directory inert when V4 deliberately shares a custom table', async () => {
       const { db, cleanup } = await adapter.create();
       try {
         const tableName = 'operator-selected-shared-ledger-table';
+        const legacyScope = createExecutionLedgerRunDirectoryScope({
+          appId: 'legacy-app',
+        });
+        const legacyDirectoryId = createCanonicalJsonSha256Id({
+          domain: 'wharfie:execution-ledger-run-directory:v1',
+          prefix: 'wld',
+          value: {
+            schemaVersion: 1,
+            serviceId: legacyScope.serviceId,
+          },
+          valuePath: 'legacy execution ledger run directory partition',
+        });
+        const legacyDirectorySortKey = `ledger-directory/v1/run/${String(
+          Number.MAX_SAFE_INTEGER - 399,
+        ).padStart(
+          16,
+          '0',
+        )}/${Buffer.from('legacy-run').toString('base64url')}`;
         const legacyRecords = [
           {
             run_id: 'legacy-run',
-            sort_key: 'ledger/v2/head',
+            sort_key: 'ledger/v3/head',
             record_type: 'execution_ledger_head',
-            schema_version: 2,
+            schema_version: 3,
             version: 1,
             sequence: 1,
             app_id: 'legacy-app',
@@ -1693,15 +3310,30 @@ for (const adapter of getAdapterMatrix()) {
           },
           {
             run_id: 'legacy-run',
-            sort_key: 'ledger/v2/projection/run',
+            sort_key: 'ledger/v3/projection/run',
             record_type: 'execution_ledger_run_projection',
-            schema_version: 2,
+            schema_version: 3,
             status: RunStatus.RUNNING,
             version: 1,
             sequence: 1,
             app_id: 'legacy-app',
             revision_id: REVISION_ID,
-            data: { schemaVersion: 2, runId: 'legacy-run' },
+            data: { schemaVersion: 3, runId: 'legacy-run' },
+          },
+          {
+            run_id: legacyDirectoryId,
+            sort_key: legacyDirectorySortKey,
+            record_type: 'execution_ledger_run_directory',
+            schema_version: 3,
+            service_id: legacyScope.serviceId,
+            ledger_run_id: 'legacy-run',
+            app_id: 'legacy-app',
+            revision_id: REVISION_ID,
+            status: RunStatus.RUNNING,
+            created_at: 399,
+            updated_at: 399,
+            version: 1,
+            sequence: 1,
           },
         ];
         await db.batchWrite({
@@ -1717,7 +3349,15 @@ for (const adapter of getAdapterMatrix()) {
           keyName: 'run_id',
           keyValue: 'legacy-run',
           sortKeyName: 'sort_key',
-          sortKeyValue: 'ledger/v2/head',
+          sortKeyValue: 'ledger/v3/head',
+          consistentRead: true,
+        });
+        const legacyDirectoryBefore = await db.get({
+          tableName,
+          keyName: 'run_id',
+          keyValue: legacyDirectoryId,
+          sortKeyName: 'sort_key',
+          sortKeyValue: legacyDirectorySortKey,
           consistentRead: true,
         });
         const ledger = createExecutionLedger({
@@ -1731,18 +3371,18 @@ for (const adapter of getAdapterMatrix()) {
           { items: [] },
         );
         await ledger.createManualRun({
-          runId: 'v3-run',
+          runId: 'v4-run',
           appId: 'legacy-app',
           revisionId: REVISION_ID,
           invocationId: INVOCATION_ID,
           activityId: ACTIVITY_ID,
-          transitionId: 'create-v3-run',
+          transitionId: 'create-v4-run',
           observedAt: 400,
         });
         await expect(
           ledger.listRuns({ appId: 'legacy-app' }),
         ).resolves.toMatchObject({
-          items: [expect.objectContaining({ runId: 'v3-run' })],
+          items: [expect.objectContaining({ runId: 'v4-run' })],
         });
         await expect(
           db.get({
@@ -1750,10 +3390,20 @@ for (const adapter of getAdapterMatrix()) {
             keyName: 'run_id',
             keyValue: 'legacy-run',
             sortKeyName: 'sort_key',
-            sortKeyValue: 'ledger/v2/head',
+            sortKeyValue: 'ledger/v3/head',
             consistentRead: true,
           }),
         ).resolves.toEqual(legacyBefore);
+        await expect(
+          db.get({
+            tableName,
+            keyName: 'run_id',
+            keyValue: legacyDirectoryId,
+            sortKeyName: 'sort_key',
+            sortKeyValue: legacyDirectorySortKey,
+            consistentRead: true,
+          }),
+        ).resolves.toEqual(legacyDirectoryBefore);
       } finally {
         await cleanup();
       }

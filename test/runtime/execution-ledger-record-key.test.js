@@ -23,20 +23,20 @@ describe('execution ledger record key codec', () => {
     const attemptId = 'attempt/#/café';
     const transitionId = 'transition/#/雪';
 
-    expect(EXECUTION_LEDGER_SORT_KEY_PREFIX).toBe('ledger/v3/');
+    expect(EXECUTION_LEDGER_SORT_KEY_PREFIX).toBe('ledger/v4/');
     expect(encodeLedgerKeySegment(invocationId)).toBe(
       Buffer.from(invocationId, 'utf8').toString('base64url'),
     );
-    expect(getRunHeadSortKey()).toBe('ledger/v3/head');
-    expect(getRunProjectionSortKey()).toBe('ledger/v3/projection/run');
+    expect(getRunHeadSortKey()).toBe('ledger/v4/head');
+    expect(getRunProjectionSortKey()).toBe('ledger/v4/projection/run');
     expect(getInvocationProjectionSortKey(invocationId)).toBe(
-      `ledger/v3/projection/invocation/${Buffer.from(invocationId, 'utf8').toString('base64url')}`,
+      `ledger/v4/projection/invocation/${Buffer.from(invocationId, 'utf8').toString('base64url')}`,
     );
     expect(getAttemptProjectionSortKey(attemptId)).toBe(
-      `ledger/v3/projection/attempt/${Buffer.from(attemptId, 'utf8').toString('base64url')}`,
+      `ledger/v4/projection/attempt/${Buffer.from(attemptId, 'utf8').toString('base64url')}`,
     );
     expect(getTransitionSortKey(transitionId)).toBe(
-      `ledger/v3/transition/${Buffer.from(transitionId, 'utf8').toString('base64url')}`,
+      `ledger/v4/transition/${Buffer.from(transitionId, 'utf8').toString('base64url')}`,
     );
 
     expect(getInvocationProjectionSortKey('a/b')).not.toBe(
@@ -52,9 +52,9 @@ describe('execution ledger record key codec', () => {
 
   test('uses lexically ordered fixed-width event sequences', () => {
     expect(EXECUTION_LEDGER_EVENT_SEQUENCE_WIDTH).toBe(16);
-    expect(getEventSortKey(1)).toBe('ledger/v3/event/0000000000000001');
+    expect(getEventSortKey(1)).toBe('ledger/v4/event/0000000000000001');
     expect(getEventSortKey(Number.MAX_SAFE_INTEGER)).toBe(
-      'ledger/v3/event/9007199254740991',
+      'ledger/v4/event/9007199254740991',
     );
 
     const keys = [100, 2, 10, 1].map(getEventSortKey).sort();

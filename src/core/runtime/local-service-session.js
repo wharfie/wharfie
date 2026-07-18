@@ -9,8 +9,15 @@ const LOCAL_ENDPOINT_PROBE_TIMEOUT_MS = 250;
 const LOCAL_SOCKET_DIRECTORY_PREFIX = 'wharfie-';
 const LOCAL_SOCKET_FILENAME_PREFIX = 's-';
 const LOCAL_SOCKET_FILENAME_SUFFIX = '.sock';
+const LOCAL_OWNER_COMMAND_SOCKET_FILENAME_PREFIX = 'c-';
 const LOCAL_SESSION_SCOPE_HASH_LENGTH = 48;
 const LOCAL_SESSION_PRINCIPAL_HASH_LENGTH = 48;
+
+// An in-memory holder capability prevents a second process that merely knows
+// durable session identity from binding the companion owner-command endpoint.
+// The liveness socket remains the cross-process exclusion primitive; this
+// handle only proves that this process acquired that exact socket itself.
+const acquiredLocalServiceSessions = new WeakSet();
 
 /**
  * Raised when another live process already owns the deterministic local
@@ -308,6 +315,33 @@ function createEndpointToken(serviceId, sessionId, sessionRoot, principalId) {
 }
 
 /**
+ * @param {string} serviceId - Stable service identity.
+ * @param {string} sessionId - Opaque endpoint key for this service session.
+ * @param {string} sessionRoot - Logical session namespace.
+ * @param {string} principalId - Current local OS principal identity.
+ * @returns {string} - Short collision-resistant owner-command endpoint token.
+ */
+function createOwnerCommandEndpointToken(
+  serviceId,
+  sessionId,
+  sessionRoot,
+  principalId,
+) {
+  return createHash('sha256')
+    .update('wharfie:local-owner-command-endpoint:v1', 'utf8')
+    .update('\0', 'utf8')
+    .update(sessionRoot, 'utf8')
+    .update('\0', 'utf8')
+    .update(serviceId, 'utf8')
+    .update('\0', 'utf8')
+    .update(sessionId, 'utf8')
+    .update('\0', 'utf8')
+    .update(principalId, 'utf8')
+    .digest('hex')
+    .slice(0, SESSION_ENDPOINT_HASH_LENGTH);
+}
+
+/**
  * @returns {string} - A short per-user physical directory under /tmp.
  */
 function getUnixSocketDirectory() {
@@ -340,6 +374,50 @@ export function getLocalServiceSessionEndpoint(options) {
   return join(
     getUnixSocketDirectory(),
     `${LOCAL_SOCKET_FILENAME_PREFIX}${token}${LOCAL_SOCKET_FILENAME_SUFFIX}`,
+  );
+}
+
+/**
+ * Derive the distinct authenticated owner-command endpoint for one live local
+ * service session. It intentionally has a separate semantic hash domain and
+ * physical filename from the liveness endpoint: a command listener can never
+ * replace, multiplex, or alter the simple probe-only session socket.
+ *
+ * This derivation does not claim that the session is live. Hosts must acquire
+ * the matching local service session before binding this endpoint; clients
+ * use the same exact durable session identity to derive it.
+ * @param {{serviceId: string, sessionId: string, sessionRoot?: string, platform?: string}} options - Endpoint inputs.
+ * @returns {string} - Unix-domain socket path or Windows named-pipe path.
+ */
+export function getLocalServiceSessionOwnerCommandEndpoint(options) {
+  const { serviceId, sessionId, sessionRoot, platform } =
+    normalizeEndpointOptions(options);
+  const token = createOwnerCommandEndpointToken(
+    serviceId,
+    sessionId,
+    sessionRoot,
+    getLocalServiceSessionPrincipalId(),
+  );
+  if (platform === 'win32') return `\\\\.\\pipe\\wc-${token}`;
+  return join(
+    getUnixSocketDirectory(),
+    `${LOCAL_OWNER_COMMAND_SOCKET_FILENAME_PREFIX}${token}${LOCAL_SOCKET_FILENAME_SUFFIX}`,
+  );
+}
+
+/**
+ * Return whether this process still holds the exact session object issued by
+ * `acquireLocalServiceSession`. This is an internal capability check for the
+ * companion authenticated owner-command endpoint, not a cross-process
+ * liveness probe and not a durable ownership assertion.
+ * @param {unknown} value - Candidate acquired session handle.
+ * @returns {boolean} - Whether the exact held handle remains live locally.
+ */
+export function isAcquiredLocalServiceSession(value) {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    acquiredLocalServiceSessions.has(/** @type {object} */ (value))
   );
 }
 
@@ -546,7 +624,7 @@ function createSessionServer() {
  * durable-session endpoint key: an old path is never reused or deleted by a
  * newer recovery session.
  * @param {{serviceId: string, sessionId: string, sessionRoot?: string}} options - Exact session inputs.
- * @returns {Promise<Readonly<{serviceId: string, sessionId: string, sessionRoot: string, endpoint: string, release: () => Promise<void>}>>} - Acquired local session.
+ * @returns {Promise<Readonly<{serviceId: string, sessionId: string, sessionRoot: string, endpoint: string, ownerCommandEndpoint: string, release: () => Promise<void>}>>} - Acquired local session.
  */
 export async function acquireLocalServiceSession(options) {
   const { serviceId, sessionId, sessionRoot } =
@@ -569,17 +647,28 @@ export async function acquireLocalServiceSession(options) {
 
     /** @type {Promise<void> | undefined} */
     let releasePromise;
-    const release = () => {
-      if (!releasePromise) releasePromise = closeServer(server);
-      return releasePromise;
-    };
-    return Object.freeze({
+    const heldSession = Object.freeze({
       serviceId,
       sessionId,
       sessionRoot,
       endpoint,
-      release,
+      ownerCommandEndpoint: getLocalServiceSessionOwnerCommandEndpoint({
+        serviceId,
+        sessionId,
+        sessionRoot,
+        platform,
+      }),
+      release: () => {
+        if (!releasePromise) {
+          releasePromise = closeServer(server).then(() => {
+            acquiredLocalServiceSessions.delete(heldSession);
+          });
+        }
+        return releasePromise;
+      },
     });
+    acquiredLocalServiceSessions.add(heldSession);
+    return heldSession;
   } catch (error) {
     await closeServer(server);
     if (!isAddressInUse(error)) throw error;

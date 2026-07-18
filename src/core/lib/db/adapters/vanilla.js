@@ -21,6 +21,7 @@ const NO_SORT = '__no_sort__';
 /**
  * @typedef CreateVanillaDBOptions
  * @property {string} [path] - Path to the database file. Defaults to `./data/database.json`. [db_path]
+ * @property {boolean} [readOnly] - Read an existing snapshot without accepting or persisting writes.
  */
 
 /**
@@ -41,6 +42,7 @@ const NO_SORT = '__no_sort__';
  * @returns {import('../base.js').DBClient} - Result.
  */
 export default function createVanillaDB(options = {}) {
+  const readOnly = options.readOnly === true;
   /**
    * @type {Record<string, Record<string, Record<string, import('../base.js').DBRecord>>>}
    */
@@ -63,7 +65,13 @@ export default function createVanillaDB(options = {}) {
     try {
       const data = readFileSync(dbFilePath, 'utf8');
       database = JSON.parse(data) || {};
-    } catch {
+    } catch (error) {
+      if (readOnly) {
+        const detail = error instanceof Error ? ` ${error.message}` : '';
+        throw new Error(
+          `Vanilla read-only database could not load '${dbFilePath}'.${detail}`,
+        );
+      }
       // TODO log warning
       database = {};
     }
@@ -84,6 +92,13 @@ export default function createVanillaDB(options = {}) {
   /** @returns {void} - Drops stale in-memory page indexes after a write. */
   function invalidatePageIndexes() {
     pageIndexByBucket = new WeakMap();
+  }
+
+  /** @returns {void} - Throws when this client cannot mutate state. */
+  function assertWritable() {
+    if (readOnly) {
+      throw new Error('Vanilla DB client is read-only.');
+    }
   }
 
   /**
@@ -361,6 +376,7 @@ export default function createVanillaDB(options = {}) {
    * @returns {import('../base.js').PutReturn} - Result.
    */
   async function put(params) {
+    assertWritable();
     const table = ensureTable(params.tableName);
 
     const record = params.record;
@@ -413,6 +429,7 @@ export default function createVanillaDB(options = {}) {
    * @returns {import('../base.js').UpdateReturn} - Result.
    */
   async function update(params) {
+    assertWritable();
     assertSortPair(params);
 
     const table = database[params.tableName];
@@ -465,6 +482,7 @@ export default function createVanillaDB(options = {}) {
    * @returns {import('../base.js').RemoveReturn} - Result.
    */
   async function remove(params) {
+    assertWritable();
     assertSortPair(params);
 
     const table = database[params.tableName];
@@ -497,6 +515,7 @@ export default function createVanillaDB(options = {}) {
    * @returns {import('../base.js').BatchWriteReturn} - Result.
    */
   async function batchWrite(params) {
+    assertWritable();
     const table = ensureTable(params.tableName);
 
     const deleteRequests = Array.isArray(params.deleteRequests)
@@ -546,6 +565,7 @@ export default function createVanillaDB(options = {}) {
    * @returns {import('../base.js').TransactionWriteReturn} - Result.
    */
   async function transactionWrite(params) {
+    assertWritable();
     const requests = validateTransactionWrite(params);
     const currentTable = database[params.tableName] || {};
 
@@ -641,6 +661,7 @@ export default function createVanillaDB(options = {}) {
    * @returns {import('../base.js').CloseReturn} - Result.
    */
   async function close() {
+    if (readOnly) return;
     const data = JSON.stringify(database);
     await fsp.mkdir(dbDir, { recursive: true });
 

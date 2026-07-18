@@ -80,6 +80,99 @@ function failedEvidence(start) {
   };
 }
 
+/**
+ * @param {Readonly<Record<string, any>>} start - Exact host start frame.
+ * @param {Record<string, any>} reason - Exact durable cancellation reason.
+ * @returns {Record<string, any>} - Valid cancelled evidence.
+ */
+function cancelledEvidence(start, reason) {
+  const transcript = new ActivityProtocolTranscriptValidator();
+  const acceptedStart = transcript.acceptHostFrame(start);
+  const cancel = transcript.acceptHostFrame({
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'cancel',
+    attemptId: start.attemptId,
+    reason,
+  });
+  const terminal = transcript.acceptComponentFrame({
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'cancelled',
+    attemptId: start.attemptId,
+    sequence: 1,
+    error: reason,
+  });
+  return {
+    status: terminal.type,
+    start: acceptedStart,
+    terminal,
+    frames: [acceptedStart, cancel, terminal],
+    transcript: transcript.snapshot(),
+  };
+}
+
+/**
+ * @param {Readonly<Record<string, any>>} start - Exact host start frame.
+ * @param {Record<string, any>} reason - Exact durable cancellation reason.
+ * @returns {Record<string, any>} - Evidence whose post-cancel outcome is ambiguous.
+ */
+function ambiguousCancellationEvidence(start, reason) {
+  const transcript = new ActivityProtocolTranscriptValidator();
+  const acceptedStart = transcript.acceptHostFrame(start);
+  const cancel = transcript.acceptHostFrame({
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'cancel',
+    attemptId: start.attemptId,
+    reason,
+  });
+  const terminal = transcript.acceptComponentFrame({
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'protocol-failed',
+    attemptId: start.attemptId,
+    sequence: 1,
+    error: {
+      code: 'termination-failed',
+      name: 'ActivityAttemptProtocolError',
+      message: 'The adapter could not prove that cancellation stopped work.',
+      details: {},
+    },
+  });
+  return {
+    status: terminal.type,
+    start: acceptedStart,
+    terminal,
+    frames: [acceptedStart, cancel, terminal],
+    transcript: transcript.snapshot(),
+  };
+}
+
+/**
+ * @param {AbortSignal} signal - Attempt cancellation signal.
+ * @returns {Promise<void>} - Resolves once cancellation reaches the attempt.
+ */
+async function waitForAbort(signal) {
+  if (signal.aborted) return;
+  await new Promise((resolve) => {
+    signal.addEventListener('abort', () => resolve(undefined), { once: true });
+  });
+}
+
+/**
+ * @returns {Error} - Structured foreground cancellation reason.
+ */
+function foregroundCancellationReason() {
+  const reason = new Error('The foreground operator requested cancellation.');
+  reason.name = 'CancellationRequested';
+  Object.assign(reason, {
+    code: 'operator-cancel-requested',
+    details: { signal: 'SIGINT', secret: 'must-stay-durable-only' },
+  });
+  return reason;
+}
+
 function createClock() {
   let time = 1_700_000_000_000;
   return () => {
@@ -145,12 +238,12 @@ function runOptions(ledger, overrides = {}) {
 }
 
 describe('manual ledger activity runner', () => {
-  it('derives manual run identity from the v4 idempotency-key contract', () => {
+  it('derives manual run identity from the v5 idempotency-key contract', () => {
     const appId = 'manual-demo';
     const idempotencyKey = 'operator-run-1';
     expect(createManualLedgerRunId({ appId, idempotencyKey })).toBe(
       createCanonicalJsonSha256Id({
-        domain: 'wharfie:manual-ledger-run:v4',
+        domain: 'wharfie:manual-ledger-run:v5',
         prefix: 'wlm',
         value: { appId, idempotencyKey },
         valuePath: 'manual ledger run identity',
@@ -221,6 +314,745 @@ describe('manual ledger activity runner', () => {
         'attempt-started',
         'attempt-terminal',
       ]);
+    });
+  });
+
+  it('cancels runnable work durably without inventing a physical attempt', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      controller.abort(foregroundCancellationReason());
+      let dispatches = 0;
+
+      const result = await runManualLedgerActivity(
+        runOptions(ledger, {
+          signal: controller.signal,
+          executeAttempt: async () => {
+            dispatches += 1;
+            throw new Error('cancelled runnable work must not dispatch');
+          },
+        }),
+      );
+
+      expect(dispatches).toBe(0);
+      expect(result).toMatchObject({
+        disposition: 'failed',
+        reused: false,
+        run: {
+          status: RunStatus.CANCELLED,
+          version: 2,
+          cancellationRequest: {
+            reason: {
+              code: 'operator-cancel-requested',
+              name: 'CancellationRequested',
+              details: {
+                signal: 'SIGINT',
+                secret: 'must-stay-durable-only',
+              },
+            },
+          },
+        },
+        invocation: {
+          status: InvocationStatus.CANCELLED,
+          generation: 0,
+        },
+      });
+      expect(result.attempt).toBeUndefined();
+      expect(
+        (await ledger.getEvents(result.run.runId)).map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual(['manual-run-created', 'manual-cancellation-requested']);
+
+      const retry = await runManualLedgerActivity(
+        runOptions(ledger, {
+          executeAttempt: async () => {
+            throw new Error('a cancelled run must remain terminal');
+          },
+        }),
+      );
+      expect(retry).toMatchObject({
+        disposition: 'failed',
+        reused: true,
+        run: { status: RunStatus.CANCELLED },
+        invocation: { status: InvocationStatus.CANCELLED, generation: 0 },
+      });
+      expect(retry.attempt).toBeUndefined();
+    });
+  });
+
+  it('cancels a claimed attempt before durable start without dispatching it', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      const cancellingLedger = {
+        ...ledger,
+        claimInvocation: async (
+          /** @type {Parameters<typeof ledger.claimInvocation>[0]} */ options,
+        ) => {
+          const claimed = await ledger.claimInvocation(options);
+          controller.abort(foregroundCancellationReason());
+          return claimed;
+        },
+      };
+      let dispatches = 0;
+
+      const result = await runManualLedgerActivity(
+        runOptions(cancellingLedger, {
+          signal: controller.signal,
+          executeAttempt: async () => {
+            dispatches += 1;
+            throw new Error('cancelled claimed work must not dispatch');
+          },
+        }),
+      );
+
+      expect(dispatches).toBe(0);
+      expect(result).toMatchObject({
+        disposition: 'failed',
+        run: { status: RunStatus.CANCELLED, version: 3 },
+        invocation: { status: InvocationStatus.CANCELLED, generation: 1 },
+        attempt: {
+          status: AttemptStatus.CANCELLED,
+          generation: 1,
+        },
+      });
+      expect(result.attempt).not.toHaveProperty('startedAt');
+      expect(
+        (await ledger.getEvents(result.run.runId)).map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual([
+        'manual-run-created',
+        'attempt-claimed',
+        'manual-cancellation-requested',
+      ]);
+    });
+  });
+
+  it('persists a started cancellation before signalling the physical attempt', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      const options = runOptions(ledger);
+      let durableRequestObservedBeforeSignal = false;
+
+      const result = await runManualLedgerActivity({
+        ...options,
+        signal: controller.signal,
+        executeAttempt: async (startFrame, { signal }) => {
+          controller.abort(foregroundCancellationReason());
+          await waitForAbort(signal);
+          const durable = await ledger.rebuildRun(options.runId);
+          durableRequestObservedBeforeSignal =
+            durable?.events.at(-1)?.type === 'manual-cancellation-requested';
+          expect(durable?.run.cancellationRequest?.reason).toEqual(
+            signal.reason,
+          );
+          return cancelledEvidence(startFrame, signal.reason);
+        },
+      });
+
+      expect(durableRequestObservedBeforeSignal).toBe(true);
+      expect(result).toMatchObject({
+        disposition: 'failed',
+        run: {
+          status: RunStatus.CANCELLED,
+          version: 5,
+          cancellationRequest: {
+            reason: { code: 'operator-cancel-requested' },
+          },
+        },
+        invocation: { status: InvocationStatus.CANCELLED, generation: 1 },
+        attempt: {
+          status: AttemptStatus.CANCELLED,
+          generation: 1,
+          terminal: { type: 'cancelled' },
+        },
+      });
+      expect(
+        (await ledger.getEvents(result.run.runId)).map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual([
+        'manual-run-created',
+        'attempt-claimed',
+        'attempt-started',
+        'manual-cancellation-requested',
+        'attempt-terminal',
+      ]);
+    });
+  });
+
+  it('allows completed evidence to win after a started cancellation request', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      const result = await runManualLedgerActivity(
+        runOptions(ledger, {
+          signal: controller.signal,
+          executeAttempt: async (
+            /** @type {Readonly<Record<string, any>>} */ startFrame,
+            /** @type {{signal: AbortSignal}} */ { signal },
+          ) => {
+            controller.abort(foregroundCancellationReason());
+            await waitForAbort(signal);
+            return completedEvidence(startFrame, { wonRace: true });
+          },
+        }),
+      );
+
+      expect(result).toMatchObject({
+        disposition: 'completed',
+        run: {
+          status: RunStatus.COMPLETED,
+          version: 5,
+          cancellationRequest: {
+            reason: { code: 'operator-cancel-requested' },
+          },
+        },
+        invocation: { status: InvocationStatus.COMPLETED },
+        attempt: {
+          status: AttemptStatus.COMPLETED,
+          terminal: { type: 'completed' },
+        },
+      });
+    });
+  });
+
+  it('does not signal a started attempt when the durable request cannot be written', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      /** @type {() => void} */
+      let observeRequest = () => {};
+      const requestObserved = new Promise((resolve) => {
+        observeRequest = () => resolve(undefined);
+      });
+      const rejectingLedger = {
+        ...ledger,
+        requestManualRunCancellation: async () => {
+          observeRequest();
+          throw new Error('durable cancellation store unavailable');
+        },
+      };
+      let physicalSignalAborted = false;
+
+      const result = await runManualLedgerActivity(
+        runOptions(rejectingLedger, {
+          signal: controller.signal,
+          executeAttempt: async (
+            /** @type {Readonly<Record<string, any>>} */ startFrame,
+            /** @type {{signal: AbortSignal}} */ { signal },
+          ) => {
+            controller.abort(foregroundCancellationReason());
+            await requestObserved;
+            await Promise.resolve();
+            physicalSignalAborted = signal.aborted;
+            return completedEvidence(startFrame, { keptRunning: true });
+          },
+        }),
+      );
+
+      expect(physicalSignalAborted).toBe(false);
+      expect(result).toMatchObject({
+        disposition: 'completed',
+        run: { status: RunStatus.COMPLETED, version: 4 },
+        invocation: { status: InvocationStatus.COMPLETED },
+        attempt: { status: AttemptStatus.COMPLETED },
+      });
+      expect(result.run.cancellationRequest).toBeUndefined();
+    });
+  });
+
+  it('recovers a runnable cancellation whose durable response was lost', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      controller.abort(foregroundCancellationReason());
+      const responseLostLedger = {
+        ...ledger,
+        requestManualRunCancellation: async (
+          /** @type {Parameters<typeof ledger.requestManualRunCancellation>[0]} */ options,
+        ) => {
+          await ledger.requestManualRunCancellation(options);
+          throw new Error('cancellation response was lost');
+        },
+      };
+      let dispatches = 0;
+
+      const result = await runManualLedgerActivity(
+        runOptions(responseLostLedger, {
+          signal: controller.signal,
+          executeAttempt: async () => {
+            dispatches += 1;
+            throw new Error(
+              'durably cancelled runnable work must not dispatch',
+            );
+          },
+        }),
+      );
+
+      expect(dispatches).toBe(0);
+      expect(result).toMatchObject({
+        disposition: 'failed',
+        run: {
+          status: RunStatus.CANCELLED,
+          cancellationRequest: {
+            reason: { code: 'operator-cancel-requested' },
+          },
+        },
+        invocation: {
+          status: InvocationStatus.CANCELLED,
+          generation: 0,
+        },
+      });
+      expect(result.attempt).toBeUndefined();
+    });
+  });
+
+  it('signals the exact started attempt after verifying a lost cancellation response', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      const responseLostLedger = {
+        ...ledger,
+        requestManualRunCancellation: async (
+          /** @type {Parameters<typeof ledger.requestManualRunCancellation>[0]} */ options,
+        ) => {
+          await ledger.requestManualRunCancellation(options);
+          throw new Error('cancellation response was lost');
+        },
+      };
+      let durableRequestObservedBeforeSignal = false;
+
+      const result = await runManualLedgerActivity(
+        runOptions(responseLostLedger, {
+          signal: controller.signal,
+          executeAttempt: async (
+            /** @type {Readonly<Record<string, any>>} */ startFrame,
+            /** @type {{signal: AbortSignal}} */ { signal },
+          ) => {
+            controller.abort(foregroundCancellationReason());
+            await waitForAbort(signal);
+            const durable = await ledger.rebuildRun(
+              createManualLedgerRunId({
+                appId: 'manual-demo',
+                idempotencyKey: 'operator-run-1',
+              }),
+            );
+            durableRequestObservedBeforeSignal =
+              durable?.run.cancellationRequest?.requestId ===
+              `cancel:${startFrame.runId}`;
+            expect(signal.reason).toEqual(
+              durable?.run.cancellationRequest?.reason,
+            );
+            return cancelledEvidence(startFrame, signal.reason);
+          },
+        }),
+      );
+
+      expect(durableRequestObservedBeforeSignal).toBe(true);
+      expect(result).toMatchObject({
+        disposition: 'failed',
+        run: { status: RunStatus.CANCELLED },
+        invocation: { status: InvocationStatus.CANCELLED },
+        attempt: {
+          status: AttemptStatus.CANCELLED,
+          terminal: { type: 'cancelled' },
+        },
+      });
+    });
+  });
+
+  it('marks ambiguous post-cancel termination uncertain instead of failed', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      const result = await runManualLedgerActivity(
+        runOptions(ledger, {
+          signal: controller.signal,
+          executeAttempt: async (
+            /** @type {Readonly<Record<string, any>>} */ startFrame,
+            /** @type {{signal: AbortSignal}} */ { signal },
+          ) => {
+            controller.abort(foregroundCancellationReason());
+            await waitForAbort(signal);
+            return ambiguousCancellationEvidence(startFrame, signal.reason);
+          },
+        }),
+      );
+
+      expect(result).toMatchObject({
+        disposition: 'blocked',
+        run: {
+          status: RunStatus.BLOCKED,
+          cancellationRequest: {
+            reason: { code: 'operator-cancel-requested' },
+          },
+        },
+        invocation: { status: InvocationStatus.UNCERTAIN },
+        attempt: { status: AttemptStatus.ABANDONED },
+      });
+      expect(
+        (await ledger.getEvents(result.run.runId)).map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual([
+        'manual-run-created',
+        'attempt-claimed',
+        'attempt-started',
+        'manual-cancellation-requested',
+        'attempt-became-uncertain',
+      ]);
+    });
+  });
+
+  it('registers a bounded started-attempt cancellation port and closes it after terminal work', async () => {
+    await withLedger(async (ledger) => {
+      /** @type {any} */
+      let port;
+      let unregisterCalls = 0;
+      const options = runOptions(ledger);
+
+      const result = await runManualLedgerActivity({
+        ...options,
+        registerActiveAttemptCancellationPort: (candidate) => {
+          port = candidate;
+          return () => {
+            unregisterCalls += 1;
+          };
+        },
+        executeAttempt: async (startFrame) => {
+          if (!port) throw new Error('Expected active cancellation port');
+          const durable = await ledger.rebuildRun(options.runId);
+          expect(
+            durable?.events.map(
+              (/** @type {Record<string, any>} */ event) => event.type,
+            ),
+          ).toEqual([
+            'manual-run-created',
+            'attempt-claimed',
+            'attempt-started',
+          ]);
+          expect(port).toMatchObject({
+            version: 1,
+            runId: options.runId,
+            invocationId: MANUAL_LEDGER_INVOCATION_ID,
+            attemptId: startFrame.attemptId,
+            fencingToken: startFrame.fencingToken,
+            generation: 1,
+          });
+          expect(typeof port.requestCancellation).toBe('function');
+          expect(port).not.toHaveProperty('signal');
+          expect(port).not.toHaveProperty('abort');
+          expect(Object.isFrozen(port)).toBe(true);
+          return completedEvidence(startFrame);
+        },
+      });
+
+      expect(result).toMatchObject({ disposition: 'completed' });
+      expect(unregisterCalls).toBe(1);
+      if (!port) throw new Error('Expected retained cancellation port');
+      await expect(
+        port.requestCancellation({ requestId: 'closed-owner-request' }),
+      ).rejects.toThrow(/no longer live/i);
+      expect(
+        (await ledger.getEvents(options.runId)).map((event) => event.type),
+      ).toEqual([
+        'manual-run-created',
+        'attempt-claimed',
+        'attempt-started',
+        'attempt-terminal',
+      ]);
+    });
+  });
+
+  it('persists fixed owner-command authority before a port signals the live attempt', async () => {
+    await withLedger(async (ledger) => {
+      /** @type {any} */
+      let port;
+      const options = runOptions(ledger);
+      const ownerCancellation = {
+        actor: { kind: 'local', id: 'active-owner-command' },
+        reason: {
+          code: 'owner-cancel-requested',
+          name: 'OwnerCancellationRequested',
+          message: 'The current local owner accepted cancellation.',
+          details: { channel: 'test-owner-command' },
+        },
+      };
+
+      const result = await runManualLedgerActivity({
+        ...options,
+        ownerCancellation,
+        registerActiveAttemptCancellationPort: (candidate) => {
+          port = candidate;
+        },
+        executeAttempt: async (startFrame, { signal }) => {
+          if (!port) throw new Error('Expected active cancellation port');
+          const cancellation = await port.requestCancellation({
+            requestId: 'owner-command-cancel-1',
+          });
+          expect(cancellation).toMatchObject({
+            outcome: 'cancellation-requested',
+            applied: true,
+            signalDelivered: true,
+            run: {
+              cancellationRequest: {
+                requestId: 'owner-command-cancel-1',
+                actor: ownerCancellation.actor,
+                reason: ownerCancellation.reason,
+              },
+            },
+          });
+          expect(signal.aborted).toBe(true);
+          const durable = await ledger.rebuildRun(options.runId);
+          expect(durable?.events.at(-1)?.type).toBe(
+            'manual-cancellation-requested',
+          );
+          expect(durable?.run.cancellationRequest).toMatchObject({
+            requestId: 'owner-command-cancel-1',
+            actor: ownerCancellation.actor,
+            reason: ownerCancellation.reason,
+          });
+          expect(signal.reason).toEqual(
+            durable?.run.cancellationRequest?.reason,
+          );
+          return cancelledEvidence(startFrame, signal.reason);
+        },
+      });
+
+      expect(result).toMatchObject({
+        disposition: 'failed',
+        run: {
+          status: RunStatus.CANCELLED,
+          cancellationRequest: {
+            requestId: 'owner-command-cancel-1',
+            actor: ownerCancellation.actor,
+          },
+        },
+        invocation: { status: InvocationStatus.CANCELLED },
+        attempt: { status: AttemptStatus.CANCELLED },
+      });
+    });
+  });
+
+  it('keeps the first durable port request authoritative when request IDs compete', async () => {
+    await withLedger(async (ledger) => {
+      /** @type {any} */
+      let port;
+      let abortEvents = 0;
+
+      const result = await runManualLedgerActivity({
+        ...runOptions(ledger),
+        registerActiveAttemptCancellationPort: (candidate) => {
+          port = candidate;
+        },
+        executeAttempt: async (startFrame, { signal }) => {
+          if (!port) throw new Error('Expected active cancellation port');
+          signal.addEventListener('abort', () => {
+            abortEvents += 1;
+          });
+          const first = await port.requestCancellation({
+            requestId: 'owner-command-first',
+          });
+          const second = await port.requestCancellation({
+            requestId: 'owner-command-second',
+          });
+          expect(first).toMatchObject({
+            outcome: 'cancellation-requested',
+            signalDelivered: true,
+            run: {
+              cancellationRequest: { requestId: 'owner-command-first' },
+            },
+          });
+          expect(second).toMatchObject({
+            outcome: 'cancellation-requested',
+            signalDelivered: false,
+            run: {
+              cancellationRequest: { requestId: 'owner-command-first' },
+            },
+          });
+          expect(abortEvents).toBe(1);
+          return cancelledEvidence(startFrame, signal.reason);
+        },
+      });
+
+      expect(result).toMatchObject({
+        run: {
+          status: RunStatus.CANCELLED,
+          cancellationRequest: { requestId: 'owner-command-first' },
+        },
+        attempt: { status: AttemptStatus.CANCELLED },
+      });
+    });
+  });
+
+  it('returns a terminal-authoritative port outcome without signalling after terminal evidence wins', async () => {
+    await withLedger(async (ledger) => {
+      /** @type {any} */
+      let port;
+      /** @type {any} */
+      let portResult;
+      const options = runOptions(ledger);
+
+      const result = await runManualLedgerActivity({
+        ...options,
+        registerActiveAttemptCancellationPort: (candidate) => {
+          port = candidate;
+        },
+        executeAttempt: async (startFrame, { signal }) => {
+          if (!port) throw new Error('Expected active cancellation port');
+          const evidence = completedEvidence(startFrame, { won: 'terminal' });
+          const current = await ledger.rebuildRun(options.runId);
+          const currentAttempt = current?.attempts[0];
+          if (!current || !currentAttempt) {
+            throw new Error('Expected durable started attempt');
+          }
+          await ledger.commitVerifiedAttemptTerminal({
+            runId: options.runId,
+            invocationId: MANUAL_LEDGER_INVOCATION_ID,
+            attemptId: currentAttempt.attemptId,
+            fencingToken: currentAttempt.fencingToken,
+            generation: currentAttempt.generation,
+            expectedVersion: current.run.version,
+            transitionId: `terminal:${currentAttempt.attemptId}`,
+            evidence,
+            actor: { kind: 'local', id: 'cli' },
+            coordinatorEpoch: currentAttempt.coordinatorEpoch,
+          });
+          portResult = await port.requestCancellation({
+            requestId: 'after-terminal-owner-cancel',
+          });
+          expect(signal.aborted).toBe(false);
+          return evidence;
+        },
+      });
+
+      expect(portResult).toMatchObject({
+        outcome: 'terminal-authoritative',
+        signalDelivered: false,
+        run: { status: RunStatus.COMPLETED },
+        attempt: { status: AttemptStatus.COMPLETED },
+      });
+      expect(result).toMatchObject({
+        disposition: 'completed',
+        run: { status: RunStatus.COMPLETED },
+      });
+    });
+  });
+
+  it('returns an outcome-uncertain port result without signalling after ambiguity wins', async () => {
+    await withLedger(async (ledger) => {
+      /** @type {any} */
+      let port;
+      /** @type {any} */
+      let portResult;
+      const options = runOptions(ledger);
+
+      const result = await runManualLedgerActivity({
+        ...options,
+        registerActiveAttemptCancellationPort: (candidate) => {
+          port = candidate;
+        },
+        executeAttempt: async (startFrame, { signal }) => {
+          if (!port) throw new Error('Expected active cancellation port');
+          const current = await ledger.rebuildRun(options.runId);
+          const currentAttempt = current?.attempts[0];
+          if (!current || !currentAttempt) {
+            throw new Error('Expected durable started attempt');
+          }
+          await ledger.markAttemptUncertain({
+            runId: options.runId,
+            invocationId: MANUAL_LEDGER_INVOCATION_ID,
+            attemptId: currentAttempt.attemptId,
+            fencingToken: currentAttempt.fencingToken,
+            generation: currentAttempt.generation,
+            expectedVersion: current.run.version,
+            transitionId: `test-uncertain:${currentAttempt.attemptId}`,
+            actor: { kind: 'local', id: 'cli' },
+            coordinatorEpoch: currentAttempt.coordinatorEpoch,
+            reason: { kind: 'test-ambiguous-owner-command' },
+          });
+          portResult = await port.requestCancellation({
+            requestId: 'after-uncertain-owner-cancel',
+          });
+          expect(signal.aborted).toBe(false);
+          return completedEvidence(startFrame, { ignored: 'uncertain' });
+        },
+      });
+
+      expect(portResult).toMatchObject({
+        outcome: 'outcome-uncertain',
+        signalDelivered: false,
+        run: { status: RunStatus.BLOCKED },
+        invocation: { status: InvocationStatus.UNCERTAIN },
+        attempt: { status: AttemptStatus.ABANDONED },
+      });
+      expect(result).toMatchObject({
+        disposition: 'blocked',
+        run: { status: RunStatus.BLOCKED },
+      });
+    });
+  });
+
+  it('delivers a port cancellation after verifying a lost durable response', async () => {
+    await withLedger(async (ledger) => {
+      const responseLostLedger = {
+        ...ledger,
+        requestManualRunCancellation: async (
+          /** @type {Parameters<typeof ledger.requestManualRunCancellation>[0]} */ request,
+        ) => {
+          await ledger.requestManualRunCancellation(request);
+          throw new Error('owner cancellation response was lost');
+        },
+      };
+      /** @type {any} */
+      let port;
+
+      const result = await runManualLedgerActivity({
+        ...runOptions(responseLostLedger),
+        registerActiveAttemptCancellationPort: (candidate) => {
+          port = candidate;
+        },
+        executeAttempt: async (startFrame, { signal }) => {
+          if (!port) throw new Error('Expected active cancellation port');
+          const cancellation = await port.requestCancellation({
+            requestId: 'lost-owner-response',
+          });
+          expect(cancellation).toMatchObject({
+            outcome: 'cancellation-requested',
+            applied: false,
+            signalDelivered: true,
+            run: {
+              cancellationRequest: { requestId: 'lost-owner-response' },
+            },
+          });
+          const replay = await port.requestCancellation({
+            requestId: 'lost-owner-response',
+          });
+          expect(replay).toMatchObject({
+            outcome: 'cancellation-requested',
+            signalDelivered: true,
+            run: {
+              cancellationRequest: { requestId: 'lost-owner-response' },
+            },
+          });
+          expect(signal.aborted).toBe(true);
+          return cancelledEvidence(startFrame, signal.reason);
+        },
+      });
+
+      expect(result).toMatchObject({
+        run: {
+          status: RunStatus.CANCELLED,
+          cancellationRequest: { requestId: 'lost-owner-response' },
+        },
+        attempt: { status: AttemptStatus.CANCELLED },
+      });
+    });
+  });
+
+  it('rejects non-AbortSignal cancellation inputs before mutating the ledger', async () => {
+    await withLedger(async (ledger) => {
+      const options = runOptions(ledger, { signal: {} });
+      await expect(runManualLedgerActivity(options)).rejects.toThrow(
+        /must be an AbortSignal/i,
+      );
+      expect(await ledger.getEvents(options.runId)).toEqual([]);
     });
   });
 

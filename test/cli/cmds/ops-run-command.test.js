@@ -2,10 +2,11 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { describe, expect, it } from '@jest/globals';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { compileApplicationRevision } from '../../../src/cli/app/compile-application-revision.js';
@@ -62,6 +63,91 @@ function runCli(args, env) {
       encoding: 'utf8',
       env,
     })
+  );
+}
+
+/**
+ * Start the public source CLI without blocking the test process.
+ * @param {string[]} args - CLI arguments.
+ * @param {Record<string, string | undefined>} env - Child environment.
+ * @returns {{child: import('node:child_process').ChildProcess, exited: Promise<{code: number | null, signal: NodeJS.Signals | null, stdout: string, stderr: string}>}} - Live process and captured completion.
+ */
+function startCli(args, env) {
+  const child = spawn(process.execPath, [binPath, ...args], {
+    cwd: repoRoot,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (!child.stdout || !child.stderr) {
+    child.kill('SIGKILL');
+    throw new Error('The source CLI child did not expose stdout and stderr.');
+  }
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => {
+    stdout += String(chunk);
+  });
+  child.stderr.on('data', (chunk) => {
+    stderr += String(chunk);
+  });
+  const exited = once(child, 'close').then(([code, signal]) => ({
+    code,
+    signal,
+    stdout,
+    stderr,
+  }));
+  return { child, exited };
+}
+
+/** @returns {Promise<void>} - Resolves on the next short polling turn. */
+async function waitForPollingTurn() {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+}
+
+/**
+ * Wait until a distinct source CLI process has durably entered its physical
+ * STARTED attempt. The reader is deliberately short-lived and read-only, the
+ * same topology used by an external `wharfie ops cancel` invocation.
+ * @param {{dbPath: string, tableName: string, runId: string, payloadStore: ReturnType<typeof createLocalExecutionPayloadStore>, timeoutMs?: number}} options - Exact run lookup.
+ * @returns {Promise<Record<string, any>>} - Verified started run view.
+ */
+async function waitForStartedRun(options) {
+  const deadline = Date.now() + (options.timeoutMs || 10_000);
+  /** @type {unknown} */
+  let lastError;
+  while (Date.now() < deadline) {
+    /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
+    let db;
+    try {
+      db = createLMDB({ path: options.dbPath, readOnly: true });
+      const view = await createExecutionLedger({
+        db,
+        tableName: options.tableName,
+        payloadStore: options.payloadStore,
+      }).rebuildRun(options.runId);
+      if (
+        view?.run.status === RunStatus.RUNNING &&
+        view.invocations.some(
+          (/** @type {Record<string, any>} */ invocation) =>
+            invocation.status === InvocationStatus.RUNNING,
+        ) &&
+        view.attempts.some(
+          (/** @type {Record<string, any>} */ attempt) =>
+            attempt.status === AttemptStatus.STARTED,
+        )
+      ) {
+        return view;
+      }
+    } catch (error) {
+      lastError = error;
+    } finally {
+      await db?.close?.();
+    }
+    await waitForPollingTurn();
+  }
+  const detail = lastError instanceof Error ? `: ${lastError.message}` : '';
+  throw new Error(
+    `Timed out waiting for durable STARTED attempt ${options.runId}${detail}`,
   );
 }
 
@@ -276,6 +362,193 @@ describe('wharfie ops run', () => {
       rmSync(dbPath, { recursive: true, force: true });
     }
   }, 20000);
+
+  it('cancels a live source-owned attempt through the public owner command', async () => {
+    const appDir = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-ops-run-cancel-app-'),
+    );
+    const dbPath = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-ops-run-cancel-db-'),
+    );
+    const tableName = 'source-owner-cancellation';
+    const appId = 'source-owner-cancellation-demo';
+    const idempotencyKey = 'wait-for-owner-cancellation';
+    const requestId = 'source-cli-cancel-request';
+    const runId = createManualLedgerRunId({ appId, idempotencyKey });
+    const appApiUrl = pathToFileURL(path.join(repoRoot, 'src', 'app.js')).href;
+    const sessionPath = path.join(dbPath, 'ledger-service-sessions');
+    const env = {
+      ...process.env,
+      NODE_ENV: 'development',
+      WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
+      WHARFIE_ARTIFACT_BUCKET: 'service-bucket',
+      WHARFIE_DB_ADAPTER: 'lmdb',
+      WHARFIE_DB_PATH: dbPath,
+      WHARFIE_CONTROL_ADAPTER: 'lmdb',
+      WHARFIE_CONTROL_PATH: dbPath,
+      WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(dbPath, 'execution-payloads'),
+      WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
+    };
+    /** @type {ReturnType<typeof startCli> | undefined} */
+    let runner;
+
+    try {
+      writeFileSync(
+        path.join(appDir, 'package.json'),
+        `${JSON.stringify({ private: true, type: 'module' })}\n`,
+      );
+      writeFileSync(
+        path.join(appDir, 'cli.js'),
+        'export async function main() {}\n',
+      );
+      writeFileSync(
+        path.join(appDir, 'activity.js'),
+        `export async function waitForCancellation(_input, runtime) {
+          await new Promise((resolve) => {
+            if (runtime.signal.aborted) {
+              resolve();
+              return;
+            }
+            runtime.signal.addEventListener('abort', resolve, { once: true });
+          });
+          return { observedCancellation: true };
+        }\n`,
+      );
+      writeFileSync(
+        path.join(appDir, 'wharfie.app.js'),
+        `import { defineApp } from ${JSON.stringify(appApiUrl)};
+         export default defineApp({
+           schemaVersion: 2,
+           app: { id: ${JSON.stringify(appId)} },
+           cli: {
+             entrypoint: {
+               kind: 'node',
+               path: './cli.js',
+               export: 'main',
+             },
+           },
+           targets: [
+             {
+               nodeVersion: '24.13.1',
+               platform: 'darwin',
+               architecture: 'arm64',
+             },
+             {
+               nodeVersion: '24.13.1',
+               platform: 'linux',
+               architecture: 'x64',
+               libc: 'glibc',
+             },
+           ],
+           activities: {
+             wait: {
+               entrypoint: {
+                 kind: 'node',
+                 path: './activity.js',
+                 export: 'waitForCancellation',
+               },
+             },
+           },
+         });\n`,
+      );
+
+      runner = startCli(
+        [
+          'ops',
+          'run',
+          '--activity',
+          'wait',
+          '--idempotency-key',
+          idempotencyKey,
+          '--dir',
+          appDir,
+        ],
+        env,
+      );
+      await expect(
+        waitForStartedRun({
+          dbPath,
+          tableName,
+          runId,
+          payloadStore: createPayloadStore(dbPath),
+        }),
+      ).resolves.toMatchObject({
+        run: { status: RunStatus.RUNNING },
+        attempts: [expect.objectContaining({ status: AttemptStatus.STARTED })],
+      });
+
+      const cancelled = runCli(
+        [
+          'ops',
+          'cancel',
+          '--run-id',
+          runId,
+          '--request-id',
+          requestId,
+          '--json',
+        ],
+        env,
+      );
+      expect(cancelled.status).toBe(0);
+      expect(cancelled.stderr).toBe('');
+      const cancellationResponse = JSON.parse(
+        cancelled.stdout.trim().split('\n')[0],
+      );
+      expect(cancellationResponse).toEqual({
+        schemaVersion: 1,
+        kind: 'wharfie.execution-ledger.cancel',
+        runId,
+        requestId,
+        outcome: 'cancellation-requested',
+        delivery: 'started',
+        runStatus: RunStatus.RUNNING,
+        invocationStatus: InvocationStatus.RUNNING,
+      });
+
+      const completed = await runner.exited;
+      expect(completed).toMatchObject({ code: 1, signal: null });
+      expect(completed.stderr).toContain(`finished ${RunStatus.CANCELLED}`);
+
+      const db = createLMDB({ path: dbPath, readOnly: true });
+      try {
+        const view = await createExecutionLedger({
+          db,
+          tableName,
+          payloadStore: createPayloadStore(dbPath),
+        }).rebuildRun(runId);
+        expect(view).toMatchObject({
+          run: {
+            status: RunStatus.CANCELLED,
+            cancellationRequest: { requestId },
+          },
+          invocations: [
+            expect.objectContaining({ status: InvocationStatus.CANCELLED }),
+          ],
+          attempts: [
+            expect.objectContaining({
+              status: AttemptStatus.CANCELLED,
+              terminal: expect.objectContaining({ type: 'cancelled' }),
+            }),
+          ],
+          events: expect.arrayContaining([
+            expect.objectContaining({
+              type: 'manual-cancellation-requested',
+              transition_id: expect.stringMatching(/^wlc_[A-Za-z0-9_-]{43}$/),
+            }),
+          ]),
+        });
+      } finally {
+        await db.close();
+      }
+    } finally {
+      if (runner?.child.exitCode === null && !runner.child.killed) {
+        runner.child.kill('SIGKILL');
+        await runner.exited;
+      }
+      rmSync(appDir, { recursive: true, force: true });
+      rmSync(dbPath, { recursive: true, force: true });
+    }
+  }, 30000);
 
   it('rejects reusing an idempotency key for a changed immutable revision', async () => {
     const appDir = mkdtempSync(

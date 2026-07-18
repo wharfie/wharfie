@@ -27,6 +27,8 @@ const FUNCTION_IMPORT = '../../../src/core/resources/builds/function.js';
 
 /** @type {{ mode: string, input: any, runtime: any }[]} */
 const invocationCalls = [];
+/** @type {Record<string, any>[]} */
+const attemptOptions = [];
 /** @type {any[]} */
 const rawResults = [];
 /** @type {(input: any, runtime: any) => any} */
@@ -84,7 +86,8 @@ class MockWharfieFunction {
    * @param {Readonly<Record<string, any>>} start - Start frame.
    * @returns {Promise<any>} - Activity evidence.
    */
-  async runActivityAttempt(start) {
+  async runActivityAttempt(start, options = {}) {
+    attemptOptions.push(options);
     return await executeActivity('source', start);
   }
 
@@ -93,7 +96,8 @@ class MockWharfieFunction {
    * @param {Readonly<Record<string, any>>} start - Start frame.
    * @returns {Promise<any>} - Activity evidence.
    */
-  static async runActivityAttempt(_name, start) {
+  static async runActivityAttempt(_name, start, options = {}) {
+    attemptOptions.push(options);
     return await executeActivity('embedded', start);
   }
 }
@@ -192,6 +196,7 @@ function embeddedExecution() {
 
 beforeEach(() => {
   invocationCalls.length = 0;
+  attemptOptions.length = 0;
   rawResults.length = 0;
   resultFactory = (input, runtime) => ({ input, runtime });
 });
@@ -389,13 +394,16 @@ describe('JSON activity values', () => {
       caller: { metadata: { source: 'scheduler' } },
     };
 
+    const controller = new AbortController();
     const evidence = await invokeManifestActivityAttemptWithStart({
       activityName: 'echo',
       startFrame,
       execution,
+      signal: controller.signal,
     });
 
     expect(evidence.start).toEqual(startFrame);
+    expect(attemptOptions).toEqual([{ signal: controller.signal }]);
     expect(invocationCalls).toHaveLength(1);
     expect(invocationCalls[0].runtime.invocation).toEqual({
       revisionId: startFrame.revisionId,
@@ -413,6 +421,16 @@ describe('JSON activity values', () => {
         execution,
       }),
     ).rejects.toThrow(/does not match execution revision/i);
+    expect(invocationCalls).toHaveLength(1);
+
+    await expect(
+      invokeManifestActivityAttemptWithStart({
+        activityName: 'echo',
+        startFrame,
+        execution,
+        signal: /** @type {any} */ ({}),
+      }),
+    ).rejects.toThrow(/must be an AbortSignal/i);
     expect(invocationCalls).toHaveLength(1);
   });
 

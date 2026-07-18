@@ -597,9 +597,15 @@ class Function {
    * Source activities with external packages must still use the sealed bundle
    * path; this in-process path intentionally constructs no resource context.
    * @param {unknown} startFrame - Host-owned Activity Protocol start frame.
+   * @param {ActivityAttemptRunOptions} [options] - Optional host cancellation controls.
    * @returns {Promise<Readonly<import('../../runtime/activity-attempt.js').ActivityAttemptEvidence>>} - Physical attempt evidence.
    */
-  async runActivityAttempt(startFrame) {
+  async runActivityAttempt(startFrame, options = {}) {
+    if (!options || typeof options !== 'object' || Array.isArray(options)) {
+      throw new TypeError(
+        'Activity attempt options must be an object when provided.',
+      );
+    }
     if (
       Array.isArray(this.properties.external) &&
       this.properties.external.length > 0
@@ -610,7 +616,11 @@ class Function {
     }
     const start = validateActivityAttemptStart(this.name, startFrame);
     const handler = await this._loadEntrypoint();
-    return await runNodeActivityAttempt({ startFrame: start, handler });
+    return await runNodeActivityAttempt({
+      startFrame: start,
+      handler,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
   }
 }
 

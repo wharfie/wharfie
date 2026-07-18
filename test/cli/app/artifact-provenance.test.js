@@ -104,7 +104,6 @@ function makeRevision(functionResources = [], assets = []) {
     functionResources.map((resource) => {
       const activity = String(resource.get('functionName'));
       const externals = resource.get('external', []);
-      const resources = resource.get('resources', {});
       return [
         activity,
         {
@@ -114,7 +113,6 @@ function makeRevision(functionResources = [], assets = []) {
             export: 'default',
           },
           ...(externals.length ? { externalPackages: externals } : {}),
-          ...(Object.keys(resources).length ? { resources } : {}),
         },
       ];
     }),

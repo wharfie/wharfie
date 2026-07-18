@@ -35,7 +35,7 @@ export const LedgerServiceRuntimeStatus = Object.freeze({
 
 /** @typedef {'NEW'|'STARTING'|'READY'|'STOPPING'|'STOPPED'|'FAILED'} LedgerServiceRuntimeStatusValue */
 /** @typedef {Readonly<Record<string, any>>} LedgerServiceLifecycleSnapshot */
-/** @typedef {{serviceId: string, sessionId: string, sessionRoot: string, endpoint: string, release: () => Promise<void>}} LocalServiceSession */
+/** @typedef {{serviceId: string, sessionId: string, sessionRoot: string, endpoint: string, ownerCommandEndpoint: string, release: () => Promise<void>}} LocalServiceSession */
 /** @typedef {{start: Function, markReady: Function, markStopping: Function, markStopped: Function}} LedgerServiceLifecycleStore */
 /** @typedef {{getOwnership: Function, claimOwnership: Function, releaseOwnership: Function}} LedgerServiceOwnershipStore */
 
@@ -154,7 +154,7 @@ async function assertObservedOwnershipAbsent(options) {
  * record is valid only for one local control volume and operating-system
  * principal; it is not a distributed lease or host-failover protocol.
  * @param {{appId: string, ownership: LedgerServiceOwnershipStore, ownerKind?: 'resident'|'manual', sessionRoot?: string, sessionId?: string, now?: () => number, acquireSession?: (input: {serviceId: string, sessionId: string, sessionRoot?: string}) => Promise<LocalServiceSession>, probeSession?: (input: {serviceId: string, sessionId: string, sessionRoot?: string}) => Promise<{endpoint: string, status: 'active'|'absent'|'unknown'}>}} options - Local ownership dependencies.
- * @returns {Promise<LocalServiceSession & {ownership: Readonly<Record<string, any>>, scopeId: string, principalId: string}>} - Held local ownership fence.
+ * @returns {Promise<LocalServiceSession & {commandSession: LocalServiceSession, ownership: Readonly<Record<string, any>>, scopeId: string, principalId: string}>} - Held local ownership fence.
  */
 export async function acquireLocalLedgerServiceSession(options) {
   assertLogicalId(options?.appId, 'appId');
@@ -285,6 +285,10 @@ export async function acquireLocalLedgerServiceSession(options) {
     };
     return Object.freeze({
       ...localSession,
+      // Preserve the unforgeable in-memory acquisition capability for the
+      // companion owner-command endpoint. The spread wrapper is deliberately
+      // not itself accepted as a socket-owning session.
+      commandSession: localSession,
       ownership: currentOwnership,
       scopeId,
       principalId,

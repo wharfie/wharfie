@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -98,6 +98,23 @@ export function resolveControlAdapterName() {
 }
 
 /**
+ * Resolve one local control-store root. Test defaults are unique but are not
+ * created until a writable adapter opens them, so read-only missing lookups do
+ * not leave filesystem state behind.
+ * @returns {string} - Local control-store root.
+ */
+export function resolveControlStorePath() {
+  const configured = process.env.WHARFIE_CONTROL_PATH;
+  if (typeof configured === 'string' && configured.trim()) {
+    return configured.trim();
+  }
+  if (process.env.NODE_ENV === 'test') {
+    return join(tmpdir(), `wharfie-control-${randomUUID()}`);
+  }
+  return join(paths.data, 'control');
+}
+
+/**
  * Resolve the append-only execution-ledger table name. DynamoDB needs its
  * distinct `run_id`/`sort_key` physical schema, while local adapters can
  * safely share the control-store path under this explicit table name.
@@ -106,28 +123,30 @@ export function resolveControlAdapterName() {
 export function resolveExecutionLedgerTableName() {
   const name = process.env.WHARFIE_EXECUTION_LEDGER_TABLE;
   if (name && String(name).trim()) return String(name).trim();
-  return 'wharfie-execution-ledger-v3';
+  return 'wharfie-execution-ledger-v4';
 }
 
 /**
- * Resolve the immutable local execution-payload root. The v3 ledger writes
+ * Resolve the immutable local execution-payload root. The v4 ledger writes
  * content before it appends a reference to the control store, so the default
  * lives beside that local control store when one is configured.  A future
  * shared payload provider can keep the same reference contract without
  * changing the ledger records.
+ * @param {string} [resolvedControlPath] - Already-resolved command-local control root.
  * @returns {string} - Local payload-store root.
  */
-export function resolveExecutionPayloadPath() {
+export function resolveExecutionPayloadPath(resolvedControlPath) {
   const configured = process.env.WHARFIE_EXECUTION_PAYLOAD_PATH;
   if (configured && String(configured).trim()) {
     return String(configured).trim();
   }
 
   const controlPath =
-    typeof process.env.WHARFIE_CONTROL_PATH === 'string' &&
+    resolvedControlPath ||
+    (typeof process.env.WHARFIE_CONTROL_PATH === 'string' &&
     process.env.WHARFIE_CONTROL_PATH.trim()
       ? process.env.WHARFIE_CONTROL_PATH.trim()
-      : undefined;
+      : undefined);
   if (controlPath) return join(controlPath, 'execution-payloads');
 
   if (process.env.NODE_ENV === 'test') {
@@ -172,19 +191,21 @@ export function resolveExecutionPayloadStoreId(
  * location so long macOS control paths cannot exceed Unix-domain socket path
  * limits. The session itself is only a same-local-OS-principal exclusion
  * primitive; it is never a distributed coordinator lease.
+ * @param {string} [resolvedControlPath] - Already-resolved command-local control root.
  * @returns {string} - Logical ledger-service session namespace.
  */
-export function resolveLedgerServiceSessionPath() {
+export function resolveLedgerServiceSessionPath(resolvedControlPath) {
   const configured = process.env.WHARFIE_LEDGER_SERVICE_SESSION_PATH;
   if (configured && String(configured).trim()) {
     return String(configured).trim();
   }
 
   const controlPath =
-    typeof process.env.WHARFIE_CONTROL_PATH === 'string' &&
+    resolvedControlPath ||
+    (typeof process.env.WHARFIE_CONTROL_PATH === 'string' &&
     process.env.WHARFIE_CONTROL_PATH.trim()
       ? process.env.WHARFIE_CONTROL_PATH.trim()
-      : undefined;
+      : undefined);
   if (controlPath) return join(controlPath, 'ledger-service-sessions');
 
   if (process.env.NODE_ENV === 'test') {
@@ -234,37 +255,39 @@ export async function createDBClient(adapterName = resolveDBAdapterName()) {
 /**
  * Create the dedicated durable control-store DB client.
  * @param {DBAdapterName} [adapterName] - Explicit adapter override.
+ * @param {{readOnly?: boolean, path?: string}} [options] - Access mode and already-resolved local root.
  * @returns {Promise<import('../db/base.js').DBClient>} - Result.
  */
 export async function createControlDBClient(
   adapterName = resolveControlAdapterName(),
+  options = {},
 ) {
   if (adapterName === 'dynamodb') {
     const { default: createDynamoDB } =
       await import('../db/adapters/dynamodb.js');
-    return createDynamoDB({ region: process.env.AWS_REGION });
+    return createDynamoDB({
+      region: process.env.AWS_REGION,
+      readOnly: options.readOnly === true,
+    });
   }
 
-  const configuredPath =
-    typeof process.env.WHARFIE_CONTROL_PATH === 'string' &&
-    process.env.WHARFIE_CONTROL_PATH.trim()
-      ? process.env.WHARFIE_CONTROL_PATH.trim()
-      : undefined;
+  const controlPath = options.path || resolveControlStorePath();
 
   if (adapterName === 'lmdb') {
     const { default: createLMDB } = await import('../db/adapters/lmdb.js');
-    return createLMDB({ path: configuredPath || join(paths.data, 'control') });
+    return createLMDB({
+      path: controlPath,
+      readOnly: options.readOnly === true,
+    });
   }
 
   // Explicit vanilla is useful for tests and diagnostics, but is not crash
   // durable: its disk snapshot is written only from close().
   const { default: createVanillaDB } =
     await import('../db/adapters/vanilla.js');
-  if (process.env.NODE_ENV === 'test' && !configuredPath) {
-    return createVanillaDB({ path: mkTempDir('wharfie-control-') });
-  }
   return createVanillaDB({
-    path: configuredPath || join(paths.data, 'control'),
+    path: controlPath,
+    readOnly: options.readOnly === true,
   });
 }
 
@@ -355,6 +378,7 @@ export default {
   resolveDBAdapterName,
   resolveStateAdapterName,
   resolveControlAdapterName,
+  resolveControlStorePath,
   resolveExecutionLedgerTableName,
   resolveExecutionPayloadPath,
   resolveExecutionPayloadStoreId,

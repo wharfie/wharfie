@@ -29,9 +29,14 @@ const staleCommands = [
   'wharfie init',
   'wharfie build-self',
   'wharfie ops list',
-  'wharfie ops cancel',
   'wharfie ops run --recover',
   '--operation-id',
+];
+
+const staleClaims = [
+  'runtime resource needs',
+  'persisting local operations',
+  'pure TypeScript path has a clean generated-SEA release proof',
 ];
 
 describe('docs command surface', () => {
@@ -45,6 +50,9 @@ describe('docs command surface', () => {
     for (const content of contents) {
       for (const staleCommand of staleCommands) {
         expect(content).not.toContain(staleCommand);
+      }
+      for (const staleClaim of staleClaims) {
+        expect(content).not.toContain(staleClaim);
       }
     }
   });
@@ -108,7 +116,17 @@ describe('docs command surface', () => {
     expect(quickstart).toContain(
       'wharfie ops recover --run-id <run-id> --confirm-runner-stopped',
     );
+    expect(quickstart).toContain(
+      'wharfie ops cancel --run-id <run-id> --request-id <stable-request-id>',
+    );
+    expect(quickstart).toContain('<app> wharfie inspect --run-id <run-id>');
+    expect(quickstart).toContain(
+      '<app> wharfie recover --run-id <run-id> --confirm-runner-stopped',
+    );
+    expect(quickstart).toContain(
+      '<app> wharfie cancel --run-id <run-id> --request-id <stable-request-id>',
+    );
     expect(quickstart).not.toContain('wharfie ops list');
-    expect(quickstart).not.toContain('wharfie ops cancel');
+    expect(quickstart).not.toContain('<app> wharfie ops cancel');
   });
 });

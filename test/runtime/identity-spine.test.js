@@ -73,9 +73,6 @@ function makeContract() {
         export: 'main',
       },
     },
-    resources: {
-      db: { adapter: 'vanilla', options: { path: '.wharfie/state' } },
-    },
     activities: {
       start: {
         entrypoint: {
@@ -292,7 +289,6 @@ describe('ApplicationRevisionV1', () => {
     const first = makeRevision();
     const reorderedContract = {
       activities: clone(first.contract.activities),
-      resources: clone(first.contract.resources),
       cli: clone(first.contract.cli),
       app: clone(first.contract.app),
       schemaVersion: 2,
@@ -352,13 +348,25 @@ describe('ApplicationRevisionV1', () => {
     expect(changed.revisionId).not.toBe(baseline.revisionId);
   });
 
-  it('rejects target-bearing contracts and noncanonical input locks', () => {
+  it('rejects target- or resource-bearing contracts and noncanonical input locks', () => {
     expect(() =>
       createApplicationRevision({
         contract: { ...makeContract(), targets: [linuxTarget] },
         inputs: makeInputs(),
       }),
     ).toThrow(/targets is not part of a logical application revision/i);
+
+    expect(() =>
+      createApplicationRevision({
+        contract: {
+          ...makeContract(),
+          resources: {
+            db: { adapter: 'vanilla', options: { path: '.wharfie/state' } },
+          },
+        },
+        inputs: makeInputs(),
+      }),
+    ).toThrow(/resources is not supported by schemaVersion 2/i);
 
     const unsortedInputs = makeInputs();
     unsortedInputs.assets.reverse();

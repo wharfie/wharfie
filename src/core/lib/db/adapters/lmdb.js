@@ -1,5 +1,5 @@
 import { lstatSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import paths from '../../paths.js';
 import { getLmdbModule } from '../../lmdb-module.js';
 import {
@@ -17,6 +17,107 @@ import {
 
 const NO_SORT = '__no_sort__';
 const SEP = '\u001f';
+
+/**
+ * Node-lmdb's root `close()` closes its whole native environment, including
+ * every named table opened from it. A control-store reader can therefore not
+ * open and close an independent root for the same local volume while a
+ * resident writer is live in this process. Keep compatible facades on one
+ * root and close physical resources only after the final facade releases.
+ *
+ * A writable facade may host a read-only facade because this adapter enforces
+ * read-only mutation guards itself. The inverse is deliberately refused: an
+ * existing native read-only environment must never become a writer.
+ * @typedef {{env: any, openedReadOnly: boolean, references: number, closing: boolean, tables: Map<string, any>}} SharedLmdbEnvironment
+ */
+
+/** @type {Map<string, SharedLmdbEnvironment>} */
+const sharedLmdbEnvironments = new Map();
+
+/** A read-only lookup cannot find an existing LMDB volume or named table. */
+export class LMDBReadOnlyStoreNotFoundError extends Error {
+  /** @param {string} message - Safe operator-facing diagnostic. */
+  constructor(message) {
+    super(message);
+    this.name = 'LMDBReadOnlyStoreNotFoundError';
+    this.code = 'WHARFIE_READ_ONLY_STORE_NOT_FOUND';
+  }
+}
+
+/**
+ * Acquire this process's sole compatible root environment for one canonical
+ * LMDB volume.
+ * @param {string} dbRoot - Canonical local LMDB directory.
+ * @param {boolean} readOnly - Whether this facade must remain read-only.
+ * @returns {SharedLmdbEnvironment} - Shared root and named-table registry.
+ */
+function acquireSharedLmdbEnvironment(dbRoot, readOnly) {
+  const existing = sharedLmdbEnvironments.get(dbRoot);
+  if (existing) {
+    if (existing.closing) {
+      throw new Error(
+        `Cannot open an LMDB facade while the prior environment is closing for '${dbRoot}'. Retry after close completes.`,
+      );
+    }
+    if (!readOnly && existing.openedReadOnly) {
+      throw new Error(
+        `Cannot open a writable LMDB facade while a read-only environment is live for '${dbRoot}'. Close the read-only facade first.`,
+      );
+    }
+    existing.references += 1;
+    return existing;
+  }
+
+  // Disable event-turn batching to reduce the chance of background commit
+  // scheduling keeping Jest or a short-lived operator process alive.
+  const env = getLmdbModule().open({
+    path: dbRoot,
+    readOnly,
+    eventTurnBatching: false,
+    commitDelay: 0,
+    // Encoding defaults to msgpack; we store plain JSON-ish objects.
+  });
+  const shared = {
+    env,
+    openedReadOnly: readOnly,
+    references: 1,
+    closing: false,
+    tables: new Map(),
+  };
+  sharedLmdbEnvironments.set(dbRoot, shared);
+  return shared;
+}
+
+/**
+ * Release one facade and physically close native resources only after the
+ * final compatible facade is gone.
+ * @param {string} dbRoot - Canonical local LMDB directory.
+ * @param {SharedLmdbEnvironment} shared - Held root environment.
+ * @returns {Promise<void>} - Resolves once the final close finishes.
+ */
+async function releaseSharedLmdbEnvironment(dbRoot, shared) {
+  shared.references -= 1;
+  if (shared.references > 0) return;
+  if (shared.references < 0) {
+    throw new Error(`LMDB environment reference underflow for '${dbRoot}'.`);
+  }
+  shared.closing = true;
+  try {
+    // If anything in the future uses async writes, make sure they're fully
+    // committed/flushed before named tables or their root are closed.
+    if (shared.env?.committed) await shared.env.committed;
+    if (shared.env?.flushed) await shared.env.flushed;
+    for (const table of shared.tables.values()) {
+      if (table && typeof table.close === 'function') await table.close();
+    }
+    shared.tables.clear();
+    if (typeof shared.env?.close === 'function') await shared.env.close();
+  } finally {
+    if (sharedLmdbEnvironments.get(dbRoot) === shared) {
+      sharedLmdbEnvironments.delete(dbRoot);
+    }
+  }
+}
 
 /**
  * @typedef CreateLMDBDBOptions
@@ -39,9 +140,9 @@ const SEP = '\u001f';
  * @returns {import('../base.js').DBClient} - Result.
  */
 export default function createLMDB(options = {}) {
-  const dbRoot = options.path
-    ? join(options.path, 'lmdb')
-    : join(paths.data, 'lmdb');
+  const dbRoot = resolve(
+    options.path ? join(options.path, 'lmdb') : join(paths.data, 'lmdb'),
+  );
   const readOnly = options.readOnly === true;
   if (readOnly) {
     let stats;
@@ -49,7 +150,7 @@ export default function createLMDB(options = {}) {
       stats = lstatSync(dbRoot);
     } catch (error) {
       const detail = error instanceof Error ? ` ${error.message}` : '';
-      throw new Error(
+      throw new LMDBReadOnlyStoreNotFoundError(
         `LMDB read-only control volume does not exist at '${dbRoot}'.${detail}`,
       );
     }
@@ -62,30 +163,36 @@ export default function createLMDB(options = {}) {
     mkdirSync(dbRoot, { recursive: true });
   }
 
-  // Disable event-turn batching to reduce the chance of background commit scheduling
-  // keeping Jest alive (especially if someone accidentally uses async put/remove).
-  const env = getLmdbModule().open({
-    path: dbRoot,
-    readOnly,
-    eventTurnBatching: false,
-    commitDelay: 0,
-    // encoding defaults to msgpack; we store plain JSON-ish objects.
-  });
+  const shared = acquireSharedLmdbEnvironment(dbRoot, readOnly);
+  const env = shared.env;
+  const tables = shared.tables;
+  let closed = false;
+  /** @type {Promise<void> | undefined} */
+  let closePromise;
 
-  /** @type {Map<string, any>} */
-  const tables = new Map();
+  /** @returns {void} */
+  function assertOpen() {
+    if (closed) throw new Error('LMDB client is closed.');
+  }
+
+  /** @returns {void} */
+  function assertWritable() {
+    assertOpen();
+    if (readOnly) throw new Error('LMDB client is read-only.');
+  }
 
   /**
    * @param {string} tableName - tableName.
    * @returns {any} - Result.
    */
   function ensureTable(tableName) {
+    assertOpen();
     let t = tables.get(tableName);
     if (!t) {
       const opened = env.openDB({ name: tableName, create: !readOnly });
       if (!opened) {
         if (readOnly) {
-          throw new Error(
+          throw new LMDBReadOnlyStoreNotFoundError(
             `LMDB read-only table '${tableName}' is not ready in the existing control volume.`,
           );
         }
@@ -333,6 +440,7 @@ export default function createLMDB(options = {}) {
    * @param {import('../base.js').PutParams} params - params.
    */
   async function put(params) {
+    assertWritable();
     const table = ensureTable(params.tableName);
     const record = params.record;
     if (!record || typeof record !== 'object')
@@ -371,6 +479,7 @@ export default function createLMDB(options = {}) {
    * @param {import('../base.js').UpdateParams} params - params.
    */
   async function update(params) {
+    assertWritable();
     assertSortPair(params);
     const table = ensureTable(params.tableName);
 
@@ -425,6 +534,7 @@ export default function createLMDB(options = {}) {
    * @param {import('../base.js').RemoveParams} params - params.
    */
   async function remove(params) {
+    assertWritable();
     assertSortPair(params);
     const table = ensureTable(params.tableName);
 
@@ -441,6 +551,7 @@ export default function createLMDB(options = {}) {
    * @param {import('../base.js').BatchWriteParams} params - params.
    */
   async function batchWrite(params) {
+    assertWritable();
     const table = ensureTable(params.tableName);
 
     const deleteRequests = Array.isArray(params.deleteRequests)
@@ -483,6 +594,7 @@ export default function createLMDB(options = {}) {
    * @param {import('../base.js').TransactionWriteParams} params - params.
    */
   async function transactionWrite(params) {
+    assertWritable();
     const requests = validateTransactionWrite(params);
     const table = ensureTable(params.tableName);
 
@@ -554,19 +666,16 @@ export default function createLMDB(options = {}) {
   }
 
   /**
-   * Close underlying resources.
+   * Release this facade. The shared root stays live until every compatible
+   * local facade closes, so an inspector cannot tear down a resident writer.
+   * @returns {Promise<void>} - Resolves once this facade releases its root.
    */
-  async function close() {
-    // If anything in the future uses async writes, make sure they're fully committed/flushed.
-    if (env?.committed) await env.committed;
-    if (env?.flushed) await env.flushed;
-
-    for (const db of tables.values()) {
-      if (db && typeof db.close === 'function') await db.close();
+  function close() {
+    if (!closePromise) {
+      closed = true;
+      closePromise = releaseSharedLmdbEnvironment(dbRoot, shared);
     }
-    tables.clear();
-
-    if (typeof env.close === 'function') await env.close();
+    return closePromise;
   }
 
   return {

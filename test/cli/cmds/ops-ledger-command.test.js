@@ -277,7 +277,7 @@ describe('ledger-native operator commands', () => {
       expect(inspected.stderr).toBe('');
       const inspection = JSON.parse(inspected.stdout);
       expect(inspection).toMatchObject({
-        schemaVersion: 1,
+        schemaVersion: 2,
         kind: 'wharfie.execution-ledger.run',
         integrity: { verified: true },
         run: { runId, appId, status: RunStatus.RUNNING },
@@ -325,7 +325,7 @@ describe('ledger-native operator commands', () => {
       expect(recovered.status).toBe(0);
       expect(recovered.stderr).toBe('');
       expect(JSON.parse(recovered.stdout)).toMatchObject({
-        schemaVersion: 1,
+        schemaVersion: 2,
         kind: 'wharfie.execution-ledger.recovery',
         recovery: { action: 'released-unstarted-claim', changed: true },
         run: { runId, status: RunStatus.RUNNING },
@@ -480,21 +480,27 @@ describe('ledger-native operator commands', () => {
     }
   }, 20000);
 
-  it('removes legacy list and cancel commands from the public operator surface', () => {
+  it('removes legacy list while exposing the current-owner cancel command', () => {
     const env = { ...process.env, NODE_ENV: 'development' };
     const help = runCli(['ops', '--help'], env, repoRoot);
     expect(help.status).toBe(0);
     expect(help.stdout).toContain('inspect');
     expect(help.stdout).toContain('recover');
+    expect(help.stdout).toContain('cancel');
     expect(help.stdout).toContain('run');
     expect(help.stdout).not.toContain('list');
-    expect(help.stdout).not.toContain('cancel');
 
-    for (const command of ['list', 'cancel']) {
-      const result = runCli(['ops', command], env, repoRoot);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toMatch(/unknown command/i);
-    }
+    const list = runCli(['ops', 'list'], env, repoRoot);
+    expect(list.status).toBe(1);
+    expect(list.stderr).toMatch(/unknown command/i);
+
+    const cancel = runCli(
+      ['ops', 'cancel', '--request-id', 'missing-run-id-request'],
+      env,
+      repoRoot,
+    );
+    expect(cancel.status).toBe(1);
+    expect(cancel.stderr).toMatch(/cancel requires --run-id/i);
 
     const legacyRecovery = runCli(['ops', 'run', '--recover'], env, repoRoot);
     expect(legacyRecovery.status).toBe(1);
@@ -515,7 +521,7 @@ describe('ledger-native operator commands', () => {
       ...process.env,
       NODE_ENV: 'development',
       WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
-      WHARFIE_CONTROL_ADAPTER: 'vanilla',
+      WHARFIE_CONTROL_ADAPTER: 'lmdb',
       WHARFIE_CONTROL_PATH: dbPath,
       WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(dbPath, 'execution-payloads'),
     };
@@ -542,7 +548,26 @@ describe('ledger-native operator commands', () => {
       );
       expect(recovery.status).toBe(1);
       expect(recovery.stderr).toContain('recovery refuses to create work');
-      expect(await readRun(dbPath, tableName, missingRunId)).toBeNull();
+
+      const cancellation = runCli(
+        [
+          'ops',
+          'cancel',
+          '--run-id',
+          missingRunId,
+          '--request-id',
+          'missing-cancellation-request',
+        ],
+        env,
+        emptyDir,
+      );
+      expect(cancellation.status).toBe(1);
+      expect(cancellation.stderr).toContain(
+        'cancellation refuses to create work',
+      );
+      expect(
+        await readRun(dbPath, tableName, missingRunId, createLMDB),
+      ).toBeNull();
     } finally {
       rmSync(dbPath, { recursive: true, force: true });
       rmSync(emptyDir, { recursive: true, force: true });

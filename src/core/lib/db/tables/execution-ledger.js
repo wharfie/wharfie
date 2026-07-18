@@ -46,11 +46,11 @@ import { comparePortablePageKeys } from '../utils.js';
  * inconsistent records, but are not signatures against a writer that can
  * replace an entire semantically valid history.
  */
-// V3 intentionally does not read v1/v2 records. V2 lacked the atomic
-// per-service run-history directory required for a safe paginated history
-// surface, so it has a fresh schema/table namespace instead of a partial
-// backfill or mixed-record migration.
-export const EXECUTION_LEDGER_SCHEMA_VERSION = 3;
+// V4 intentionally does not read v1/v2/v3 records. V3 had no durable
+// cancellation request, so it cannot safely interpret pre-start cancellation
+// or authorize a cancelled physical terminal. Use a fresh schema/table and
+// run-directory namespace instead of reinterpreting retained histories.
+export const EXECUTION_LEDGER_SCHEMA_VERSION = 4;
 export const EXECUTION_LEDGER_MAX_OPAQUE_ID_BYTES =
   MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES;
 export const EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES = 64 * 1024;
@@ -96,12 +96,13 @@ const KEY_NAME = 'run_id';
 const SORT_KEY_NAME = 'sort_key';
 const RUN_DIRECTORY_RECORD_TYPE = 'execution_ledger_run_directory';
 const RUN_DIRECTORY_RUN_KIND = 'manual';
-const RUN_DIRECTORY_CURSOR_SCHEMA_VERSION = 1;
+const RUN_DIRECTORY_CURSOR_SCHEMA_VERSION = 2;
 const RUN_DIRECTORY_DEFAULT_PAGE_SIZE = 50;
 const RUN_DIRECTORY_MAX_PAGE_SIZE = 100;
 const RUN_DIRECTORY_MAX_PAGE_RETRIES = 3;
 const EVENT_TYPES = new Set([
   'manual-run-created',
+  'manual-cancellation-requested',
   'attempt-claimed',
   'attempt-started',
   'attempt-terminal',
@@ -109,12 +110,10 @@ const EVENT_TYPES = new Set([
   'attempt-became-uncertain',
 ]);
 const TERMINAL_TYPES = new Set(ACTIVITY_PROTOCOL_TERMINAL_TYPES);
-// The first vertical has no durable cancellation request or deadline decision.
-// Do not let a valid physical `cancelled` transcript become a logical outcome
-// until the corresponding ledger transition exists.
 const SUPPORTED_MANUAL_TERMINAL_TYPES = new Set([
   'completed',
   'failed',
+  'cancelled',
   'protocol-failed',
 ]);
 const MANUAL_REQUEST_PAYLOAD_SCHEMA = 'wharfie.execution.manual-request.v1';
@@ -122,6 +121,9 @@ const ACTIVITY_EVIDENCE_PAYLOAD_SCHEMA =
   'wharfie.execution.activity-evidence.v1';
 /**
  * @typedef {import('../base.js').DBClient} DBClient
+ */
+/**
+ * @typedef {{applied: boolean, outcome: 'cancellation-requested'|'terminal-authoritative'|'outcome-uncertain', receipt?: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} ManualCancellationResult
  */
 
 /** Error raised when a caller reuses an immutable run identity for new work. */
@@ -330,7 +332,7 @@ function assertSnapshotKeys(value, required, optional, label) {
  */
 function normalizeActor(value) {
   const actor = cloneBoundedJsonObject(
-    value ?? { kind: 'local', id: 'local' },
+    value === undefined ? { kind: 'local', id: 'local' } : value,
     EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
     'actor',
   );
@@ -338,6 +340,59 @@ function normalizeActor(value) {
   return {
     kind: assertOpaqueId(actor.kind, 'actor.kind'),
     id: assertOpaqueId(actor.id, 'actor.id'),
+  };
+}
+
+/**
+ * Normalize one durable cancellation reason through the Activity Protocol
+ * host-frame validator. Persisting the exact protocol shape lets replay prove
+ * that a later physical `cancelled` terminal was authorized by this decision.
+ * @param {unknown} value - Candidate structured Activity Protocol error.
+ * @param {string} label - Human-readable value path.
+ * @returns {{code: string, name: string, message: string, details: Record<string, any>}} - Strict cancellation reason.
+ */
+function normalizeCancellationReason(value, label) {
+  const reason = cloneInlinePayload(value, label);
+  const frame = validateActivityProtocolHostFrame(
+    {
+      protocol: ACTIVITY_PROTOCOL_NAME,
+      protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+      type: 'cancel',
+      attemptId: 'cancellation-reason-validation',
+      reason,
+    },
+    label,
+  );
+  return /** @type {{code: string, name: string, message: string, details: Record<string, any>}} */ (
+    cloneInlinePayload(frame.reason, label)
+  );
+}
+
+/**
+ * @param {unknown} value - Candidate retained cancellation request.
+ * @param {string} label - Human-readable value path.
+ * @returns {{requestId: string, transitionId: string, requestedAt: number, actor: {kind: string, id: string}, reason: {code: string, name: string, message: string, details: Record<string, any>}}} - Strict cancellation request.
+ */
+function normalizeCancellationRequest(value, label) {
+  const request = cloneBoundedJsonObject(
+    value,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    label,
+  );
+  assertExactKeys(
+    request,
+    ['requestId', 'transitionId', 'requestedAt', 'actor', 'reason'],
+    label,
+  );
+  return {
+    requestId: assertOpaqueId(request.requestId, `${label}.requestId`),
+    transitionId: assertOpaqueId(request.transitionId, `${label}.transitionId`),
+    requestedAt: normalizeObservedAt(
+      request.requestedAt,
+      `${label}.requestedAt`,
+    ),
+    actor: normalizeActor(request.actor),
+    reason: normalizeCancellationReason(request.reason, `${label}.reason`),
   };
 }
 
@@ -940,7 +995,7 @@ function createEventId({
   payload,
 }) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v3',
+    domain: 'wharfie:execution-ledger-event:v4',
     prefix: 'wle',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -1084,7 +1139,7 @@ function normalizeRunSnapshot(run, runId) {
     EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
     'run snapshot',
   );
-  assertExactKeys(
+  assertSnapshotKeys(
     value,
     [
       'schemaVersion',
@@ -1099,6 +1154,7 @@ function normalizeRunSnapshot(run, runId) {
       'createdAt',
       'updatedAt',
     ],
+    ['cancellationRequest'],
     'run snapshot',
   );
   if (value.schemaVersion !== EXECUTION_LEDGER_SCHEMA_VERSION) {
@@ -1122,6 +1178,22 @@ function normalizeRunSnapshot(run, runId) {
     MANUAL_REQUEST_PAYLOAD_SCHEMA,
     'run projection requestRef',
   );
+  const hasCancellationRequest = Object.prototype.hasOwnProperty.call(
+    value,
+    'cancellationRequest',
+  );
+  if (value.status === RunStatus.CANCELLED && !hasCancellationRequest) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'cancelled run lacks cancellation request',
+    );
+  }
+  if (hasCancellationRequest) {
+    value.cancellationRequest = normalizeCancellationRequest(
+      value.cancellationRequest,
+      'run projection cancellationRequest',
+    );
+  }
   return value;
 }
 
@@ -1153,7 +1225,7 @@ function normalizeInvocationSnapshot(invocation, runId) {
       'createdAt',
       'updatedAt',
     ],
-    ['terminal', 'uncertainty'],
+    ['terminal', 'uncertainty', 'cancellationRequest'],
     'invocation snapshot',
   );
   if (value.schemaVersion !== EXECUTION_LEDGER_SCHEMA_VERSION) {
@@ -1199,6 +1271,10 @@ function normalizeInvocationSnapshot(invocation, runId) {
     value,
     'uncertainty',
   );
+  const hasCancellationRequest = Object.prototype.hasOwnProperty.call(
+    value,
+    'cancellationRequest',
+  );
   if (
     ([InvocationStatus.RUNNABLE, InvocationStatus.RUNNING].includes(
       value.status,
@@ -1206,12 +1282,12 @@ function normalizeInvocationSnapshot(invocation, runId) {
       (hasTerminal || hasUncertainty)) ||
     (value.status === InvocationStatus.UNCERTAIN &&
       (!hasUncertainty || hasTerminal)) ||
-    ([
-      InvocationStatus.COMPLETED,
-      InvocationStatus.FAILED,
-      InvocationStatus.CANCELLED,
-    ].includes(value.status) &&
-      (!hasTerminal || hasUncertainty))
+    ([InvocationStatus.COMPLETED, InvocationStatus.FAILED].includes(
+      value.status,
+    ) &&
+      (!hasTerminal || hasUncertainty)) ||
+    (value.status === InvocationStatus.CANCELLED &&
+      (!hasCancellationRequest || hasUncertainty))
   ) {
     throw new ExecutionLedgerProjectionError(
       runId,
@@ -1228,6 +1304,12 @@ function normalizeInvocationSnapshot(invocation, runId) {
     value.uncertainty = cloneInlinePayload(
       value.uncertainty,
       'invocation projection uncertainty',
+    );
+  }
+  if (hasCancellationRequest) {
+    value.cancellationRequest = normalizeCancellationRequest(
+      value.cancellationRequest,
+      'invocation projection cancellationRequest',
     );
   }
   return value;
@@ -1263,7 +1345,13 @@ function normalizeAttemptSnapshot(attempt, runId) {
       'updatedAt',
       'lastSequence',
     ],
-    ['startedAt', 'terminal', 'evidenceRef', 'abandonment'],
+    [
+      'startedAt',
+      'terminal',
+      'evidenceRef',
+      'abandonment',
+      'cancellationRequest',
+    ],
     'attempt snapshot',
   );
   if (value.schemaVersion !== EXECUTION_LEDGER_SCHEMA_VERSION) {
@@ -1309,17 +1397,26 @@ function normalizeAttemptSnapshot(attempt, runId) {
     value,
     'abandonment',
   );
+  const hasCancellationRequest = Object.prototype.hasOwnProperty.call(
+    value,
+    'cancellationRequest',
+  );
   if (
     (value.status === AttemptStatus.CLAIMED &&
-      (hasStartedAt || hasTerminal || hasEvidenceRef || hasAbandonment)) ||
+      (hasStartedAt ||
+        hasTerminal ||
+        hasEvidenceRef ||
+        hasAbandonment ||
+        hasCancellationRequest)) ||
     (value.status === AttemptStatus.STARTED &&
       (!hasStartedAt || hasTerminal || hasEvidenceRef || hasAbandonment)) ||
-    ([
-      AttemptStatus.COMPLETED,
-      AttemptStatus.FAILED,
-      AttemptStatus.CANCELLED,
-    ].includes(value.status) &&
+    ([AttemptStatus.COMPLETED, AttemptStatus.FAILED].includes(value.status) &&
       (!hasStartedAt || !hasTerminal || !hasEvidenceRef || hasAbandonment)) ||
+    (value.status === AttemptStatus.CANCELLED &&
+      (!hasCancellationRequest ||
+        hasAbandonment ||
+        hasStartedAt !== hasTerminal ||
+        hasTerminal !== hasEvidenceRef)) ||
     (value.status === AttemptStatus.ABANDONED &&
       (hasTerminal || hasEvidenceRef || !hasAbandonment))
   ) {
@@ -1348,6 +1445,12 @@ function normalizeAttemptSnapshot(attempt, runId) {
     value.abandonment = cloneInlinePayload(
       value.abandonment,
       'attempt projection abandonment',
+    );
+  }
+  if (hasCancellationRequest) {
+    value.cancellationRequest = normalizeCancellationRequest(
+      value.cancellationRequest,
+      'attempt projection cancellationRequest',
     );
   }
   return value;
@@ -1460,6 +1563,47 @@ function assertAttemptAdvance(prior, next, event, runId) {
   ) {
     throw new ExecutionLedgerProjectionError(runId, 'attempt event fence');
   }
+}
+
+/**
+ * @param {Record<string, any>} left - Prior projection snapshot.
+ * @param {Record<string, any>} right - Next projection snapshot.
+ * @returns {boolean} - Whether both snapshots retain the same cancellation request.
+ */
+function hasSameCancellationRequest(left, right) {
+  const leftHas = Object.prototype.hasOwnProperty.call(
+    left,
+    'cancellationRequest',
+  );
+  const rightHas = Object.prototype.hasOwnProperty.call(
+    right,
+    'cancellationRequest',
+  );
+  return (
+    leftHas === rightHas &&
+    (!leftHas ||
+      hasSameCanonicalJson(left.cancellationRequest, right.cancellationRequest))
+  );
+}
+
+/**
+ * Compare selected optional lifecycle fields without treating absence as an
+ * alias for an explicit undefined value. Cancellation may add its own request
+ * metadata, but it must never manufacture or rewrite physical evidence.
+ * @param {Record<string, any>} left - Prior projection snapshot.
+ * @param {Record<string, any>} right - Next projection snapshot.
+ * @param {string[]} fields - Optional lifecycle fields to preserve exactly.
+ * @returns {boolean} - Whether field presence and canonical values match.
+ */
+function hasSameOptionalFields(left, right, fields) {
+  return fields.every((field) => {
+    const leftHas = Object.prototype.hasOwnProperty.call(left, field);
+    const rightHas = Object.prototype.hasOwnProperty.call(right, field);
+    return (
+      leftHas === rightHas &&
+      (!leftHas || hasSameCanonicalJson(left[field], right[field]))
+    );
+  });
 }
 
 /**
@@ -1623,13 +1767,22 @@ function eventSnapshots(event, runId) {
     EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
     'event payload',
   );
-  assertExactKeys(
-    payload,
-    event.type === 'manual-run-created'
-      ? ['run', 'invocation']
-      : ['run', 'invocation', 'attempt'],
-    'event payload',
-  );
+  if (event.type === 'manual-cancellation-requested') {
+    assertSnapshotKeys(
+      payload,
+      ['run', 'invocation'],
+      ['attempt'],
+      'event payload',
+    );
+  } else {
+    assertExactKeys(
+      payload,
+      event.type === 'manual-run-created'
+        ? ['run', 'invocation']
+        : ['run', 'invocation', 'attempt'],
+      'event payload',
+    );
+  }
   const run = normalizeRunSnapshot(payload.run, runId);
   const invocation = normalizeInvocationSnapshot(payload.invocation, runId);
   /** @type {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} */
@@ -1678,6 +1831,24 @@ function assertEventRequestDigest(
       activityId: invocation.activityId,
       requestRef: run.requestRef,
       trigger: run.trigger,
+    };
+  } else if (event.type === 'manual-cancellation-requested') {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      expectedGeneration: currentInvocation?.generation,
+      expectedVersion: currentRun?.version,
+      transitionId: event.transition_id,
+      requestId: run.cancellationRequest?.requestId,
+      reason: run.cancellationRequest?.reason,
+      actor: event.actor,
+      coordinatorEpoch: event.fence.coordinatorEpoch,
+      ...(attempt
+        ? {
+            attemptId: attempt.attemptId,
+            fencingToken: attempt.fencingToken,
+          }
+        : {}),
     };
   } else if (event.type === 'attempt-claimed') {
     value = {
@@ -1888,7 +2059,11 @@ async function applyEvent(
     return;
   }
 
-  if (!currentRun || !currentInvocation || !attempt) {
+  if (
+    !currentRun ||
+    !currentInvocation ||
+    (!attempt && event.type !== 'manual-cancellation-requested')
+  ) {
     throw new ExecutionLedgerProjectionError(runId, 'event lacks prior state');
   }
   assertRunAdvance(currentRun, run, event.sequence, runId);
@@ -1903,138 +2078,268 @@ async function applyEvent(
     );
   }
 
-  if (event.type === 'attempt-claimed') {
-    assertAttemptBelongsToInvocation(attempt, run, invocation, runId);
+  if (event.type !== 'manual-cancellation-requested') {
     if (
-      currentRun.status !== RunStatus.RUNNING ||
-      run.status !== RunStatus.RUNNING ||
-      currentInvocation.status !== InvocationStatus.RUNNABLE ||
-      state.attempts.has(
-        attemptMapKey(attempt.invocationId, attempt.attemptId),
+      !hasSameCancellationRequest(currentRun, run) ||
+      !hasSameCancellationRequest(currentInvocation, invocation) ||
+      (currentAttempt &&
+        (!attempt || !hasSameCancellationRequest(currentAttempt, attempt)))
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'cancellation request changed outside its decision event',
+      );
+    }
+  }
+
+  if (event.type === 'manual-cancellation-requested') {
+    const cancellationRequest = run.cancellationRequest;
+    const matchingRequest =
+      cancellationRequest &&
+      cancellationRequest.transitionId === event.transition_id &&
+      cancellationRequest.requestedAt === event.observed_at &&
+      hasSameCanonicalJson(cancellationRequest.actor, event.actor) &&
+      hasSameCanonicalJson(
+        invocation.cancellationRequest,
+        cancellationRequest,
+      ) &&
+      (!attempt ||
+        hasSameCanonicalJson(attempt.cancellationRequest, cancellationRequest));
+    const hadRequest =
+      Object.prototype.hasOwnProperty.call(currentRun, 'cancellationRequest') ||
+      Object.prototype.hasOwnProperty.call(
+        currentInvocation,
+        'cancellationRequest',
       ) ||
-      attempt.status !== AttemptStatus.CLAIMED ||
-      attempt.generation !== currentInvocation.generation + 1 ||
-      invocation.status !== InvocationStatus.RUNNING ||
-      invocation.generation !== attempt.generation ||
-      attempt.version !== 1 ||
-      attempt.lastSequence !== event.sequence ||
-      attempt.attemptId !==
-        createAttemptId(runId, invocation.invocationId, attempt.generation) ||
-      attempt.claimedAt !== event.observed_at ||
-      attempt.updatedAt !== event.observed_at ||
-      Object.prototype.hasOwnProperty.call(attempt, 'startedAt') ||
-      Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
-      Object.prototype.hasOwnProperty.call(attempt, 'evidenceRef') ||
-      Object.prototype.hasOwnProperty.call(attempt, 'abandonment') ||
-      event.fence.coordinatorEpoch !== attempt.coordinatorEpoch ||
-      event.fence.invocationGeneration !== attempt.generation
-    ) {
-      throw new ExecutionLedgerProjectionError(runId, 'invalid attempt claim');
-    }
-  } else if (event.type === 'attempt-started') {
-    if (
-      currentRun.status !== RunStatus.RUNNING ||
-      run.status !== RunStatus.RUNNING ||
-      currentInvocation.status !== InvocationStatus.RUNNING ||
-      !currentAttempt ||
-      currentAttempt.status !== AttemptStatus.CLAIMED ||
-      attempt.status !== AttemptStatus.STARTED ||
-      attempt.generation !== currentInvocation.generation ||
-      Object.prototype.hasOwnProperty.call(currentAttempt, 'startedAt') ||
-      attempt.startedAt !== event.observed_at ||
-      Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
-      Object.prototype.hasOwnProperty.call(attempt, 'evidenceRef') ||
-      Object.prototype.hasOwnProperty.call(attempt, 'abandonment') ||
-      invocation.status !== InvocationStatus.RUNNING ||
-      invocation.generation !== currentInvocation.generation
-    ) {
-      throw new ExecutionLedgerProjectionError(runId, 'invalid attempt start');
-    }
-    assertAttemptAdvance(currentAttempt, attempt, event, runId);
-  } else if (event.type === 'attempt-terminal') {
-    const terminal = attempt.terminal;
-    if (!SUPPORTED_MANUAL_TERMINAL_TYPES.has(terminal.type)) {
-      throw new ExecutionLedgerProjectionError(
-        runId,
-        'unsupported manual terminal type',
+      Boolean(
+        currentAttempt &&
+        Object.prototype.hasOwnProperty.call(
+          currentAttempt,
+          'cancellationRequest',
+        ),
       );
-    }
-    const statuses = statusesForTerminal(terminal);
-    const verifiedEvidence = validateLedgerAttemptEvidence(
-      await payloadReader.readEvidence(attempt.evidenceRef),
-      await createLedgerAttemptStart(run, invocation, attempt, payloadReader),
-      'persisted attempt evidence',
-    );
+    const cancelsRunnable =
+      currentRun.status === RunStatus.RUNNING &&
+      currentInvocation.status === InvocationStatus.RUNNABLE &&
+      run.status === RunStatus.CANCELLED &&
+      invocation.status === InvocationStatus.CANCELLED &&
+      (currentInvocation.generation === 0
+        ? !attempt
+        : currentAttempt?.status === AttemptStatus.ABANDONED &&
+          attempt?.status === AttemptStatus.ABANDONED);
+    const cancelsClaimed =
+      currentRun.status === RunStatus.RUNNING &&
+      currentInvocation.status === InvocationStatus.RUNNING &&
+      currentAttempt?.status === AttemptStatus.CLAIMED &&
+      run.status === RunStatus.CANCELLED &&
+      invocation.status === InvocationStatus.CANCELLED &&
+      attempt?.status === AttemptStatus.CANCELLED;
+    const requestsStarted =
+      currentRun.status === RunStatus.RUNNING &&
+      currentInvocation.status === InvocationStatus.RUNNING &&
+      currentAttempt?.status === AttemptStatus.STARTED &&
+      run.status === RunStatus.RUNNING &&
+      invocation.status === InvocationStatus.RUNNING &&
+      attempt?.status === AttemptStatus.STARTED;
     if (
-      currentRun.status !== RunStatus.RUNNING ||
-      currentInvocation.status !== InvocationStatus.RUNNING ||
-      !currentAttempt ||
-      currentAttempt.status !== AttemptStatus.STARTED ||
-      attempt.status !== statuses.attempt ||
-      attempt.generation !== currentInvocation.generation ||
-      invocation.status !== statuses.invocation ||
+      !matchingRequest ||
+      hadRequest ||
+      !hasSameOptionalFields(currentInvocation, invocation, [
+        'terminal',
+        'uncertainty',
+      ]) ||
       invocation.generation !== currentInvocation.generation ||
-      run.status !== statuses.run ||
-      attempt.startedAt !== currentAttempt.startedAt ||
-      terminal.attemptId !== attempt.attemptId ||
-      !hasSameCanonicalJson(
-        createTerminalSummary(verifiedEvidence.terminal),
-        terminal,
-      ) ||
-      !hasSameCanonicalJson(invocation.terminal, terminal)
+      event.fence.invocationGeneration !== currentInvocation.generation ||
+      (!attempt && event.fence.coordinatorEpoch !== 0) ||
+      (!cancelsRunnable && !cancelsClaimed && !requestsStarted)
     ) {
       throw new ExecutionLedgerProjectionError(
         runId,
-        'invalid attempt terminal',
+        'invalid manual cancellation request',
       );
     }
-    assertAttemptAdvance(currentAttempt, attempt, event, runId);
-  } else if (event.type === 'attempt-abandoned-before-start') {
-    if (
-      currentRun.status !== RunStatus.RUNNING ||
-      currentInvocation.status !== InvocationStatus.RUNNING ||
-      !currentAttempt ||
-      currentAttempt.status !== AttemptStatus.CLAIMED ||
-      attempt.status !== AttemptStatus.ABANDONED ||
-      attempt.generation !== currentInvocation.generation ||
-      Object.prototype.hasOwnProperty.call(currentAttempt, 'startedAt') ||
-      Object.prototype.hasOwnProperty.call(attempt, 'startedAt') ||
-      Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
-      Object.prototype.hasOwnProperty.call(attempt, 'evidenceRef') ||
-      !Object.prototype.hasOwnProperty.call(attempt, 'abandonment') ||
-      invocation.status !== InvocationStatus.RUNNABLE ||
-      invocation.generation !== currentInvocation.generation ||
-      run.status !== RunStatus.RUNNING
-    ) {
+    if (attempt) {
+      if (!currentAttempt) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'cancellation attempt lacks prior state',
+        );
+      }
+      if (
+        !hasSameOptionalFields(currentAttempt, attempt, [
+          'startedAt',
+          'terminal',
+          'evidenceRef',
+          'abandonment',
+        ])
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'cancellation rewrote attempt lifecycle evidence',
+        );
+      }
+      assertAttemptBelongsToInvocation(attempt, run, invocation, runId);
+      assertAttemptAdvance(currentAttempt, attempt, event, runId);
+    }
+  } else {
+    if (!attempt) {
       throw new ExecutionLedgerProjectionError(
         runId,
-        'invalid pre-start abandonment',
+        'attempt event lacks an attempt snapshot',
       );
     }
-    assertAttemptAdvance(currentAttempt, attempt, event, runId);
-  } else if (event.type === 'attempt-became-uncertain') {
-    if (
-      currentRun.status !== RunStatus.RUNNING ||
-      currentInvocation.status !== InvocationStatus.RUNNING ||
-      !currentAttempt ||
-      currentAttempt.status !== AttemptStatus.STARTED ||
-      attempt.status !== AttemptStatus.ABANDONED ||
-      attempt.generation !== currentInvocation.generation ||
-      attempt.startedAt !== currentAttempt.startedAt ||
-      Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
-      Object.prototype.hasOwnProperty.call(attempt, 'evidenceRef') ||
-      !Object.prototype.hasOwnProperty.call(attempt, 'abandonment') ||
-      invocation.status !== InvocationStatus.UNCERTAIN ||
-      invocation.generation !== currentInvocation.generation ||
-      !hasSameCanonicalJson(invocation.uncertainty, attempt.abandonment) ||
-      run.status !== RunStatus.BLOCKED
-    ) {
-      throw new ExecutionLedgerProjectionError(
-        runId,
-        'invalid uncertain abandonment',
+    if (event.type === 'attempt-claimed') {
+      assertAttemptBelongsToInvocation(attempt, run, invocation, runId);
+      if (
+        currentRun.status !== RunStatus.RUNNING ||
+        run.status !== RunStatus.RUNNING ||
+        currentInvocation.status !== InvocationStatus.RUNNABLE ||
+        state.attempts.has(
+          attemptMapKey(attempt.invocationId, attempt.attemptId),
+        ) ||
+        attempt.status !== AttemptStatus.CLAIMED ||
+        attempt.generation !== currentInvocation.generation + 1 ||
+        invocation.status !== InvocationStatus.RUNNING ||
+        invocation.generation !== attempt.generation ||
+        attempt.version !== 1 ||
+        attempt.lastSequence !== event.sequence ||
+        attempt.attemptId !==
+          createAttemptId(runId, invocation.invocationId, attempt.generation) ||
+        attempt.claimedAt !== event.observed_at ||
+        attempt.updatedAt !== event.observed_at ||
+        Object.prototype.hasOwnProperty.call(attempt, 'startedAt') ||
+        Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
+        Object.prototype.hasOwnProperty.call(attempt, 'evidenceRef') ||
+        Object.prototype.hasOwnProperty.call(attempt, 'abandonment') ||
+        event.fence.coordinatorEpoch !== attempt.coordinatorEpoch ||
+        event.fence.invocationGeneration !== attempt.generation
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'invalid attempt claim',
+        );
+      }
+    } else if (event.type === 'attempt-started') {
+      if (
+        currentRun.status !== RunStatus.RUNNING ||
+        run.status !== RunStatus.RUNNING ||
+        currentInvocation.status !== InvocationStatus.RUNNING ||
+        !currentAttempt ||
+        currentAttempt.status !== AttemptStatus.CLAIMED ||
+        attempt.status !== AttemptStatus.STARTED ||
+        attempt.generation !== currentInvocation.generation ||
+        Object.prototype.hasOwnProperty.call(currentAttempt, 'startedAt') ||
+        attempt.startedAt !== event.observed_at ||
+        Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
+        Object.prototype.hasOwnProperty.call(attempt, 'evidenceRef') ||
+        Object.prototype.hasOwnProperty.call(attempt, 'abandonment') ||
+        invocation.status !== InvocationStatus.RUNNING ||
+        invocation.generation !== currentInvocation.generation
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'invalid attempt start',
+        );
+      }
+      assertAttemptAdvance(currentAttempt, attempt, event, runId);
+    } else if (event.type === 'attempt-terminal') {
+      const terminal = attempt.terminal;
+      if (!SUPPORTED_MANUAL_TERMINAL_TYPES.has(terminal.type)) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'unsupported manual terminal type',
+        );
+      }
+      const statuses = statusesForTerminal(terminal);
+      const verifiedEvidence = validateLedgerAttemptEvidence(
+        await payloadReader.readEvidence(attempt.evidenceRef),
+        await createLedgerAttemptStart(run, invocation, attempt, payloadReader),
+        'persisted attempt evidence',
       );
+      try {
+        assertSupportedManualTerminal(
+          verifiedEvidence.terminal,
+          verifiedEvidence.evidence,
+          run.cancellationRequest,
+          'persisted attempt terminal',
+        );
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'unsupported or unauthorized manual terminal type',
+        );
+      }
+      if (
+        currentRun.status !== RunStatus.RUNNING ||
+        currentInvocation.status !== InvocationStatus.RUNNING ||
+        !currentAttempt ||
+        currentAttempt.status !== AttemptStatus.STARTED ||
+        attempt.status !== statuses.attempt ||
+        attempt.generation !== currentInvocation.generation ||
+        invocation.status !== statuses.invocation ||
+        invocation.generation !== currentInvocation.generation ||
+        run.status !== statuses.run ||
+        attempt.startedAt !== currentAttempt.startedAt ||
+        terminal.attemptId !== attempt.attemptId ||
+        !hasSameCanonicalJson(
+          createTerminalSummary(verifiedEvidence.terminal),
+          terminal,
+        ) ||
+        !hasSameCanonicalJson(invocation.terminal, terminal)
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'invalid attempt terminal',
+        );
+      }
+      assertAttemptAdvance(currentAttempt, attempt, event, runId);
+    } else if (event.type === 'attempt-abandoned-before-start') {
+      if (
+        currentRun.status !== RunStatus.RUNNING ||
+        currentInvocation.status !== InvocationStatus.RUNNING ||
+        !currentAttempt ||
+        currentAttempt.status !== AttemptStatus.CLAIMED ||
+        attempt.status !== AttemptStatus.ABANDONED ||
+        attempt.generation !== currentInvocation.generation ||
+        Object.prototype.hasOwnProperty.call(currentAttempt, 'startedAt') ||
+        Object.prototype.hasOwnProperty.call(attempt, 'startedAt') ||
+        Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
+        Object.prototype.hasOwnProperty.call(attempt, 'evidenceRef') ||
+        !Object.prototype.hasOwnProperty.call(attempt, 'abandonment') ||
+        invocation.status !== InvocationStatus.RUNNABLE ||
+        invocation.generation !== currentInvocation.generation ||
+        run.status !== RunStatus.RUNNING
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'invalid pre-start abandonment',
+        );
+      }
+      assertAttemptAdvance(currentAttempt, attempt, event, runId);
+    } else if (event.type === 'attempt-became-uncertain') {
+      if (
+        currentRun.status !== RunStatus.RUNNING ||
+        currentInvocation.status !== InvocationStatus.RUNNING ||
+        !currentAttempt ||
+        currentAttempt.status !== AttemptStatus.STARTED ||
+        attempt.status !== AttemptStatus.ABANDONED ||
+        attempt.generation !== currentInvocation.generation ||
+        attempt.startedAt !== currentAttempt.startedAt ||
+        Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
+        Object.prototype.hasOwnProperty.call(attempt, 'evidenceRef') ||
+        !Object.prototype.hasOwnProperty.call(attempt, 'abandonment') ||
+        invocation.status !== InvocationStatus.UNCERTAIN ||
+        invocation.generation !== currentInvocation.generation ||
+        !hasSameCanonicalJson(invocation.uncertainty, attempt.abandonment) ||
+        run.status !== RunStatus.BLOCKED
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'invalid uncertain abandonment',
+        );
+      }
+      assertAttemptAdvance(currentAttempt, attempt, event, runId);
     }
-    assertAttemptAdvance(currentAttempt, attempt, event, runId);
   }
 
   assertEventRequestDigest(
@@ -2050,10 +2355,12 @@ async function applyEvent(
 
   state.run = run;
   state.invocations.set(invocation.invocationId, invocation);
-  state.attempts.set(
-    attemptMapKey(attempt.invocationId, attempt.attemptId),
-    attempt,
-  );
+  if (attempt) {
+    state.attempts.set(
+      attemptMapKey(attempt.invocationId, attempt.attemptId),
+      attempt,
+    );
+  }
 }
 
 /**
@@ -2066,9 +2373,9 @@ async function readRunRecords(db, tableName, runId) {
   return await db.query({
     tableName,
     consistentRead: true,
-    // A custom V3 table may deliberately retain V2 or lifecycle rows in the
-    // same physical partition. Only the fresh V3 record namespace participates
-    // in replay; no old history is accidentally treated as a malformed V3 run.
+    // A custom V4 table may deliberately retain older or lifecycle rows in the
+    // same physical partition. Only the fresh V4 record namespace participates
+    // in replay; no old history is accidentally treated as a malformed V4 run.
     keyConditions: [
       pkEq(KEY_NAME, runId),
       skBegins(SORT_KEY_NAME, EXECUTION_LEDGER_SORT_KEY_PREFIX),
@@ -2379,6 +2686,54 @@ function transitionResult(state, attempt, receipt, applied) {
 }
 
 /**
+ * Return the retained physical attempt for an invocation's current generation.
+ * Generation zero is the only state with no attempt. Any other missing or
+ * duplicate generation is corrupt history rather than a cancellable gap.
+ * @param {Record<string, any>} state - Verified folded ledger state.
+ * @param {Record<string, any>} invocation - Current invocation projection.
+ * @param {string} runId - Durable run identity.
+ * @returns {Record<string, any> | undefined} - Current generation attempt.
+ */
+function getCurrentGenerationAttempt(state, invocation, runId) {
+  if (invocation.generation === 0) return undefined;
+  const attempts = [...state.attempts.values()].filter(
+    (attempt) =>
+      attempt.invocationId === invocation.invocationId &&
+      attempt.generation === invocation.generation,
+  );
+  if (attempts.length !== 1) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'current invocation generation attempt count',
+    );
+  }
+  return attempts[0];
+}
+
+/**
+ * @param {Record<string, any>} state - Verified folded ledger state.
+ * @param {Record<string, any>} invocation - Current invocation projection.
+ * @param {Record<string, any> | undefined} attempt - Current generation attempt.
+ * @param {'terminal-authoritative'|'outcome-uncertain'} outcome - Explicit no-mutation result.
+ * @returns {{applied: false, outcome: 'terminal-authoritative'|'outcome-uncertain', run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} - Current no-mutation state.
+ */
+function cancellationNoMutationResult(state, invocation, attempt, outcome) {
+  const result = {
+    applied: /** @type {const} */ (false),
+    outcome,
+    run: cloneJsonObject(state.run, 'run result'),
+    invocation: cloneJsonObject(invocation, 'invocation result'),
+  };
+  if (attempt) {
+    /** @type {Record<string, any>} */ (result).attempt = cloneJsonObject(
+      attempt,
+      'attempt result',
+    );
+  }
+  return result;
+}
+
+/**
  * Attach the exact host start frame to a successfully persisted STARTED
  * transition. This deliberately happens only after the durable transition is
  * readable again, so callers cannot accidentally dispatch an attempt from a
@@ -2425,7 +2780,7 @@ async function startedTransitionResult(result, runId, payloadStore) {
  */
 function createTransitionRequestDigest(type, value) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-transition:v3',
+    domain: 'wharfie:execution-ledger-transition:v4',
     prefix: 'wlt',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -2583,13 +2938,48 @@ function statusesForTerminal(terminal) {
 
 /**
  * @param {Record<string, any>} terminal - Validated Activity Protocol terminal.
+ * @param {Record<string, any>} evidence - Fully verified attempt evidence.
+ * @param {Record<string, any> | undefined} cancellationRequest - Prior durable cancellation authority.
  * @param {string} label - Human-readable boundary label.
  * @returns {void}
  */
-function assertSupportedManualTerminal(terminal, label) {
+function assertSupportedManualTerminal(
+  terminal,
+  evidence,
+  cancellationRequest,
+  label,
+) {
   if (!SUPPORTED_MANUAL_TERMINAL_TYPES.has(terminal.type)) {
     throw new TypeError(
-      `${label}.type '${terminal.type}' requires a durable cancellation or deadline decision that this ledger slice does not implement.`,
+      `${label}.type '${terminal.type}' requires a durable decision that this ledger slice does not implement.`,
+    );
+  }
+  const cancelFrames = evidence.frames.filter(
+    (/** @type {Record<string, any>} */ frame) => frame.type === 'cancel',
+  );
+  const hasAuthorizedCancelFrame =
+    cancelFrames.length === 1 &&
+    cancellationRequest &&
+    cancelFrames[0].attemptId === terminal.attemptId &&
+    hasSameCanonicalJson(cancelFrames[0].reason, cancellationRequest.reason);
+  if (cancelFrames.length > 0 && !hasAuthorizedCancelFrame) {
+    throw new TypeError(
+      `${label} contains a host cancel frame without the exact prior durable cancellation request authority.`,
+    );
+  }
+  if (
+    terminal.type === 'protocol-failed' &&
+    cancellationRequest &&
+    cancelFrames.length > 0
+  ) {
+    throw new TypeError(
+      `${label}.type 'protocol-failed' after cancellation does not prove that the begun handler stopped.`,
+    );
+  }
+  if (terminal.type !== 'cancelled') return;
+  if (!hasAuthorizedCancelFrame) {
+    throw new TypeError(
+      `${label}.type 'cancelled' requires a prior durable cancellation request with the exact accepted host cancel reason.`,
     );
   }
 }
@@ -2753,7 +3143,7 @@ function validateLedgerAttemptEvidence(value, expectedStart, label) {
  */
 function createAttemptId(runId, invocationId, generation) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-attempt:v3',
+    domain: 'wharfie:execution-ledger-attempt:v4',
     prefix: 'wla',
     value: { runId, invocationId, generation },
     valuePath: 'execution ledger attempt identity',
@@ -3337,6 +3727,383 @@ export function createExecutionLedger({
   }
 
   /**
+   * Persist the one first-wins cancellation request for a manual run. Work
+   * that has not crossed STARTED becomes durably cancelled immediately. A
+   * begun attempt retains RUNNING state until its full protocol evidence wins
+   * a later terminal race; already uncertain work remains a reconciliation
+   * concern and is never relabelled by this API.
+   * @param {{runId: string, invocationId: string, expectedVersion: number, expectedGeneration: number, transitionId: string, requestId: string, reason: {code: string, name: string, message: string, details: Record<string, any>}, attemptId?: string, fencingToken?: string, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Durable cancellation request.
+   * @returns {Promise<ManualCancellationResult>} - Accepted request or explicit authoritative no-mutation state.
+   */
+  async function requestManualRunCancellation(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+      'requestManualRunCancellation',
+    );
+    const common = normalizeTransitionOptions(
+      value,
+      [
+        'runId',
+        'invocationId',
+        'expectedVersion',
+        'expectedGeneration',
+        'transitionId',
+        'requestId',
+        'reason',
+        'attemptId',
+        'fencingToken',
+        'actor',
+        'coordinatorEpoch',
+        'observedAt',
+      ],
+      'requestManualRunCancellation',
+      now,
+    );
+    const invocationId = assertOpaqueId(
+      value.invocationId,
+      'requestManualRunCancellation.invocationId',
+    );
+    const expectedGeneration = assertNonnegativeSafeInteger(
+      value.expectedGeneration,
+      'requestManualRunCancellation.expectedGeneration',
+    );
+    // `transitionId` addresses the immutable receipt/event namespace, while
+    // `requestId` is the stable caller-facing cancellation identity. Keeping
+    // both explicit prevents an external retry key from colliding with a
+    // lifecycle receipt such as `create`, while preserving that retry key in
+    // the durable cancellation authority.
+    const requestId = assertOpaqueId(
+      value.requestId,
+      'requestManualRunCancellation.requestId',
+    );
+    const reason = normalizeCancellationReason(
+      value.reason,
+      'requestManualRunCancellation.reason',
+    );
+    const hasAttemptId = Object.prototype.hasOwnProperty.call(
+      value,
+      'attemptId',
+    );
+    const hasFencingToken = Object.prototype.hasOwnProperty.call(
+      value,
+      'fencingToken',
+    );
+    if (hasAttemptId !== hasFencingToken) {
+      throw new TypeError(
+        'requestManualRunCancellation.attemptId and fencingToken must be supplied together.',
+      );
+    }
+    const requestedAttemptId = hasAttemptId
+      ? assertOpaqueId(
+          value.attemptId,
+          'requestManualRunCancellation.attemptId',
+        )
+      : undefined;
+    const requestedFencingToken = hasFencingToken
+      ? assertOpaqueId(
+          value.fencingToken,
+          'requestManualRunCancellation.fencingToken',
+        )
+      : undefined;
+
+    /**
+     * Classify durable states that make a new append unnecessary. This is
+     * used both before the optimistic write and after a conditional loss so a
+     * terminal or uncertainty transition that wins the race remains the
+     * explicit authority instead of surfacing as an undifferentiated conflict.
+     * @param {Record<string, any>} durableState - Fresh verified ledger state.
+     * @returns {Promise<{invocation: Record<string, any>, currentAttempt?: Record<string, any>, result?: ManualCancellationResult}>} - Current invocation plus any authoritative cancellation result.
+     */
+    async function classifyDurableCancellation(durableState) {
+      const durableInvocation = durableState.invocations.get(invocationId);
+      if (!durableInvocation) {
+        throw new ExecutionLedgerConflictError(
+          common.runId,
+          'manual invocation does not exist',
+        );
+      }
+      const durableAttempt = getCurrentGenerationAttempt(
+        durableState,
+        durableInvocation,
+        common.runId,
+      );
+      const retainedRequest = durableState.run.cancellationRequest;
+      if (retainedRequest) {
+        if (
+          !hasSameCanonicalJson(
+            durableInvocation.cancellationRequest,
+            retainedRequest,
+          ) ||
+          (durableAttempt &&
+            !hasSameCanonicalJson(
+              durableAttempt.cancellationRequest,
+              retainedRequest,
+            ))
+        ) {
+          throw new ExecutionLedgerProjectionError(
+            common.runId,
+            'retained cancellation request projection mismatch',
+          );
+        }
+        const retainedReceipt = await getTransitionReceipt(
+          db,
+          resolvedTableName,
+          common.runId,
+          retainedRequest.transitionId,
+        );
+        if (
+          !retainedReceipt ||
+          retainedReceipt.type !== 'manual-cancellation-requested'
+        ) {
+          throw new ExecutionLedgerProjectionError(
+            common.runId,
+            'retained cancellation request receipt missing',
+          );
+        }
+        if (common.transitionId === retainedRequest.transitionId) {
+          const replayedRequestDigest = createTransitionRequestDigest(
+            'manual-cancellation-requested',
+            {
+              runId: common.runId,
+              invocationId,
+              expectedGeneration,
+              expectedVersion: common.expectedVersion,
+              transitionId: common.transitionId,
+              requestId,
+              reason,
+              actor: common.actor,
+              coordinatorEpoch: common.coordinatorEpoch,
+              ...(requestedAttemptId !== undefined &&
+              requestedFencingToken !== undefined
+                ? {
+                    attemptId: requestedAttemptId,
+                    fencingToken: requestedFencingToken,
+                  }
+                : {}),
+            },
+          );
+          if (retainedReceipt.request_digest !== replayedRequestDigest) {
+            throw new ExecutionLedgerTransitionConflictError(
+              common.runId,
+              common.transitionId,
+            );
+          }
+        }
+        return {
+          invocation: durableInvocation,
+          ...(durableAttempt ? { currentAttempt: durableAttempt } : {}),
+          result: {
+            ...existingTransitionResult(durableState, retainedReceipt),
+            outcome: /** @type {const} */ ('cancellation-requested'),
+          },
+        };
+      }
+      if (
+        [RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED].includes(
+          durableState.run.status,
+        )
+      ) {
+        return {
+          invocation: durableInvocation,
+          ...(durableAttempt ? { currentAttempt: durableAttempt } : {}),
+          result: cancellationNoMutationResult(
+            durableState,
+            durableInvocation,
+            durableAttempt,
+            'terminal-authoritative',
+          ),
+        };
+      }
+      if (
+        durableState.run.status === RunStatus.BLOCKED &&
+        durableInvocation.status === InvocationStatus.UNCERTAIN &&
+        durableAttempt?.status === AttemptStatus.ABANDONED
+      ) {
+        return {
+          invocation: durableInvocation,
+          currentAttempt: durableAttempt,
+          result: cancellationNoMutationResult(
+            durableState,
+            durableInvocation,
+            durableAttempt,
+            'outcome-uncertain',
+          ),
+        };
+      }
+      return {
+        invocation: durableInvocation,
+        ...(durableAttempt ? { currentAttempt: durableAttempt } : {}),
+      };
+    }
+
+    const state = await readVerifiedRun(common.runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    const classified = await classifyDurableCancellation(state);
+    if (classified.result) return classified.result;
+    const invocation = classified.invocation;
+    const currentAttempt = classified.currentAttempt;
+    if (state.head.version !== common.expectedVersion) {
+      throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
+    }
+    if (invocation.generation !== expectedGeneration) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'stale invocation generation',
+      );
+    }
+    if (currentAttempt) {
+      if (
+        requestedAttemptId === undefined ||
+        requestedFencingToken === undefined ||
+        requestedAttemptId !== currentAttempt.attemptId
+      ) {
+        throw new ExecutionLedgerConflictError(
+          common.runId,
+          'current attempt identity is required',
+        );
+      }
+      assertCurrentAttemptFence(
+        currentAttempt,
+        {
+          coordinatorEpoch: common.coordinatorEpoch,
+          fencingToken: requestedFencingToken,
+          generation: expectedGeneration,
+        },
+        common.runId,
+      );
+    } else if (
+      requestedAttemptId !== undefined ||
+      requestedFencingToken !== undefined ||
+      common.coordinatorEpoch !== 0
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'cancellation supplied a stale attempt fence',
+      );
+    }
+
+    const isRunnable =
+      state.run.status === RunStatus.RUNNING &&
+      invocation.status === InvocationStatus.RUNNABLE &&
+      (!currentAttempt || currentAttempt.status === AttemptStatus.ABANDONED);
+    const isClaimed =
+      state.run.status === RunStatus.RUNNING &&
+      invocation.status === InvocationStatus.RUNNING &&
+      currentAttempt?.status === AttemptStatus.CLAIMED;
+    const isStarted =
+      state.run.status === RunStatus.RUNNING &&
+      invocation.status === InvocationStatus.RUNNING &&
+      currentAttempt?.status === AttemptStatus.STARTED;
+    if (!isRunnable && !isClaimed && !isStarted) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'manual invocation cannot accept cancellation in its current state',
+      );
+    }
+
+    const cancellationRequest = {
+      requestId,
+      transitionId: common.transitionId,
+      requestedAt: common.observedAt,
+      actor: common.actor,
+      reason,
+    };
+    const requestDigest = createTransitionRequestDigest(
+      'manual-cancellation-requested',
+      {
+        runId: common.runId,
+        invocationId,
+        expectedGeneration,
+        expectedVersion: common.expectedVersion,
+        transitionId: common.transitionId,
+        requestId,
+        reason,
+        actor: common.actor,
+        coordinatorEpoch: common.coordinatorEpoch,
+        ...(currentAttempt
+          ? {
+              attemptId: currentAttempt.attemptId,
+              fencingToken: currentAttempt.fencingToken,
+            }
+          : {}),
+      },
+    );
+    const sequence = state.head.sequence + 1;
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current run'),
+      status: isRunnable || isClaimed ? RunStatus.CANCELLED : RunStatus.RUNNING,
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+      cancellationRequest,
+    };
+    const nextInvocation = {
+      ...cloneJsonObject(invocation, 'current invocation'),
+      status:
+        isRunnable || isClaimed
+          ? InvocationStatus.CANCELLED
+          : InvocationStatus.RUNNING,
+      version: invocation.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+      cancellationRequest,
+    };
+    const nextAttempt = currentAttempt
+      ? {
+          ...cloneJsonObject(currentAttempt, 'current attempt'),
+          status: isClaimed ? AttemptStatus.CANCELLED : currentAttempt.status,
+          version: currentAttempt.version + 1,
+          lastSequence: sequence,
+          updatedAt: common.observedAt,
+          cancellationRequest,
+        }
+      : undefined;
+    const event = createEventRecord(
+      common.runId,
+      sequence,
+      common.transitionId,
+      requestDigest,
+      'manual-cancellation-requested',
+      common.observedAt,
+      common.actor,
+      {
+        coordinatorEpoch: common.coordinatorEpoch,
+        invocationGeneration: expectedGeneration,
+      },
+      {
+        run: nextRun,
+        invocation: nextInvocation,
+        ...(nextAttempt ? { attempt: nextAttempt } : {}),
+      },
+    );
+    let result;
+    try {
+      result = await appendOrReplay({
+        state,
+        runId: common.runId,
+        transitionId: common.transitionId,
+        requestDigest,
+        event,
+        nextRun,
+        nextInvocation,
+        ...(nextAttempt ? { nextAttempt, currentAttempt } : {}),
+      });
+    } catch (error) {
+      if (!(error instanceof ExecutionLedgerConflictError)) throw error;
+      const racedState = await readVerifiedRun(common.runId);
+      if (!racedState) throw error;
+      const raced = await classifyDurableCancellation(racedState);
+      if (raced.result) return raced.result;
+      throw error;
+    }
+    return {
+      ...result,
+      outcome: /** @type {const} */ ('cancellation-requested'),
+    };
+  }
+
+  /**
    * Claim the next physical generation of the manual invocation. The caller
    * supplies its future-facing fence now, even though this local slice has no
    * provider-backed coordinator lease yet.
@@ -3712,7 +4479,12 @@ export function createExecutionLedger({
         'commitVerifiedAttemptTerminal.evidence must end with a terminal for the exact persisted attempt.',
       );
     }
-    assertSupportedManualTerminal(terminal, 'commitVerifiedAttemptTerminal');
+    assertSupportedManualTerminal(
+      terminal,
+      evidence,
+      state.run.cancellationRequest,
+      'commitVerifiedAttemptTerminal',
+    );
     const terminalSummary = createTerminalSummary(terminal);
     const existingReceipt = await getTransitionReceipt(
       db,
@@ -4404,6 +5176,7 @@ export function createExecutionLedger({
     markAttemptStarted,
     markAttemptUncertain,
     rebuildRun,
+    requestManualRunCancellation,
   };
 }
 
@@ -4415,6 +5188,7 @@ export function createExecutionLedger({
  * @property {(...args: any[]) => Promise<any>} commitVerifiedAttemptTerminal - Commits validated terminal evidence.
  * @property {(...args: any[]) => Promise<any>} markAttemptUncertain - Blocks a begun ambiguous attempt.
  * @property {(...args: any[]) => Promise<any>} abandonUnstartedAttempt - Safely releases an unstarted claim.
+ * @property {(...args: any[]) => Promise<any>} requestManualRunCancellation - Persists the first cancellation request or returns authoritative terminal/uncertain state.
  * @property {(runId: string) => Promise<Record<string, any> | null>} getRun - Reads a verified run projection.
  * @property {(runId: string, invocationId: string) => Promise<Record<string, any> | null>} getInvocation - Reads a verified invocation projection.
  * @property {(runId: string, invocationId: string, attemptId: string) => Promise<Record<string, any> | null>} getAttempt - Reads a verified attempt projection.
