@@ -67,17 +67,24 @@ sibling is probed read-only, with an exact receipt becoming `COMPLETED` or
 applies all sibling dispositions and blocks the arbitrary stopped activity
 attempt. Unsupported, missing, or corrupt destination evidence leaves the whole
 set unchanged. Recovery never reruns application or adapter code. Broader effect
-reconciliation, real boundary-by-boundary process-crash coverage, and any wider
-exactly-once claim remain unfinished. Public run history/listing, scheduling,
-and release hardening still need focused review. The npm package remains
-deliberately private. It is not ready for production use.
+reconciliation and any wider exactly-once claim remain unfinished. Real child
+processes now exercise seven source/core durable-run `SIGKILL` boundaries and
+three mixed-set recovery boundaries. A relocated SEA with Node absent from
+`PATH` also proves packaged compound recovery across response-delivery loss and
+restart. That packaged proof is deliberately narrower than durable activity
+parity: the SEA can operate on a retained run but cannot yet originate the
+source `ops run` execution path. A shared packaged durable-run host and the full
+moved-SEA activity crash matrix remain work. Public run history/listing,
+scheduling, and release hardening still need focused review. The npm package
+remains deliberately private. It is not ready for production use.
 
 ## Start here
 
 - [Project charter](PROJECT.md) — the canonical problem, scope, public concepts, boundaries, and success test.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [V7 atomic effect-settlement checkpoint](llm/checkpoints/2026-07-18-v7-atomic-effect-settlement.md) — the current restart point after closing stopped-attempt sibling sets in one bounded transaction.
+- [Real-process managed-effect crash checkpoint](llm/checkpoints/2026-07-18-real-process-managed-effect-crash-matrix.md) — the current restart point after proving the source/core and compound-recovery `SIGKILL` matrices and the narrower packaged-operator response-loss boundary.
+- [V7 atomic effect-settlement checkpoint](llm/checkpoints/2026-07-18-v7-atomic-effect-settlement.md) — the preceding restart point after closing stopped-attempt sibling sets in one bounded transaction.
 - [Public effects and receipt-recovery checkpoint](llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md) — the preceding restart point after exposing finite application state and closing its first singular stopped-runner recovery window.
 - [July 2026 checkpoint](llm/checkpoints/2026-07-16-project-reset.md) — immutable historical evidence of the pre-reset state and conversation handoff.
 - [Packaging salvage checkpoint](llm/checkpoints/2026-07-16-packaging-salvage.md) — historical first implementation proof and the release blockers that existed before v1 deletion.
