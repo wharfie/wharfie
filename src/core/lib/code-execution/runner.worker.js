@@ -233,6 +233,7 @@ function createActivityAttemptHostTransport(value, id, auth) {
  * @property {boolean} preCancelled - Whether the host cancelled before the start frame was physically sent.
  * @property {boolean} cancelled - Whether the host sent its one cancellation frame.
  * @property {boolean} finished - Whether the wrapper settled.
+ * @property {boolean} effectsAvailable - Whether the host explicitly advertised a managed-effect handler.
  * @property {boolean} componentTerminal - Whether a terminal component frame was emitted.
  * @property {Map<number, {resolve: () => void, reject: (error: Error) => void, effectId?: string}>} componentAcks - Component frame delivery acknowledgements.
  * @property {Map<string, {request: Record<string, any>, claimed: boolean, settled: boolean, promise: Promise<unknown>, resolve: (value: unknown) => void, reject: (error: Error) => void}>} effectResults - Correlated host effect results.
@@ -613,6 +614,7 @@ async function openActivityAttempt(msg) {
       env,
       entrypointSymbol,
       transportAuth,
+      effectsAvailable,
     } = msg;
     transport = createActivityAttemptHostTransport(
       transportPort,
@@ -622,6 +624,11 @@ async function openActivityAttempt(msg) {
     if (typeof entrypointSymbol !== 'string' || entrypointSymbol.length === 0) {
       throw new TypeError(
         'Activity attempt requires a private entrypoint symbol.',
+      );
+    }
+    if (typeof effectsAvailable !== 'boolean') {
+      throw new TypeError(
+        'Activity attempt requires an explicit effectsAvailable boolean.',
       );
     }
     /** @type {ActivityAttemptRunnerSession} */
@@ -634,6 +641,7 @@ async function openActivityAttempt(msg) {
       preCancelled: false,
       cancelled: false,
       finished: false,
+      effectsAvailable,
       componentTerminal: false,
       componentAcks: new Map(),
       effectResults: new Map(),
@@ -722,8 +730,13 @@ function receiveActivityAttemptHostFrame(msg) {
             transport: {
               onComponentFrame: (/** @type {unknown} */ componentFrame) =>
                 deliverActivityAttemptComponentFrame(session, componentFrame),
-              handleEffect: (/** @type {Record<string, any>} */ request) =>
-                requestActivityAttemptEffect(session, request),
+              ...(session.effectsAvailable
+                ? {
+                    handleEffect: (
+                      /** @type {Record<string, any>} */ request,
+                    ) => requestActivityAttemptEffect(session, request),
+                  }
+                : {}),
               signal: session.controller.signal,
               forceTerminate: () =>
                 requestActivityAttemptForceTermination(session),

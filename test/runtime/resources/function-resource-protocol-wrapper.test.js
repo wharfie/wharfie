@@ -184,11 +184,6 @@ describe('FunctionResource Activity Protocol v1 bundle wrapper', () => {
         signal: new AbortController().signal,
       },
       {
-        onComponentFrame: () => {},
-        signal: new AbortController().signal,
-        forceTerminate: () => {},
-      },
-      {
         ...newTransport(),
         handler: () => 'caller-controlled-handler',
       },
@@ -236,9 +231,6 @@ describe('FunctionResource Activity Protocol v1 bundle wrapper', () => {
       transport: {
         onComponentFrame: (/** @type {Record<string, any>} */ frame) =>
           componentFrames.push(frame),
-        handleEffect: () => {
-          throw new Error('No effect expected.');
-        },
         signal: new AbortController().signal,
         forceTerminate: () => {
           forceTerminateCalls += 1;

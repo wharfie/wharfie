@@ -12,7 +12,9 @@ import {
   ACTIVITY_PROTOCOL_VERSION,
 } from '../../../src/core/runtime/activity-protocol.js';
 import worker from '../../../src/core/lib/code-execution/worker.js';
-import WharfieFunction from '../../../src/core/resources/builds/function.js';
+import WharfieFunction, {
+  ActivityAttemptEvidenceError,
+} from '../../../src/core/resources/builds/function.js';
 import FunctionResource from '../../../src/core/resources/builds/function-resource.js';
 
 /** @type {string[]} */
@@ -167,6 +169,79 @@ describe('Function managed-effect worker transport', () => {
       terminal: { result: { stored: { key: 'stored-42' } } },
       transcript: { pendingEffectIds: [], terminalType: 'completed' },
     });
+  });
+
+  it('returns ordinary failed evidence when the host has no managed-effect handler', async () => {
+    const activityId = `managed-effect-unavailable-${Date.now()}-${Math.floor(
+      Math.random() * 1e9,
+    )}`;
+    const bundle = await buildPreparedActivity(
+      activityId,
+      [
+        'export async function execute(_input, runtime) {',
+        '  await runtime.effects.request({',
+        "    effectId: 'unavailable-effect',",
+        "    capability: 'test-store',",
+        "    operation: 'put',",
+        '    input: { value: 42 },',
+        "    requestedReplayProperties: ['idempotent'],",
+        '  });',
+        '}',
+      ].join('\n'),
+    );
+
+    const evidence = await WharfieFunction.runPreparedActivityAttempt(
+      activityId,
+      bundle,
+      startFrame(activityId),
+    );
+
+    expect(evidence.status).toBe('failed');
+    expect(evidence.frames.map((frame) => frame.type)).toEqual([
+      'start',
+      'failed',
+    ]);
+    expect(evidence.terminal).toMatchObject({
+      type: 'failed',
+      sequence: 1,
+      error: {
+        name: 'ActivityEffectUnavailableError',
+        code: 'effect-handler-unavailable',
+        details: {},
+      },
+    });
+  });
+
+  it('rejects a forged effect frame when the host advertised no handler', async () => {
+    const activityId = `managed-effect-forged-unavailable-${Date.now()}-${Math.floor(
+      Math.random() * 1e9,
+    )}`;
+    const privateSymbol = getActivityAttemptProtocolSymbol(activityId);
+    const codeString = `
+      globalThis[Symbol.for(${JSON.stringify(privateSymbol)})] =
+        async ({ startFrame, transport }) => {
+          await transport.onComponentFrame({
+            protocol: 'wharfie.activity',
+            protocolVersion: 1,
+            type: 'effect-request',
+            attemptId: startFrame.attemptId,
+            sequence: 1,
+            effectId: 'forged-effect',
+            capability: 'test-store',
+            operation: 'put',
+            input: { value: 42 },
+            requestedReplayProperties: ['idempotent'],
+          });
+        };
+    `;
+
+    await expect(
+      WharfieFunction.runPreparedActivityAttempt(
+        activityId,
+        { codeString },
+        startFrame(activityId),
+      ),
+    ).rejects.toBeInstanceOf(ActivityAttemptEvidenceError);
   });
 
   it('allows a durable host effect to outlive the transport ACK timeout', async () => {

@@ -240,24 +240,28 @@ class FunctionResource extends BuildResource {
           )});
         }
         const transport = request.transport;
+        const hasEffectHandler =
+          transport !== null &&
+          typeof transport === 'object' &&
+          !Array.isArray(transport) &&
+          Object.prototype.hasOwnProperty.call(transport, 'handleEffect');
         if (
           transport === null ||
           typeof transport !== 'object' ||
           Array.isArray(transport) ||
           Object.getPrototypeOf(transport) !== Object.prototype ||
           !Object.prototype.hasOwnProperty.call(transport, 'onComponentFrame') ||
-          !Object.prototype.hasOwnProperty.call(transport, 'handleEffect') ||
           !Object.prototype.hasOwnProperty.call(transport, 'signal') ||
           !Object.prototype.hasOwnProperty.call(transport, 'forceTerminate') ||
-          Object.keys(transport).length !== 4
+          Object.keys(transport).length !== (hasEffectHandler ? 4 : 3)
         ) {
           throw new TypeError(${JSON.stringify(
-            `Activity '${functionName}' protocol wrapper requires a runner-owned transport with exactly { onComponentFrame, handleEffect, signal, forceTerminate }.`,
+            `Activity '${functionName}' protocol wrapper requires a runner-owned transport with exactly { onComponentFrame, signal, forceTerminate } and an optional own handleEffect.`,
           )});
         }
         if (
           typeof transport.onComponentFrame !== 'function' ||
-          typeof transport.handleEffect !== 'function' ||
+          (hasEffectHandler && typeof transport.handleEffect !== 'function') ||
           typeof transport.forceTerminate !== 'function' ||
           transport.signal === null ||
           typeof transport.signal !== 'object' ||
@@ -265,14 +269,14 @@ class FunctionResource extends BuildResource {
           typeof transport.signal.removeEventListener !== 'function'
         ) {
           throw new TypeError(${JSON.stringify(
-            `Activity '${functionName}' protocol wrapper requires transport.onComponentFrame, transport.handleEffect, and transport.forceTerminate functions plus an AbortSignal-like transport.signal.`,
+            `Activity '${functionName}' protocol wrapper requires transport.onComponentFrame and transport.forceTerminate functions, an optional handleEffect function, plus an AbortSignal-like transport.signal.`,
           )});
         }
         return runNodeActivityAttempt({
           startFrame: request.startFrame,
           handler: entrypoint,
           onComponentFrame: transport.onComponentFrame,
-          handleEffect: transport.handleEffect,
+          ...(hasEffectHandler ? { handleEffect: transport.handleEffect } : {}),
           signal: transport.signal,
           forceTerminate: transport.forceTerminate,
         });

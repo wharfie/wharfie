@@ -1757,6 +1757,7 @@ async function runActivityAttemptInSandbox(
             pkgFile: sb.pkgFile,
             env,
             entrypointSymbol,
+            effectsAvailable: pendingAttempt.handleEffect !== null,
             transportPort: port2,
             transportAuth,
           },
