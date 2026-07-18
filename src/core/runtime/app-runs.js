@@ -547,7 +547,7 @@ export function createManifestActivityFunction(options) {
  * Build and execute one external-bearing activity from its sealed source
  * snapshot and dependency lock. The bundle runs the private attempt wrapper;
  * no legacy context or resource RPC is assembled on this path.
- * @param {{ manifest: Record<string, any>, revision: import('./application-revision.js').ApplicationRevision, dependencyLock: { path: string, input: import('./application-revision.js').LockedInputDescriptor }, appDir: string, activityName: string, startFrame: Readonly<Record<string, any>>, signal?: AbortSignal }} options - Bound source attempt inputs.
+ * @param {{ manifest: Record<string, any>, revision: import('./application-revision.js').ApplicationRevision, dependencyLock: { path: string, input: import('./application-revision.js').LockedInputDescriptor }, appDir: string, activityName: string, startFrame: Readonly<Record<string, any>>, signal?: AbortSignal, handleEffect?: (request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown> }} options - Bound source attempt inputs.
  * @returns {Promise<Readonly<import('./activity-attempt.js').ActivityAttemptEvidence>>} - Revalidated physical attempt evidence.
  */
 async function invokePreparedSourceExternalActivity(options) {
@@ -640,7 +640,12 @@ async function invokePreparedSourceExternalActivity(options) {
     options.activityName,
     { codeString, externalsTar, externalArchiveDigest },
     options.startFrame,
-    options.signal === undefined ? {} : { signal: options.signal },
+    {
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.handleEffect === undefined
+        ? {}
+        : { handleEffect: options.handleEffect }),
+    },
   );
 }
 
@@ -709,6 +714,7 @@ function validateManifestActivityAttemptWithStartOptions(options) {
     'startFrame',
     'execution',
     'signal',
+    'handleEffect',
   ]);
   for (const key of Object.keys(options)) {
     if (!allowed.has(key)) {
@@ -729,6 +735,14 @@ function validateManifestActivityAttemptWithStartOptions(options) {
     options.signal,
     'invokeManifestActivityAttemptWithStart.signal',
   );
+  if (
+    options.handleEffect !== undefined &&
+    typeof options.handleEffect !== 'function'
+  ) {
+    throw new TypeError(
+      'invokeManifestActivityAttemptWithStart.handleEffect must be a function when provided.',
+    );
+  }
 }
 
 /**
@@ -790,7 +804,7 @@ function resolveManifestActivityAttemptExecution(execution) {
  * @param {{kind: 'prepared-source', source: ReturnType<typeof validatePreparedSourceExecution>} | {kind: 'embedded', embedded: ReturnType<typeof validateEmbeddedExecution>}} execution - Resolved execution identity.
  * @param {string} activityName - Declared activity ID.
  * @param {Readonly<Record<string, any>>} startFrame - Exact host-owned start frame.
- * @param {{signal?: AbortSignal}} [options] - Host-owned attempt controls.
+ * @param {{signal?: AbortSignal, handleEffect?: (request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown>}} [options] - Trusted host-owned attempt controls.
  * @returns {Promise<Readonly<import('./activity-attempt.js').ActivityAttemptEvidence>>} - Physical attempt evidence.
  */
 async function dispatchManifestActivityAttempt(
@@ -843,7 +857,7 @@ async function dispatchManifestActivityAttempt(
  * frame. This is the narrow scheduler seam: the frame must name the selected
  * revision and activity, but its run/invocation/attempt/fence identity is not
  * regenerated or otherwise changed by the runtime.
- * @param {{ activityName: string, startFrame: Record<string, any>, signal?: AbortSignal, execution: { kind: 'prepared-source', prepared: import('../../cli/app/compile-application-revision.js').PreparedApplicationRevision } | { kind: 'embedded', manifest: any, embeddedRevision: import('../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair } }} options - Durable invocation options.
+ * @param {{ activityName: string, startFrame: Record<string, any>, signal?: AbortSignal, handleEffect?: (request: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => unknown | Promise<unknown>, execution: { kind: 'prepared-source', prepared: import('../../cli/app/compile-application-revision.js').PreparedApplicationRevision } | { kind: 'embedded', manifest: any, embeddedRevision: import('../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair } }} options - Durable invocation options.
  * @returns {Promise<Readonly<import('./activity-attempt.js').ActivityAttemptEvidence>>} - Physical attempt evidence.
  */
 export async function invokeManifestActivityAttemptWithStart(options) {
@@ -862,7 +876,12 @@ export async function invokeManifestActivityAttemptWithStart(options) {
     execution,
     options.activityName,
     startFrame,
-    options.signal === undefined ? {} : { signal: options.signal },
+    {
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.handleEffect === undefined
+        ? {}
+        : { handleEffect: options.handleEffect }),
+    },
   );
 }
 

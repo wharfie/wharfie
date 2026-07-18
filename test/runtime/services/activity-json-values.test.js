@@ -395,15 +395,21 @@ describe('JSON activity values', () => {
     };
 
     const controller = new AbortController();
+    const handleEffect = () => {
+      throw new Error('Effect execution is not expected in this seam test.');
+    };
     const evidence = await invokeManifestActivityAttemptWithStart({
       activityName: 'echo',
       startFrame,
       execution,
       signal: controller.signal,
+      handleEffect,
     });
 
     expect(evidence.start).toEqual(startFrame);
-    expect(attemptOptions).toEqual([{ signal: controller.signal }]);
+    expect(attemptOptions).toEqual([
+      { signal: controller.signal, handleEffect },
+    ]);
     expect(invocationCalls).toHaveLength(1);
     expect(invocationCalls[0].runtime.invocation).toEqual({
       revisionId: startFrame.revisionId,
@@ -432,6 +438,72 @@ describe('JSON activity values', () => {
       }),
     ).rejects.toThrow(/must be an AbortSignal/i);
     expect(invocationCalls).toHaveLength(1);
+
+    await expect(
+      invokeManifestActivityAttemptWithStart({
+        activityName: 'echo',
+        startFrame,
+        execution,
+        handleEffect: /** @type {any} */ ({}),
+      }),
+    ).rejects.toThrow(/handleEffect must be a function/i);
+    expect(invocationCalls).toHaveLength(1);
+  });
+
+  it('forwards a trusted effect handler through the embedded packaged seam', async () => {
+    const { invokeManifestActivityAttemptWithStart } = await import(
+      APP_RUNS_IMPORT
+    );
+    const execution = embeddedExecution();
+    const startFrame = {
+      protocol: 'wharfie.activity',
+      protocolVersion: 1,
+      type: 'start',
+      revisionId: execution.embeddedRevision.revision.revisionId,
+      activityId: 'echo',
+      runId: 'embedded-run-1',
+      invocationId: 'embedded-invocation-1',
+      attemptId: 'embedded-attempt-1',
+      fencingToken: 'embedded-fence-1',
+      input: { packaged: true },
+      caller: { metadata: { source: 'scheduler' } },
+    };
+    const handleEffect = () => {
+      throw new Error('Effect execution is not expected in this seam test.');
+    };
+
+    const evidence = await invokeManifestActivityAttemptWithStart({
+      activityName: 'echo',
+      startFrame,
+      execution,
+      handleEffect,
+    });
+
+    expect(evidence.start).toEqual(startFrame);
+    expect(attemptOptions).toEqual([{ handleEffect }]);
+    expect(invocationCalls.map(({ mode }) => mode)).toEqual(['embedded']);
+  });
+
+  it('keeps ephemeral attempts on the effects-unavailable path', async () => {
+    const { invokeManifestActivityAttempt } = await import(APP_RUNS_IMPORT);
+    const execution = sourceExecution();
+
+    await invokeManifestActivityAttempt({
+      activityName: 'echo',
+      input: { ephemeral: true },
+      execution,
+    });
+
+    expect(attemptOptions).toEqual([{}]);
+    await expect(
+      invokeManifestActivityAttempt({
+        activityName: 'echo',
+        input: { ephemeral: true },
+        execution,
+        handleEffect: () => {},
+      }),
+    ).rejects.toThrow(/handleEffect is not supported/i);
+    expect(attemptOptions).toEqual([{}]);
   });
 
   it('does not accept a source outcome when the prepared revision changes while it runs', async () => {

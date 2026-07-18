@@ -53,8 +53,9 @@ const runPreparedActivityAttempt = jest.fn(
    * @param {string} _name
    * @param {any} _bundle
    * @param {any} startFrame
+   * @param {any} _options
    */
-  async (_name, _bundle, startFrame) => ({
+  async (_name, _bundle, startFrame, _options) => ({
     status: 'completed',
     terminal: {
       protocol: 'wharfie.activity',
@@ -90,9 +91,10 @@ class MockWharfieFunction {
    * @param {string} name
    * @param {any} bundle
    * @param {any} startFrame
+   * @param {any} options
    */
-  static async runPreparedActivityAttempt(name, bundle, startFrame) {
-    return await runPreparedActivityAttempt(name, bundle, startFrame);
+  static async runPreparedActivityAttempt(name, bundle, startFrame, options) {
+    return await runPreparedActivityAttempt(name, bundle, startFrame, options);
   }
 
   static async run() {
@@ -241,6 +243,57 @@ describe('revision-backed source externals', () => {
         input: { value: 1 },
         caller: { metadata: { trace: 'source' } },
       }),
+      {},
+    );
+  });
+
+  it('forwards durable effect controls through the prepared external seam', async () => {
+    const { invokeManifestActivityAttemptWithStart } = await import(
+      APP_RUNS_IMPORT
+    );
+    const manifest = makeManifest();
+    const revision = makeRevision(manifest);
+    const prepared = makePrepared(manifest, revision);
+    receiptDependencyLockInput = revision.inputs.dependencies;
+    const startFrame = {
+      protocol: 'wharfie.activity',
+      protocolVersion: 1,
+      type: 'start',
+      revisionId: revision.revisionId,
+      activityId: 'work',
+      runId: 'durable-run-1',
+      invocationId: 'durable-invocation-1',
+      attemptId: 'durable-attempt-1',
+      fencingToken: 'durable-fence-1',
+      input: { value: 1 },
+      caller: { metadata: { source: 'scheduler' } },
+    };
+    const controller = new AbortController();
+    const handleEffect = () => {
+      throw new Error('Effect execution is not expected in this seam test.');
+    };
+
+    await invokeManifestActivityAttemptWithStart({
+      activityName: 'work',
+      startFrame,
+      execution: { kind: 'prepared-source', prepared },
+      signal: controller.signal,
+      handleEffect,
+    });
+
+    expect(runPreparedActivityAttempt).toHaveBeenCalledWith(
+      'work',
+      expect.objectContaining({
+        codeString: 'prepared locked bundle',
+        externalsTar: externalArchive,
+        externalArchiveDigest: digest(externalArchive),
+      }),
+      expect.objectContaining({
+        revisionId: revision.revisionId,
+        activityId: 'work',
+        attemptId: 'durable-attempt-1',
+      }),
+      { signal: controller.signal, handleEffect },
     );
   });
 
