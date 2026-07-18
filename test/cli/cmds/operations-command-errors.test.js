@@ -2,6 +2,8 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { jest } from '@jest/globals';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -12,6 +14,8 @@ const { inspectCommand, recoverCommand, reconcileCommand, cancelCommand } =
   createExecutionLedgerOperatorCommands();
 
 const ORIGINAL_ENV = process.env;
+/** @type {string[]} */
+const temporaryDirectories = [];
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const helloWorldDir = path.join(
@@ -85,8 +89,16 @@ beforeEach(() => {
   delete process.env.WHARFIE_CONTROL_ADAPTER;
   delete process.env.WHARFIE_CONTROL_PATH;
   delete process.env.WHARFIE_DB_PATH;
+  delete process.env.WHARFIE_APPLICATION_STATE_ADAPTER;
+  delete process.env.WHARFIE_APPLICATION_STATE_PATH;
   delete process.env.AWS_REGION;
   process.exitCode = undefined;
+});
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    rmSync(directory, { force: true, recursive: true });
+  }
 });
 
 afterAll(() => {
@@ -168,6 +180,13 @@ describe.each([
 });
 
 test('wharfie ops run uses an isolated zero-config control store in tests', async () => {
+  const applicationStatePath = mkdtempSync(
+    path.join(tmpdir(), 'wharfie-ops-run-app-state-'),
+  );
+  temporaryDirectories.push(applicationStatePath);
+  process.env.WHARFIE_APPLICATION_STATE_ADAPTER = 'lmdb';
+  process.env.WHARFIE_APPLICATION_STATE_PATH = applicationStatePath;
+
   await expectCliSuccess(() =>
     runCommand.parseAsync(
       ['node', 'run', '--dir', helloWorldDir, '--activity', 'echo-event'],

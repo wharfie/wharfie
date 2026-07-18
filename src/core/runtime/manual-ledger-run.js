@@ -36,7 +36,11 @@ export const MANUAL_LEDGER_ACTIVE_ATTEMPT_CANCELLATION_PORT_VERSION = 1;
  */
 
 /**
- * @typedef {{outcome: 'cancellation-requested'|'terminal-authoritative'|'outcome-uncertain', applied: boolean, signalDelivered: boolean, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} ManualLedgerActiveAttemptCancellationResult
+ * @typedef {{outcome: 'cancellation-requested'|'terminal-authoritative'|'outcome-uncertain'|'attempt-not-current', applied: boolean, signalDelivered: boolean, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>}} ManualLedgerActiveAttemptCancellationResult
+ */
+
+/**
+ * @typedef {{attemptId: string, fencingToken: string, generation: number, coordinatorEpoch: number, status: 'CLAIMED'|'STARTED'}} ManualLedgerCancellationAttemptFence
  */
 
 /**
@@ -67,6 +71,19 @@ export const MANUAL_LEDGER_ACTIVE_ATTEMPT_CANCELLATION_PORT_VERSION = 1;
  * again before persistence. Omit this whole descriptor to use the fixed
  * local-owner command reason and the runner's actor.
  * @typedef {{actor?: {kind: string, id: string}, reason?: ManualLedgerOwnerCancellationReason}} ManualLedgerOwnerCancellation
+ */
+
+/**
+ * Stable identity available after this process has durably claimed a fresh
+ * physical attempt but before it crosses the durable STARTED boundary.
+ * @typedef {{runId: string, invocationId: string, attemptId: string, fencingToken: string, generation: number}} ManualLedgerAttemptDispatchContext
+ */
+
+/**
+ * Resources acquired specifically for one fresh physical dispatch. `release`
+ * is awaited only after durable outcome selection and local cancellation
+ * cleanup have both settled.
+ * @typedef {{executeAttempt: (startFrame: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => Promise<Readonly<Record<string, any>>>, release: () => void|Promise<void>}} ManualLedgerPreparedAttemptDispatch
  */
 
 /**
@@ -360,6 +377,46 @@ function assertOptionalActiveAttemptCancellationPortRegistrar(value) {
 }
 
 /**
+ * Require the acquisition hook to return one unambiguous executor/resource
+ * pair. Reflective own-key validation also rejects hidden and symbol fields,
+ * keeping the host-side capability surface deliberately closed.
+ * @param {unknown} value - Candidate prepared dispatch resources.
+ * @returns {ManualLedgerPreparedAttemptDispatch} - Exact executor and disposer pair.
+ */
+function normalizePreparedAttemptDispatch(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError(
+      'runManualLedgerActivity.prepareAttemptDispatch must return an object containing exactly executeAttempt and release.',
+    );
+  }
+  const prepared = /** @type {Record<string, unknown>} */ (value);
+  const keys = Reflect.ownKeys(prepared);
+  if (
+    keys.length !== 2 ||
+    !keys.includes('executeAttempt') ||
+    !keys.includes('release')
+  ) {
+    throw new TypeError(
+      'runManualLedgerActivity.prepareAttemptDispatch must return exactly executeAttempt and release.',
+    );
+  }
+  if (typeof prepared.executeAttempt !== 'function') {
+    throw new TypeError(
+      'runManualLedgerActivity.prepareAttemptDispatch.executeAttempt must be a function.',
+    );
+  }
+  if (typeof prepared.release !== 'function') {
+    throw new TypeError(
+      'runManualLedgerActivity.prepareAttemptDispatch.release must be a function.',
+    );
+  }
+  return /** @type {ManualLedgerPreparedAttemptDispatch} */ ({
+    executeAttempt: prepared.executeAttempt,
+    release: prepared.release,
+  });
+}
+
+/**
  * Normalize the process-local cancellation authority fixed at runner setup.
  * The narrow port intentionally accepts only request IDs, so a peer cannot
  * choose durable actor/reason fields by sending arbitrary command payloads.
@@ -448,6 +505,90 @@ function normalizeActiveAttemptCancellationPortRequest(value) {
 }
 
 /**
+ * Snapshot the exact physical attempt a cancellation caller is authorized to
+ * affect. Active status is part of the fence because operator recovery can
+ * revoke ownership by retaining the same identity as an ABANDONED attempt.
+ * @param {unknown} value - Candidate exact attempt fence.
+ * @returns {Readonly<ManualLedgerCancellationAttemptFence> | undefined} - Valid immutable fence.
+ */
+function normalizeCancellationAttemptFence(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('Cancellation expectedAttempt must be an object.');
+  }
+  const candidate = /** @type {Record<string, unknown>} */ (value);
+  const keys = Reflect.ownKeys(candidate);
+  const expectedKeys = [
+    'attemptId',
+    'fencingToken',
+    'generation',
+    'coordinatorEpoch',
+    'status',
+  ];
+  if (
+    keys.length !== expectedKeys.length ||
+    expectedKeys.some((key) => !keys.includes(key))
+  ) {
+    throw new TypeError(
+      'Cancellation expectedAttempt must contain exactly attemptId, fencingToken, generation, coordinatorEpoch, and status.',
+    );
+  }
+  if (
+    !Number.isSafeInteger(candidate.generation) ||
+    Number(candidate.generation) < 1
+  ) {
+    throw new TypeError(
+      'Cancellation expectedAttempt.generation must be a positive safe integer.',
+    );
+  }
+  if (
+    !Number.isSafeInteger(candidate.coordinatorEpoch) ||
+    Number(candidate.coordinatorEpoch) < 0
+  ) {
+    throw new TypeError(
+      'Cancellation expectedAttempt.coordinatorEpoch must be a non-negative safe integer.',
+    );
+  }
+  if (
+    candidate.status !== AttemptStatus.CLAIMED &&
+    candidate.status !== AttemptStatus.STARTED
+  ) {
+    throw new TypeError(
+      'Cancellation expectedAttempt.status must be CLAIMED or STARTED.',
+    );
+  }
+  return Object.freeze({
+    attemptId: assertLedgerOpaqueId(
+      candidate.attemptId,
+      'cancellation expectedAttempt.attemptId',
+    ),
+    fencingToken: assertLedgerOpaqueId(
+      candidate.fencingToken,
+      'cancellation expectedAttempt.fencingToken',
+    ),
+    generation: Number(candidate.generation),
+    coordinatorEpoch: Number(candidate.coordinatorEpoch),
+    status: candidate.status,
+  });
+}
+
+/**
+ * @param {Record<string, any>} attempt - Durable attempt projection.
+ * @returns {Readonly<ManualLedgerCancellationAttemptFence>} - Exact retry fence.
+ */
+function cancellationAttemptFence(attempt) {
+  return /** @type {Readonly<ManualLedgerCancellationAttemptFence>} */ (
+    normalizeCancellationAttemptFence({
+      attemptId: attempt.attemptId,
+      fencingToken: attempt.fencingToken,
+      generation: attempt.generation,
+      coordinatorEpoch: attempt.coordinatorEpoch,
+      status: attempt.status,
+    })
+  );
+}
+
+/**
  * @param {Record<string, any>} view - Verified rebuilt ledger view.
  * @param {Record<string, any>} invocation - Current invocation projection.
  * @returns {Record<string, any> | undefined} - Current generation attempt.
@@ -478,10 +619,13 @@ function outcomeFromCancellationResult(result, reused = false) {
  * so bounded retries rebind the same stable request ID to the new state. No
  * retry sends a physical signal; the caller does that only after this function
  * returns a durably verified request.
- * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, invocationId: string, transitionId: string, requestId: string, actor: Record<string, any>, reason: Record<string, any>}} options - Durable cancellation inputs.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, invocationId: string, transitionId: string, requestId: string, actor: Record<string, any>, reason: Record<string, any>, expectedAttempt?: ManualLedgerCancellationAttemptFence}} options - Durable cancellation inputs.
  * @returns {Promise<Record<string, any>>} - Accepted request or authoritative current state.
  */
 async function requestActiveOwnerCancellation(options) {
+  const expectedAttempt = normalizeCancellationAttemptFence(
+    options.expectedAttempt,
+  );
   /**
    * Recover an authoritative result after an optimistic conflict or a lost
    * write response. The verified projection is sufficient here: cancellation
@@ -518,6 +662,34 @@ async function requestActiveOwnerCancellation(options) {
     return null;
   };
 
+  /**
+   * Return the current projection without allowing a stale caller to rebind its
+   * cancellation identity to a successor generation.
+   * @param {{view: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>}} current - Fresh verified state.
+   * @returns {Record<string, any> | null} - Non-mutating stale result when fenced ownership was lost.
+   */
+  const staleAttemptResult = (current) => {
+    if (!expectedAttempt) return null;
+    const attempt = maybeCurrentAttempt(current.view, current.invocation);
+    if (
+      attempt &&
+      isSameAttempt(attempt, expectedAttempt) &&
+      attempt.coordinatorEpoch === expectedAttempt.coordinatorEpoch &&
+      attempt.status === expectedAttempt.status
+    ) {
+      return null;
+    }
+    return (
+      authoritativeResult(current) || {
+        outcome: 'attempt-not-current',
+        applied: false,
+        run: current.run,
+        invocation: current.invocation,
+        ...(attempt ? { attempt } : {}),
+      }
+    );
+  };
+
   /** @type {unknown} */
   let lastConflict;
   for (let retry = 0; retry < 4; retry += 1) {
@@ -526,6 +698,8 @@ async function requestActiveOwnerCancellation(options) {
       options.runId,
       options.invocationId,
     );
+    const staleCurrent = staleAttemptResult(current);
+    if (staleCurrent) return staleCurrent;
     const attempt = maybeCurrentAttempt(current.view, current.invocation);
     try {
       return await options.ledger.requestManualRunCancellation({
@@ -546,10 +720,28 @@ async function requestActiveOwnerCancellation(options) {
           : {}),
       });
     } catch (error) {
-      // A same-ID/different-payload request is an immutable transition
-      // conflict, not a lost response. Never turn it into a successful
-      // cancellation merely because some retained request happens to exist.
+      // A same-ID/different-payload request remains an immutable transition
+      // conflict while this caller still owns the expected active state. If
+      // recovery or a successor won concurrently, return that authoritative
+      // state without letting the stale caller affect it.
       if (error instanceof ExecutionLedgerTransitionConflictError) {
+        if (expectedAttempt) {
+          let durable;
+          try {
+            durable = await readCurrent(
+              options.ledger,
+              options.runId,
+              options.invocationId,
+            );
+          } catch (verificationError) {
+            throw new AggregateError(
+              [error, verificationError],
+              `Could not verify whether cancellation ownership was retained for ${options.runId}.`,
+            );
+          }
+          const staleDurable = staleAttemptResult(durable);
+          if (staleDurable) return staleDurable;
+        }
         throw error;
       }
       let durable;
@@ -569,6 +761,8 @@ async function requestActiveOwnerCancellation(options) {
           `Could not verify whether cancellation was persisted for ${options.runId}.`,
         );
       }
+      const staleDurable = staleAttemptResult(durable);
+      if (staleDurable) return staleDurable;
       const authoritative = authoritativeResult(durable);
       if (authoritative) return authoritative;
       if (!(error instanceof ExecutionLedgerConflictError)) throw error;
@@ -1031,7 +1225,7 @@ export async function reconcileManualLedgerActivity(options) {
  * append-only ledger. A normal repeat never steals a RUNNING attempt because
  * coordinator leases do not exist yet; recovery is a separate operator action
  * that never accepts or compiles current application source.
- * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, appId: string, revisionId: string, activityId: string, input?: any, callerMetadata?: Record<string, any>, actor?: {kind: string, id: string}, signal?: AbortSignal, ownerCancellation?: ManualLedgerOwnerCancellation, registerActiveAttemptCancellationPort?: ManualLedgerActiveAttemptCancellationPortRegistrar, createFencingToken?: () => string, executeAttempt: (startFrame: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => Promise<Readonly<Record<string, any>>>}} options - Bound manual activity execution.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, appId: string, revisionId: string, activityId: string, input?: any, callerMetadata?: Record<string, any>, actor?: {kind: string, id: string}, signal?: AbortSignal, ownerCancellation?: ManualLedgerOwnerCancellation, registerActiveAttemptCancellationPort?: ManualLedgerActiveAttemptCancellationPortRegistrar, createFencingToken?: () => string, executeAttempt?: (startFrame: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => Promise<Readonly<Record<string, any>>>, prepareAttemptDispatch?: (context: Readonly<ManualLedgerAttemptDispatchContext>) => ManualLedgerPreparedAttemptDispatch|Promise<ManualLedgerPreparedAttemptDispatch>}} options - Bound manual activity execution. Exactly one dispatch option is required.
  * @returns {Promise<ReturnType<typeof outcomeFromState>>} - Durable terminal, blocked, or in-progress result.
  */
 export async function runManualLedgerActivity(options) {
@@ -1041,8 +1235,26 @@ export async function runManualLedgerActivity(options) {
   if (!options.ledger) {
     throw new TypeError('runManualLedgerActivity requires ledger.');
   }
-  if (typeof options.executeAttempt !== 'function') {
-    throw new TypeError('runManualLedgerActivity requires executeAttempt.');
+  const executeAttemptProvided = options.executeAttempt !== undefined;
+  const prepareAttemptDispatchProvided =
+    options.prepareAttemptDispatch !== undefined;
+  if (executeAttemptProvided === prepareAttemptDispatchProvided) {
+    throw new TypeError(
+      'runManualLedgerActivity requires exactly one of executeAttempt or prepareAttemptDispatch.',
+    );
+  }
+  if (executeAttemptProvided && typeof options.executeAttempt !== 'function') {
+    throw new TypeError(
+      'runManualLedgerActivity.executeAttempt must be a function when provided.',
+    );
+  }
+  if (
+    prepareAttemptDispatchProvided &&
+    typeof options.prepareAttemptDispatch !== 'function'
+  ) {
+    throw new TypeError(
+      'runManualLedgerActivity.prepareAttemptDispatch must be a function when provided.',
+    );
   }
   if (Object.prototype.hasOwnProperty.call(options, 'recover')) {
     throw new TypeError(
@@ -1160,6 +1372,7 @@ export async function runManualLedgerActivity(options) {
     throw new Error(`Execution ledger claim has no attempt: ${runId}`);
   }
   const attempt = claim.attempt;
+  const claimedCancellationFence = cancellationAttemptFence(attempt);
   // Claim receipts are idempotency evidence, not a delivery lease. A replayed
   // claim may belong to a different process, and the post-write read may have
   // already observed recovery or a newer generation. Only the caller that
@@ -1188,6 +1401,7 @@ export async function runManualLedgerActivity(options) {
       transitionId: `cancel:${runId}`,
       requestId: `cancel:${runId}`,
       actor,
+      expectedAttempt: claimedCancellationFence,
       reason: serializeActivityAttemptError(
         options.signal.reason,
         'cancel-requested',
@@ -1198,6 +1412,11 @@ export async function runManualLedgerActivity(options) {
 
   /** @type {any} */
   let started;
+  /** @type {ManualLedgerPreparedAttemptDispatch['executeAttempt'] | undefined} */
+  let executeAttempt = options.executeAttempt;
+  /** @type {ManualLedgerPreparedAttemptDispatch['release'] | null} */
+  let releaseAttemptDispatch = null;
+  let dispatchFailurePhase = 'start-dispatch';
   /** @type {Map<string, Promise<ManualLedgerActiveAttemptCancellationResult>>} */
   const cancellationPromises = new Map();
   const deliveredCancellationRequestIds = new Set();
@@ -1209,7 +1428,123 @@ export async function runManualLedgerActivity(options) {
   /** @type {(() => void) | null} */
   let unregisterActiveAttemptCancellationPort = null;
   let activeAttemptCancellationPort = false;
+  /** @type {unknown} */
+  let runnerError;
+  let runnerFailed = false;
+
+  /**
+   * Finish every cleanup phase before reporting any of their failures. Keeping
+   * this outside the lifecycle `finally` also lets lint verify that the
+   * durable runner has no direct control-flow override there.
+   * @returns {Promise<void>} - Resolves when every cleanup succeeds.
+   */
+  const cleanupAttemptDispatch = async () => {
+    /** @type {unknown[]} */
+    const cleanupErrors = [];
+    activeAttemptCancellationPort = false;
+    const removeListener = /** @type {unknown} */ (removeCancellationListener);
+    try {
+      if (typeof removeListener === 'function') removeListener();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    const unregisterPort = /** @type {unknown} */ (
+      unregisterActiveAttemptCancellationPort
+    );
+    try {
+      if (typeof unregisterPort === 'function') unregisterPort();
+    } catch (error) {
+      // Marking the port inactive before calling its disposer keeps retained
+      // callbacks fail-closed even when host cleanup itself fails.
+      cleanupErrors.push(error);
+    }
+    if (cancellationPromises.size > 0) {
+      try {
+        await Promise.allSettled([...cancellationPromises.values()]);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    const releaseDispatch = /** @type {unknown} */ (releaseAttemptDispatch);
+    if (typeof releaseDispatch === 'function') {
+      try {
+        await releaseDispatch();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+
+    if (cleanupErrors.length === 0) return;
+    if (runnerFailed) {
+      throw new AggregateError(
+        [runnerError, ...cleanupErrors],
+        'The manual activity runner and dispatch cleanup both failed.',
+      );
+    }
+    if (cleanupErrors.length === 1) throw cleanupErrors[0];
+    throw new AggregateError(
+      cleanupErrors,
+      'Multiple manual activity dispatch cleanup operations failed.',
+    );
+  };
+
   try {
+    if (options.prepareAttemptDispatch) {
+      dispatchFailurePhase = 'prepare-dispatch';
+      const candidate = await options.prepareAttemptDispatch(
+        Object.freeze({
+          runId,
+          invocationId,
+          attemptId: attempt.attemptId,
+          fencingToken: attempt.fencingToken,
+          generation: attempt.generation,
+        }),
+      );
+      // If acquisition returned a usable disposer alongside a malformed
+      // capability surface, still release what it acquired after the
+      // normal pre-start failure settlement.
+      if (
+        candidate &&
+        typeof candidate === 'object' &&
+        !Array.isArray(candidate) &&
+        typeof (/** @type {Record<string, unknown>} */ (candidate).release) ===
+          'function'
+      ) {
+        releaseAttemptDispatch = /** @type {() => void|Promise<void>} */ (
+          /** @type {Record<string, unknown>} */ (candidate).release
+        );
+      }
+      const prepared = normalizePreparedAttemptDispatch(candidate);
+      executeAttempt = prepared.executeAttempt;
+      releaseAttemptDispatch = prepared.release;
+      dispatchFailurePhase = 'start-dispatch';
+    }
+    if (!executeAttempt) {
+      throw new Error(
+        'runManualLedgerActivity has no executor after dispatch preparation.',
+      );
+    }
+
+    // Preparation can perform asynchronous I/O. Honour a foreground abort
+    // which arrived while those resources were opening without crossing
+    // the durable STARTED boundary or invoking the physical executor.
+    if (options.signal?.aborted) {
+      const cancellation = await requestActiveOwnerCancellation({
+        ledger,
+        runId,
+        invocationId,
+        transitionId: `cancel:${runId}`,
+        requestId: `cancel:${runId}`,
+        actor,
+        expectedAttempt: claimedCancellationFence,
+        reason: serializeActivityAttemptError(
+          options.signal.reason,
+          'cancel-requested',
+        ),
+      });
+      return outcomeFromCancellationResult(cancellation, !created.applied);
+    }
+
     started = await ledger.markAttemptStarted({
       runId,
       invocationId,
@@ -1235,6 +1570,9 @@ export async function runManualLedgerActivity(options) {
         ),
       });
     }
+    const startedCancellationFence = cancellationAttemptFence(started.attempt);
+
+    dispatchFailurePhase = 'runtime-dispatch';
 
     /**
      * Persist/re-read a single stable request before touching the physical
@@ -1263,6 +1601,7 @@ export async function runManualLedgerActivity(options) {
             requestId,
             actor: cancellation.actor,
             reason: cancellation.reason,
+            expectedAttempt: startedCancellationFence,
           }).then((result) => {
             let signalDelivered = false;
             if (
@@ -1353,7 +1692,9 @@ export async function runManualLedgerActivity(options) {
       const onCancellation = () => {
         beginForegroundCancellation();
       };
-      options.signal.addEventListener('abort', onCancellation, { once: true });
+      options.signal.addEventListener('abort', onCancellation, {
+        once: true,
+      });
       removeCancellationListener = () => {
         options.signal?.removeEventListener('abort', onCancellation);
       };
@@ -1372,7 +1713,7 @@ export async function runManualLedgerActivity(options) {
 
     let evidence;
     try {
-      evidence = await options.executeAttempt(started.startFrame, {
+      evidence = await executeAttempt(started.startFrame, {
         signal: attemptController.signal,
       });
     } catch (executionError) {
@@ -1463,32 +1804,54 @@ export async function runManualLedgerActivity(options) {
       ),
     });
   } catch (error) {
-    return await settleDispatchFailure({
-      ledger,
-      runId,
-      invocationId,
-      expectedAttempt: attempt,
-      transitionId: `uncertain:${attempt.attemptId}`,
-      actor,
-      phase: started ? 'runtime-dispatch' : 'start-dispatch',
-      error,
-    });
-  } finally {
-    activeAttemptCancellationPort = false;
-    removeCancellationListener?.();
-    try {
-      unregisterActiveAttemptCancellationPort?.();
-    } catch {
-      // A host disposer cannot change a durable terminal/uncertain outcome.
-      // Marking the port inactive before calling it keeps retained callbacks
-      // fail-closed even if host cleanup itself throws.
-    }
-    if (cancellationPromises.size > 0) {
+    let dispatchError = error;
+    if (
+      started === undefined &&
+      dispatchFailurePhase === 'prepare-dispatch' &&
+      options.signal?.aborted
+    ) {
       try {
-        await Promise.allSettled([...cancellationPromises.values()]);
-      } catch {}
+        const cancellation = await requestActiveOwnerCancellation({
+          ledger,
+          runId,
+          invocationId,
+          transitionId: `cancel:${runId}`,
+          requestId: `cancel:${runId}`,
+          actor,
+          expectedAttempt: claimedCancellationFence,
+          reason: serializeActivityAttemptError(
+            options.signal.reason,
+            'cancel-requested',
+          ),
+        });
+        return outcomeFromCancellationResult(cancellation, !created.applied);
+      } catch (cancellationError) {
+        dispatchError = new AggregateError(
+          [error, cancellationError],
+          'Attempt preparation and durable foreground cancellation both failed.',
+        );
+      }
     }
+    try {
+      return await settleDispatchFailure({
+        ledger,
+        runId,
+        invocationId,
+        expectedAttempt: attempt,
+        transitionId: `uncertain:${attempt.attemptId}`,
+        actor,
+        phase: dispatchFailurePhase,
+        error: dispatchError,
+      });
+    } catch (settlementError) {
+      runnerFailed = true;
+      runnerError = settlementError;
+    }
+  } finally {
+    await cleanupAttemptDispatch();
   }
+  if (runnerFailed) throw runnerError;
+  throw new Error('The manual activity runner produced no durable outcome.');
 }
 
 export default {

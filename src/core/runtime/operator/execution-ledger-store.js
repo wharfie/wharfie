@@ -42,7 +42,7 @@ export function resolveExecutionLedgerStoreConfiguration() {
  * Read-only mode is used by inspection and recovery preflight so exact missing
  * lookups cannot materialize a local control store.
  * @template T
- * @param {(ledger: ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, tableName: string, sessionPath: string, readOnly: boolean}) => Promise<T>} handler - Work to run against the ledger.
+ * @param {(ledger: ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string, sessionPath: string, readOnly: boolean}) => Promise<T>} handler - Work to run against the ledger.
  * @param {{readOnly?: boolean, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>}} [options] - Store access options.
  * @returns {Promise<T>} - Handler result.
  */
@@ -80,6 +80,7 @@ export async function withExecutionLedger(handler, options = {}) {
     return await handler(ledger, {
       db,
       adapterName: configuration.adapterName,
+      controlPath: configuration.controlPath,
       tableName: configuration.tableName,
       sessionPath: configuration.sessionPath,
       readOnly,
@@ -95,7 +96,7 @@ export async function withExecutionLedger(handler, options = {}) {
  * operator-confirmation contract until provider-backed coordinator ownership
  * exists; callers must not claim local exclusion for those adapters.
  * @template T
- * @param {{appId: string, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, tableName: string, sessionPath: string, readOnly: boolean}, handler: (localOwner?: Record<string, any>) => Promise<T>}} options - Ownership-scoped mutation.
+ * @param {{appId: string, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string, sessionPath: string, readOnly: boolean}, handler: (localOwner?: Record<string, any>) => Promise<T>}} options - Ownership-scoped mutation.
  * @returns {Promise<T>} - Handler result.
  */
 export async function withLocalLedgerServiceMutationOwnership(options) {

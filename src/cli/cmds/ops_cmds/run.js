@@ -9,6 +9,15 @@ import {
   withExecutionLedger,
   withLocalLedgerServiceMutationOwnership,
 } from '../../../core/runtime/operator/execution-ledger-store.js';
+import {
+  assertApplicationStateStoreIsolation,
+  openApplicationStateDB,
+  resolveApplicationStateStoreConfiguration,
+} from '../../../core/runtime/application-state-store.js';
+import {
+  createBuiltinManagedEffectCatalog,
+  createBuiltinManagedEffectHandler,
+} from '../../../core/runtime/effects/builtin-catalog.js';
 import { createLedgerServiceOwnership } from '../../../core/lib/db/tables/ledger-service-lifecycle.js';
 import { EXECUTION_LEDGER_CANCEL_OWNER_COMMAND } from '../../../core/runtime/operator/execution-ledger-operator.js';
 import { createLocalOwnerCommandServer } from '../../../core/runtime/operator/local-owner-command.js';
@@ -248,6 +257,76 @@ const runCommand = new Command('run')
                 appId,
                 context,
                 handler: async (localOwner) => {
+                  const prepareAttemptDispatch = async () => {
+                    const applicationStateConfiguration =
+                      resolveApplicationStateStoreConfiguration();
+                    if (applicationStateConfiguration.adapterName !== 'lmdb') {
+                      throw new Error(
+                        'ops run requires the LMDB application-state adapter.',
+                      );
+                    }
+                    assertApplicationStateStoreIsolation(
+                      applicationStateConfiguration,
+                      context,
+                    );
+                    const applicationState = await openApplicationStateDB({
+                      configuration: applicationStateConfiguration,
+                    });
+                    try {
+                      // Recheck after opening so a prospective path that became
+                      // an alias between configuration and acquisition cannot
+                      // cross the durable STARTED boundary.
+                      assertApplicationStateStoreIsolation(
+                        applicationState.context,
+                        context,
+                      );
+                      return {
+                        executeAttempt: async (
+                          /** @type {Readonly<Record<string, any>>} */ startFrame,
+                          /** @type {{signal: AbortSignal}} */ { signal },
+                        ) => {
+                          // Store identity is application data. Initialize the
+                          // catalog only after this exact attempt wins durable
+                          // dispatch authorization, never while merely
+                          // preparing a claim that may be cancelled/recovered.
+                          const catalog =
+                            await createBuiltinManagedEffectCatalog({
+                              db: applicationState.db,
+                              appId,
+                              adapterName: applicationState.context.adapterName,
+                              tableName: applicationState.context.tableName,
+                            });
+                          return await invokeManifestActivityAttemptWithStart({
+                            activityName,
+                            startFrame,
+                            signal,
+                            handleEffect: createBuiltinManagedEffectHandler({
+                              ledger,
+                              runId,
+                              invocationId: startFrame.invocationId,
+                              catalog,
+                            }),
+                            execution: {
+                              kind: 'prepared-source',
+                              prepared: preparedRevision,
+                            },
+                          });
+                        },
+                        release: applicationState.close,
+                      };
+                    } catch (error) {
+                      try {
+                        await applicationState.close();
+                      } catch (closeError) {
+                        throw new AggregateError(
+                          [error, closeError],
+                          'Application-state dispatch preparation and cleanup both failed.',
+                        );
+                      }
+                      throw error;
+                    }
+                  };
+
                   /**
                    * The manual runner is still usable with adapters that do
                    * not implement local ownership. Only an LMDB-held owner
@@ -264,16 +343,7 @@ const runCommand = new Command('run')
                       input,
                       callerMetadata,
                       signal: cancellation.signal,
-                      executeAttempt: async (startFrame, { signal }) =>
-                        await invokeManifestActivityAttemptWithStart({
-                          activityName,
-                          startFrame,
-                          signal,
-                          execution: {
-                            kind: 'prepared-source',
-                            prepared: preparedRevision,
-                          },
-                        }),
+                      prepareAttemptDispatch,
                     });
                   }
 
@@ -340,16 +410,7 @@ const runCommand = new Command('run')
                           }
                         };
                       },
-                      executeAttempt: async (startFrame, { signal }) =>
-                        await invokeManifestActivityAttemptWithStart({
-                          activityName,
-                          startFrame,
-                          signal,
-                          execution: {
-                            kind: 'prepared-source',
-                            prepared: preparedRevision,
-                          },
-                        }),
+                      prepareAttemptDispatch,
                     });
                   } finally {
                     // The command endpoint must disappear before the durable

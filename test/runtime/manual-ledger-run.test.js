@@ -161,6 +161,18 @@ async function waitForAbort(signal) {
 }
 
 /**
+ * @returns {{promise: Promise<void>, resolve: () => void}} - Externally resolvable test gate.
+ */
+function createDeferred() {
+  /** @type {() => void} */
+  let release = () => {};
+  const promise = new Promise((resolve) => {
+    release = () => resolve(undefined);
+  });
+  return { promise, resolve: release };
+}
+
+/**
  * @returns {Error} - Structured foreground cancellation reason.
  */
 function foregroundCancellationReason() {
@@ -314,6 +326,801 @@ describe('manual ledger activity runner', () => {
         'attempt-started',
         'attempt-terminal',
       ]);
+    });
+  });
+
+  it('prepares only after a fresh claim and awaits release after the durable terminal', async () => {
+    await withLedger(async (ledger) => {
+      /** @type {string[]} */
+      const order = [];
+      const entered = createDeferred();
+      const gated = createDeferred();
+      const observingLedger = {
+        ...ledger,
+        markAttemptStarted: async (
+          /** @type {Parameters<typeof ledger.markAttemptStarted>[0]} */ options,
+        ) => {
+          order.push('start');
+          return await ledger.markAttemptStarted(options);
+        },
+        commitVerifiedAttemptTerminal: async (
+          /** @type {Parameters<typeof ledger.commitVerifiedAttemptTerminal>[0]} */ options,
+        ) => {
+          order.push('terminal');
+          return await ledger.commitVerifiedAttemptTerminal(options);
+        },
+      };
+
+      const options = runOptions(observingLedger, {
+        executeAttempt: undefined,
+        prepareAttemptDispatch: async (
+          /** @type {Readonly<{runId: string, invocationId: string, attemptId: string, fencingToken: string, generation: number}>} */ context,
+        ) => {
+          order.push('prepare');
+          expect(Object.isFrozen(context)).toBe(true);
+          expect(context).toEqual({
+            runId: expect.stringMatching(/^wlm_/),
+            invocationId: MANUAL_LEDGER_INVOCATION_ID,
+            attemptId: expect.any(String),
+            fencingToken: 'local-test-fence',
+            generation: 1,
+          });
+          const claimed = await ledger.rebuildRun(context.runId);
+          expect(claimed?.attempts).toEqual([
+            expect.objectContaining({
+              attemptId: context.attemptId,
+              status: AttemptStatus.CLAIMED,
+            }),
+          ]);
+          return {
+            executeAttempt: async (
+              /** @type {Readonly<Record<string, any>>} */ startFrame,
+            ) => {
+              order.push('execute');
+              const started = await ledger.rebuildRun(context.runId);
+              expect(started?.attempts).toEqual([
+                expect.objectContaining({ status: AttemptStatus.STARTED }),
+              ]);
+              return completedEvidence(startFrame);
+            },
+            release: async () => {
+              order.push('release-entered');
+              const terminal = await ledger.rebuildRun(context.runId);
+              expect(terminal?.run.status).toBe(RunStatus.COMPLETED);
+              entered.resolve();
+              await gated.promise;
+              order.push('release-finished');
+            },
+          };
+        },
+      });
+      let settled = false;
+      const resultPromise = runManualLedgerActivity(options);
+      resultPromise.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+
+      await entered.promise;
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(order).toEqual([
+        'prepare',
+        'start',
+        'execute',
+        'terminal',
+        'release-entered',
+      ]);
+      gated.resolve();
+
+      await expect(resultPromise).resolves.toMatchObject({
+        disposition: 'completed',
+        attempt: { status: AttemptStatus.COMPLETED },
+      });
+      expect(order).toEqual([
+        'prepare',
+        'start',
+        'execute',
+        'terminal',
+        'release-entered',
+        'release-finished',
+      ]);
+    });
+  });
+
+  it('cancels and releases a fresh claim when the signal aborts during preparation', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      const entered = createDeferred();
+      const continuePreparation = createDeferred();
+      let executions = 0;
+      let releases = 0;
+      const options = runOptions(ledger, {
+        executeAttempt: undefined,
+        signal: controller.signal,
+        prepareAttemptDispatch: async (
+          /** @type {Readonly<{runId: string}>} */ context,
+        ) => {
+          entered.resolve();
+          await continuePreparation.promise;
+          return {
+            executeAttempt: async () => {
+              executions += 1;
+              throw new Error('cancelled preparation must not dispatch');
+            },
+            release: async () => {
+              releases += 1;
+              const view = await ledger.rebuildRun(context.runId);
+              expect(view).toMatchObject({
+                run: { status: RunStatus.CANCELLED },
+                invocations: [{ status: InvocationStatus.CANCELLED }],
+                attempts: [{ status: AttemptStatus.CANCELLED }],
+              });
+            },
+          };
+        },
+      });
+      const resultPromise = runManualLedgerActivity(options);
+
+      await entered.promise;
+      const claimed = await ledger.rebuildRun(options.runId);
+      expect(claimed?.attempts).toEqual([
+        expect.objectContaining({ status: AttemptStatus.CLAIMED }),
+      ]);
+      controller.abort(foregroundCancellationReason());
+      continuePreparation.resolve();
+
+      await expect(resultPromise).resolves.toMatchObject({
+        disposition: 'failed',
+        run: { status: RunStatus.CANCELLED },
+        invocation: { status: InvocationStatus.CANCELLED },
+        attempt: { status: AttemptStatus.CANCELLED },
+      });
+      expect(executions).toBe(0);
+      expect(releases).toBe(1);
+      expect(
+        (await ledger.getEvents(options.runId)).map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual([
+        'manual-run-created',
+        'attempt-claimed',
+        'manual-cancellation-requested',
+      ]);
+    });
+  });
+
+  it('does not let a stale preparation abort cancel a recovered successor generation', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      const entered = createDeferred();
+      const continuePreparation = createDeferred();
+      let executions = 0;
+      let releases = 0;
+      const options = runOptions(ledger, {
+        executeAttempt: undefined,
+        signal: controller.signal,
+        prepareAttemptDispatch: async () => {
+          entered.resolve();
+          await continuePreparation.promise;
+          return {
+            executeAttempt: async () => {
+              executions += 1;
+              throw new Error('stale preparation must not dispatch');
+            },
+            release: async () => {
+              releases += 1;
+              const view = await ledger.rebuildRun(options.runId);
+              expect(view).toMatchObject({
+                run: { status: RunStatus.RUNNING },
+                invocations: [
+                  { status: InvocationStatus.RUNNING, generation: 2 },
+                ],
+                attempts: expect.arrayContaining([
+                  expect.objectContaining({
+                    status: AttemptStatus.CLAIMED,
+                    generation: 2,
+                    fencingToken: 'replacement-preparation-fence',
+                  }),
+                ]),
+              });
+              expect(view?.run.cancellationRequest).toBeUndefined();
+            },
+          };
+        },
+      });
+      const staleResultPromise = runManualLedgerActivity(options);
+
+      await entered.promise;
+      const recovery = await recoverManualLedgerActivity({
+        ledger,
+        runId: options.runId,
+      });
+      expect(recovery).toMatchObject({
+        found: true,
+        mayExecute: true,
+        action: ManualLedgerRecoveryAction.RELEASED_UNSTARTED_CLAIM,
+        changed: true,
+      });
+      if (!recovery.outcome) throw new Error('Expected recovered run outcome');
+      const replacement = await ledger.claimInvocation({
+        runId: options.runId,
+        invocationId: MANUAL_LEDGER_INVOCATION_ID,
+        fencingToken: 'replacement-preparation-fence',
+        expectedGeneration: recovery.outcome.invocation.generation,
+        expectedVersion: recovery.outcome.run.version,
+        transitionId: 'replacement-claim:2',
+        actor: { kind: 'local', id: 'replacement' },
+        coordinatorEpoch: 0,
+      });
+      expect(replacement).toMatchObject({
+        applied: true,
+        attempt: {
+          status: AttemptStatus.CLAIMED,
+          generation: 2,
+          fencingToken: 'replacement-preparation-fence',
+        },
+      });
+
+      controller.abort(foregroundCancellationReason());
+      continuePreparation.resolve();
+
+      await expect(staleResultPromise).resolves.toMatchObject({
+        disposition: 'in-progress',
+        run: { status: RunStatus.RUNNING },
+        invocation: { status: InvocationStatus.RUNNING, generation: 2 },
+        attempt: {
+          status: AttemptStatus.CLAIMED,
+          generation: 2,
+          fencingToken: 'replacement-preparation-fence',
+        },
+      });
+      expect(executions).toBe(0);
+      expect(releases).toBe(1);
+      expect(
+        (await ledger.getEvents(options.runId)).map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual([
+        'manual-run-created',
+        'attempt-claimed',
+        'attempt-abandoned-before-start',
+        'attempt-claimed',
+      ]);
+    });
+  });
+
+  it('does not let a stale preparation abort cancel its recovered abandoned claim', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      const entered = createDeferred();
+      const continuePreparation = createDeferred();
+      let releases = 0;
+      const options = runOptions(ledger, {
+        executeAttempt: undefined,
+        signal: controller.signal,
+        prepareAttemptDispatch: async () => {
+          entered.resolve();
+          await continuePreparation.promise;
+          return {
+            executeAttempt: async () => {
+              throw new Error('recovered preparation must not dispatch');
+            },
+            release: () => {
+              releases += 1;
+            },
+          };
+        },
+      });
+      const staleResultPromise = runManualLedgerActivity(options);
+
+      await entered.promise;
+      await expect(
+        recoverManualLedgerActivity({ ledger, runId: options.runId }),
+      ).resolves.toMatchObject({
+        found: true,
+        mayExecute: true,
+        action: ManualLedgerRecoveryAction.RELEASED_UNSTARTED_CLAIM,
+        changed: true,
+      });
+      controller.abort(foregroundCancellationReason());
+      continuePreparation.resolve();
+
+      const staleResult = await staleResultPromise;
+      expect(staleResult).toMatchObject({
+        disposition: 'in-progress',
+        run: { status: RunStatus.RUNNING },
+        invocation: { status: InvocationStatus.RUNNABLE, generation: 1 },
+        attempt: { status: AttemptStatus.ABANDONED, generation: 1 },
+      });
+      expect(staleResult.run.cancellationRequest).toBeUndefined();
+      expect(releases).toBe(1);
+      expect(
+        (await ledger.getEvents(options.runId)).map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual([
+        'manual-run-created',
+        'attempt-claimed',
+        'attempt-abandoned-before-start',
+      ]);
+    });
+  });
+
+  it('keeps cancellation authoritative when preparation rejects after an abort', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      const entered = createDeferred();
+      const continuePreparation = createDeferred();
+      const preparationError = new Error('application store open failed');
+      const options = runOptions(ledger, {
+        executeAttempt: undefined,
+        signal: controller.signal,
+        prepareAttemptDispatch: async () => {
+          entered.resolve();
+          await continuePreparation.promise;
+          throw preparationError;
+        },
+      });
+      const resultPromise = runManualLedgerActivity(options);
+
+      await entered.promise;
+      controller.abort(foregroundCancellationReason());
+      continuePreparation.resolve();
+
+      await expect(resultPromise).resolves.toMatchObject({
+        disposition: 'failed',
+        run: { status: RunStatus.CANCELLED },
+        invocation: { status: InvocationStatus.CANCELLED },
+        attempt: { status: AttemptStatus.CANCELLED },
+      });
+      expect(
+        (await ledger.getEvents(options.runId)).map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual([
+        'manual-run-created',
+        'attempt-claimed',
+        'manual-cancellation-requested',
+      ]);
+    });
+  });
+
+  it('cancels malformed preparation after an abort and releases its salvaged disposer', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      const entered = createDeferred();
+      const continuePreparation = createDeferred();
+      let releases = 0;
+      const options = runOptions(ledger, {
+        executeAttempt: undefined,
+        signal: controller.signal,
+        prepareAttemptDispatch: async () => {
+          entered.resolve();
+          await continuePreparation.promise;
+          return {
+            executeAttempt: async () => {
+              throw new Error('malformed preparation must not dispatch');
+            },
+            release: async () => {
+              releases += 1;
+              expect(await ledger.rebuildRun(options.runId)).toMatchObject({
+                run: { status: RunStatus.CANCELLED },
+                invocations: [{ status: InvocationStatus.CANCELLED }],
+                attempts: [{ status: AttemptStatus.CANCELLED }],
+              });
+            },
+            extra: true,
+          };
+        },
+      });
+      const resultPromise = runManualLedgerActivity(options);
+
+      await entered.promise;
+      controller.abort(foregroundCancellationReason());
+      continuePreparation.resolve();
+
+      await expect(resultPromise).resolves.toMatchObject({
+        disposition: 'failed',
+        run: { status: RunStatus.CANCELLED },
+        attempt: { status: AttemptStatus.CANCELLED },
+      });
+      expect(releases).toBe(1);
+      expect(
+        (await ledger.getEvents(options.runId)).map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual([
+        'manual-run-created',
+        'attempt-claimed',
+        'manual-cancellation-requested',
+      ]);
+    });
+  });
+
+  it('preserves preparation and cancellation failures when abort persistence fails', async () => {
+    await withLedger(async (ledger) => {
+      const controller = new AbortController();
+      const entered = createDeferred();
+      const continuePreparation = createDeferred();
+      const preparationError = new Error('application store open failed');
+      const cancellationError = new Error('control store unavailable');
+      const failingLedger = {
+        ...ledger,
+        requestManualRunCancellation: async () => {
+          throw cancellationError;
+        },
+      };
+      const options = runOptions(failingLedger, {
+        executeAttempt: undefined,
+        signal: controller.signal,
+        prepareAttemptDispatch: async () => {
+          entered.resolve();
+          await continuePreparation.promise;
+          throw preparationError;
+        },
+      });
+      const resultPromise = runManualLedgerActivity(options);
+
+      await entered.promise;
+      controller.abort(foregroundCancellationReason());
+      continuePreparation.resolve();
+
+      /** @type {unknown} */
+      let reported;
+      try {
+        await resultPromise;
+      } catch (error) {
+        reported = error;
+      }
+      expect(reported).toBeInstanceOf(AggregateError);
+      expect(/** @type {AggregateError} */ (reported).errors).toEqual([
+        preparationError,
+        cancellationError,
+      ]);
+      expect(await ledger.rebuildRun(options.runId)).toMatchObject({
+        run: { status: RunStatus.RUNNING },
+        invocations: [{ status: InvocationStatus.RUNNABLE }],
+        attempts: [{ status: AttemptStatus.ABANDONED }],
+      });
+    });
+  });
+
+  it('never prepares resources for retained terminal, running, or uncertain state', async () => {
+    await withLedger(async (ledger) => {
+      let preparations = 0;
+      const retainedDispatch = {
+        executeAttempt: undefined,
+        prepareAttemptDispatch: async () => {
+          preparations += 1;
+          throw new Error('retained state must not acquire dispatch resources');
+        },
+      };
+
+      const terminalOptions = runOptions(ledger);
+      await runManualLedgerActivity(terminalOptions);
+      await expect(
+        runManualLedgerActivity({ ...terminalOptions, ...retainedDispatch }),
+      ).resolves.toMatchObject({
+        disposition: 'completed',
+        reused: true,
+      });
+
+      const uncertainOptions = runOptions(ledger, {
+        runId: createManualLedgerRunId({
+          appId: 'manual-demo',
+          idempotencyKey: 'operator-run-uncertain',
+        }),
+        executeAttempt: async () => {
+          throw new Error('physical outcome lost');
+        },
+      });
+      await runManualLedgerActivity(uncertainOptions);
+      await expect(
+        runManualLedgerActivity({ ...uncertainOptions, ...retainedDispatch }),
+      ).resolves.toMatchObject({ disposition: 'blocked', reused: true });
+
+      const runningOptions = runOptions(ledger, {
+        runId: createManualLedgerRunId({
+          appId: 'manual-demo',
+          idempotencyKey: 'operator-run-running',
+        }),
+      });
+      await ledger.createManualRun({
+        runId: runningOptions.runId,
+        appId: runningOptions.appId,
+        revisionId: runningOptions.revisionId,
+        invocationId: MANUAL_LEDGER_INVOCATION_ID,
+        activityId: runningOptions.activityId,
+        input: runningOptions.input,
+        callerMetadata: runningOptions.callerMetadata,
+        transitionId: 'create',
+        actor: { kind: 'local', id: 'cli' },
+        coordinatorEpoch: 0,
+      });
+      await ledger.claimInvocation({
+        runId: runningOptions.runId,
+        invocationId: MANUAL_LEDGER_INVOCATION_ID,
+        fencingToken: 'retained-running-fence',
+        expectedGeneration: 0,
+        expectedVersion: 1,
+        transitionId: 'claim:1',
+        actor: { kind: 'local', id: 'test' },
+      });
+      await expect(
+        runManualLedgerActivity({ ...runningOptions, ...retainedDispatch }),
+      ).resolves.toMatchObject({
+        disposition: 'in-progress',
+        attempt: { status: AttemptStatus.CLAIMED },
+      });
+
+      expect(preparations).toBe(0);
+    });
+  });
+
+  it('abandons a failed preparation before start and allows a fresh retry', async () => {
+    await withLedger(async (ledger) => {
+      const options = runOptions(ledger, {
+        executeAttempt: undefined,
+        prepareAttemptDispatch: async () => {
+          throw new Error('application resources unavailable');
+        },
+      });
+      await expect(runManualLedgerActivity(options)).rejects.toThrow(
+        /application resources unavailable/i,
+      );
+
+      const failedView = await ledger.rebuildRun(options.runId);
+      expect(failedView).toMatchObject({
+        run: { status: RunStatus.RUNNING, version: 3 },
+        invocations: [{ status: InvocationStatus.RUNNABLE, generation: 1 }],
+        attempts: [{ status: AttemptStatus.ABANDONED, generation: 1 }],
+      });
+      expect(
+        failedView?.events.map(
+          (/** @type {Record<string, any>} */ event) => event.type,
+        ),
+      ).toEqual([
+        'manual-run-created',
+        'attempt-claimed',
+        'attempt-abandoned-before-start',
+      ]);
+
+      const retry = await runManualLedgerActivity({
+        ...options,
+        createFencingToken: () => 'local-retry-fence',
+        prepareAttemptDispatch: async () => ({
+          executeAttempt: async (startFrame) =>
+            completedEvidence(startFrame, { retried: true }),
+          release: () => {},
+        }),
+      });
+      expect(retry).toMatchObject({
+        disposition: 'completed',
+        invocation: { generation: 2 },
+        attempt: {
+          status: AttemptStatus.COMPLETED,
+          generation: 2,
+          fencingToken: 'local-retry-fence',
+        },
+      });
+    });
+  });
+
+  it('releases prepared resources after dispatch uncertainty and cancellation cleanup', async () => {
+    await withLedger(async (ledger) => {
+      /** @type {string[]} */
+      const order = [];
+      const options = runOptions(ledger, {
+        executeAttempt: undefined,
+        registerActiveAttemptCancellationPort: () => {
+          order.push('register');
+          return () => {
+            order.push('unregister');
+          };
+        },
+        prepareAttemptDispatch: async (
+          /** @type {Readonly<{runId: string}>} */ context,
+        ) => ({
+          executeAttempt: async () => {
+            order.push('execute');
+            throw new Error('worker transport failed');
+          },
+          release: async () => {
+            order.push('release');
+            const view = await ledger.rebuildRun(context.runId);
+            expect(view).toMatchObject({
+              run: { status: RunStatus.BLOCKED },
+              invocations: [{ status: InvocationStatus.UNCERTAIN }],
+              attempts: [{ status: AttemptStatus.ABANDONED }],
+            });
+          },
+        }),
+      });
+
+      await expect(runManualLedgerActivity(options)).resolves.toMatchObject({
+        disposition: 'blocked',
+        run: { status: RunStatus.BLOCKED },
+      });
+      expect(order).toEqual(['register', 'execute', 'unregister', 'release']);
+    });
+  });
+
+  it('finishes every cleanup and reports failures after a durable terminal', async () => {
+    await withLedger(async (ledger) => {
+      /** @type {string[]} */
+      const order = [];
+      const removeError = new Error('listener removal failed');
+      const unregisterError = new Error('port unregister failed');
+      const releaseError = new Error('dispatch release failed');
+      let releases = 0;
+      const signal = {
+        aborted: false,
+        addEventListener: () => {
+          order.push('listen');
+        },
+        removeEventListener: () => {
+          order.push('remove-listener');
+          throw removeError;
+        },
+      };
+      const options = runOptions(ledger, {
+        executeAttempt: undefined,
+        signal,
+        registerActiveAttemptCancellationPort: () => {
+          order.push('register');
+          return () => {
+            order.push('unregister');
+            throw unregisterError;
+          };
+        },
+        prepareAttemptDispatch: async () => ({
+          executeAttempt: async (
+            /** @type {Readonly<Record<string, any>>} */ startFrame,
+          ) => {
+            order.push('execute');
+            return completedEvidence(startFrame);
+          },
+          release: async () => {
+            releases += 1;
+            order.push('release');
+            throw releaseError;
+          },
+        }),
+      });
+
+      /** @type {unknown} */
+      let reported;
+      try {
+        await runManualLedgerActivity(options);
+      } catch (error) {
+        reported = error;
+      }
+      expect(reported).toBeInstanceOf(AggregateError);
+      expect(/** @type {AggregateError} */ (reported).errors).toEqual([
+        removeError,
+        unregisterError,
+        releaseError,
+      ]);
+      expect(order).toEqual([
+        'register',
+        'listen',
+        'execute',
+        'remove-listener',
+        'unregister',
+        'release',
+      ]);
+      expect(releases).toBe(1);
+      expect(await ledger.rebuildRun(options.runId)).toMatchObject({
+        run: { status: RunStatus.COMPLETED },
+        invocations: [{ status: InvocationStatus.COMPLETED }],
+        attempts: [{ status: AttemptStatus.COMPLETED }],
+      });
+
+      await expect(
+        runManualLedgerActivity(
+          runOptions(ledger, {
+            executeAttempt: async () => {
+              throw new Error('retained terminal must not dispatch');
+            },
+          }),
+        ),
+      ).resolves.toMatchObject({ disposition: 'completed', reused: true });
+      expect(releases).toBe(1);
+    });
+  });
+
+  it('rejects ambiguous dispatch options and exact-shape preparation violations', async () => {
+    await withLedger(async (ledger) => {
+      const both = runOptions(ledger, {
+        prepareAttemptDispatch: async () => ({
+          executeAttempt: async () => ({}),
+          release: () => {},
+        }),
+      });
+      await expect(runManualLedgerActivity(both)).rejects.toThrow(
+        /exactly one of executeAttempt or prepareAttemptDispatch/i,
+      );
+      const neither = runOptions(ledger, { executeAttempt: undefined });
+      await expect(runManualLedgerActivity(neither)).rejects.toThrow(
+        /exactly one of executeAttempt or prepareAttemptDispatch/i,
+      );
+      expect(await ledger.getEvents(both.runId)).toEqual([]);
+
+      let salvagedReleases = 0;
+      const salvagedReleaseError = new Error('salvaged release failed');
+      const malformed = runOptions(ledger, {
+        runId: createManualLedgerRunId({
+          appId: 'manual-demo',
+          idempotencyKey: 'invalid-preparation-extra-key',
+        }),
+        executeAttempt: undefined,
+        prepareAttemptDispatch: async () => ({
+          executeAttempt: async () => ({}),
+          release: () => {
+            salvagedReleases += 1;
+            throw salvagedReleaseError;
+          },
+          extra: true,
+        }),
+      });
+      /** @type {unknown} */
+      let malformedError;
+      try {
+        await runManualLedgerActivity(malformed);
+      } catch (error) {
+        malformedError = error;
+      }
+      expect(malformedError).toBeInstanceOf(AggregateError);
+      const malformedErrors = /** @type {AggregateError} */ (malformedError)
+        .errors;
+      expect(malformedErrors).toHaveLength(2);
+      expect(malformedErrors[0]).toBeInstanceOf(TypeError);
+      expect(/** @type {Error} */ (malformedErrors[0]).message).toMatch(
+        /prepareAttemptDispatch/i,
+      );
+      expect(malformedErrors[1]).toBe(salvagedReleaseError);
+      expect(salvagedReleases).toBe(1);
+      expect(await ledger.rebuildRun(malformed.runId)).toMatchObject({
+        run: { status: RunStatus.RUNNING },
+        invocations: [{ status: InvocationStatus.RUNNABLE }],
+        attempts: [{ status: AttemptStatus.ABANDONED }],
+      });
+
+      const invalidResults = [
+        null,
+        { executeAttempt: 'not-a-function', release: () => {} },
+        { executeAttempt: async () => ({}), release: 'not-a-function' },
+      ];
+      for (const [index, invalidResult] of invalidResults.entries()) {
+        const options = runOptions(ledger, {
+          runId: createManualLedgerRunId({
+            appId: 'manual-demo',
+            idempotencyKey: `invalid-preparation-${index}`,
+          }),
+          executeAttempt: undefined,
+          prepareAttemptDispatch: async () => invalidResult,
+        });
+        await expect(runManualLedgerActivity(options)).rejects.toThrow(
+          /prepareAttemptDispatch/i,
+        );
+        const view = await ledger.rebuildRun(options.runId);
+        expect(view).toMatchObject({
+          run: { status: RunStatus.RUNNING },
+          invocations: [{ status: InvocationStatus.RUNNABLE }],
+          attempts: [{ status: AttemptStatus.ABANDONED }],
+        });
+        expect(
+          view?.events.some(
+            (/** @type {Record<string, any>} */ event) =>
+              event.type === 'attempt-started',
+          ),
+        ).toBe(false);
+      }
     });
   });
 

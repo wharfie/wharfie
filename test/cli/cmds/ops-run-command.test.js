@@ -4,7 +4,7 @@
 import { describe, expect, it } from '@jest/globals';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -12,16 +12,25 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { compileApplicationRevision } from '../../../src/cli/app/compile-application-revision.js';
 import { loadApp } from '../../../src/cli/app/load-app.js';
 import createVanillaDB from '../../../src/core/lib/db/adapters/vanilla.js';
-import { resolveExecutionPayloadStoreId } from '../../../src/core/lib/config/db.js';
+import {
+  APPLICATION_STATE_TABLE_NAME,
+  resolveExecutionPayloadStoreId,
+} from '../../../src/core/lib/config/db.js';
 import {
   AttemptStatus,
+  EffectStatus,
   InvocationStatus,
   RunStatus,
   createExecutionLedger,
 } from '../../../src/core/lib/db/tables/execution-ledger.js';
 import createLMDB from '../../../src/core/lib/db/adapters/lmdb.js';
+import {
+  createApplicationStateBusinessKey,
+  createApplicationStateTable,
+} from '../../../src/core/lib/db/tables/application-state.js';
 import { createLedgerServiceOwnership } from '../../../src/core/lib/db/tables/ledger-service-lifecycle.js';
 import { createLocalExecutionPayloadStore } from '../../../src/core/lib/payload-store/local.js';
+import { APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS } from '../../../src/core/runtime/effects/application-state.js';
 import {
   MANUAL_LEDGER_INVOCATION_ID,
   createManualLedgerRunId,
@@ -176,6 +185,7 @@ describe('wharfie ops run', () => {
     const idempotencyKey = 'blocked-by-resident-service';
     const runId = createManualLedgerRunId({ appId, idempotencyKey });
     const sessionRoot = path.join(dbPath, 'ledger-service-sessions');
+    const applicationStatePath = path.join(dbPath, 'application-state');
     const ownerDb = createLMDB({ path: dbPath });
     const ownership = createLedgerServiceOwnership({
       db: ownerDb,
@@ -213,6 +223,8 @@ describe('wharfie ops run', () => {
             'execution-payloads',
           ),
           WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionRoot,
+          WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
+          WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
         },
       );
 
@@ -220,6 +232,7 @@ describe('wharfie ops run', () => {
       expect(result.stderr).toContain(
         'Local service session is already active',
       );
+      expect(existsSync(applicationStatePath)).toBe(false);
 
       await expect(
         createExecutionLedger({
@@ -234,6 +247,98 @@ describe('wharfie ops run', () => {
       rmSync(dbPath, { recursive: true, force: true });
     }
   }, 20000);
+
+  it('refuses to alias application state onto the execution-control root', () => {
+    const dbPath = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-ops-run-store-alias-'),
+    );
+    try {
+      const result = runCli(
+        [
+          'ops',
+          'run',
+          '--activity',
+          'echo-event',
+          '--idempotency-key',
+          'aliased-local-stores',
+          '--dir',
+          helloWorldDir,
+        ],
+        {
+          ...process.env,
+          NODE_ENV: 'development',
+          WHARFIE_ARTIFACT_BUCKET: 'service-bucket',
+          WHARFIE_CONTROL_ADAPTER: 'vanilla',
+          WHARFIE_CONTROL_PATH: dbPath,
+          WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(
+            dbPath,
+            'execution-payloads',
+          ),
+          WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
+          WHARFIE_APPLICATION_STATE_PATH: path.join(dbPath, 'child', '..'),
+        },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toMatch(/must use distinct local roots/i);
+      expect(existsSync(path.join(dbPath, 'lmdb'))).toBe(false);
+    } finally {
+      rmSync(dbPath, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['explicit', 'development'],
+    ['ambient test default', 'test'],
+  ])(
+    'rejects %s vanilla application state without materializing its root',
+    (selection, nodeEnv) => {
+      const dbPath = mkdtempSync(
+        path.join(os.tmpdir(), 'wharfie-ops-run-vanilla-app-state-'),
+      );
+      const applicationStatePath = path.join(dbPath, 'application-state');
+      try {
+        /** @type {Record<string, string | undefined>} */
+        const env = {
+          ...process.env,
+          NODE_ENV: nodeEnv,
+          WHARFIE_ARTIFACT_BUCKET: 'service-bucket',
+          WHARFIE_CONTROL_ADAPTER: 'vanilla',
+          WHARFIE_CONTROL_PATH: dbPath,
+          WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(
+            dbPath,
+            'execution-payloads',
+          ),
+          WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+        };
+        if (selection === 'explicit') {
+          env.WHARFIE_APPLICATION_STATE_ADAPTER = 'vanilla';
+        } else {
+          delete env.WHARFIE_APPLICATION_STATE_ADAPTER;
+        }
+
+        const result = runCli(
+          [
+            'ops',
+            'run',
+            '--activity',
+            'echo-event',
+            '--idempotency-key',
+            `vanilla-app-state-${selection.replaceAll(' ', '-')}`,
+            '--dir',
+            helloWorldDir,
+          ],
+          env,
+        );
+        expect(result.status).toBe(1);
+        expect(result.stderr).toMatch(
+          /requires the LMDB application-state adapter/i,
+        );
+        expect(existsSync(applicationStatePath)).toBe(false);
+      } finally {
+        rmSync(dbPath, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('executes an app activity through the append-only ledger and deduplicates an exact retry', async () => {
     const dbPath = mkdtempSync(path.join(os.tmpdir(), 'wharfie-ops-run-'));
@@ -274,6 +379,8 @@ describe('wharfie ops run', () => {
         WHARFIE_CONTROL_ADAPTER: 'vanilla',
         WHARFIE_CONTROL_PATH: dbPath,
         WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(dbPath, 'execution-payloads'),
+        WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
+        WHARFIE_APPLICATION_STATE_PATH: path.join(dbPath, 'application-state'),
       };
       const first = runCli(args, env);
 
@@ -363,6 +470,255 @@ describe('wharfie ops run', () => {
     }
   }, 20000);
 
+  it.each(['vanilla', 'lmdb'])(
+    'persists and replays a managed application-state effect with %s control state',
+    async (controlAdapter) => {
+      const appDir = mkdtempSync(
+        path.join(os.tmpdir(), 'wharfie-ops-run-effect-app-'),
+      );
+      const dbPath = mkdtempSync(
+        path.join(os.tmpdir(), 'wharfie-ops-run-effect-db-'),
+      );
+      const applicationStatePath = path.join(dbPath, 'application-state');
+      const tableName = `managed-effect-${controlAdapter}`;
+      const appId = `managed-effect-${controlAdapter}-demo`;
+      const idempotencyKey = 'persist-one-value';
+      const runId = createManualLedgerRunId({ appId, idempotencyKey });
+      const appApiUrl = pathToFileURL(
+        path.join(repoRoot, 'src', 'app.js'),
+      ).href;
+      /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
+      let controlDb;
+      /** @type {import('../../../src/core/lib/db/base.js').DBClient | undefined} */
+      let applicationStateDb;
+
+      try {
+        writeFileSync(
+          path.join(appDir, 'package.json'),
+          `${JSON.stringify({ private: true, type: 'module' })}\n`,
+        );
+        writeFileSync(
+          path.join(appDir, 'cli.js'),
+          'export async function main() {}\n',
+        );
+        writeFileSync(
+          path.join(appDir, 'activity.js'),
+          `export async function persist(input, runtime) {
+            const stored = await runtime.effects.request({
+              effectId: 'persist-value',
+              capability: 'application-state',
+              operation: 'put-if-absent',
+              input: { key: input.key, value: input.value },
+              requestedReplayProperties: ['idempotent', 'transactional'],
+            });
+            return { stored };
+          }\n`,
+        );
+        writeFileSync(
+          path.join(appDir, 'wharfie.app.js'),
+          `import { defineApp } from ${JSON.stringify(appApiUrl)};
+           export default defineApp({
+             schemaVersion: 2,
+             app: { id: ${JSON.stringify(appId)} },
+             cli: {
+               entrypoint: {
+                 kind: 'node',
+                 path: './cli.js',
+                 export: 'main',
+               },
+             },
+             targets: [
+               {
+                 nodeVersion: '24.13.1',
+                 platform: 'darwin',
+                 architecture: 'arm64',
+               },
+               {
+                 nodeVersion: '24.13.1',
+                 platform: 'linux',
+                 architecture: 'x64',
+                 libc: 'glibc',
+               },
+             ],
+             activities: {
+               persist: {
+                 entrypoint: {
+                   kind: 'node',
+                   path: './activity.js',
+                   export: 'persist',
+                 },
+               },
+             },
+           });\n`,
+        );
+
+        const args = [
+          'ops',
+          'run',
+          '--activity',
+          'persist',
+          '--idempotency-key',
+          idempotencyKey,
+          '--dir',
+          appDir,
+          '--input',
+          '{"key":"operator-choice","value":{"answer":42}}',
+        ];
+        const env = {
+          ...process.env,
+          NODE_ENV: 'development',
+          WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
+          WHARFIE_ARTIFACT_BUCKET: 'service-bucket',
+          WHARFIE_CONTROL_ADAPTER: controlAdapter,
+          WHARFIE_CONTROL_PATH: dbPath,
+          WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(
+            dbPath,
+            'execution-payloads',
+          ),
+          WHARFIE_LEDGER_SERVICE_SESSION_PATH: path.join(
+            dbPath,
+            'ledger-service-sessions',
+          ),
+          WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
+          WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+        };
+
+        const first = runCli(args, env);
+        expect(first.status).toBe(0);
+        expect(first.stderr).toBe('');
+        expect(first.stdout).toContain("'COMPLETED'");
+
+        controlDb =
+          controlAdapter === 'lmdb'
+            ? createLMDB({ path: dbPath, readOnly: true })
+            : createVanillaDB({ path: dbPath, readOnly: true });
+        const ledger = createExecutionLedger({
+          db: controlDb,
+          tableName,
+          payloadStore: createPayloadStore(dbPath),
+          effectEvidenceVerifiers: [
+            ...APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS,
+          ],
+        });
+        const firstView = await ledger.rebuildRun(runId);
+        expect(firstView).not.toBeNull();
+        if (!firstView) throw new Error('Expected managed-effect run');
+        expect(firstView.run).toMatchObject({
+          runId,
+          appId,
+          status: RunStatus.COMPLETED,
+          version: 7,
+        });
+        expect(firstView.effects).toEqual([
+          expect.objectContaining({
+            effectId: 'persist-value',
+            status: EffectStatus.COMPLETED,
+            requestedReplayProperties: ['idempotent', 'transactional'],
+            substantiatedReplayProperties: ['idempotent', 'transactional'],
+            destination: expect.objectContaining({
+              kind: 'application-state',
+              configuration: expect.objectContaining({
+                namespace: appId,
+                tableName: APPLICATION_STATE_TABLE_NAME,
+              }),
+            }),
+          }),
+        ]);
+        expect(
+          firstView.events.map(
+            (/** @type {Record<string, any>} */ event) => event.type,
+          ),
+        ).toEqual([
+          'manual-run-created',
+          'attempt-claimed',
+          'attempt-started',
+          'effect-requested',
+          'effect-started',
+          'effect-completed',
+          'attempt-terminal',
+        ]);
+        const effect = firstView.effects[0];
+        await controlDb.close();
+        controlDb = undefined;
+
+        applicationStateDb = createLMDB({
+          path: applicationStatePath,
+          readOnly: true,
+        });
+        const applicationState = createApplicationStateTable({
+          db: applicationStateDb,
+          tableName: APPLICATION_STATE_TABLE_NAME,
+        });
+        const businessKey = createApplicationStateBusinessKey(
+          appId,
+          'operator-choice',
+        );
+        const firstBusiness = await applicationState.readBusinessByPhysicalKey(
+          businessKey.resourceId,
+          businessKey.sortKey,
+        );
+        const firstReceipt = await applicationState.readReceipt(
+          effect.destinationEffectId,
+        );
+        expect(firstBusiness).toMatchObject({
+          namespace: appId,
+          logical_key: 'operator-choice',
+          value: { answer: 42 },
+          created_by_destination_effect_id: effect.destinationEffectId,
+        });
+        expect(firstReceipt).toMatchObject({
+          destination_effect_id: effect.destinationEffectId,
+          business_record_digest: firstBusiness?.record_digest,
+          outcome_code: 'inserted',
+          inserted: true,
+        });
+        await applicationStateDb.close();
+        applicationStateDb = undefined;
+        rmSync(applicationStatePath, { recursive: true, force: true });
+        expect(existsSync(applicationStatePath)).toBe(false);
+
+        const retry = runCli(args, env);
+        expect(retry.status).toBe(0);
+        expect(retry.stderr).toBe('');
+        expect(retry.stdout).toContain('attempt 1');
+        expect(existsSync(applicationStatePath)).toBe(false);
+
+        controlDb =
+          controlAdapter === 'lmdb'
+            ? createLMDB({ path: dbPath, readOnly: true })
+            : createVanillaDB({ path: dbPath, readOnly: true });
+        const retryView = await createExecutionLedger({
+          db: controlDb,
+          tableName,
+          payloadStore: createPayloadStore(dbPath),
+          effectEvidenceVerifiers: [
+            ...APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS,
+          ],
+        }).rebuildRun(runId);
+        expect(retryView?.events).toHaveLength(7);
+        expect(retryView?.effects).toHaveLength(1);
+        await controlDb.close();
+        controlDb = undefined;
+      } finally {
+        await controlDb?.close?.();
+        await applicationStateDb?.close?.();
+        rmSync(appDir, {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 50,
+        });
+        rmSync(dbPath, {
+          recursive: true,
+          force: true,
+          maxRetries: 5,
+          retryDelay: 50,
+        });
+      }
+    },
+    40000,
+  );
+
   it('cancels a live source-owned attempt through the public owner command', async () => {
     const appDir = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-ops-run-cancel-app-'),
@@ -377,6 +733,7 @@ describe('wharfie ops run', () => {
     const runId = createManualLedgerRunId({ appId, idempotencyKey });
     const appApiUrl = pathToFileURL(path.join(repoRoot, 'src', 'app.js')).href;
     const sessionPath = path.join(dbPath, 'ledger-service-sessions');
+    const applicationStatePath = path.join(dbPath, 'application-state');
     const env = {
       ...process.env,
       NODE_ENV: 'development',
@@ -388,6 +745,8 @@ describe('wharfie ops run', () => {
       WHARFIE_CONTROL_PATH: dbPath,
       WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(dbPath, 'execution-payloads'),
       WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
+      WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
+      WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
     };
     /** @type {ReturnType<typeof startCli> | undefined} */
     let runner;
@@ -631,6 +990,8 @@ describe('wharfie ops run', () => {
         WHARFIE_CONTROL_ADAPTER: 'vanilla',
         WHARFIE_CONTROL_PATH: dbPath,
         WHARFIE_EXECUTION_PAYLOAD_PATH: path.join(dbPath, 'execution-payloads'),
+        WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
+        WHARFIE_APPLICATION_STATE_PATH: path.join(dbPath, 'application-state'),
       };
       const args = [
         'ops',

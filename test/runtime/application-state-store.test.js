@@ -1,7 +1,13 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +19,8 @@ import {
   resolveApplicationStateAdapterName,
 } from '../../src/core/lib/config/db.js';
 import {
+  assertApplicationStateStoreIsolation,
+  openApplicationStateDB,
   resolveApplicationStateStoreConfiguration,
   validateApplicationStateStoreConfiguration,
   withApplicationStateDB,
@@ -77,6 +85,105 @@ describe('application-state store boundary', () => {
     });
   });
 
+  it('rejects lexical, case-only, and symlink aliases of the execution-control root', () => {
+    const parent = mkdtempSync(
+      join(tmpdir(), 'wharfie-application-state-isolation-'),
+    );
+    temporaryDirectories.push(parent);
+    const controlPath = join(parent, 'control');
+    const distinctPath = join(controlPath, 'application-state');
+    const configuration = validateApplicationStateStoreConfiguration({
+      adapterName: 'lmdb',
+      storePath: distinctPath,
+      tableName: APPLICATION_STATE_TABLE_NAME,
+    });
+    expect(() =>
+      assertApplicationStateStoreIsolation(configuration, {
+        adapterName: 'lmdb',
+        controlPath,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertApplicationStateStoreIsolation(
+        validateApplicationStateStoreConfiguration({
+          ...configuration,
+          storePath: join(controlPath, 'child', '..'),
+        }),
+        { adapterName: 'lmdb', controlPath },
+      ),
+    ).toThrow(/distinct local roots/i);
+
+    const alias = join(parent, 'control-alias');
+    mkdirSync(controlPath, { recursive: true });
+    symlinkSync(controlPath, alias, 'dir');
+    expect(() =>
+      assertApplicationStateStoreIsolation(
+        validateApplicationStateStoreConfiguration({
+          ...configuration,
+          storePath: alias,
+        }),
+        { adapterName: 'vanilla', controlPath },
+      ),
+    ).toThrow(/distinct local roots/i);
+
+    expect(() =>
+      assertApplicationStateStoreIsolation(
+        validateApplicationStateStoreConfiguration({
+          ...configuration,
+          storePath: join(parent, 'Prospective-Store'),
+        }),
+        {
+          adapterName: 'vanilla',
+          controlPath: join(parent, 'prospective-store'),
+        },
+      ),
+    ).toThrow(/distinct local roots/i);
+
+    expect(() =>
+      assertApplicationStateStoreIsolation(
+        validateApplicationStateStoreConfiguration({
+          ...configuration,
+          storePath: join(parent, 'Caf\u00e9'),
+        }),
+        {
+          adapterName: 'vanilla',
+          controlPath: join(parent, 'Cafe\u0301'),
+        },
+      ),
+    ).toThrow(/distinct local roots/i);
+
+    for (const [applicationName, controlName] of [
+      ['Stra\u00dfe', 'STRASSE'],
+      ['\u03a3', '\u03c2'],
+    ]) {
+      expect(() =>
+        assertApplicationStateStoreIsolation(
+          validateApplicationStateStoreConfiguration({
+            ...configuration,
+            storePath: join(parent, applicationName),
+          }),
+          {
+            adapterName: 'vanilla',
+            controlPath: join(parent, controlName),
+          },
+        ),
+      ).toThrow(/distinct local roots/i);
+    }
+
+    const futureApplicationPath = join(parent, 'future-application');
+    const danglingControlAlias = join(parent, 'dangling-control-alias');
+    symlinkSync(futureApplicationPath, danglingControlAlias, 'dir');
+    expect(() =>
+      assertApplicationStateStoreIsolation(
+        validateApplicationStateStoreConfiguration({
+          ...configuration,
+          storePath: futureApplicationPath,
+        }),
+        { adapterName: 'vanilla', controlPath: danglingControlAlias },
+      ),
+    ).toThrow(/distinct local roots/i);
+  });
+
   it('opens, routes, and closes the dedicated store around one operation', async () => {
     const storePath = mkdtempSync(
       join(tmpdir(), 'wharfie-application-state-store-'),
@@ -121,6 +228,44 @@ describe('application-state store boundary', () => {
           record: { record_id: 'application:b' },
         }),
       ).rejects.toThrow('Vanilla DB client is read-only.');
+    } finally {
+      await reader.close();
+    }
+  });
+
+  it('exposes an idempotently closable owned scope for pre-dispatch runners', async () => {
+    const storePath = mkdtempSync(
+      join(tmpdir(), 'wharfie-application-state-owned-'),
+    );
+    temporaryDirectories.push(storePath);
+    const configuration = validateApplicationStateStoreConfiguration({
+      adapterName: 'vanilla',
+      storePath,
+      tableName: APPLICATION_STATE_TABLE_NAME,
+    });
+    const access = await openApplicationStateDB({ configuration });
+    expect(Object.isFrozen(access)).toBe(true);
+    expect(Object.isFrozen(access.context)).toBe(true);
+    expect(access.context).toEqual({ ...configuration, readOnly: false });
+    await access.db.put({
+      tableName: APPLICATION_STATE_TABLE_NAME,
+      keyName: 'record_id',
+      record: { record_id: 'owned:a', value: 7 },
+    });
+    await Promise.all([access.close(), access.close()]);
+
+    const reader = await createApplicationStateDBClient('vanilla', {
+      path: storePath,
+      readOnly: true,
+    });
+    try {
+      await expect(
+        reader.get({
+          tableName: APPLICATION_STATE_TABLE_NAME,
+          keyName: 'record_id',
+          keyValue: 'owned:a',
+        }),
+      ).resolves.toEqual({ record_id: 'owned:a', value: 7 });
     } finally {
       await reader.close();
     }
