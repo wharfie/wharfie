@@ -1,5 +1,5 @@
 export type JsonPrimitive = null | boolean | number | string;
-export type JsonValue = JsonPrimitive | JsonValue[] | JsonObject;
+export type JsonValue = JsonPrimitive | readonly JsonValue[] | JsonObject;
 export interface JsonObject {
   [key: string]: JsonValue;
 }
@@ -52,6 +52,33 @@ export interface ActivityLogger {
   error(message: string, fields?: JsonObject): void;
 }
 
+/** The first durable effect exposed to application activities. */
+export interface ApplicationStatePutIfAbsentEffectRequest<
+  Value extends JsonValue = JsonValue,
+> {
+  readonly effectId: string;
+  readonly capability: 'application-state';
+  readonly operation: 'put-if-absent';
+  readonly input: {
+    readonly key: string;
+    readonly value: Value;
+  };
+  readonly requestedReplayProperties: readonly ['idempotent', 'transactional'];
+}
+
+/** The exact logical result of an application-state put-if-absent effect. */
+export interface ApplicationStatePutIfAbsentEffectResult {
+  readonly inserted: boolean;
+}
+
+/** Host-mediated effects. A host without this capability rejects the request. */
+export interface ActivityEffects {
+  request<const Request extends ApplicationStatePutIfAbsentEffectRequest>(
+    request: Request &
+      StrictShape<Request, ApplicationStatePutIfAbsentEffectRequest>,
+  ): Promise<ApplicationStatePutIfAbsentEffectResult>;
+}
+
 /** Runtime values supplied to an Activity Protocol v1 Node handler. */
 export interface ActivityRuntime<
   CallerMetadata extends JsonObject = JsonObject,
@@ -60,6 +87,7 @@ export interface ActivityRuntime<
   readonly caller: ActivityCaller<CallerMetadata>;
   readonly signal: AbortSignal;
   readonly logger: ActivityLogger;
+  readonly effects: ActivityEffects;
 }
 
 /** A named activity export: JSON input plus immutable invocation runtime. */

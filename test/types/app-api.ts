@@ -1,6 +1,8 @@
 import {
   defineApp,
   invokeActivity,
+  type ActivityRuntime,
+  type ApplicationStatePutIfAbsentEffectRequest,
   type JsonObject,
 } from '@wharfie/wharfie/app';
 
@@ -205,3 +207,111 @@ const result = await invokeActivity<GreetResult, { name: string }>('greet', {
 
 const message: string = result.message;
 void message;
+
+declare const runtime: ActivityRuntime;
+
+const putIfAbsentRequest = {
+  effectId: 'remember-greeting',
+  capability: 'application-state',
+  operation: 'put-if-absent',
+  input: {
+    key: 'greeting',
+    value: {
+      message: 'hello',
+      attempts: 1,
+      tags: ['friendly', 'durable'],
+    },
+  },
+  requestedReplayProperties: ['idempotent', 'transactional'],
+} as const satisfies ApplicationStatePutIfAbsentEffectRequest<{
+  message: 'hello';
+  attempts: 1;
+  tags: readonly ['friendly', 'durable'];
+}>;
+
+const literalMessage: 'hello' = putIfAbsentRequest.input.value.message;
+const literalTag: 'friendly' = putIfAbsentRequest.input.value.tags[0];
+const putIfAbsentResult = await runtime.effects.request(putIfAbsentRequest);
+const inserted: boolean = putIfAbsentResult.inserted;
+void literalMessage;
+void literalTag;
+void inserted;
+
+// @ts-expect-error Effect results expose only the exact inserted field.
+putIfAbsentResult.created;
+
+// @ts-expect-error Effect requests require an effectId.
+runtime.effects.request({
+  capability: 'application-state',
+  operation: 'put-if-absent',
+  input: { key: 'greeting', value: 'hello' },
+  requestedReplayProperties: ['idempotent', 'transactional'],
+});
+
+runtime.effects.request({
+  ...putIfAbsentRequest,
+  // @ts-expect-error Effect requests reject undeclared top-level fields.
+  timeoutMs: 1000,
+});
+
+runtime.effects.request({
+  ...putIfAbsentRequest,
+  // @ts-expect-error Effect input requires a value.
+  input: { key: 'greeting' },
+});
+
+runtime.effects.request({
+  ...putIfAbsentRequest,
+  // @ts-expect-error Effect input rejects undeclared fields.
+  input: { key: 'greeting', value: 'hello', namespace: 'extra' },
+});
+
+runtime.effects.request({
+  ...putIfAbsentRequest,
+  // @ts-expect-error The application-state capability is the only public capability.
+  capability: 'queue',
+});
+
+runtime.effects.request({
+  ...putIfAbsentRequest,
+  // @ts-expect-error Put-if-absent is the only public application-state operation.
+  operation: 'put',
+});
+
+runtime.effects.request({
+  ...putIfAbsentRequest,
+  // @ts-expect-error Replay properties must contain the exact supported tuple.
+  requestedReplayProperties: ['unsafe', 'transactional'],
+});
+
+runtime.effects.request({
+  ...putIfAbsentRequest,
+  // @ts-expect-error Replay properties may not be reordered.
+  requestedReplayProperties: ['transactional', 'idempotent'],
+});
+
+runtime.effects.request({
+  ...putIfAbsentRequest,
+  // @ts-expect-error Replay properties may not be a subset.
+  requestedReplayProperties: ['idempotent'],
+});
+
+runtime.effects.request({
+  ...putIfAbsentRequest,
+  // @ts-expect-error Effect values must be JSON-safe.
+  input: { key: 'greeting', value: Symbol('not-json') },
+});
+
+declare const invocation: ActivityRuntime['invocation'];
+declare const caller: ActivityRuntime['caller'];
+declare const signal: AbortSignal;
+declare const logger: ActivityRuntime['logger'];
+
+// @ts-expect-error Activity runtimes must expose durable effects.
+const runtimeWithoutEffects: ActivityRuntime = {
+  invocation,
+  caller,
+  signal,
+  logger,
+};
+void runtimeWithoutEffects;

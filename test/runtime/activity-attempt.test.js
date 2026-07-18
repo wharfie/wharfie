@@ -305,6 +305,131 @@ describe('Node Activity Protocol v1 attempt adapter', () => {
     expect(evidence.terminal.result).toEqual({ effect: { etag: 'abc' } });
   });
 
+  it.each([
+    [
+      'additional field',
+      () => ({
+        request: effectRequest({ unsupported: true }),
+        accessorReads: () => 0,
+      }),
+    ],
+    [
+      'hidden field',
+      () => {
+        const request = effectRequest();
+        Object.defineProperty(request, 'hidden', {
+          enumerable: false,
+          value: true,
+        });
+        return { request, accessorReads: () => 0 };
+      },
+    ],
+    [
+      'symbol field',
+      () => {
+        const request = effectRequest();
+        Object.defineProperty(request, Symbol('hidden'), {
+          enumerable: true,
+          value: true,
+        });
+        return { request, accessorReads: () => 0 };
+      },
+    ],
+    [
+      'accessor field',
+      () => {
+        const request = effectRequest();
+        let reads = 0;
+        Object.defineProperty(request, 'input', {
+          enumerable: true,
+          get() {
+            reads += 1;
+            return { key: 'must-not-be-read' };
+          },
+        });
+        return { request, accessorReads: () => reads };
+      },
+    ],
+    [
+      'missing field',
+      () => {
+        const request = effectRequest();
+        delete request.input;
+        return { request, accessorReads: () => 0 };
+      },
+    ],
+    [
+      'inherited field',
+      () => ({
+        request: Object.assign(
+          Object.create({ inherited: 'must-not-cross' }),
+          effectRequest(),
+        ),
+        accessorReads: () => 0,
+      }),
+    ],
+  ])(
+    'latches a logical effect request with an invalid %s before host dispatch',
+    async (_label, createCandidate) => {
+      const handleEffect = jest.fn();
+      const candidate = createCandidate();
+      let caught;
+      const evidence = await runNodeActivityAttempt({
+        startFrame: startFrame(),
+        handleEffect,
+        handler: async (_input, runtime) => {
+          try {
+            await runtime.effects.request(candidate.request);
+          } catch (error) {
+            caught = error;
+          }
+          return 'activity tried to recover';
+        },
+      });
+
+      expect(candidate.accessorReads()).toBe(0);
+      expect(handleEffect).not.toHaveBeenCalled();
+      expect(caught).toBeInstanceOf(ActivityAttemptProtocolError);
+      expect(caught).toMatchObject({ code: 'effect-request-invalid' });
+      expect(evidence.status).toBe('protocol-failed');
+      expect(evidence.terminal.error).toMatchObject({
+        code: 'effect-request-invalid',
+        name: 'ActivityAttemptProtocolError',
+      });
+      expect(evidence.frames.map((frame) => frame.type)).toEqual([
+        'start',
+        'protocol-failed',
+      ]);
+    },
+  );
+
+  it('reports an unavailable handler before inspecting the logical effect request', async () => {
+    let caught;
+    const request = effectRequest({ unsupported: true });
+    const evidence = await runNodeActivityAttempt({
+      startFrame: startFrame(),
+      handler: async (_input, runtime) => {
+        try {
+          await runtime.effects.request(request);
+        } catch (error) {
+          caught = error;
+        }
+        return 'unavailable was handled';
+      },
+    });
+
+    expect(caught).toMatchObject({
+      name: 'ActivityEffectUnavailableError',
+      code: 'effect-handler-unavailable',
+    });
+    expect(evidence.status).toBe('completed');
+    expect(evidence.terminal.result).toBe('unavailable was handled');
+    expect(evidence.frames.map((frame) => frame.type)).toEqual([
+      'start',
+      'completed',
+    ]);
+  });
+
   it('retains effect work beyond the bounded transport-operation timeout', async () => {
     const evidence = await runNodeActivityAttempt({
       startFrame: startFrame(),

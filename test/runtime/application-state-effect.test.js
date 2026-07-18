@@ -220,7 +220,18 @@ describe('application-state effect request and catalog boundary', () => {
         ...request,
         requestedReplayProperties: ['unsafe'],
       }),
-    ).toThrow(/only idempotent and transactional/i);
+    ).toThrow(/exactly idempotent, transactional/i);
+    for (const requestedReplayProperties of [
+      ['idempotent'],
+      ['transactional'],
+    ]) {
+      expect(() =>
+        normalizeApplicationStatePutIfAbsentRequest({
+          ...request,
+          requestedReplayProperties,
+        }),
+      ).toThrow(/exactly idempotent, transactional/i);
+    }
     expect(() =>
       normalizeApplicationStatePutIfAbsentRequest({
         ...request,

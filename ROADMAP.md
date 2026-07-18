@@ -123,8 +123,8 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       ready-work queue or expose a source-only `ops list` command.
 - [x] Delete the superseded mutable Operation/Action graph, operation table,
       queue-run bridge, and second writable run model. Manual durable execution
-      now distinguishes a caller idempotency key from the derived V5 manual
-      run identity and writes only the append-only V5 ledger.
+      now distinguishes a caller idempotency key from the derived V6 manual
+      run identity and writes only the append-only V6 ledger.
 - [x] Delete the disconnected pre-reset NodeAgent, state-command, systemd
       release, and private DB/queue/Lambda gRPC runtime island. Packaged apps
       now have one narrow private runtime-command selector, currently mapping
@@ -167,10 +167,11 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, retry policy,
       broader recovery, and multi-host authenticated current-owner command
       routing.
-- [ ] Connect the managed-effect driver to authenticated source and SEA
-      Activity Protocol transports through one finite capability/adapter
-      catalog; implement one real destination verifier before exposing the
-      public effect API.
+- [x] Connect the managed-effect driver to the framed source and SEA Activity
+      Protocol worker boundary through one finite capability/adapter catalog.
+      The first public request, `application-state` / `put-if-absent`, atomically
+      commits its LMDB value and permanent receipt; source and packaged hosts
+      share the same exact request and unavailable-host behavior.
 - [ ] Implement destination-specific reconciliation and compensation for
       uncertain effects, plus actual retry policy for substantiated `pure`,
       `idempotent`, and `transactional` work. Begun in-process handlers remain
@@ -231,11 +232,11 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 ## Immediate queue
 
 1. Repair the clean-install lint dependency declaration after explicit approval, make draft PR #125 green in GitHub Actions, and review the reset stack for merge.
-2. Wire the internal managed-effect driver through the complete source/SEA
-   attempt transcript lifecycle with one finite real adapter and deterministic
-   destination verifier.
-3. Add destination-backed effect reconciliation and adversarial crash tests at
-   every request/start/outcome boundary before enabling automatic retries or
-   making an exactly-once effect claim.
+2. Recover retained `STARTED` application-state effects only from their
+   permanent destination receipts, under exact runner exclusion and the
+   original durable attempt/effect fences.
+3. Add adversarial crash tests at every request/start/destination/outcome
+   boundary before enabling automatic retries or making an exactly-once effect
+   claim beyond that destination-backed operation.
 
 The latest dated handoff at [llm/checkpoints/2026-07-18-v5-managed-effect-foundation.md](llm/checkpoints/2026-07-18-v5-managed-effect-foundation.md) records the complete frozen core-closure preflight and the internal V5 request/start/verifier-backed-outcome/uncertainty boundary, including response-loss behavior, exact proof, and deliberate public limits. The preceding [evidence-backed reconciliation checkpoint](llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md), [authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md), [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md), [shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md), [resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md), [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.

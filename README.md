@@ -34,7 +34,7 @@ consuming public commands.
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
 The abandoned v1 source and dependency graph have been deleted. The strict v2
-manifest and the append-only V5 manual run → invocation → attempt → effect
+manifest and the append-only V6 manual run → invocation → attempt → effect
 ledger are now defined; the superseded mutable Operation/Action snapshot store
 is gone. Its redacted per-service history directory is transactionally bound to
 each run transition, while revision-backed source and SEA activities consume
@@ -55,12 +55,14 @@ ledger race, while ambiguous post-cancellation termination becomes blocked
 evidence-backed reconciliation event: a complete bounded Activity Protocol
 transcript proves one retained abandoned attempt's terminal outcome, while the
 physical attempt itself stays `ABANDONED`. The local command transport is not
-yet supported on Windows. V5 also has an internal verifier-backed managed-effect
-foundation, but it is not connected to source/SEA activity transport and has no
-production adapter or exactly-once claim. Public run history/listing,
-scheduling, effect reconciliation, and release hardening still need focused
-review. The npm package remains deliberately private. It is not ready for
-production use.
+yet supported on Windows. V6 connects verifier-backed managed effects through
+the framed source/SEA worker boundary and exposes one finite public operation:
+`application-state` / `put-if-absent`. Its LMDB destination atomically commits
+the business value with a permanent effect receipt; retained `STARTED` effect
+recovery and any broader exactly-once claim remain unfinished. Public run
+history/listing, scheduling, effect reconciliation, and release hardening still
+need focused review. The npm package remains deliberately private. It is not
+ready for production use.
 
 ## Start here
 
@@ -74,7 +76,7 @@ production use.
 - [Atomic operation-store checkpoint](llm/checkpoints/2026-07-16-atomic-operation-store.md) — historical atomic snapshot and fencing boundary.
 - [Immutable identity-spine checkpoint](llm/checkpoints/2026-07-17-immutable-identity-spine.md) — historical identity and artifact boundary.
 - [Mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md) — historical deletion boundary after making the append-only V3 ledger the only writable durable run model.
-- [V5 managed-effect foundation checkpoint](llm/checkpoints/2026-07-18-v5-managed-effect-foundation.md) — current restart point for the full frozen core-closure preflight, V5 persisted effect truth, exact proof, and next vertical.
+- [V5 managed-effect foundation checkpoint](llm/checkpoints/2026-07-18-v5-managed-effect-foundation.md) — historical internal persisted-effect boundary before destination binding and public application state.
 - [Evidence-backed uncertain-reconciliation checkpoint](llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md) — historical predecessor for the V4 terminal-resolution event, shared source/SEA operator command, and final local branch cleanup.
 - [Authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md) — parent checkpoint for the narrow external cancellation contract.
 - [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md) — historical foreground durable-before-signal boundary.
@@ -121,11 +123,14 @@ does not trim or rewrite them. The CLI is required; activities and package
 targets are optional. Application- and activity-level `resources` are not part
 of the schema and are rejected as unknown fields. A caller-metadata object may
 contain a property named `resources`, but it is ordinary inert JSON—not an
-injection request. Public managed-capability and managed-effect APIs remain
-separate future contracts; the internal V5 effect ledger is not exposed through
-the activity runtime. Workflows and schedules are intentionally not in this
-schema until their durable semantics are ready. Build credentials, signing
-material, and extra asset configuration are also outside the public manifest.
+injection request. Managed effects are a separate finite API on
+`runtime.effects`; the first exact request is `application-state` /
+`put-if-absent` with `['idempotent', 'transactional']` replay properties.
+Durable `ops run` fulfills that request, while ephemeral invocation rejects it
+with `effect-handler-unavailable`. Workflows and schedules are intentionally not
+in this schema until their durable semantics are ready. Build credentials,
+signing material, and extra asset configuration are also outside the public
+manifest.
 
 See the [quickstart](docs/src/assets/markdown/quickstart.md) and [application
 structure](docs/src/assets/markdown/project-structure.md) for the complete

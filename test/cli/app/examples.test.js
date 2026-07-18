@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -119,6 +119,88 @@ describe('schemaVersion 2 app demos', () => {
       message: 'hello public-api',
       requestId: 'req-public-api',
     });
+  });
+
+  it('fails a public ephemeral invocation when an activity requests application state', async () => {
+    const dir = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-ephemeral-effect-example-'),
+    );
+    const stateParent = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-ephemeral-effect-state-'),
+    );
+    const applicationStatePath = path.join(stateParent, 'application-state');
+    const previousApplicationStatePath =
+      process.env.WHARFIE_APPLICATION_STATE_PATH;
+
+    try {
+      process.env.WHARFIE_APPLICATION_STATE_PATH = applicationStatePath;
+      writeFileSync(
+        path.join(dir, 'package.json'),
+        JSON.stringify({ private: true, type: 'module' }),
+      );
+      writeFileSync(
+        path.join(dir, 'cli.js'),
+        'export async function main() {}\n',
+      );
+      writeFileSync(
+        path.join(dir, 'activity.js'),
+        `export async function persist(_input, runtime) {
+  return runtime.effects.request({
+    effectId: 'persist-value',
+    capability: 'application-state',
+    operation: 'put-if-absent',
+    input: { key: 'greeting', value: { message: 'hello' } },
+    requestedReplayProperties: ['idempotent', 'transactional'],
+  });
+}\n`,
+      );
+      writeFileSync(
+        path.join(dir, 'wharfie.app.js'),
+        `export default {
+  schemaVersion: 2,
+  app: { id: 'ephemeral-effect-example' },
+  cli: { entrypoint: { kind: 'node', path: './cli.js', export: 'main' } },
+  targets: [{
+    nodeVersion: process.versions.node,
+    platform: process.platform,
+    architecture: process.arch,
+    ...(process.platform === 'linux' ? { libc: 'glibc' } : {}),
+  }],
+  activities: {
+    persist: {
+      entrypoint: { kind: 'node', path: './activity.js', export: 'persist' },
+    },
+  },
+};\n`,
+      );
+
+      await expect(
+        invokeActivity('persist', { dir, input: {} }),
+      ).rejects.toMatchObject({
+        name: 'ActivityEffectUnavailableError',
+        code: 'effect-handler-unavailable',
+        terminalType: 'failed',
+        evidence: {
+          terminal: {
+            type: 'failed',
+            error: {
+              name: 'ActivityEffectUnavailableError',
+              code: 'effect-handler-unavailable',
+            },
+          },
+        },
+      });
+      expect(existsSync(applicationStatePath)).toBe(false);
+    } finally {
+      if (previousApplicationStatePath === undefined) {
+        delete process.env.WHARFIE_APPLICATION_STATE_PATH;
+      } else {
+        process.env.WHARFIE_APPLICATION_STATE_PATH =
+          previousApplicationStatePath;
+      }
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(stateParent, { recursive: true, force: true });
+    }
   });
 
   it('rejects the obsolete event/context public invocation fields', async () => {

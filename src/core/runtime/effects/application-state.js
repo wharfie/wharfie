@@ -95,13 +95,15 @@ export function normalizeApplicationStatePutIfAbsentRequest(
     );
   }
   if (
+    frame.requestedReplayProperties.length !==
+      APPLICATION_STATE_SUBSTANTIATED_REPLAY_PROPERTIES.length ||
     frame.requestedReplayProperties.some(
-      (/** @type {string} */ property) =>
-        !APPLICATION_STATE_SUBSTANTIATED_REPLAY_PROPERTIES.includes(property),
+      (/** @type {string} */ property, /** @type {number} */ index) =>
+        property !== APPLICATION_STATE_SUBSTANTIATED_REPLAY_PROPERTIES[index],
     )
   ) {
     throw new TypeError(
-      `${label}.requestedReplayProperties may request only idempotent and transactional.`,
+      `${label}.requestedReplayProperties must be exactly idempotent, transactional.`,
     );
   }
   const input = cloneBoundedJsonObject(

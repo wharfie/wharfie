@@ -60,9 +60,12 @@ normalizing them. The v2 schema has no `ActorSystem`, `functions`,
 
 The schema does not accept application- or activity-level `resources`; those
 are unknown fields. A property named `resources` inside caller metadata remains
-ordinary cloned JSON and does not request injection. Public managed-capability
-and managed-effect APIs remain separate future contracts; the internal V5
-effect ledger is not exposed through the activity runtime.
+ordinary cloned JSON and does not request injection. Managed effects are a
+separate finite API on `runtime.effects`; the first public request is
+`application-state` / `put-if-absent` with the exact replay properties
+`['idempotent', 'transactional']`. Durable `ops run` hosts fulfill it, while an
+ephemeral `invokeActivity` request rejects catchably with
+`effect-handler-unavailable`.
 
 An activity may pin target-specific dependencies with exact published versions:
 
@@ -76,9 +79,9 @@ and sorted by name.
 Activity exports use `(input, runtime)`, rather than the former `(event,
 context)` convention. `runtime.caller.metadata` carries caller-supplied JSON
 metadata separately from `input`, while `runtime.invocation` supplies immutable
-revision, run, invocation, attempt, and fencing identities. The initial
-Activity Protocol v1 path deliberately provides neither injected resource
-handles nor managed effects.
+revision, run, invocation, attempt, and fencing identities. Activity Protocol
+v1 deliberately provides no injected resource handles; host-mediated effects
+remain available only through the closed `runtime.effects` contract.
 
 Use `wharfie app manifest ./path/to/app` to inspect the compiled manifest,
 `wharfie app run sync --dir ./path/to/app` to invoke an activity locally, and

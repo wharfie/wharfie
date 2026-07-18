@@ -20,6 +20,13 @@ const MAX_ACTIVITY_ERROR_MESSAGE_LENGTH = 16 * 1024;
 const MAX_ACTIVITY_ERROR_NAME_LENGTH = 256;
 const MAX_ACTIVITY_ERROR_DETAILS_BYTES = 64 * 1024;
 const UTF8_ENCODER = new TextEncoder();
+const LOGICAL_EFFECT_REQUEST_KEYS = Object.freeze([
+  'effectId',
+  'capability',
+  'operation',
+  'input',
+  'requestedReplayProperties',
+]);
 
 /**
  * Return the private bundle entrypoint symbol name for one declared activity.
@@ -246,6 +253,52 @@ function deepFreeze(value) {
   }
   for (const child of Object.values(value)) deepFreeze(child);
   return Object.freeze(value);
+}
+
+/**
+ * Extract the exact component-facing managed-effect request without invoking
+ * application-defined accessors. Hidden, symbol, inherited, missing, and
+ * additional fields are rejected rather than silently disappearing when the
+ * protocol frame is constructed.
+ * @param {unknown} value - Candidate logical effect request.
+ * @returns {{effectId: any, capability: any, operation: any, input: any, requestedReplayProperties: any}} - Exact data-property values.
+ */
+function normalizeLogicalEffectRequest(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('The managed effect request must be an object.');
+  }
+
+  const request = /** @type {Record<string, any>} */ (value);
+  const prototype = Object.getPrototypeOf(request);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(
+      'The managed effect request must use a plain or null prototype.',
+    );
+  }
+  const keys = Reflect.ownKeys(request);
+  if (
+    keys.length !== LOGICAL_EFFECT_REQUEST_KEYS.length ||
+    LOGICAL_EFFECT_REQUEST_KEYS.some((key) => !keys.includes(key))
+  ) {
+    throw new TypeError(
+      'The managed effect request must contain exactly effectId, capability, operation, input, and requestedReplayProperties.',
+    );
+  }
+
+  /** @type {Record<string, any>} */
+  const normalized = {};
+  for (const key of LOGICAL_EFFECT_REQUEST_KEYS) {
+    const descriptor = Object.getOwnPropertyDescriptor(request, key);
+    if (!descriptor?.enumerable || !('value' in descriptor)) {
+      throw new TypeError(
+        `The managed effect request ${key} field must be an enumerable data property.`,
+      );
+    }
+    normalized[key] = descriptor.value;
+  }
+  return /** @type {{effectId: any, capability: any, operation: any, input: any, requestedReplayProperties: any}} */ (
+    normalized
+  );
 }
 
 /**
@@ -796,10 +849,14 @@ export async function runNodeActivityAttempt(options) {
           'This activity host does not provide a managed effect handler.',
         );
       }
-      if (!request || typeof request !== 'object') {
-        const error = new ActivityAttemptProtocolError(
+      let logicalRequest;
+      try {
+        logicalRequest = normalizeLogicalEffectRequest(request);
+      } catch (cause) {
+        const error = asProtocolError(
+          cause,
           'effect-request-invalid',
-          'effects.request requires an effect request object.',
+          'effects.request requires an exact managed effect request object.',
         );
         latchProtocolFailure(error);
         throw error;
@@ -811,11 +868,11 @@ export async function runNodeActivityAttempt(options) {
         type: 'effect-request',
         attemptId: start.attemptId,
         sequence: nextSequence,
-        effectId: request.effectId,
-        capability: request.capability,
-        operation: request.operation,
-        input: request.input,
-        requestedReplayProperties: request.requestedReplayProperties,
+        effectId: logicalRequest.effectId,
+        capability: logicalRequest.capability,
+        operation: logicalRequest.operation,
+        input: logicalRequest.input,
+        requestedReplayProperties: logicalRequest.requestedReplayProperties,
       });
       await drainDelivery();
       if (deliveryFailure)
