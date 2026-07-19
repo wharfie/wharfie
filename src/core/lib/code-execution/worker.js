@@ -342,6 +342,7 @@ async function cleanupSandbox(sandbox) {
     });
   }
   await sandbox.cleanupPromise;
+  ownedSandboxRoots.delete(sandbox.root);
 }
 
 /**
@@ -1279,6 +1280,8 @@ function ensureWorker(name, codeString, sandbox) {
 const sandboxes = new Map();
 /** @type {Map<string, Promise<Sandbox>>} */
 const sandboxPreparations = new Map();
+/** @type {Set<string>} */
+const ownedSandboxRoots = new Set();
 let sandboxCacheGeneration = 0;
 /** @type {Promise<void> | null} */
 let sandboxClearPromise = null;
@@ -1328,6 +1331,7 @@ async function ensurePrivateVmParent() {
 async function createFreshSandboxRoot(key) {
   const parent = await ensurePrivateVmParent();
   const root = await mkdtemp(join(VM_PATH, `${key}-`));
+  ownedSandboxRoots.add(root);
   try {
     await chmod(root, 0o700);
     await assertPrivateDirectory(root, 'Wharfie sandbox root');
@@ -1343,6 +1347,7 @@ async function createFreshSandboxRoot(key) {
     return root;
   } catch (error) {
     await rm(root, { recursive: true, force: true });
+    ownedSandboxRoots.delete(root);
     throw error;
   }
 }
@@ -1874,4 +1879,5 @@ export default {
   getExternalBundleDigest,
   _destroyWorker: destroyWorker,
   _clearSandboxCache: clearSandboxCache,
+  _getOwnedSandboxRoots: () => [...ownedSandboxRoots].sort(),
 };

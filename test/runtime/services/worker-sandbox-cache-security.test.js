@@ -262,8 +262,7 @@ describe('worker sandbox cache security', () => {
       name,
       "'unreachable'",
     );
-    await fsp.mkdir(VM_PATH, { recursive: true });
-    const before = new Set(await fsp.readdir(VM_PATH));
+    const before = sandboxWorker._getOwnedSandboxRoots();
 
     await expect(
       sandboxWorker.runActivityAttemptInSandbox(
@@ -278,9 +277,6 @@ describe('worker sandbox cache security', () => {
       ),
     ).rejects.toThrow(/unsupported entry type|symbolic link/i);
 
-    const leakedRoots = (await fsp.readdir(VM_PATH)).filter(
-      (entry) => !before.has(entry),
-    );
-    expect(leakedRoots).toEqual([]);
+    expect(sandboxWorker._getOwnedSandboxRoots()).toEqual(before);
   });
 });

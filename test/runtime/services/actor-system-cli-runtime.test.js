@@ -68,6 +68,8 @@ describe('packaged application dispatch', () => {
     expect(help).toContain('manifest');
     expect(help).toContain('metadata');
     expect(help).toMatch(/\brun\b/);
+    expect(help).toContain('submit');
+    expect(help).toContain('worker');
     expect(help).toContain('inspect');
     expect(help).toContain('recover');
     expect(help).toContain('reconcile');

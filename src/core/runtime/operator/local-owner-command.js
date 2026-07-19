@@ -3,6 +3,7 @@ import net from 'node:net';
 
 import { assertLedgerOpaqueId } from '../../lib/ledger/record-key.js';
 import {
+  EXECUTION_PAYLOAD_MAX_BYTES,
   decodeCanonicalJsonPayload,
   encodeCanonicalJsonPayload,
 } from '../execution-payload.js';
@@ -16,8 +17,15 @@ import {
 
 /** The only supported local owner-command protocol version. */
 export const LOCAL_OWNER_COMMAND_PROTOCOL_VERSION = 1;
-/** Maximum exact canonical request envelope size. */
-export const LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES = 64 * 1024;
+/** Default exact canonical request envelope size. */
+export const LOCAL_OWNER_COMMAND_DEFAULT_MAX_REQUEST_BYTES = 64 * 1024;
+/**
+ * Absolute exact canonical request envelope ceiling. Resident submission can
+ * carry one maximum-sized referenced execution payload plus bounded command
+ * identity and envelope fields; other commands retain the smaller default.
+ */
+export const LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES =
+  EXECUTION_PAYLOAD_MAX_BYTES + 64 * 1024;
 /** Maximum exact canonical response envelope size. */
 export const LOCAL_OWNER_COMMAND_MAX_RESPONSE_BYTES = 64 * 1024;
 /** Default bounded local socket and owner-handler wait. */
@@ -87,10 +95,11 @@ function normalizeTimeout(value, label, fallback) {
  * @param {unknown} value - Candidate protocol byte cap.
  * @param {string} label - Option label.
  * @param {number} maximum - Hard protocol ceiling.
+ * @param {number} [fallback=maximum] - Default when no override is supplied.
  * @returns {number} - Valid byte cap.
  */
-function normalizeByteLimit(value, label, maximum) {
-  if (value === undefined) return maximum;
+function normalizeByteLimit(value, label, maximum, fallback = maximum) {
+  if (value === undefined) return fallback;
   if (
     typeof value !== 'number' ||
     !Number.isSafeInteger(value) ||
@@ -739,6 +748,7 @@ function normalizeServerOptions(options) {
       candidate.maxRequestBytes,
       'local owner command server options.maxRequestBytes',
       LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES,
+      LOCAL_OWNER_COMMAND_DEFAULT_MAX_REQUEST_BYTES,
     ),
     maxResponseBytes: normalizeByteLimit(
       candidate.maxResponseBytes,
@@ -849,8 +859,8 @@ export async function createLocalOwnerCommandServer(options) {
 }
 
 /**
- * @param {{serviceId: unknown, sessionId: unknown, sessionRoot?: unknown, requestId: unknown, command: unknown, request: unknown, timeoutMs?: unknown, maxResponseBytes?: unknown}} options - Candidate client options.
- * @returns {{serviceId: string, sessionId: string, sessionRoot?: string, requestId: string, command: string, request: Record<string, any>, timeoutMs: number, maxResponseBytes: number, endpoint: string, bytes: Buffer}} - Normalized client request.
+ * @param {{serviceId: unknown, sessionId: unknown, sessionRoot?: unknown, requestId: unknown, command: unknown, request: unknown, timeoutMs?: unknown, maxRequestBytes?: unknown, maxResponseBytes?: unknown}} options - Candidate client options.
+ * @returns {{serviceId: string, sessionId: string, sessionRoot?: string, requestId: string, command: string, request: Record<string, any>, timeoutMs: number, maxRequestBytes: number, maxResponseBytes: number, endpoint: string, bytes: Buffer}} - Normalized client request.
  */
 function normalizeClientOptions(options) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) {
@@ -865,6 +875,7 @@ function normalizeClientOptions(options) {
     'command',
     'request',
     'timeoutMs',
+    'maxRequestBytes',
     'maxResponseBytes',
   ]);
   for (const key of Object.keys(candidate)) {
@@ -911,9 +922,15 @@ function normalizeClientOptions(options) {
     { ...unsigned, mac },
     'local owner command request',
   );
-  if (bytes.byteLength > LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES) {
+  const maxRequestBytes = normalizeByteLimit(
+    candidate.maxRequestBytes,
+    'local owner command options.maxRequestBytes',
+    LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES,
+    LOCAL_OWNER_COMMAND_DEFAULT_MAX_REQUEST_BYTES,
+  );
+  if (bytes.byteLength > maxRequestBytes) {
     throw new RangeError(
-      `local owner command request exceeds the ${LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES}-byte limit.`,
+      `local owner command request exceeds the ${maxRequestBytes}-byte limit.`,
     );
   }
   return {
@@ -925,6 +942,7 @@ function normalizeClientOptions(options) {
     requestId,
     command,
     request,
+    maxRequestBytes,
     timeoutMs: normalizeTimeout(
       candidate.timeoutMs,
       'local owner command options.timeoutMs',
@@ -1054,7 +1072,7 @@ function exchangeLocalOwnerCommand(options) {
  * a different local scope/principal/session before it invokes this transport.
  * A timeout is intentionally not a negative acknowledgement: reconcile the
  * retained request ID against durable state before retrying or reporting it.
- * @param {{serviceId: string, sessionId: string, sessionRoot?: string, requestId: string, command: string, request: Record<string, any>, timeoutMs?: number, maxResponseBytes?: number}} options - Exact command request.
+ * @param {{serviceId: string, sessionId: string, sessionRoot?: string, requestId: string, command: string, request: Record<string, any>, timeoutMs?: number, maxRequestBytes?: number, maxResponseBytes?: number}} options - Exact command request.
  * @returns {Promise<Record<string, any>>} - Authenticated bounded handler result.
  */
 export async function sendLocalOwnerCommand(options) {
@@ -1071,6 +1089,7 @@ export async function sendLocalOwnerCommand(options) {
 }
 
 export default {
+  LOCAL_OWNER_COMMAND_DEFAULT_MAX_REQUEST_BYTES,
   LOCAL_OWNER_COMMAND_DEFAULT_TIMEOUT_MS,
   LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES,
   LOCAL_OWNER_COMMAND_MAX_RESPONSE_BYTES,

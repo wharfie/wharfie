@@ -676,7 +676,7 @@ function hasMatchingStoppedManagedEffectRecoveryEvent(events, expected) {
  * excluded the prior runner. PENDING work is cancelled from ledger authority
  * without destination access. Every STARTED effect is probed read-only before
  * one atomic attempt-level settlement. Adapter execution is never accepted.
- * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, invocationId: string, recoverOutcome?: (input: Readonly<{destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}>) => Promise<unknown>|unknown, actor?: {kind: string, id: string}}} options - Stopped-runner recovery inputs.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, invocationId: string, recoverOutcome?: (input: Readonly<{destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}>) => Promise<unknown>|unknown, actor?: {kind: string, id: string}, expectedAttempt?: Record<string, any>, expectedEffects?: Record<string, any>[]}} options - Stopped-runner recovery inputs.
  * @returns {Promise<ReturnType<typeof stoppedManagedEffectRecoveryResult>>} - Redacted atomic result.
  */
 export async function recoverStoppedManagedEffects(options) {
@@ -709,11 +709,62 @@ export async function recoverStoppedManagedEffects(options) {
     options.actor,
     'recoverStoppedManagedEffects.actor',
   );
+  if (
+    (options.expectedAttempt === undefined) !==
+    (options.expectedEffects === undefined)
+  ) {
+    throw new TypeError(
+      'recoverStoppedManagedEffects expectedAttempt and expectedEffects must be provided together.',
+    );
+  }
+  const expectedAttempt =
+    options.expectedAttempt === undefined
+      ? undefined
+      : deepFreezeJson(
+          cloneJsonObject(
+            options.expectedAttempt,
+            'recoverStoppedManagedEffects.expectedAttempt',
+          ),
+        );
+  /** @type {Record<string, any>[] | undefined} */
+  let expectedEffects;
+  if (options.expectedEffects !== undefined) {
+    const clonedExpectedEffects = cloneJsonValue(
+      options.expectedEffects,
+      'recoverStoppedManagedEffects.expectedEffects',
+    );
+    if (!Array.isArray(clonedExpectedEffects)) {
+      throw new TypeError(
+        'recoverStoppedManagedEffects.expectedEffects must be an array.',
+      );
+    }
+    clonedExpectedEffects.sort((left, right) =>
+      left.effectId < right.effectId
+        ? -1
+        : left.effectId > right.effectId
+          ? 1
+          : 0,
+    );
+    expectedEffects = deepFreezeJson(clonedExpectedEffects);
+  }
   const retained = await readStoppedManagedEffectSet(
     ledger,
     runId,
     invocationId,
   );
+  if (
+    expectedAttempt !== undefined &&
+    expectedEffects !== undefined &&
+    (!hasSameCanonicalJson(retained.attempt, expectedAttempt) ||
+      !hasSameCanonicalJson(
+        retained.deliveries.map((delivery) => delivery.effect),
+        expectedEffects,
+      ))
+  ) {
+    throw new ManagedEffectDispatchNotAuthorizedError(
+      expectedEffects[0]?.effectId || expectedAttempt.attemptId,
+    );
+  }
   const hasStarted = retained.deliveries.some(
     (delivery) => delivery.effect.status === EffectStatus.STARTED,
   );

@@ -20,18 +20,36 @@ framework is no longer part of the product, and breaking changes are expected.
 4. Promote that executable to a persistent single-node service.
 5. Enroll more trusted nodes when placement or recovery requires them.
 
-The current implementation proves the first three steps plus a narrow resident
-ledger-service lifecycle and local ownership boundary. Scheduling and executing
-durable work as a service, provider-backed deployment, and the trusted-node mesh
-remain roadmap work; Wharfie is not production ready.
+The current implementation proves the first three steps and the first resident
+activity vertical. A source or packaged command can durably submit one
+revision-pinned activity while the worker is offline; the matching single-node
+resident later executes requests serially and recovers conservatively after a
+process restart. A stale unstarted claim can be rescheduled, while work that
+crossed `STARTED` becomes blocked `UNCERTAIN` rather than being redispatched.
+Any unresolved managed-effect siblings settle atomically through receipt-only
+recovery before that block. The public worker command and hidden packaged
+service runtime share this implementation.
+
+This is not yet a durable workflow engine or an installed operating-system
+service. Workflow continuations, timers and schedules, a purpose-built ready
+index, startup-on-boot installation, provider-backed deployment, multi-host
+leases/heartbeats, and the trusted-node mesh remain roadmap work; Wharfie is
+not production ready.
 
 ## Start locally
 
 ```bash
 wharfie app manifest ./path/to/app
 wharfie app run <activity-id> --dir ./path/to/app --input '{"who":"cli-user"}'
+wharfie ops submit --activity <activity-id> --dir ./path/to/app \
+  --idempotency-key <stable-key> --input '{"who":"cli-user"}'
+wharfie ops worker --dir ./path/to/app
 wharfie app package ./path/to/app
 ```
+
+The packaged equivalents are `<app> wharfie submit ...` and `<app> wharfie
+worker`; they are bound to the manifest and revision embedded in that artifact
+and do not accept `--dir`.
 
 The shipped top-level CLI contains `app` and `ops`. Continue with the
 [installation guide](./guides/installation.md), [quickstart](./guides/quickstart.md),

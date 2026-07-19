@@ -14,10 +14,13 @@ import {
   resolveManifestActivityExecutionBinding,
 } from './app-runs.js';
 import {
+  MANUAL_LEDGER_INVOCATION_ID,
   createManualLedgerRunId,
   runManualLedgerActivity,
+  submitManualLedgerActivity,
 } from './manual-ledger-run.js';
 import { createLedgerServiceOwnership } from '../lib/db/tables/ledger-service-lifecycle.js';
+import { hasSameCanonicalJson } from '../lib/ledger/execution-ledger-contract.js';
 import { assertLedgerOpaqueId } from '../lib/ledger/record-key.js';
 import { cloneJsonObject, cloneJsonValue } from './json-value.js';
 import { EXECUTION_LEDGER_CANCEL_OWNER_COMMAND } from './operator/execution-ledger-operator.js';
@@ -53,6 +56,18 @@ import { createLocalOwnerCommandServer } from './operator/local-owner-command.js
  * @property {any} [input] - JSON activity input.
  * @property {Record<string, any>} [callerMetadata] - JSON caller metadata.
  * @property {{kind: string, id: string}} [actor] - Durable transition actor.
+ * @property {AbortSignal} [signal] - Foreground cancellation signal.
+ */
+
+/**
+ * @typedef ResolvedPersistedDurableManifestActivityRequest
+ * @property {ManifestActivityExecution} execution - Validated execution descriptor.
+ * @property {Readonly<{appId: string, revisionId: string, manifest: Record<string, any>}>} identity - Identity derived from the execution descriptor.
+ * @property {string} activityName - Declared activity ID.
+ * @property {string} runId - Persisted durable run identity.
+ * @property {any} [input] - Stored JSON activity input.
+ * @property {Record<string, any>} [callerMetadata] - Stored JSON caller metadata.
+ * @property {{kind: string, id: string}} actor - Original durable creation actor.
  * @property {AbortSignal} [signal] - Foreground cancellation signal.
  */
 
@@ -226,9 +241,9 @@ async function resolveDurableManifestActivityRequest(options) {
  * Execute one already-bound durable request through an already-open ledger.
  * Ownership is deliberately outside this kernel so a future resident worker
  * can call it while holding its long-lived app-scoped owner generation.
- * @param {ResolvedDurableManifestActivityRequest} request - Exact durable request.
+ * @param {ResolvedDurableManifestActivityRequest | ResolvedPersistedDurableManifestActivityRequest} request - Exact submitted or persisted durable request.
  * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, controlContext: {db: import('../lib/db/base.js').DBClient, adapterName: import('../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, applicationStateConfiguration: ReturnType<typeof resolveApplicationStateStoreConfiguration>, ownerCancellation?: import('./manual-ledger-run.js').ManualLedgerOwnerCancellation, registerActiveAttemptCancellationPort?: import('./manual-ledger-run.js').ManualLedgerActiveAttemptCancellationPortRegistrar}} options - Owned host capabilities.
- * @returns {Promise<{appId: string, revisionId: string, activityName: string, idempotencyKey: string, runId: string, outcome: Record<string, any>}>} - Durable run result.
+ * @returns {Promise<{appId: string, revisionId: string, activityName: string, idempotencyKey?: string, runId: string, outcome: Record<string, any>}>} - Durable run result.
  */
 async function runResolvedDurableManifestActivity(request, options) {
   const { appId, revisionId } = request.identity;
@@ -322,10 +337,194 @@ async function runResolvedDurableManifestActivity(request, options) {
     appId,
     revisionId,
     activityName: request.activityName,
-    idempotencyKey: request.idempotencyKey,
+    ...(!('idempotencyKey' in request) || request.idempotencyKey === undefined
+      ? {}
+      : { idempotencyKey: request.idempotencyKey }),
     runId: request.runId,
     outcome,
   };
+}
+
+/**
+ * Persist one immutable manual activity request without claiming or executing
+ * it. This is the authority-neutral ingress seam used both by a future CLI
+ * router and by the authenticated command endpoint of a resident worker.
+ * @param {DurableManifestActivityRequest & {ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore}} options - Bound submission and already-open ledger.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Compact durable acceptance receipt.
+ */
+export async function submitDurableManifestActivity(options) {
+  if (!options?.ledger) {
+    throw new TypeError('submitDurableManifestActivity requires ledger.');
+  }
+  const request = await resolveDurableManifestActivityRequest(options);
+  const submitted = await submitManualLedgerActivity({
+    ledger: options.ledger,
+    runId: request.runId,
+    appId: request.identity.appId,
+    revisionId: request.identity.revisionId,
+    activityId: request.activityName,
+    ...(Object.prototype.hasOwnProperty.call(request, 'input')
+      ? { input: request.input }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(request, 'callerMetadata')
+      ? { callerMetadata: request.callerMetadata }
+      : {}),
+    ...(request.actor === undefined ? {} : { actor: request.actor }),
+  });
+  return Object.freeze({
+    ...submitted,
+    idempotencyKey: request.idempotencyKey,
+  });
+}
+
+/**
+ * Re-read and bind one persisted manual request to an immutable execution
+ * descriptor. The creation actor is retained exactly so the ordinary manual
+ * runner can replay its `create` transition before claiming work without
+ * changing durable authorship.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: ManifestActivityExecution, runId: string, signal?: AbortSignal}} options - Persisted execution inputs.
+ * @returns {Promise<Readonly<ResolvedPersistedDurableManifestActivityRequest>>} - Exact stored request bound to executable revision bytes.
+ */
+async function resolvePersistedDurableManifestActivityRequest(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError(
+      'Persisted durable manifest activity execution requires options.',
+    );
+  }
+  if (
+    !options.ledger ||
+    typeof options.ledger.readManualRunRequest !== 'function'
+  ) {
+    throw new TypeError(
+      'Persisted durable manifest activity execution requires ledger.readManualRunRequest.',
+    );
+  }
+  const binding = resolveManifestActivityExecutionBinding(options.execution);
+  const runId = assertLedgerOpaqueId(options.runId, 'runId');
+  const stored = await options.ledger.readManualRunRequest(
+    runId,
+    MANUAL_LEDGER_INVOCATION_ID,
+  );
+  if (!stored) {
+    throw new Error(
+      `Persisted manual activity request was not found: ${runId}`,
+    );
+  }
+  const run = cloneJsonObject(stored.run, 'Persisted durable activity run');
+  const invocation = cloneJsonObject(
+    stored.invocation,
+    'Persisted durable activity invocation',
+  );
+  const request = cloneJsonObject(
+    stored.request,
+    'Persisted durable activity request',
+  );
+  const actor = resolveOptionalActor(stored.actor);
+  if (!actor) {
+    throw new Error(
+      `Persisted manual activity request has no creation actor: ${runId}`,
+    );
+  }
+  if (
+    run.runId !== runId ||
+    run.appId !== binding.identity.appId ||
+    run.revisionId !== binding.identity.revisionId ||
+    run.trigger?.kind !== 'manual' ||
+    invocation.runId !== runId ||
+    invocation.invocationId !== MANUAL_LEDGER_INVOCATION_ID ||
+    invocation.appId !== binding.identity.appId ||
+    invocation.revisionId !== binding.identity.revisionId ||
+    run.requestRef === undefined ||
+    invocation.requestRef === undefined ||
+    !hasSameCanonicalJson(run.requestRef, invocation.requestRef)
+  ) {
+    throw new Error(
+      `Persisted manual activity request does not match its embedded application revision: ${runId}`,
+    );
+  }
+  const activityName =
+    typeof invocation.activityId === 'string' ? invocation.activityId : '';
+  if (
+    !activityName ||
+    !getManifestActivityNames(binding.identity.manifest).includes(activityName)
+  ) {
+    throw new Error(
+      `Persisted manual activity '${activityName || '(missing)'}' is unavailable in revision ${binding.identity.revisionId}.`,
+    );
+  }
+  if (binding.execution.kind === 'prepared-source') {
+    await binding.execution.prepared.verifyRuntime();
+  }
+  const signal = resolveOptionalAbortSignal(options.signal);
+  return Object.freeze({
+    execution: binding.execution,
+    identity: binding.identity,
+    activityName,
+    runId,
+    input: cloneJsonValue(request.input, 'Persisted durable activity input'),
+    callerMetadata: cloneJsonObject(
+      request.callerMetadata,
+      'Persisted durable activity caller metadata',
+    ),
+    actor,
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+/**
+ * Execute one already-persisted request through an already-open control
+ * ledger. Callers must hold the application mutation owner for the complete
+ * call; this function never acquires or releases local ownership.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, controlContext: {db: import('../lib/db/base.js').DBClient, adapterName: import('../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, execution: ManifestActivityExecution, runId: string, signal?: AbortSignal, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, ownerCancellation?: import('./manual-ledger-run.js').ManualLedgerOwnerCancellation, registerActiveAttemptCancellationPort?: import('./manual-ledger-run.js').ManualLedgerActiveAttemptCancellationPortRegistrar}} options - Owned persisted execution request.
+ * @returns {ReturnType<typeof runResolvedDurableManifestActivity>} - Durable activity result.
+ */
+export async function runPersistedDurableManifestActivity(options) {
+  if (!options?.ledger) {
+    throw new TypeError('runPersistedDurableManifestActivity requires ledger.');
+  }
+  if (!options.controlContext) {
+    throw new TypeError(
+      'runPersistedDurableManifestActivity requires controlContext.',
+    );
+  }
+  const controlContext = Object.freeze({
+    db: options.controlContext.db,
+    adapterName: options.controlContext.adapterName,
+    controlPath: options.controlContext.controlPath,
+    tableName: options.controlContext.tableName,
+  });
+  const applicationStateConfiguration = Object.prototype.hasOwnProperty.call(
+    options,
+    'applicationStateConfiguration',
+  )
+    ? validateApplicationStateStoreConfiguration(
+        options.applicationStateConfiguration,
+      )
+    : resolveApplicationStateStoreConfiguration();
+  if (applicationStateConfiguration.adapterName !== 'lmdb') {
+    throw new Error(
+      'Durable activity execution requires the LMDB application-state adapter.',
+    );
+  }
+  assertApplicationStateStoreIsolation(
+    applicationStateConfiguration,
+    controlContext,
+  );
+  const request = await resolvePersistedDurableManifestActivityRequest(options);
+  return await runResolvedDurableManifestActivity(request, {
+    ledger: options.ledger,
+    controlContext,
+    applicationStateConfiguration,
+    ...(options.ownerCancellation === undefined
+      ? {}
+      : { ownerCancellation: options.ownerCancellation }),
+    ...(options.registerActiveAttemptCancellationPort === undefined
+      ? {}
+      : {
+          registerActiveAttemptCancellationPort:
+            options.registerActiveAttemptCancellationPort,
+        }),
+  });
 }
 
 /**
@@ -333,7 +532,7 @@ async function runResolvedDurableManifestActivity(request, options) {
  * This is the authority-neutral resident integration seam; callers remain
  * responsible for holding the app's mutation ownership capability.
  * @param {DurableManifestActivityRequest & {ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, controlContext: {db: import('../lib/db/base.js').DBClient, adapterName: import('../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, ownerCancellation?: import('./manual-ledger-run.js').ManualLedgerOwnerCancellation, registerActiveAttemptCancellationPort?: import('./manual-ledger-run.js').ManualLedgerActiveAttemptCancellationPortRegistrar}} options - Owned durable host request.
- * @returns {ReturnType<typeof runResolvedDurableManifestActivity>} - Durable run result.
+ * @returns {Promise<{appId: string, revisionId: string, activityName: string, idempotencyKey: string, runId: string, outcome: Record<string, any>}>} - Durable run result.
  */
 export async function runDurableManifestActivity(options) {
   const ledger = options?.ledger;
@@ -368,7 +567,7 @@ export async function runDurableManifestActivity(options) {
     applicationStateConfiguration,
     controlContext,
   );
-  return await runResolvedDurableManifestActivity(request, {
+  const result = await runResolvedDurableManifestActivity(request, {
     ledger,
     controlContext,
     applicationStateConfiguration,
@@ -382,6 +581,7 @@ export async function runDurableManifestActivity(options) {
             options.registerActiveAttemptCancellationPort,
         }),
   });
+  return { ...result, idempotencyKey: request.idempotencyKey };
 }
 
 /**
@@ -458,7 +658,7 @@ export async function runLocalDurableManifestActivity(options) {
               );
             },
           });
-          /** @type {{appId: string, revisionId: string, activityName: string, idempotencyKey: string, runId: string, outcome: Record<string, any>} | undefined} */
+          /** @type {{appId: string, revisionId: string, activityName: string, idempotencyKey?: string, runId: string, outcome: Record<string, any>} | undefined} */
           let result;
           /** @type {unknown} */
           let runnerError;
@@ -507,9 +707,12 @@ export async function runLocalDurableManifestActivity(options) {
           }
           if (runnerFailed) throw runnerError;
           if (closeFailed) throw closeError;
-          return /** @type {{appId: string, revisionId: string, activityName: string, idempotencyKey: string, runId: string, outcome: Record<string, any>}} */ (
-            result
-          );
+          return {
+            .../** @type {{appId: string, revisionId: string, activityName: string, runId: string, outcome: Record<string, any>}} */ (
+              result
+            ),
+            idempotencyKey: request.idempotencyKey,
+          };
         },
       }),
     { configuration },

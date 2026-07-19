@@ -636,6 +636,7 @@ describe('shared execution-ledger operator boundary', () => {
         const target = {
           invocationId: MANUAL_LEDGER_INVOCATION_ID,
           attemptId: attempt.attemptId,
+          attempt,
           effects: before.effects,
         };
         const competingLedger = {
@@ -723,6 +724,7 @@ describe('shared execution-ledger operator boundary', () => {
             target: {
               invocationId: MANUAL_LEDGER_INVOCATION_ID,
               attemptId: attempt.attemptId,
+              attempt,
               effects: before.effects,
             },
             actor: { kind: 'local', id: 'cli' },

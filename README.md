@@ -48,25 +48,44 @@ the packaged adapter accepts only its cross-checked embedded manifest and
 revision/runtime pair and exposes no source-directory override. Operator and
 private runtime dispatch choose their path before authored CLI code is loaded.
 
-Foreground durable `ops run` execution has an authenticated current-owner
-cancellation path. Source `wharfie ops cancel` and packaged `<app> wharfie
-cancel` can reach only the exact live, same-principal LMDB foreground owner of
-a `STARTED` manual attempt. The required stable `--request-id` is reused after
-a lost response. That owner persists intent before beginning physical delivery;
-an inactive, stale, unreachable, or merely resident owner never triggers a
-direct-write fallback. A verified completion or failure may still win the
-ledger race, while ambiguous post-cancellation termination becomes blocked
-`UNCERTAIN` work. Blocked work can now be resolved only through an explicit,
-evidence-backed reconciliation event: a complete bounded Activity Protocol
+That host now supports durable submission separately from execution. Source
+`wharfie ops submit` and packaged `<app> wharfie submit` persist an exact
+app/revision activity request even when no worker is running. If the matching
+resident is live, submission reaches it through the authenticated local-owner
+command endpoint; otherwise a short-lived exclusive owner appends the same
+`RUNNABLE` invocation and exits. Source `wharfie ops worker` and packaged
+`<app> wharfie worker` run the first single-node resident activity worker, and
+the hidden packaged service runtime delegates to that same implementation. The
+worker accepts only its exact app and revision, executes one physical attempt
+at a time, and treats run history only as a locator before rebuilding and
+claiming from authoritative ledger state. On restart it can release and
+reschedule a stale `CLAIMED` attempt that never started; a stale `STARTED`
+attempt becomes blocked `UNCERTAIN` work and is never silently redispatched.
+If that stopped attempt retains unresolved managed effects, the resident uses
+the same source-free compound recovery boundary: `PENDING` siblings are
+cancelled, `STARTED` application-state siblings are probed read-only for their
+permanent receipts, and the exact set settles atomically before the run blocks.
+
+Foreground durable `ops run` and resident execution share an authenticated
+current-owner cancellation path. Source `wharfie ops cancel` and packaged
+`<app> wharfie cancel` can reach only the exact live, same-principal LMDB owner
+of a `STARTED` manual attempt. The required stable `--request-id` is reused
+after a lost response. That owner persists intent before beginning physical
+delivery; an inactive, stale, unreachable, or resident owner that is not
+running the exact attempt never triggers a direct-write fallback. A verified
+completion or failure may still win the ledger race, while ambiguous
+post-cancellation termination becomes blocked `UNCERTAIN` work. Blocked work
+can now be resolved only through an explicit, evidence-backed reconciliation
+event: a complete bounded Activity Protocol
 transcript proves one retained abandoned attempt's terminal outcome, while the
 physical attempt itself stays `ABANDONED`. The local command transport is not
 yet supported on Windows. V9 carries forward verifier-backed managed effects
 through the framed source/SEA worker boundary and exposes one finite public
 operation: `application-state` / `put-if-absent`. Its LMDB destination
 atomically commits the business value with a permanent effect receipt.
-Confirmed source/SEA
-recovery now settles the complete active-effect set—at most 16 unresolved
-effects—for one stopped attempt under the held LMDB owner. A retained `PENDING`
+Confirmed source/SEA operator recovery and resident restart recovery now settle
+the complete active-effect set—at most 16 unresolved effects—for one stopped
+attempt under the held LMDB owner. A retained `PENDING`
 request becomes `CANCELLED` without opening application state; every `STARTED`
 sibling is probed read-only, with an exact receipt becoming `COMPLETED` or
 `FAILED` and strict absence becoming `UNCERTAIN`. One append-only transaction
@@ -90,10 +109,13 @@ boundaries. A relocated SEA with Node absent from `PATH` proves the complete
 eight-boundary managed-effect matrix, three-boundary mixed-settlement matrix,
 and four-disposition effect-reconciliation matrix, including exact orphan-
 payload reuse and LMDB owner recovery. Those paths never dispatch authored
-app/CLI/activity code or the normal adapter. Persistent scheduling, workflow
-continuations, resident-service lifecycle, and public run history/listing are
-the next durable-service work. The npm package remains deliberately private.
-It is not ready for production use.
+app/CLI/activity code or the normal adapter. The resident activity vertical now
+persists offline submissions, executes serially, recovers conservative restart
+states, and drains gracefully. Durable workflow continuations, timers and
+schedules, an indexed ready-work projection, OS service installation/startup,
+multi-host leases and heartbeats, and public run history/listing remain next
+work. The npm package remains deliberately private. It is not ready for
+production use.
 
 ## Start here
 
@@ -101,7 +123,8 @@ It is not ready for production use.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [V2 foundation stabilization checkpoint](llm/checkpoints/2026-07-19-v2-foundation-stabilized.md) — the current clean-install restart point after repository cleanup, the portable module gate, and the public V9 successor proof.
+- [Resident activity worker checkpoint](llm/checkpoints/2026-07-19-v3-resident-activity-worker.md) — the current fully validated implementation handoff for offline submission, serial resident execution, and conservative restart recovery.
+- [V2 foundation stabilization checkpoint](llm/checkpoints/2026-07-19-v2-foundation-stabilized.md) — the preceding clean-install restart point after repository cleanup, the portable module gate, and the public V9 successor proof.
 - [V9 managed-effect successor checkpoint](llm/checkpoints/2026-07-19-v9-managed-effect-successors.md) — the historical pre-mount restart point for the first causally linked fresh-identity retry policy and its internal relocated-SEA proof.
 - [V8 destination-effect reconciliation checkpoint](llm/checkpoints/2026-07-18-v8-destination-effect-reconciliation.md) — the preceding restart point after destination-finalized uncertain-effect reconciliation and its relocated-SEA crash matrix.
 - [Relocated-SEA mixed-settlement checkpoint](llm/checkpoints/2026-07-18-relocated-sea-mixed-settlement-sigkill-matrix.md) — the preceding restart point after proving packaged stopped-attempt settlement across mixed sibling dispositions.
@@ -179,6 +202,39 @@ manifest.
 See the [quickstart](docs/guides/quickstart.md) and [application
 structure](docs/guides/application-structure.md) for the complete
 authoring rules.
+
+## Submit durable work and run a local resident
+
+The source commands prepare and pin the application revision from `--dir`:
+
+```bash
+wharfie ops submit --dir ./path/to/app --activity greet \
+  --idempotency-key <stable-key> --input '{"name":"Ada"}'
+wharfie ops worker --dir ./path/to/app
+```
+
+A packaged application exposes the same operations without a source-directory
+override:
+
+```bash
+<app> wharfie submit --activity greet \
+  --idempotency-key <stable-key> --input '{"name":"Ada"}'
+<app> wharfie worker
+```
+
+`submit` is durable and does not require a live worker. Reusing the same
+idempotency key with the identical request returns the retained run; changing
+the request conflicts. A matching resident wakes immediately when it accepts
+the authenticated request, while an offline request remains `RUNNABLE` until
+that exact app/revision worker starts. The worker is deliberately serial. On
+`SIGINT` or `SIGTERM` it stops admitting commands and claims, records
+`STOPPING`, allows the active attempt up to 30 seconds to finish naturally,
+then requests cooperative durable cancellation and retains ownership until the
+attempt and admitted command handlers settle.
+
+This is a foreground resident runtime, not service installation. Wharfie does
+not yet install startup-on-boot units or provide schedules, workflow
+continuations, multi-host reassignment, or a public ready-work/history index.
 
 ## Reconcile one uncertain managed effect
 

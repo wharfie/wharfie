@@ -22,6 +22,7 @@ import {
   createManualLedgerRunId,
   recoverManualLedgerActivity,
   runManualLedgerActivity,
+  submitManualLedgerActivity,
 } from '../../src/core/runtime/manual-ledger-run.js';
 
 const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
@@ -266,6 +267,98 @@ describe('manual ledger activity runner', () => {
         /** @type {any} */ ({ appId, operationId: idempotencyKey }),
       ),
     ).toThrow(/idempotencyKey/i);
+  });
+
+  it('submits and deduplicates durable work without claiming an attempt', async () => {
+    await withLedger(async (ledger) => {
+      const runnable = runOptions(ledger);
+      const submission = {
+        ledger,
+        runId: runnable.runId,
+        appId: runnable.appId,
+        revisionId: runnable.revisionId,
+        activityId: runnable.activityId,
+        input: runnable.input,
+        callerMetadata: runnable.callerMetadata,
+        actor: { kind: 'local', id: 'submit-test' },
+      };
+
+      await expect(submitManualLedgerActivity(submission)).resolves.toEqual({
+        accepted: true,
+        reused: false,
+        runId: runnable.runId,
+        appId: runnable.appId,
+        revisionId: runnable.revisionId,
+        invocationId: MANUAL_LEDGER_INVOCATION_ID,
+        activityId: runnable.activityId,
+        runStatus: RunStatus.RUNNING,
+        invocationStatus: InvocationStatus.RUNNABLE,
+      });
+
+      const submitted = await ledger.rebuildRun(runnable.runId);
+      expect(submitted).toMatchObject({
+        run: { status: RunStatus.RUNNING, version: 1 },
+        invocations: [
+          {
+            invocationId: MANUAL_LEDGER_INVOCATION_ID,
+            status: InvocationStatus.RUNNABLE,
+            generation: 0,
+          },
+        ],
+        attempts: [],
+        events: [{ type: 'manual-run-created', actor: submission.actor }],
+      });
+      await expect(
+        ledger.readManualRunRequest(
+          runnable.runId,
+          MANUAL_LEDGER_INVOCATION_ID,
+        ),
+      ).resolves.toMatchObject({
+        request: {
+          input: runnable.input,
+          callerMetadata: runnable.callerMetadata,
+        },
+        actor: submission.actor,
+      });
+
+      await expect(submitManualLedgerActivity(submission)).resolves.toEqual({
+        accepted: true,
+        reused: true,
+        runId: runnable.runId,
+        appId: runnable.appId,
+        revisionId: runnable.revisionId,
+        invocationId: MANUAL_LEDGER_INVOCATION_ID,
+        activityId: runnable.activityId,
+        runStatus: RunStatus.RUNNING,
+        invocationStatus: InvocationStatus.RUNNABLE,
+      });
+      await expect(
+        submitManualLedgerActivity({
+          ...submission,
+          input: { who: 'Grace' },
+        }),
+      ).rejects.toThrow(/conflicts with existing work/i);
+      await expect(ledger.getEvents(runnable.runId)).resolves.toHaveLength(1);
+    });
+  });
+
+  it('rejects unsupported dispatch fields before submission', async () => {
+    await withLedger(async (ledger) => {
+      const runnable = runOptions(ledger);
+      await expect(
+        submitManualLedgerActivity(
+          /** @type {any} */ ({
+            ledger,
+            runId: runnable.runId,
+            appId: runnable.appId,
+            revisionId: runnable.revisionId,
+            activityId: runnable.activityId,
+            executeAttempt: runnable.executeAttempt,
+          }),
+        ),
+      ).rejects.toThrow(/executeAttempt is not supported/i);
+      await expect(ledger.rebuildRun(runnable.runId)).resolves.toBeNull();
+    });
   });
 
   it('rejects the retired precreated-successor seam before creating manual work', async () => {

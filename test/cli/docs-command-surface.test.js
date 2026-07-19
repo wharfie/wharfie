@@ -126,6 +126,14 @@ describe('docs command surface', () => {
     expect(quickstart).toContain(
       'wharfie ops run --activity <activity-id> --dir ./path/to/app',
     );
+    expect(quickstart).toContain(
+      'wharfie ops submit --activity <activity-id> --dir ./path/to/app',
+    );
+    expect(quickstart).toContain('wharfie ops worker --dir ./path/to/app');
+    expect(quickstart).toContain(
+      '<app> wharfie submit --activity <activity-id>',
+    );
+    expect(quickstart).toContain('<app> wharfie worker');
     expect(quickstart).toContain('--idempotency-key <stable-key>');
     expect(quickstart).not.toContain('--operation-id');
     expect(quickstart).toContain('append-only run → invocation → attempt');

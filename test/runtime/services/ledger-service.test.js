@@ -72,6 +72,54 @@ function createDependencies(options = {}) {
 }
 
 describe('resident ledger service lifecycle', () => {
+  it('can defer READY until the composed command endpoint is bound', async () => {
+    const { lifecycle, ownership, sessionRoot } = createDependencies();
+    const service = createLedgerService({
+      appId: APP_ID,
+      revisionId: REVISION_A,
+      lifecycle,
+      ownership,
+      sessionRoot,
+    });
+
+    await expect(service.start({ deferReady: true })).resolves.toMatchObject({
+      status: LedgerServiceLifecycleStatus.STARTING,
+      generation: 1,
+    });
+    expect(service.getRuntimeStatus()).toBe(
+      LedgerServiceRuntimeStatus.STARTING,
+    );
+    expect(service.ownsLocalSession()).toBe(true);
+    await expect(service.markReady()).resolves.toMatchObject({
+      status: LedgerServiceLifecycleStatus.READY,
+      generation: 1,
+    });
+    expect(service.getRuntimeStatus()).toBe(LedgerServiceRuntimeStatus.READY);
+    await service.stop();
+  });
+
+  it('lets shutdown win before deferred readiness without publishing READY', async () => {
+    const { lifecycle, ownership, sessionRoot } = createDependencies();
+    const markReady = jest.fn(lifecycle.markReady);
+    const service = createLedgerService({
+      appId: APP_ID,
+      revisionId: REVISION_A,
+      lifecycle: { ...lifecycle, markReady },
+      ownership,
+      sessionRoot,
+    });
+
+    await service.start({ deferReady: true });
+    const stopping = await service.beginStopping();
+    await expect(service.markReady()).resolves.toEqual(stopping);
+    expect(markReady).not.toHaveBeenCalled();
+    const stopped = await service.stop();
+    expect(stopped).toMatchObject({
+      status: LedgerServiceLifecycleStatus.STOPPED,
+    });
+    await expect(service.markReady()).resolves.toEqual(stopped);
+  });
+
   it('holds one local owner, persists READY, and lets a later revision recover after graceful stop', async () => {
     const { lifecycle, ownership, sessionRoot } = createDependencies();
     let observedAt = 100;
@@ -110,6 +158,15 @@ describe('resident ledger service lifecycle', () => {
     expect(concurrent.getRuntimeStatus()).toBe(
       LedgerServiceRuntimeStatus.FAILED,
     );
+
+    const stopping = await first.beginStopping();
+    expect(stopping).toMatchObject({
+      generation: 1,
+      status: LedgerServiceLifecycleStatus.STOPPING,
+    });
+    expect(first.getRuntimeStatus()).toBe(LedgerServiceRuntimeStatus.STOPPING);
+    expect(first.ownsLocalSession()).toBe(true);
+    await expect(first.beginStopping()).resolves.toEqual(stopping);
 
     const stopped = await first.stop();
     expect(stopped).toMatchObject({

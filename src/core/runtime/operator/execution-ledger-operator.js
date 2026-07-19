@@ -598,7 +598,7 @@ function assertRecoverableApplicationStateEffect(effect, appId) {
  * authority; only STARTED members require the exact built-in LMDB receipt
  * contract. Both statuses settle in one later ledger transition.
  * @param {Record<string, any>} view - Fresh verified run projection.
- * @returns {{invocationId: string, attemptId: string, effects: Record<string, any>[], hasStarted: boolean, fingerprint: string} | undefined} - Exact recovery set.
+ * @returns {{invocationId: string, attemptId: string, attempt: Record<string, any>, effects: Record<string, any>[], hasStarted: boolean, fingerprint: string} | undefined} - Exact recovery set.
  */
 function getStoppedEffectRecoveryTarget(view) {
   const invocation = getRecoverableInvocation(view);
@@ -688,6 +688,7 @@ function getStoppedEffectRecoveryTarget(view) {
   return {
     invocationId: invocation.invocationId,
     attemptId: attempt.attemptId,
+    attempt,
     effects: unresolved,
     hasStarted: unresolved.some(
       (/** @type {Record<string, any>} */ effect) =>
@@ -1259,7 +1260,7 @@ function hasCompetingManagedEffectRecoveryAuthority(view, target) {
  * This internal operator seam isolates the authority decision from store and
  * catalog plumbing; packaged command construction calls it only under held
  * local mutation ownership.
- * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, target: {invocationId: string, attemptId: string, effects: Record<string, any>[]}, recoverOutcome?: (input: {destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}) => Promise<unknown>|unknown, actor: {kind: string, id: string}}} options - Exact operator recovery inputs.
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, target: {invocationId: string, attemptId: string, attempt: Record<string, any>, effects: Record<string, any>[]}, recoverOutcome?: (input: {destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}) => Promise<unknown>|unknown, actor: {kind: string, id: string}}} options - Exact operator recovery inputs.
  * @returns {Promise<Record<string, any>>} - Plural recovery or retained generic authority.
  */
 export async function recoverStoppedManagedEffectsAtOperatorBoundary(options) {
@@ -1271,6 +1272,8 @@ export async function recoverStoppedManagedEffectsAtOperatorBoundary(options) {
       ...(options.recoverOutcome
         ? { recoverOutcome: options.recoverOutcome }
         : {}),
+      expectedAttempt: options.target.attempt,
+      expectedEffects: options.target.effects,
       actor: options.actor,
     });
     return {
@@ -1447,13 +1450,14 @@ function getAcceptedOwnerStatuses(candidate, delivery) {
 
 /**
  * Read exactly the ownership record that names a possible current local
- * manual runner. This is a read-only routing lookup, not authority to write
- * the ledger; the server rechecks its durable generation before it dispatches
- * the command.
+ * activity owner. Foreground manual runners and resident workers expose the
+ * same authenticated cancellation command; this lookup is only routing, not
+ * authority to write the ledger. The server rechecks its durable generation
+ * before dispatching the command.
  * @param {{appId: string, configuration: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>}} options - Current app and immutable storage routing.
- * @returns {Promise<{serviceId: string, ownership: Readonly<Record<string, any>>} | null>} - Current local manual owner or no eligible owner.
+ * @returns {Promise<{serviceId: string, ownership: Readonly<Record<string, any>>} | null>} - Current local activity owner or no eligible owner.
  */
-async function readLocalManualOwner(options) {
+async function readLocalActivityOwner(options) {
   const serviceId = createLedgerServiceId({ appId: options.appId });
   try {
     return await withExecutionLedger(
@@ -1464,7 +1468,10 @@ async function readLocalManualOwner(options) {
         }).getOwnership({ serviceId });
         if (
           !ownership ||
-          ownership.ownerKind !== LedgerServiceOwnerKind.MANUAL
+          ![
+            LedgerServiceOwnerKind.MANUAL,
+            LedgerServiceOwnerKind.RESIDENT,
+          ].includes(ownership.ownerKind)
         ) {
           return null;
         }
@@ -1569,7 +1576,7 @@ export async function cancelExecutionLedgerRun(options) {
     );
   }
 
-  const owner = await readLocalManualOwner({
+  const owner = await readLocalActivityOwner({
     appId: preflight.run.appId,
     configuration,
   });

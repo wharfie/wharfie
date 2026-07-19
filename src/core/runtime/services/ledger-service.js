@@ -36,6 +36,7 @@ export const LedgerServiceRuntimeStatus = Object.freeze({
 /** @typedef {'NEW'|'STARTING'|'READY'|'STOPPING'|'STOPPED'|'FAILED'} LedgerServiceRuntimeStatusValue */
 /** @typedef {Readonly<Record<string, any>>} LedgerServiceLifecycleSnapshot */
 /** @typedef {{serviceId: string, sessionId: string, sessionRoot: string, endpoint: string, ownerCommandEndpoint: string, release: () => Promise<void>}} LocalServiceSession */
+/** @typedef {LocalServiceSession & {commandSession: LocalServiceSession, ownership: Readonly<Record<string, any>>, scopeId: string, principalId: string}} LocalLedgerServiceOwner */
 /** @typedef {{start: Function, markReady: Function, markStopping: Function, markStopped: Function}} LedgerServiceLifecycleStore */
 /** @typedef {{getOwnership: Function, claimOwnership: Function, releaseOwnership: Function}} LedgerServiceOwnershipStore */
 
@@ -314,7 +315,7 @@ export async function acquireLocalLedgerServiceSession(options) {
  * intentionally no scheduler, run claim, queue poller, lease, heartbeat, or
  * coordinator epoch in this first lifecycle vertical.
  * @param {{appId: string, revisionId: string, lifecycle: LedgerServiceLifecycleStore, ownership: LedgerServiceOwnershipStore, sessionRoot?: string, sessionId?: string, now?: () => number, acquireSession?: (input: {serviceId: string, sessionId: string, sessionRoot?: string}) => Promise<LocalServiceSession>, probeSession?: (input: {serviceId: string, sessionId: string, sessionRoot?: string}) => Promise<{endpoint: string, status: 'active'|'absent'|'unknown'}>}} options - Service dependencies.
- * @returns {{start: () => Promise<LedgerServiceLifecycleSnapshot>, stop: () => Promise<LedgerServiceLifecycleSnapshot | null>, getLifecycle: () => LedgerServiceLifecycleSnapshot | null, getRuntimeStatus: () => LedgerServiceRuntimeStatusValue, getServiceId: () => string, ownsLocalSession: () => boolean}} - Resident service handle.
+ * @returns {{start: (options?: {deferReady?: boolean}) => Promise<LedgerServiceLifecycleSnapshot>, markReady: () => Promise<LedgerServiceLifecycleSnapshot>, beginStopping: () => Promise<LedgerServiceLifecycleSnapshot | null>, stop: () => Promise<LedgerServiceLifecycleSnapshot | null>, getLifecycle: () => LedgerServiceLifecycleSnapshot | null, getRuntimeStatus: () => LedgerServiceRuntimeStatusValue, getServiceId: () => string, getLocalOwner: () => LocalLedgerServiceOwner | null, ownsLocalSession: () => boolean}} - Resident service handle.
  */
 export function createLedgerService(options) {
   assertLogicalId(options?.appId, 'appId');
@@ -335,7 +336,7 @@ export function createLedgerService(options) {
   const now = options.now || (() => Date.now());
   const serviceId = createLedgerServiceId({ appId });
 
-  /** @type {LocalServiceSession | undefined} */
+  /** @type {LocalLedgerServiceOwner | undefined} */
   let localSession;
   /** @type {LedgerServiceLifecycleSnapshot | null} */
   let lifecycleSnapshot = null;
@@ -343,6 +344,11 @@ export function createLedgerService(options) {
   let runtimeStatus = LedgerServiceRuntimeStatus.NEW;
   /** @type {Promise<LedgerServiceLifecycleSnapshot> | undefined} */
   let startPromise;
+  /** @type {Promise<LedgerServiceLifecycleSnapshot> | undefined} */
+  let markReadyPromise;
+  /** @type {Promise<LedgerServiceLifecycleSnapshot | null> | undefined} */
+  let beginStoppingPromise;
+  let stoppingRequested = false;
   /** @type {Promise<LedgerServiceLifecycleSnapshot | null> | undefined} */
   let stopPromise;
 
@@ -357,12 +363,25 @@ export function createLedgerService(options) {
   }
 
   /**
-   * Acquire ownership, record STARTING, then record READY. A crash after any
-   * point leaves no false STOPPED record: process death releases the socket,
-   * and the next owner writes a higher STARTING generation.
-   * @returns {Promise<LedgerServiceLifecycleSnapshot>} - Durable READY record.
+   * Acquire ownership and record STARTING. Ordinary callers also record READY;
+   * a composed runtime may defer READY until its command endpoint is bound.
+   * @param {{deferReady?: boolean}} [startOptions] - Optional readiness split.
+   * @returns {Promise<LedgerServiceLifecycleSnapshot>} - Durable STARTING or READY record.
    */
-  async function start() {
+  async function start(startOptions = {}) {
+    if (
+      !startOptions ||
+      typeof startOptions !== 'object' ||
+      Array.isArray(startOptions) ||
+      Object.keys(startOptions).some((key) => key !== 'deferReady') ||
+      (startOptions.deferReady !== undefined &&
+        typeof startOptions.deferReady !== 'boolean')
+    ) {
+      throw new TypeError(
+        'Ledger service start options support only boolean deferReady.',
+      );
+    }
+    const deferReady = startOptions.deferReady === true;
     if (runtimeStatus === LedgerServiceRuntimeStatus.READY) {
       if (!lifecycleSnapshot) {
         throw new LedgerServiceRuntimeStateError(
@@ -371,70 +390,194 @@ export function createLedgerService(options) {
       }
       return lifecycleSnapshot;
     }
-    if (startPromise) return await startPromise;
     if (
-      runtimeStatus !== LedgerServiceRuntimeStatus.NEW ||
-      stopPromise !== undefined
+      stoppingRequested ||
+      (runtimeStatus !== LedgerServiceRuntimeStatus.NEW &&
+        runtimeStatus !== LedgerServiceRuntimeStatus.STARTING)
+    ) {
+      throw new LedgerServiceRuntimeStateError(
+        `Ledger service cannot start from ${runtimeStatus}.`,
+      );
+    }
+    if (
+      !startPromise &&
+      (runtimeStatus !== LedgerServiceRuntimeStatus.NEW ||
+        stopPromise !== undefined)
     ) {
       throw new LedgerServiceRuntimeStateError(
         `Ledger service cannot start from ${runtimeStatus}.`,
       );
     }
 
-    runtimeStatus = LedgerServiceRuntimeStatus.STARTING;
-    const pending = (async () => {
+    if (!startPromise) {
+      runtimeStatus = LedgerServiceRuntimeStatus.STARTING;
+      startPromise = (async () => {
+        try {
+          localSession = await acquireLocalLedgerServiceSession({
+            appId,
+            ownership,
+            ownerKind: LedgerServiceOwnerKind.RESIDENT,
+            sessionId,
+            now,
+            ...(typeof sessionRoot === 'string' ? { sessionRoot } : {}),
+            ...(typeof options.acquireSession === 'function'
+              ? { acquireSession: options.acquireSession }
+              : {}),
+            ...(typeof options.probeSession === 'function'
+              ? { probeSession: options.probeSession }
+              : {}),
+          });
+          const starting = await lifecycle.start({
+            serviceId,
+            appId,
+            revisionId,
+            sessionId,
+            observedAt: now(),
+          });
+          lifecycleSnapshot = /** @type {LedgerServiceLifecycleSnapshot} */ (
+            starting.lifecycle
+          );
+          return lifecycleSnapshot;
+        } catch (error) {
+          runtimeStatus = LedgerServiceRuntimeStatus.FAILED;
+          try {
+            await releaseLocalSession();
+          } catch (releaseError) {
+            throw new AggregateError(
+              [error, releaseError],
+              'Ledger service startup failed and its local ownership session could not be released.',
+            );
+          }
+          throw error;
+        }
+      })();
+    }
+    const startingSnapshot = await startPromise;
+    if (deferReady) return startingSnapshot;
+    try {
+      return await markReady();
+    } catch (error) {
+      runtimeStatus = LedgerServiceRuntimeStatus.FAILED;
       try {
-        localSession = await acquireLocalLedgerServiceSession({
-          appId,
-          ownership,
-          ownerKind: LedgerServiceOwnerKind.RESIDENT,
-          sessionId,
-          now,
-          ...(typeof sessionRoot === 'string' ? { sessionRoot } : {}),
-          ...(typeof options.acquireSession === 'function'
-            ? { acquireSession: options.acquireSession }
-            : {}),
-          ...(typeof options.probeSession === 'function'
-            ? { probeSession: options.probeSession }
-            : {}),
-        });
-        const starting = await lifecycle.start({
-          serviceId,
-          appId,
-          revisionId,
-          sessionId,
-          observedAt: now(),
-        });
-        const startingSnapshot = /** @type {LedgerServiceLifecycleSnapshot} */ (
-          starting.lifecycle
+        await releaseLocalSession();
+      } catch (releaseError) {
+        throw new AggregateError(
+          [error, releaseError],
+          'Ledger service readiness failed and its local ownership session could not be released.',
         );
-        lifecycleSnapshot = startingSnapshot;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Publish READY only after the composed runtime has bound every endpoint it
+   * promises while ready. A concurrent shutdown wins without fabricating a
+   * transient READY record.
+   * @returns {Promise<LedgerServiceLifecycleSnapshot>} - Current durable lifecycle.
+   */
+  async function markReady() {
+    if (stoppingRequested && lifecycleSnapshot) return lifecycleSnapshot;
+    if (markReadyPromise) return await markReadyPromise;
+    const pending = (async () => {
+      if (!startPromise) {
+        throw new LedgerServiceRuntimeStateError(
+          'Ledger service cannot become READY before STARTING.',
+        );
+      }
+      await startPromise;
+      if (stoppingRequested) {
+        return /** @type {LedgerServiceLifecycleSnapshot} */ (
+          lifecycleSnapshot
+        );
+      }
+      if (!localSession || !lifecycleSnapshot) {
+        throw new LedgerServiceRuntimeStateError(
+          'Ledger service cannot become READY without its local owner and STARTING record.',
+        );
+      }
+      if (lifecycleSnapshot.status === LedgerServiceLifecycleStatus.READY) {
+        runtimeStatus = LedgerServiceRuntimeStatus.READY;
+        return lifecycleSnapshot;
+      }
+      if (
+        lifecycleSnapshot.status === LedgerServiceLifecycleStatus.STOPPING ||
+        lifecycleSnapshot.status === LedgerServiceLifecycleStatus.STOPPED
+      ) {
+        return lifecycleSnapshot;
+      }
+      try {
         const ready = await lifecycle.markReady({
           serviceId,
           sessionId,
-          generation: startingSnapshot.generation,
+          generation: lifecycleSnapshot.generation,
           observedAt: now(),
         });
-        const readySnapshot = /** @type {LedgerServiceLifecycleSnapshot} */ (
+        lifecycleSnapshot = /** @type {LedgerServiceLifecycleSnapshot} */ (
           ready.lifecycle
         );
-        lifecycleSnapshot = readySnapshot;
         runtimeStatus = LedgerServiceRuntimeStatus.READY;
-        return readySnapshot;
+        return lifecycleSnapshot;
       } catch (error) {
         runtimeStatus = LedgerServiceRuntimeStatus.FAILED;
-        try {
-          await releaseLocalSession();
-        } catch (releaseError) {
-          throw new AggregateError(
-            [error, releaseError],
-            'Ledger service startup failed and its local ownership session could not be released.',
-          );
-        }
         throw error;
       }
     })();
-    startPromise = pending;
+    markReadyPromise = pending;
+    return await pending;
+  }
+
+  /**
+   * Publish STOPPING while retaining this exact local owner generation. The
+   * worker may then drain or cooperatively cancel its active attempt before a
+   * later `stop()` publishes STOPPED and releases ownership.
+   * @returns {Promise<LedgerServiceLifecycleSnapshot | null>} - Durable STOPPING snapshot when the service started.
+   */
+  async function beginStopping() {
+    if (beginStoppingPromise) return await beginStoppingPromise;
+    stoppingRequested = true;
+    const readinessInFlight = markReadyPromise;
+    const pending = (async () => {
+      if (startPromise) await startPromise;
+      if (readinessInFlight) {
+        try {
+          await readinessInFlight;
+        } catch {
+          // A failed READY write does not waive the best-effort durable
+          // STARTING -> STOPPING cleanup under the still-held owner.
+        }
+      }
+      if (!localSession) return lifecycleSnapshot;
+      if (!lifecycleSnapshot) {
+        runtimeStatus = LedgerServiceRuntimeStatus.FAILED;
+        throw new LedgerServiceRuntimeStateError(
+          'Ledger service owns a local session without a lifecycle snapshot.',
+        );
+      }
+      if (lifecycleSnapshot.status === LedgerServiceLifecycleStatus.STOPPED) {
+        runtimeStatus = LedgerServiceRuntimeStatus.STOPPED;
+        return lifecycleSnapshot;
+      }
+      runtimeStatus = LedgerServiceRuntimeStatus.STOPPING;
+      if (lifecycleSnapshot.status !== LedgerServiceLifecycleStatus.STOPPING) {
+        try {
+          const stopping = await lifecycle.markStopping({
+            serviceId,
+            sessionId,
+            generation: lifecycleSnapshot.generation,
+            observedAt: now(),
+          });
+          lifecycleSnapshot = /** @type {LedgerServiceLifecycleSnapshot} */ (
+            stopping.lifecycle
+          );
+        } catch (error) {
+          runtimeStatus = LedgerServiceRuntimeStatus.FAILED;
+          throw error;
+        }
+      }
+      return lifecycleSnapshot;
+    })();
+    beginStoppingPromise = pending;
     return await pending;
   }
 
@@ -475,27 +618,14 @@ export function createLedgerService(options) {
 
       /** @type {LedgerServiceLifecycleSnapshot} */
       let currentSnapshot = lifecycleSnapshot;
-      runtimeStatus = LedgerServiceRuntimeStatus.STOPPING;
       /** @type {LedgerServiceLifecycleSnapshot | undefined} */
       let result;
       /** @type {unknown} */
       let transitionError;
       try {
-        if (
-          currentSnapshot.status !== LedgerServiceLifecycleStatus.STOPPING &&
-          currentSnapshot.status !== LedgerServiceLifecycleStatus.STOPPED
-        ) {
-          const stopping = await lifecycle.markStopping({
-            serviceId,
-            sessionId,
-            generation: currentSnapshot.generation,
-            observedAt: now(),
-          });
-          currentSnapshot = /** @type {LedgerServiceLifecycleSnapshot} */ (
-            stopping.lifecycle
-          );
-          lifecycleSnapshot = currentSnapshot;
-        }
+        currentSnapshot = /** @type {LedgerServiceLifecycleSnapshot} */ (
+          await beginStopping()
+        );
         if (currentSnapshot.status !== LedgerServiceLifecycleStatus.STOPPED) {
           const stopped = await lifecycle.markStopped({
             serviceId,
@@ -537,10 +667,13 @@ export function createLedgerService(options) {
 
   return {
     start,
+    markReady,
+    beginStopping,
     stop,
     getLifecycle: () => lifecycleSnapshot,
     getRuntimeStatus: () => runtimeStatus,
     getServiceId: () => serviceId,
+    getLocalOwner: () => localSession || null,
     ownsLocalSession: () => Boolean(localSession),
   };
 }

@@ -1654,7 +1654,7 @@ function assertManagedEffectBatchRecoveryView(serialized, fixture, expected) {
  * @param {Record<string, any>} after - Exact settled run.
  * @param {{payloadStoreId: string, effects: {effectId: string, initialStatus: string, recoveryAction?: string, recoveredStatus?: string}[]}} fixture - Seeded effect batch.
  * @param {Record<string, any>} actor - Expected settlement actor.
- * @param {{key: string, size: number, sha256: string}} recoveredPayloadFile - Exact recovered outcome payload bytes.
+ * @param {{key: string, size: number, sha256: string} | undefined} recoveredPayloadFile - Exact recovered outcome payload bytes when the fixture includes receipt recovery.
  * @returns {Record<string, any>} - Compound settlement event.
  */
 function assertSettledManagedEffectBatchRun(
@@ -1776,6 +1776,10 @@ function assertSettledManagedEffectBatchRun(
       };
     } else {
       assert.equal(expected.recoveryAction, 'outcome-recovered');
+      assert.ok(
+        recoveredPayloadFile,
+        'receipt recovery requires the exact recovered payload file',
+      );
       const outcomeRef = retained.outcomeRef;
       assert.ok(outcomeRef, 'recovered effect omitted its outcome reference');
       assert.deepEqual(Object.keys(outcomeRef).sort(), [
@@ -6869,6 +6873,13 @@ export async function greet(
   input: GreetInput = {},
   runtime: GreetRuntime = {},
 ) {
+  const dispatchMarkerPath =
+    process.env.WHARFIE_SEA_VERIFIER_ACTIVITY_DISPATCH_MARKER;
+  if (dispatchMarkerPath) {
+    writeDurableMarker(dispatchMarkerPath, {
+      kind: 'packaged-greet-activity-dispatch',
+    });
+  }
   const message = \`hello \${input.name || 'world'}\`;
   const database = open({
     path: './lmdb-smoke',
@@ -7263,6 +7274,10 @@ export default defineApp({
     cleanRunDirectory,
     'active-recovery-probe-must-remain-absent',
   );
+  const residentActivityDispatchMarkerPath = path.join(
+    cleanRunDirectory,
+    'resident-activity-dispatch-must-remain-absent.json',
+  );
   const ledgerTableName = 'wharfie-package-sea-ledger-service';
   const lifecycleObserver = await createInstalledLedgerLifecycleObserver({
     installedPackageRoot,
@@ -7283,6 +7298,8 @@ export default defineApp({
   const residentEnvironment = {
     ...operatorEnvironment,
     WHARFIE_RUNTIME_COMMAND: 'ledger-service',
+    WHARFIE_SEA_VERIFIER_ACTIVITY_DISPATCH_MARKER:
+      residentActivityDispatchMarkerPath,
   };
   const ledgerFixture = await createInstalledExecutionLedgerFixture({
     installedPackageRoot,
@@ -7291,6 +7308,21 @@ export default defineApp({
     payloadPath,
     applicationStatePath,
     revisionId: packagedArtifact.revisionId,
+  });
+  const historicalOperatorRevisionId = `wrv1_${createHash('sha256')
+    .update(
+      `wharfie:sea-verifier:historical-operator-revision:v1\0${packagedArtifact.revisionId}`,
+      'utf8',
+    )
+    .digest('base64url')}`;
+  assert.notEqual(historicalOperatorRevisionId, packagedArtifact.revisionId);
+  const operatorLedgerFixture = await createInstalledExecutionLedgerFixture({
+    installedPackageRoot,
+    controlPath,
+    tableName: ledgerTableName,
+    payloadPath,
+    applicationStatePath,
+    revisionId: historicalOperatorRevisionId,
   });
   const durableIdempotencyKey = 'packaged-durable-managed-effect';
   const durableRunId = ledgerFixture.createRunId(
@@ -7547,6 +7579,31 @@ export default defineApp({
     root: path.join(cleanRunDirectory, 'managed-effect-successor-crash-matrix'),
   });
 
+  const residentEffectBatch =
+    await ledgerFixture.createApplicationStateRecoveryBatchRun(
+      embeddedManifest.app.id,
+      'resident-current-revision-effect-recovery',
+      [
+        { effectId: 'resident-pending', state: 'PENDING' },
+        { effectId: 'resident-started', state: 'STARTED_ABSENT' },
+      ],
+    );
+  const residentRunBeforeRecovery = await ledgerFixture.readRun(
+    residentEffectBatch.runId,
+  );
+  assert.ok(residentRunBeforeRecovery);
+  assert.deepEqual(
+    residentRunBeforeRecovery.effects.map((effect) => effect.status),
+    ['PENDING', 'STARTED'],
+  );
+  const residentDestinationsBeforeRecovery =
+    await readManagedEffectBatchDestinations(
+      ledgerFixture,
+      embeddedManifest.app.id,
+      residentEffectBatch,
+    );
+  assert.equal(existsSync(residentActivityDispatchMarkerPath), false);
+
   /** @type {ReturnType<typeof spawnResidentService> | undefined} */
   let firstResidentService;
   /** @type {ReturnType<typeof spawnResidentService> | undefined} */
@@ -7580,15 +7637,119 @@ export default defineApp({
     assert.equal(firstOwnership?.ownerKind, 'resident');
     assert.equal(firstOwnership?.generation, 1);
 
-    const claimedRunId = await ledgerFixture.createClaimedRun(
+    const residentRunAfterRecovery = await waitForDurableRun(
+      {
+        read: async () =>
+          await ledgerFixture.readRun(residentEffectBatch.runId),
+      },
+      (snapshot) =>
+        snapshot?.events.length ===
+          residentRunBeforeRecovery.events.length + 1 &&
+        snapshot.events.at(-1)?.type === 'attempt-became-uncertain',
+      firstResidentService,
+      'atomic resident recovery of current-revision STARTED work',
+    );
+    assertSettledManagedEffectBatchRun(
+      residentRunBeforeRecovery,
+      residentRunAfterRecovery,
+      residentEffectBatch,
+      { kind: 'resident-recovery', id: embeddedManifest.app.id },
+      undefined,
+    );
+    assert.deepEqual(
+      await readManagedEffectBatchDestinations(
+        ledgerFixture,
+        embeddedManifest.app.id,
+        residentEffectBatch,
+      ),
+      residentDestinationsBeforeRecovery,
+    );
+    assert.equal(existsSync(residentActivityDispatchMarkerPath), false);
+    assert.equal(firstResidentService.getExit(), null);
+    assert.equal((await lifecycleObserver.read())?.status, 'READY');
+
+    const postRecoveryIdempotencyKey = 'resident-post-managed-effect-recovery';
+    const postRecoveryRunId = ledgerFixture.createRunId(
+      embeddedManifest.app.id,
+      postRecoveryIdempotencyKey,
+    );
+    const postRecoverySubmit = JSON.parse(
+      runCommand(
+        cleanArtifactPath,
+        [
+          'wharfie',
+          'submit',
+          '--activity',
+          'persist-once',
+          '--idempotency-key',
+          postRecoveryIdempotencyKey,
+          '--input',
+          JSON.stringify({
+            key: 'resident-post-recovery-key',
+            value: { message: 'resident worker remained usable' },
+          }),
+          '--caller-metadata',
+          JSON.stringify({ requestId: 'resident-post-recovery-request' }),
+          '--json',
+        ],
+        {
+          cwd: cleanRunDirectory,
+          capture: true,
+          env: operatorEnvironment,
+        },
+      ).stdout,
+    );
+    assert.deepEqual(postRecoverySubmit, {
+      idempotency_key: postRecoveryIdempotencyKey,
+      run_id: postRecoveryRunId,
+      revision: packagedArtifact.revisionId,
+      activity: 'persist-once',
+      status: ledgerFixture.RunStatus.RUNNING,
+      invocation_status: ledgerFixture.InvocationStatus.RUNNABLE,
+      attempt_generation: 0,
+      attempt_status: '',
+      reused: false,
+    });
+    const postRecoveryRun = await waitForDurableRun(
+      { read: async () => await ledgerFixture.readRun(postRecoveryRunId) },
+      (snapshot) =>
+        snapshot?.run.status === ledgerFixture.RunStatus.COMPLETED &&
+        snapshot.invocations[0]?.status ===
+          ledgerFixture.InvocationStatus.COMPLETED &&
+        snapshot.attempts[0]?.status === ledgerFixture.AttemptStatus.COMPLETED,
+      firstResidentService,
+      'post-recovery resident activity completion',
+    );
+    assert.equal(postRecoveryRun.attempts.length, 1);
+    assert.equal(postRecoveryRun.attempts[0].generation, 1);
+    assert.equal(postRecoveryRun.effects.length, 1);
+    assert.equal(
+      postRecoveryRun.effects[0].status,
+      ledgerFixture.EffectStatus.COMPLETED,
+    );
+    assert.ok(
+      await ledgerFixture.readApplicationStateReceipt(
+        embeddedManifest.app.id,
+        postRecoveryRun.effects[0].destinationEffectId,
+      ),
+    );
+    assert.equal(existsSync(residentActivityDispatchMarkerPath), false);
+    assert.equal(firstResidentService.getExit(), null);
+    assert.equal((await lifecycleObserver.read())?.status, 'READY');
+
+    // These runs exercise app-scoped, source-independent operator recovery for
+    // historical revisions. Keeping them distinct from the resident's exact
+    // embedded revision prevents the live worker from legitimately recovering
+    // or dispatching verifier-injected work before the ownership assertions.
+    const claimedRunId = await operatorLedgerFixture.createClaimedRun(
       embeddedManifest.app.id,
       'packaged-operator-claimed-run',
     );
-    const crossAppRunId = await ledgerFixture.createClaimedRun(
+    const crossAppRunId = await operatorLedgerFixture.createClaimedRun(
       'other-portable-app',
       'packaged-operator-cross-app-run',
     );
-    const missingRunId = ledgerFixture.createRunId(
+    const missingRunId = operatorLedgerFixture.createRunId(
       embeddedManifest.app.id,
       'packaged-operator-missing-run',
     );
@@ -7611,13 +7772,13 @@ export default defineApp({
       },
     ];
     const sourceEffectBatch =
-      await ledgerFixture.createApplicationStateRecoveryBatchRun(
+      await operatorLedgerFixture.createApplicationStateRecoveryBatchRun(
         embeddedManifest.app.id,
         'source-mixed-effect-recovery',
         recoveryEffectSpecs('source'),
       );
     const seaEffectBatch =
-      await ledgerFixture.createApplicationStateRecoveryBatchRun(
+      await operatorLedgerFixture.createApplicationStateRecoveryBatchRun(
         embeddedManifest.app.id,
         'sea-mixed-effect-recovery',
         recoveryEffectSpecs('sea'),
@@ -7641,7 +7802,7 @@ export default defineApp({
       })),
     ];
     const seaCrashEffectBatch =
-      await ledgerFixture.createApplicationStateRecoveryBatchRun(
+      await operatorLedgerFixture.createApplicationStateRecoveryBatchRun(
         embeddedManifest.app.id,
         'sea-output-backpressure-crash-recovery',
         crashEffectSpecs,
@@ -8322,7 +8483,7 @@ export default defineApp({
       action: 'released-unstarted-claim',
       changed: true,
     });
-    assert.equal(packagedRecovery.run.revisionId, packagedArtifact.revisionId);
+    assert.equal(packagedRecovery.run.revisionId, historicalOperatorRevisionId);
     assert.equal(
       packagedRecovery.invocations[0].status,
       ledgerFixture.InvocationStatus.RUNNABLE,
@@ -8383,7 +8544,7 @@ export default defineApp({
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, live current-revision resident recovery without authored activity redispatch or process exit, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();

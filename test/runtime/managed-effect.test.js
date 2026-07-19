@@ -787,6 +787,14 @@ for (const dbAdapter of getAdapterMatrix()) {
           effectId: 'c-absent',
           sequence: 3,
         });
+        const before = await harness.ledger.rebuildRun(RUN_ID);
+        const expectedAttempt = before?.attempts.find(
+          (/** @type {Record<string, any>} */ candidate) =>
+            candidate.invocationId === INVOCATION_ID,
+        );
+        if (!before || !expectedAttempt) {
+          throw new Error('Expected mixed managed-effect recovery set.');
+        }
         const beforeEvents = await harness.ledger.getEvents(RUN_ID);
         const recoverOutcome = jest.fn(
           async (/** @type {Record<string, any>} */ input) => {
@@ -809,6 +817,8 @@ for (const dbAdapter of getAdapterMatrix()) {
           invocationId: INVOCATION_ID,
           recoverOutcome,
           actor: ACTOR,
+          expectedAttempt,
+          expectedEffects: [...before.effects].reverse(),
         });
         expect(result).toEqual({
           action: ManagedEffectRecoveryAction.SETTLED_MANAGED_EFFECT_SET,
@@ -851,6 +861,62 @@ for (const dbAdapter of getAdapterMatrix()) {
           type: 'attempt-became-uncertain',
           actor: ACTOR,
         });
+      } finally {
+        await harness.cleanup();
+      }
+    });
+
+    test('rejects a stale expected attempt fence before destination recovery', async () => {
+      const harness = await createHarness(dbAdapter);
+      try {
+        await retainManagedEffect(harness, { status: 'STARTED' });
+        const before = await harness.ledger.rebuildRun(RUN_ID);
+        const attempt = before?.attempts.find(
+          (/** @type {Record<string, any>} */ candidate) =>
+            candidate.invocationId === INVOCATION_ID,
+        );
+        if (!before || !attempt) {
+          throw new Error('Expected retained managed-effect attempt.');
+        }
+        const recoverOutcome = jest.fn(async () => null);
+
+        await expect(
+          recoverStoppedManagedEffects({
+            ledger: harness.ledger,
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            recoverOutcome,
+            expectedAttempt: {
+              ...attempt,
+              generation: attempt.generation + 1,
+            },
+            expectedEffects: before.effects,
+          }),
+        ).rejects.toBeInstanceOf(ManagedEffectDispatchNotAuthorizedError);
+
+        await expect(
+          recoverStoppedManagedEffects({
+            ledger: harness.ledger,
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            recoverOutcome,
+            expectedAttempt: attempt,
+            expectedEffects: before.effects.map(
+              (
+                /** @type {Record<string, any>} */ effect,
+                /** @type {number} */ index,
+              ) =>
+                index === 0
+                  ? { ...effect, version: effect.version + 1 }
+                  : effect,
+            ),
+          }),
+        ).rejects.toBeInstanceOf(ManagedEffectDispatchNotAuthorizedError);
+
+        expect(recoverOutcome).not.toHaveBeenCalled();
+        await expect(harness.ledger.rebuildRun(RUN_ID)).resolves.toEqual(
+          before,
+        );
       } finally {
         await harness.cleanup();
       }

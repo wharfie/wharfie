@@ -12304,6 +12304,69 @@ export function createExecutionLedger({
   }
 
   /**
+   * Read one manual invocation's immutable request and its exact creation
+   * actor after verifying the complete event stream, every projection, and
+   * the referenced request bytes. The creation actor is required when a
+   * resident owner replays `createManualRun`: changing it would change the
+   * immutable creation receipt instead of reaching the retained request.
+   * @param {string} runId - Run identity.
+   * @param {string} invocationId - Invocation identity.
+   * @returns {Promise<{run: Record<string, any>, invocation: Record<string, any>, request: {input: any, callerMetadata: Record<string, any>}, actor: {kind: string, id: string}} | null>} - Verified manual request authority, or null when the run or invocation does not exist.
+   */
+  async function readManualRunRequest(runId, invocationId) {
+    const normalizedRunId = assertOpaqueId(runId, 'runId');
+    const normalizedInvocationId = assertOpaqueId(invocationId, 'invocationId');
+    const state = await readVerifiedRun(normalizedRunId);
+    const invocation = state?.invocations.get(normalizedInvocationId);
+    if (!state || !invocation) return null;
+
+    const creationEvent = state.events[0];
+    if (
+      state.run.trigger?.kind !== 'manual' ||
+      creationEvent?.sequence !== 1 ||
+      creationEvent?.type !== 'manual-run-created'
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        normalizedRunId,
+        'manual run creation authority is unavailable',
+      );
+    }
+    const creation = eventSnapshots(creationEvent, normalizedRunId);
+    if (
+      creation.run.runId !== state.run.runId ||
+      creation.invocation.invocationId !== normalizedInvocationId ||
+      !hasSameCanonicalJson(
+        creation.invocation.requestRef,
+        invocation.requestRef,
+      )
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        normalizedRunId,
+        'manual run creation authority disagrees with invocation',
+      );
+    }
+    const request = await createLedgerPayloadReader(
+      payloadStore,
+      normalizedRunId,
+    ).readManualRequest(invocation.requestRef);
+    return {
+      run: cloneJsonObject(state.run, 'manual request run'),
+      invocation: cloneJsonObject(invocation, 'manual request invocation'),
+      request: {
+        input: cloneReferencedPayload(request.input, 'manual request input'),
+        callerMetadata: cloneJsonObject(
+          request.callerMetadata,
+          'manual request caller metadata',
+        ),
+      },
+      actor: {
+        kind: creationEvent.actor.kind,
+        id: creationEvent.actor.id,
+      },
+    };
+  }
+
+  /**
    * @param {string} runId - Run identity.
    * @param {string} invocationId - Invocation identity.
    * @param {string} attemptId - Attempt identity.
@@ -12503,6 +12566,7 @@ export function createExecutionLedger({
     markManagedEffectUncertain,
     interruptManagedEffectSuccessor,
     recordManagedEffectRequest,
+    readManualRunRequest,
     readManagedEffectDelivery,
     reconcileUncertainManagedEffect,
     reconcileUncertainManualAttempt,
@@ -12539,6 +12603,7 @@ export function createExecutionLedger({
  * @property {(runId: string, invocationId: string) => Promise<Record<string, any> | null>} getInvocation - Reads a verified invocation projection.
  * @property {(runId: string, invocationId: string, attemptId: string) => Promise<Record<string, any> | null>} getAttempt - Reads a verified attempt projection.
  * @property {(runId: string, invocationId: string, effectId: string) => Promise<Record<string, any> | null>} getEffect - Reads a verified effect projection.
+ * @property {(runId: string, invocationId: string) => Promise<{run: Record<string, any>, invocation: Record<string, any>, request: {input: any, callerMetadata: Record<string, any>}, actor: {kind: string, id: string}} | null>} readManualRunRequest - Rehashes one manual request and returns its verified creation actor for identical durable replay.
  * @property {(runId: string, invocationId: string, effectId: string) => Promise<Record<string, any> | null>} readManagedEffectDelivery - Rehashes a logical request and re-verifies any terminal result for safe redelivery.
  * @property {(runId: string) => Promise<Record<string, any>[]>} getEvents - Reads a verified event stream.
  * @property {(options: {appId: string, limit?: number, cursor?: string}) => Promise<{items: Record<string, any>[], nextCursor?: string}>} listRuns - Reads a verified bounded run-history page.

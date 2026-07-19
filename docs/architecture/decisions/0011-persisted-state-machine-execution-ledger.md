@@ -355,6 +355,29 @@ run`, packaged `<app> wharfie run`, recovery, and reconciliation acquire that
 same ownership fence and refuse to race a resident service; read-only
 inspection does not.
 
+The resident activity vertical composes that lifecycle with a deliberately
+serial worker. Source `wharfie ops submit` and packaged `<app> wharfie submit`
+create the exact app/revision-pinned manual run without claiming an attempt. A
+live matching resident accepts the submission through its authenticated owner
+command endpoint; when no owner is live, the submitter briefly acquires the
+same local fence, appends the `RUNNABLE` request, and exits. Source `wharfie ops
+worker`, packaged `<app> wharfie worker`, and the hidden packaged service
+runtime all enter the same resident worker implementation.
+
+The worker executes one physical attempt at a time. Its bounded paginated
+run-history scan is only a locator, not execution authority or the eventual
+ready-work design: it rebuilds each candidate from the event stream and relies
+on the ordinary ledger claim to authorize dispatch. It accepts only runs whose
+app and revision exactly match its prepared or embedded execution. On restart,
+a stale `CLAIMED` attempt that never crossed `STARTED` is abandoned and a fresh
+generation may be claimed. A stale `STARTED` attempt is recovered to blocked
+`UNCERTAIN` and never automatically redispatched. When it retains unresolved
+managed effects, the resident applies the same source-free compound recovery
+contract while holding ownership: `PENDING` siblings cancel without destination
+access, `STARTED` built-in application-state siblings are probed read-only, and
+the exact set plus stopped attempt settle atomically. That path exposes neither
+authored activity execution nor the normal adapter catalog.
+
 Foreground activity origination also shares one core host. The installed
 source command supplies one sealed prepared revision; the packaged command
 supplies only its validated embedded manifest and revision/runtime pair. Both
@@ -382,19 +405,35 @@ Packaged recovery and reconciliation require the local LMDB protocol, while
 source forms retain their documented configured-adapter behavior. External
 cancellation requires LMDB: it reads the current owner read-only, then uses an
 authenticated per-session command endpoint only for that exact live
-same-principal foreground `STARTED` attempt. It requires a stable request ID
-for retries and never falls back to a direct mutation or treats a resident
-lifecycle owner as a worker.
+same-principal foreground or resident `STARTED` attempt. It requires a stable
+request ID for retries and never falls back to a direct mutation. An idle
+resident or one executing another run does not count as the target attempt and
+reports no delivery.
 
-This is deliberately not a lease, heartbeat, scheduler, work claim, or
-distributed coordinator protocol. It can recover after process restart on one
-local volume, host/network namespace, and operating-system principal, but it
-cannot claim automatic recovery after host or volume loss. The hidden resident
-runtime rejects vanilla and distributed control adapters: their semantics
-cannot substantiate this single-host ownership protocol. The current
-source-level runtime also uses LMDB while the SEA build externalizes that native
-dependency; portable clean-machine service startup remains an explicit
-packaging/verification task, not a property of this lifecycle record.
+Graceful resident shutdown stops owner-command admission and new claims, writes
+`STOPPING` while retaining ownership, and waits for admitted callbacks. One
+active attempt receives a 30-second natural drain allowance; expiry requests
+cooperative cancellation through the same durable cancellation path. The
+resident retains ownership until the attempt and command handlers settle, then
+writes `STOPPED` and releases its session. Startup keeps lifecycle at
+`STARTING` until the separate owner-command socket is bound; shutdown that wins
+before binding moves directly to `STOPPING` without publishing false
+readiness. Resident submission explicitly enlarges that authenticated
+endpoint's bounded request envelope to carry the ledger's maximum referenced
+payload, while unrelated owner commands retain the smaller default.
+
+This is deliberately not a general scheduler, lease, heartbeat, multi-host
+work-reassignment, or distributed coordinator protocol. It makes only the
+narrow local claim for exact-revision manual activity work and can recover
+after process restart on one local volume, host/network namespace, and
+operating-system principal. It cannot claim automatic recovery after host or
+volume loss. The hidden resident runtime rejects vanilla and distributed
+control adapters: their semantics cannot substantiate this single-host
+ownership protocol. The current source-level runtime also uses LMDB while the
+SEA build externalizes that native dependency. The hidden SEA runtime now
+shares the resident activity implementation, but portable moved-SEA service
+startup remains an explicit packaging and validation obligation rather than a
+property of this lifecycle record.
 
 Automatic coordinator replacement requires a provider-backed **ControlStore**
 with semantic operations for lease acquisition, renewal, epoch increment, and
@@ -432,6 +471,12 @@ invocation-creation decisions; it is not durable execution truth.
   from logs.
 - Recovery can distinguish work that is safe to resume from work that is
   genuinely ambiguous.
+- An offline manual activity request can outlive its submitting process and be
+  executed later by an exact-revision resident without weakening the
+  `CLAIMED`/`STARTED` ambiguity boundary.
+- The first worker is intentionally serial. Its scan of verified run history is
+  adequate as a locator for this narrow vertical, but a transactional ready
+  projection is required before broader scheduling work.
 - At-least-once physical dispatch and one authoritative logical outcome are
   explicit, compatible claims.
 - Projections make normal queries practical, but every transition is more

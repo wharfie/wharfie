@@ -157,10 +157,61 @@ the same `--idempotency-key` with identical app revision, activity, input, and
 caller metadata returns its durable terminal without running the activity
 again. A changed request with that key fails rather than silently deduplicating.
 The result table includes the operator-provided `idempotency_key` and derived
-durable `run_id`. Inspection is read-only. Recovery is an explicit durable
-mutation to use only after every prior runner has stopped; it does not load an
-app manifest, parse current input, compile source, or dispatch user code.
-Cancellation is a separate request to an already active owner:
+durable `run_id`.
+
+To persist the request without claiming or running it, use `submit`:
+
+```bash
+wharfie ops submit --activity <activity-id> --dir ./path/to/app \
+  --idempotency-key <stable-key> --input '{"who":"cli-user"}'
+```
+
+`submit` does not require a live worker. It either sends the request to the
+matching resident through its authenticated same-principal command endpoint or
+briefly acquires the local owner and appends the same `RUNNABLE` invocation
+while offline. The receipt contains the exact app revision and derived run ID;
+reuse the idempotency key only with the identical activity, input, and caller
+metadata. It does not imply that physical execution has begun.
+
+Run the matching source revision as a foreground resident in another terminal:
+
+```bash
+wharfie ops worker --dir ./path/to/app
+```
+
+The first worker processes one physical attempt at a time. It accepts and
+executes only runs pinned to its exact application and immutable revision. Its
+paginated run-history scan is only a locator: the worker rebuilds each candidate
+and the ordinary ledger claim remains the authority to execute. On restart a
+stale `CLAIMED` attempt that never crossed the handler-start boundary is
+released and rescheduled. A stale `STARTED` attempt becomes blocked
+`UNCERTAIN`; Wharfie does not silently redispatch code that may already have
+run. If that attempt has unresolved managed effects, the resident first settles
+the exact sibling set through the source-free recovery path: `PENDING` requests
+are cancelled without destination access and `STARTED` application-state
+requests are checked read-only for permanent receipts. The whole set and the
+blocked attempt advance in one ledger event; authored activity and normal
+adapter code are not rerun.
+
+The packaged artifact exposes the same pair without any source-directory
+override:
+
+```bash
+<app> wharfie submit --activity <activity-id> \
+  --idempotency-key <stable-key> --input '{"who":"cli-user"}'
+<app> wharfie worker
+```
+
+The private environment-selected packaged service runtime starts the same
+resident activity implementation. Wharfie does not yet install it as an OS
+service or arrange startup on boot. The current worker is not a workflow or
+scheduler: it has no continuations, timers, schedules, multi-host leases, or
+heartbeats, and run history is not an ideal ready-work index.
+
+Inspection is read-only. Recovery is an explicit durable mutation to use only
+after every prior runner has stopped; it does not load an app manifest, parse
+current input, compile source, or dispatch user code. Cancellation is a
+separate request to an already active foreground or resident owner:
 
 ```bash
 wharfie ops inspect --run-id <run-id>
@@ -280,33 +331,46 @@ never rewritten, and the transcript, result, reason, and fence are never echoed
 in the operator response. A `cancelled` result still requires the matching
 earlier durable cancellation request and host cancellation frame.
 
-The V9 ledger carries forward cancellation by the foreground active owner.
-During `wharfie ops run`, the first `SIGINT` or `SIGTERM` becomes a durable request
-before the owner signals the physical attempt. While an LMDB-backed `ops run`
-owns the exact `STARTED` attempt, source `wharfie ops cancel` or packaged
-`<app> wharfie cancel` can reach that owner through a bounded, authenticated
-same-principal local command endpoint. `--request-id` is required; reuse the
-same value after a lost response. The owner persists durable intent before it
-begins delivery. The command reports `delivery: "started"` only after that
-handoff begins; a timeout, stale/moved owner, unavailable endpoint, inactive
-run, wrong run, or merely resident lifecycle owner reports no delivery and
-never falls back to a direct ledger write. The local transport is deliberately
-unsupported on Windows.
+The V9 ledger carries forward cancellation by the active local owner. During
+`wharfie ops run`, the first `SIGINT` or `SIGTERM` becomes a durable request
+before the owner signals the physical attempt. An LMDB-backed foreground run
+or resident worker that owns the exact `STARTED` attempt can also receive
+source `wharfie ops cancel` or packaged `<app> wharfie cancel` through its
+bounded, authenticated same-principal local command endpoint. `--request-id`
+is required; reuse the same value after a lost response. The owner persists
+durable intent before it begins delivery. The command reports `delivery:
+"started"` only after that handoff begins; a timeout, stale/moved owner,
+unavailable endpoint, inactive or wrong run, idle resident, or resident that is
+executing another run reports no delivery and never falls back to a direct
+ledger write. The local transport is deliberately unsupported on Windows.
 
 The external command intentionally cannot directly cancel `RUNNABLE`,
-`CLAIMED`, or otherwise unstarted work: only the active foreground owner's
+`CLAIMED`, or otherwise unstarted work: only an active local owner's exact
 `STARTED` attempt can accept it. Once that attempt is started, only matching
 cancellation evidence can commit `CANCELLED`; a verified completion or failure
 may still win, while unconfirmed post-cancellation termination becomes blocked
 `UNCERTAIN` work; later reconciliation needs evidence rather than another
 cancel request. There is still no public run-history/list: the verified bounded
 V7 run directory paired with the V9 ledger is internal rather than the retired
-`ops list` surface. The resident service currently owns only local lifecycle
-and exclusion state; it does not schedule, claim, or execute work. The bounded
-recovery and reconciliation paths have real subprocess and relocated-SEA crash
-coverage across request, start, destination commit, payload publication, ledger
-settlement, and response-delivery boundaries. New durable capabilities still
-need equivalent adversarial proof before they can support a production claim.
+`ops list` surface. The resident now submits, claims, and executes exact-revision
+manual activities serially, but it does not run workflow continuations or
+schedules. The bounded recovery and reconciliation paths have prior real
+subprocess and relocated-SEA crash coverage across request, start, destination
+commit, payload publication, ledger settlement, and response-delivery
+boundaries. The new resident dispatch and shutdown surface still needs its full
+adversarial and moved-SEA validation receipt before it can support a production
+claim.
+
+On `SIGINT` or `SIGTERM`, the resident stops admitting submissions and new
+claims, writes lifecycle `STOPPING`, and waits for admitted command callbacks.
+An active attempt receives 30 seconds to finish naturally; after that the
+worker uses the existing cooperative durable-cancellation path and keeps local
+ownership until the attempt settles. Only then does graceful shutdown write
+`STOPPED` and release ownership. Lifecycle remains `STARTING` until the
+owner-command socket is bound, so durable `READY` means that authenticated
+submission/cancellation ingress is actually available. The resident endpoint
+accepts the ledger's bounded referenced-payload size; unrelated local-owner
+commands keep their smaller request default.
 
 ## Package the app
 

@@ -1,17 +1,8 @@
 import { Command } from 'commander';
 
-import {
-  createControlDBClient,
-  resolveExecutionLedgerTableName,
-  resolveLedgerServiceSessionPath,
-  resolveControlAdapterName,
-} from '../../lib/config/db.js';
-import {
-  createLedgerServiceLifecycle,
-  createLedgerServiceOwnership,
-} from '../../lib/db/tables/ledger-service-lifecycle.js';
+import { readEmbeddedAppManifest } from '../../resources/builds/lib/app-manifest-asset.js';
 import { readEmbeddedRevisionRuntimePair } from '../../resources/builds/lib/revision-runtime-assets.js';
-import { createLedgerService } from './ledger-service.js';
+import { runLocalResidentActivityService } from './resident-activity-worker.js';
 
 /**
  * Wait for the ordinary process-manager signals that request a graceful
@@ -56,85 +47,89 @@ export function waitForLedgerServiceShutdown(options = {}) {
 }
 
 /**
- * Run the hidden resident ledger-service bootstrap. It binds service identity
- * to immutable metadata embedded in the SEA, opens the durable control store,
- * and owns only the empty lifecycle/session vertical. Scheduling and activity
- * execution intentionally remain unavailable here.
- * @param {{readEmbeddedRevisionRuntimePair?: () => Promise<{runtime: {appId: string, revisionId: string}}>, createControlDBClient?: () => Promise<any>, resolveControlAdapterName?: () => string, createLedgerServiceLifecycle?: (...args: any[]) => any, createLedgerServiceOwnership?: (...args: any[]) => any, createLedgerService?: (...args: any[]) => {start: () => Promise<any>, stop: () => Promise<any>}, waitForShutdown?: (options?: {signal?: AbortSignal}) => Promise<unknown>, tableName?: string, sessionRoot?: string}} [options] - Injected runtime dependencies for tests.
- * @returns {Promise<any>} - Final durable STOPPED lifecycle snapshot.
+ * Run the hidden resident bootstrap from immutable assets embedded in the SEA.
+ * The shared local resident service owns the control DB, lifecycle generation,
+ * authenticated command endpoint, restart recovery, serial activity dispatch,
+ * and graceful drain. This wrapper only translates process-manager signals
+ * into that service's abort contract.
+ * @param {{readEmbeddedAppManifest?: () => Promise<Record<string, any>>, readEmbeddedRevisionRuntimePair?: () => Promise<import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair>, runResidentActivityService?: typeof runLocalResidentActivityService, waitForShutdown?: (options?: {signal?: AbortSignal}) => Promise<unknown>}} [options] - Injected runtime dependencies for tests.
+ * @returns {Promise<Readonly<{processed: number}>>} - Graceful resident drain summary.
  */
 export async function runLedgerServiceRuntime(options = {}) {
+  const readManifest =
+    options.readEmbeddedAppManifest || readEmbeddedAppManifest;
   const readIdentity =
     options.readEmbeddedRevisionRuntimePair || readEmbeddedRevisionRuntimePair;
-  const openControlStore =
-    options.createControlDBClient || createControlDBClient;
-  const resolveControlAdapter =
-    options.resolveControlAdapterName || resolveControlAdapterName;
-  const createLifecycle =
-    options.createLedgerServiceLifecycle || createLedgerServiceLifecycle;
-  const createOwnership =
-    options.createLedgerServiceOwnership || createLedgerServiceOwnership;
-  const createService = options.createLedgerService || createLedgerService;
+  const runResident =
+    options.runResidentActivityService || runLocalResidentActivityService;
   const waitForShutdown =
     options.waitForShutdown || waitForLedgerServiceShutdown;
-  const tableName = options.tableName || resolveExecutionLedgerTableName();
-  const sessionRoot =
-    options.sessionRoot === undefined
-      ? resolveLedgerServiceSessionPath()
-      : options.sessionRoot;
-  const shutdownAbort = new AbortController();
-  /** @type {Promise<unknown> | undefined} */
-  let shutdownRequested;
-
-  /** @type {any} */
-  let db;
-  /** @type {{start: () => Promise<any>, stop: () => Promise<any>} | undefined} */
-  let service;
-  let started = false;
-  let stopAttempted = false;
-
-  /** @returns {Promise<any>} - Graceful service stop result. */
-  const stopStartedService = async () => {
-    if (!started || stopAttempted || !service) return undefined;
-    stopAttempted = true;
-    return await service.stop();
-  };
+  const waitAbort = new AbortController();
+  const residentAbort = new AbortController();
+  /** @type {Promise<{kind: 'shutdown', signal: unknown}>} */
+  let shutdownOutcome;
+  /** @type {Promise<{kind: 'resident', value: Readonly<{processed: number}>} | {kind: 'resident-error', error: unknown}> | undefined} */
+  let residentOutcome;
 
   try {
     // Register signal handlers before any await in startup. In particular,
     // the durable READY transition must never become externally visible
     // before a SIGTERM can be captured and converted into a fenced STOPPED
     // transition.
-    shutdownRequested = waitForShutdown({ signal: shutdownAbort.signal });
-    const embedded = await readIdentity();
-    if (!options.createControlDBClient && resolveControlAdapter() !== 'lmdb') {
+    shutdownOutcome = Promise.resolve(
+      waitForShutdown({ signal: waitAbort.signal }),
+    ).then((signal) => ({ kind: 'shutdown', signal }));
+    const [manifest, embeddedRevision] = await Promise.all([
+      readManifest(),
+      readIdentity(),
+    ]);
+    residentOutcome = Promise.resolve().then(async () => {
+      try {
+        return {
+          kind: /** @type {'resident'} */ ('resident'),
+          value: await runResident({
+            execution: {
+              kind: 'embedded',
+              manifest,
+              embeddedRevision,
+            },
+            signal: residentAbort.signal,
+          }),
+        };
+      } catch (error) {
+        return {
+          kind: /** @type {'resident-error'} */ ('resident-error'),
+          error,
+        };
+      }
+    });
+
+    const first = await Promise.race([shutdownOutcome, residentOutcome]);
+    if (first.kind === 'resident-error') throw first.error;
+    if (first.kind === 'resident') {
       throw new Error(
-        'The resident ledger-service requires WHARFIE_CONTROL_ADAPTER=lmdb. Distributed and vanilla control stores are not supported by its local ownership protocol.',
+        'Resident activity service stopped without a shutdown request.',
       );
     }
-    db = await openControlStore();
-    const lifecycle = createLifecycle({ db, tableName });
-    const ownership = createOwnership({ db, tableName });
-    service = createService({
-      appId: embedded.runtime.appId,
-      revisionId: embedded.runtime.revisionId,
-      lifecycle,
-      ownership,
-      sessionRoot,
-    });
-    await service.start();
-    started = true;
-    await shutdownRequested;
-    return await stopStartedService();
+
+    residentAbort.abort(
+      Object.assign(
+        new Error('The resident ledger service was asked to drain.'),
+        {
+          name: 'ResidentWorkerShutdownRequested',
+          code: 'resident-worker-shutdown-requested',
+          details: { signal: first.signal },
+        },
+      ),
+    );
+    const stopped = await residentOutcome;
+    if (stopped.kind === 'resident-error') throw stopped.error;
+    return stopped.value;
   } finally {
-    try {
-      await stopStartedService();
-    } finally {
-      try {
-        shutdownAbort.abort();
-      } finally {
-        await db?.close?.();
-      }
+    waitAbort.abort();
+    residentAbort.abort();
+    if (residentOutcome) {
+      await residentOutcome;
     }
   }
 }

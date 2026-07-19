@@ -14,6 +14,7 @@ import {
   probeLocalServiceSession,
 } from '../../src/core/runtime/local-service-session.js';
 import {
+  LOCAL_OWNER_COMMAND_DEFAULT_MAX_REQUEST_BYTES,
   LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES,
   LocalOwnerCommandError,
   createLocalOwnerCommandServer,
@@ -335,7 +336,10 @@ describe('local owner command transport', () => {
         await expect(
           exchangeRaw(
             server.endpoint,
-            Buffer.alloc(LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES + 1, 0x61),
+            Buffer.alloc(
+              LOCAL_OWNER_COMMAND_DEFAULT_MAX_REQUEST_BYTES + 1,
+              0x61,
+            ),
           ).then((value) => JSON.parse(value.toString('utf8'))),
         ).resolves.toMatchObject({ status: 'malformed' });
         await expect(
@@ -352,6 +356,50 @@ describe('local owner command transport', () => {
           code: 'local-owner-command-timeout',
           kind: 'timeout',
         });
+      } finally {
+        await server.close();
+      }
+    });
+  });
+
+  it('allows an explicitly enlarged authenticated request while retaining the bounded default', async () => {
+    await withLiveSession(async (session) => {
+      const maxRequestBytes = 256 * 1024;
+      expect(maxRequestBytes).toBeLessThan(
+        LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES,
+      );
+      const server = await createLocalOwnerCommandServer({
+        session,
+        maxRequestBytes,
+        handleCommand: async (command) => ({
+          acceptedBytes: command.request.payload.length,
+        }),
+      });
+      try {
+        const payload = 'x'.repeat(
+          LOCAL_OWNER_COMMAND_DEFAULT_MAX_REQUEST_BYTES + 1,
+        );
+        await expect(
+          sendLocalOwnerCommand({
+            serviceId: session.serviceId,
+            sessionId: session.sessionId,
+            sessionRoot: session.sessionRoot,
+            requestId: 'default-large-owner-command-request',
+            command: 'submit-large-request',
+            request: { payload },
+          }),
+        ).rejects.toThrow(/exceeds the 65536-byte limit/i);
+        await expect(
+          sendLocalOwnerCommand({
+            serviceId: session.serviceId,
+            sessionId: session.sessionId,
+            sessionRoot: session.sessionRoot,
+            requestId: 'large-owner-command-request',
+            command: 'submit-large-request',
+            request: { payload },
+            maxRequestBytes,
+          }),
+        ).resolves.toEqual({ acceptedBytes: payload.length });
       } finally {
         await server.close();
       }

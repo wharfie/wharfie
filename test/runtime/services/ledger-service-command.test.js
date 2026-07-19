@@ -11,71 +11,122 @@ import {
 
 const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
 
+/** @returns {import('../../../src/core/resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair} */
+function embeddedPair() {
+  return /** @type {any} */ ({
+    revision: { revisionId: REVISION_ID },
+    runtime: { appId: 'packaged-runtime', revisionId: REVISION_ID },
+  });
+}
+
 describe('hidden ledger-service runtime command', () => {
-  it('uses only embedded identity, opens one lifecycle store, and closes it after a graceful stop', async () => {
-    const db = { close: jest.fn(async () => {}) };
-    const lifecycle = { kind: 'lifecycle-store' };
-    const ownership = { kind: 'ownership-store' };
-    const stopped = { status: 'STOPPED', generation: 1 };
-    const service = {
-      start: jest.fn(async () => ({ status: 'READY', generation: 1 })),
-      stop: jest.fn(async () => stopped),
-    };
-    const readEmbeddedRevisionRuntimePair = jest.fn(async () => ({
-      runtime: { appId: 'packaged-runtime', revisionId: REVISION_ID },
-    }));
-    const createControlDBClient = jest.fn(async () => db);
-    const createLedgerServiceLifecycle = jest.fn(
-      (/** @type {any} */ _options) => lifecycle,
-    );
-    const createLedgerServiceOwnership = jest.fn(
-      (/** @type {any} */ _options) => ownership,
-    );
-    const createLedgerService = jest.fn(
-      (/** @type {any} */ _options) => service,
-    );
+  it('binds the resident service to embedded assets and drains it on shutdown', async () => {
+    const manifest = { app: { id: 'packaged-runtime' } };
+    const pair = embeddedPair();
+    const readEmbeddedAppManifest = jest.fn(async () => manifest);
+    const readEmbeddedRevisionRuntimePair = jest.fn(async () => pair);
     const waitForShutdown = jest.fn(async () => 'SIGTERM');
+    /** @type {AbortSignal | undefined} */
+    let residentSignal;
+    const runResidentActivityService = jest.fn(
+      (
+        /** @type {Parameters<typeof import('../../../src/core/runtime/services/resident-activity-worker.js').runLocalResidentActivityService>[0]} */ {
+          execution,
+          signal,
+        },
+      ) =>
+        new Promise((resolve) => {
+          expect(execution).toEqual({
+            kind: 'embedded',
+            manifest,
+            embeddedRevision: pair,
+          });
+          if (!signal) throw new Error('Expected the resident abort signal.');
+          residentSignal = signal;
+          signal.addEventListener('abort', () => resolve({ processed: 2 }), {
+            once: true,
+          });
+        }),
+    );
 
     await expect(
       runLedgerServiceRuntime({
+        readEmbeddedAppManifest,
         readEmbeddedRevisionRuntimePair,
-        createControlDBClient,
-        createLedgerServiceLifecycle,
-        createLedgerServiceOwnership,
-        createLedgerService,
+        runResidentActivityService,
         waitForShutdown,
-        tableName: 'ledger-table',
-        sessionRoot: '/logical/control/session-namespace',
       }),
-    ).resolves.toEqual(stopped);
+    ).resolves.toEqual({ processed: 2 });
 
+    expect(readEmbeddedAppManifest).toHaveBeenCalledTimes(1);
     expect(readEmbeddedRevisionRuntimePair).toHaveBeenCalledTimes(1);
-    expect(createLedgerServiceLifecycle).toHaveBeenCalledWith({
-      db,
-      tableName: 'ledger-table',
-    });
-    expect(createLedgerServiceOwnership).toHaveBeenCalledWith({
-      db,
-      tableName: 'ledger-table',
-    });
-    expect(createLedgerService).toHaveBeenCalledWith({
-      appId: 'packaged-runtime',
-      revisionId: REVISION_ID,
-      lifecycle,
-      ownership,
-      sessionRoot: '/logical/control/session-namespace',
-    });
-    expect(service.start).toHaveBeenCalledTimes(1);
     expect(waitForShutdown).toHaveBeenCalledTimes(1);
-    expect(service.stop).toHaveBeenCalledTimes(1);
-    expect(db.close).toHaveBeenCalledTimes(1);
+    expect(runResidentActivityService).toHaveBeenCalledTimes(1);
+    if (!residentSignal) throw new Error('Expected resident startup.');
+    expect(residentSignal.aborted).toBe(true);
+    expect(residentSignal.reason).toMatchObject({
+      code: 'resident-worker-shutdown-requested',
+      details: { signal: 'SIGTERM' },
+    });
+  });
+
+  it('registers graceful shutdown before reading either embedded asset', async () => {
+    const waitForShutdown = jest.fn(() => new Promise(() => {}));
+    const readEmbeddedAppManifest = jest.fn(async () => {
+      expect(waitForShutdown).toHaveBeenCalledTimes(1);
+      return { app: { id: 'packaged-runtime' } };
+    });
+    const readEmbeddedRevisionRuntimePair = jest.fn(async () => {
+      expect(waitForShutdown).toHaveBeenCalledTimes(1);
+      return embeddedPair();
+    });
+
+    await expect(
+      runLedgerServiceRuntime({
+        readEmbeddedAppManifest,
+        readEmbeddedRevisionRuntimePair,
+        runResidentActivityService: async () => ({ processed: 0 }),
+        waitForShutdown,
+      }),
+    ).rejects.toThrow(/stopped without a shutdown request/i);
+  });
+
+  it('propagates resident startup failure and cancels the pending signal wait', async () => {
+    const startupError = new Error('already active');
+    /** @type {AbortSignal | undefined} */
+    let waitSignal;
+    const waitForShutdown = jest.fn(
+      (/** @type {{signal?: AbortSignal}} */ options = {}) =>
+        new Promise((resolve) => {
+          const signal = options.signal;
+          if (!signal) throw new Error('Expected the wait abort signal.');
+          waitSignal = signal;
+          signal.addEventListener('abort', () => resolve(undefined), {
+            once: true,
+          });
+        }),
+    );
+
+    await expect(
+      runLedgerServiceRuntime({
+        readEmbeddedAppManifest: async () => ({
+          app: { id: 'packaged-runtime' },
+        }),
+        readEmbeddedRevisionRuntimePair: async () => embeddedPair(),
+        runResidentActivityService: async () => {
+          throw startupError;
+        },
+        waitForShutdown,
+      }),
+    ).rejects.toBe(startupError);
+
+    if (!waitSignal) throw new Error('Expected shutdown wait startup.');
+    expect(waitSignal.aborted).toBe(true);
   });
 
   it('removes only its own signal listeners after the first graceful shutdown request', async () => {
     const processRef = /** @type {NodeJS.Process} */ (new EventEmitter());
-    const waiting = waitForLedgerServiceShutdown({
-      processRef,
-    });
+    const waiting = waitForLedgerServiceShutdown({ processRef });
 
     processRef.emit('SIGTERM');
     await expect(waiting).resolves.toBe('SIGTERM');
@@ -95,89 +146,5 @@ describe('hidden ledger-service runtime command', () => {
     await expect(waiting).resolves.toBeUndefined();
     expect(processRef.listenerCount('SIGINT')).toBe(0);
     expect(processRef.listenerCount('SIGTERM')).toBe(0);
-  });
-
-  it('registers graceful shutdown before durable readiness can be published', async () => {
-    const db = { close: jest.fn(async () => {}) };
-    /** @type {() => void} */
-    let requestShutdown;
-    const waitForShutdown = jest.fn(
-      () =>
-        new Promise((resolve) => {
-          requestShutdown = () => resolve('SIGTERM');
-        }),
-    );
-    const service = {
-      start: jest.fn(async () => {
-        expect(waitForShutdown).toHaveBeenCalledTimes(1);
-        requestShutdown();
-        return { status: 'READY', generation: 1 };
-      }),
-      stop: jest.fn(async () => ({ status: 'STOPPED', generation: 1 })),
-    };
-
-    await expect(
-      runLedgerServiceRuntime({
-        readEmbeddedRevisionRuntimePair: async () => ({
-          runtime: { appId: 'packaged-runtime', revisionId: REVISION_ID },
-        }),
-        createControlDBClient: async () => db,
-        createLedgerServiceLifecycle: () => ({ kind: 'lifecycle-store' }),
-        createLedgerServiceOwnership: () => ({ kind: 'ownership-store' }),
-        createLedgerService: () => service,
-        waitForShutdown,
-        tableName: 'ledger-table',
-        sessionRoot: '/logical/control/session-namespace',
-      }),
-    ).resolves.toEqual({ status: 'STOPPED', generation: 1 });
-
-    expect(service.stop).toHaveBeenCalledTimes(1);
-    expect(db.close).toHaveBeenCalledTimes(1);
-  });
-
-  it('closes control state if startup rejects before the resident service becomes ready', async () => {
-    const db = { close: jest.fn(async () => {}) };
-    const startupError = new Error('already active');
-    const service = {
-      start: jest.fn(async () => {
-        throw startupError;
-      }),
-      stop: jest.fn(async () => {}),
-    };
-
-    await expect(
-      runLedgerServiceRuntime({
-        readEmbeddedRevisionRuntimePair: async () => ({
-          runtime: { appId: 'packaged-runtime', revisionId: REVISION_ID },
-        }),
-        createControlDBClient: async () => db,
-        createLedgerServiceLifecycle: () => ({ kind: 'lifecycle-store' }),
-        createLedgerServiceOwnership: () => ({ kind: 'ownership-store' }),
-        createLedgerService: () => service,
-        waitForShutdown: async () => 'SIGTERM',
-        tableName: 'ledger-table',
-        sessionRoot: '/logical/control/session-namespace',
-      }),
-    ).rejects.toBe(startupError);
-
-    expect(service.stop).not.toHaveBeenCalled();
-    expect(db.close).toHaveBeenCalledTimes(1);
-  });
-
-  it('rejects a nonlocal control adapter before opening a resident service', async () => {
-    const previous = process.env.WHARFIE_CONTROL_ADAPTER;
-    process.env.WHARFIE_CONTROL_ADAPTER = 'dynamodb';
-    try {
-      await expect(
-        runLedgerServiceRuntime({
-          readEmbeddedRevisionRuntimePair: async () => ({
-            runtime: { appId: 'packaged-runtime', revisionId: REVISION_ID },
-          }),
-        }),
-      ).rejects.toThrow(/WHARFIE_CONTROL_ADAPTER=lmdb/i);
-    } finally {
-      if (previous === undefined) delete process.env.WHARFIE_CONTROL_ADAPTER;
-      else process.env.WHARFIE_CONTROL_ADAPTER = previous;
-    }
   });
 });

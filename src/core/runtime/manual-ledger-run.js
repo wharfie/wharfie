@@ -11,11 +11,16 @@ import {
   MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES,
   assertLedgerOpaqueId,
 } from '../lib/ledger/record-key.js';
+import { assertApplicationRevisionId } from './application-revision.js';
 import { createCanonicalJsonSha256Id } from './content-id.js';
 import { assertLogicalId } from './logical-id.js';
 import { serializeActivityAttemptError } from './activity-attempt.js';
 
 export const MANUAL_LEDGER_INVOCATION_ID = 'manual';
+
+/**
+ * @typedef {{accepted: true, reused: boolean, runId: string, appId: string, revisionId: string, invocationId: string, activityId: string, runStatus: string, invocationStatus: string}} ManualLedgerSubmissionResult
+ */
 
 export const ManualLedgerRecoveryAction = Object.freeze({
   NONE: 'none',
@@ -1231,6 +1236,121 @@ export async function reconcileManualLedgerActivity(options) {
 }
 
 /**
+ * Persist one manual activity request without claiming or dispatching it. The
+ * retained creation receipt is the durable submission boundary: an identical
+ * retry returns `reused: true`, while changed work under the same run identity
+ * remains a visible ledger conflict.
+ *
+ * This deliberately returns only stable identity and lifecycle fields. Input,
+ * caller metadata, payload references, event actors, and fencing material stay
+ * behind the verified ledger read boundary.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, appId: string, revisionId: string, activityId: string, input?: any, callerMetadata?: Record<string, any>, actor?: {kind: string, id: string}}} options - Bound manual activity submission.
+ * @returns {Promise<ManualLedgerSubmissionResult>} - Compact durable acceptance result.
+ */
+export async function submitManualLedgerActivity(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError('submitManualLedgerActivity requires options.');
+  }
+  const allowedKeys = new Set([
+    'ledger',
+    'runId',
+    'appId',
+    'revisionId',
+    'activityId',
+    'input',
+    'callerMetadata',
+    'actor',
+  ]);
+  for (const key of Object.keys(options)) {
+    if (!allowedKeys.has(key)) {
+      throw new TypeError(
+        `submitManualLedgerActivity.${key} is not supported.`,
+      );
+    }
+  }
+  if (!options.ledger) {
+    throw new TypeError('submitManualLedgerActivity requires ledger.');
+  }
+  const ledger = options.ledger;
+  const runId = assertLedgerOpaqueId(options.runId, 'runId');
+  assertLogicalId(options.appId, 'appId');
+  const appId = options.appId;
+  assertApplicationRevisionId(options.revisionId, 'revisionId');
+  const revisionId = options.revisionId;
+  assertLogicalId(options.activityId, 'activityId');
+  const activityId = options.activityId;
+
+  const created = await ledger.createManualRun({
+    runId,
+    appId,
+    revisionId,
+    invocationId: MANUAL_LEDGER_INVOCATION_ID,
+    activityId,
+    ...(Object.prototype.hasOwnProperty.call(options, 'input')
+      ? { input: options.input }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(options, 'callerMetadata')
+      ? { callerMetadata: options.callerMetadata }
+      : {}),
+    transitionId: 'create',
+    ...(Object.prototype.hasOwnProperty.call(options, 'actor')
+      ? { actor: options.actor }
+      : {}),
+    coordinatorEpoch: 0,
+  });
+
+  if (
+    created.run.runId !== runId ||
+    created.run.appId !== appId ||
+    created.run.revisionId !== revisionId ||
+    created.invocation.runId !== runId ||
+    created.invocation.invocationId !== MANUAL_LEDGER_INVOCATION_ID ||
+    created.invocation.appId !== appId ||
+    created.invocation.revisionId !== revisionId ||
+    created.invocation.activityId !== activityId
+  ) {
+    throw new Error(
+      'submitManualLedgerActivity existing run does not match its requested execution identity.',
+    );
+  }
+
+  const view = await ledger.rebuildRun(runId);
+  if (!view) {
+    throw new Error(`Submitted execution ledger run disappeared: ${runId}`);
+  }
+  const invocation = view.invocations.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.invocationId === MANUAL_LEDGER_INVOCATION_ID,
+  );
+  if (
+    view.run.runId !== runId ||
+    view.run.appId !== appId ||
+    view.run.revisionId !== revisionId ||
+    !invocation ||
+    invocation.runId !== runId ||
+    invocation.appId !== appId ||
+    invocation.revisionId !== revisionId ||
+    invocation.activityId !== activityId
+  ) {
+    throw new Error(
+      'submitManualLedgerActivity verified readback does not match its requested execution identity.',
+    );
+  }
+
+  return {
+    accepted: true,
+    reused: !created.applied,
+    runId,
+    appId,
+    revisionId,
+    invocationId: invocation.invocationId,
+    activityId,
+    runStatus: view.run.status,
+    invocationStatus: invocation.status,
+  };
+}
+
+/**
  * Create, claim, and execute exactly one manual activity through the
  * append-only ledger. A normal repeat never steals a RUNNING attempt because
  * coordinator leases do not exist yet; recovery is a separate operator action
@@ -1888,4 +2008,5 @@ export default {
   createManualLedgerRunId,
   recoverManualLedgerActivity,
   runManualLedgerActivity,
+  submitManualLedgerActivity,
 };

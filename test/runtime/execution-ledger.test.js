@@ -1457,6 +1457,58 @@ for (const adapter of getAdapterMatrix()) {
       }
     });
 
+    test('reads a verified manual request with its exact creation actor', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-manual-request-read',
+          now: createClock(),
+        });
+        await expect(
+          ledger.readManualRunRequest(RUN_ID, INVOCATION_ID),
+        ).resolves.toBeNull();
+
+        const actor = { kind: 'submitter', id: 'request-read-test' };
+        await ledger.createManualRun(manualRun({ actor }));
+        const first = await ledger.readManualRunRequest(RUN_ID, INVOCATION_ID);
+        if (!first) throw new Error('Expected a verified manual request.');
+        expect(first).toMatchObject({
+          run: {
+            runId: RUN_ID,
+            appId: 'demo',
+            revisionId: REVISION_ID,
+            status: RunStatus.RUNNING,
+          },
+          invocation: {
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            activityId: ACTIVITY_ID,
+            status: InvocationStatus.RUNNABLE,
+          },
+          request: {
+            input: { name: 'Ada' },
+            callerMetadata: { source: 'test' },
+          },
+          actor,
+        });
+        await expect(
+          ledger.readManualRunRequest(RUN_ID, 'missing-invocation'),
+        ).resolves.toBeNull();
+
+        first.request.input.name = 'mutated-return-value';
+        first.actor.id = 'mutated-return-value';
+        await expect(
+          ledger.readManualRunRequest(RUN_ID, INVOCATION_ID),
+        ).resolves.toMatchObject({
+          request: { input: { name: 'Ada' } },
+          actor,
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
     test('appends and folds one terminal manual activity with durable receipts', async () => {
       const { db, cleanup } = await adapter.create();
       try {

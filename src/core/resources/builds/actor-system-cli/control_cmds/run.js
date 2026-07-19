@@ -1,6 +1,5 @@
-import { readEmbeddedAppManifest } from '../../lib/app-manifest-asset.js';
-import { readEmbeddedRevisionRuntimePair } from '../../lib/revision-runtime-assets.js';
 import { createDurableRunCommand } from '../../../../runtime/operator/durable-run-command.js';
+import { loadEmbeddedDurableExecution } from '../lib/durable-execution.js';
 
 /**
  * Build a fresh durable run command bound only to the artifact's immutable
@@ -10,24 +9,8 @@ import { createDurableRunCommand } from '../../../../runtime/operator/durable-ru
  * @returns {import('commander').Command} - Fresh packaged durable run command.
  */
 export function createPackagedDurableRunCommand(options = {}) {
-  const loadExecution =
-    options.loadExecution ||
-    (async () => {
-      const [manifest, embeddedRevision] = await Promise.all([
-        readEmbeddedAppManifest(),
-        readEmbeddedRevisionRuntimePair(),
-      ]);
-      return {
-        execution: {
-          kind: 'embedded',
-          manifest,
-          embeddedRevision,
-        },
-      };
-    });
-
   return createDurableRunCommand({
-    loadExecution,
+    loadExecution: options.loadExecution || loadEmbeddedDurableExecution,
     ...(options.output === undefined ? {} : { output: options.output }),
     ...(options.runActivity === undefined
       ? {}

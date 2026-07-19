@@ -4,14 +4,9 @@ import {
   displayInfo,
   displaySuccess,
 } from '../../output/basic.js';
-import {
-  createDurableRunCommand,
-  createForegroundCancellation,
-} from '../../../core/runtime/operator/durable-run-command.js';
+import { createDurableWorkerCommand } from '../../../core/runtime/operator/durable-worker-command.js';
 
-export { createForegroundCancellation };
-
-const runCommand = createDurableRunCommand({
+const workerCommand = createDurableWorkerCommand({
   includeDirOption: true,
   output: {
     info: displayInfo,
@@ -21,4 +16,4 @@ const runCommand = createDurableRunCommand({
   loadExecution: loadPreparedDurableExecution,
 });
 
-export default runCommand;
+export default workerCommand;
