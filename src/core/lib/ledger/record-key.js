@@ -75,6 +75,11 @@ export function getRunProjectionSortKey() {
   return `${EXECUTION_LEDGER_SORT_KEY_PREFIX}projection/run`;
 }
 
+/** @returns {string} - Singular workflow-cursor projection sort key. */
+export function getWorkflowCursorProjectionSortKey() {
+  return `${EXECUTION_LEDGER_SORT_KEY_PREFIX}projection/workflow-cursor`;
+}
+
 /**
  * @param {number} sequence - Event sequence.
  * @returns {string} - Event sort key.
@@ -156,4 +161,5 @@ export default {
   getRunHeadSortKey,
   getRunProjectionSortKey,
   getTransitionSortKey,
+  getWorkflowCursorProjectionSortKey,
 };

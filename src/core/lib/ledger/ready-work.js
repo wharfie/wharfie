@@ -47,32 +47,59 @@ const COMMON_STORAGE_KEYS = Object.freeze([
   'run_version',
   'sequence',
 ]);
-const KIND_INPUT_KEYS = Object.freeze({
+const WORKFLOW_CURSOR_INPUT_KEYS = Object.freeze([
+  'cursorVersion',
+  'continuationId',
+  'stepId',
+  'stepIndex',
+]);
+const WORKFLOW_CURSOR_STORAGE_KEYS = Object.freeze([
+  'cursor_version',
+  'continuation_id',
+  'step_id',
+  'step_index',
+]);
+const KIND_MANUAL_INPUT_KEYS = Object.freeze({
   ACTIVITY: Object.freeze(['invocationId', 'generation']),
   RECOVERY: Object.freeze(['invocationId', 'attemptId', 'generation']),
-  CONTINUATION: Object.freeze(['continuationId', 'stepId', 'stepIndex']),
-  TIMER: Object.freeze(['continuationId', 'stepId', 'stepIndex', 'timerId']),
 });
-const KIND_STORAGE_KEYS = Object.freeze({
+const KIND_MANUAL_STORAGE_KEYS = Object.freeze({
   ACTIVITY: Object.freeze(['invocation_id', 'generation']),
   RECOVERY: Object.freeze(['invocation_id', 'attempt_id', 'generation']),
-  CONTINUATION: Object.freeze(['continuation_id', 'step_id', 'step_index']),
-  TIMER: Object.freeze([
-    'continuation_id',
-    'step_id',
-    'step_index',
-    'timer_id',
+});
+const KIND_WORKFLOW_INPUT_KEYS = Object.freeze({
+  ACTIVITY: Object.freeze([
+    ...KIND_MANUAL_INPUT_KEYS.ACTIVITY,
+    ...WORKFLOW_CURSOR_INPUT_KEYS,
   ]),
+  RECOVERY: Object.freeze([
+    ...KIND_MANUAL_INPUT_KEYS.RECOVERY,
+    ...WORKFLOW_CURSOR_INPUT_KEYS,
+  ]),
+  CONTINUATION: WORKFLOW_CURSOR_INPUT_KEYS,
+  TIMER: Object.freeze([...WORKFLOW_CURSOR_INPUT_KEYS, 'timerId']),
+});
+const KIND_WORKFLOW_STORAGE_KEYS = Object.freeze({
+  ACTIVITY: Object.freeze([
+    ...KIND_MANUAL_STORAGE_KEYS.ACTIVITY,
+    ...WORKFLOW_CURSOR_STORAGE_KEYS,
+  ]),
+  RECOVERY: Object.freeze([
+    ...KIND_MANUAL_STORAGE_KEYS.RECOVERY,
+    ...WORKFLOW_CURSOR_STORAGE_KEYS,
+  ]),
+  CONTINUATION: WORKFLOW_CURSOR_STORAGE_KEYS,
+  TIMER: Object.freeze([...WORKFLOW_CURSOR_STORAGE_KEYS, 'timer_id']),
 });
 
-export const EXECUTION_LEDGER_READY_WORK_SCHEMA_VERSION = 1;
+export const EXECUTION_LEDGER_READY_WORK_SCHEMA_VERSION = 2;
 export const EXECUTION_LEDGER_READY_WORK_RECORD_TYPE =
   'execution_ledger_ready_work_projection';
 export const EXECUTION_LEDGER_READY_WORK_PARTITION_DOMAIN =
-  'wharfie:execution-ledger-ready-work-partition:v1';
+  'wharfie:execution-ledger-ready-work-partition:v2';
 export const EXECUTION_LEDGER_READY_WORK_PARTITION_PREFIX = 'wlw';
 export const EXECUTION_LEDGER_READY_WORK_SORT_KEY_PREFIX =
-  'ledger-ready/v1/work/';
+  'ledger-ready/v2/work/';
 export const EXECUTION_LEDGER_READY_WORK_TIMESTAMP_WIDTH = 16;
 export const EXECUTION_LEDGER_READY_WORK_MAX_RECORD_BYTES = 32 * 1024;
 
@@ -127,6 +154,58 @@ function assertExactKeys(value, expected, label) {
       `${label} must contain exactly ${expected.join(', ')}.`,
     );
   }
+}
+
+/**
+ * @param {Record<string, any>} value - Candidate object.
+ * @param {Iterable<string>} keys - Related fields.
+ * @returns {boolean} - Whether any related field is present.
+ */
+function hasAnyOwnField(value, keys) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) return true;
+  }
+  return false;
+}
+
+/**
+ * Select one strict constructor shape. Activity and recovery locators may be
+ * manual rows without cursor coordinates or workflow rows with the complete
+ * cursor tuple; a partial tuple selects the workflow variant and then fails
+ * exact-key validation.
+ * @param {Record<string, any>} value - Candidate constructor input.
+ * @param {'ACTIVITY'|'RECOVERY'|'CONTINUATION'|'TIMER'} kind - Work kind.
+ * @returns {Iterable<string>} - Exact kind-specific input fields.
+ */
+function inputKeysForKind(value, kind) {
+  if (
+    kind === ExecutionLedgerReadyWorkKind.ACTIVITY ||
+    kind === ExecutionLedgerReadyWorkKind.RECOVERY
+  ) {
+    return hasAnyOwnField(value, WORKFLOW_CURSOR_INPUT_KEYS)
+      ? KIND_WORKFLOW_INPUT_KEYS[kind]
+      : KIND_MANUAL_INPUT_KEYS[kind];
+  }
+  return KIND_WORKFLOW_INPUT_KEYS[kind];
+}
+
+/**
+ * Select one strict storage shape using the same all-or-none cursor rule as
+ * the public constructor.
+ * @param {Record<string, any>} value - Candidate storage row.
+ * @param {'ACTIVITY'|'RECOVERY'|'CONTINUATION'|'TIMER'} kind - Work kind.
+ * @returns {Iterable<string>} - Exact kind-specific storage fields.
+ */
+function storageKeysForKind(value, kind) {
+  if (
+    kind === ExecutionLedgerReadyWorkKind.ACTIVITY ||
+    kind === ExecutionLedgerReadyWorkKind.RECOVERY
+  ) {
+    return hasAnyOwnField(value, WORKFLOW_CURSOR_STORAGE_KEYS)
+      ? KIND_WORKFLOW_STORAGE_KEYS[kind]
+      : KIND_MANUAL_STORAGE_KEYS[kind];
+  }
+  return KIND_WORKFLOW_STORAGE_KEYS[kind];
 }
 
 /**
@@ -281,6 +360,49 @@ export function parseExecutionLedgerReadyWorkSortKey(
 }
 
 /**
+ * @param {Record<string, any>} value - Validated workflow locator input.
+ * @returns {{cursor_version: number, continuation_id: string, step_id: string, step_index: number}} - Exact workflow cursor coordinates.
+ */
+function createWorkflowCursorStorageFields(value) {
+  assertLogicalId(value.stepId, 'ready-work input.stepId');
+  return {
+    cursor_version: assertPositiveSafeInteger(
+      value.cursorVersion,
+      'ready-work input.cursorVersion',
+    ),
+    continuation_id: assertLedgerOpaqueId(
+      value.continuationId,
+      'ready-work input.continuationId',
+    ),
+    step_id: value.stepId,
+    step_index: assertNonnegativeSafeInteger(
+      value.stepIndex,
+      'ready-work input.stepIndex',
+    ),
+  };
+}
+
+/**
+ * @param {Record<string, any>} record - Strict workflow storage row.
+ * @returns {void} - Throws when any cursor coordinate is invalid.
+ */
+function assertWorkflowCursorStorageFields(record) {
+  assertPositiveSafeInteger(
+    record.cursor_version,
+    'ready-work record.cursor_version',
+  );
+  assertLedgerOpaqueId(
+    record.continuation_id,
+    'ready-work record.continuation_id',
+  );
+  assertLogicalId(record.step_id, 'ready-work record.step_id');
+  assertNonnegativeSafeInteger(
+    record.step_index,
+    'ready-work record.step_index',
+  );
+}
+
+/**
  * @param {Record<string, any>} value - Validated constructor input.
  * @param {'ACTIVITY'|'RECOVERY'|'CONTINUATION'|'TIMER'} kind - Work kind.
  * @returns {Record<string, string|number>} - Kind-specific storage fields.
@@ -296,6 +418,9 @@ function createKindStorageFields(value, kind) {
         value.generation,
         'ready-work input.generation',
       ),
+      ...(hasAnyOwnField(value, WORKFLOW_CURSOR_INPUT_KEYS)
+        ? createWorkflowCursorStorageFields(value)
+        : {}),
     };
   }
   if (kind === ExecutionLedgerReadyWorkKind.RECOVERY) {
@@ -312,20 +437,12 @@ function createKindStorageFields(value, kind) {
         value.generation,
         'ready-work input.generation',
       ),
+      ...(hasAnyOwnField(value, WORKFLOW_CURSOR_INPUT_KEYS)
+        ? createWorkflowCursorStorageFields(value)
+        : {}),
     };
   }
-  assertLogicalId(value.stepId, 'ready-work input.stepId');
-  const continuation = {
-    continuation_id: assertLedgerOpaqueId(
-      value.continuationId,
-      'ready-work input.continuationId',
-    ),
-    step_id: value.stepId,
-    step_index: assertNonnegativeSafeInteger(
-      value.stepIndex,
-      'ready-work input.stepIndex',
-    ),
-  };
+  const continuation = createWorkflowCursorStorageFields(value);
   return kind === ExecutionLedgerReadyWorkKind.TIMER
     ? {
         ...continuation,
@@ -349,7 +466,7 @@ export function createExecutionLedgerReadyWorkRecord(input) {
   const kind = normalizeReadyWorkKind(input.kind, 'ready-work input.kind');
   assertExactKeys(
     input,
-    [...COMMON_INPUT_KEYS, ...KIND_INPUT_KEYS[kind]],
+    [...COMMON_INPUT_KEYS, ...inputKeysForKind(input, kind)],
     'ready-work input',
   );
   const scope = createExecutionLedgerReadyWorkScope({
@@ -416,7 +533,7 @@ export function normalizeExecutionLedgerReadyWorkRecord(raw, expectedScope) {
   const kind = normalizeReadyWorkKind(record.kind, 'ready-work record.kind');
   assertExactKeys(
     record,
-    [...COMMON_STORAGE_KEYS, ...KIND_STORAGE_KEYS[kind]],
+    [...COMMON_STORAGE_KEYS, ...storageKeysForKind(record, kind)],
     'ready-work record',
   );
   if (
@@ -464,6 +581,9 @@ export function normalizeExecutionLedgerReadyWorkRecord(raw, expectedScope) {
       record.generation,
       'ready-work record.generation',
     );
+    if (hasAnyOwnField(record, WORKFLOW_CURSOR_STORAGE_KEYS)) {
+      assertWorkflowCursorStorageFields(record);
+    }
   } else if (kind === ExecutionLedgerReadyWorkKind.RECOVERY) {
     assertLedgerOpaqueId(
       record.invocation_id,
@@ -474,16 +594,11 @@ export function normalizeExecutionLedgerReadyWorkRecord(raw, expectedScope) {
       record.generation,
       'ready-work record.generation',
     );
+    if (hasAnyOwnField(record, WORKFLOW_CURSOR_STORAGE_KEYS)) {
+      assertWorkflowCursorStorageFields(record);
+    }
   } else {
-    assertLedgerOpaqueId(
-      record.continuation_id,
-      'ready-work record.continuation_id',
-    );
-    assertLogicalId(record.step_id, 'ready-work record.step_id');
-    assertNonnegativeSafeInteger(
-      record.step_index,
-      'ready-work record.step_index',
-    );
+    assertWorkflowCursorStorageFields(record);
     if (kind === ExecutionLedgerReadyWorkKind.TIMER) {
       assertLedgerOpaqueId(record.timer_id, 'ready-work record.timer_id');
     }

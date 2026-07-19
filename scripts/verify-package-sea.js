@@ -5884,7 +5884,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
         const expectedTargetRequestRef =
           fixture.createExecutionPayloadReference({
             bytes: fixture.encodeCanonicalJsonPayload(expectedTargetRequest),
-            payloadSchema: 'wharfie.execution.manual-request.v1',
+            payloadSchema: 'wharfie.execution.activity-request.v1',
             storeId: fixture.payloadStoreId,
           });
         const directoryBeforeRetry = await fixture.listRunDirectory(

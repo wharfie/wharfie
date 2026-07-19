@@ -419,7 +419,7 @@ describe('wharfie ops run', () => {
           activityId: 'echo-event',
           status: InvocationStatus.COMPLETED,
           requestRef: expect.objectContaining({
-            payloadSchema: 'wharfie.execution.manual-request.v1',
+            payloadSchema: 'wharfie.execution.activity-request.v1',
           }),
         }),
       ]);

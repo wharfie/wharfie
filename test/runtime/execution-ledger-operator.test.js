@@ -1425,7 +1425,7 @@ describe('shared execution-ledger operator boundary', () => {
             requestId: 'cancel-successor-before-claim',
             reason: cancellationReason,
           }),
-        ).rejects.toThrow(/cannot cancel a managed-effect successor/i);
+        ).rejects.toThrow(/authorized only for a manual activity run/i);
 
         await expect(
           ledger.claimInvocation({
@@ -1436,7 +1436,7 @@ describe('shared execution-ledger operator boundary', () => {
             expectedVersion: handoff.targetRun.version,
             transitionId: 'claim:successor-contract',
           }),
-        ).rejects.toThrow(/not authorized for a managed-effect successor/i);
+        ).rejects.toThrow(/authorized only for a manual activity run/i);
 
         const started = await ledger.startManagedEffectSuccessor({
           runId: handoff.authorization.target.runId,
@@ -1484,7 +1484,7 @@ describe('shared execution-ledger operator boundary', () => {
             reason: { kind: 'ordinary-lifecycle-must-not-run' },
             actor,
           }),
-        ).rejects.toThrow(/not authorized for a managed-effect successor/i);
+        ).rejects.toThrow(/authorized only for a manual activity run/i);
         await expect(
           ledger.recordManagedEffectRequest({
             runId: handoff.authorization.target.runId,
@@ -1514,7 +1514,7 @@ describe('shared execution-ledger operator boundary', () => {
               handoff.authorization.contract.substantiatedReplayProperties,
             actor,
           }),
-        ).rejects.toThrow(/not authorized for a managed-effect successor/i);
+        ).rejects.toThrow(/authorized only for a manual activity run/i);
         const replayedStart = await ledger.startManagedEffectSuccessor({
           runId: handoff.authorization.target.runId,
           fencingToken: 'successor-contract-fence',

@@ -50,9 +50,9 @@ describe('execution ledger ready-work projection codec', () => {
       revisionId: REVISION_ID,
     });
 
-    expect(EXECUTION_LEDGER_READY_WORK_SCHEMA_VERSION).toBe(1);
+    expect(EXECUTION_LEDGER_READY_WORK_SCHEMA_VERSION).toBe(2);
     expect(EXECUTION_LEDGER_READY_WORK_PARTITION_DOMAIN).toBe(
-      'wharfie:execution-ledger-ready-work-partition:v1',
+      'wharfie:execution-ledger-ready-work-partition:v2',
     );
     expect(scope).toEqual({
       appId: APP_ID,
@@ -101,10 +101,10 @@ describe('execution ledger ready-work projection codec', () => {
     });
 
     expect(EXECUTION_LEDGER_READY_WORK_SORT_KEY_PREFIX).toBe(
-      'ledger-ready/v1/work/',
+      'ledger-ready/v2/work/',
     );
     expect(early).toBe(
-      `ledger-ready/v1/work/0000000000000002/${Buffer.from('run/早', 'utf8').toString('base64url')}`,
+      `ledger-ready/v2/work/0000000000000002/${Buffer.from('run/早', 'utf8').toString('base64url')}`,
     );
     expect([later, early].sort()).toEqual([early, later]);
     expect(parseExecutionLedgerReadyWorkSortKey(early)).toEqual({
@@ -135,11 +135,33 @@ describe('execution ledger ready-work projection codec', () => {
 
   test.each([
     [
+      'manual activity',
       ExecutionLedgerReadyWorkKind.ACTIVITY,
       { invocationId: 'invocation-1', generation: 0 },
       { invocation_id: 'invocation-1', generation: 0 },
     ],
     [
+      'workflow activity',
+      ExecutionLedgerReadyWorkKind.ACTIVITY,
+      {
+        invocationId: 'invocation-1',
+        generation: 0,
+        cursorVersion: 2,
+        continuationId: 'continue-1',
+        stepId: 'activity-1',
+        stepIndex: 0,
+      },
+      {
+        invocation_id: 'invocation-1',
+        generation: 0,
+        cursor_version: 2,
+        continuation_id: 'continue-1',
+        step_id: 'activity-1',
+        step_index: 0,
+      },
+    ],
+    [
+      'manual recovery',
       ExecutionLedgerReadyWorkKind.RECOVERY,
       {
         invocationId: 'invocation-1',
@@ -153,19 +175,55 @@ describe('execution ledger ready-work projection codec', () => {
       },
     ],
     [
-      ExecutionLedgerReadyWorkKind.CONTINUATION,
-      { continuationId: 'continue-1', stepId: 'wait-1', stepIndex: 2 },
-      { continuation_id: 'continue-1', step_id: 'wait-1', step_index: 2 },
+      'workflow recovery',
+      ExecutionLedgerReadyWorkKind.RECOVERY,
+      {
+        invocationId: 'invocation-1',
+        attemptId: 'attempt-1',
+        generation: 1,
+        cursorVersion: 3,
+        continuationId: 'continue-1',
+        stepId: 'activity-1',
+        stepIndex: 0,
+      },
+      {
+        invocation_id: 'invocation-1',
+        attempt_id: 'attempt-1',
+        generation: 1,
+        cursor_version: 3,
+        continuation_id: 'continue-1',
+        step_id: 'activity-1',
+        step_index: 0,
+      },
     ],
     [
+      'continuation',
+      ExecutionLedgerReadyWorkKind.CONTINUATION,
+      {
+        cursorVersion: 4,
+        continuationId: 'continue-1',
+        stepId: 'wait-1',
+        stepIndex: 2,
+      },
+      {
+        cursor_version: 4,
+        continuation_id: 'continue-1',
+        step_id: 'wait-1',
+        step_index: 2,
+      },
+    ],
+    [
+      'timer',
       ExecutionLedgerReadyWorkKind.TIMER,
       {
+        cursorVersion: 5,
         continuationId: 'continue-1',
         stepId: 'timer-1',
         stepIndex: 2,
         timerId: 'timer-run-1',
       },
       {
+        cursor_version: 5,
         continuation_id: 'continue-1',
         step_id: 'timer-1',
         step_index: 2,
@@ -174,11 +232,11 @@ describe('execution ledger ready-work projection codec', () => {
     ],
   ])(
     'constructs and validates one exact %s locator',
-    (kind, fields, stored) => {
+    (label, kind, fields, stored) => {
       const input = {
         appId: APP_ID,
         revisionId: REVISION_ID,
-        runId: `run-${kind.toLowerCase()}`,
+        runId: `run-${label.replace(' ', '-')}`,
         kind,
         availableAt: kind === ExecutionLedgerReadyWorkKind.TIMER ? 100 : 0,
         runVersion: 4,
@@ -218,6 +276,61 @@ describe('execution ledger ready-work projection codec', () => {
       ).toEqual(record);
     },
   );
+
+  test.each([
+    [
+      ExecutionLedgerReadyWorkKind.ACTIVITY,
+      { invocationId: 'invocation-1', generation: 0 },
+    ],
+    [
+      ExecutionLedgerReadyWorkKind.RECOVERY,
+      {
+        invocationId: 'invocation-1',
+        attemptId: 'attempt-1',
+        generation: 1,
+      },
+    ],
+  ])('requires an all-or-none workflow cursor tuple for %s', (kind, base) => {
+    const workflowCursor = {
+      cursorVersion: 1,
+      continuationId: 'continue-1',
+      stepId: 'activity-1',
+      stepIndex: 0,
+    };
+    const input = common({ kind, ...base, ...workflowCursor });
+    const record = createExecutionLedgerReadyWorkRecord(input);
+
+    for (const field of Object.keys(workflowCursor)) {
+      const partialInput = /** @type {Record<string, any>} */ ({ ...input });
+      delete partialInput[field];
+      expect(() => createExecutionLedgerReadyWorkRecord(partialInput)).toThrow(
+        /exactly/i,
+      );
+    }
+
+    for (const field of [
+      'cursor_version',
+      'continuation_id',
+      'step_id',
+      'step_index',
+    ]) {
+      const partialRecord = { ...record };
+      delete partialRecord[field];
+      expect(() =>
+        normalizeExecutionLedgerReadyWorkRecord(partialRecord, {
+          appId: APP_ID,
+          revisionId: REVISION_ID,
+        }),
+      ).toThrow(/exactly/i);
+    }
+
+    expect(() =>
+      createExecutionLedgerReadyWorkRecord({
+        ...input,
+        cursorVersion: 0,
+      }),
+    ).toThrow(/positive safe integer/i);
+  });
 
   test('rejects malformed, stale-scope, and cross-kind rows', () => {
     const record = createExecutionLedgerReadyWorkRecord(common());
@@ -274,16 +387,16 @@ describe('execution ledger ready-work projection codec', () => {
       }),
     ).toThrow(/nonnegative safe integer/i);
     expect(() =>
-      parseExecutionLedgerReadyWorkSortKey('ledger-ready/v1/work/2/cnVu'),
+      parseExecutionLedgerReadyWorkSortKey('ledger-ready/v2/work/2/cnVu'),
     ).toThrow(/fixed-width timestamp/i);
     expect(() =>
       parseExecutionLedgerReadyWorkSortKey(
-        'ledger-ready/v1/work/0000000000000002/not+base64',
+        'ledger-ready/v2/work/0000000000000002/not+base64',
       ),
     ).toThrow(/canonically encoded/i);
     expect(() =>
       parseExecutionLedgerReadyWorkSortKey(
-        'ledger-ready/v1/work/0000000000000002/wA',
+        'ledger-ready/v2/work/0000000000000002/wA',
       ),
     ).toThrow(/not canonical|invalid run identity/i);
   });

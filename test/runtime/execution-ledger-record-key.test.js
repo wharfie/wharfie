@@ -16,6 +16,7 @@ import {
   getRunHeadSortKey,
   getRunProjectionSortKey,
   getTransitionSortKey,
+  getWorkflowCursorProjectionSortKey,
 } from '../../src/core/lib/ledger/record-key.js';
 import {
   EXECUTION_LEDGER_RUN_DIRECTORY_PARTITION_DOMAIN,
@@ -37,6 +38,9 @@ describe('execution ledger record key codec', () => {
     );
     expect(getRunHeadSortKey()).toBe('ledger/v10/head');
     expect(getRunProjectionSortKey()).toBe('ledger/v10/projection/run');
+    expect(getWorkflowCursorProjectionSortKey()).toBe(
+      'ledger/v10/projection/workflow-cursor',
+    );
     expect(getInvocationProjectionSortKey(invocationId)).toBe(
       `ledger/v10/projection/invocation/${Buffer.from(invocationId, 'utf8').toString('base64url')}`,
     );

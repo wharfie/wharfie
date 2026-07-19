@@ -1534,7 +1534,7 @@ for (const adapter of getAdapterMatrix()) {
         });
         expect(created.run).toMatchObject({
           requestRef: {
-            payloadSchema: 'wharfie.execution.manual-request.v1',
+            payloadSchema: 'wharfie.execution.activity-request.v1',
           },
         });
         expect(created.run).not.toHaveProperty('input');
@@ -3509,6 +3509,56 @@ for (const adapter of getAdapterMatrix()) {
       }
     });
 
+    test('rejects a rehashed manual transition that invents a workflow binding', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const tableName = 'execution-ledger-workflow-binding-forgery';
+        const ledger = createExecutionLedger({
+          db,
+          tableName,
+          now: createClock(),
+        });
+        await ledger.createManualRun(manualRun());
+        await ledger.claimInvocation({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          fencingToken: 'workflow-binding-forgery-fence',
+          expectedGeneration: 0,
+          expectedVersion: 1,
+          transitionId: 'workflow-binding-forgery-claim',
+        });
+        const event = await db.get({
+          tableName,
+          keyName: 'run_id',
+          keyValue: RUN_ID,
+          sortKeyName: 'sort_key',
+          sortKeyValue: getEventSortKey(2),
+          consistentRead: true,
+        });
+        const forgedPayload = JSON.parse(JSON.stringify(event?.payload));
+        forgedPayload.invocation.workflow = {
+          workflowId: 'forged-workflow',
+          planId: 'forged-plan',
+          continuationId: 'forged-continuation',
+          stepId: 'forged-step',
+          stepIndex: 0,
+        };
+        await forgeEventSnapshots({
+          db,
+          tableName,
+          sequence: 2,
+          transitionId: 'workflow-binding-forgery-claim',
+          payload: forgedPayload,
+        });
+
+        await expect(ledger.rebuildRun(RUN_ID)).rejects.toMatchObject({
+          reason: 'invalid invocation transition',
+        });
+      } finally {
+        await cleanup();
+      }
+    });
+
     test('fails closed when retained terminal evidence is altered after append', async () => {
       const { db, cleanup } = await adapter.create();
       try {
@@ -3686,7 +3736,7 @@ for (const adapter of getAdapterMatrix()) {
       const { db, cleanup } = await adapter.create();
       try {
         const reference = await PAYLOAD_STORE.putJson({
-          payloadSchema: 'wharfie.execution.manual-request.v1',
+          payloadSchema: 'wharfie.execution.activity-request.v1',
           value: { input: {}, callerMetadata: {} },
         });
         const oversizedReference = {

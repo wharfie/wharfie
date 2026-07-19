@@ -275,7 +275,7 @@ describe('managed-effect successor dedicated lifecycle', () => {
         transitionId: 'illegal-claim',
         actor: ACTOR,
       }),
-    ).rejects.toThrow(/not authorized for a managed-effect successor/);
+    ).rejects.toThrow(/authorized only for a manual activity run/);
     await expect(
       harness.ledger.markAttemptStarted({
         runId: handoff1.authorization.target.runId,
@@ -288,7 +288,7 @@ describe('managed-effect successor dedicated lifecycle', () => {
         transitionId: 'illegal-attempt-start',
         actor: ACTOR,
       }),
-    ).rejects.toThrow(/not authorized for a managed-effect successor/);
+    ).rejects.toThrow(/authorized only for a manual activity run/);
 
     const started1 = await harness.ledger.startManagedEffectSuccessor({
       runId: handoff1.authorization.target.runId,
@@ -319,7 +319,7 @@ describe('managed-effect successor dedicated lifecycle', () => {
         transitionId: 'illegal-effect-start',
         actor: ACTOR,
       }),
-    ).rejects.toThrow(/not authorized for a managed-effect successor/);
+    ).rejects.toThrow(/authorized only for a manual activity run/);
     await expect(
       harness.ledger.commitManagedEffectOutcome({
         runId: handoff1.authorization.target.runId,
@@ -335,7 +335,7 @@ describe('managed-effect successor dedicated lifecycle', () => {
         outcome: { ok: true },
         actor: ACTOR,
       }),
-    ).rejects.toThrow(/not authorized for a managed-effect successor/);
+    ).rejects.toThrow(/authorized only for a manual activity run/);
     const replayedStart = await harness.ledger.startManagedEffectSuccessor({
       runId: handoff1.authorization.target.runId,
       fencingToken: 'successor-one-fence',

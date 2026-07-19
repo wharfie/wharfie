@@ -67,6 +67,7 @@ import {
   getRunHeadSortKey,
   getRunProjectionSortKey,
   getTransitionSortKey,
+  getWorkflowCursorProjectionSortKey,
 } from '../../ledger/record-key.js';
 import {
   EXECUTION_LEDGER_RUN_DIRECTORY_SORT_KEY_PREFIX,
@@ -90,6 +91,21 @@ import {
   createManagedEffectSuccessorRequestDigest,
   normalizeManagedEffectSuccessorAuthorization,
 } from '../../ledger/managed-effect-successor-contract.js';
+import {
+  WORKFLOW_ACTIVITY_REQUEST_PAYLOAD_SCHEMA as ACTIVITY_REQUEST_PAYLOAD_SCHEMA,
+  WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION,
+  WORKFLOW_PLAN_PAYLOAD_KIND,
+  WORKFLOW_PLAN_PAYLOAD_SCHEMA,
+  WORKFLOW_START_PAYLOAD_KIND,
+  WORKFLOW_START_PAYLOAD_SCHEMA,
+  WorkflowCursorDisposition,
+  assertWorkflowRunId,
+  materializeFirstWorkflowActivity,
+  normalizeWorkflowActivityRequest,
+  normalizeWorkflowCursor,
+  normalizeWorkflowPlanPayload,
+  normalizeWorkflowStartPayload,
+} from '../../ledger/workflow-execution-contract.js';
 import { CONDITION_TYPE, KEY_TYPE } from '../base.js';
 import { comparePortablePageKeys } from '../utils.js';
 
@@ -129,7 +145,11 @@ export {
 const KEY_NAME = 'run_id';
 const SORT_KEY_NAME = 'sort_key';
 const RUN_DIRECTORY_RECORD_TYPE = 'execution_ledger_run_directory';
-const RUN_DIRECTORY_RUN_KINDS = new Set(['manual', 'effect-successor']);
+const RUN_DIRECTORY_RUN_KINDS = new Set([
+  'manual',
+  'workflow',
+  'effect-successor',
+]);
 const RUN_DIRECTORY_CURSOR_SCHEMA_VERSION = 8;
 const RUN_DIRECTORY_DEFAULT_PAGE_SIZE = 50;
 const RUN_DIRECTORY_MAX_PAGE_SIZE = 100;
@@ -141,6 +161,7 @@ const READY_WORK_CURSOR_MAX_BYTES = 4096;
 const SUCCESSOR_IDENTITY_SORT_KEY_PREFIX = 'successor-identity/v1/';
 const EVENT_TYPES = new Set([
   'manual-run-created',
+  'workflow-run-created',
   'effect-successor-authorized',
   'effect-successor-run-created',
   'effect-successor-started',
@@ -168,7 +189,6 @@ const SUPPORTED_MANUAL_TERMINAL_TYPES = new Set([
   'cancelled',
   'protocol-failed',
 ]);
-const MANUAL_REQUEST_PAYLOAD_SCHEMA = 'wharfie.execution.manual-request.v1';
 const ACTIVITY_EVIDENCE_PAYLOAD_SCHEMA =
   'wharfie.execution.activity-evidence.v1';
 const UNCERTAIN_ATTEMPT_RECONCILIATION_VERIFIER = Object.freeze({
@@ -337,18 +357,39 @@ function normalizeRunTrigger(value) {
     assertExactKeys(trigger, ['kind'], 'trigger');
     return { kind: 'manual' };
   }
+  if (trigger.kind === 'workflow') {
+    assertExactKeys(
+      trigger,
+      ['kind', 'workflowId', 'planId', 'planRef'],
+      'trigger',
+    );
+    assertLogicalId(trigger.workflowId, 'trigger.workflowId');
+    assertOpaqueId(trigger.planId, 'trigger.planId');
+    trigger.planRef = normalizePayloadReference(
+      trigger.planRef,
+      WORKFLOW_PLAN_PAYLOAD_SCHEMA,
+      'trigger.planRef',
+    );
+    return trigger;
+  }
   if (trigger.kind === 'effect-successor') {
     return normalizeManagedEffectSuccessorAuthorization(trigger);
   }
-  throw new TypeError("trigger.kind must be 'manual' or 'effect-successor'.");
+  throw new TypeError(
+    "trigger.kind must be 'manual', 'workflow', or 'effect-successor'.",
+  );
 }
 
 /**
  * @param {Record<string, any>} trigger - Verified run trigger.
- * @returns {'manual'|'effect-successor'} - Redacted run-directory kind.
+ * @returns {'manual'|'workflow'|'effect-successor'} - Redacted run-directory kind.
  */
 function runKindFromTrigger(trigger) {
-  return trigger.kind === 'effect-successor' ? 'effect-successor' : 'manual';
+  return trigger.kind === 'workflow'
+    ? 'workflow'
+    : trigger.kind === 'effect-successor'
+      ? 'effect-successor'
+      : 'manual';
 }
 
 /**
@@ -356,7 +397,7 @@ function runKindFromTrigger(trigger) {
  * @param {string} label - Human-readable boundary label.
  * @returns {{input: any, callerMetadata: Record<string, any>}} - Strict manual request envelope.
  */
-function normalizeManualRequestEnvelope(value, label) {
+function normalizeActivityRequestEnvelope(value, label) {
   const envelope = cloneReferencedPayloadObject(value, label);
   assertExactKeys(envelope, ['input', 'callerMetadata'], label);
   return {
@@ -728,6 +769,47 @@ function createRunProjectionRecord(runId, data) {
 }
 
 /**
+ * @param {unknown} value - Candidate workflow cursor projection.
+ * @param {string} runId - Expected workflow run identity.
+ * @returns {Record<string, any>} - Strict workflow cursor snapshot.
+ */
+function normalizeWorkflowCursorSnapshot(value, runId) {
+  try {
+    const cursor = normalizeWorkflowCursor(value, 'workflow cursor projection');
+    if (cursor.runId !== runId) {
+      throw new TypeError('workflow cursor projection run identity mismatch.');
+    }
+    return cursor;
+  } catch (error) {
+    if (error instanceof ExecutionLedgerProjectionError) throw error;
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'invalid workflow cursor projection',
+    );
+  }
+}
+
+/**
+ * @param {string} runId - Workflow run identity.
+ * @param {Record<string, any>} data - Workflow cursor projection.
+ * @returns {Record<string, any>} - Typed cursor projection record.
+ */
+function createWorkflowCursorProjectionRecord(runId, data) {
+  const cursor = normalizeWorkflowCursorSnapshot(data, runId);
+  return {
+    [KEY_NAME]: runId,
+    [SORT_KEY_NAME]: getWorkflowCursorProjectionSortKey(),
+    record_type: 'execution_ledger_workflow_cursor_projection',
+    schema_version: EXECUTION_LEDGER_SCHEMA_VERSION,
+    disposition: cursor.disposition,
+    version: cursor.version,
+    sequence: cursor.lastSequence,
+    revision_id: cursor.revisionId,
+    data: cloneInlinePayload(cursor, 'workflow cursor projection'),
+  };
+}
+
+/**
  * Build the small, redacted projection used to locate a service's run history.
  * The directory contains no payload references, terminal data, evidence, or
  * fencing tokens; callers must rebuild the referenced run before relying on
@@ -1067,7 +1149,7 @@ function parseRunDirectoryCursor(cursor, scope) {
 
 /**
  * @param {Record<string, any>} directory - Verified directory row.
- * @returns {{runId: string, appId: string, revisionId: string, kind: 'manual'|'effect-successor', status: string, version: number, lastSequence: number, createdAt: number, updatedAt: number}} - Redacted page item.
+ * @returns {{runId: string, appId: string, revisionId: string, kind: 'manual'|'workflow'|'effect-successor', status: string, version: number, lastSequence: number, createdAt: number, updatedAt: number}} - Redacted page item.
  */
 function createRunDirectoryPageItem(directory) {
   return {
@@ -1241,11 +1323,23 @@ function createReadyWorkPageItem(record) {
     runVersion: record.run_version,
     lastSequence: record.sequence,
   };
+  const workflow = Object.prototype.hasOwnProperty.call(
+    record,
+    'cursor_version',
+  )
+    ? {
+        cursorVersion: record.cursor_version,
+        continuationId: record.continuation_id,
+        stepId: record.step_id,
+        stepIndex: record.step_index,
+      }
+    : {};
   if (record.kind === ExecutionLedgerReadyWorkKind.ACTIVITY) {
     return {
       ...common,
       invocationId: record.invocation_id,
       generation: record.generation,
+      ...workflow,
     };
   }
   if (record.kind === ExecutionLedgerReadyWorkKind.RECOVERY) {
@@ -1254,10 +1348,12 @@ function createReadyWorkPageItem(record) {
       invocationId: record.invocation_id,
       attemptId: record.attempt_id,
       generation: record.generation,
+      ...workflow,
     };
   }
   const continuation = {
     ...common,
+    cursorVersion: record.cursor_version,
     continuationId: record.continuation_id,
     stepId: record.step_id,
     stepIndex: record.step_index,
@@ -1547,7 +1643,9 @@ function normalizeRunSnapshot(run, runId) {
   value.trigger = normalizeRunTrigger(value.trigger);
   value.requestRef = normalizePayloadReference(
     value.requestRef,
-    MANUAL_REQUEST_PAYLOAD_SCHEMA,
+    value.trigger.kind === 'workflow'
+      ? WORKFLOW_START_PAYLOAD_SCHEMA
+      : ACTIVITY_REQUEST_PAYLOAD_SCHEMA,
     'run projection requestRef',
   );
   const hasCancellationRequest = Object.prototype.hasOwnProperty.call(
@@ -1567,6 +1665,35 @@ function normalizeRunSnapshot(run, runId) {
     );
   }
   return value;
+}
+
+/**
+ * Bind a workflow activity invocation to the exact persisted cursor that
+ * materialized its logical request. Physical attempts retain their separate
+ * generation and fence identities.
+ * @param {unknown} value - Candidate workflow invocation binding.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {{workflowId: string, planId: string, continuationId: string, stepId: string, stepIndex: number}} - Exact cursor binding.
+ */
+function normalizeWorkflowInvocationBinding(value, label) {
+  const binding = cloneBoundedJsonObject(
+    value,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    label,
+  );
+  assertExactKeys(
+    binding,
+    ['workflowId', 'planId', 'continuationId', 'stepId', 'stepIndex'],
+    label,
+  );
+  assertLogicalId(binding.workflowId, `${label}.workflowId`);
+  assertOpaqueId(binding.planId, `${label}.planId`);
+  assertOpaqueId(binding.continuationId, `${label}.continuationId`);
+  assertLogicalId(binding.stepId, `${label}.stepId`);
+  assertNonnegativeSafeInteger(binding.stepIndex, `${label}.stepIndex`);
+  return /** @type {{workflowId: string, planId: string, continuationId: string, stepId: string, stepIndex: number}} */ (
+    binding
+  );
 }
 
 /**
@@ -1597,7 +1724,7 @@ function normalizeInvocationSnapshot(invocation, runId) {
       'createdAt',
       'updatedAt',
     ],
-    ['terminal', 'uncertainty', 'cancellationRequest'],
+    ['terminal', 'uncertainty', 'cancellationRequest', 'workflow'],
     'invocation snapshot',
   );
   if (value.schemaVersion !== EXECUTION_LEDGER_SCHEMA_VERSION) {
@@ -1635,7 +1762,7 @@ function normalizeInvocationSnapshot(invocation, runId) {
   normalizeObservedAt(value.updatedAt, 'invocation projection updatedAt');
   value.requestRef = normalizePayloadReference(
     value.requestRef,
-    MANUAL_REQUEST_PAYLOAD_SCHEMA,
+    ACTIVITY_REQUEST_PAYLOAD_SCHEMA,
     'invocation projection requestRef',
   );
   const hasTerminal = Object.prototype.hasOwnProperty.call(value, 'terminal');
@@ -1647,6 +1774,7 @@ function normalizeInvocationSnapshot(invocation, runId) {
     value,
     'cancellationRequest',
   );
+  const hasWorkflow = Object.prototype.hasOwnProperty.call(value, 'workflow');
   if (
     ([InvocationStatus.RUNNABLE, InvocationStatus.RUNNING].includes(
       value.status,
@@ -1682,6 +1810,12 @@ function normalizeInvocationSnapshot(invocation, runId) {
     value.cancellationRequest = normalizeCancellationRequest(
       value.cancellationRequest,
       'invocation projection cancellationRequest',
+    );
+  }
+  if (hasWorkflow) {
+    value.workflow = normalizeWorkflowInvocationBinding(
+      value.workflow,
+      'invocation projection workflow',
     );
   }
   return value;
@@ -2253,6 +2387,14 @@ function assertRunAdvance(prior, next, sequence, runId) {
  * @returns {void}
  */
 function assertInvocationAdvance(prior, next, sequence, runId) {
+  const priorHasWorkflow = Object.prototype.hasOwnProperty.call(
+    prior,
+    'workflow',
+  );
+  const nextHasWorkflow = Object.prototype.hasOwnProperty.call(
+    next,
+    'workflow',
+  );
   if (
     next.runId !== prior.runId ||
     next.invocationId !== prior.invocationId ||
@@ -2260,6 +2402,9 @@ function assertInvocationAdvance(prior, next, sequence, runId) {
     next.revisionId !== prior.revisionId ||
     next.activityId !== prior.activityId ||
     !hasSameCanonicalJson(next.requestRef, prior.requestRef) ||
+    priorHasWorkflow !== nextHasWorkflow ||
+    (priorHasWorkflow &&
+      !hasSameCanonicalJson(next.workflow, prior.workflow)) ||
     next.createdAt !== prior.createdAt ||
     next.version !== prior.version + 1 ||
     next.lastSequence !== sequence
@@ -2602,7 +2747,7 @@ function normalizeTransitionReceipt(value, runId) {
 /**
  * @param {Record<string, any>} event - Event being folded.
  * @param {string} runId - Expected run identity.
- * @returns {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} - Event projection snapshots.
+ * @returns {{run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} - Event projection snapshots.
  */
 function eventSnapshots(event, runId) {
   const payload = cloneBoundedJsonObject(
@@ -2610,7 +2755,13 @@ function eventSnapshots(event, runId) {
     EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
     'event payload',
   );
-  if (
+  if (event.type === 'workflow-run-created') {
+    assertExactKeys(
+      payload,
+      ['run', 'invocation', 'workflowCursor'],
+      'event payload',
+    );
+  } else if (
     event.type === 'effect-successor-authorized' ||
     event.type === 'effect-successor-run-created'
   ) {
@@ -2659,9 +2810,11 @@ function eventSnapshots(event, runId) {
   } else {
     assertExactKeys(
       payload,
-      ['manual-run-created', 'effect-successor-run-created'].includes(
-        event.type,
-      )
+      [
+        'manual-run-created',
+        'workflow-run-created',
+        'effect-successor-run-created',
+      ].includes(event.type)
         ? ['run', 'invocation']
         : ['run', 'invocation', 'attempt'],
       'event payload',
@@ -2669,8 +2822,14 @@ function eventSnapshots(event, runId) {
   }
   const run = normalizeRunSnapshot(payload.run, runId);
   const invocation = normalizeInvocationSnapshot(payload.invocation, runId);
-  /** @type {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} */
+  /** @type {{run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} */
   const result = { run, invocation };
+  if (Object.prototype.hasOwnProperty.call(payload, 'workflowCursor')) {
+    result.workflowCursor = normalizeWorkflowCursorSnapshot(
+      payload.workflowCursor,
+      runId,
+    );
+  }
   if (Object.prototype.hasOwnProperty.call(payload, 'attempt')) {
     result.attempt = normalizeAttemptSnapshot(payload.attempt, runId);
   }
@@ -3016,6 +3175,22 @@ function assertEventRequestDigest(
       revisionId: run.revisionId,
       activityId: invocation.activityId,
       requestRef: run.requestRef,
+      trigger: run.trigger,
+    };
+  } else if (event.type === 'workflow-run-created') {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      transitionId: event.transition_id,
+      actor: event.actor,
+      coordinatorEpoch: event.fence.coordinatorEpoch,
+      appId: run.appId,
+      revisionId: run.revisionId,
+      workflowId: run.trigger.workflowId,
+      planId: run.trigger.planId,
+      planRef: run.trigger.planRef,
+      startRef: run.requestRef,
+      activityRequestRef: invocation.requestRef,
       trigger: run.trigger,
     };
   } else if (event.type === 'effect-successor-run-created') {
@@ -3365,7 +3540,7 @@ function assertEventRequestDigest(
  * authorizing another mutation.
  * @param {{readBytes: (reference: unknown) => Promise<unknown>}} payloadStore - Immutable payload store.
  * @param {string} runId - Durable run identity for safe diagnostics.
- * @returns {{readManualRequest: (reference: unknown) => Promise<Record<string, any>>, readEvidence: (reference: unknown) => Promise<Record<string, any>>, readManagedEffectRequest: (reference: unknown) => Promise<ReturnType<typeof normalizeManagedEffectRequest>>, readManagedEffectOutcome: (reference: unknown) => Promise<ReturnType<typeof normalizeManagedEffectOutcome>>, readManagedEffectReconciliationEvidence: (reference: unknown) => Promise<Record<string, any>>}} - Verified payload reader.
+ * @returns {{readActivityRequest: (reference: unknown) => Promise<Record<string, any>>, readWorkflowPlan: (reference: unknown) => Promise<ReturnType<typeof normalizeWorkflowPlanPayload>>, readWorkflowStart: (reference: unknown) => Promise<ReturnType<typeof normalizeWorkflowStartPayload>>, readEvidence: (reference: unknown) => Promise<Record<string, any>>, readManagedEffectRequest: (reference: unknown) => Promise<ReturnType<typeof normalizeManagedEffectRequest>>, readManagedEffectOutcome: (reference: unknown) => Promise<ReturnType<typeof normalizeManagedEffectOutcome>>, readManagedEffectReconciliationEvidence: (reference: unknown) => Promise<Record<string, any>>}} - Verified payload reader.
  */
 function createLedgerPayloadReader(payloadStore, runId) {
   /** @type {Map<string, Promise<any>>} */
@@ -3408,14 +3583,34 @@ function createLedgerPayloadReader(payloadStore, runId) {
   }
 
   return {
-    async readManualRequest(reference) {
-      return normalizeManualRequestEnvelope(
+    async readActivityRequest(reference) {
+      return normalizeActivityRequestEnvelope(
         await read(
           reference,
-          MANUAL_REQUEST_PAYLOAD_SCHEMA,
-          'persisted manual request',
+          ACTIVITY_REQUEST_PAYLOAD_SCHEMA,
+          'persisted activity request',
         ),
-        'persisted manual request',
+        'persisted activity request',
+      );
+    },
+    async readWorkflowPlan(reference) {
+      return normalizeWorkflowPlanPayload(
+        await read(
+          reference,
+          WORKFLOW_PLAN_PAYLOAD_SCHEMA,
+          'persisted workflow plan',
+        ),
+        'persisted workflow plan',
+      );
+    },
+    async readWorkflowStart(reference) {
+      return normalizeWorkflowStartPayload(
+        await read(
+          reference,
+          WORKFLOW_START_PAYLOAD_SCHEMA,
+          'persisted workflow start',
+        ),
+        'persisted workflow start',
       );
     },
     async readEvidence(reference) {
@@ -3464,12 +3659,13 @@ function createLedgerPayloadReader(payloadStore, runId) {
 /**
  * @param {Record<string, any>} run - Run snapshot.
  * @param {Record<string, any>} invocation - Invocation snapshot.
+ * @param {Record<string, any> | undefined} workflowCursor - Workflow cursor snapshot.
  * @param {Record<string, any> | undefined} attempt - Attempt snapshot.
  * @param {Record<string, any> | undefined} effect - Effect snapshot.
  * @param {Record<string, any>[] | undefined} effects - Compound effect snapshots.
  * @param {Record<string, any> | undefined} reconciliation - Reconciliation payload when the retained attempt is deliberately unchanged.
  * @param {Record<string, any>} event - Event being folded.
- * @param {{run?: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, effects: Map<string, Record<string, any>>, eventsBySequence: Map<number, Record<string, any>>, eventsById: Map<string, Record<string, any>>}} state - Mutable fold state.
+ * @param {{run?: Record<string, any>, workflowCursor?: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, effects: Map<string, Record<string, any>>, eventsBySequence: Map<number, Record<string, any>>, eventsById: Map<string, Record<string, any>>}} state - Mutable fold state.
  * @param {string} runId - Run identity.
  * @param {ReturnType<typeof createLedgerPayloadReader>} payloadReader - Per-fold verified immutable payload reader.
  * @param {Map<string, {descriptor: {kind: string, version: number}, verify: (input: Record<string, any>) => boolean}>} effectVerifierRegistry - Versioned deterministic effect verifiers.
@@ -3478,6 +3674,7 @@ function createLedgerPayloadReader(payloadStore, runId) {
 async function applyEvent(
   run,
   invocation,
+  workflowCursor,
   attempt,
   effect,
   effects,
@@ -3523,6 +3720,122 @@ async function applyEvent(
           : 0,
     );
 
+  if (event.type === 'workflow-run-created') {
+    if (
+      currentRun ||
+      currentInvocation ||
+      state.workflowCursor ||
+      !workflowCursor ||
+      attempt ||
+      effect ||
+      effects ||
+      reconciliation ||
+      event.sequence !== 1 ||
+      run.status !== RunStatus.RUNNING ||
+      run.version !== 1 ||
+      run.lastSequence !== 1 ||
+      invocation.status !== InvocationStatus.RUNNABLE ||
+      invocation.generation !== 0 ||
+      invocation.version !== 1 ||
+      invocation.lastSequence !== 1 ||
+      workflowCursor.version !== 1 ||
+      workflowCursor.lastSequence !== 1 ||
+      workflowCursor.disposition !==
+        WorkflowCursorDisposition.ACTIVITY_RUNNABLE ||
+      run.createdAt !== event.observed_at ||
+      run.updatedAt !== event.observed_at ||
+      invocation.createdAt !== event.observed_at ||
+      invocation.updatedAt !== event.observed_at ||
+      workflowCursor.createdAt !== event.observed_at ||
+      workflowCursor.updatedAt !== event.observed_at ||
+      run.appId !== invocation.appId ||
+      run.appId !== workflowCursor.appId ||
+      run.revisionId !== invocation.revisionId ||
+      run.revisionId !== workflowCursor.revisionId ||
+      run.runId !== workflowCursor.runId ||
+      run.trigger.kind !== 'workflow' ||
+      run.trigger.workflowId !== workflowCursor.workflowId ||
+      run.trigger.planId !== workflowCursor.planId ||
+      !hasSameCanonicalJson(run.trigger.planRef, workflowCursor.planRef) ||
+      !hasSameCanonicalJson(run.requestRef, workflowCursor.startRef) ||
+      invocation.invocationId !== workflowCursor.invocationId ||
+      !invocation.workflow ||
+      !hasSameCanonicalJson(invocation.workflow, {
+        workflowId: workflowCursor.workflowId,
+        planId: workflowCursor.planId,
+        continuationId: workflowCursor.continuationId,
+        stepId: workflowCursor.stepId,
+        stepIndex: workflowCursor.stepIndex,
+      }) ||
+      event.fence.coordinatorEpoch !== 0 ||
+      event.fence.invocationGeneration !== 0
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid workflow run creation',
+      );
+    }
+
+    const planPayload = await payloadReader.readWorkflowPlan(
+      run.trigger.planRef,
+    );
+    const startPayload = await payloadReader.readWorkflowStart(run.requestRef);
+    const activityRequest = normalizeWorkflowActivityRequest(
+      await payloadReader.readActivityRequest(invocation.requestRef),
+      'persisted workflow activity request',
+    );
+    let materialized;
+    try {
+      materialized = materializeFirstWorkflowActivity({
+        runId,
+        planPayload,
+        planRef: run.trigger.planRef,
+        startPayload,
+        startRef: run.requestRef,
+        observedAt: event.observed_at,
+      });
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'workflow start materialization mismatch',
+      );
+    }
+    if (
+      materialized.planPayload.appId !== run.appId ||
+      materialized.planPayload.revisionId !== run.revisionId ||
+      materialized.planPayload.workflowId !== run.trigger.workflowId ||
+      materialized.planId !== run.trigger.planId ||
+      materialized.invocationId !== invocation.invocationId ||
+      materialized.activityId !== invocation.activityId ||
+      !hasSameCanonicalJson(materialized.activityRequest, activityRequest) ||
+      !hasSameCanonicalJson(materialized.cursor, workflowCursor)
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'workflow start derivation mismatch',
+      );
+    }
+    assertEventRequestDigest(
+      event,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      new Map(),
+      run,
+      invocation,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      runId,
+    );
+    state.run = run;
+    state.workflowCursor = workflowCursor;
+    state.invocations.set(invocation.invocationId, invocation);
+    return;
+  }
+
   if (
     event.type === 'manual-run-created' ||
     event.type === 'effect-successor-run-created'
@@ -3536,6 +3849,8 @@ async function applyEvent(
     if (
       currentRun ||
       currentInvocation ||
+      state.workflowCursor ||
+      workflowCursor ||
       attempt ||
       event.sequence !== 1 ||
       run.status !== RunStatus.RUNNING ||
@@ -3554,6 +3869,7 @@ async function applyEvent(
       !hasSameCanonicalJson(run.requestRef, invocation.requestRef) ||
       event.fence.coordinatorEpoch !== 0 ||
       event.fence.invocationGeneration !== 0 ||
+      invocation.workflow ||
       (isSuccessor
         ? !authorization ||
           run.runId !== authorization.target.runId ||
@@ -3575,7 +3891,7 @@ async function applyEvent(
     ) {
       throw new ExecutionLedgerProjectionError(runId, 'invalid run creation');
     }
-    const requestEnvelope = await payloadReader.readManualRequest(
+    const requestEnvelope = await payloadReader.readActivityRequest(
       run.requestRef,
     );
     if (authorization) {
@@ -3643,6 +3959,12 @@ async function applyEvent(
       ].includes(event.type))
   ) {
     throw new ExecutionLedgerProjectionError(runId, 'event lacks prior state');
+  }
+  if (currentRun.trigger?.kind === 'workflow') {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'workflow transitions beyond creation are not implemented',
+    );
   }
   assertRunAdvance(currentRun, run, event.sequence, runId);
   assertInvocationAdvance(currentInvocation, invocation, event.sequence, runId);
@@ -5203,7 +5525,7 @@ function sameSnapshot(left, right) {
  * @param {string} runId - Expected run identity.
  * @param {{readBytes: (reference: unknown) => Promise<unknown>}} payloadStore - Immutable payload store.
  * @param {Map<string, {descriptor: {kind: string, version: number}, verify: (input: Record<string, any>) => boolean}>} effectVerifierRegistry - Versioned deterministic effect verifiers.
- * @returns {Promise<{head: Record<string, any>, run: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, effects: Map<string, Record<string, any>>, events: Record<string, any>[]}|null>} - Verified current state, if the run exists.
+ * @returns {Promise<{head: Record<string, any>, run: Record<string, any>, workflowCursor?: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, effects: Map<string, Record<string, any>>, events: Record<string, any>[]}|null>} - Verified current state, if the run exists.
  */
 async function foldAndVerifyRun(
   records,
@@ -5217,6 +5539,8 @@ async function foldAndVerifyRun(
   let head;
   /** @type {Record<string, any> | undefined} */
   let runProjection;
+  /** @type {Record<string, any> | undefined} */
+  let workflowCursorProjection;
   const invocationProjections = new Map();
   const attemptProjections = new Map();
   const effectProjections = new Map();
@@ -5258,6 +5582,34 @@ async function foldAndVerifyRun(
           'execution_ledger_run_projection',
         );
         break;
+      case 'execution_ledger_workflow_cursor_projection': {
+        if (workflowCursorProjection) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'duplicate workflow cursor projection',
+          );
+        }
+        const cursor = normalizeWorkflowCursorSnapshot(record.data, runId);
+        requireRecord(
+          record,
+          runId,
+          getWorkflowCursorProjectionSortKey(),
+          'execution_ledger_workflow_cursor_projection',
+        );
+        if (
+          record.disposition !== cursor.disposition ||
+          record.version !== cursor.version ||
+          record.sequence !== cursor.lastSequence ||
+          record.revision_id !== cursor.revisionId
+        ) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'workflow cursor projection index mismatch',
+          );
+        }
+        workflowCursorProjection = cursor;
+        break;
+      }
       case 'execution_ledger_invocation_projection': {
         const invocation = normalizeInvocationSnapshot(record.data, runId);
         const expectedSortKey = getInvocationProjectionSortKey(
@@ -5397,7 +5749,7 @@ async function foldAndVerifyRun(
     receiptsByTransition.set(receipt.transition_id, receipt);
   }
 
-  /** @type {{run?: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, effects: Map<string, Record<string, any>>, eventsBySequence: Map<number, Record<string, any>>, eventsById: Map<string, Record<string, any>>}} */
+  /** @type {{run?: Record<string, any>, workflowCursor?: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, effects: Map<string, Record<string, any>>, eventsBySequence: Map<number, Record<string, any>>, eventsById: Map<string, Record<string, any>>}} */
   const state = {
     invocations: new Map(),
     attempts: new Map(),
@@ -5454,6 +5806,7 @@ async function foldAndVerifyRun(
     await applyEvent(
       snapshots.run,
       snapshots.invocation,
+      snapshots.workflowCursor,
       snapshots.attempt,
       snapshots.effect,
       snapshots.effects,
@@ -5479,6 +5832,18 @@ async function foldAndVerifyRun(
 
   if (!state.run) {
     throw new ExecutionLedgerProjectionError(runId, 'event stream has no run');
+  }
+  if (
+    state.run.trigger.kind === 'workflow'
+      ? !state.workflowCursor ||
+        !workflowCursorProjection ||
+        !sameSnapshot(state.workflowCursor, workflowCursorProjection)
+      : state.workflowCursor || workflowCursorProjection
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'workflow cursor projection disagrees',
+    );
   }
   const expectedRun = normalizeRunSnapshot(runProjection.data, runId);
   if (
@@ -5538,6 +5903,7 @@ async function foldAndVerifyRun(
   return {
     head: cloneJsonObject(head, 'run head'),
     run: state.run,
+    ...(state.workflowCursor ? { workflowCursor: state.workflowCursor } : {}),
     invocations: state.invocations,
     attempts: state.attempts,
     effects: state.effects,
@@ -5769,6 +6135,21 @@ function replacementConditions(record, extraConditions = []) {
 }
 
 /**
+ * @param {Record<string, any>} record - Existing workflow cursor projection.
+ * @returns {import('../base.js').KeyCondition[]} - Cursor stale-write fence.
+ */
+function workflowCursorReplacementConditions(record) {
+  return [
+    eq('record_type', record.record_type),
+    eq('schema_version', record.schema_version),
+    eq('disposition', record.disposition),
+    eq('version', record.version),
+    eq('sequence', record.sequence),
+    eq('revision_id', record.revision_id),
+  ];
+}
+
+/**
  * @param {Record<string, any>} record - Existing typed run-directory row.
  * @returns {import('../base.js').KeyCondition[]} - Full stale-write fence.
  */
@@ -5883,7 +6264,7 @@ function assertSupportedManualTerminal(
  * @param {Record<string, any>} run - Current run projection.
  * @param {Record<string, any>} invocation - Current invocation projection.
  * @param {Record<string, any>} attempt - Current attempt projection.
- * @param {{readManualRequest: (reference: unknown) => Promise<Record<string, any>>}} payloadReader - Verified immutable payload reader.
+ * @param {{readActivityRequest: (reference: unknown) => Promise<Record<string, any>>}} payloadReader - Verified immutable payload reader.
  * @returns {Promise<Readonly<Record<string, any>>>} - Exact host start frame bound by the ledger.
  */
 async function createLedgerAttemptStart(
@@ -5892,7 +6273,9 @@ async function createLedgerAttemptStart(
   attempt,
   payloadReader,
 ) {
-  const request = await payloadReader.readManualRequest(invocation.requestRef);
+  const request = await payloadReader.readActivityRequest(
+    invocation.requestRef,
+  );
   return validateActivityProtocolHostFrame(
     {
       protocol: ACTIVITY_PROTOCOL_NAME,
@@ -6377,7 +6760,8 @@ function createAttemptId(runId, invocationId, generation) {
 /**
  * Create a provider-neutral append-only execution ledger over one transactional
  * DB table. It intentionally does not provide leases, scheduling, or a general
- * workflow API; those require later durable contracts.
+ * workflow engine; only the first activity-headed workflow continuation is
+ * admitted until later durable transition contracts land.
  * @param {{db: DBClient, tableName: string, payloadStore: {putJson: (input: {value: unknown, payloadSchema: string}) => Promise<unknown>, readBytes: (reference: unknown) => Promise<unknown>}, effectEvidenceVerifiers?: {kind: string, version: number, verify: (input: Record<string, any>) => boolean}[], now?: () => number}} options - Store dependencies.
  * @returns {ExecutionLedgerStore} - Durable ledger API.
  */
@@ -6515,18 +6899,19 @@ export function createExecutionLedger({
   }
 
   /**
-   * Keep ordinary authored-activity transitions fail-closed. A successor has
-   * its own finite state machine; permitting an old generic entry point would
-   * recreate the unsafe STARTED-without-effect gap this ledger version removes.
+   * Keep the established single-activity transitions fail-closed. Workflow and
+   * successor runs have cursor-aware finite state machines; permitting an old
+   * generic entry point would advance or terminalize them without consuming
+   * their durable orchestration position.
    * @param {Record<string, any>} state - Fresh verified durable state.
    * @param {string} operation - Calling mutation name for diagnostics.
    * @returns {void}
    */
-  function assertOrdinaryLifecycleRun(state, operation) {
-    if (state.run.trigger?.kind === 'effect-successor') {
+  function assertManualLifecycleRun(state, operation) {
+    if (state.run.trigger?.kind !== 'manual') {
       throw new ExecutionLedgerConflictError(
         state.run.runId,
-        `${operation} is not authorized for a managed-effect successor`,
+        `${operation} is authorized only for a manual activity run`,
       );
     }
   }
@@ -6609,16 +6994,24 @@ export function createExecutionLedger({
 
   /**
    * Derive the locator row implied by one authoritative lifecycle snapshot.
-   * V10 initially mounts the index for ordinary manual work; managed-effect
-   * successors retain their dedicated finite operator lifecycle. Workflow
-   * continuations will use the same codec when their state machine lands.
+   * Manual work has no cursor coordinates; workflow activity work is bound to
+   * the exact persisted continuation that selected its logical request.
    * @param {Record<string, any>} run - Run snapshot.
    * @param {Record<string, any>} invocation - Current invocation snapshot.
    * @param {Record<string, any> | undefined} attempt - Current physical attempt.
+   * @param {Record<string, any> | undefined} workflowCursor - Current workflow cursor.
    * @returns {Record<string, any> | undefined} - Canonical storage row.
    */
-  function createLifecycleReadyWorkRecord(run, invocation, attempt) {
-    if (run.trigger?.kind !== 'manual' || run.status !== RunStatus.RUNNING) {
+  function createLifecycleReadyWorkRecord(
+    run,
+    invocation,
+    attempt,
+    workflowCursor = undefined,
+  ) {
+    if (
+      !['manual', 'workflow'].includes(run.trigger?.kind) ||
+      run.status !== RunStatus.RUNNING
+    ) {
       return undefined;
     }
     if (
@@ -6629,6 +7022,33 @@ export function createExecutionLedger({
       throw new ExecutionLedgerProjectionError(
         run.runId,
         'ready-work invocation scope mismatch',
+      );
+    }
+    const isWorkflow = run.trigger.kind === 'workflow';
+    if (
+      isWorkflow
+        ? !workflowCursor ||
+          workflowCursor.runId !== run.runId ||
+          workflowCursor.appId !== run.appId ||
+          workflowCursor.revisionId !== run.revisionId ||
+          workflowCursor.workflowId !== run.trigger.workflowId ||
+          workflowCursor.planId !== run.trigger.planId ||
+          workflowCursor.invocationId !== invocation.invocationId ||
+          workflowCursor.disposition !==
+            WorkflowCursorDisposition.ACTIVITY_RUNNABLE ||
+          !invocation.workflow ||
+          !hasSameCanonicalJson(invocation.workflow, {
+            workflowId: workflowCursor.workflowId,
+            planId: workflowCursor.planId,
+            continuationId: workflowCursor.continuationId,
+            stepId: workflowCursor.stepId,
+            stepIndex: workflowCursor.stepIndex,
+          })
+        : workflowCursor || invocation.workflow
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        run.runId,
+        'ready-work workflow cursor mismatch',
       );
     }
     const common = {
@@ -6645,6 +7065,14 @@ export function createExecutionLedger({
         availableAt: invocation.updatedAt,
         invocationId: invocation.invocationId,
         generation: invocation.generation,
+        ...(workflowCursor
+          ? {
+              cursorVersion: workflowCursor.version,
+              continuationId: workflowCursor.continuationId,
+              stepId: workflowCursor.stepId,
+              stepIndex: workflowCursor.stepIndex,
+            }
+          : {}),
       });
     }
     if (invocation.status !== InvocationStatus.RUNNING) return undefined;
@@ -6666,6 +7094,14 @@ export function createExecutionLedger({
       invocationId: invocation.invocationId,
       attemptId: attempt.attemptId,
       generation: attempt.generation,
+      ...(workflowCursor
+        ? {
+            cursorVersion: workflowCursor.version,
+            continuationId: workflowCursor.continuationId,
+            stepId: workflowCursor.stepId,
+            stepIndex: workflowCursor.stepIndex,
+          }
+        : {}),
     });
   }
 
@@ -6687,7 +7123,7 @@ export function createExecutionLedger({
    * the affected projections, including the current ready-work locator. The
    * caller supplies already-folded snapshots so the event remains sufficient
    * to reconstruct every authoritative projection.
-   * @param {{state: Record<string, any> | null, runId: string, transitionId: string, requestDigest: string, event: Record<string, any>, nextRun: Record<string, any>, nextInvocation: Record<string, any>, nextAttempt?: Record<string, any>, currentAttempt?: Record<string, any>, nextEffect?: Record<string, any>, currentEffect?: Record<string, any>, effectTransitions?: Array<{currentEffect?: Record<string, any>, nextEffect: Record<string, any>}>}} input - Fully validated transition.
+   * @param {{state: Record<string, any> | null, runId: string, transitionId: string, requestDigest: string, event: Record<string, any>, nextRun: Record<string, any>, nextInvocation: Record<string, any>, nextWorkflowCursor?: Record<string, any>, nextAttempt?: Record<string, any>, currentAttempt?: Record<string, any>, nextEffect?: Record<string, any>, currentEffect?: Record<string, any>, effectTransitions?: Array<{currentEffect?: Record<string, any>, nextEffect: Record<string, any>}>}} input - Fully validated transition.
    * @returns {Promise<void>} - Resolves only after the durable transaction commits.
    */
   async function appendTransition(input) {
@@ -6734,6 +7170,8 @@ export function createExecutionLedger({
       input.requestDigest,
       eventRecord,
     );
+    const currentWorkflowCursor = input.state?.workflowCursor;
+    const nextWorkflowCursor = input.nextWorkflowCursor;
     const currentInvocation = input.state
       ? input.state.invocations.get(input.nextInvocation.invocationId)
       : undefined;
@@ -6751,6 +7189,7 @@ export function createExecutionLedger({
           input.state.run,
           persistedInvocation,
           getReadyWorkAttempt(input.state, persistedInvocation),
+          currentWorkflowCursor,
         )
       : undefined;
     const nextReadyAttempt =
@@ -6764,6 +7203,7 @@ export function createExecutionLedger({
       input.nextRun,
       input.nextInvocation,
       nextReadyAttempt,
+      nextWorkflowCursor,
     );
 
     /** @type {import('../base.js').TransactionPutRequest[]} */
@@ -6863,6 +7303,37 @@ export function createExecutionLedger({
 
     /** @type {import('../base.js').TransactionDeleteRequest[]} */
     const deleteRequests = [];
+    if (nextWorkflowCursor) {
+      const cursorRecord = createWorkflowCursorProjectionRecord(
+        input.runId,
+        nextWorkflowCursor,
+      );
+      putRequests.push({
+        keyName: KEY_NAME,
+        sortKeyName: SORT_KEY_NAME,
+        record: cursorRecord,
+        conditions: currentWorkflowCursor
+          ? workflowCursorReplacementConditions(
+              createWorkflowCursorProjectionRecord(
+                input.runId,
+                currentWorkflowCursor,
+              ),
+            )
+          : [notExists(SORT_KEY_NAME)],
+      });
+    } else if (currentWorkflowCursor) {
+      const currentCursorRecord = createWorkflowCursorProjectionRecord(
+        input.runId,
+        currentWorkflowCursor,
+      );
+      deleteRequests.push({
+        keyName: KEY_NAME,
+        keyValue: input.runId,
+        sortKeyName: SORT_KEY_NAME,
+        sortKeyValue: currentCursorRecord[SORT_KEY_NAME],
+        conditions: workflowCursorReplacementConditions(currentCursorRecord),
+      });
+    }
     if (currentReadyWork && nextReadyWork) {
       const sameReadyWorkKey =
         currentReadyWork[KEY_NAME] === nextReadyWork[KEY_NAME] &&
@@ -7000,7 +7471,7 @@ export function createExecutionLedger({
    * @param {Record<string, any>} current - Existing run projection.
    * @param {Record<string, any>} invocation - Existing root invocation projection.
    * @param {{appId: string, revisionId: string, activityId: string, input: any, callerMetadata: Record<string, any>, trigger: {kind: 'manual'}}} requested - Caller-requested manual work.
-   * @param {{readManualRequest: (reference: unknown) => Promise<Record<string, any>>}} payloadReader - Verified immutable payload reader.
+   * @param {{readActivityRequest: (reference: unknown) => Promise<Record<string, any>>}} payloadReader - Verified immutable payload reader.
    * @returns {Promise<boolean>} - Whether the run is an exact idempotent duplicate.
    */
   async function isSameManualRun(
@@ -7018,7 +7489,7 @@ export function createExecutionLedger({
       hasSameCanonicalJson(current.trigger, requested.trigger) &&
       hasSameCanonicalJson(current.requestRef, invocation.requestRef)
     ) {
-      const persisted = await payloadReader.readManualRequest(
+      const persisted = await payloadReader.readActivityRequest(
         current.requestRef,
       );
       return (
@@ -7177,7 +7648,7 @@ export function createExecutionLedger({
 
     const requestRef = await putVerifiedPayload(payloadStore, {
       value: { input, callerMetadata },
-      payloadSchema: MANUAL_REQUEST_PAYLOAD_SCHEMA,
+      payloadSchema: ACTIVITY_REQUEST_PAYLOAD_SCHEMA,
       label: 'createManualRun.requestRef',
     });
     const requestDigest = createTransitionRequestDigest('manual-run-created', {
@@ -7312,6 +7783,410 @@ export function createExecutionLedger({
       );
     }
     return transitionResult(next, undefined, receipt, true, undefined);
+  }
+
+  /**
+   * @param {Record<string, any>} state - Verified workflow state.
+   * @param {{planPayload: Record<string, any>, startPayload: Record<string, any>, actor: {kind: string, id: string}}} requested - Exact requested immutable work.
+   * @returns {Promise<{run: Record<string, any>, workflowCursor: Record<string, any>, invocation: Record<string, any>} | undefined>} - Immutable creation snapshots, if the run is an exact duplicate.
+   */
+  async function getMatchingWorkflowCreation(state, requested) {
+    const creationEvent = state.events[0];
+    if (
+      state.run.trigger?.kind !== 'workflow' ||
+      creationEvent?.type !== 'workflow-run-created' ||
+      !hasSameCanonicalJson(creationEvent.actor, requested.actor)
+    ) {
+      return undefined;
+    }
+    const creation = eventSnapshots(creationEvent, state.run.runId);
+    if (!creation.workflowCursor) return undefined;
+    const payloadReader = createLedgerPayloadReader(
+      payloadStore,
+      state.run.runId,
+    );
+    const persistedPlan = await payloadReader.readWorkflowPlan(
+      creation.run.trigger.planRef,
+    );
+    const persistedStart = await payloadReader.readWorkflowStart(
+      creation.run.requestRef,
+    );
+    return hasSameCanonicalJson(persistedPlan, requested.planPayload) &&
+      hasSameCanonicalJson(persistedStart, requested.startPayload)
+      ? {
+          run: creation.run,
+          workflowCursor: creation.workflowCursor,
+          invocation: creation.invocation,
+        }
+      : undefined;
+  }
+
+  /**
+   * @param {{runId: string, invocationId: string, transitionId: string, actor: {kind: string, id: string}, appId: string, revisionId: string, workflowId: string, planId: string, planRef: Record<string, any>, startRef: Record<string, any>, activityRequestRef: Record<string, any>, trigger: Record<string, any>}} input - Exact workflow creation authority.
+   * @returns {string} - Canonical transition request digest.
+   */
+  function createWorkflowRunRequestDigest(input) {
+    return createTransitionRequestDigest('workflow-run-created', {
+      runId: input.runId,
+      invocationId: input.invocationId,
+      transitionId: input.transitionId,
+      actor: input.actor,
+      coordinatorEpoch: 0,
+      appId: input.appId,
+      revisionId: input.revisionId,
+      workflowId: input.workflowId,
+      planId: input.planId,
+      planRef: input.planRef,
+      startRef: input.startRef,
+      activityRequestRef: input.activityRequestRef,
+      trigger: input.trigger,
+    });
+  }
+
+  /**
+   * @param {Record<string, any>} state - Verified workflow state.
+   * @param {Record<string, any> | null} receipt - Optional creation receipt.
+   * @param {boolean} applied - Whether this call won creation.
+   * @returns {{applied: boolean, receipt?: Record<string, any>, run: Record<string, any>, workflowCursor: Record<string, any>, invocation: Record<string, any>}} - Public workflow creation result.
+   */
+  function workflowCreationResult(state, receipt, applied) {
+    const cursor = state.workflowCursor;
+    const invocation = cursor
+      ? state.invocations.get(cursor.invocationId)
+      : undefined;
+    if (!cursor || !invocation) {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        'workflow creation state is incomplete',
+      );
+    }
+    return {
+      applied,
+      ...(receipt
+        ? { receipt: cloneJsonObject(receipt, 'workflow creation receipt') }
+        : {}),
+      run: cloneJsonObject(state.run, 'workflow run result'),
+      workflowCursor: cloneJsonObject(cursor, 'workflow cursor result'),
+      invocation: cloneJsonObject(invocation, 'workflow invocation result'),
+    };
+  }
+
+  /**
+   * Create the first persisted continuation of one static workflow. This
+   * tranche intentionally accepts only activity-headed definitions; timer and
+   * signal starts remain closed until their own durable projections and race
+   * semantics exist.
+   * @param {{runId: string, appId: string, revisionId: string, workflowId: string, definition: Record<string, any>, input?: any, callerMetadata?: Record<string, any>, transitionId: string, actor?: {kind: string, id: string}, observedAt?: number}} options - Immutable workflow start.
+   * @returns {Promise<{applied: boolean, receipt?: Record<string, any>, run: Record<string, any>, workflowCursor: Record<string, any>, invocation: Record<string, any>}>} - Created or exactly deduplicated workflow.
+   */
+  async function createWorkflowRun(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+      'createWorkflowRun',
+    );
+    assertSupportedKeys(
+      value,
+      [
+        'runId',
+        'appId',
+        'revisionId',
+        'workflowId',
+        'definition',
+        'input',
+        'callerMetadata',
+        'transitionId',
+        'actor',
+        'observedAt',
+      ],
+      'createWorkflowRun',
+    );
+    const runId = value.runId;
+    assertWorkflowRunId(runId, 'createWorkflowRun.runId');
+    const appId = value.appId;
+    assertLogicalId(appId, 'createWorkflowRun.appId');
+    const revisionId = value.revisionId;
+    assertApplicationRevisionId(revisionId, 'createWorkflowRun.revisionId');
+    const workflowId = value.workflowId;
+    assertLogicalId(workflowId, 'createWorkflowRun.workflowId');
+    const planPayload = normalizeWorkflowPlanPayload(
+      {
+        schemaVersion: WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION,
+        kind: WORKFLOW_PLAN_PAYLOAD_KIND,
+        appId,
+        revisionId,
+        workflowId,
+        definition: value.definition,
+      },
+      'createWorkflowRun.plan',
+    );
+    const startPayload = normalizeWorkflowStartPayload(
+      {
+        schemaVersion: WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION,
+        kind: WORKFLOW_START_PAYLOAD_KIND,
+        input: Object.prototype.hasOwnProperty.call(value, 'input')
+          ? value.input
+          : {},
+        callerMetadata: Object.prototype.hasOwnProperty.call(
+          value,
+          'callerMetadata',
+        )
+          ? value.callerMetadata
+          : {},
+      },
+      'createWorkflowRun.start',
+    );
+    const firstStep = planPayload.definition.steps[0];
+    if (firstStep.kind !== 'activity') {
+      throw new TypeError(
+        'createWorkflowRun requires an activity first step; timer and signal first steps are not implemented.',
+      );
+    }
+    if (firstStep.activity === MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID) {
+      throw new TypeError(
+        'createWorkflowRun cannot use the reserved managed-effect successor activity ID.',
+      );
+    }
+    let preflightInput;
+    if (firstStep.input.kind === 'workflow-input') {
+      preflightInput = startPayload.input;
+    } else if (firstStep.input.kind === 'literal') {
+      preflightInput = firstStep.input.value;
+    } else {
+      throw new TypeError(
+        'createWorkflowRun first activity cannot select a prior step output.',
+      );
+    }
+    const preflightActivityRequest = normalizeWorkflowActivityRequest(
+      {
+        input: preflightInput,
+        callerMetadata: startPayload.callerMetadata,
+      },
+      'createWorkflowRun.activityRequest',
+    );
+    const transitionId = assertOpaqueId(
+      value.transitionId,
+      'createWorkflowRun.transitionId',
+    );
+    const actor = normalizeActor(value.actor);
+    const observedAt = normalizeObservedAt(
+      Object.prototype.hasOwnProperty.call(value, 'observedAt')
+        ? value.observedAt
+        : now(),
+      'createWorkflowRun.observedAt',
+    );
+    const requested = { planPayload, startPayload, actor };
+
+    const existing = await readVerifiedRun(runId);
+    if (existing) {
+      const creation = await getMatchingWorkflowCreation(existing, requested);
+      if (!creation || !existing.workflowCursor) {
+        throw new ExecutionLedgerRunConflictError(runId);
+      }
+      const requestDigest = createWorkflowRunRequestDigest({
+        runId,
+        invocationId: creation.invocation.invocationId,
+        transitionId,
+        actor,
+        appId,
+        revisionId,
+        workflowId,
+        planId: creation.workflowCursor.planId,
+        planRef: creation.workflowCursor.planRef,
+        startRef: creation.workflowCursor.startRef,
+        activityRequestRef: creation.invocation.requestRef,
+        trigger: creation.run.trigger,
+      });
+      const receipt = await getTransitionReceipt(
+        db,
+        resolvedTableName,
+        runId,
+        transitionId,
+      );
+      if (receipt && receipt.request_digest !== requestDigest) {
+        throw new ExecutionLedgerTransitionConflictError(runId, transitionId);
+      }
+      try {
+        await repairReadyWork({ appId, revisionId, runId });
+      } catch (error) {
+        if (!(error instanceof ExecutionLedgerConflictError)) throw error;
+      }
+      return workflowCreationResult(existing, receipt, false);
+    }
+
+    const planRef = await putVerifiedPayload(payloadStore, {
+      value: planPayload,
+      payloadSchema: WORKFLOW_PLAN_PAYLOAD_SCHEMA,
+      label: 'createWorkflowRun.planRef',
+    });
+    const startRef = await putVerifiedPayload(payloadStore, {
+      value: startPayload,
+      payloadSchema: WORKFLOW_START_PAYLOAD_SCHEMA,
+      label: 'createWorkflowRun.startRef',
+    });
+    const materialized = materializeFirstWorkflowActivity({
+      runId,
+      planPayload,
+      planRef,
+      startPayload,
+      startRef,
+      observedAt,
+    });
+    if (
+      !hasSameCanonicalJson(
+        materialized.activityRequest,
+        preflightActivityRequest,
+      )
+    ) {
+      throw new TypeError(
+        'createWorkflowRun activity materialization changed its preflight request.',
+      );
+    }
+    const activityRequestRef = await putVerifiedPayload(payloadStore, {
+      value: materialized.activityRequest,
+      payloadSchema: ACTIVITY_REQUEST_PAYLOAD_SCHEMA,
+      label: 'createWorkflowRun.activityRequestRef',
+    });
+    const trigger = normalizeRunTrigger({
+      kind: 'workflow',
+      workflowId,
+      planId: materialized.planId,
+      planRef,
+    });
+    const run = {
+      schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+      runId,
+      appId,
+      revisionId,
+      trigger,
+      requestRef: startRef,
+      status: RunStatus.RUNNING,
+      version: 1,
+      lastSequence: 1,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    };
+    const workflowCursor = materialized.cursor;
+    const invocation = {
+      schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+      runId,
+      invocationId: materialized.invocationId,
+      appId,
+      revisionId,
+      activityId: materialized.activityId,
+      requestRef: activityRequestRef,
+      status: InvocationStatus.RUNNABLE,
+      generation: 0,
+      version: 1,
+      lastSequence: 1,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+      workflow: {
+        workflowId,
+        planId: materialized.planId,
+        continuationId: materialized.continuationId,
+        stepId: workflowCursor.stepId,
+        stepIndex: workflowCursor.stepIndex,
+      },
+    };
+    const requestDigest = createWorkflowRunRequestDigest({
+      runId,
+      invocationId: invocation.invocationId,
+      transitionId,
+      actor,
+      appId,
+      revisionId,
+      workflowId,
+      planId: materialized.planId,
+      planRef,
+      startRef,
+      activityRequestRef,
+      trigger,
+    });
+    const event = createEventRecord(
+      runId,
+      1,
+      transitionId,
+      requestDigest,
+      'workflow-run-created',
+      observedAt,
+      actor,
+      { coordinatorEpoch: 0, invocationGeneration: 0 },
+      { run, invocation, workflowCursor },
+    );
+
+    try {
+      await appendTransition({
+        state: null,
+        runId,
+        transitionId,
+        requestDigest,
+        event,
+        nextRun: run,
+        nextInvocation: invocation,
+        nextWorkflowCursor: workflowCursor,
+      });
+    } catch (error) {
+      if (!isConditionalCheckFailed(error)) throw error;
+      const raced = await readVerifiedRun(runId);
+      if (!raced) throw new ExecutionLedgerConflictError(runId);
+      const racedCreation = await getMatchingWorkflowCreation(raced, requested);
+      if (!racedCreation || !raced.workflowCursor) {
+        throw new ExecutionLedgerRunConflictError(runId);
+      }
+      const racedRequestDigest = createWorkflowRunRequestDigest({
+        runId,
+        invocationId: racedCreation.invocation.invocationId,
+        transitionId,
+        actor,
+        appId,
+        revisionId,
+        workflowId,
+        planId: racedCreation.workflowCursor.planId,
+        planRef: racedCreation.workflowCursor.planRef,
+        startRef: racedCreation.workflowCursor.startRef,
+        activityRequestRef: racedCreation.invocation.requestRef,
+        trigger: racedCreation.run.trigger,
+      });
+      const receipt = await getTransitionReceipt(
+        db,
+        resolvedTableName,
+        runId,
+        transitionId,
+      );
+      if (receipt && receipt.request_digest !== racedRequestDigest) {
+        throw new ExecutionLedgerTransitionConflictError(runId, transitionId);
+      }
+      try {
+        await repairReadyWork({ appId, revisionId, runId });
+      } catch (repairError) {
+        if (!(repairError instanceof ExecutionLedgerConflictError)) {
+          throw repairError;
+        }
+      }
+      return workflowCreationResult(raced, receipt, false);
+    }
+
+    const next = await readVerifiedRun(runId);
+    if (!next) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'created workflow run missing',
+      );
+    }
+    const receipt = await getTransitionReceipt(
+      db,
+      resolvedTableName,
+      runId,
+      transitionId,
+    );
+    if (!receipt) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'created workflow transition missing',
+      );
+    }
+    return workflowCreationResult(next, receipt, true);
   }
 
   /**
@@ -7603,7 +8478,7 @@ export function createExecutionLedger({
         },
         callerMetadata: {},
       },
-      payloadSchema: MANUAL_REQUEST_PAYLOAD_SCHEMA,
+      payloadSchema: ACTIVITY_REQUEST_PAYLOAD_SCHEMA,
       label: 'authorizeManagedEffectSuccessorRetry.targetRequestRef',
     });
     const sourceSequence = state.head.sequence + 1;
@@ -7899,7 +8774,7 @@ export function createExecutionLedger({
     const { authorization, invocation } =
       getManagedEffectSuccessorInvocation(state);
     const payloadReader = createLedgerPayloadReader(payloadStore, common.runId);
-    const requestEnvelope = await payloadReader.readManualRequest(
+    const requestEnvelope = await payloadReader.readActivityRequest(
       invocation.requestRef,
     );
     const targetInput = normalizeManagedEffectSuccessorRunInput(
@@ -9279,11 +10154,7 @@ export function createExecutionLedger({
 
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
-    if (state.run.trigger?.kind === 'effect-successor') {
-      throw new TypeError(
-        'requestManualRunCancellation cannot cancel a managed-effect successor.',
-      );
-    }
+    assertManualLifecycleRun(state, 'requestManualRunCancellation');
     const classified = await classifyDurableCancellation(state);
     if (classified.result) return classified.result;
     const invocation = classified.invocation;
@@ -9504,7 +10375,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
-    assertOrdinaryLifecycleRun(state, 'claimInvocation');
+    assertManualLifecycleRun(state, 'claimInvocation');
     const currentInvocation = state.invocations.get(invocationId);
     const attemptId = createAttemptId(
       common.runId,
@@ -9657,7 +10528,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
-    assertOrdinaryLifecycleRun(state, 'markAttemptStarted');
+    assertManualLifecycleRun(state, 'markAttemptStarted');
     const requestDigest = createTransitionRequestDigest('attempt-started', {
       runId: common.runId,
       invocationId,
@@ -9870,7 +10741,7 @@ export function createExecutionLedger({
     }
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
-    assertOrdinaryLifecycleRun(state, 'recordManagedEffectRequest');
+    assertManualLifecycleRun(state, 'recordManagedEffectRequest');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     const key = effectMapKey(invocationId, effectId);
@@ -10194,7 +11065,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
-    assertOrdinaryLifecycleRun(state, 'markManagedEffectStarted');
+    assertManualLifecycleRun(state, 'markManagedEffectStarted');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     const effect = state.effects.get(effectMapKey(invocationId, effectId));
@@ -10383,7 +11254,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
-    assertOrdinaryLifecycleRun(state, 'commitManagedEffectOutcome');
+    assertManualLifecycleRun(state, 'commitManagedEffectOutcome');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     const effect = state.effects.get(effectMapKey(invocationId, effectId));
@@ -10658,7 +11529,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
-    assertOrdinaryLifecycleRun(state, 'markManagedEffectUncertain');
+    assertManualLifecycleRun(state, 'markManagedEffectUncertain');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     const effect = state.effects.get(effectMapKey(invocationId, effectId));
@@ -10916,7 +11787,7 @@ export function createExecutionLedger({
 
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
-    assertOrdinaryLifecycleRun(state, 'settleStoppedAttemptManagedEffects');
+    assertManualLifecycleRun(state, 'settleStoppedAttemptManagedEffects');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     if (!invocation || !attempt) {
@@ -11249,7 +12120,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
-    assertOrdinaryLifecycleRun(state, 'commitVerifiedAttemptTerminal');
+    assertManualLifecycleRun(state, 'commitVerifiedAttemptTerminal');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     if (!invocation || !attempt) {
@@ -11522,7 +12393,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
-    assertOrdinaryLifecycleRun(state, 'markAttemptUncertain');
+    assertManualLifecycleRun(state, 'markAttemptUncertain');
     const requestDigest = createTransitionRequestDigest(
       'attempt-became-uncertain',
       {
@@ -11742,7 +12613,7 @@ export function createExecutionLedger({
 
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
-    assertOrdinaryLifecycleRun(state, 'reconcileUncertainManagedEffect');
+    assertManualLifecycleRun(state, 'reconcileUncertainManagedEffect');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     const effect = state.effects.get(effectMapKey(invocationId, effectId));
@@ -12123,7 +12994,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
-    assertOrdinaryLifecycleRun(state, 'reconcileUncertainManualAttempt');
+    assertManualLifecycleRun(state, 'reconcileUncertainManualAttempt');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     if (!invocation || !attempt) {
@@ -12435,7 +13306,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
-    assertOrdinaryLifecycleRun(state, 'abandonUnstartedAttempt');
+    assertManualLifecycleRun(state, 'abandonUnstartedAttempt');
     const requestDigest = createTransitionRequestDigest(
       'attempt-abandoned-before-start',
       {
@@ -12534,7 +13405,7 @@ export function createExecutionLedger({
   }
 
   /**
-   * Reconcile one known manual run's replaceable ready-work locator from its
+   * Reconcile one known run's replaceable ready-work locator from its
    * authoritative event fold. This is a liveness repair only: the run head is
    * condition-checked and the repaired row still grants no execution
    * authority. Supplying an observed stale row also removes that exact extra
@@ -12568,17 +13439,23 @@ export function createExecutionLedger({
       );
     }
     const invocations = [...state.invocations.values()];
-    if (invocations.length !== 1) {
+    const invocation =
+      state.run.trigger.kind === 'workflow' && state.workflowCursor
+        ? state.invocations.get(state.workflowCursor.invocationId)
+        : invocations.length === 1
+          ? invocations[0]
+          : undefined;
+    if (!invocation) {
       throw new ExecutionLedgerProjectionError(
         runId,
-        'ready-work repair requires one current invocation',
+        'ready-work repair cannot identify the current invocation',
       );
     }
-    const invocation = invocations[0];
     const expected = createLifecycleReadyWorkRecord(
       state.run,
       invocation,
       getReadyWorkAttempt(state, invocation),
+      state.workflowCursor,
     );
     const observed = Object.prototype.hasOwnProperty.call(value, 'observed')
       ? createExecutionLedgerReadyWorkRecord(value.observed)
@@ -12984,7 +13861,7 @@ export function createExecutionLedger({
     const request = await createLedgerPayloadReader(
       payloadStore,
       normalizedRunId,
-    ).readManualRequest(invocation.requestRef);
+    ).readActivityRequest(invocation.requestRef);
     return {
       run: cloneJsonObject(state.run, 'manual request run'),
       invocation: cloneJsonObject(invocation, 'manual request invocation'),
@@ -13144,7 +14021,7 @@ export function createExecutionLedger({
    * Verify and expose a fully rebuilt run view for recovery/inspection. A
    * projection mismatch rejects rather than authorizing any later mutation.
    * @param {string} runId - Run identity.
-   * @returns {Promise<{head: Record<string, any>, run: Record<string, any>, invocations: Record<string, any>[], attempts: Record<string, any>[], effects: Record<string, any>[], events: Record<string, any>[]}|null>} - Rebuilt run view.
+   * @returns {Promise<{head: Record<string, any>, run: Record<string, any>, workflowCursor?: Record<string, any>, invocations: Record<string, any>[], attempts: Record<string, any>[], effects: Record<string, any>[], events: Record<string, any>[]}|null>} - Rebuilt run view.
    */
   async function rebuildRun(runId) {
     const normalizedRunId = assertOpaqueId(runId, 'runId');
@@ -13153,6 +14030,14 @@ export function createExecutionLedger({
     return {
       head: cloneJsonObject(state.head, 'run head'),
       run: cloneJsonObject(state.run, 'run'),
+      ...(state.workflowCursor
+        ? {
+            workflowCursor: cloneJsonObject(
+              state.workflowCursor,
+              'workflow cursor',
+            ),
+          }
+        : {}),
       invocations: [...state.invocations.values()]
         .sort((left, right) =>
           left.invocationId < right.invocationId
@@ -13190,6 +14075,7 @@ export function createExecutionLedger({
     commitVerifiedAttemptTerminal,
     commitManagedEffectOutcome,
     createManualRun,
+    createWorkflowRun,
     getAttempt,
     getEffect,
     getEvents,
@@ -13219,6 +14105,7 @@ export function createExecutionLedger({
 /**
  * @typedef ExecutionLedgerStore
  * @property {(...args: any[]) => Promise<any>} createManualRun - Creates one idempotent manual run.
+ * @property {(...args: any[]) => Promise<any>} createWorkflowRun - Creates one idempotent activity-headed workflow run.
  * @property {(...args: any[]) => Promise<any>} authorizeManagedEffectSuccessorRetry - Atomically appends source authorization and creates one fresh effect-only retry run.
  * @property {(...args: any[]) => Promise<any>} startManagedEffectSuccessor - Atomically starts a successor's sole retained effect and authorizes one physical dispatch.
  * @property {(...args: any[]) => Promise<any>} commitManagedEffectSuccessorOutcome - Atomically closes a successor's sole started effect and aggregate terminal state.
@@ -13245,7 +14132,7 @@ export function createExecutionLedger({
  * @property {(runId: string, invocationId: string, effectId: string) => Promise<Record<string, any> | null>} readManagedEffectDelivery - Rehashes a logical request and re-verifies any terminal result for safe redelivery.
  * @property {(runId: string) => Promise<Record<string, any>[]>} getEvents - Reads a verified event stream.
  * @property {(options: {appId: string, revisionId: string, limit?: number, observedAt?: number, cursor?: string}) => Promise<{items: Record<string, any>[], nextCursor?: string}>} listReadyWork - Reads an exact-revision page of current-work locators; each must be rebuilt before use.
- * @property {(options: {appId: string, revisionId: string, runId: string, observed?: Record<string, any>}) => Promise<{applied: boolean, runId: string, expected?: Record<string, any>}>} repairReadyWork - Rebuilds one known manual run's replaceable ready-work locator under an exact head condition.
+ * @property {(options: {appId: string, revisionId: string, runId: string, observed?: Record<string, any>}) => Promise<{applied: boolean, runId: string, expected?: Record<string, any>}>} repairReadyWork - Rebuilds one known run's replaceable ready-work locator under an exact head condition.
  * @property {(options: {appId: string, limit?: number, cursor?: string}) => Promise<{items: Record<string, any>[], nextCursor?: string}>} listRuns - Reads a verified bounded run-history page.
  * @property {(runId: string) => Promise<Record<string, any> | null>} rebuildRun - Rebuilds and verifies a whole run.
  */
