@@ -34,13 +34,16 @@ consuming public commands.
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
 The abandoned v1 source and dependency graph have been deleted. The strict v2
-manifest and the append-only V10 manual run → invocation → attempt → effect
-ledger are now defined; the superseded mutable Operation/Action snapshot store
-is gone. The manifest can now declare a bounded plain-data linear workflow,
-although durable workflow execution is the next implementation slice. The
-ledger's redacted per-service history directory is transactionally bound to
-every run transition. Its exact-revision ready-work projection is bound to each
-relevant manual lifecycle transition, while
+manifest and the append-only V10 run → invocation → attempt → effect ledger
+are now defined; the superseded mutable Operation/Action snapshot store is
+gone. The manifest can declare a bounded plain-data linear workflow, and the
+internal ledger can atomically create an activity-headed workflow run with its
+immutable plan and start payloads, stable cursor and invocation identities,
+run-directory entry, and cursor-bound ready-work row. It does not yet claim,
+execute, or advance that workflow activity. The ledger's redacted per-service
+history directory is transactionally bound to every run transition. Its
+exact-revision ready-work projection is bound to each relevant manual lifecycle
+transition and initial workflow-run creation, while
 revision-backed source and SEA activities consume
 one frozen target dependency closure instead of ambient `node_modules` or a
 newly resolved npm tree. Exact-run inspection, confirmed recovery, and
@@ -116,11 +119,14 @@ and four-disposition effect-reconciliation matrix, including exact orphan-
 payload reuse and LMDB owner recovery. Those paths never dispatch authored
 app/CLI/activity code or the normal adapter. The resident activity vertical now
 persists offline submissions, executes serially, recovers conservative restart
-states, and drains gracefully through the new transactional ready-work index.
-Durable workflow continuations, timers and schedules, OS service
-installation/startup, multi-host leases and heartbeats, and public run
-history/listing remain next work. The npm package remains deliberately private.
-It is not ready for production use.
+states, and drains gracefully through the transactional ready-work index. The
+internal activity-headed workflow start is durable and rebuildable, but
+workflow activity execution and cursor advancement, persisted outputs, timers,
+signals, workflow cancellation, resident workflow dispatch, public workflow
+commands, and schedules remain unfinished. OS service installation/startup,
+multi-host leases and heartbeats, and public run history/listing are also later
+work. The npm package remains deliberately private. It is not ready for
+production use.
 
 ## Start here
 
@@ -128,7 +134,8 @@ It is not ready for production use.
 - [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [V10 ready-work checkpoint](llm/checkpoints/2026-07-19-v4-v10-ready-work.md) — the current implementation handoff for the exact-revision transactional scheduler locator and strict workflow authoring contract.
+- [Activity-headed workflow-start checkpoint](llm/checkpoints/2026-07-19-v5-activity-headed-workflow-start.md) — the current implementation handoff for immutable workflow inputs, stable cursor identities, atomic initial materialization, and ready-work V2.
+- [V10 ready-work checkpoint](llm/checkpoints/2026-07-19-v4-v10-ready-work.md) — the preceding implementation handoff for the exact-revision transactional scheduler locator and strict workflow authoring contract.
 - [Resident activity worker checkpoint](llm/checkpoints/2026-07-19-v3-resident-activity-worker.md) — the preceding fully validated handoff for offline submission, serial resident execution, and conservative restart recovery.
 - [V2 foundation stabilization checkpoint](llm/checkpoints/2026-07-19-v2-foundation-stabilized.md) — the preceding clean-install restart point after repository cleanup, the portable module gate, and the public V9 successor proof.
 - [V9 managed-effect successor checkpoint](llm/checkpoints/2026-07-19-v9-managed-effect-successors.md) — the historical pre-mount restart point for the first causally linked fresh-identity retry policy and its internal relocated-SEA proof.
@@ -208,9 +215,11 @@ does not trim or rewrite them. The CLI is required; activities and package
 targets and workflows are optional. A workflow is one to 64 ordered plain-data
 activity, timer, or signal steps; activity inputs explicitly select the
 workflow input, a JSON literal, or one earlier step's persisted output. The
-manifest compiler and packager bind that definition to the revision, but the
-durable workflow execution commands are not implemented yet. Application- and
-activity-level `resources` are not part
+manifest compiler and packager bind that definition to the revision. The
+internal ledger can atomically start a workflow whose first step is an activity
+using `workflow-input` or `literal`; workflow execution/advancement, resident
+dispatch, and public workflow commands are not implemented yet. Application-
+and activity-level `resources` are not part
 of the schema and are rejected as unknown fields. A caller-metadata object may
 contain a property named `resources`, but it is ordinary inert JSON—not an
 injection request. Managed effects are a separate finite API on
