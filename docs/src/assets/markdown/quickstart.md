@@ -167,6 +167,7 @@ wharfie ops inspect --run-id <run-id>
 wharfie ops recover --run-id <run-id> --confirm-runner-stopped
 wharfie ops reconcile --run-id <run-id> --reconciliation-id <stable-id> \
   --evidence-file <host-transcript.json> --confirm-runner-stopped [--reason <text>]
+wharfie ops reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped
 wharfie ops cancel --run-id <run-id> --request-id <stable-request-id>
 ```
 
@@ -178,15 +179,16 @@ its reserved operator namespace:
 <app> wharfie recover --run-id <run-id> --confirm-runner-stopped
 <app> wharfie reconcile --run-id <run-id> --reconciliation-id <stable-id> \
   --evidence-file <host-transcript.json> --confirm-runner-stopped [--reason <text>]
+<app> wharfie reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped
 <app> wharfie cancel --run-id <run-id> --request-id <stable-request-id>
 ```
 
-Packaged inspection, recovery, reconciliation, and cancellation are scoped to
-the immutable app identity embedded in the artifact. They can operate an older
-revision of that same app, but reject another app's run ID before output or
-mutation. With `--json`, the source and packaged forms of `inspect` emit the
-same schema-v4 redacted run view, including effect
-identity/status/adapter-lifecycle rows but not requests, destinations,
+Packaged inspection, recovery, reconciliation, effect reconciliation, and
+cancellation are scoped to the immutable app identity embedded in the
+artifact. They can operate an older revision of that same app, but reject
+another app's run ID before output or mutation. With `--json`, the source and
+packaged forms of `inspect` emit the same schema-v5 redacted run view, including
+effect identity/status/adapter-lifecycle rows but not requests, destinations,
 receipts, evidence, values, paths, or fencing tokens. `recover` emits that view
 plus recovery action `settled-managed-effect-set` and one sorted
 `managedEffects` result for the atomically settled active set; `reconcile`
@@ -196,10 +198,30 @@ containing the request ID, outcome, delivery state, and safe lifecycle
 statuses. Without `--json`, these commands use the compact human-oriented table
 and message format shown above.
 
+`reconcile-effect` is distinct from transcript-backed `reconcile`. It requires
+the exact `--run-id`, `--effect-id`, a stable `--reconciliation-id`, and
+`--confirm-runner-stopped`. Reuse the same reconciliation ID and exact request
+after a lost response; exact replay returns the retained status with
+`changed: false` instead of repeating destination or ledger work. Both source
+and packaged forms require the held app-scoped LMDB local-owner protocol and
+refuse to race a live resident session or prior runner. This is a trusted local
+operator boundary, not remote coordinator routing.
+
+The finite reconciliation catalog either recovers a late verifier-backed
+positive receipt or atomically installs a permanent `NOT_APPLIED` destination
+finalization that fences the original destination effect ID. It does not accept
+an operator-selected status, load application source, or redispatch the effect.
+The enclosing run and invocation remain `BLOCKED` / `UNCERTAIN`, and the
+abandoned physical attempt remains unchanged. Human and `--json` output are
+redacted to safe lifecycle state plus the reconciliation ID, effect ID,
+resulting status, and `changed` flag; requests, values, destinations, store
+identity, receipts, finalizations, evidence, private reason text, and fencing
+material remain hidden.
+
 Inspection opens existing control state read-only and never creates missing
 state. Recovery is deliberately explicit: use it only after confirming every
 prior runner is gone. It can release a claim that never started; a begun
-attempt becomes visibly blocked as `UNCERTAIN` instead of replaying code. V7
+attempt becomes visibly blocked as `UNCERTAIN` instead of replaying code. V8
 recovers the complete active-effect set, bounded to 16 unresolved effects, for
 that exact attempt under the held local owner. Every `PENDING` request becomes
 `CANCELLED` without a destination probe because its durable start authorization
@@ -230,7 +252,7 @@ never rewritten, and the transcript, result, reason, and fence are never echoed
 in the operator response. A `cancelled` result still requires the matching
 earlier durable cancellation request and host cancellation frame.
 
-The V7 ledger supports cancellation by the foreground active owner. During
+The V8 ledger supports cancellation by the foreground active owner. During
 `wharfie ops run`, the first `SIGINT` or `SIGTERM` becomes a durable request
 before the owner signals the physical attempt. While an LMDB-backed `ops run`
 owns the exact `STARTED` attempt, source `wharfie ops cancel` or packaged
@@ -250,13 +272,13 @@ cancellation evidence can commit `CANCELLED`; a verified completion or failure
 may still win, while unconfirmed post-cancellation termination becomes blocked
 `UNCERTAIN` work; later reconciliation needs evidence rather than another
 cancel request. There is still no public run-history/list: the verified bounded
-V5 run directory paired with the V7 ledger is internal rather than the retired
+V6 run directory paired with the V8 ledger is internal rather than the retired
 `ops list` surface. The resident service currently owns only local lifecycle
 and exclusion state; it does not schedule, claim, or execute work. The bounded
-recovery transaction and the built-in application-state receipt tests do not
-replace real subprocess and SEA crashes at request, start, destination commit,
-ledger settlement, and response-delivery boundaries; that adversarial matrix
-remains release-blocking work.
+recovery and reconciliation paths have real subprocess and relocated-SEA crash
+coverage across request, start, destination commit, payload publication, ledger
+settlement, and response-delivery boundaries. New durable capabilities still
+need equivalent adversarial proof before they can support a production claim.
 
 ## Package the app
 

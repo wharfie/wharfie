@@ -34,7 +34,7 @@ consuming public commands.
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
 The abandoned v1 source and dependency graph have been deleted. The strict v2
-manifest and the append-only V7 manual run → invocation → attempt → effect
+manifest and the append-only V8 manual run → invocation → attempt → effect
 ledger are now defined; the superseded mutable Operation/Action snapshot store
 is gone. Its redacted per-service history directory is transactionally bound to
 each run transition, while revision-backed source and SEA activities consume
@@ -60,7 +60,7 @@ ledger race, while ambiguous post-cancellation termination becomes blocked
 evidence-backed reconciliation event: a complete bounded Activity Protocol
 transcript proves one retained abandoned attempt's terminal outcome, while the
 physical attempt itself stays `ABANDONED`. The local command transport is not
-yet supported on Windows. V7 connects verifier-backed managed effects through
+yet supported on Windows. V8 connects verifier-backed managed effects through
 the framed source/SEA worker boundary and exposes one finite public operation:
 `application-state` / `put-if-absent`. Its LMDB destination atomically commits
 the business value with a permanent effect receipt. Confirmed source/SEA
@@ -71,16 +71,16 @@ sibling is probed read-only, with an exact receipt becoming `COMPLETED` or
 `FAILED` and strict absence becoming `UNCERTAIN`. One append-only transaction
 applies all sibling dispositions and blocks the arbitrary stopped activity
 attempt. Unsupported, missing, or corrupt destination evidence leaves the whole
-set unchanged. Recovery never reruns application or adapter code. Broader effect
-reconciliation and any wider exactly-once claim remain unfinished. Real child
-processes now exercise seven source/core durable-run `SIGKILL` boundaries and
-three mixed-set recovery boundaries. A relocated SEA with Node absent from
-`PATH` also proves packaged compound recovery across response-delivery loss and
-restart, originates a durable managed-effect activity through its framed worker,
-demonstrates user continuation after effect-result delivery, and replays the
-same stable request without another event, attempt, effect, or receipt change.
-The full seven-boundary activity `SIGKILL` matrix has not yet been repeated
-through the moved SEA, so packaged process-crash parity remains work. Public run
+set unchanged. Recovery never reruns application or adapter code. Destination-
+finalized reconciliation can now resolve one retained `UNCERTAIN` built-in
+effect without resolving the abandoned activity; automatic retry, successor
+work, compensation, and any wider exactly-once claim remain unfinished. Real
+child processes now exercise seven source/core durable-run `SIGKILL` boundaries
+and three mixed-set recovery boundaries. A relocated SEA with Node absent from
+`PATH` proves the complete eight-boundary managed-effect matrix, three-boundary
+mixed-settlement matrix, and four-disposition effect-reconciliation matrix,
+including exact orphan-payload reuse and LMDB owner recovery. Those paths never
+dispatch authored app/CLI/activity code or the normal adapter. Public run
 history/listing, scheduling, and release hardening still need focused review.
 The npm package remains deliberately private. It is not ready for production
 use.
@@ -90,7 +90,10 @@ use.
 - [Project charter](PROJECT.md) — the canonical problem, scope, public concepts, boundaries, and success test.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [Shared packaged durable-run checkpoint](llm/checkpoints/2026-07-18-shared-packaged-durable-run-host.md) — the current restart point after unifying source and packaged foreground durable execution and proving a moved-SEA managed effect with exact replay.
+- [V8 destination-effect reconciliation checkpoint](llm/checkpoints/2026-07-18-v8-destination-effect-reconciliation.md) — the current restart point after destination-finalized uncertain-effect reconciliation and its relocated-SEA crash matrix.
+- [Relocated-SEA mixed-settlement checkpoint](llm/checkpoints/2026-07-18-relocated-sea-mixed-settlement-sigkill-matrix.md) — the preceding restart point after proving packaged stopped-attempt settlement across mixed sibling dispositions.
+- [Relocated-SEA managed-effect checkpoint](llm/checkpoints/2026-07-18-relocated-sea-managed-effect-sigkill-matrix.md) — the preceding restart point after repeating managed-effect crash recovery through the moved SEA.
+- [Shared packaged durable-run checkpoint](llm/checkpoints/2026-07-18-shared-packaged-durable-run-host.md) — the historical point that unified source and packaged foreground durable execution and proved a moved-SEA managed effect with exact replay.
 - [Real-process managed-effect crash checkpoint](llm/checkpoints/2026-07-18-real-process-managed-effect-crash-matrix.md) — the preceding restart point after proving the source/core and compound-recovery `SIGKILL` matrices and the narrower packaged-operator response-loss boundary.
 - [V7 atomic effect-settlement checkpoint](llm/checkpoints/2026-07-18-v7-atomic-effect-settlement.md) — the preceding restart point after closing stopped-attempt sibling sets in one bounded transaction.
 - [Public effects and receipt-recovery checkpoint](llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md) — the preceding restart point after exposing finite application state and closing its first singular stopped-runner recovery window.
@@ -160,6 +163,32 @@ manifest.
 See the [quickstart](docs/src/assets/markdown/quickstart.md) and [application
 structure](docs/src/assets/markdown/project-structure.md) for the complete
 authoring rules.
+
+## Reconcile one uncertain managed effect
+
+The source and packaged operator surfaces can resolve one retained
+`UNCERTAIN` application-state effect from a permanent destination decision:
+
+```bash
+wharfie ops reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped
+<app> wharfie reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped
+```
+
+All four options are required. Reuse the same `--reconciliation-id` and exact
+request after a lost response; an exact replay returns the retained decision
+without another destination or ledger transition. Both forms are trusted local
+mutations: they require the held app-scoped LMDB local-owner protocol, refuse
+to race a live resident session or prior runner, and do not provide remote
+operator routing. The packaged form additionally binds the run to the app
+identity embedded in the artifact.
+
+The command can retain a late verifier-backed positive receipt or atomically
+finalize the exact destination effect as permanently `NOT_APPLIED`. It never
+loads application source, redispatches the effect, or unblocks the enclosing
+`UNCERTAIN` invocation. Human and `--json` output are redacted: they expose the
+stable reconciliation/effect identities, resulting effect status, replay
+state, and safe lifecycle view, but not request values, destination/store
+details, receipts, finalizations, evidence, private reason text, or fences.
 
 ## Current external dependency boundary
 
