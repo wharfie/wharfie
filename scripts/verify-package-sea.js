@@ -47,6 +47,14 @@ const SEA_CRASH_DESTINATION_WRITE_BREAKPOINT = Object.freeze({
   anchor: 'const identity = await assertStoreIdentity(input.storeId);',
   occurrence: 1,
 });
+const SEA_CRASH_DESTINATION_TRANSACTION_BREAKPOINT = Object.freeze({
+  sourceSuffix: 'src/core/lib/db/tables/application-state.js',
+  // This condition occurs only in the fresh put-if-absent transaction. It
+  // excludes store initialization and reconciliation's negative closure, so
+  // one successor adapter delivery yields exactly one observable write.
+  anchor: 'resolutionAbsentCondition(input.destinationEffectId),',
+  occurrence: 1,
+});
 const SEA_ACTIVITY_DISPATCH_BREAKPOINT = Object.freeze({
   sourceSuffix: 'src/core/runtime/durable-activity-host.js',
   anchor: 'return await invokeManifestActivityAttemptWithStart({',
@@ -345,6 +353,138 @@ const SEA_EFFECT_RECONCILIATION_CRASH_CASES = Object.freeze([
     label: 'effect ledger reconciliation before operator response',
     breakpoint: SEA_EFFECT_LEDGER_RECONCILED_BREAKPOINT,
     ledgerCommittedAtBoundary: true,
+  },
+]);
+const SEA_SUCCESSOR_SOURCE_EFFECT_ID = 'successor-source-effect';
+const SEA_SUCCESSOR_CRASH_CASES = Object.freeze([
+  {
+    boundary: 'successor-target-request-published',
+    label: 'successor target-request payload publication',
+    breakpoint: {
+      sourceSuffix: 'src/core/lib/db/tables/execution-ledger.js',
+      // This is the first statement after the immutable target request is
+      // published and before the atomic source/target transaction is built.
+      anchor: 'const sourceSequence = state.head.sequence + 1;',
+    },
+    adapterEntries: 0,
+    applicationStateWrites: 0,
+    authorizationCommitted: false,
+    target: null,
+    destinationApplied: false,
+    orphanPayloads: 1,
+  },
+  {
+    boundary: 'successor-authorization-committed',
+    label: 'atomic successor authorization and target creation',
+    breakpoint: {
+      sourceSuffix: 'src/core/lib/db/tables/execution-ledger.js',
+      // The cross-partition transaction has returned; the following readback
+      // has not yet influenced control flow or authorized adapter entry.
+      anchor: 'const [acceptedSource, acceptedTarget] = await Promise.all([',
+    },
+    adapterEntries: 0,
+    applicationStateWrites: 0,
+    authorizationCommitted: true,
+    target: {
+      run: 'RUNNING',
+      invocation: 'RUNNABLE',
+      attempt: null,
+      effect: null,
+      events: ['effect-successor-run-created'],
+    },
+    destinationApplied: false,
+    orphanPayloads: 0,
+  },
+  {
+    boundary: 'successor-atomic-start-committed',
+    label: 'atomic successor start before adapter entry',
+    breakpoint: {
+      sourceSuffix: 'src/core/runtime/managed-effect-successor.js',
+      anchor: 'if (!started.dispatchAuthorized) {',
+    },
+    adapterEntries: 0,
+    applicationStateWrites: 0,
+    authorizationCommitted: true,
+    target: {
+      run: 'RUNNING',
+      invocation: 'RUNNING',
+      attempt: 'STARTED',
+      effect: 'STARTED',
+      events: ['effect-successor-run-created', 'effect-successor-started'],
+    },
+    destinationApplied: false,
+    orphanPayloads: 0,
+  },
+  {
+    boundary: 'successor-destination-committed',
+    label: 'successor destination transaction before terminal publication',
+    breakpoint: {
+      sourceSuffix: 'src/core/runtime/effects/builtin-catalog.js',
+      anchor: 'return createApplicationStateOutcomeFromReceipt(receipt);',
+    },
+    adapterEntries: 1,
+    applicationStateWrites: 1,
+    authorizationCommitted: true,
+    target: {
+      run: 'RUNNING',
+      invocation: 'RUNNING',
+      attempt: 'STARTED',
+      effect: 'STARTED',
+      events: ['effect-successor-run-created', 'effect-successor-started'],
+    },
+    destinationApplied: true,
+    orphanPayloads: 0,
+  },
+  {
+    boundary: 'successor-terminal-payloads-published',
+    label: 'successor terminal payload publication before ledger append',
+    breakpoint: {
+      sourceSuffix: 'src/core/lib/db/tables/execution-ledger.js',
+      // The fourth request-digest declaration belongs to the dedicated
+      // successor terminal transition. Both outcome and terminal evidence have
+      // been published, but neither is reachable until the following append.
+      anchor: 'const requestDigest = createTransitionRequestDigest(',
+      occurrence: 4,
+    },
+    adapterEntries: 1,
+    applicationStateWrites: 1,
+    authorizationCommitted: true,
+    target: {
+      run: 'RUNNING',
+      invocation: 'RUNNING',
+      attempt: 'STARTED',
+      effect: 'STARTED',
+      events: ['effect-successor-run-created', 'effect-successor-started'],
+    },
+    destinationApplied: true,
+    orphanPayloads: 2,
+  },
+  {
+    boundary: 'successor-atomic-terminal-committed',
+    label: 'atomic successor terminal before operator response',
+    breakpoint: {
+      sourceSuffix: 'src/core/runtime/operator/execution-ledger-operator.js',
+      // The first occurrence is retained-target replay. Fresh execution reaches
+      // this second read only after executeManagedEffectSuccessorRun returns.
+      anchor: 'const sourceView = await ledger.rebuildRun(current.run.runId);',
+      occurrence: 2,
+    },
+    adapterEntries: 1,
+    applicationStateWrites: 1,
+    authorizationCommitted: true,
+    target: {
+      run: 'COMPLETED',
+      invocation: 'COMPLETED',
+      attempt: 'COMPLETED',
+      effect: 'COMPLETED',
+      events: [
+        'effect-successor-run-created',
+        'effect-successor-started',
+        'effect-successor-terminal',
+      ],
+    },
+    destinationApplied: true,
+    orphanPayloads: 0,
   },
 ]);
 
@@ -662,7 +802,7 @@ async function createInstalledLedgerLifecycleObserver(options) {
  * operator fixtures. The moved SEA still performs every operation under test;
  * this host helper only prepares independently verifiable durable state.
  * @param {{installedPackageRoot: string, controlPath: string, tableName: string, payloadPath: string, applicationStatePath: string, revisionId: string}} options - Installed-package fixture inputs.
- * @returns {Promise<{payloadStoreId: string, createDestinationEffectId: (appId: string, runId: string, effectId: string) => string, createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, payloadStoreId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, materializeApplicationStateReceipt: (appId: string, runId: string, effectId: string) => Promise<Readonly<Record<string, any>>>, readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readManagedEffectDelivery: (runId: string, effectId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, ApplicationStateAdapterDescriptor: Record<string, any>, ApplicationStateReconciliationVerifierDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
+ * @returns {Promise<{payloadStoreId: string, createDestinationEffectId: (appId: string, runId: string, effectId: string) => string, createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, payloadStoreId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, materializeApplicationStateReceipt: (appId: string, runId: string, effectId: string) => Promise<Readonly<Record<string, any>>>, readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readManagedEffectDelivery: (runId: string, effectId: string) => Promise<Record<string, any> | null>, readRawLedgerRunRows: (runId: string) => Promise<Record<string, any>[]>, listRunDirectory: (appId: string) => Promise<Record<string, any>[]>, readSuccessorIdentity: (appId: string, successorId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, createManagedEffectSuccessorAuthorization: (options: Record<string, any>) => Record<string, any>, encodeCanonicalJsonPayload: (value: unknown) => Buffer, createExecutionPayloadReference: (options: {bytes: Buffer, payloadSchema: string, storeId: string}) => Record<string, any>, ApplicationStateAdapterDescriptor: Record<string, any>, ApplicationStateReconciliationVerifierDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
  */
 async function createInstalledExecutionLedgerFixture(options) {
   const installedModule = async (/** @type {string} */ relativePath) =>
@@ -679,6 +819,12 @@ async function createInstalledExecutionLedgerFixture(options) {
     ledgerContractModule,
     applicationStateEffectModule,
     builtinCatalogModule,
+    dbBaseModule,
+    runDirectoryModule,
+    contentIdModule,
+    successorContractModule,
+    executionPayloadModule,
+    recordKeyModule,
   ] = await Promise.all([
     installedModule('src/core/lib/db/adapters/lmdb.js'),
     installedModule('src/core/lib/db/tables/execution-ledger.js'),
@@ -689,6 +835,12 @@ async function createInstalledExecutionLedgerFixture(options) {
     installedModule('src/core/lib/ledger/execution-ledger-contract.js'),
     installedModule('src/core/runtime/effects/application-state.js'),
     installedModule('src/core/runtime/effects/builtin-catalog.js'),
+    installedModule('src/core/lib/db/base.js'),
+    installedModule('src/core/lib/ledger/run-directory.js'),
+    installedModule('src/core/runtime/content-id.js'),
+    installedModule('src/core/lib/ledger/managed-effect-successor-contract.js'),
+    installedModule('src/core/runtime/execution-payload.js'),
+    installedModule('src/core/lib/ledger/record-key.js'),
   ]);
   const payloadStoreId = `payload-${createHash('sha256')
     .update(path.resolve(options.payloadPath), 'utf8')
@@ -773,6 +925,90 @@ async function createInstalledExecutionLedgerFixture(options) {
       return receipts;
     } finally {
       await applicationDb.close();
+    }
+  };
+  const readRawLedgerRunRows = async (/** @type {string} */ runId) => {
+    const { db } = openLedger(true);
+    try {
+      const rows = [];
+      let startAfter;
+      do {
+        const page = await db.queryPage({
+          tableName: options.tableName,
+          consistentRead: true,
+          keyConditions: [
+            {
+              keyType: dbBaseModule.KEY_TYPE.PRIMARY,
+              conditionType: dbBaseModule.CONDITION_TYPE.EQUALS,
+              propertyName: 'run_id',
+              propertyValue: runId,
+            },
+            {
+              keyType: dbBaseModule.KEY_TYPE.SORT,
+              conditionType: dbBaseModule.CONDITION_TYPE.BEGINS_WITH,
+              propertyName: 'sort_key',
+              propertyValue: recordKeyModule.EXECUTION_LEDGER_SORT_KEY_PREFIX,
+            },
+          ],
+          limit: 100,
+          ...(startAfter === undefined ? {} : { startAfter }),
+        });
+        rows.push(...page.items);
+        startAfter = page.nextStartAfter;
+      } while (startAfter !== undefined);
+      return rows;
+    } finally {
+      await db.close();
+    }
+  };
+  const listRunDirectory = async (/** @type {string} */ appId) => {
+    const { db, ledger } = openLedger(true);
+    try {
+      const items = [];
+      let cursor;
+      do {
+        const page = await ledger.listRuns({
+          appId,
+          limit: 100,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        items.push(...page.items);
+        cursor = page.nextCursor;
+      } while (cursor !== undefined);
+      return items;
+    } finally {
+      await db.close();
+    }
+  };
+  const readSuccessorIdentity = async (
+    /** @type {string} */ appId,
+    /** @type {string} */ successorId,
+  ) => {
+    const { db } = openLedger(true);
+    try {
+      const scope = runDirectoryModule.createExecutionLedgerRunDirectoryScope({
+        appId,
+      });
+      const sortKey = `successor-identity/v1/${contentIdModule.createCanonicalJsonSha256Id(
+        {
+          domain: 'wharfie:managed-effect-successor-public-id:v1',
+          prefix: 'wsu',
+          value: successorId,
+          valuePath: 'managed effect successor public identity',
+        },
+      )}`;
+      return (
+        (await db.get({
+          tableName: options.tableName,
+          keyName: 'run_id',
+          keyValue: scope.directoryId,
+          sortKeyName: 'sort_key',
+          sortKeyValue: sortKey,
+          consistentRead: true,
+        })) || null
+      );
+    } finally {
+      await db.close();
     }
   };
   return {
@@ -1095,6 +1331,9 @@ async function createInstalledExecutionLedgerFixture(options) {
         await db.close();
       }
     },
+    readRawLedgerRunRows,
+    listRunDirectory,
+    readSuccessorIdentity,
     readRun: async (runId) => {
       const { db, ledger } = openLedger(true);
       try {
@@ -1103,6 +1342,12 @@ async function createInstalledExecutionLedgerFixture(options) {
         await db.close();
       }
     },
+    createManagedEffectSuccessorAuthorization:
+      successorContractModule.createManagedEffectSuccessorAuthorization,
+    encodeCanonicalJsonPayload:
+      executionPayloadModule.encodeCanonicalJsonPayload,
+    createExecutionPayloadReference:
+      executionPayloadModule.createExecutionPayloadReference,
     ApplicationStateAdapterDescriptor:
       applicationStateEffectModule.APPLICATION_STATE_ADAPTER_DESCRIPTOR,
     ApplicationStateReconciliationVerifierDescriptor:
@@ -2270,6 +2515,42 @@ function readPayloadStorageSnapshot(payloadPath, run) {
 }
 
 /**
+ * Snapshot one shared payload store against every run that may retain a
+ * reference. Successor authorization spans two aggregates, so inspecting only
+ * the source or target would misclassify the other aggregate's live payloads as
+ * orphans.
+ * @param {string} payloadPath - Local payload-store root.
+ * @param {Record<string, any>[]} runs - Complete verified aggregate set.
+ * @returns {{physical: string[], reachable: string[], orphans: string[], files: {key: string, size: number, sha256: string}[]}} - Exact shared storage snapshot.
+ */
+function readPayloadStorageSnapshotForRuns(payloadPath, runs) {
+  const physical = readPhysicalPayloadKeys(payloadPath);
+  const reachableSet = new Set();
+  for (const run of runs) collectReachablePayloadKeys(run, reachableSet);
+  const reachable = [...reachableSet].sort();
+  const orphans = physical.filter((key) => !reachableSet.has(key));
+  for (const key of reachable) {
+    assert.ok(
+      physical.includes(key),
+      `Execution ledger references a missing payload file: ${key}`,
+    );
+  }
+  return {
+    physical,
+    reachable,
+    orphans,
+    files: physical.map((key) => {
+      const bytes = readFileSync(path.join(payloadPath, ...key.split('/')));
+      return {
+        key,
+        size: bytes.length,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+      };
+    }),
+  };
+}
+
+/**
  * Bind a breakpoint to the exact installed source bytes packaged into the SEA.
  * @param {string} installedPackageRoot - Installed tarball root.
  * @param {Record<string, any>} target - Original-source anchor.
@@ -2416,15 +2697,114 @@ async function resumeToSeaCrashBoundary(
 }
 
 /**
- * Run a normally terminating moved-SEA JSON command while a source-mapped
- * breakpoints prove the physical destination adapter and its low-level write
- * entry are never entered.
+ * Resume one inspected successor retry to its exact crash target while
+ * counting both the framework adapter entry and the physical destination
+ * transaction entry. Existing managed-effect matrices intentionally use a
+ * simpler adapter-only helper; successor parity needs both boundaries exact.
+ * @param {Record<string, any>} inspector - Attached inspector.
+ * @param {{getExit: () => ResidentServiceExit | null, getOutput: () => {stdout: string, stderr: string}}} service - Inspected moved SEA.
+ * @param {{label: string, adapterEntries: number, applicationStateWrites: number}} scenario - Exact expected execution counts.
+ * @param {{breakpointId: string, breakpointIds?: string[], name: string}} adapterBreakpoint - Managed adapter entry.
+ * @param {{breakpointId: string, breakpointIds?: string[], name: string}} writeBreakpoint - Application-state transaction entry.
+ * @param {{breakpointId: string, breakpointIds?: string[], name: string}} targetBreakpoint - Exact crash target.
+ * @param {{breakpointId: string, breakpointIds?: string[], name: string}[]} forbiddenBreakpoints - Authored execution surfaces.
+ * @returns {Promise<{adapterEntries: number, applicationStateWrites: number}>} - Exact physical execution evidence.
+ */
+async function resumeToSeaSuccessorCrashBoundary(
+  inspector,
+  service,
+  scenario,
+  adapterBreakpoint,
+  writeBreakpoint,
+  targetBreakpoint,
+  forbiddenBreakpoints,
+) {
+  let adapterEntries = 0;
+  let applicationStateWrites = 0;
+  await inspector.resume();
+  for (;;) {
+    let pause;
+    try {
+      pause = await inspector.waitForPause();
+    } catch (error) {
+      throw residentServiceError(
+        service,
+        `${scenario.label} did not reach ${targetBreakpoint.name}; inspector error=${error instanceof Error ? error.message : String(error)}.`,
+      );
+    }
+    const hits = pause.hitBreakpoints || [];
+    const findHit = (
+      /** @type {{breakpointId: string, breakpointIds?: string[], name: string}[]} */ breakpoints,
+    ) =>
+      breakpoints.find((breakpoint) => {
+        const ids = new Set(
+          breakpoint.breakpointIds || [breakpoint.breakpointId],
+        );
+        return hits.some((breakpointId) => ids.has(breakpointId));
+      });
+    const forbidden = findHit(forbiddenBreakpoints);
+    if (forbidden) {
+      assertExactInspectorPause(pause, forbidden, scenario.label);
+      throw residentServiceError(
+        service,
+        `${scenario.label} entered forbidden execution path ${forbidden.name}.`,
+      );
+    }
+    if (findHit([adapterBreakpoint])) {
+      assertExactInspectorPause(pause, adapterBreakpoint, scenario.label);
+      adapterEntries += 1;
+      assert.ok(
+        adapterEntries <= scenario.adapterEntries,
+        `${scenario.label} entered the successor adapter too often`,
+      );
+      await inspector.resume();
+      continue;
+    }
+    if (findHit([writeBreakpoint])) {
+      assertExactInspectorPause(pause, writeBreakpoint, scenario.label);
+      applicationStateWrites += 1;
+      assert.ok(
+        applicationStateWrites <= scenario.applicationStateWrites,
+        `${scenario.label} entered application-state too often`,
+      );
+      await inspector.resume();
+      continue;
+    }
+    assertExactInspectorPause(pause, targetBreakpoint, scenario.label);
+    break;
+  }
+  assert.equal(adapterEntries, scenario.adapterEntries);
+  assert.equal(applicationStateWrites, scenario.applicationStateWrites);
+  assert.equal(
+    service.getExit(),
+    null,
+    `${scenario.label} moved SEA exited before its crash boundary`,
+  );
+  return { adapterEntries, applicationStateWrites };
+}
+
+/**
+ * Run a normally terminating moved-SEA JSON command while source-mapped
+ * breakpoints prove its exact destination adapter/write count and forbid every
+ * unrelated dispatch surface.
  * @param {string} artifactPath - Relocated standalone SEA.
  * @param {string[]} args - Packaged command arguments.
- * @param {{cwd: string, env: Record<string, string>, installedPackageRoot: string, label: string, forbiddenTargets?: Array<{name: string, target: Record<string, any>}>}} options - Guard inputs.
- * @returns {Promise<{serialized: string, value: Record<string, any>}>} - Exact command response.
+ * @param {{cwd: string, env: Record<string, string>, installedPackageRoot: string, label: string, forbiddenTargets?: Array<{name: string, target: Record<string, any>}>, allowedAdapterEntries?: number, allowedApplicationStateWrites?: number, expectedExitCode?: number, writeBreakpointTarget?: Record<string, any>}} options - Guard inputs.
+ * @returns {Promise<{serialized: string, value: Record<string, any>, adapterEntries: number, applicationStateWrites: number, stderr: string}>} - Exact command response and dispatch evidence.
  */
 async function runInspectorGuardedSeaJson(artifactPath, args, options) {
+  const allowedAdapterEntries = options.allowedAdapterEntries || 0;
+  const allowedApplicationStateWrites =
+    options.allowedApplicationStateWrites || 0;
+  const expectedExitCode = options.expectedExitCode || 0;
+  assert.ok(
+    Number.isInteger(allowedAdapterEntries) && allowedAdapterEntries >= 0,
+  );
+  assert.ok(
+    Number.isInteger(allowedApplicationStateWrites) &&
+      allowedApplicationStateWrites >= 0,
+  );
+  assert.ok(Number.isInteger(expectedExitCode) && expectedExitCode >= 0);
   const service = spawnInspectorPausedProcess(artifactPath, args, {
     cwd: options.cwd,
     env: options.env,
@@ -2447,7 +2827,7 @@ async function runInspectorGuardedSeaJson(artifactPath, args, options) {
       'application-state-write-entry',
       bindInstalledBreakpointSource(
         options.installedPackageRoot,
-        SEA_CRASH_DESTINATION_WRITE_BREAKPOINT,
+        options.writeBreakpointTarget || SEA_CRASH_DESTINATION_WRITE_BREAKPOINT,
       ),
     );
     const additionalForbiddenBreakpoints = await Promise.all(
@@ -2459,15 +2839,14 @@ async function runInspectorGuardedSeaJson(artifactPath, args, options) {
           ),
       ),
     );
-    const forbiddenBreakpoints = [
-      adapterBreakpoint,
-      writeBreakpoint,
-      ...additionalForbiddenBreakpoints,
-    ];
-    const pause = inspector.waitForPause().then(
-      (value) => ({ kind: 'pause', value }),
-      (error) => ({ kind: 'inspector-error', error }),
-    );
+    let adapterEntries = 0;
+    let applicationStateWrites = 0;
+    const waitForPause = () =>
+      inspector.waitForPause().then(
+        (value) => ({ kind: 'pause', value }),
+        (error) => ({ kind: 'inspector-error', error }),
+      );
+    let pause = waitForPause();
     await inspector.resume();
     const deadline = Date.now() + CRASH_RECOVERY_TIMEOUT_MS;
     /** @type {Record<string, any> | undefined} */
@@ -2483,20 +2862,53 @@ async function runInspectorGuardedSeaJson(artifactPath, args, options) {
       ]);
       if (next.kind === 'pause') {
         const hits = next.value.hitBreakpoints || [];
-        const forbidden = forbiddenBreakpoints.find((breakpoint) => {
+        const forbidden = additionalForbiddenBreakpoints.find((breakpoint) => {
           const ids = new Set(
             breakpoint.breakpointIds || [breakpoint.breakpointId],
           );
           return hits.some((breakpointId) => ids.has(breakpointId));
         });
-        assert.ok(
-          forbidden,
-          `${options.label} paused outside its forbidden execution guards: ${JSON.stringify(hits)}`,
+        if (forbidden) {
+          assertExactInspectorPause(next.value, forbidden, options.label);
+          throw residentServiceError(
+            service,
+            `${options.label} entered forbidden execution path ${forbidden.name}.`,
+          );
+        }
+        const adapterIds = new Set(
+          adapterBreakpoint.breakpointIds || [adapterBreakpoint.breakpointId],
         );
-        assertExactInspectorPause(next.value, forbidden, options.label);
-        throw residentServiceError(
-          service,
-          `${options.label} entered forbidden execution path ${forbidden.name}.`,
+        if (hits.some((breakpointId) => adapterIds.has(breakpointId))) {
+          assertExactInspectorPause(
+            next.value,
+            adapterBreakpoint,
+            options.label,
+          );
+          adapterEntries += 1;
+          assert.ok(
+            adapterEntries <= allowedAdapterEntries,
+            `${options.label} entered the destination adapter too often`,
+          );
+          pause = waitForPause();
+          await inspector.resume();
+          continue;
+        }
+        const writeIds = new Set(
+          writeBreakpoint.breakpointIds || [writeBreakpoint.breakpointId],
+        );
+        if (hits.some((breakpointId) => writeIds.has(breakpointId))) {
+          assertExactInspectorPause(next.value, writeBreakpoint, options.label);
+          applicationStateWrites += 1;
+          assert.ok(
+            applicationStateWrites <= allowedApplicationStateWrites,
+            `${options.label} entered the application-state write too often`,
+          );
+          pause = waitForPause();
+          await inspector.resume();
+          continue;
+        }
+        assert.fail(
+          `${options.label} paused outside its execution guards: ${JSON.stringify(hits)}`,
         );
       }
       if (next.kind === 'inspector-error' && !service.getExit()) {
@@ -2536,11 +2948,27 @@ async function runInspectorGuardedSeaJson(artifactPath, args, options) {
     );
     assert.deepEqual(
       exited,
-      { code: 0, signal: null },
+      { code: expectedExitCode, signal: null },
       residentServiceError(service, `${options.label} exited unsuccessfully.`)
         .message,
     );
-    return { serialized, value };
+    assert.equal(
+      adapterEntries,
+      allowedAdapterEntries,
+      `${options.label} entered the destination adapter the wrong number of times`,
+    );
+    assert.equal(
+      applicationStateWrites,
+      allowedApplicationStateWrites,
+      `${options.label} entered the application-state write the wrong number of times`,
+    );
+    return {
+      serialized,
+      value,
+      adapterEntries,
+      applicationStateWrites,
+      stderr: service.getOutput().stderr,
+    };
   } finally {
     inspector?.close();
     await stopResidentServiceForCleanup(service);
@@ -4438,6 +4866,1719 @@ async function verifyRelocatedSeaEffectReconciliationCrashMatrix(options) {
   }
 }
 
+/**
+ * Reproduce the stable schema-v5 projection used by the packaged operator so
+ * successor responses can be compared as complete JSON values, not partial
+ * shapes.
+ * @param {Record<string, any>} raw - Verified rebuilt ledger run.
+ * @param {string} [kind] - Public response kind.
+ * @returns {Record<string, any>} - Exact redacted operator run view.
+ */
+function createExpectedSeaOperatorRunView(
+  raw,
+  kind = 'wharfie.execution-ledger.run',
+) {
+  return {
+    schemaVersion: 5,
+    kind,
+    integrity: { verified: true },
+    run: {
+      runId: raw.run.runId,
+      appId: raw.run.appId,
+      revisionId: raw.run.revisionId,
+      status: raw.run.status,
+      version: raw.run.version,
+      lastSequence: raw.run.lastSequence,
+      createdAt: raw.run.createdAt,
+      updatedAt: raw.run.updatedAt,
+      ...(raw.run.cancellationRequest
+        ? {
+            cancellationRequest: {
+              requestId: raw.run.cancellationRequest.requestId,
+              requestedAt: raw.run.cancellationRequest.requestedAt,
+            },
+          }
+        : {}),
+    },
+    invocations: raw.invocations.map((invocation) => ({
+      invocationId: invocation.invocationId,
+      activityId: invocation.activityId,
+      status: invocation.status,
+      generation: invocation.generation,
+      version: invocation.version,
+      lastSequence: invocation.lastSequence,
+      createdAt: invocation.createdAt,
+      updatedAt: invocation.updatedAt,
+    })),
+    attempts: raw.attempts.map((attempt) => ({
+      invocationId: attempt.invocationId,
+      attemptId: attempt.attemptId,
+      status: attempt.status,
+      generation: attempt.generation,
+      version: attempt.version,
+      claimedAt: attempt.claimedAt,
+      ...(attempt.startedAt === undefined
+        ? {}
+        : { startedAt: attempt.startedAt }),
+      updatedAt: attempt.updatedAt,
+      lastSequence: attempt.lastSequence,
+    })),
+    effects: raw.effects.map((effect) => ({
+      invocationId: effect.invocationId,
+      effectId: effect.effectId,
+      status: effect.status,
+      adapter: {
+        id: effect.adapter.id,
+        version: effect.adapter.version,
+      },
+      version: effect.version,
+      lastSequence: effect.lastSequence,
+      createdAt: effect.createdAt,
+      updatedAt: effect.updatedAt,
+    })),
+    history: raw.events.map((event) => ({
+      sequence: event.sequence,
+      type: event.type,
+      observedAt: event.observed_at,
+      actor: event.actor,
+    })),
+  };
+}
+
+/**
+ * Assert a complete causal retry response and both independently redacted run
+ * projections.
+ * @param {string} serialized - Exact one-line SEA JSON response.
+ * @param {Record<string, any>} source - Verified source aggregate.
+ * @param {Record<string, any>} target - Verified target aggregate.
+ * @param {{successorId: string, sourceEffectId: string, targetEffectId: string, authorizationApplied: boolean, disposition: string, secrets: string[], label: string}} expected - Safe response truth and private values.
+ * @returns {Record<string, any>} - Parsed response.
+ */
+function assertSeaSuccessorOperatorView(serialized, source, target, expected) {
+  const value = JSON.parse(serialized);
+  assert.deepEqual(value, {
+    schemaVersion: 5,
+    kind: 'wharfie.execution-ledger.effect-successor',
+    integrity: { verified: true },
+    effectSuccessor: {
+      successorId: expected.successorId,
+      intent: 'retry',
+      authorizationApplied: expected.authorizationApplied,
+      source: {
+        runId: source.run.runId,
+        effectId: expected.sourceEffectId,
+        status: source.run.status,
+      },
+      target: {
+        runId: target.run.runId,
+        effectId: expected.targetEffectId,
+        status: target.run.status,
+        disposition: expected.disposition,
+      },
+    },
+    source: createExpectedSeaOperatorRunView(source),
+    target: createExpectedSeaOperatorRunView(target),
+  });
+  for (const secret of [
+    ...expected.secrets,
+    'destinationEffectId',
+    'requestDigest',
+    'fencingToken',
+    'coordinatorEpoch',
+    'outcomeRef',
+    'evidenceRef',
+    'businessObservation',
+    'contractDigest',
+    'receiptDigest',
+    '"trigger"',
+    '"payload"',
+  ]) {
+    assert.equal(
+      serialized.includes(secret),
+      false,
+      `${expected.label} successor response disclosed ${secret}`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Find one exact source-side successor authorization.
+ * @param {Record<string, any>} source - Verified source aggregate.
+ * @param {string} successorId - Stable public identity.
+ * @param {number} expectedCount - Required matching event count.
+ * @returns {Record<string, any> | null} - Retained authorization.
+ */
+function findSeaSuccessorAuthorization(source, successorId, expectedCount) {
+  const events = source.events.filter(
+    (event) =>
+      event.type === 'effect-successor-authorized' &&
+      event.payload?.authorization?.successorId === successorId,
+  );
+  assert.equal(events.length, expectedCount);
+  return events[0]?.payload?.authorization || null;
+}
+
+/**
+ * Derive the only target identity and authorization an exact retained source
+ * can publish. This deliberately uses the installed package's derivation so a
+ * crash before the cross-run transaction can prove every target-side record is
+ * absent rather than merely waiting for a source event to reveal its ID.
+ * @param {{createManagedEffectSuccessorAuthorization: (options: Record<string, any>) => Record<string, any>}} fixture - Installed successor-contract helper.
+ * @param {Record<string, any>} source - Verified source aggregate after reconciliation.
+ * @param {Record<string, any>} sourceRequest - Exact logical source request.
+ * @param {{successorId: string, reason: string}} expected - Operator retry input.
+ * @returns {Record<string, any>} - Deterministically derived authorization.
+ */
+function createExpectedSeaSuccessorAuthorization(
+  fixture,
+  source,
+  sourceRequest,
+  expected,
+) {
+  const sourceEffect = source.effects.find(
+    (effect) => effect.effectId === SEA_SUCCESSOR_SOURCE_EFFECT_ID,
+  );
+  assert.ok(sourceEffect?.reconciliation);
+  const sourceAttempt = source.attempts.find(
+    (attempt) => attempt.attemptId === sourceEffect.requestedBy.attemptId,
+  );
+  assert.ok(sourceAttempt);
+  const reconciliationEvents = source.events.filter(
+    (event) =>
+      event.type === 'uncertain-effect-reconciled' &&
+      event.payload?.effect?.effectId === sourceEffect.effectId &&
+      event.payload?.reconciliation?.reconciliationId ===
+        sourceEffect.reconciliation.reconciliationId,
+  );
+  assert.equal(reconciliationEvents.length, 1);
+  const reconciliationEvent = reconciliationEvents[0];
+  return fixture.createManagedEffectSuccessorAuthorization({
+    appId: source.run.appId,
+    revisionId: source.run.revisionId,
+    successorId: expected.successorId,
+    reason: {
+      kind: 'operator-managed-effect-successor-retry',
+      successorId: expected.successorId,
+      message: expected.reason,
+    },
+    source: {
+      runId: source.run.runId,
+      invocationId: sourceEffect.invocationId,
+      attemptId: sourceAttempt.attemptId,
+      effectId: sourceEffect.effectId,
+      uncertaintyEventId: sourceEffect.reconciliation.uncertaintyEventId,
+      uncertaintySequence: sourceEffect.reconciliation.uncertaintySequence,
+      reconciliationEventId: reconciliationEvent.event_id,
+      reconciliationSequence: reconciliationEvent.sequence,
+      reconciliationId: sourceEffect.reconciliation.reconciliationId,
+      disposition: 'NOT_APPLIED',
+    },
+    contract: {
+      adapter: sourceEffect.adapter,
+      destination: sourceEffect.destination,
+      verifier: sourceEffect.verifier,
+      substantiatedReplayProperties: sourceEffect.substantiatedReplayProperties,
+    },
+    request: sourceRequest,
+  });
+}
+
+/**
+ * Prove authorization advances only the source aggregate envelope while its
+ * abandoned attempt and permanently decided effect remain byte-identical.
+ * @param {Record<string, any>} before - Source before authorization.
+ * @param {Record<string, any>} after - Source after authorization.
+ * @param {{successorId: string, sourceEffectId: string, actor: Record<string, any>, reason: string, revisionId: string}} expected - Exact causal authority.
+ * @returns {Record<string, any>} - Verified immutable authorization.
+ */
+function assertSeaSuccessorSourceAuthorization(before, after, expected) {
+  assert.deepEqual(Object.keys(after).sort(), Object.keys(before).sort());
+  assert.equal(before.run.status, 'BLOCKED');
+  assert.equal(after.run.status, 'BLOCKED');
+  assert.equal(before.invocations[0].status, 'UNCERTAIN');
+  assert.equal(after.invocations[0].status, 'UNCERTAIN');
+  assert.deepEqual(after.attempts, before.attempts);
+  assert.deepEqual(after.effects, before.effects);
+  assert.deepEqual(after.events.slice(0, before.events.length), before.events);
+  assert.equal(after.events.length, before.events.length + 1);
+  const event = after.events.at(-1);
+  assert.equal(event.type, 'effect-successor-authorized');
+  assert.deepEqual(event.actor, expected.actor);
+  assert.equal(event.sequence, before.head.sequence + 1);
+  assert.deepEqual(after.head, {
+    ...before.head,
+    version: before.head.version + 1,
+    sequence: event.sequence,
+  });
+  assert.deepEqual(after.run, {
+    ...before.run,
+    version: before.run.version + 1,
+    lastSequence: event.sequence,
+    updatedAt: event.observed_at,
+  });
+  assert.deepEqual(after.invocations[0], {
+    ...before.invocations[0],
+    version: before.invocations[0].version + 1,
+    lastSequence: event.sequence,
+    updatedAt: event.observed_at,
+  });
+  const authorization = event.payload.authorization;
+  assert.deepEqual(Object.keys(authorization).sort(), [
+    'contract',
+    'intent',
+    'kind',
+    'policy',
+    'reason',
+    'slotId',
+    'source',
+    'successorId',
+    'target',
+  ]);
+  assert.equal(authorization.kind, 'effect-successor');
+  assert.equal(authorization.intent, 'retry');
+  assert.equal(authorization.successorId, expected.successorId);
+  assert.deepEqual(authorization.policy, {
+    kind: 'application-state-put-if-absent-not-applied-retry',
+    version: 1,
+  });
+  assert.deepEqual(authorization.reason, {
+    kind: 'operator-managed-effect-successor-retry',
+    successorId: expected.successorId,
+    message: expected.reason,
+  });
+  const sourceEffect = before.effects.find(
+    (effect) => effect.effectId === expected.sourceEffectId,
+  );
+  assert.ok(sourceEffect?.reconciliation);
+  assert.deepEqual(authorization.source, {
+    runId: before.run.runId,
+    invocationId: sourceEffect.invocationId,
+    attemptId: before.attempts[0].attemptId,
+    effectId: sourceEffect.effectId,
+    uncertaintyEventId: sourceEffect.reconciliation.uncertaintyEventId,
+    uncertaintySequence: sourceEffect.reconciliation.uncertaintySequence,
+    reconciliationEventId: before.events.at(-1).event_id,
+    reconciliationSequence: before.events.at(-1).sequence,
+    reconciliationId: sourceEffect.reconciliation.reconciliationId,
+    disposition: 'NOT_APPLIED',
+  });
+  assert.deepEqual(authorization.contract, {
+    adapter: sourceEffect.adapter,
+    destination: sourceEffect.destination,
+    verifier: sourceEffect.verifier,
+    substantiatedReplayProperties: sourceEffect.substantiatedReplayProperties,
+  });
+  assert.equal(authorization.target.revisionId, expected.revisionId);
+  assert.notEqual(authorization.target.runId, before.run.runId);
+  assert.notEqual(authorization.target.invocationId, sourceEffect.invocationId);
+  assert.notEqual(authorization.target.effectId, sourceEffect.effectId);
+  assert.notEqual(
+    authorization.target.destinationEffectId,
+    sourceEffect.destinationEffectId,
+  );
+  assert.deepEqual(event.payload, {
+    run: after.run,
+    invocation: after.invocations[0],
+    authorization,
+  });
+  return authorization;
+}
+
+/**
+ * Assert the exact finite target state retained at one successor boundary.
+ * @param {Record<string, any>} target - Verified target aggregate.
+ * @param {Record<string, any>} authorization - Immutable target trigger.
+ * @param {{run: string, invocation: string, attempt: string | null, effect: string | null, events: string[]}} expected - Required lifecycle state.
+ * @param {Record<string, any>} actor - Packaged operator authority.
+ * @param {string} label - Assertion context.
+ * @returns {void}
+ */
+function assertSeaSuccessorTargetState(
+  target,
+  authorization,
+  expected,
+  actor,
+  label,
+) {
+  assert.equal(target.run.runId, authorization.target.runId);
+  assert.deepEqual(target.run.trigger, authorization);
+  assert.equal(target.run.status, expected.run);
+  assert.equal(target.invocations.length, 1);
+  assert.equal(
+    target.invocations[0].invocationId,
+    authorization.target.invocationId,
+  );
+  assert.equal(target.invocations[0].activityId, 'wharfie-effect-successor');
+  assert.equal(target.invocations[0].status, expected.invocation);
+  assert.equal(target.attempts.length, expected.attempt === null ? 0 : 1);
+  assert.equal(target.attempts[0]?.status || null, expected.attempt);
+  assert.equal(target.effects.length, expected.effect === null ? 0 : 1);
+  assert.equal(target.effects[0]?.status || null, expected.effect);
+  if (target.effects[0]) {
+    assert.equal(target.effects[0].effectId, authorization.target.effectId);
+    assert.equal(
+      target.effects[0].destinationEffectId,
+      authorization.target.destinationEffectId,
+    );
+  }
+  assert.deepEqual(
+    target.events.map((event) => event.type),
+    expected.events,
+    `${label} retained the wrong successor event vocabulary`,
+  );
+  assert.deepEqual(
+    target.events.map((event) => event.actor),
+    Array.from({ length: expected.events.length }, () => actor),
+  );
+}
+
+/**
+ * Assert that a target copies only the verified logical request into fresh,
+ * target-owned durable authority. The source's old physical attempt must never
+ * become the new run's fence, request envelope, or effect identity.
+ * @param {{readExecutionPayload: (reference: Record<string, any>) => Promise<any>}} fixture - Installed payload reader.
+ * @param {Record<string, any>} source - Verified source aggregate.
+ * @param {Record<string, any>} target - Verified successor target aggregate.
+ * @param {Record<string, any>} authorization - Immutable target trigger.
+ * @param {Record<string, any>} sourceRequest - Exact logical source request.
+ * @param {string} label - Assertion context.
+ * @returns {Promise<void>} - Resolves after every retained authority verifies.
+ */
+async function assertSeaSuccessorTargetAuthority(
+  fixture,
+  source,
+  target,
+  authorization,
+  sourceRequest,
+  label,
+) {
+  const [invocation] = target.invocations;
+  assert.ok(invocation, `${label} has no successor invocation`);
+  assert.deepEqual(target.run.requestRef, invocation.requestRef);
+  assert.deepEqual(
+    JSON.parse(
+      JSON.stringify(await fixture.readExecutionPayload(target.run.requestRef)),
+    ),
+    JSON.parse(
+      JSON.stringify({
+        input: {
+          effectRequest: {
+            effectId: authorization.target.effectId,
+            ...sourceRequest,
+          },
+        },
+        callerMetadata: {},
+      }),
+    ),
+  );
+  const [effect] = target.effects;
+  if (!effect) return;
+  const attempt = target.attempts.find(
+    (candidate) => candidate.attemptId === effect.requestedBy.attemptId,
+  );
+  assert.ok(attempt, `${label} effect has no matching target attempt`);
+  const sourceAttempt = source.attempts.find(
+    (candidate) => candidate.attemptId === authorization.source.attemptId,
+  );
+  assert.ok(sourceAttempt, `${label} source attempt disappeared`);
+  assert.deepEqual(effect.adapter, authorization.contract.adapter);
+  assert.deepEqual(effect.destination, authorization.contract.destination);
+  assert.deepEqual(effect.verifier, authorization.contract.verifier);
+  assert.deepEqual(
+    effect.requestedReplayProperties,
+    sourceRequest.requestedReplayProperties,
+  );
+  assert.deepEqual(
+    effect.substantiatedReplayProperties,
+    authorization.contract.substantiatedReplayProperties,
+  );
+  assert.deepEqual(
+    await fixture.readExecutionPayload(effect.requestRef),
+    sourceRequest,
+  );
+  assert.notEqual(attempt.attemptId, sourceAttempt.attemptId);
+  assert.equal(attempt.generation, 1);
+  assert.equal(invocation.generation, 1);
+  assert.equal(attempt.coordinatorEpoch, 0);
+  assert.notEqual(attempt.fencingToken, sourceAttempt.fencingToken);
+  assert.deepEqual(effect.requestedBy, {
+    attemptId: attempt.attemptId,
+    generation: attempt.generation,
+    coordinatorEpoch: attempt.coordinatorEpoch,
+    fencingToken: attempt.fencingToken,
+    protocolSequence: 1,
+  });
+  assert.deepEqual(effect.startedBy, {
+    attemptId: attempt.attemptId,
+    generation: attempt.generation,
+    coordinatorEpoch: attempt.coordinatorEpoch,
+    fencingToken: attempt.fencingToken,
+  });
+}
+
+/**
+ * Read one immutable payload and bind its reference to the physical local
+ * content-addressed file rather than trusting a projection alone.
+ * @param {{payloadStoreId: string, readExecutionPayload: (reference: Record<string, any>) => Promise<any>}} fixture - Installed payload reader.
+ * @param {Record<string, any>} reference - Retained immutable reference.
+ * @param {{files: {key: string, size: number, sha256: string}[]}} payloadStorage - Physical payload snapshot.
+ * @param {string} payloadSchema - Exact semantic payload schema.
+ * @param {string} label - Assertion context.
+ * @returns {Promise<any>} - Exact referenced JSON payload.
+ */
+async function readSeaPhysicalPayload(
+  fixture,
+  reference,
+  payloadStorage,
+  payloadSchema,
+  label,
+) {
+  const file = payloadStorage.files.find(
+    (candidate) => candidate.key === reference.storage.key,
+  );
+  assert.ok(file, `${label} payload is not physical`);
+  assert.equal(reference.schemaVersion, 1);
+  assert.equal(reference.kind, 'executionPayloadReference');
+  assert.equal(reference.mediaType, 'application/json');
+  assert.equal(reference.payloadSchema, payloadSchema);
+  assert.deepEqual(reference.storage, {
+    kind: 'wharfie.local-content-addressed.v1',
+    storeId: fixture.payloadStoreId,
+    key: file.key,
+  });
+  assert.equal(reference.size, file.size);
+  assert.deepEqual(reference.digest, {
+    algorithm: 'sha256',
+    value: Buffer.from(file.sha256, 'hex').toString('base64url'),
+  });
+  return JSON.parse(
+    JSON.stringify(await fixture.readExecutionPayload(reference)),
+  );
+}
+
+/**
+ * Bind the direct terminal outcome and complete target-owned transcript to
+ * the actual destination receipt. Reconciled terminal outcomes intentionally
+ * use their separate reconciliation-evidence assertion instead.
+ * @param {{payloadStoreId: string, readExecutionPayload: (reference: Record<string, any>) => Promise<any>}} fixture - Installed payload reader.
+ * @param {Record<string, any>} target - Verified terminal successor target.
+ * @param {Record<string, any>} authorization - Immutable target trigger.
+ * @param {Record<string, any>} sourceRequest - Exact logical source request.
+ * @param {{receipt: Record<string, any> | null}} destination - Physical destination truth.
+ * @param {{files: {key: string, size: number, sha256: string}[]}} payloadStorage - Physical payload snapshot.
+ * @param {string} label - Assertion context.
+ * @returns {Promise<void>} - Resolves after terminal evidence verifies.
+ */
+async function assertSeaSuccessorTerminalOutcomeEvidence(
+  fixture,
+  target,
+  authorization,
+  sourceRequest,
+  destination,
+  payloadStorage,
+  label,
+) {
+  if (
+    !target.events.some((event) => event.type === 'effect-successor-terminal')
+  ) {
+    return;
+  }
+  assert.ok(destination.receipt, `${label} direct terminal has no receipt`);
+  const [invocation] = target.invocations;
+  const [attempt] = target.attempts;
+  const [effect] = target.effects;
+  assert.ok(invocation);
+  assert.ok(attempt);
+  assert.ok(effect);
+  assert.equal(invocation.status, 'COMPLETED');
+  assert.equal(attempt.status, 'COMPLETED');
+  assert.equal(effect.status, 'COMPLETED');
+  assert.ok(effect.outcomeRef, `${label} terminal has no outcome reference`);
+  assert.ok(attempt.evidenceRef, `${label} terminal has no evidence reference`);
+  const normalizedSourceRequest = JSON.parse(JSON.stringify(sourceRequest));
+  const expectedOutcome = JSON.parse(
+    JSON.stringify({
+      destinationEffectId: authorization.target.destinationEffectId,
+      adapter: authorization.contract.adapter,
+      destination: authorization.contract.destination,
+      verifier: authorization.contract.verifier,
+      ok: true,
+      result: { inserted: destination.receipt.inserted },
+      substantiatedReplayProperties:
+        authorization.contract.substantiatedReplayProperties,
+      evidence: {
+        kind: 'application-state-put-if-absent-receipt',
+        version: 2,
+        destinationEffectId: destination.receipt.destination_effect_id,
+        contractDigest: destination.receipt.contract_digest,
+        receiptDigest: destination.receipt.receipt_digest,
+        businessRecordDigest: destination.receipt.business_record_digest,
+        disposition: destination.receipt.outcome_code,
+      },
+    }),
+  );
+  const outcome = await readSeaPhysicalPayload(
+    fixture,
+    effect.outcomeRef,
+    payloadStorage,
+    'wharfie.execution.managed-effect-outcome.v2',
+    `${label} outcome`,
+  );
+  assert.deepEqual(outcome, expectedOutcome);
+  const evidence = await readSeaPhysicalPayload(
+    fixture,
+    attempt.evidenceRef,
+    payloadStorage,
+    'wharfie.execution.activity-evidence.v1',
+    `${label} evidence`,
+  );
+  const expectedStart = {
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'start',
+    revisionId: authorization.target.revisionId,
+    activityId: 'wharfie-effect-successor',
+    runId: authorization.target.runId,
+    invocationId: authorization.target.invocationId,
+    attemptId: attempt.attemptId,
+    fencingToken: attempt.fencingToken,
+    input: {
+      effectRequest: {
+        effectId: authorization.target.effectId,
+        ...normalizedSourceRequest,
+      },
+    },
+    caller: { metadata: {} },
+  };
+  const expectedRequestFrame = {
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'effect-request',
+    attemptId: attempt.attemptId,
+    sequence: 1,
+    effectId: authorization.target.effectId,
+    ...normalizedSourceRequest,
+  };
+  const expectedResultFrame = {
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'effect-result',
+    attemptId: attempt.attemptId,
+    effectId: authorization.target.effectId,
+    ok: true,
+    result: expectedOutcome.result,
+    substantiatedReplayProperties:
+      authorization.contract.substantiatedReplayProperties,
+    evidence: expectedOutcome.evidence,
+  };
+  const expectedTerminal = {
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'completed',
+    attemptId: attempt.attemptId,
+    sequence: 2,
+    result: expectedOutcome.result,
+  };
+  assert.equal(evidence.status, 'completed');
+  assert.deepEqual(evidence.start, expectedStart);
+  assert.deepEqual(evidence.frames, [
+    expectedStart,
+    expectedRequestFrame,
+    expectedResultFrame,
+    expectedTerminal,
+  ]);
+  assert.deepEqual(evidence.terminal, expectedTerminal);
+  assert.deepEqual(invocation.terminal, {
+    type: 'completed',
+    attemptId: attempt.attemptId,
+  });
+}
+
+/**
+ * Assert destination truth for the successor's fresh physical identity.
+ * @param {{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}} destination - Physical application-state truth.
+ * @param {Record<string, any>} authorization - Immutable target identity.
+ * @param {Record<string, any>} sourceRequest - Exact logical source request.
+ * @param {string} appId - Application namespace.
+ * @param {true | false | 'not-applied'} expectedOutcome - Expected destination state.
+ * @returns {void}
+ */
+function assertSeaSuccessorDestination(
+  destination,
+  authorization,
+  sourceRequest,
+  appId,
+  expectedOutcome,
+) {
+  if (expectedOutcome === false) {
+    assert.deepEqual(destination, {
+      receipt: null,
+      resolution: null,
+      business: null,
+    });
+    return;
+  }
+  if (expectedOutcome === 'not-applied') {
+    assert.equal(destination.receipt, null);
+    assert.equal(destination.business, null);
+    assert.ok(destination.resolution);
+    assert.equal(
+      destination.resolution.destination_effect_id,
+      authorization.target.destinationEffectId,
+    );
+    assert.equal(destination.resolution.operation, 'put-if-absent');
+    assert.equal(destination.resolution.disposition, 'not-applied');
+    assert.deepEqual(destination.resolution.business_observation, {
+      kind: 'absent',
+    });
+    return;
+  }
+  assert.ok(destination.receipt);
+  assert.ok(destination.business);
+  assert.equal(destination.resolution, null);
+  assert.deepEqual(
+    {
+      destinationEffectId: destination.receipt.destination_effect_id,
+      outcomeCode: destination.receipt.outcome_code,
+      inserted: destination.receipt.inserted,
+      namespace: destination.business.namespace,
+      logicalKey: destination.business.logical_key,
+      createdBy: destination.business.created_by_destination_effect_id,
+    },
+    {
+      destinationEffectId: authorization.target.destinationEffectId,
+      outcomeCode: 'inserted',
+      inserted: true,
+      namespace: appId,
+      logicalKey: sourceRequest.input.key,
+      createdBy: authorization.target.destinationEffectId,
+    },
+  );
+  assert.deepEqual(
+    destination.business.value,
+    JSON.parse(JSON.stringify(sourceRequest.input.value)),
+  );
+  assert.equal(
+    destination.business.contract_digest,
+    destination.receipt.contract_digest,
+  );
+  assert.equal(
+    destination.business.record_digest,
+    destination.receipt.business_record_digest,
+  );
+}
+
+/**
+ * Prove the internal successor executor preserves its dedicated lifecycle
+ * across every durable publication and transaction boundary. A private
+ * environment gate adds a hidden packaged-operator fixture alias; no normal
+ * source or packaged CLI mounts a successor command. Every execution is the
+ * relocated SEA with Node absent from PATH; host-side imports only seed and
+ * independently read durable truth.
+ * @param {{artifactPath: string, appId: string, cleanEnvironment: Record<string, string>, installedPackageRoot: string, revisionId: string, root: string}} options - Matrix inputs.
+ * @returns {Promise<void>} - Resolves after all six crash/recovery cases pass.
+ */
+async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
+  mkdirSync(options.root, { recursive: true, mode: 0o700 });
+  try {
+    for (const [
+      scenarioIndex,
+      scenario,
+    ] of SEA_SUCCESSOR_CRASH_CASES.entries()) {
+      const caseId = `case-${scenarioIndex + 1}`;
+      const caseRoot = path.join(options.root, scenario.boundary);
+      const controlPath = path.join(caseRoot, 'control');
+      const payloadPath = path.join(controlPath, 'execution-payloads');
+      const sessionPath = path.join(caseRoot, 'sessions');
+      const applicationStatePath = path.join(caseRoot, 'application-state');
+      const markerPath = path.join(
+        caseRoot,
+        'authored-activity-must-not-run.json',
+      );
+      const tableName = `wharfie-package-sea-${scenario.boundary}`;
+      const packagedActor = {
+        kind: 'packaged-operator',
+        id: options.revisionId,
+      };
+      const successorId = `sea-${caseId}`;
+      const sourceReconciliationId = `source-${caseId}`;
+      const targetReconciliationId = `target-${caseId}`;
+      const sourceReason = `sea-private-source-${randomUUID()}`;
+      const retryReason = `sea-private-successor-${randomUUID()}`;
+      const targetReason = `sea-private-target-${randomUUID()}`;
+      const staleEndpoints = new Set();
+      mkdirSync(caseRoot, { recursive: true, mode: 0o700 });
+      const environment = {
+        ...options.cleanEnvironment,
+        WHARFIE_CONTROL_ADAPTER: 'lmdb',
+        WHARFIE_CONTROL_PATH: controlPath,
+        WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
+        WHARFIE_EXECUTION_PAYLOAD_PATH: payloadPath,
+        WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
+        WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
+        WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+        WHARFIE_TEST_SEA_SUCCESSOR_FIXTURE: '1',
+      };
+      const fixture = await createInstalledExecutionLedgerFixture({
+        installedPackageRoot: options.installedPackageRoot,
+        controlPath,
+        tableName,
+        payloadPath,
+        applicationStatePath,
+        revisionId: options.revisionId,
+      });
+      const lifecycle = await createInstalledLedgerLifecycleObserver({
+        installedPackageRoot: options.installedPackageRoot,
+        controlPath,
+        tableName,
+        appId: options.appId,
+      });
+      // The hidden packaged-operator fixture uses the same source-free command
+      // body as the future public surface, so setup, execution, recovery, and
+      // reconciliation must never enter authored app CLI or activity dispatch.
+      const operatorForbiddenTargets = [
+        {
+          name: 'authored-activity-dispatch',
+          target: SEA_ACTIVITY_DISPATCH_BREAKPOINT,
+        },
+        {
+          name: 'authored-app-cli-dispatch',
+          target: SEA_APP_CLI_DISPATCH_BREAKPOINT,
+        },
+      ];
+      /** @type {ReturnType<typeof spawnInspectorPausedProcess> | undefined} */
+      let service;
+      /** @type {Record<string, any> | undefined} */
+      let inspector;
+      try {
+        const unavailableNode = spawnSync('node', ['--version'], {
+          encoding: 'utf8',
+          env: environment,
+        });
+        assert.equal(
+          unavailableNode.error?.code,
+          'ENOENT',
+          `${scenario.label} unexpectedly exposes Node on PATH`,
+        );
+
+        const batch = await fixture.createApplicationStateRecoveryBatchRun(
+          options.appId,
+          `sea-source-${caseId}`,
+          [
+            {
+              effectId: SEA_SUCCESSOR_SOURCE_EFFECT_ID,
+              state: 'STARTED_ABSENT',
+            },
+          ],
+        );
+        const sourceEffectFixture = batch.effects[0];
+        const sourceRecoveryArgs = [
+          'wharfie',
+          'recover',
+          '--run-id',
+          batch.runId,
+          '--confirm-runner-stopped',
+          '--json',
+        ];
+        const sourceRecovery = await runInspectorGuardedSeaJson(
+          options.artifactPath,
+          sourceRecoveryArgs,
+          {
+            cwd: caseRoot,
+            env: environment,
+            installedPackageRoot: options.installedPackageRoot,
+            label: `${scenario.label} source recovery setup`,
+            forbiddenTargets: operatorForbiddenTargets,
+          },
+        );
+        assertManagedEffectBatchRecoveryView(sourceRecovery.serialized, batch, {
+          adapter: fixture.ApplicationStateAdapterDescriptor,
+          actor: packagedActor,
+        });
+        const sourceReconciliationArgs = [
+          'wharfie',
+          'reconcile-effect',
+          '--run-id',
+          batch.runId,
+          '--effect-id',
+          SEA_SUCCESSOR_SOURCE_EFFECT_ID,
+          '--reconciliation-id',
+          sourceReconciliationId,
+          '--confirm-runner-stopped',
+          '--reason',
+          sourceReason,
+          '--json',
+        ];
+        const sourceBeforeReconciliation = await fixture.readRun(batch.runId);
+        assert.ok(sourceBeforeReconciliation);
+        const sourceReconciliation = await runInspectorGuardedSeaJson(
+          options.artifactPath,
+          sourceReconciliationArgs,
+          {
+            cwd: caseRoot,
+            env: environment,
+            installedPackageRoot: options.installedPackageRoot,
+            label: `${scenario.label} source not-applied setup`,
+            forbiddenTargets: operatorForbiddenTargets,
+          },
+        );
+        const sourceBeforeRetry = await fixture.readRun(batch.runId);
+        assert.ok(sourceBeforeRetry);
+        const sourceAuthority = assertUncertainManagedEffectReconciliationRun(
+          sourceBeforeReconciliation,
+          sourceBeforeRetry,
+          batch,
+          {
+            effectId: SEA_SUCCESSOR_SOURCE_EFFECT_ID,
+            reconciliationId: sourceReconciliationId,
+            status: 'NOT_APPLIED',
+            actor: packagedActor,
+            reason: sourceReason,
+            verifier: fixture.ApplicationStateReconciliationVerifierDescriptor,
+          },
+        );
+        assertManagedEffectReconciliationView(
+          sourceReconciliation.serialized,
+          batch,
+          sourceBeforeRetry,
+          {
+            effectId: SEA_SUCCESSOR_SOURCE_EFFECT_ID,
+            reconciliationId: sourceReconciliationId,
+            status: 'NOT_APPLIED',
+            changed: true,
+            privateReason: sourceReason,
+            adapter: fixture.ApplicationStateAdapterDescriptor,
+            extraSecrets: [applicationStatePath, controlPath],
+          },
+        );
+        const sourceDestination = await fixture.readApplicationStateDestination(
+          options.appId,
+          sourceEffectFixture.destinationEffectId,
+          sourceEffectFixture.requestKey,
+        );
+        const sourcePayload = readPayloadStorageSnapshotForRuns(payloadPath, [
+          sourceBeforeRetry,
+        ]);
+        assert.deepEqual(sourcePayload.orphans, []);
+        await assertManagedEffectReconciliationPayload(
+          fixture,
+          sourceAuthority.effect,
+          sourceDestination,
+          sourcePayload,
+        );
+        const sourceEffect = sourceBeforeRetry.effects.find(
+          (effect) => effect.effectId === SEA_SUCCESSOR_SOURCE_EFFECT_ID,
+        );
+        assert.ok(sourceEffect);
+        const sourceRequest = await fixture.readExecutionPayload(
+          sourceEffect.requestRef,
+        );
+        assert.equal(sourceRequest.input.key, sourceEffectFixture.requestKey);
+        const expectedAuthorization = createExpectedSeaSuccessorAuthorization(
+          fixture,
+          sourceBeforeRetry,
+          sourceRequest,
+          { successorId, reason: retryReason },
+        );
+        const expectedTargetRequest = {
+          input: {
+            effectRequest: {
+              effectId: expectedAuthorization.target.effectId,
+              ...sourceRequest,
+            },
+          },
+          callerMetadata: {},
+        };
+        const expectedTargetRequestRef =
+          fixture.createExecutionPayloadReference({
+            bytes: fixture.encodeCanonicalJsonPayload(expectedTargetRequest),
+            payloadSchema: 'wharfie.execution.manual-request.v1',
+            storeId: fixture.payloadStoreId,
+          });
+        const directoryBeforeRetry = await fixture.listRunDirectory(
+          options.appId,
+        );
+        assert.equal(await lifecycle.readOwnership(), null);
+        assert.equal(existsSync(markerPath), false);
+
+        const retryArgs = [
+          'wharfie',
+          '__sea-successor-fixture',
+          '--run-id',
+          batch.runId,
+          '--effect-id',
+          SEA_SUCCESSOR_SOURCE_EFFECT_ID,
+          '--successor-id',
+          successorId,
+          '--confirm-runner-stopped',
+          '--reason',
+          retryReason,
+          '--json',
+        ];
+        service = spawnInspectorPausedProcess(options.artifactPath, retryArgs, {
+          cwd: caseRoot,
+          env: environment,
+          timeoutMs: CRASH_RECOVERY_TIMEOUT_MS,
+        });
+        inspector = await attachSeaInspector(service, {
+          timeoutMs: CRASH_RECOVERY_TIMEOUT_MS,
+        });
+        const adapterBreakpoint = await inspector.setSourceBreakpoint(
+          'successor-adapter-entry',
+          bindInstalledBreakpointSource(
+            options.installedPackageRoot,
+            SEA_CRASH_ADAPTER_BREAKPOINT,
+          ),
+        );
+        const writeBreakpoint = await inspector.setSourceBreakpoint(
+          'successor-application-state-write',
+          bindInstalledBreakpointSource(
+            options.installedPackageRoot,
+            SEA_CRASH_DESTINATION_TRANSACTION_BREAKPOINT,
+          ),
+        );
+        const targetBreakpoint = await inspector.setSourceBreakpoint(
+          scenario.boundary,
+          bindInstalledBreakpointSource(
+            options.installedPackageRoot,
+            scenario.breakpoint,
+          ),
+        );
+        const forbiddenBreakpoints = await Promise.all(
+          operatorForbiddenTargets.map(
+            async ({ name, target }) =>
+              await inspector.setSourceBreakpoint(
+                name,
+                bindInstalledBreakpointSource(
+                  options.installedPackageRoot,
+                  target,
+                ),
+              ),
+          ),
+        );
+        assert.deepEqual(
+          await resumeToSeaSuccessorCrashBoundary(
+            inspector,
+            service,
+            scenario,
+            adapterBreakpoint,
+            writeBreakpoint,
+            targetBreakpoint,
+            forbiddenBreakpoints,
+          ),
+          {
+            adapterEntries: scenario.adapterEntries,
+            applicationStateWrites: scenario.applicationStateWrites,
+          },
+        );
+        assert.equal(
+          service.getOutput().stdout,
+          '',
+          `${scenario.label} returned a response before its crash boundary`,
+        );
+        assert.equal(existsSync(markerPath), false);
+
+        const sourceAtBoundary = await fixture.readRun(batch.runId);
+        assert.ok(sourceAtBoundary);
+        let authorization;
+        let targetAtBoundary = null;
+        if (!scenario.authorizationCommitted) {
+          assert.deepEqual(sourceAtBoundary, sourceBeforeRetry);
+          assert.equal(
+            findSeaSuccessorAuthorization(sourceAtBoundary, successorId, 0),
+            null,
+          );
+          assert.equal(
+            await fixture.readRun(expectedAuthorization.target.runId),
+            null,
+          );
+          assert.deepEqual(
+            await fixture.readRawLedgerRunRows(
+              expectedAuthorization.target.runId,
+            ),
+            [],
+          );
+          assert.deepEqual(
+            await fixture.listRunDirectory(options.appId),
+            directoryBeforeRetry,
+          );
+          assert.equal(
+            await fixture.readSuccessorIdentity(options.appId, successorId),
+            null,
+          );
+        } else {
+          authorization = assertSeaSuccessorSourceAuthorization(
+            sourceBeforeRetry,
+            sourceAtBoundary,
+            {
+              successorId,
+              sourceEffectId: SEA_SUCCESSOR_SOURCE_EFFECT_ID,
+              actor: packagedActor,
+              reason: retryReason,
+              revisionId: options.revisionId,
+            },
+          );
+          assert.deepEqual(authorization, expectedAuthorization);
+          targetAtBoundary = await fixture.readRun(authorization.target.runId);
+          assert.ok(targetAtBoundary);
+          assertSeaSuccessorTargetState(
+            targetAtBoundary,
+            authorization,
+            scenario.target,
+            packagedActor,
+            scenario.label,
+          );
+          await assertSeaSuccessorTargetAuthority(
+            fixture,
+            sourceBeforeRetry,
+            targetAtBoundary,
+            authorization,
+            sourceRequest,
+            scenario.label,
+          );
+        }
+        const destinationAtBoundary = authorization
+          ? await fixture.readApplicationStateDestination(
+              options.appId,
+              authorization.target.destinationEffectId,
+              sourceEffectFixture.requestKey,
+            )
+          : null;
+        if (destinationAtBoundary) {
+          assertSeaSuccessorDestination(
+            destinationAtBoundary,
+            authorization,
+            sourceRequest,
+            options.appId,
+            scenario.destinationApplied,
+          );
+        }
+        const payloadAtBoundary = readPayloadStorageSnapshotForRuns(
+          payloadPath,
+          [sourceAtBoundary, ...(targetAtBoundary ? [targetAtBoundary] : [])],
+        );
+        assert.equal(payloadAtBoundary.orphans.length, scenario.orphanPayloads);
+        assert.equal(
+          payloadAtBoundary.physical.length,
+          payloadAtBoundary.reachable.length + scenario.orphanPayloads,
+        );
+        assert.deepEqual(
+          payloadAtBoundary.files.filter((file) =>
+            sourcePayload.physical.includes(file.key),
+          ),
+          sourcePayload.files,
+          `${scenario.label} rewrote preexisting immutable payloads`,
+        );
+        let preauthorizationRequestKey;
+        if (!scenario.authorizationCommitted) {
+          const added = payloadAtBoundary.physical.filter(
+            (key) => !sourcePayload.physical.includes(key),
+          );
+          assert.deepEqual(
+            payloadAtBoundary.reachable,
+            sourcePayload.reachable,
+          );
+          assert.deepEqual(added, [expectedTargetRequestRef.storage.key]);
+          assert.deepEqual(payloadAtBoundary.orphans, [
+            expectedTargetRequestRef.storage.key,
+          ]);
+          assert.deepEqual(
+            JSON.parse(
+              JSON.stringify(
+                await fixture.readExecutionPayload(expectedTargetRequestRef),
+              ),
+            ),
+            JSON.parse(JSON.stringify(expectedTargetRequest)),
+          );
+          preauthorizationRequestKey = expectedTargetRequestRef.storage.key;
+        }
+        const terminalPayloadKeys =
+          scenario.boundary === 'successor-terminal-payloads-published'
+            ? [...payloadAtBoundary.orphans]
+            : [];
+
+        const ownershipAtBoundary = await lifecycle.readOwnership();
+        assert.ok(ownershipAtBoundary, `${scenario.label} has no owner`);
+        assert.equal(ownershipAtBoundary.appId, options.appId);
+        assert.equal(ownershipAtBoundary.ownerKind, 'manual');
+        const staleEndpoint = lifecycle.getSessionEndpoint(
+          ownershipAtBoundary.sessionId,
+          sessionPath,
+        );
+        staleEndpoints.add(staleEndpoint);
+        assert.equal(existsSync(staleEndpoint), true);
+        const killed = await signalResidentService(service, 'SIGKILL');
+        assert.deepEqual(killed, { code: null, signal: 'SIGKILL' });
+        inspector.close();
+        inspector = undefined;
+        service = undefined;
+        assert.deepEqual(await lifecycle.readOwnership(), ownershipAtBoundary);
+        assert.deepEqual(await fixture.readRun(batch.runId), sourceAtBoundary);
+        if (!scenario.authorizationCommitted) {
+          assert.equal(
+            await fixture.readRun(expectedAuthorization.target.runId),
+            null,
+          );
+          assert.deepEqual(
+            await fixture.readRawLedgerRunRows(
+              expectedAuthorization.target.runId,
+            ),
+            [],
+          );
+          assert.deepEqual(
+            await fixture.listRunDirectory(options.appId),
+            directoryBeforeRetry,
+          );
+          assert.equal(
+            await fixture.readSuccessorIdentity(options.appId, successorId),
+            null,
+          );
+        } else if (authorization) {
+          assert.deepEqual(
+            await fixture.readRun(authorization.target.runId),
+            targetAtBoundary,
+          );
+        }
+        assert.deepEqual(
+          readPayloadStorageSnapshotForRuns(payloadPath, [
+            sourceAtBoundary,
+            ...(targetAtBoundary ? [targetAtBoundary] : []),
+          ]),
+          payloadAtBoundary,
+        );
+        if (authorization) {
+          assert.deepEqual(
+            await fixture.readApplicationStateDestination(
+              options.appId,
+              authorization.target.destinationEffectId,
+              sourceEffectFixture.requestKey,
+            ),
+            destinationAtBoundary,
+          );
+        }
+
+        const commonSecrets = [
+          ...batch.secrets,
+          sourceEffectFixture.destinationEffectId,
+          sourceEffectFixture.requestKey,
+          batch.storeId,
+          sourceReason,
+          retryReason,
+          targetReason,
+          applicationStatePath,
+          controlPath,
+        ];
+        let finalSource;
+        let finalTarget;
+        let finalDestination;
+        let finalPayload;
+        let finalDisposition;
+
+        if (
+          scenario.boundary === 'successor-target-request-published' ||
+          scenario.boundary === 'successor-authorization-committed'
+        ) {
+          const continuation = await runInspectorGuardedSeaJson(
+            options.artifactPath,
+            retryArgs,
+            {
+              cwd: caseRoot,
+              env: environment,
+              installedPackageRoot: options.installedPackageRoot,
+              label: `${scenario.label} restart completion`,
+              forbiddenTargets: operatorForbiddenTargets,
+              allowedAdapterEntries: 1,
+              allowedApplicationStateWrites: 1,
+              writeBreakpointTarget:
+                SEA_CRASH_DESTINATION_TRANSACTION_BREAKPOINT,
+            },
+          );
+          finalSource = await fixture.readRun(batch.runId);
+          assert.ok(finalSource);
+          if (!scenario.authorizationCommitted) {
+            authorization = assertSeaSuccessorSourceAuthorization(
+              sourceBeforeRetry,
+              finalSource,
+              {
+                successorId,
+                sourceEffectId: SEA_SUCCESSOR_SOURCE_EFFECT_ID,
+                actor: packagedActor,
+                reason: retryReason,
+                revisionId: options.revisionId,
+              },
+            );
+            assert.deepEqual(authorization, expectedAuthorization);
+          } else {
+            assert.deepEqual(finalSource, sourceAtBoundary);
+          }
+          finalTarget = await fixture.readRun(authorization.target.runId);
+          assert.ok(finalTarget);
+          assertSeaSuccessorTargetState(
+            finalTarget,
+            authorization,
+            {
+              run: 'COMPLETED',
+              invocation: 'COMPLETED',
+              attempt: 'COMPLETED',
+              effect: 'COMPLETED',
+              events: [
+                'effect-successor-run-created',
+                'effect-successor-started',
+                'effect-successor-terminal',
+              ],
+            },
+            packagedActor,
+            `${scenario.label} completed target`,
+          );
+          await assertSeaSuccessorTargetAuthority(
+            fixture,
+            sourceBeforeRetry,
+            finalTarget,
+            authorization,
+            sourceRequest,
+            `${scenario.label} completed target`,
+          );
+          finalDestination = await fixture.readApplicationStateDestination(
+            options.appId,
+            authorization.target.destinationEffectId,
+            sourceEffectFixture.requestKey,
+          );
+          assertSeaSuccessorDestination(
+            finalDestination,
+            authorization,
+            sourceRequest,
+            options.appId,
+            true,
+          );
+          finalPayload = readPayloadStorageSnapshotForRuns(payloadPath, [
+            finalSource,
+            finalTarget,
+          ]);
+          assert.deepEqual(finalPayload.orphans, []);
+          if (preauthorizationRequestKey) {
+            assert.deepEqual(
+              finalTarget.run.requestRef,
+              expectedTargetRequestRef,
+              'restart did not reuse the pre-authorization request payload',
+            );
+            assert.ok(
+              finalPayload.reachable.includes(preauthorizationRequestKey),
+            );
+            assert.deepEqual(
+              finalPayload.files.find(
+                (file) => file.key === preauthorizationRequestKey,
+              ),
+              payloadAtBoundary.files.find(
+                (file) => file.key === preauthorizationRequestKey,
+              ),
+            );
+          }
+          assertSeaSuccessorOperatorView(
+            continuation.serialized,
+            finalSource,
+            finalTarget,
+            {
+              successorId,
+              sourceEffectId: SEA_SUCCESSOR_SOURCE_EFFECT_ID,
+              targetEffectId: authorization.target.effectId,
+              authorizationApplied: !scenario.authorizationCommitted,
+              disposition: 'completed',
+              secrets: [
+                ...commonSecrets,
+                authorization.target.destinationEffectId,
+              ],
+              label: `${scenario.label} continuation`,
+            },
+          );
+          for (const secret of commonSecrets) {
+            assert.equal(continuation.stderr.includes(secret), false);
+          }
+          finalDisposition = 'completed';
+        } else {
+          if (scenario.boundary !== 'successor-atomic-terminal-committed') {
+            const retained = await runInspectorGuardedSeaJson(
+              options.artifactPath,
+              retryArgs,
+              {
+                cwd: caseRoot,
+                env: environment,
+                installedPackageRoot: options.installedPackageRoot,
+                label: `${scenario.label} retained pre-recovery replay`,
+                forbiddenTargets: operatorForbiddenTargets,
+                expectedExitCode: 1,
+                writeBreakpointTarget:
+                  SEA_CRASH_DESTINATION_TRANSACTION_BREAKPOINT,
+              },
+            );
+            assertSeaSuccessorOperatorView(
+              retained.serialized,
+              sourceAtBoundary,
+              targetAtBoundary,
+              {
+                successorId,
+                sourceEffectId: SEA_SUCCESSOR_SOURCE_EFFECT_ID,
+                targetEffectId: authorization.target.effectId,
+                authorizationApplied: false,
+                disposition: 'in-progress',
+                secrets: [
+                  ...commonSecrets,
+                  authorization.target.destinationEffectId,
+                ],
+                label: `${scenario.label} retained replay`,
+              },
+            );
+            assert.match(retained.stderr, /already in progress/i);
+            for (const secret of commonSecrets) {
+              assert.equal(retained.stderr.includes(secret), false);
+            }
+            assert.deepEqual(
+              await fixture.readRun(batch.runId),
+              sourceAtBoundary,
+            );
+            assert.deepEqual(
+              await fixture.readRun(authorization.target.runId),
+              targetAtBoundary,
+            );
+          }
+
+          const recoveryArgs = [
+            'wharfie',
+            'recover',
+            '--run-id',
+            authorization.target.runId,
+            '--confirm-runner-stopped',
+            '--json',
+          ];
+          const recovery = await runInspectorGuardedSeaJson(
+            options.artifactPath,
+            recoveryArgs,
+            {
+              cwd: caseRoot,
+              env: environment,
+              installedPackageRoot: options.installedPackageRoot,
+              label: `${scenario.label} target recovery`,
+              forbiddenTargets: operatorForbiddenTargets,
+            },
+          );
+          const recoveredTarget = await fixture.readRun(
+            authorization.target.runId,
+          );
+          assert.ok(recoveredTarget);
+          if (scenario.boundary === 'successor-atomic-terminal-committed') {
+            assert.deepEqual(recoveredTarget, targetAtBoundary);
+            assert.deepEqual(JSON.parse(recovery.serialized), {
+              ...createExpectedSeaOperatorRunView(
+                recoveredTarget,
+                'wharfie.execution-ledger.recovery',
+              ),
+              recovery: { action: 'none', changed: false },
+            });
+            finalSource = sourceAtBoundary;
+            finalTarget = recoveredTarget;
+            finalDestination = destinationAtBoundary;
+            finalPayload = payloadAtBoundary;
+            finalDisposition = 'completed';
+          } else {
+            assertSeaSuccessorTargetState(
+              recoveredTarget,
+              authorization,
+              {
+                run: 'BLOCKED',
+                invocation: 'UNCERTAIN',
+                attempt: 'ABANDONED',
+                effect: 'UNCERTAIN',
+                events: [
+                  'effect-successor-run-created',
+                  'effect-successor-started',
+                  'effect-successor-interrupted',
+                ],
+              },
+              packagedActor,
+              `${scenario.label} recovered target`,
+            );
+            await assertSeaSuccessorTargetAuthority(
+              fixture,
+              sourceBeforeRetry,
+              recoveredTarget,
+              authorization,
+              sourceRequest,
+              `${scenario.label} recovered target`,
+            );
+            assert.deepEqual(JSON.parse(recovery.serialized), {
+              ...createExpectedSeaOperatorRunView(
+                recoveredTarget,
+                'wharfie.execution-ledger.recovery',
+              ),
+              recovery: {
+                action: 'marked-successor-uncertain',
+                changed: true,
+              },
+            });
+            assert.deepEqual(
+              readPayloadStorageSnapshotForRuns(payloadPath, [
+                sourceAtBoundary,
+                recoveredTarget,
+              ]),
+              payloadAtBoundary,
+              `${scenario.label} recovery published payloads`,
+            );
+            assert.deepEqual(
+              await fixture.readApplicationStateDestination(
+                options.appId,
+                authorization.target.destinationEffectId,
+                sourceEffectFixture.requestKey,
+              ),
+              destinationAtBoundary,
+            );
+
+            const reconciliationArgs = [
+              'wharfie',
+              'reconcile-effect',
+              '--run-id',
+              authorization.target.runId,
+              '--effect-id',
+              authorization.target.effectId,
+              '--reconciliation-id',
+              targetReconciliationId,
+              '--confirm-runner-stopped',
+              '--reason',
+              targetReason,
+              '--json',
+            ];
+            const reconciliation = await runInspectorGuardedSeaJson(
+              options.artifactPath,
+              reconciliationArgs,
+              {
+                cwd: caseRoot,
+                env: environment,
+                installedPackageRoot: options.installedPackageRoot,
+                label: `${scenario.label} target reconciliation`,
+                forbiddenTargets: operatorForbiddenTargets,
+              },
+            );
+            finalSource = await fixture.readRun(batch.runId);
+            finalTarget = await fixture.readRun(authorization.target.runId);
+            assert.ok(finalSource);
+            assert.ok(finalTarget);
+            assert.deepEqual(finalSource, sourceAtBoundary);
+            const completed = scenario.destinationApplied;
+            assertSeaSuccessorTargetState(
+              finalTarget,
+              authorization,
+              {
+                run: completed ? 'COMPLETED' : 'FAILED',
+                invocation: completed ? 'COMPLETED' : 'FAILED',
+                attempt: 'ABANDONED',
+                effect: completed ? 'COMPLETED' : 'NOT_APPLIED',
+                events: [
+                  'effect-successor-run-created',
+                  'effect-successor-started',
+                  'effect-successor-interrupted',
+                  'effect-successor-reconciled',
+                ],
+              },
+              packagedActor,
+              `${scenario.label} reconciled target`,
+            );
+            await assertSeaSuccessorTargetAuthority(
+              fixture,
+              sourceBeforeRetry,
+              finalTarget,
+              authorization,
+              sourceRequest,
+              `${scenario.label} reconciled target`,
+            );
+            assert.deepEqual(finalTarget.attempts, recoveredTarget.attempts);
+            assert.deepEqual(JSON.parse(reconciliation.serialized), {
+              ...createExpectedSeaOperatorRunView(
+                finalTarget,
+                'wharfie.execution-ledger.effect-reconciliation',
+              ),
+              effectReconciliation: {
+                reconciliationId: targetReconciliationId,
+                effectId: authorization.target.effectId,
+                status: completed ? 'COMPLETED' : 'NOT_APPLIED',
+                changed: true,
+              },
+            });
+            finalDestination = await fixture.readApplicationStateDestination(
+              options.appId,
+              authorization.target.destinationEffectId,
+              sourceEffectFixture.requestKey,
+            );
+            assertSeaSuccessorDestination(
+              finalDestination,
+              authorization,
+              sourceRequest,
+              options.appId,
+              completed ? true : 'not-applied',
+            );
+            finalPayload = readPayloadStorageSnapshotForRuns(payloadPath, [
+              finalSource,
+              finalTarget,
+            ]);
+            await assertManagedEffectReconciliationPayload(
+              fixture,
+              finalTarget.effects[0],
+              finalDestination,
+              finalPayload,
+            );
+            if (scenario.boundary === 'successor-terminal-payloads-published') {
+              assert.deepEqual(
+                finalPayload.physical,
+                payloadAtBoundary.physical,
+              );
+              assert.deepEqual(finalPayload.files, payloadAtBoundary.files);
+              assert.equal(finalPayload.orphans.length, 1);
+              const reusedOutcomeKey =
+                finalTarget.effects[0].reconciliation.evidenceRef.storage.key;
+              assert.equal(
+                finalTarget.effects[0].outcomeRef.storage.key,
+                reusedOutcomeKey,
+              );
+              assert.ok(terminalPayloadKeys.includes(reusedOutcomeKey));
+              assert.deepEqual(
+                finalPayload.orphans,
+                terminalPayloadKeys.filter((key) => key !== reusedOutcomeKey),
+              );
+            } else {
+              assert.deepEqual(finalPayload.orphans, []);
+            }
+            finalDisposition = completed ? 'completed' : 'failed';
+          }
+        }
+
+        assert.ok(authorization);
+        assert.ok(finalSource);
+        assert.ok(finalTarget);
+        assert.ok(finalDestination);
+        assert.ok(finalPayload);
+        assert.deepEqual(authorization, expectedAuthorization);
+        await assertSeaSuccessorTargetAuthority(
+          fixture,
+          sourceBeforeRetry,
+          finalTarget,
+          authorization,
+          sourceRequest,
+          `${scenario.label} final target`,
+        );
+        await assertSeaSuccessorTerminalOutcomeEvidence(
+          fixture,
+          finalTarget,
+          authorization,
+          sourceRequest,
+          finalDestination,
+          finalPayload,
+          `${scenario.label} final terminal`,
+        );
+        assert.deepEqual(
+          findSeaSuccessorAuthorization(finalSource, successorId, 1),
+          authorization,
+        );
+        const beforeFinalReplay = {
+          source: finalSource,
+          target: finalTarget,
+          destination: finalDestination,
+          payload: finalPayload,
+        };
+        const finalReplay = await runInspectorGuardedSeaJson(
+          options.artifactPath,
+          retryArgs,
+          {
+            cwd: caseRoot,
+            env: environment,
+            installedPackageRoot: options.installedPackageRoot,
+            label: `${scenario.label} terminal replay`,
+            forbiddenTargets: operatorForbiddenTargets,
+            expectedExitCode: finalDisposition === 'failed' ? 1 : 0,
+            writeBreakpointTarget: SEA_CRASH_DESTINATION_TRANSACTION_BREAKPOINT,
+          },
+        );
+        assertSeaSuccessorOperatorView(
+          finalReplay.serialized,
+          finalSource,
+          finalTarget,
+          {
+            successorId,
+            sourceEffectId: SEA_SUCCESSOR_SOURCE_EFFECT_ID,
+            targetEffectId: authorization.target.effectId,
+            authorizationApplied: false,
+            disposition: finalDisposition,
+            secrets: [
+              ...commonSecrets,
+              authorization.target.destinationEffectId,
+            ],
+            label: `${scenario.label} terminal replay`,
+          },
+        );
+        if (finalDisposition === 'failed') {
+          assert.match(finalReplay.stderr, /finished FAILED/i);
+        }
+        for (const secret of commonSecrets) {
+          assert.equal(finalReplay.stderr.includes(secret), false);
+        }
+        assert.deepEqual(
+          await fixture.readRun(batch.runId),
+          beforeFinalReplay.source,
+        );
+        assert.deepEqual(
+          await fixture.readRun(authorization.target.runId),
+          beforeFinalReplay.target,
+        );
+        assert.deepEqual(
+          await fixture.readApplicationStateDestination(
+            options.appId,
+            authorization.target.destinationEffectId,
+            sourceEffectFixture.requestKey,
+          ),
+          beforeFinalReplay.destination,
+        );
+        assert.deepEqual(
+          readPayloadStorageSnapshotForRuns(payloadPath, [
+            beforeFinalReplay.source,
+            beforeFinalReplay.target,
+          ]),
+          beforeFinalReplay.payload,
+        );
+        const finalSourceDestination =
+          await fixture.readApplicationStateDestination(
+            options.appId,
+            sourceEffectFixture.destinationEffectId,
+            sourceEffectFixture.requestKey,
+          );
+        assert.deepEqual(
+          {
+            receipt: finalSourceDestination.receipt,
+            resolution: finalSourceDestination.resolution,
+          },
+          {
+            receipt: sourceDestination.receipt,
+            resolution: sourceDestination.resolution,
+          },
+          `${scenario.label} rewrote the source effect disposition`,
+        );
+        assert.deepEqual(
+          finalSourceDestination.business,
+          finalDestination.business,
+          `${scenario.label} did not retain one shared successor business row`,
+        );
+        assert.equal(await lifecycle.readOwnership(), null);
+        assert.equal(existsSync(staleEndpoint), true);
+        assert.equal(existsSync(markerPath), false);
+      } finally {
+        inspector?.close();
+        await stopResidentServiceForCleanup(service);
+        for (const endpoint of staleEndpoints)
+          rmSync(endpoint, { force: true });
+        rmSync(caseRoot, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    rmSync(options.root, { recursive: true, force: true });
+  }
+}
+
 if (!['darwin', 'linux'].includes(process.platform)) {
   throw new Error('The real package SEA smoke test requires macOS or Linux');
 }
@@ -4878,6 +7019,22 @@ export default defineApp({
     env: cleanEnvironment,
   }).stdout;
   assert.doesNotMatch(operatorHelp, /\bretry-effect\b/);
+  const hiddenSuccessorFixtureWithoutGate = spawnSync(
+    cleanArtifactPath,
+    ['wharfie', '__sea-successor-fixture'],
+    {
+      cwd: cleanRunDirectory,
+      encoding: 'utf8',
+      env: cleanEnvironment,
+      maxBuffer: 20 * 1024 * 1024,
+    },
+  );
+  if (hiddenSuccessorFixtureWithoutGate.error) {
+    throw hiddenSuccessorFixtureWithoutGate.error;
+  }
+  assert.equal(hiddenSuccessorFixtureWithoutGate.signal, null);
+  assert.equal(hiddenSuccessorFixtureWithoutGate.status, 1);
+  assert.match(hiddenSuccessorFixtureWithoutGate.stderr, /unknown command/i);
   const generatedResult = JSON.parse(
     runCommand(cleanArtifactPath, ['greet', 'packaged-user'], {
       cwd: cleanRunDirectory,
@@ -5257,6 +7414,14 @@ export default defineApp({
     installedPackageRoot,
     revisionId: packagedArtifact.revisionId,
     root: path.join(cleanRunDirectory, 'effect-reconciliation-crash-matrix'),
+  });
+  await verifyRelocatedSeaManagedEffectSuccessorCrashMatrix({
+    artifactPath: cleanArtifactPath,
+    appId: embeddedManifest.app.id,
+    cleanEnvironment,
+    installedPackageRoot,
+    revisionId: packagedArtifact.revisionId,
+    root: path.join(cleanRunDirectory, 'managed-effect-successor-crash-matrix'),
   });
 
   /** @type {ReturnType<typeof spawnResidentService> | undefined} */
@@ -6095,7 +8260,7 @@ export default defineApp({
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary private-fixture relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with orphan payload reuse, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();

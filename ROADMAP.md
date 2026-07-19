@@ -1,6 +1,6 @@
 # Wharfie roadmap
 
-**Status:** project reset in progress · **Last updated:** 2026-07-18
+**Status:** project reset in progress · **Last updated:** 2026-07-19
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -125,7 +125,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       queue-run bridge, and second writable run model. Manual durable execution
       established the distinction between a caller idempotency key and the
       derived manual-run identity while writing only the then-current
-      append-only V7 ledger. The current V8 authority retains that single
+      append-only V7 ledger. The current V9 authority retains that single
       append-only model in its fresh namespace.
 - [x] Delete the disconnected pre-reset NodeAgent, state-command, systemd
       release, and private DB/queue/Lambda gRPC runtime island. Packaged apps
@@ -218,12 +218,35 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       and ledger-response `SIGKILL` boundaries replay exactly, reuse the
       content-addressed orphan, recover the LMDB owner, and never dispatch the
       authored app/CLI/activity or normal adapter.
-- [ ] Define and implement append-only, causally linked successor retry and
-      forward-compensation policy/work for substantiated `pure`, `idempotent`,
-      and `transactional` operations. Every successor receives fresh work,
-      effect, and destination identities; begun in-process handlers remain
-      `unsafe` by default, and no generic inverse or `COMPENSATED` rewrite is
-      inferred for the original effect.
+- [x] Define the V9 causally linked successor contract in ADR 0018: source
+      authorization, framework-owned effect-only target creation, one
+      stable application-scoped caller-supplied successor ID, and one causal retry slot
+      commit atomically while the source attempt and effect remain unchanged.
+- [x] Validate the internal hidden-fixture V9 successor matrix. The
+      implementation accepts
+      only an exact application-state V2 `put-if-absent` request after verified
+      `NOT_APPLIED`, gives the target fresh run, invocation, effect,
+      destination, attempt, and fence identities, and never loads or reruns the
+      authored source handler. Its dedicated atomic start creates the sole
+      attempt and effect together; generic claim, attempt, effect, terminal, and
+      cancellation transitions reject the target. The Node-absent relocated-SEA
+      matrix covers authorization, target-request payload, atomic start,
+      destination commit, terminal-payload, and atomic-terminal SIGKILL/replay
+      boundaries through a hidden test fixture using the real packaged command
+      body, with no authored app, activity, or adapter dispatch. Exact final
+      commands and exits are recorded in the draft V9 checkpoint; its immutable
+      commit receipt remains pending.
+- [ ] Deliberately review and mount the proposed exact source
+      `wharfie ops retry-effect` and packaged `<app> wharfie retry-effect`
+      surface, then add public source/package command parity and response-loss
+      tests. Until that review, leave both normal CLI parents unmounted and do
+      not treat the private SEA fixture as public support.
+- [ ] Decide the authority model for explicit, versioned forward-compensation
+      plans—predeclared in an application revision only, or strict finite plans
+      submitted after an incident by a trusted operator/LLM—before implementing
+      or exposing compensation. Do not infer authority from replay-property
+      labels, invent a generic inverse, delete application state, or rewrite the
+      source effect as `COMPENSATED`.
 - [ ] Provide transactional inbox/outbox behavior for Wharfie-managed state and queues, with destination-side deduplication committed atomically with consumer mutations where exactly-once processing is claimed.
 - [ ] Support manual, cron, and workflow-triggered runs through one execution path.
 - [ ] Install/uninstall the artifact as an OS-managed resident service, initially systemd, with startup on boot, health reporting, graceful shutdown/restart, and reboot recovery.
@@ -233,7 +256,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       command `<app> wharfie run` binds only its embedded manifest/revision/
       runtime identity and proved parity through the then-current V7 ledger,
       ownership, cancellation, application-state, managed-effect, and
-      framed-worker path. The current source and packaged commands share the V8
+      framed-worker path. The current source and packaged commands share the V9
       authority. A moved SEA with Node absent from `PATH` completed one managed
       effect, proved worker/user continuation after delivery, and replayed the
       exact key without changing its run, effect, or permanent receipt.
@@ -296,11 +319,11 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 ## Immediate queue
 
-1. Define and implement append-only, causally linked successor retry and
-   forward-compensation policy/work from verified reconciliations. Give every
-   successor fresh work, effect, and destination identities, never reopen V8
-   history or silently redispatch an abandoned attempt, and do not infer a
-   generic inverse.
+1. Review whether to mount the V9 application-state V2 successor command now
+   that its internal process/relocated-SEA crash proof passes. If mounted, add
+   public source/package parity and response-loss tests; otherwise retain the
+   internal gate. Do not rerun the authored source handler or claim generic
+   compensation.
 2. Add durable workflow continuations, scheduling decisions, outputs, and a
    truly persistent resident worker so a local CLI can remain useful after the
    authoring session ends. Keep coordinator leases and mesh placement later.
@@ -308,4 +331,4 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
    `@typescript-eslint/parser` dependency, make draft PR #125 green in GitHub
    Actions, and review the reset stack for merge.
 
-ADR [0017](docs/architecture/decisions/0017-destination-finalized-effect-reconciliation.md) is the current authority for V8 destination-finalized uncertain-effect reconciliation. The current dated handoff is [llm/checkpoints/2026-07-18-v8-destination-effect-reconciliation.md](llm/checkpoints/2026-07-18-v8-destination-effect-reconciliation.md). Its parent [relocated-SEA mixed-settlement SIGKILL checkpoint](llm/checkpoints/2026-07-18-relocated-sea-mixed-settlement-sigkill-matrix.md) records the complete V7 packaged settlement crash surface; the [relocated-SEA managed-effect SIGKILL checkpoint](llm/checkpoints/2026-07-18-relocated-sea-managed-effect-sigkill-matrix.md) records the preceding eight packaged single-effect boundaries; the [shared packaged durable-run host checkpoint](llm/checkpoints/2026-07-18-shared-packaged-durable-run-host.md) records packaged activity origination; the [real-process managed-effect crash checkpoint](llm/checkpoints/2026-07-18-real-process-managed-effect-crash-matrix.md) records the source/core and compound-settlement crash matrices before packaged parity; the [V7 atomic effect-settlement checkpoint](llm/checkpoints/2026-07-18-v7-atomic-effect-settlement.md) records the historical compound-settlement state machine before real process-crash coverage; the [public application-state and receipt-recovery checkpoint](llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md) records the finite public effect and first singular recovery boundary; the [V5 managed-effect foundation checkpoint](llm/checkpoints/2026-07-18-v5-managed-effect-foundation.md), [evidence-backed reconciliation checkpoint](llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md), [authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md), [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md), [shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md), [resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md), [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.
+ADR [0018](docs/architecture/decisions/0018-causally-linked-managed-effect-successors.md) is the proposed authority for V9 causally linked managed-effect successor work. The in-progress restart point is the explicitly draft [V9 managed-effect successor checkpoint](llm/checkpoints/2026-07-19-v9-managed-effect-successors.md); its validation and publication receipts remain pending. The last completed handoff is [V8 destination-finalized effect reconciliation](llm/checkpoints/2026-07-18-v8-destination-effect-reconciliation.md). Its parent [relocated-SEA mixed-settlement SIGKILL checkpoint](llm/checkpoints/2026-07-18-relocated-sea-mixed-settlement-sigkill-matrix.md) records the complete V7 packaged settlement crash surface; the [relocated-SEA managed-effect SIGKILL checkpoint](llm/checkpoints/2026-07-18-relocated-sea-managed-effect-sigkill-matrix.md) records the preceding eight packaged single-effect boundaries; the [shared packaged durable-run host checkpoint](llm/checkpoints/2026-07-18-shared-packaged-durable-run-host.md) records packaged activity origination; the [real-process managed-effect crash checkpoint](llm/checkpoints/2026-07-18-real-process-managed-effect-crash-matrix.md) records the source/core and compound-settlement crash matrices before packaged parity; the [V7 atomic effect-settlement checkpoint](llm/checkpoints/2026-07-18-v7-atomic-effect-settlement.md) records the historical compound-settlement state machine before real process-crash coverage; the [public application-state and receipt-recovery checkpoint](llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md) records the finite public effect and first singular recovery boundary; the [V5 managed-effect foundation checkpoint](llm/checkpoints/2026-07-18-v5-managed-effect-foundation.md), [evidence-backed reconciliation checkpoint](llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md), [authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md), [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md), [shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md), [resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md), [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.

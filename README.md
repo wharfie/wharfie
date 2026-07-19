@@ -34,7 +34,7 @@ consuming public commands.
 Local and single-node use should require no external Wharfie control plane. The initial automatic coordinator-failover design does depend on a linearizable durable store.
 
 The abandoned v1 source and dependency graph have been deleted. The strict v2
-manifest and the append-only V8 manual run → invocation → attempt → effect
+manifest and the append-only V9 manual run → invocation → attempt → effect
 ledger are now defined; the superseded mutable Operation/Action snapshot store
 is gone. Its redacted per-service history directory is transactionally bound to
 each run transition, while revision-backed source and SEA activities consume
@@ -60,10 +60,11 @@ ledger race, while ambiguous post-cancellation termination becomes blocked
 evidence-backed reconciliation event: a complete bounded Activity Protocol
 transcript proves one retained abandoned attempt's terminal outcome, while the
 physical attempt itself stays `ABANDONED`. The local command transport is not
-yet supported on Windows. V8 connects verifier-backed managed effects through
-the framed source/SEA worker boundary and exposes one finite public operation:
-`application-state` / `put-if-absent`. Its LMDB destination atomically commits
-the business value with a permanent effect receipt. Confirmed source/SEA
+yet supported on Windows. V9 carries forward verifier-backed managed effects
+through the framed source/SEA worker boundary and exposes one finite public
+operation: `application-state` / `put-if-absent`. Its LMDB destination
+atomically commits the business value with a permanent effect receipt.
+Confirmed source/SEA
 recovery now settles the complete active-effect set—at most 16 unresolved
 effects—for one stopped attempt under the held LMDB owner. A retained `PENDING`
 request becomes `CANCELLED` without opening application state; every `STARTED`
@@ -73,24 +74,39 @@ applies all sibling dispositions and blocks the arbitrary stopped activity
 attempt. Unsupported, missing, or corrupt destination evidence leaves the whole
 set unchanged. Recovery never reruns application or adapter code. Destination-
 finalized reconciliation can now resolve one retained `UNCERTAIN` built-in
-effect without resolving the abandoned activity; automatic retry, successor
-work, compensation, and any wider exactly-once claim remain unfinished. Real
-child processes now exercise seven source/core durable-run `SIGKILL` boundaries
-and three mixed-set recovery boundaries. A relocated SEA with Node absent from
-`PATH` proves the complete eight-boundary managed-effect matrix, three-boundary
-mixed-settlement matrix, and four-disposition effect-reconciliation matrix,
-including exact orphan-payload reuse and LMDB owner recovery. Those paths never
-dispatch authored app/CLI/activity code or the normal adapter. Public run
-history/listing, scheduling, and release hardening still need focused review.
-The npm package remains deliberately private. It is not ready for production
-use.
+effect without resolving the abandoned activity. A narrow successor policy is
+implemented internally and remains gated pending final public-surface review: it may
+authorize one fresh application-state V2 `put-if-absent` target only after the
+exact source effect is permanently `NOT_APPLIED`. Its dedicated effect-only
+lifecycle starts fresh target identities.
+
+Internally, it never redispatches the abandoned authored activity. The source
+stays `BLOCKED` / `UNCERTAIN`.
+
+The internal hidden-fixture relocated-SEA crash/recovery matrix passes in this
+V9 worktree. It is not a public support claim; public command mounts and
+source/package parity proof remain pending.
+
+For now, no public successor operation is available pending final surface
+review. Generic handler retries, compensation, persistent scheduling, and
+wider exactly-once claims remain unfinished. Earlier V8 real-child coverage
+exercises
+seven source/core durable-run `SIGKILL` boundaries and three mixed-set recovery
+boundaries. A relocated SEA with Node absent from `PATH` proves the complete
+eight-boundary managed-effect matrix, three-boundary mixed-settlement matrix,
+and four-disposition effect-reconciliation matrix, including exact orphan-
+payload reuse and LMDB owner recovery. Those paths never dispatch authored
+app/CLI/activity code or the normal adapter. Public run history/listing,
+scheduling, and release hardening still need focused review. The npm package
+remains deliberately private. It is not ready for production use.
 
 ## Start here
 
 - [Project charter](PROJECT.md) — the canonical problem, scope, public concepts, boundaries, and success test.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [V8 destination-effect reconciliation checkpoint](llm/checkpoints/2026-07-18-v8-destination-effect-reconciliation.md) — the current restart point after destination-finalized uncertain-effect reconciliation and its relocated-SEA crash matrix.
+- [V9 managed-effect successor checkpoint](llm/checkpoints/2026-07-19-v9-managed-effect-successors.md) — the current draft restart point for the first causally linked fresh-identity retry policy, its recorded internal relocated-SEA proof, and pending public-surface review.
+- [V8 destination-effect reconciliation checkpoint](llm/checkpoints/2026-07-18-v8-destination-effect-reconciliation.md) — the preceding restart point after destination-finalized uncertain-effect reconciliation and its relocated-SEA crash matrix.
 - [Relocated-SEA mixed-settlement checkpoint](llm/checkpoints/2026-07-18-relocated-sea-mixed-settlement-sigkill-matrix.md) — the preceding restart point after proving packaged stopped-attempt settlement across mixed sibling dispositions.
 - [Relocated-SEA managed-effect checkpoint](llm/checkpoints/2026-07-18-relocated-sea-managed-effect-sigkill-matrix.md) — the preceding restart point after repeating managed-effect crash recovery through the moved SEA.
 - [Shared packaged durable-run checkpoint](llm/checkpoints/2026-07-18-shared-packaged-durable-run-host.md) — the historical point that unified source and packaged foreground durable execution and proved a moved-SEA managed effect with exact replay.
@@ -189,6 +205,24 @@ loads application source, redispatches the effect, or unblocks the enclosing
 stable reconciliation/effect identities, resulting effect status, replay
 state, and safe lifecycle view, but not request values, destination/store
 details, receipts, finalizations, evidence, private reason text, or fences.
+
+## Managed-effect successor proof gate
+
+The internal successor policy accepts only an exact retained application-state
+V2 effect after a verified permanent `NOT_APPLIED` decision. It creates fresh
+run, invocation, attempt, effect, destination, and fence identities through a
+dedicated effect-only lifecycle.
+
+Internally, it never redispatches the abandoned authored activity. The source
+remains `BLOCKED` / `UNCERTAIN` even when the target completes.
+
+The internal hidden-fixture relocated-SEA crash/recovery matrix passes in this
+V9 worktree, including redaction and response-loss replay. It is not a public
+support claim; public command mounts and source/package parity proof remain
+pending.
+
+For now, no public successor operation is available pending final surface
+review. This is not generic handler retry or compensation.
 
 ## Current external dependency boundary
 

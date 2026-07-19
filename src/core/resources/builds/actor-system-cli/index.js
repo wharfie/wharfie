@@ -27,6 +27,7 @@ export function createProgram(options = {}) {
     recoverCommand,
     reconcileCommand,
     reconcileEffectCommand,
+    retryEffectCommand,
     cancelCommand,
   } = createExecutionLedgerOperatorCommands({
     resolveExpectedIdentity,
@@ -47,7 +48,7 @@ export function createProgram(options = {}) {
       : { processRef: options.processRef }),
   });
 
-  return new Command()
+  const program = new Command()
     .name('wharfie')
     .description('Wharfie operator commands for this packaged application')
     .addCommand(manifestCommand)
@@ -58,6 +59,18 @@ export function createProgram(options = {}) {
     .addCommand(reconcileCommand)
     .addCommand(reconcileEffectCommand)
     .addCommand(cancelCommand);
+
+  // The relocated-SEA verifier needs to reach the internal successor seam
+  // without claiming a supported public command. This private, hidden alias is
+  // absent unless the verifier explicitly opts in, and keeps its real command
+  // parsing/redaction/identity behavior rather than duplicating it in an app.
+  if (process.env.WHARFIE_TEST_SEA_SUCCESSOR_FIXTURE === '1') {
+    program.addCommand(retryEffectCommand.name('__sea-successor-fixture'), {
+      hidden: true,
+    });
+  }
+
+  return program;
 }
 
 /**

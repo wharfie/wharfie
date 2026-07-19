@@ -184,8 +184,8 @@ its reserved operator namespace:
 ```
 
 Packaged inspection, recovery, reconciliation, effect reconciliation, and
-cancellation are scoped to the immutable app identity embedded in the
-artifact. They can operate an older revision of that same app, but reject
+cancellation are scoped to the immutable app identity embedded in
+the artifact. They can operate an older revision of that same app, but reject
 another app's run ID before output or mutation. With `--json`, the source and
 packaged forms of `inspect` emit the same schema-v5 redacted run view, including
 effect identity/status/adapter-lifecycle rows but not requests, destinations,
@@ -194,9 +194,9 @@ plus recovery action `settled-managed-effect-set` and one sorted
 `managedEffects` result for the atomically settled active set; `reconcile`
 wraps the view with its stable reconciliation ID and whether it was newly
 applied. `cancel` instead emits a redacted schema-v1 cancellation result
-containing the request ID, outcome, delivery state, and safe lifecycle
-statuses. Without `--json`, these commands use the compact human-oriented table
-and message format shown above.
+containing the request ID, outcome, delivery state, and safe lifecycle statuses.
+Without `--json`, these commands use the compact human-oriented table and
+message format shown above.
 
 `reconcile-effect` is distinct from transcript-backed `reconcile`. It requires
 the exact `--run-id`, `--effect-id`, a stable `--reconciliation-id`, and
@@ -218,14 +218,33 @@ resulting status, and `changed` flag; requests, values, destinations, store
 identity, receipts, finalizations, evidence, private reason text, and fencing
 material remain hidden.
 
+The causally linked successor implementation remains internal pending final
+public-surface review. It accepts only an exact retained application-state V2
+effect after a verified permanent `NOT_APPLIED` decision, creates fresh run,
+invocation, attempt, effect, destination, and fence identities, and uses a
+dedicated effect-only lifecycle.
+
+Internally, it never redispatches the abandoned authored activity. The source
+remains `BLOCKED` / `UNCERTAIN` even when the target completes.
+
+The internal hidden-fixture relocated-SEA crash/recovery matrix passes in this
+V9 worktree. It is not a public support claim; public command mounts and
+source/package parity proof remain pending.
+
+For now, no public successor operation is available pending final surface
+review. The eventual finite destination policy is not generic handler retry or
+compensation.
+
 Inspection opens existing control state read-only and never creates missing
 state. Recovery is deliberately explicit: use it only after confirming every
-prior runner is gone. It can release a claim that never started; a begun
-attempt becomes visibly blocked as `UNCERTAIN` instead of replaying code. V8
-recovers the complete active-effect set, bounded to 16 unresolved effects, for
-that exact attempt under the held local owner. Every `PENDING` request becomes
-`CANCELLED` without a destination probe because its durable start authorization
-never committed.
+prior runner is gone. For an ordinary manual run, it can release a generic
+claim that never started; a begun attempt becomes visibly blocked as
+`UNCERTAIN` instead of replaying code. The successor lifecycle instead uses the
+dedicated behavior above and has no generic claim. V9 retains V8's recovery of
+the complete active-effect set, bounded to 16 unresolved effects, for an
+ordinary stopped attempt under the held local owner. Every `PENDING` request
+becomes `CANCELLED` without a destination probe because its durable start
+authorization never committed.
 
 When any sibling is `STARTED`, recovery also opens application state read-only
 and probes each exact destination receipt before changing the control ledger.
@@ -252,8 +271,8 @@ never rewritten, and the transcript, result, reason, and fence are never echoed
 in the operator response. A `cancelled` result still requires the matching
 earlier durable cancellation request and host cancellation frame.
 
-The V8 ledger supports cancellation by the foreground active owner. During
-`wharfie ops run`, the first `SIGINT` or `SIGTERM` becomes a durable request
+The V9 ledger carries forward cancellation by the foreground active owner.
+During `wharfie ops run`, the first `SIGINT` or `SIGTERM` becomes a durable request
 before the owner signals the physical attempt. While an LMDB-backed `ops run`
 owns the exact `STARTED` attempt, source `wharfie ops cancel` or packaged
 `<app> wharfie cancel` can reach that owner through a bounded, authenticated
@@ -272,7 +291,7 @@ cancellation evidence can commit `CANCELLED`; a verified completion or failure
 may still win, while unconfirmed post-cancellation termination becomes blocked
 `UNCERTAIN` work; later reconciliation needs evidence rather than another
 cancel request. There is still no public run-history/list: the verified bounded
-V6 run directory paired with the V8 ledger is internal rather than the retired
+V7 run directory paired with the V9 ledger is internal rather than the retired
 `ops list` surface. The resident service currently owns only local lifecycle
 and exclusion state; it does not schedule, claim, or execute work. The bounded
 recovery and reconciliation paths have real subprocess and relocated-SEA crash

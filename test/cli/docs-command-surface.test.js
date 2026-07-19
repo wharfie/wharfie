@@ -94,6 +94,11 @@ describe('docs command surface', () => {
         entry.startsWith('!'),
       ),
     ).toBe(false);
+    expect(Object.keys(packageJson.exports).sort()).toEqual([
+      '.',
+      './app',
+      './package.json',
+    ]);
   });
 
   it('documents working onboarding commands in the quickstart', async () => {
@@ -159,7 +164,7 @@ describe('docs command surface', () => {
     }
   });
 
-  it('keeps managed-effect successor work internal pending relocated-SEA proof', async () => {
+  it('keeps managed-effect successor work internal pending public-surface review', async () => {
     const documents = await Promise.all(
       ['README.md', 'docs/src/assets/markdown/quickstart.md'].map(
         (relativePath) =>
@@ -169,7 +174,14 @@ describe('docs command surface', () => {
 
     for (const document of documents) {
       expect(document).not.toContain('retry-effect');
-      expect(document).toMatch(/relocated-SEA crash and\s+recovery proof/);
+      expect(document).toContain(
+        'internal hidden-fixture relocated-SEA crash/recovery matrix',
+      );
+      expect(document).toContain('passes in this\nV9 worktree');
+      expect(document).toContain('not a public support claim');
+      expect(document).toContain(
+        'public command mounts and\nsource/package parity proof remain pending',
+      );
       expect(document).toContain('dedicated effect-only lifecycle');
       expect(document).toMatch(
         /never redispatches the\s+abandoned authored activity/,

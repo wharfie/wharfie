@@ -814,8 +814,12 @@ describe('managed-effect successor dedicated lifecycle', () => {
     releaseAdapter();
 
     const results = await Promise.all(executions);
-    expect(results.filter((result) => result.outcome.reused === false)).toHaveLength(1);
-    expect(results.filter((result) => result.outcome.reused === true)).toHaveLength(1);
+    expect(
+      results.filter((result) => result.outcome.reused === false),
+    ).toHaveLength(1);
+    expect(
+      results.filter((result) => result.outcome.reused === true),
+    ).toHaveLength(1);
     expect(adapterCalls).toBe(1);
     const target = await harness.ledger.rebuildRun(
       handoff.authorization.target.runId,

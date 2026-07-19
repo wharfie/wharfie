@@ -16,6 +16,7 @@ function clearRuntimeEnvironment() {
   delete process.env.WHARFIE_BOOTSTRAP_ARGS;
   delete process.env.WHARFIE_RUNTIME_COMMAND;
   delete process.env.WHARFIE_RUNTIME_ARGS;
+  delete process.env.WHARFIE_TEST_SEA_SUCCESSOR_FIXTURE;
 }
 
 afterEach(() => {
@@ -77,6 +78,43 @@ describe('packaged application dispatch', () => {
     expect(help).not.toMatch(/\bfunc\b/);
     expect(help).not.toMatch(/\binfra\b/);
     expect(help).not.toMatch(/\bctl\b/);
+  });
+
+  it('keeps successor commands unmounted until their SEA proof gates pass', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    for (const commandName of ['retry-effect', '__sea-successor-fixture']) {
+      /** @type {string[]} */
+      const errors = [];
+      const program = createProgram();
+      /** @param {string} message */
+      const writeErr = (message) => errors.push(message);
+      program.configureOutput({
+        writeErr,
+      });
+      program.exitOverride();
+
+      await expect(
+        program.parseAsync(['node', 'wharfie-artifact', commandName], {
+          from: 'node',
+        }),
+      ).rejects.toMatchObject({ code: 'commander.unknownCommand' });
+      expect(errors.join('')).toMatch(/unknown command/i);
+    }
+  });
+
+  it('enables only a hidden SEA fixture alias when the verifier opts in', async () => {
+    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
+    process.env.WHARFIE_TEST_SEA_SUCCESSOR_FIXTURE = '1';
+
+    const program = createProgram();
+    expect(
+      program.commands.map(
+        /** @param {import('commander').Command} command */
+        (command) => command.name(),
+      ),
+    ).toContain('__sea-successor-fixture');
+    expect(program.helpInformation()).not.toContain('__sea-successor-fixture');
+    expect(program.helpInformation()).not.toContain('retry-effect');
   });
 
   it('honors the private ledger-service runtime command and arguments', async () => {
