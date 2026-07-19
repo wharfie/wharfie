@@ -16,6 +16,7 @@ import {
   getInvocationProjectionSortKey,
   getTransitionSortKey,
 } from '../../src/core/lib/ledger/record-key.js';
+import { createManagedEffectDestinationId } from '../../src/core/lib/ledger/execution-ledger-contract.js';
 import { createLocalExecutionPayloadStore } from '../../src/core/lib/payload-store/local.js';
 import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
 import {
@@ -587,6 +588,104 @@ describe('managed-effect successor dedicated lifecycle', () => {
     );
   });
 
+  test('rejects every pinned catalog drift before creating an attempt or effect', async () => {
+    const harness = await createHarness('catalog-drift');
+    const source = await seedNotAppliedSource(harness, 'catalog-drift');
+    const handoff = await authorizeSuccessor(
+      harness,
+      source.runId,
+      SOURCE_EFFECT_ID,
+      'catalog-drift-successor',
+    );
+    const before = await harness.ledger.rebuildRun(
+      handoff.authorization.target.runId,
+    );
+    if (!before) throw new Error('Catalog-drift successor target disappeared.');
+    const baseAdapter = harness.catalog.resolve(
+      effectRequest(
+        'catalog-drift-preflight',
+        handoff.authorization.target.effectId,
+      ),
+    );
+    const changedDestination = {
+      ...baseAdapter.destination,
+      bindingId: 'drifted-binding',
+    };
+    const cases = [
+      {
+        label: 'adapter descriptor',
+        catalog: {
+          ...harness.catalog,
+          resolve: () =>
+            Object.freeze({
+              ...baseAdapter,
+              descriptor: { ...baseAdapter.descriptor, version: 99 },
+            }),
+        },
+      },
+      {
+        label: 'adapter destination',
+        catalog: {
+          ...harness.catalog,
+          resolve: () =>
+            Object.freeze({ ...baseAdapter, destination: changedDestination }),
+        },
+      },
+      {
+        label: 'adapter verifier',
+        catalog: {
+          ...harness.catalog,
+          resolve: () =>
+            Object.freeze({
+              ...baseAdapter,
+              verifier: { ...baseAdapter.verifier, version: 99 },
+            }),
+        },
+      },
+      {
+        label: 'substantiated replay properties',
+        catalog: {
+          ...harness.catalog,
+          resolve: () =>
+            Object.freeze({
+              ...baseAdapter,
+              substantiatedReplayProperties: [],
+            }),
+        },
+      },
+      {
+        label: 'catalog destination',
+        catalog: {
+          ...harness.catalog,
+          destination: changedDestination,
+          resolve: () => baseAdapter,
+        },
+      },
+    ];
+
+    for (const drift of cases) {
+      await expect(
+        executeManagedEffectSuccessorRun({
+          ledger: harness.ledger,
+          authorization: handoff.authorization,
+          request: handoff.request,
+          catalog: drift.catalog,
+          actor: ACTOR,
+          createFencingToken: () => `catalog-drift-${drift.label}`,
+        }),
+      ).rejects.toThrow(/catalog does not match the successor authorization/);
+      expect(
+        await harness.ledger.rebuildRun(handoff.authorization.target.runId),
+      ).toEqual(before);
+    }
+    expect(before).toMatchObject({
+      run: { status: 'RUNNING' },
+      invocations: [expect.objectContaining({ status: 'RUNNABLE' })],
+      attempts: [],
+      effects: [],
+    });
+  });
+
   test('target-only runtime dispatches exactly once and never re-enters generic lifecycle events', async () => {
     const harness = await createHarness('runtime');
     const source = await seedNotAppliedSource(harness, 'runtime');
@@ -737,6 +836,79 @@ describe('managed-effect successor dedicated lifecycle', () => {
       'effect-successor-started',
       'effect-successor-terminal',
     ]);
+  });
+
+  test('retains a fresh already-present receipt as a completed successor outcome', async () => {
+    const harness = await createHarness('already-present');
+    const priorRequest = effectRequest(
+      'already-present-prior-attempt',
+      'already-present-prior-effect',
+    );
+    const priorAdapter = harness.catalog.resolve(priorRequest);
+    const priorIdentity = {
+      runId: 'already-present-prior-run',
+      invocationId: 'already-present-prior-invocation',
+      attemptId: 'already-present-prior-attempt',
+      effectId: 'already-present-prior-effect',
+    };
+    const priorOutcome = await priorAdapter.execute({
+      destinationEffectId: createManagedEffectDestinationId({
+        appId: APP_ID,
+        runId: priorIdentity.runId,
+        invocationId: priorIdentity.invocationId,
+        effectId: priorIdentity.effectId,
+      }),
+      destination: priorAdapter.destination,
+      identity: priorIdentity,
+      request: priorRequest,
+    });
+    expect(priorOutcome).toMatchObject({ result: { inserted: true } });
+
+    const source = await seedNotAppliedSource(harness, 'already-present');
+    const sourceBefore = await harness.ledger.rebuildRun(source.runId);
+    if (!sourceBefore) throw new Error('Already-present source disappeared.');
+    const handoff = await authorizeSuccessor(
+      harness,
+      source.runId,
+      SOURCE_EFFECT_ID,
+      'already-present-successor',
+    );
+    const executed = await executeManagedEffectSuccessorRun({
+      ledger: harness.ledger,
+      authorization: handoff.authorization,
+      request: handoff.request,
+      catalog: harness.catalog,
+      actor: ACTOR,
+      createFencingToken: () => 'already-present-successor-fence',
+    });
+    expect(executed.outcome).toMatchObject({
+      disposition: 'completed',
+      reused: false,
+      effect: { status: 'COMPLETED' },
+    });
+    const delivery = await harness.ledger.readManagedEffectDelivery(
+      handoff.authorization.target.runId,
+      handoff.authorization.target.invocationId,
+      handoff.authorization.target.effectId,
+    );
+    expect(delivery).toMatchObject({
+      outcome: { ok: true, result: { inserted: false } },
+      resultFrame: { type: 'effect-result', result: { inserted: false } },
+    });
+    await expect(
+      harness.catalog.readReceipt(
+        handoff.authorization.target.destinationEffectId,
+      ),
+    ).resolves.toMatchObject({ inserted: false });
+
+    const sourceAfter = await harness.ledger.rebuildRun(source.runId);
+    if (!sourceAfter) throw new Error('Already-present source disappeared.');
+    expect(sourceAfter.attempts).toEqual(sourceBefore.attempts);
+    expect(sourceAfter.effects).toEqual(sourceBefore.effects);
+    expect(sourceAfter.events).toHaveLength(sourceBefore.events.length + 1);
+    expect(sourceAfter.events.at(-1)).toMatchObject({
+      type: 'effect-successor-authorized',
+    });
   });
 
   test('turns an adapter failure after atomic start into one reconciled uncertain successor without redispatch', async () => {
