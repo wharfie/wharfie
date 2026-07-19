@@ -15,7 +15,11 @@ The user authorized the current session to commit, push, and work through this c
 - `agent/strict-manifest` was published through cleanup commit `25d40d4` in umbrella draft PR [#125](https://github.com/wharfie/wharfie/pull/125).
 - The reset and inventory staging tips were preserved under verified annotated `archive/2026-07-17/staging/...` tags. PRs #123 and #124 were then closed as superseded and both staging branches were deleted.
 - PRs #100, #99, and #25 were closed with exact archive and supersession notes. PR #125 is the only open pull request.
-- Four roadmap milestones were created. Replacement issues #126–#132 were created first; all 24 legacy issues were then closed with duplicate or not-planned reasons and preservation context. The seven replacements are the only open issues.
+- Four roadmap milestones were created. Replacement issues #126–#132 were
+  created first; all 24 legacy issues were then closed with duplicate or
+  not-planned reasons and preservation context. Those seven replacements were
+  the only open issues at the end of the initial cleanup. The 2026-07-19
+  post-V9 audit subsequently added #133–#137 for uncovered roadmap work.
 - Every superseded branch was compared with its peeled archive target immediately before deletion. The only live remote head names are `master` and `agent/strict-manifest`; cleanup commit `25d40d4` is on the active branch.
 - On 2026-07-18, the local refs `agent/packaging-salvage`, `agent/project-reset`, and `agent/v1-deletion` were removed after confirming they were merged into `agent/strict-manifest`. The exact tips of `agent/cleanup-inventory`, `jvd/examples`, `jvd/pr4`, and the local `master` were separately confirmed against annotated archive tags before their local refs were removed. A later audit found all seven remaining local `jvd/*` refs superseded or absorbed; each exact tip is now preserved under `archive/2026-07-18/local/jvd/*` before its local branch name was removed.
 - The local-only unpublished-master and stash tags remain local and were not pushed.
@@ -283,7 +287,7 @@ closure remain roadmap work rather than cleanup actions.
 
 The preservation and tracker/branch cleanup expectations are now observed:
 archive targets were verified before deletion, the local-only refs remain
-unpublished, only #125 is open among pull requests, only #126–#132 are open
-among issues, and only `master` plus `agent/strict-manifest` remain as remote
-heads. The remaining validation and release work is tracked by `ROADMAP.md` and
-PR #125.
+unpublished, only #125 is open among pull requests, issues #126–#137 are the
+open implementation tracker, and only `master` plus `agent/strict-manifest`
+remain as remote heads. The remaining validation and release work is tracked
+by `ROADMAP.md` and PR #125.
