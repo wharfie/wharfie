@@ -21,5 +21,6 @@ These records capture product-level decisions that should survive implementation
 | [0015 — Destination-bound managed effects and finite host catalogs](0015-destination-bound-managed-effects.md)             | Accepted; V6 foundation superseded by 0016   |
 | [0016 — Atomic stopped-attempt managed-effect settlement](0016-atomic-stopped-attempt-effect-settlement.md)                | Accepted; V7 namespace superseded by 0017    |
 | [0017 — Destination-finalized uncertain-effect reconciliation](0017-destination-finalized-effect-reconciliation.md)        | Accepted; V8 reconciliation boundary         |
+| [0018 — Causally linked managed-effect successor work](0018-causally-linked-managed-effect-successors.md)                  | Proposed; executor/compensation review       |
 
 The canonical product scope is [PROJECT.md](../../../PROJECT.md). The delivery order is [ROADMAP.md](../../../ROADMAP.md).
