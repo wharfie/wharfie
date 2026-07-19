@@ -357,9 +357,13 @@ manual activities serially, but it does not run workflow continuations or
 schedules. The bounded recovery and reconciliation paths have prior real
 subprocess and relocated-SEA crash coverage across request, start, destination
 commit, payload publication, ledger settlement, and response-delivery
-boundaries. The new resident dispatch and shutdown surface still needs its full
-adversarial and moved-SEA validation receipt before it can support a production
-claim.
+boundaries. The resident dispatch and shutdown surface now has a complete
+source, package, and moved-SEA validation receipt, including exact-revision
+dispatch, graceful drain tests, current-revision managed-effect recovery, and
+service crash/restart with Node unavailable on `PATH`. It remains a
+single-process activity worker rather than a production workflow service: the
+ready-work index, workflow continuations, OS installation/reboot proof, and
+multi-host coordination are still intentionally absent.
 
 On `SIGINT` or `SIGTERM`, the resident stops admitting submissions and new
 claims, writes lifecycle `STOPPING`, and waits for admitted command callbacks.
