@@ -234,13 +234,15 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       destination commit, terminal-payload, and atomic-terminal SIGKILL/replay
       boundaries through a hidden test fixture using the real packaged command
       body, with no authored app, activity, or adapter dispatch. Exact final
-      commands and exits are recorded in the draft V9 checkpoint; its immutable
-      commit receipt remains pending.
+      commands and exits are recorded in the V9 checkpoint and bound to
+      `ab4e3ca6c2032a6207fb0b1f91cf07e8a0ba4ab8` and
+      `a2a0618c05fefbc8968b0856cc176a2f47cb09c1`, including a separate-writer
+      `already-present` receipt through terminal crash/replay.
 - [ ] Deliberately review and mount the proposed exact source
       `wharfie ops retry-effect` and packaged `<app> wharfie retry-effect`
       surface, then add public source/package command parity and response-loss
       tests. Until that review, leave both normal CLI parents unmounted and do
-      not treat the private SEA fixture as public support.
+      not treat the unsupported SEA fixture as public support.
 - [ ] Decide the authority model for explicit, versioned forward-compensation
       plans—predeclared in an application revision only, or strict finite plans
       submitted after an incident by a trusted operator/LLM—before implementing
