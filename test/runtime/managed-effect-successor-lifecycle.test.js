@@ -7,8 +7,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import createVanillaDB from '../../src/core/lib/db/adapters/vanilla.js';
-import { createExecutionLedger } from '../../src/core/lib/db/tables/execution-ledger.js';
+import {
+  ExecutionLedgerProjectionError,
+  createExecutionLedger,
+} from '../../src/core/lib/db/tables/execution-ledger.js';
+import {
+  getEventSortKey,
+  getInvocationProjectionSortKey,
+  getTransitionSortKey,
+} from '../../src/core/lib/ledger/record-key.js';
 import { createLocalExecutionPayloadStore } from '../../src/core/lib/payload-store/local.js';
+import { createCanonicalJsonSha256Id } from '../../src/core/runtime/content-id.js';
 import {
   APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS,
   APPLICATION_STATE_RECONCILIATION_VERIFIER_DESCRIPTOR,
@@ -65,6 +74,7 @@ function reason(kind) {
 async function createHarness(label) {
   const root = mkdtempSync(join(tmpdir(), `wharfie-successor-${label}-`));
   const db = createVanillaDB({ path: root });
+  const tableName = `successor-${label}`;
   const catalog = await createBuiltinManagedEffectCatalog({
     db,
     appId: APP_ID,
@@ -80,7 +90,7 @@ async function createHarness(label) {
     });
   const ledger = createExecutionLedger({
     db,
-    tableName: `successor-${label}`,
+    tableName,
     payloadStore: createLocalExecutionPayloadStore({
       path: join(root, 'payloads'),
       storeId: `successor-${label}`,
@@ -91,7 +101,28 @@ async function createHarness(label) {
     await db.close();
     rmSync(root, { recursive: true, force: true });
   });
-  return { catalog, ledger, reconciliationCatalog };
+  return { catalog, db, ledger, reconciliationCatalog, tableName };
+}
+
+/** @param {Record<string, any>} event */
+function successorEventId(event) {
+  return createCanonicalJsonSha256Id({
+    domain: 'wharfie:execution-ledger-event:v9',
+    prefix: 'wle',
+    value: {
+      schemaVersion: event.schema_version,
+      runId: event.run_id,
+      sequence: event.sequence,
+      transitionId: event.transition_id,
+      requestDigest: event.request_digest,
+      type: event.type,
+      observedAt: event.observed_at,
+      actor: event.actor,
+      fence: event.fence,
+      payload: event.payload,
+    },
+    valuePath: 'managed-effect successor event identity',
+  });
 }
 
 /** @param {any} harness @param {string} suffix */
@@ -482,6 +513,80 @@ describe('managed-effect successor dedicated lifecycle', () => {
     ]);
   });
 
+  test('rejects a rehashed interruption that rewrites invocation generation', async () => {
+    const harness = await createHarness('interruption-generation-forgery');
+    const source = await seedNotAppliedSource(
+      harness,
+      'interruption-generation-forgery',
+    );
+    const handoff = await authorizeSuccessor(
+      harness,
+      source.runId,
+      SOURCE_EFFECT_ID,
+      'interruption-generation-forgery-successor',
+    );
+    const started = await harness.ledger.startManagedEffectSuccessor({
+      runId: handoff.authorization.target.runId,
+      fencingToken: 'interruption-generation-forgery-fence',
+      expectedVersion: handoff.targetRun.version,
+      transitionId: 'successor-start',
+      actor: ACTOR,
+    });
+    const interrupted = await harness.ledger.interruptManagedEffectSuccessor({
+      runId: handoff.authorization.target.runId,
+      fencingToken: started.attempt.fencingToken,
+      generation: started.attempt.generation,
+      coordinatorEpoch: started.attempt.coordinatorEpoch,
+      expectedVersion: started.run.version,
+      expectedEffectVersion: started.effect.version,
+      transitionId: 'successor-interrupted',
+      reason: reason('interruption-generation-forgery'),
+      actor: ACTOR,
+    });
+    const runId = handoff.authorization.target.runId;
+    const invocationId = handoff.authorization.target.invocationId;
+    const event = await harness.db.get({
+      tableName: harness.tableName,
+      keyName: 'run_id',
+      keyValue: runId,
+      sortKeyName: 'sort_key',
+      sortKeyValue: getEventSortKey(interrupted.receipt.sequence),
+      consistentRead: true,
+    });
+    if (!event) throw new Error('Expected successor interruption event.');
+    const forgedPayload = JSON.parse(JSON.stringify(event.payload));
+    forgedPayload.invocation.generation = 99;
+    const forgedEventId = successorEventId({
+      ...event,
+      payload: forgedPayload,
+    });
+    /** @param {string} sortKeyValue @param {any[]} updates */
+    const update = async (sortKeyValue, updates) =>
+      await harness.db.update({
+        tableName: harness.tableName,
+        keyName: 'run_id',
+        keyValue: runId,
+        sortKeyName: 'sort_key',
+        sortKeyValue,
+        updates,
+      });
+    await update(getEventSortKey(interrupted.receipt.sequence), [
+      { property: ['payload'], propertyValue: forgedPayload },
+      { property: ['event_id'], propertyValue: forgedEventId },
+    ]);
+    await update(getTransitionSortKey('successor-interrupted'), [
+      { property: ['event_id'], propertyValue: forgedEventId },
+    ]);
+    await update(getInvocationProjectionSortKey(invocationId), [
+      { property: ['generation'], propertyValue: 99 },
+      { property: ['data', 'generation'], propertyValue: 99 },
+    ]);
+
+    await expect(harness.ledger.rebuildRun(runId)).rejects.toBeInstanceOf(
+      ExecutionLedgerProjectionError,
+    );
+  });
+
   test('target-only runtime dispatches exactly once and never re-enters generic lifecycle events', async () => {
     const harness = await createHarness('runtime');
     const source = await seedNotAppliedSource(harness, 'runtime');
@@ -526,6 +631,112 @@ describe('managed-effect successor dedicated lifecycle', () => {
     expect(
       await harness.ledger.getEvents(handoff.authorization.target.runId),
     ).toEqual(eventsAfterFirst);
+  });
+
+  test('concurrent target executors grant one atomic dispatch authority', async () => {
+    const harness = await createHarness('concurrent-runtime');
+    const source = await seedNotAppliedSource(harness, 'concurrent-runtime');
+    const handoff = await authorizeSuccessor(
+      harness,
+      source.runId,
+      SOURCE_EFFECT_ID,
+      'concurrent-runtime-successor',
+    );
+
+    let startArrivals = 0;
+    /** @type {() => void} */
+    let releaseStarts = () => {};
+    /** @type {Promise<void>} */
+    const bothStartsArrived = new Promise((resolve) => {
+      releaseStarts = () => resolve();
+    });
+    const racingLedger = {
+      ...harness.ledger,
+      async startManagedEffectSuccessor(
+        /** @type {Record<string, any>} */ input,
+      ) {
+        startArrivals += 1;
+        if (startArrivals === 2) releaseStarts();
+        await bothStartsArrived;
+        return await harness.ledger.startManagedEffectSuccessor(input);
+      },
+    };
+
+    let adapterCalls = 0;
+    /** @type {() => void} */
+    let releaseAdapter = () => {};
+    /** @type {Promise<void>} */
+    const adapterReleased = new Promise((resolve) => {
+      releaseAdapter = () => resolve();
+    });
+    /** @type {() => void} */
+    let observeAdapterEntry = () => {};
+    /** @type {Promise<void>} */
+    const adapterEntered = new Promise((resolve) => {
+      observeAdapterEntry = () => resolve();
+    });
+    const gatedCatalog = {
+      ...harness.catalog,
+      /** @param {Record<string, any>} frame */
+      resolve(frame) {
+        const adapter = harness.catalog.resolve(frame);
+        return Object.freeze({
+          ...adapter,
+          async execute(/** @type {Record<string, any>} */ input) {
+            adapterCalls += 1;
+            observeAdapterEntry();
+            await adapterReleased;
+            return await adapter.execute(input);
+          },
+        });
+      },
+    };
+
+    const executions = [
+      executeManagedEffectSuccessorRun({
+        ledger: racingLedger,
+        authorization: handoff.authorization,
+        request: handoff.request,
+        catalog: gatedCatalog,
+        actor: ACTOR,
+        createFencingToken: () => 'concurrent-runtime-fence-a',
+      }),
+      executeManagedEffectSuccessorRun({
+        ledger: racingLedger,
+        authorization: handoff.authorization,
+        request: handoff.request,
+        catalog: gatedCatalog,
+        actor: ACTOR,
+        createFencingToken: () => 'concurrent-runtime-fence-b',
+      }),
+    ];
+    await adapterEntered;
+    expect(adapterCalls).toBe(1);
+    releaseAdapter();
+
+    const results = await Promise.all(executions);
+    expect(results.filter((result) => result.outcome.reused === false)).toHaveLength(1);
+    expect(results.filter((result) => result.outcome.reused === true)).toHaveLength(1);
+    expect(adapterCalls).toBe(1);
+    const target = await harness.ledger.rebuildRun(
+      handoff.authorization.target.runId,
+    );
+    if (!target) throw new Error('Concurrent successor target disappeared.');
+    expect(target).toMatchObject({
+      run: { status: 'COMPLETED' },
+      invocations: [expect.objectContaining({ status: 'COMPLETED' })],
+      attempts: [expect.objectContaining({ status: 'COMPLETED' })],
+      effects: [expect.objectContaining({ status: 'COMPLETED' })],
+    });
+    expect(
+      target.events.map(
+        (/** @type {Record<string, any>} */ event) => event.type,
+      ),
+    ).toEqual([
+      'effect-successor-run-created',
+      'effect-successor-started',
+      'effect-successor-terminal',
+    ]);
   });
 
   test('turns an adapter failure after atomic start into one reconciled uncertain successor without redispatch', async () => {

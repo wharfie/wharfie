@@ -3971,6 +3971,9 @@ async function applyEvent(
       run.status !== RunStatus.BLOCKED ||
       currentInvocation.status !== InvocationStatus.RUNNING ||
       invocation.status !== InvocationStatus.UNCERTAIN ||
+      currentInvocation.generation !== currentAttempt.generation ||
+      invocation.generation !== currentInvocation.generation ||
+      invocation.generation !== attempt.generation ||
       currentAttempt.status !== AttemptStatus.STARTED ||
       attempt.status !== AttemptStatus.ABANDONED ||
       attempt.startedAt !== currentAttempt.startedAt ||
