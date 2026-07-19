@@ -250,12 +250,12 @@ function runOptions(ledger, overrides = {}) {
 }
 
 describe('manual ledger activity runner', () => {
-  it('derives manual run identity from the v8 idempotency-key contract', () => {
+  it('derives manual run identity from the v9 idempotency-key contract', () => {
     const appId = 'manual-demo';
     const idempotencyKey = 'operator-run-1';
     expect(createManualLedgerRunId({ appId, idempotencyKey })).toBe(
       createCanonicalJsonSha256Id({
-        domain: 'wharfie:manual-ledger-run:v8',
+        domain: 'wharfie:manual-ledger-run:v9',
         prefix: 'wlm',
         value: { appId, idempotencyKey },
         valuePath: 'manual ledger run identity',
@@ -266,6 +266,18 @@ describe('manual ledger activity runner', () => {
         /** @type {any} */ ({ appId, operationId: idempotencyKey }),
       ),
     ).toThrow(/idempotencyKey/i);
+  });
+
+  it('rejects the retired precreated-successor seam before creating manual work', async () => {
+    await withLedger(async (ledger) => {
+      const options = runOptions(ledger, {
+        existingSuccessor: { runId: 'must-not-be-consumed' },
+      });
+      await expect(runManualLedgerActivity(options)).rejects.toThrow(
+        /cannot execute a managed-effect successor/i,
+      );
+      await expect(ledger.rebuildRun(options.runId)).resolves.toBeNull();
+    });
   });
 
   it('persists the exact durable start before dispatch and deduplicates a terminal retry', async () => {

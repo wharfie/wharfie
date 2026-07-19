@@ -66,7 +66,9 @@ const SEA_EFFECT_DESTINATION_RESOLVED_BREAKPOINT = Object.freeze({
 const SEA_EFFECT_EVIDENCE_PUBLISHED_BREAKPOINT = Object.freeze({
   sourceSuffix: 'src/core/lib/db/tables/execution-ledger.js',
   anchor: 'const reconciliation = {',
-  occurrence: 1,
+  // The first reconciliation object belongs to the dedicated successor
+  // lifecycle. This matrix verifies ordinary effect reconciliation.
+  occurrence: 2,
 });
 const SEA_EFFECT_LEDGER_RECONCILED_BREAKPOINT = Object.freeze({
   sourceSuffix: 'src/core/runtime/operator/execution-ledger-operator.js',
@@ -295,6 +297,10 @@ const SEA_MIXED_SETTLEMENT_CRASH_CASES = Object.freeze([
     breakpoint: {
       sourceSuffix: 'src/core/runtime/operator/execution-ledger-operator.js',
       anchor: 'const view = await ledger.rebuildRun(options.runId);',
+      // The dedicated successor branch now has its own source-free readback
+      // with the same statement. This crash matrix exercises ordinary mixed
+      // effect recovery, so bind the generic branch after its helper returns.
+      occurrence: 2,
     },
     settledAtBoundary: true,
   },
@@ -2485,12 +2491,12 @@ async function runInspectorGuardedSeaJson(artifactPath, args, options) {
         });
         assert.ok(
           forbidden,
-          `${options.label} paused outside its physical destination guards: ${JSON.stringify(hits)}`,
+          `${options.label} paused outside its forbidden execution guards: ${JSON.stringify(hits)}`,
         );
         assertExactInspectorPause(next.value, forbidden, options.label);
         throw residentServiceError(
           service,
-          `${options.label} entered forbidden physical destination path ${forbidden.name}.`,
+          `${options.label} entered forbidden execution path ${forbidden.name}.`,
         );
       }
       if (next.kind === 'inspector-error' && !service.getExit()) {
@@ -4866,6 +4872,12 @@ export default defineApp({
     'ENOENT',
     'Clean SEA smoke environment unexpectedly exposes a Node executable',
   );
+  const operatorHelp = runCommand(cleanArtifactPath, ['wharfie', '--help'], {
+    cwd: cleanRunDirectory,
+    capture: true,
+    env: cleanEnvironment,
+  }).stdout;
+  assert.doesNotMatch(operatorHelp, /\bretry-effect\b/);
   const generatedResult = JSON.parse(
     runCommand(cleanArtifactPath, ['greet', 'packaged-user'], {
       cwd: cleanRunDirectory,

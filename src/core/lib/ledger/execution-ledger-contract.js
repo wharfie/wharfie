@@ -19,7 +19,11 @@ import {
   assertLedgerOpaqueId,
 } from './record-key.js';
 
-export const EXECUTION_LEDGER_SCHEMA_VERSION = 8;
+export const EXECUTION_LEDGER_SCHEMA_VERSION = 9;
+// Destination operation identity outlives the ledger records that authorize
+// it. Change this version only when the logical destination identity contract
+// changes, never merely because the execution-ledger storage schema changes.
+export const MANAGED_EFFECT_DESTINATION_IDENTITY_VERSION = 8;
 export const EXECUTION_LEDGER_MAX_OPAQUE_ID_BYTES =
   MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES;
 export const EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES = 64 * 1024;
@@ -611,7 +615,7 @@ export function createManagedEffectDestinationId(input) {
     domain: 'wharfie:execution-ledger-destination-effect:v8',
     prefix: 'wfx',
     value: {
-      schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+      schemaVersion: MANAGED_EFFECT_DESTINATION_IDENTITY_VERSION,
       appId: input.appId,
       runId,
       invocationId,

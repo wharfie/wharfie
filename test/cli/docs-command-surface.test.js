@@ -30,6 +30,7 @@ const staleCommands = [
   'wharfie build-self',
   'wharfie ops list',
   'wharfie ops run --recover',
+  'retry-effect',
   '--operation-id',
 ];
 
@@ -132,6 +133,7 @@ describe('docs command surface', () => {
     expect(quickstart).toContain(
       '<app> wharfie reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped',
     );
+    expect(quickstart).not.toContain('retry-effect');
     expect(quickstart).not.toContain('wharfie ops list');
     expect(quickstart).not.toContain('<app> wharfie ops cancel');
   });
@@ -154,6 +156,25 @@ describe('docs command surface', () => {
       expect(document).toContain('app-scoped LMDB local-owner protocol');
       expect(document).toContain('after a lost response');
       expect(document).toContain('redacted');
+    }
+  });
+
+  it('keeps managed-effect successor work internal pending relocated-SEA proof', async () => {
+    const documents = await Promise.all(
+      ['README.md', 'docs/src/assets/markdown/quickstart.md'].map(
+        (relativePath) =>
+          fsp.readFile(path.join(repoRoot, relativePath), 'utf8'),
+      ),
+    );
+
+    for (const document of documents) {
+      expect(document).not.toContain('retry-effect');
+      expect(document).toMatch(/relocated-SEA crash and\s+recovery proof/);
+      expect(document).toContain('dedicated effect-only lifecycle');
+      expect(document).toMatch(
+        /never redispatches the\s+abandoned authored activity/,
+      );
+      expect(document).toMatch(/no public successor\s+operation is available/);
     }
   });
 });

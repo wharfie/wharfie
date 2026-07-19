@@ -26,6 +26,10 @@ import {
   assertLedgerOpaqueId,
 } from '../../lib/ledger/record-key.js';
 import { hasSameCanonicalJson } from '../../lib/ledger/execution-ledger-contract.js';
+import {
+  assertInitialManagedEffectSuccessorRetryEligible,
+  normalizeManagedEffectSuccessorAuthorization,
+} from '../../lib/ledger/managed-effect-successor-contract.js';
 import { assertLogicalId } from '../logical-id.js';
 import {
   ManualLedgerRecoveryAction,
@@ -47,10 +51,15 @@ import {
   normalizeApplicationStateDestination,
 } from '../effects/application-state.js';
 import {
+  createBuiltinManagedEffectCatalog,
   createBuiltinManagedEffectReconciliationCatalog,
   createBuiltinManagedEffectRecoveryCatalog,
 } from '../effects/builtin-catalog.js';
 import { recoverStoppedManagedEffects } from '../managed-effect.js';
+import {
+  executeManagedEffectSuccessorRun,
+  recoverManagedEffectSuccessorRun,
+} from '../managed-effect-successor.js';
 import {
   getLocalServiceSessionPrincipalId,
   getLocalServiceSessionScopeId,
@@ -63,6 +72,7 @@ import {
 import { sendLocalOwnerCommand } from './local-owner-command.js';
 import {
   createExecutionLedgerEffectReconciliationOperatorView,
+  createExecutionLedgerEffectSuccessorOperatorView,
   createExecutionLedgerOperatorView,
   createExecutionLedgerReconciliationOperatorView,
   createExecutionLedgerRecoveryOperatorView,
@@ -81,10 +91,13 @@ export const EXECUTION_LEDGER_RECONCILIATION_REASON_MAX_BYTES = 4096;
 
 const RECONCILIATION_TRANSITION_PREFIX = 'reconcile:';
 const EFFECT_RECONCILIATION_TRANSITION_PREFIX = 'reconcile-effect:';
+const MANAGED_EFFECT_SUCCESSOR_REASON_KIND =
+  'operator-managed-effect-successor-retry';
 const DEFAULT_RECOVERY_OPERATOR_ACTOR = Object.freeze({
   kind: 'local',
   id: 'cli',
 });
+const MANAGED_EFFECT_SUCCESSOR_RECOVERY_ACTION = 'marked-successor-uncertain';
 
 /**
  * Snapshot one exact recovery authority before any asynchronous read. The
@@ -136,7 +149,7 @@ export class ExecutionLedgerOperatorScopeError extends Error {
 
 /**
  * @param {unknown} value - Candidate durable run ID.
- * @param {'inspect'|'recover'|'reconcile'|'reconcile-effect'|'cancel'} command - Operator command.
+ * @param {'inspect'|'recover'|'reconcile'|'reconcile-effect'|'retry-effect'|'cancel'} command - Operator command.
  * @returns {string} - Exact requested run ID.
  */
 function requireRunId(value, command) {
@@ -155,6 +168,30 @@ function requireEffectId(value) {
     throw new Error('reconcile-effect requires --effect-id <effectId>.');
   }
   return assertLedgerOpaqueId(value, 'reconcile-effect effectId');
+}
+
+/**
+ * @param {unknown} value - Candidate source managed-effect identity.
+ * @returns {string} - Validated source effect identity.
+ */
+function requireSuccessorEffectId(value) {
+  if (value === undefined) {
+    throw new Error('retry-effect requires --effect-id <effectId>.');
+  }
+  return assertLedgerOpaqueId(value, 'retry-effect effectId');
+}
+
+/**
+ * @param {unknown} value - Candidate public idempotency identity.
+ * @returns {string} - Validated stable successor identity.
+ */
+function requireSuccessorId(value) {
+  if (value === undefined) {
+    throw new Error(
+      'retry-effect requires --successor-id <successorId>; reuse the same value after a lost response.',
+    );
+  }
+  return assertLedgerOpaqueId(value, 'retry-effect successorId');
 }
 
 /**
@@ -216,7 +253,7 @@ function resolveEffectReconciliationId(value) {
 
 /**
  * @param {unknown} value - Candidate optional operator explanation.
- * @param {'reconcile'|'reconcile-effect'} [command] - Operator command label.
+ * @param {'reconcile'|'reconcile-effect'|'retry-effect'} [command] - Operator command label.
  * @returns {string | undefined} - Bounded well-formed explanation.
  */
 function resolveReconciliationReasonText(value, command = 'reconcile') {
@@ -258,6 +295,23 @@ function createReconciliationReason(
   return {
     kind,
     reconciliationId,
+    ...(message === undefined ? {} : { message }),
+  };
+}
+
+/**
+ * Build the exact private reason persisted with a fresh-identity retry. The
+ * stable successor ID is included so a replay cannot silently change prose
+ * while claiming the same operator request.
+ * @param {string} successorId - Stable public successor identity.
+ * @param {unknown} reasonText - Optional private explanation.
+ * @returns {Record<string, any>} - Bounded structured durable reason.
+ */
+function createManagedEffectSuccessorReason(successorId, reasonText) {
+  const message = resolveReconciliationReasonText(reasonText, 'retry-effect');
+  return {
+    kind: MANAGED_EFFECT_SUCCESSOR_REASON_KIND,
+    successorId,
     ...(message === undefined ? {} : { message }),
   };
 }
@@ -476,6 +530,26 @@ function getManualInvocation(view) {
 }
 
 /**
+ * Resolve the one framework-owned invocation that the source-free recovery
+ * command may inspect. Manual runs retain the historical `manual` identity;
+ * successor runs carry a fresh invocation ID in their verified trigger.
+ * @param {Record<string, any>} view - Verified exact ledger run.
+ * @returns {Record<string, any> | undefined} - Exact recoverable invocation.
+ */
+function getRecoverableInvocation(view) {
+  if (view.run.trigger?.kind !== 'effect-successor') {
+    return getManualInvocation(view);
+  }
+  const authorization = normalizeManagedEffectSuccessorAuthorization(
+    view.run.trigger,
+  );
+  return view.invocations.find(
+    (/** @type {Record<string, any>} */ invocation) =>
+      invocation.invocationId === authorization.target.invocationId,
+  );
+}
+
+/**
  * @param {unknown} left - Candidate exact JSON tuple.
  * @param {unknown} right - Expected exact JSON tuple.
  * @returns {boolean} - Whether the arrays are positionally equal.
@@ -527,7 +601,7 @@ function assertRecoverableApplicationStateEffect(effect, appId) {
  * @returns {{invocationId: string, attemptId: string, effects: Record<string, any>[], hasStarted: boolean, fingerprint: string} | undefined} - Exact recovery set.
  */
 function getStoppedEffectRecoveryTarget(view) {
-  const invocation = getManualInvocation(view);
+  const invocation = getRecoverableInvocation(view);
   if (
     view.run.status !== RunStatus.RUNNING ||
     invocation?.status !== InvocationStatus.RUNNING
@@ -633,7 +707,7 @@ function getStoppedEffectRecoveryTarget(view) {
  * @param {string} reconciliationId - Stable caller reconciliation identity.
  * @param {{kind: string, id: string}} actor - Exact durable operator actor.
  * @param {Record<string, any>} reason - Exact durable reconciliation reason.
- * @returns {{effect: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, uncertaintyEvent: Record<string, any>, expectedVersion: number, expectedEffectVersion: number, reconciled: boolean}} - Exact retained target and original request versions.
+ * @returns {{effect: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, uncertaintyEvent: Record<string, any>, expectedVersion: number, expectedEffectVersion: number, reconciled: boolean, successor: boolean}} - Exact retained target and original request versions.
  */
 function getUncertainEffectReconciliationTarget(
   view,
@@ -663,6 +737,29 @@ function getUncertainEffectReconciliationTarget(
       candidate.invocationId === effect.invocationId &&
       candidate.attemptId === effect.requestedBy?.attemptId,
   );
+  const successor = view.run.trigger?.kind === 'effect-successor';
+  if (successor) {
+    let authorization;
+    try {
+      authorization = normalizeManagedEffectSuccessorAuthorization(
+        view.run.trigger,
+      );
+    } catch {
+      throw new Error(
+        `Managed effect ${effectId} has an invalid successor trigger.`,
+      );
+    }
+    if (
+      authorization.target.runId !== view.run.runId ||
+      authorization.target.invocationId !== invocation?.invocationId ||
+      authorization.target.effectId !== effect.effectId ||
+      authorization.target.destinationEffectId !== effect.destinationEffectId
+    ) {
+      throw new Error(
+        `Managed effect ${effectId} does not match its successor trigger authority.`,
+      );
+    }
+  }
   if (
     attempt?.status !== AttemptStatus.ABANDONED ||
     invocation.generation !== attempt.generation ||
@@ -738,10 +835,12 @@ function getUncertainEffectReconciliationTarget(
       (uncertaintyEventId === undefined ||
         event.event_id === uncertaintyEventId) &&
       (event.type === 'effect-became-uncertain' ||
-        event.type === 'attempt-became-uncertain'),
+        event.type === 'attempt-became-uncertain' ||
+        (successor && event.type === 'effect-successor-interrupted')),
   );
   const uncertaintyEffect =
-    uncertaintyEvent?.type === 'effect-became-uncertain'
+    uncertaintyEvent?.type === 'effect-became-uncertain' ||
+    uncertaintyEvent?.type === 'effect-successor-interrupted'
       ? uncertaintyEvent.payload?.effect
       : uncertaintyEvent?.payload?.effects?.find(
           (/** @type {Record<string, any>} */ candidate) =>
@@ -776,7 +875,10 @@ function getUncertainEffectReconciliationTarget(
     reconciliationEvent = view.events.find(
       (/** @type {Record<string, any>} */ event) =>
         event.sequence === effect.lastSequence &&
-        event.type === 'uncertain-effect-reconciled' &&
+        event.type ===
+          (successor
+            ? 'effect-successor-reconciled'
+            : 'uncertain-effect-reconciled') &&
         event.payload?.effect?.effectId === effect.effectId &&
         event.payload?.reconciliation?.reconciliationId ===
           effect.reconciliation.reconciliationId,
@@ -816,6 +918,7 @@ function getUncertainEffectReconciliationTarget(
     expectedVersion,
     expectedEffectVersion,
     reconciled: isReconciled,
+    successor,
   };
 }
 
@@ -843,6 +946,127 @@ function reconstructOperatorManagedEffectRequest(delivery) {
     },
     'reconcile-effect retained request',
   );
+}
+
+/**
+ * Locate the one destination-finalized source that the initial retry policy
+ * can consider. This is deliberately stricter than merely finding an effect
+ * by ID: a direct manual source remains BLOCKED/UNCERTAIN, while a prior
+ * successor that was permanently proven NOT_APPLIED is terminal FAILED/FAILED
+ * with its abandoned physical attempt retained exactly. The ledger performs
+ * the full event-link proof; this preflight mirrors only those two legal
+ * source families before opening a destination catalog.
+ * @param {Record<string, any>} view - Verified source run.
+ * @param {string} effectId - Exact source effect identity.
+ * @returns {{effect: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>}} - Exact retained source projections.
+ */
+function getManagedEffectSuccessorRetryTarget(view, effectId) {
+  const effects = (view.effects || []).filter(
+    (/** @type {Record<string, any>} */ effect) => effect.effectId === effectId,
+  );
+  const effect = effects.length === 1 ? effects[0] : undefined;
+  const invocation = view.invocations.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.invocationId === effect?.invocationId,
+  );
+  const attempt = view.attempts.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.invocationId === effect?.invocationId &&
+      candidate.attemptId === effect?.requestedBy?.attemptId,
+  );
+  const directSource =
+    view.run.trigger?.kind === 'manual' &&
+    view.run.status === RunStatus.BLOCKED &&
+    invocation?.status === InvocationStatus.UNCERTAIN;
+  let chainedSource = false;
+  if (view.run.trigger?.kind === 'effect-successor') {
+    try {
+      const authorization = normalizeManagedEffectSuccessorAuthorization(
+        view.run.trigger,
+      );
+      chainedSource =
+        view.run.status === RunStatus.FAILED &&
+        invocation?.status === InvocationStatus.FAILED &&
+        invocation.terminal?.type === 'failed' &&
+        invocation.terminal?.attemptId === attempt?.attemptId &&
+        authorization.target.runId === view.run.runId &&
+        authorization.target.invocationId === invocation?.invocationId &&
+        authorization.target.effectId === effect?.effectId &&
+        authorization.target.destinationEffectId ===
+          effect?.destinationEffectId;
+    } catch {
+      chainedSource = false;
+    }
+  }
+  if (
+    !effect ||
+    !invocation ||
+    !attempt ||
+    (!directSource && !chainedSource) ||
+    attempt.status !== AttemptStatus.ABANDONED ||
+    effect.status !== EffectStatus.NOT_APPLIED ||
+    effect.reconciliation?.resolutionStatus !== EffectStatus.NOT_APPLIED
+  ) {
+    throw new Error(
+      `Managed effect ${effectId} is not an exact not-applied retry source.`,
+    );
+  }
+  return { effect, invocation, attempt };
+}
+
+/**
+ * Re-read the immutable source request and prove the currently open finite
+ * catalog is the exact adapter/destination contract retained by the source.
+ * This runs before the atomic authorization so catalog drift cannot create an
+ * inert successor run.
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, view: Record<string, any>, effectId: string, catalog: Record<string, any>}} options - Pinned catalog preflight.
+ * @returns {Promise<void>} - Resolves only for the supported exact contract.
+ */
+async function assertManagedEffectSuccessorCatalogPreflight(options) {
+  const target = getManagedEffectSuccessorRetryTarget(
+    options.view,
+    options.effectId,
+  );
+  const delivery = await options.ledger.readManagedEffectDelivery(
+    options.view.run.runId,
+    target.invocation.invocationId,
+    target.effect.effectId,
+  );
+  if (
+    !delivery ||
+    !hasSameCanonicalJson(delivery.run, options.view.run) ||
+    !hasSameCanonicalJson(delivery.invocation, target.invocation) ||
+    !hasSameCanonicalJson(delivery.attempt, target.attempt) ||
+    !hasSameCanonicalJson(delivery.effect, target.effect)
+  ) {
+    throw new Error(
+      `Managed effect ${target.effect.effectId} changed before successor authorization.`,
+    );
+  }
+  assertInitialManagedEffectSuccessorRetryEligible({
+    effect: delivery.effect,
+    request: delivery.request,
+  });
+  const adapter = options.catalog.resolve(
+    reconstructOperatorManagedEffectRequest(delivery),
+  );
+  if (
+    !hasSameCanonicalJson(adapter.descriptor, target.effect.adapter) ||
+    !hasSameCanonicalJson(adapter.destination, target.effect.destination) ||
+    !hasSameCanonicalJson(adapter.verifier, target.effect.verifier) ||
+    !hasSameCanonicalJson(
+      adapter.substantiatedReplayProperties,
+      target.effect.substantiatedReplayProperties,
+    ) ||
+    !hasSameCanonicalJson(
+      options.catalog.destination,
+      target.effect.destination,
+    )
+  ) {
+    throw new Error(
+      'The current application-state catalog does not match the retained retry source.',
+    );
+  }
 }
 
 /**
@@ -913,24 +1137,40 @@ export async function reconcileUncertainManagedEffectAtOperatorBoundary(
       'Application-state reconciliation returned an unsupported destination disposition.',
     );
   }
-  const result = await options.ledger.reconcileUncertainManagedEffect({
-    runId: options.runId,
-    invocationId: target.invocation.invocationId,
-    attemptId: target.attempt.attemptId,
-    effectId: target.effect.effectId,
-    fencingToken: target.attempt.fencingToken,
-    generation: target.attempt.generation,
-    coordinatorEpoch: target.attempt.coordinatorEpoch,
-    expectedVersion: target.expectedVersion,
-    expectedEffectVersion: target.expectedEffectVersion,
-    uncertaintyEventId: target.uncertaintyEvent.event_id,
-    uncertaintySequence: target.uncertaintyEvent.sequence,
-    transitionId: `${EFFECT_RECONCILIATION_TRANSITION_PREFIX}${options.reconciliationId}`,
-    reconciliationId: options.reconciliationId,
-    actor: options.actor,
-    reason: options.reason,
-    resolution,
-  });
+  const result = target.successor
+    ? await options.ledger.reconcileManagedEffectSuccessor({
+        runId: options.runId,
+        fencingToken: target.attempt.fencingToken,
+        generation: target.attempt.generation,
+        coordinatorEpoch: target.attempt.coordinatorEpoch,
+        expectedVersion: target.expectedVersion,
+        expectedEffectVersion: target.expectedEffectVersion,
+        uncertaintyEventId: target.uncertaintyEvent.event_id,
+        uncertaintySequence: target.uncertaintyEvent.sequence,
+        transitionId: `${EFFECT_RECONCILIATION_TRANSITION_PREFIX}${options.reconciliationId}`,
+        reconciliationId: options.reconciliationId,
+        actor: options.actor,
+        reason: options.reason,
+        resolution,
+      })
+    : await options.ledger.reconcileUncertainManagedEffect({
+        runId: options.runId,
+        invocationId: target.invocation.invocationId,
+        attemptId: target.attempt.attemptId,
+        effectId: target.effect.effectId,
+        fencingToken: target.attempt.fencingToken,
+        generation: target.attempt.generation,
+        coordinatorEpoch: target.attempt.coordinatorEpoch,
+        expectedVersion: target.expectedVersion,
+        expectedEffectVersion: target.expectedEffectVersion,
+        uncertaintyEventId: target.uncertaintyEvent.event_id,
+        uncertaintySequence: target.uncertaintyEvent.sequence,
+        transitionId: `${EFFECT_RECONCILIATION_TRANSITION_PREFIX}${options.reconciliationId}`,
+        reconciliationId: options.reconciliationId,
+        actor: options.actor,
+        reason: options.reason,
+        resolution,
+      });
   const current = await options.ledger.rebuildRun(options.runId);
   if (!current || !result.effect) {
     throw new Error(
@@ -1310,6 +1550,16 @@ export async function cancelExecutionLedgerRun(options) {
   });
   if (!preflight) return null;
 
+  // A managed-effect successor has no manual host and its dedicated lifecycle
+  // intentionally has no cancellation transition. Do not look up or contact a
+  // manual owner for it: an unrelated active manual run must never influence
+  // the response for this framework-owned target.
+  if (preflight.run.trigger?.kind === 'effect-successor') {
+    throw new Error(
+      'Cancellation is not supported for a managed-effect successor; reconcile its destination instead.',
+    );
+  }
+
   const nonDeliverable = classifyNonDeliverableCancellation(preflight);
   if (nonDeliverable) {
     return createNonDeliverableCancellationResponse(
@@ -1444,7 +1694,10 @@ export async function recoverExecutionLedgerRun(options) {
   // Refuse unsupported effect sets while every opened store is still
   // read-only. The same selection is repeated under local ownership below so
   // a concurrent transition cannot authorize work from this stale view.
-  const preflightTarget = getStoppedEffectRecoveryTarget(preflight);
+  const preflightTarget =
+    preflight.run.trigger?.kind === 'effect-successor'
+      ? undefined
+      : getStoppedEffectRecoveryTarget(preflight);
 
   return await withExecutionLedger(
     async (ledger, context) =>
@@ -1455,6 +1708,39 @@ export async function recoverExecutionLedgerRun(options) {
           const current = await ledger.rebuildRun(options.runId);
           if (!current) return null;
           assertExpectedApp(current, options.expectedAppId);
+          if (current.run.trigger?.kind === 'effect-successor') {
+            if (!localOwner || context.adapterName !== 'lmdb') {
+              throw new Error(
+                'Recovery of a managed-effect successor requires the held LMDB local-owner protocol.',
+              );
+            }
+            const successorRecovery = await recoverManagedEffectSuccessorRun({
+              ledger,
+              runId: current.run.runId,
+              actor,
+            });
+            if (!successorRecovery) return null;
+            const view = await ledger.rebuildRun(options.runId);
+            if (!view) return null;
+            assertExpectedApp(view, options.expectedAppId);
+            const invocation = getRecoverableInvocation(view);
+            const mayExecute =
+              successorRecovery.outcome.disposition === 'in-progress' &&
+              view.run.status === RunStatus.RUNNING &&
+              invocation?.status === InvocationStatus.RUNNABLE;
+            return {
+              recovery: {
+                found: true,
+                mayExecute,
+                action:
+                  successorRecovery.outcome.reused === false
+                    ? MANAGED_EFFECT_SUCCESSOR_RECOVERY_ACTION
+                    : ManualLedgerRecoveryAction.NONE,
+                changed: successorRecovery.outcome.reused === false,
+              },
+              view,
+            };
+          }
           const target = getStoppedEffectRecoveryTarget(current);
           if (target?.fingerprint !== preflightTarget?.fingerprint) {
             throw new Error(
@@ -1521,9 +1807,16 @@ export async function recoverExecutionLedgerRun(options) {
                 actor,
               });
             } else {
+              const invocation = getRecoverableInvocation(current);
+              if (!invocation) {
+                throw new Error(
+                  'The recoverable execution-ledger invocation is unavailable.',
+                );
+              }
               recovery = await recoverManualLedgerActivity({
                 ledger,
                 runId: options.runId,
+                invocationId: invocation.invocationId,
                 actor,
               });
             }
@@ -1614,9 +1907,16 @@ export async function reconcileExecutionLedgerRun(options) {
           const current = await ledger.rebuildRun(options.runId);
           if (!current) return null;
           assertExpectedApp(current, options.expectedAppId);
+          const invocation = getRecoverableInvocation(current);
+          if (!invocation) {
+            throw new Error(
+              'The reconcilable execution-ledger invocation is unavailable.',
+            );
+          }
           const reconciliation = await reconcileManualLedgerActivity({
             ledger,
             runId: options.runId,
+            invocationId: invocation.invocationId,
             reconciliationId,
             evidence: options.evidence,
             reason,
@@ -1822,6 +2122,269 @@ export async function reconcileExecutionLedgerEffect(options) {
 }
 
 /**
+ * @param {{handoff: Record<string, any>, execution: Record<string, any>, sourceView: Record<string, any>, targetView: Record<string, any>}} input - Verified successor readbacks.
+ * @returns {{successor: {successorId: string, intent: string, authorizationApplied: boolean, sourceEffectId: string, targetEffectId: string, targetDisposition: 'completed'|'failed'|'blocked'|'in-progress'}, sourceView: Record<string, any>, targetView: Record<string, any>}} - Safe internal operator result.
+ */
+function createManagedEffectSuccessorResult(input) {
+  const targetDisposition = input.execution.outcome?.disposition;
+  if (
+    targetDisposition !== 'completed' &&
+    targetDisposition !== 'failed' &&
+    targetDisposition !== 'blocked' &&
+    targetDisposition !== 'in-progress'
+  ) {
+    throw new Error(
+      'Managed-effect successor execution returned an unsupported target disposition.',
+    );
+  }
+  return {
+    successor: {
+      successorId: input.handoff.authorization.successorId,
+      intent: input.handoff.authorization.intent,
+      authorizationApplied: input.handoff.applied,
+      sourceEffectId: input.handoff.authorization.source.effectId,
+      targetEffectId: input.handoff.authorization.target.effectId,
+      targetDisposition,
+    },
+    sourceView: input.sourceView,
+    targetView: input.targetView,
+  };
+}
+
+/**
+ * Authorize and execute the initial finite managed-effect successor policy.
+ * The source application handler is never loaded: after proving local owner
+ * exclusion and the exact retained application-state destination, the ledger
+ * atomically creates a causally linked effect-only run and a framework-owned
+ * handler executes that run against the already-open catalog.
+ * @param {{runId: string, effectId: string, successorId: string, reason?: string, expectedAppId?: string, actor?: {kind: string, id: string}, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>}} options - Exact successor retry request.
+ * @returns {Promise<{successor: {successorId: string, intent: string, authorizationApplied: boolean, sourceEffectId: string, targetEffectId: string, targetDisposition: 'completed'|'failed'|'blocked'|'in-progress'}, sourceView: Record<string, any>, targetView: Record<string, any>} | null>} - Safe successor metadata and verified readbacks, or null.
+ */
+export async function retryExecutionLedgerEffect(options) {
+  const configuration =
+    options.configuration || resolveExecutionLedgerStoreConfiguration();
+  if (configuration.adapterName !== 'lmdb') {
+    throw new Error(
+      `Managed-effect successor retry requires the LMDB local-owner protocol until '${configuration.adapterName}' has a coordinator ownership contract.`,
+    );
+  }
+  const effectId = requireSuccessorEffectId(options.effectId);
+  const successorId = requireSuccessorId(options.successorId);
+  const actor = resolveRecoveryOperatorActor(options.actor);
+  const reason = createManagedEffectSuccessorReason(
+    successorId,
+    options.reason,
+  );
+  const preflight = await inspectExecutionLedgerRun({
+    runId: options.runId,
+    expectedAppId: options.expectedAppId,
+    configuration,
+  });
+  if (!preflight) return null;
+  getManagedEffectSuccessorRetryTarget(preflight, effectId);
+
+  return await withExecutionLedger(
+    async (ledger, context) =>
+      await withLocalLedgerServiceMutationOwnership({
+        appId: options.expectedAppId || preflight.run.appId,
+        context,
+        handler: async (localOwner) => {
+          if (!localOwner || context.adapterName !== 'lmdb') {
+            throw new Error(
+              'Managed-effect successor retry requires the held LMDB local-owner protocol.',
+            );
+          }
+          const current = await ledger.rebuildRun(options.runId);
+          if (!current) return null;
+          assertExpectedApp(current, options.expectedAppId);
+          getManagedEffectSuccessorRetryTarget(current, effectId);
+
+          const retainedAuthorization = current.events.find(
+            (/** @type {Record<string, any>} */ event) =>
+              event.type === 'effect-successor-authorized' &&
+              event.payload?.authorization?.successorId === successorId,
+          );
+          if (retainedAuthorization) {
+            const handoff = await ledger.authorizeManagedEffectSuccessorRetry({
+              sourceRunId: current.run.runId,
+              sourceEffectId: effectId,
+              successorId,
+              reason,
+              actor,
+            });
+            const retainedTarget = await ledger.rebuildRun(
+              handoff.authorization.target.runId,
+            );
+            const retainedInvocation = retainedTarget?.invocations.find(
+              (/** @type {Record<string, any>} */ invocation) =>
+                invocation.invocationId ===
+                handoff.authorization.target.invocationId,
+            );
+            if (!retainedTarget || !retainedInvocation) {
+              throw new Error(
+                'Retained managed-effect successor target is unavailable.',
+              );
+            }
+            if (
+              retainedTarget.run.status !== RunStatus.RUNNING ||
+              retainedInvocation.status !== InvocationStatus.RUNNABLE
+            ) {
+              const execution = await executeManagedEffectSuccessorRun({
+                ledger,
+                authorization: handoff.authorization,
+                request: handoff.request,
+                actor,
+              });
+              const sourceView = await ledger.rebuildRun(current.run.runId);
+              const targetView = await ledger.rebuildRun(
+                handoff.authorization.target.runId,
+              );
+              if (!sourceView || !targetView) {
+                throw new Error(
+                  'Retained managed-effect successor readback is unavailable.',
+                );
+              }
+              return createManagedEffectSuccessorResult({
+                handoff,
+                execution,
+                sourceView,
+                targetView,
+              });
+            }
+          }
+
+          const applicationStateConfiguration =
+            options.applicationStateConfiguration ||
+            resolveApplicationStateStoreConfiguration();
+          if (applicationStateConfiguration.adapterName !== 'lmdb') {
+            throw new Error(
+              'Managed-effect successor retry requires the LMDB application-state adapter.',
+            );
+          }
+          assertApplicationStateStoreIsolation(
+            applicationStateConfiguration,
+            context,
+          );
+
+          // A wrong or absent local volume must fail without materializing a
+          // replacement store. The executable catalog is opened only after
+          // this existing-identity probe proves the retained destination.
+          await withApplicationStateDB(
+            async (db, readOnlyContext) => {
+              assertApplicationStateStoreIsolation(readOnlyContext, context);
+              const readOnlyCatalog =
+                await createBuiltinManagedEffectRecoveryCatalog({
+                  db,
+                  appId: current.run.appId,
+                  adapterName: readOnlyContext.adapterName,
+                  tableName: readOnlyContext.tableName,
+                });
+              const target = getManagedEffectSuccessorRetryTarget(
+                current,
+                effectId,
+              );
+              if (
+                !hasSameCanonicalJson(
+                  readOnlyCatalog.destination,
+                  target.effect.destination,
+                )
+              ) {
+                throw new Error(
+                  'The configured application-state store does not match the retained retry destination.',
+                );
+              }
+            },
+            {
+              configuration: applicationStateConfiguration,
+              readOnly: true,
+            },
+          );
+
+          const applicationState = await openApplicationStateDB({
+            configuration: applicationStateConfiguration,
+            readOnly: false,
+          });
+          /** @type {{successor: {successorId: string, intent: string, authorizationApplied: boolean, sourceEffectId: string, targetEffectId: string, targetDisposition: 'completed'|'failed'|'blocked'|'in-progress'}, sourceView: Record<string, any>, targetView: Record<string, any>} | null | undefined} */
+          let result;
+          /** @type {unknown} */
+          let operationError;
+          let operationFailed = false;
+          try {
+            assertApplicationStateStoreIsolation(
+              applicationState.context,
+              context,
+            );
+            const catalog = await createBuiltinManagedEffectCatalog({
+              db: applicationState.db,
+              appId: current.run.appId,
+              adapterName: applicationState.context.adapterName,
+              tableName: applicationState.context.tableName,
+            });
+            await assertManagedEffectSuccessorCatalogPreflight({
+              ledger,
+              view: current,
+              effectId,
+              catalog,
+            });
+            const handoff = await ledger.authorizeManagedEffectSuccessorRetry({
+              sourceRunId: current.run.runId,
+              sourceEffectId: effectId,
+              successorId,
+              reason,
+              actor,
+            });
+            const execution = await executeManagedEffectSuccessorRun({
+              ledger,
+              authorization: handoff.authorization,
+              request: handoff.request,
+              catalog,
+              actor,
+            });
+            const sourceView = await ledger.rebuildRun(current.run.runId);
+            const targetView = await ledger.rebuildRun(
+              handoff.authorization.target.runId,
+            );
+            if (!sourceView || !targetView) {
+              throw new Error(
+                'Managed-effect successor execution committed without verified source and target readbacks.',
+              );
+            }
+            result = createManagedEffectSuccessorResult({
+              handoff,
+              execution,
+              sourceView,
+              targetView,
+            });
+          } catch (error) {
+            operationFailed = true;
+            operationError = error;
+          }
+
+          /** @type {unknown} */
+          let closeError;
+          let closeFailed = false;
+          try {
+            await applicationState.close();
+          } catch (error) {
+            closeFailed = true;
+            closeError = error;
+          }
+          if (operationFailed && closeFailed) {
+            throw new AggregateError(
+              [operationError, closeError],
+              'Managed-effect successor retry and application-state cleanup both failed.',
+            );
+          }
+          if (operationFailed) throw operationError;
+          if (closeFailed) throw closeError;
+          return result || null;
+        },
+      }),
+    { configuration },
+  );
+}
+
+/**
  * @param {string | Record<string, any>} action - Named recovery action or combined managed-effect recovery.
  * @returns {string} - Human-readable completed recovery message.
  */
@@ -1845,6 +2408,9 @@ function recoveryMessage(action) {
   }
   if (recoveryAction === 'marked-started-uncertain') {
     return 'Marked a begun attempt uncertain. This command did not dispatch an activity.';
+  }
+  if (recoveryAction === MANAGED_EFFECT_SUCCESSOR_RECOVERY_ACTION) {
+    return 'Marked a started effect-only successor uncertain. This command did not dispatch the effect again; reconcile its destination before authorizing any later successor.';
   }
   return 'Verified durable recovery state. No recovery transition was needed.';
 }
@@ -1872,6 +2438,40 @@ function effectReconciliationMessage(reconciliation) {
 }
 
 /**
+ * @param {{successorId: string, authorizationApplied: boolean, sourceEffectId: string, targetEffectId: string, targetDisposition: string}} successor - Safe successor result.
+ * @returns {string} - Human-readable completed effect-only retry result.
+ */
+function effectSuccessorMessage(successor) {
+  const authorization = successor.authorizationApplied
+    ? `Managed effect ${successor.sourceEffectId} authorized successor ${successor.successorId}`
+    : `Managed-effect successor ${successor.successorId} was already authorized`;
+  return `${authorization}; framework-owned effect ${successor.targetEffectId} completed durably. The abandoned source activity remains blocked.`;
+}
+
+/**
+ * Describe a safe non-completed target without implying that this command can
+ * recover or redispatch a claimed successor attempt.
+ * @param {{successorId: string, targetEffectId: string, targetDisposition: string}} successor - Safe successor result.
+ * @param {Record<string, any>} targetView - Verified target run.
+ * @returns {Error} - Public non-completed outcome.
+ */
+function effectSuccessorOutcomeError(successor, targetView) {
+  if (successor.targetDisposition === 'failed') {
+    return new Error(
+      `Managed-effect successor ${successor.successorId} finished ${targetView.run.status}. Terminal details remain private durable evidence.`,
+    );
+  }
+  if (successor.targetDisposition === 'blocked') {
+    return new Error(
+      `Managed-effect successor ${successor.successorId} is BLOCKED. This command did not recover or redispatch its uncertain target; inspect target run ${targetView.run.runId} before a separate recovery decision.`,
+    );
+  }
+  return new Error(
+    `Managed-effect successor ${successor.successorId} is already in progress. This command did not steal or recover target run ${targetView.run.runId}.`,
+  );
+}
+
+/**
  * Keep destination identifiers, physical store identity, retained evidence,
  * and private operator prose out of the public command failure channel. The
  * programmatic boundary still throws the original error to trusted callers.
@@ -1881,6 +2481,18 @@ function effectReconciliationMessage(reconciliation) {
 export function redactExecutionLedgerEffectReconciliationError(_error) {
   return new Error(
     'Managed-effect reconciliation could not report a safe result. No destination details are shown; retry with the same reconciliation ID after inspecting trusted local diagnostics.',
+  );
+}
+
+/**
+ * Keep source requests, destination identity, private reason prose, and both
+ * attempts' fencing details out of the public retry failure channel.
+ * @param {unknown} _error - Private successor failure.
+ * @returns {Error} - Stable public failure.
+ */
+export function redactExecutionLedgerEffectSuccessorError(_error) {
+  return new Error(
+    'Managed-effect successor retry could not report a safe result. No request or destination details are shown; retry with the same successor ID after inspecting trusted local diagnostics.',
   );
 }
 
@@ -1980,6 +2592,7 @@ function resolveOutput(provided) {
  * @property {() => Promise<{appId: string, revisionId?: string}>} [resolveExpectedIdentity] - Lazy packaged artifact authority.
  * @property {boolean} [requireLocalOwnership] - Require the current LMDB ownership protocol for recovery.
  * @property {(evidenceFile: string) => Promise<Record<string, any>>} [readReconciliationEvidenceFile] - Bounded evidence-reader seam for tests or hosts.
+ * @property {typeof retryExecutionLedgerEffect} [retryEffect] - Successor boundary seam for tests or hosts.
  * @property {Partial<ExecutionLedgerOperatorOutput>} [output] - Test or host output hooks.
  */
 
@@ -1987,13 +2600,14 @@ function resolveOutput(provided) {
  * Create fresh exact-run leaf commands. Source and packaged parents must never
  * share Commander instances because addCommand reparents its child.
  * @param {CreateExecutionLedgerOperatorCommandsOptions} [options] - Host behavior.
- * @returns {{inspectCommand: Command, recoverCommand: Command, reconcileCommand: Command, reconcileEffectCommand: Command, cancelCommand: Command}} - Fresh commands.
+ * @returns {{inspectCommand: Command, recoverCommand: Command, reconcileCommand: Command, reconcileEffectCommand: Command, retryEffectCommand: Command, cancelCommand: Command}} - Fresh commands.
  */
 export function createExecutionLedgerOperatorCommands(options = {}) {
   const output = resolveOutput(options.output);
   const readReconciliationEvidenceFile =
     options.readReconciliationEvidenceFile ||
     readExecutionLedgerReconciliationEvidenceFile;
+  const retryEffect = options.retryEffect || retryExecutionLedgerEffect;
 
   const resolveIdentity = async () =>
     normalizeExpectedIdentity(
@@ -2268,6 +2882,114 @@ export function createExecutionLedgerOperatorCommands(options = {}) {
       }
     });
 
+  const retryEffectCommand = new Command('retry-effect')
+    .description(
+      'Run one fresh causally linked effect-only retry after a permanent not-applied decision',
+    )
+    .option('--run-id <runId>', 'Persisted source execution-ledger run ID')
+    .requiredOption(
+      '--effect-id <effectId>',
+      'Exact not-applied source managed-effect ID',
+    )
+    .requiredOption(
+      '--successor-id <successorId>',
+      'Required stable successor ID; reuse it when retrying a lost response',
+    )
+    .option(
+      '--confirm-runner-stopped',
+      'Confirm that every prior runner for the source run has stopped',
+    )
+    .option('--reason <text>', 'Optional private durable operator explanation')
+    .option(
+      '--json',
+      'Write a redacted machine-readable causal source/target view',
+    )
+    .action(async (commandOptions) => {
+      if (commandOptions.confirmRunnerStopped !== true) {
+        output.failure(
+          new Error(
+            'retry-effect requires --confirm-runner-stopped before it can authorize or execute new work.',
+          ),
+        );
+        process.exitCode = 1;
+        return;
+      }
+      let runId;
+      let effectId;
+      let successorId;
+      let reasonText;
+      try {
+        runId = requireRunId(commandOptions.runId, 'retry-effect');
+        effectId = requireSuccessorEffectId(commandOptions.effectId);
+        successorId = requireSuccessorId(commandOptions.successorId);
+        reasonText = resolveReconciliationReasonText(
+          commandOptions.reason,
+          'retry-effect',
+        );
+      } catch (error) {
+        output.failure(error);
+        process.exitCode = 1;
+        return;
+      }
+      try {
+        const identity = await resolveIdentity();
+        const result = await retryEffect({
+          runId,
+          effectId,
+          successorId,
+          ...(reasonText === undefined ? {} : { reason: reasonText }),
+          expectedAppId: identity?.appId,
+          ...(identity?.revisionId
+            ? {
+                actor: {
+                  kind: 'packaged-operator',
+                  id: identity.revisionId,
+                },
+              }
+            : {}),
+        });
+        if (!result) {
+          throw new Error(
+            `No durable execution-ledger run exists; successor retry refuses to create work: ${runId}`,
+          );
+        }
+        if (commandOptions.json === true) {
+          output.json(
+            createExecutionLedgerEffectSuccessorOperatorView(
+              result.successor,
+              result.sourceView,
+              result.targetView,
+            ),
+          );
+        } else {
+          output.table([
+            ...formatExecutionLedgerOperatorRows(result.sourceView).map(
+              (row) => ({ role: 'source', ...row }),
+            ),
+            ...formatExecutionLedgerOperatorRows(result.targetView).map(
+              (row) => ({
+                role: 'target',
+                ...row,
+              }),
+            ),
+          ]);
+        }
+        if (result.successor.targetDisposition !== 'completed') {
+          output.failure(
+            effectSuccessorOutcomeError(result.successor, result.targetView),
+          );
+          process.exitCode = 1;
+          return;
+        }
+        if (commandOptions.json !== true) {
+          output.success(effectSuccessorMessage(result.successor));
+        }
+      } catch (error) {
+        output.failure(redactExecutionLedgerEffectSuccessorError(error));
+        process.exitCode = 1;
+      }
+    });
+
   const cancelCommand = new Command('cancel')
     .description(
       'Ask the current local owner to durably cancel one exact active ledger run',
@@ -2313,6 +3035,7 @@ export function createExecutionLedgerOperatorCommands(options = {}) {
     recoverCommand,
     reconcileCommand,
     reconcileEffectCommand,
+    retryEffectCommand,
     cancelCommand,
   };
 }

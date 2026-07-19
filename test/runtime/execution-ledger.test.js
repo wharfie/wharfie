@@ -37,6 +37,7 @@ import {
   createExecutionLedgerRunDirectoryScope,
   getExecutionLedgerRunDirectorySortKey,
 } from '../../src/core/lib/ledger/run-directory.js';
+import { MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID } from '../../src/core/lib/ledger/managed-effect-successor-contract.js';
 
 const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
 const RUN_ID = 'run-1';
@@ -357,7 +358,7 @@ function failedCancellationEvidenceForStart(
  */
 function eventIdFor(event) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v8',
+    domain: 'wharfie:execution-ledger-event:v9',
     prefix: 'wle',
     value: {
       schemaVersion: event.schema_version,
@@ -592,6 +593,25 @@ function createClock() {
 
 for (const adapter of getAdapterMatrix()) {
   describe(`${adapter.name} execution ledger contract`, () => {
+    test('reserves the host-managed successor activity from manual creation', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-reserved-successor-activity',
+          now: createClock(),
+        });
+        await expect(
+          ledger.createManualRun(
+            manualRun({ activityId: MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID }),
+          ),
+        ).rejects.toThrow(/reserved managed-effect successor activity/i);
+        await expect(ledger.getRun(RUN_ID)).resolves.toBeNull();
+      } finally {
+        await cleanup();
+      }
+    });
+
     test('settles the exact mixed managed-effect set atomically and rejects stale or partial plans', async () => {
       const { db, cleanup } = await adapter.create();
       const tableName = 'execution-ledger-effect-settlement';
@@ -4405,11 +4425,11 @@ for (const adapter of getAdapterMatrix()) {
         ).rejects.toThrow(/cursor.*scope/i);
         const malformedCursor = Buffer.from(
           JSON.stringify({
-            schemaVersion: 6,
+            schemaVersion: 7,
             appId,
             serviceId: scope.serviceId,
             directoryId: scope.directoryId,
-            startAfter: 'ledger-directory/v6/run/0000000000000000/not-base64!',
+            startAfter: 'ledger-directory/v7/run/0000000000000000/not-base64!',
           }),
           'utf8',
         ).toString('base64url');
@@ -4418,7 +4438,7 @@ for (const adapter of getAdapterMatrix()) {
         ).rejects.toThrow(/cursor.*scope/i);
         const missingBoundaryCursor = Buffer.from(
           JSON.stringify({
-            schemaVersion: 6,
+            schemaVersion: 7,
             appId,
             serviceId: scope.serviceId,
             directoryId: scope.directoryId,
@@ -4461,7 +4481,7 @@ for (const adapter of getAdapterMatrix()) {
         expect(tieSecond.nextCursor).toBeUndefined();
 
         // A user-controlled run ID can equal another app's internal directory
-        // partition. V8 replay is scoped to ledger/v8/, so that co-location
+        // partition. V9 replay is scoped to ledger/v9/, so that co-location
         // remains harmless instead of treating the directory row as a run row.
         const aliasTargetAppId = 'directory-alias-target';
         const aliasRunId = createExecutionLedgerRunDirectoryScope({
@@ -4550,7 +4570,7 @@ for (const adapter of getAdapterMatrix()) {
       }
     });
 
-    test('keeps V7 records and its V5 directory inert when V8 deliberately shares a custom table', async () => {
+    test('keeps V8 records and its V6 directory inert when V9 deliberately shares a custom table', async () => {
       const { db, cleanup } = await adapter.create();
       try {
         const tableName = 'operator-selected-shared-ledger-table';
@@ -4558,15 +4578,15 @@ for (const adapter of getAdapterMatrix()) {
           appId: 'legacy-app',
         });
         const legacyDirectoryId = createCanonicalJsonSha256Id({
-          domain: 'wharfie:execution-ledger-run-directory:v5',
+          domain: 'wharfie:execution-ledger-run-directory:v6',
           prefix: 'wld',
           value: {
-            schemaVersion: 5,
+            schemaVersion: 6,
             serviceId: legacyScope.serviceId,
           },
           valuePath: 'legacy execution ledger run directory partition',
         });
-        const legacyDirectorySortKey = `ledger-directory/v5/run/${String(
+        const legacyDirectorySortKey = `ledger-directory/v6/run/${String(
           Number.MAX_SAFE_INTEGER - 399,
         ).padStart(
           16,
@@ -4575,9 +4595,9 @@ for (const adapter of getAdapterMatrix()) {
         const legacyRecords = [
           {
             run_id: 'legacy-run',
-            sort_key: 'ledger/v7/head',
+            sort_key: 'ledger/v8/head',
             record_type: 'execution_ledger_head',
-            schema_version: 7,
+            schema_version: 8,
             version: 1,
             sequence: 1,
             app_id: 'legacy-app',
@@ -4585,21 +4605,21 @@ for (const adapter of getAdapterMatrix()) {
           },
           {
             run_id: 'legacy-run',
-            sort_key: 'ledger/v7/projection/run',
+            sort_key: 'ledger/v8/projection/run',
             record_type: 'execution_ledger_run_projection',
-            schema_version: 7,
+            schema_version: 8,
             status: RunStatus.RUNNING,
             version: 1,
             sequence: 1,
             app_id: 'legacy-app',
             revision_id: REVISION_ID,
-            data: { schemaVersion: 7, runId: 'legacy-run' },
+            data: { schemaVersion: 8, runId: 'legacy-run' },
           },
           {
             run_id: legacyDirectoryId,
             sort_key: legacyDirectorySortKey,
             record_type: 'execution_ledger_run_directory',
-            schema_version: 7,
+            schema_version: 8,
             service_id: legacyScope.serviceId,
             ledger_run_id: 'legacy-run',
             app_id: 'legacy-app',
@@ -4625,7 +4645,7 @@ for (const adapter of getAdapterMatrix()) {
           keyName: 'run_id',
           keyValue: 'legacy-run',
           sortKeyName: 'sort_key',
-          sortKeyValue: 'ledger/v7/head',
+          sortKeyValue: 'ledger/v8/head',
           consistentRead: true,
         });
         const legacyDirectoryBefore = await db.get({
@@ -4648,17 +4668,17 @@ for (const adapter of getAdapterMatrix()) {
         );
         await ledger.createManualRun({
           // Reuse the exact physical partition to prove the fresh sort-key
-          // namespace coexists without reinterpreting its V7 records.
+          // namespace coexists without reinterpreting its V8 records.
           runId: 'legacy-run',
           appId: 'legacy-app',
           revisionId: REVISION_ID,
           invocationId: INVOCATION_ID,
           activityId: ACTIVITY_ID,
-          transitionId: 'create-v8-legacy-run',
+          transitionId: 'create-v9-legacy-run',
           observedAt: 400,
         });
         await expect(ledger.getRun('legacy-run')).resolves.toMatchObject({
-          schemaVersion: 8,
+          schemaVersion: 9,
           appId: 'legacy-app',
         });
         await expect(
@@ -4672,7 +4692,7 @@ for (const adapter of getAdapterMatrix()) {
             keyName: 'run_id',
             keyValue: 'legacy-run',
             sortKeyName: 'sort_key',
-            sortKeyValue: 'ledger/v7/head',
+            sortKeyValue: 'ledger/v8/head',
             consistentRead: true,
           }),
         ).resolves.toEqual(legacyBefore);

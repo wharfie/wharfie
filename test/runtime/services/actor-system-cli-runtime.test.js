@@ -71,6 +71,7 @@ describe('packaged application dispatch', () => {
     expect(help).toContain('recover');
     expect(help).toContain('reconcile');
     expect(help).toContain('reconcile-effect');
+    expect(help).not.toContain('retry-effect');
     expect(help).toContain('cancel');
     expect(help).not.toMatch(/\blist\b/);
     expect(help).not.toMatch(/\bfunc\b/);

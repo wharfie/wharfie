@@ -22,6 +22,7 @@ import {
 import {
   AttemptStatus,
   EffectStatus,
+  ExecutionLedgerTransitionConflictError,
   InvocationStatus,
   RunStatus,
   createExecutionLedger,
@@ -35,6 +36,7 @@ import {
   createBuiltinManagedEffectCatalog,
   createBuiltinManagedEffectReconciliationCatalog,
 } from '../../src/core/runtime/effects/builtin-catalog.js';
+import { executeManagedEffectSuccessorRun } from '../../src/core/runtime/managed-effect-successor.js';
 import {
   MANUAL_LEDGER_INVOCATION_ID,
   createManualLedgerRunId,
@@ -44,6 +46,7 @@ import { ActivityProtocolTranscriptValidator } from '../../src/core/runtime/acti
 import {
   ExecutionLedgerOperatorScopeError,
   EXECUTION_LEDGER_RECONCILIATION_EVIDENCE_FILE_MAX_BYTES,
+  cancelExecutionLedgerRun,
   inspectExecutionLedgerRun,
   readExecutionLedgerReconciliationEvidenceFile,
   reconcileExecutionLedgerEffect,
@@ -51,9 +54,11 @@ import {
   reconcileUncertainManagedEffectAtOperatorBoundary,
   recoverExecutionLedgerRun,
   recoverStoppedManagedEffectsAtOperatorBoundary,
+  retryExecutionLedgerEffect,
 } from '../../src/core/runtime/operator/execution-ledger-operator.js';
 import {
   createExecutionLedgerEffectReconciliationOperatorView,
+  createExecutionLedgerEffectSuccessorOperatorView,
   createExecutionLedgerOperatorView,
   createExecutionLedgerRecoveryOperatorView,
 } from '../../src/core/runtime/operator/execution-ledger-view.js';
@@ -1170,6 +1175,586 @@ describe('shared execution-ledger operator boundary', () => {
     }
   }, 30000);
 
+  it('runs a not-applied managed effect as a fresh framework-owned successor and redacts both runs', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-effect-successor-'),
+    );
+    const reconciliationId = 'successor-source-reconciliation';
+    const successorId = 'remember-value-successor-1';
+    const actor = {
+      kind: 'packaged-operator',
+      id: OPERATOR_REVISION_ID,
+    };
+    try {
+      const fixture = await seedApplicationStateRecoveryRun(root, {
+        effectStates: ['STARTED'],
+      });
+      const recovered = await recoverExecutionLedgerRun({
+        runId: fixture.runId,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!recovered) throw new Error('Expected uncertain recovery result.');
+      const sourceEffect = recovered.view.effects[0];
+      const reconciled = await reconcileExecutionLedgerEffect({
+        runId: fixture.runId,
+        effectId: sourceEffect.effectId,
+        reconciliationId,
+        actor,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!reconciled) {
+        throw new Error('Expected not-applied source reconciliation.');
+      }
+      expect(reconciled.reconciliation.status).toBe(EffectStatus.NOT_APPLIED);
+      const sourceBefore = reconciled.view;
+
+      const result = await retryExecutionLedgerEffect({
+        runId: fixture.runId,
+        effectId: sourceEffect.effectId,
+        successorId,
+        reason: 'private-successor-reason',
+        actor,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!result) throw new Error('Expected managed-effect successor result.');
+
+      expect(result.successor).toMatchObject({
+        successorId,
+        intent: 'retry',
+        authorizationApplied: true,
+        sourceEffectId: sourceEffect.effectId,
+        targetDisposition: 'completed',
+      });
+      expect(result.successor.targetEffectId).not.toBe(sourceEffect.effectId);
+      expect(result.sourceView.run).toMatchObject({
+        runId: fixture.runId,
+        status: RunStatus.BLOCKED,
+        version: sourceBefore.run.version + 1,
+      });
+      expect(result.sourceView.attempts).toEqual(sourceBefore.attempts);
+      expect(result.sourceView.effects).toEqual(sourceBefore.effects);
+      expect(result.sourceView.events).toHaveLength(
+        sourceBefore.events.length + 1,
+      );
+      expect(result.sourceView.events.at(-1)).toMatchObject({
+        type: 'effect-successor-authorized',
+        actor,
+      });
+      expect(result.targetView).toMatchObject({
+        run: { status: RunStatus.COMPLETED },
+        invocations: [{ status: InvocationStatus.COMPLETED }],
+        effects: [
+          expect.objectContaining({
+            effectId: result.successor.targetEffectId,
+            status: EffectStatus.COMPLETED,
+          }),
+        ],
+      });
+
+      const operatorView = createExecutionLedgerEffectSuccessorOperatorView(
+        result.successor,
+        result.sourceView,
+        result.targetView,
+      );
+      expect(operatorView).toMatchObject({
+        schemaVersion: 5,
+        kind: 'wharfie.execution-ledger.effect-successor',
+        effectSuccessor: {
+          successorId,
+          authorizationApplied: true,
+          source: {
+            runId: fixture.runId,
+            effectId: sourceEffect.effectId,
+            status: RunStatus.BLOCKED,
+          },
+          target: {
+            runId: result.targetView.run.runId,
+            effectId: result.successor.targetEffectId,
+            status: RunStatus.COMPLETED,
+            disposition: 'completed',
+          },
+        },
+      });
+      const serialized = JSON.stringify(operatorView);
+      for (const secret of [
+        fixture.storeId,
+        'state-secret-remember-value',
+        'private-successor-reason',
+        'destinationEffectId',
+        'fencingToken',
+      ]) {
+        expect(serialized).not.toContain(secret);
+      }
+
+      rmSync(fixture.applicationStateConfiguration.storePath, {
+        recursive: true,
+        force: true,
+      });
+      const replay = await retryExecutionLedgerEffect({
+        runId: fixture.runId,
+        effectId: sourceEffect.effectId,
+        successorId,
+        reason: 'private-successor-reason',
+        actor,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      expect(replay).toMatchObject({
+        successor: {
+          successorId,
+          authorizationApplied: false,
+        },
+        sourceView: result.sourceView,
+        targetView: result.targetView,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it('makes successor authorization first-wins and admits only its dedicated atomic lifecycle', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-effect-successor-contract-'),
+    );
+    const actor = {
+      kind: 'packaged-operator',
+      id: OPERATOR_REVISION_ID,
+    };
+    try {
+      const fixture = await seedApplicationStateRecoveryRun(root, {
+        effectStates: ['STARTED'],
+      });
+      const recovered = await recoverExecutionLedgerRun({
+        runId: fixture.runId,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!recovered) throw new Error('Expected uncertain recovery result.');
+      const sourceEffect = recovered.view.effects[0];
+      const reconciled = await reconcileExecutionLedgerEffect({
+        runId: fixture.runId,
+        effectId: sourceEffect.effectId,
+        reconciliationId: 'successor-contract-reconciliation',
+        actor,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!reconciled) throw new Error('Expected source reconciliation.');
+
+      const { db, ledger } = createLmdbLedger(fixture.configuration);
+      try {
+        const request = {
+          sourceRunId: fixture.runId,
+          sourceEffectId: sourceEffect.effectId,
+          successorId: 'sole-effect-successor',
+          reason: { kind: 'contract-test' },
+          actor,
+        };
+        const handoff =
+          await ledger.authorizeManagedEffectSuccessorRetry(request);
+        expect(handoff.applied).toBe(true);
+        const runnableBeforeCancellation = await ledger.rebuildRun(
+          handoff.authorization.target.runId,
+        );
+        await expect(
+          cancelExecutionLedgerRun({
+            runId: handoff.authorization.target.runId,
+            requestId: 'cancel-successor-before-start',
+            expectedAppId: fixture.appId,
+            configuration: fixture.configuration,
+          }),
+        ).rejects.toThrow(
+          /cancellation is not supported for a managed-effect successor/i,
+        );
+        await expect(
+          ledger.rebuildRun(handoff.authorization.target.runId),
+        ).resolves.toEqual(runnableBeforeCancellation);
+        await expect(
+          ledger.authorizeManagedEffectSuccessorRetry(request),
+        ).resolves.toMatchObject({ applied: false });
+        await expect(
+          ledger.authorizeManagedEffectSuccessorRetry({
+            ...request,
+            successorId: 'competing-successor',
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerTransitionConflictError);
+        await expect(
+          ledger.authorizeManagedEffectSuccessorRetry({
+            ...request,
+            reason: { kind: 'different-work' },
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerTransitionConflictError);
+
+        const aborted = new AbortController();
+        aborted.abort(new Error('do not consume the successor slot'));
+        await expect(
+          executeManagedEffectSuccessorRun(
+            /** @type {any} */ ({
+              ledger,
+              authorization: handoff.authorization,
+              request: handoff.request,
+              signal: aborted.signal,
+            }),
+          ),
+        ).rejects.toThrow(/does not support cancellation/i);
+
+        const cancellationReason = {
+          code: 'operator-requested-cancellation',
+          name: 'CancellationError',
+          message: 'Successor cancellation is intentionally unsupported.',
+          details: { requestId: 'cancel-successor-before-claim' },
+        };
+        await expect(
+          ledger.requestManualRunCancellation({
+            runId: handoff.authorization.target.runId,
+            invocationId: handoff.authorization.target.invocationId,
+            expectedGeneration: 0,
+            expectedVersion: handoff.targetRun.version,
+            transitionId: 'cancel:successor-before-claim',
+            requestId: 'cancel-successor-before-claim',
+            reason: cancellationReason,
+          }),
+        ).rejects.toThrow(/cannot cancel a managed-effect successor/i);
+
+        await expect(
+          ledger.claimInvocation({
+            runId: handoff.authorization.target.runId,
+            invocationId: handoff.authorization.target.invocationId,
+            fencingToken: 'successor-contract-fence',
+            expectedGeneration: 0,
+            expectedVersion: handoff.targetRun.version,
+            transitionId: 'claim:successor-contract',
+          }),
+        ).rejects.toThrow(/not authorized for a managed-effect successor/i);
+
+        const started = await ledger.startManagedEffectSuccessor({
+          runId: handoff.authorization.target.runId,
+          fencingToken: 'successor-contract-fence',
+          expectedVersion: handoff.targetRun.version,
+          transitionId: 'start:successor-contract',
+          actor,
+        });
+        expect(started).toMatchObject({
+          applied: true,
+          dispatchAuthorized: true,
+          run: { status: RunStatus.RUNNING },
+          invocation: { status: InvocationStatus.RUNNING, generation: 1 },
+          attempt: { status: AttemptStatus.STARTED, generation: 1 },
+          effect: {
+            effectId: handoff.authorization.target.effectId,
+            status: EffectStatus.STARTED,
+          },
+        });
+        const startedBeforeCancellation = await ledger.rebuildRun(
+          handoff.authorization.target.runId,
+        );
+        await expect(
+          cancelExecutionLedgerRun({
+            runId: handoff.authorization.target.runId,
+            requestId: 'cancel-successor-after-start',
+            expectedAppId: fixture.appId,
+            configuration: fixture.configuration,
+          }),
+        ).rejects.toThrow(
+          /cancellation is not supported for a managed-effect successor/i,
+        );
+        await expect(
+          ledger.rebuildRun(handoff.authorization.target.runId),
+        ).resolves.toEqual(startedBeforeCancellation);
+        await expect(
+          ledger.markAttemptUncertain({
+            runId: handoff.authorization.target.runId,
+            invocationId: handoff.authorization.target.invocationId,
+            attemptId: started.attempt.attemptId,
+            fencingToken: started.attempt.fencingToken,
+            generation: started.attempt.generation,
+            expectedVersion: started.run.version,
+            transitionId: 'uncertain:successor-contract',
+            reason: { kind: 'ordinary-lifecycle-must-not-run' },
+            actor,
+          }),
+        ).rejects.toThrow(/not authorized for a managed-effect successor/i);
+        await expect(
+          ledger.recordManagedEffectRequest({
+            runId: handoff.authorization.target.runId,
+            invocationId: handoff.authorization.target.invocationId,
+            attemptId: started.attempt.attemptId,
+            fencingToken: started.attempt.fencingToken,
+            generation: started.attempt.generation,
+            expectedVersion: started.run.version,
+            transitionId: 'request:successor-contract',
+            request: {
+              protocol: 'wharfie.activity',
+              protocolVersion: 1,
+              type: 'effect-request',
+              attemptId: started.attempt.attemptId,
+              sequence: 1,
+              effectId: handoff.authorization.target.effectId,
+              capability: handoff.request.capability,
+              operation: handoff.request.operation,
+              input: handoff.request.input,
+              requestedReplayProperties:
+                handoff.request.requestedReplayProperties,
+            },
+            adapter: handoff.authorization.contract.adapter,
+            destination: handoff.authorization.contract.destination,
+            verifier: handoff.authorization.contract.verifier,
+            substantiatedReplayProperties:
+              handoff.authorization.contract.substantiatedReplayProperties,
+            actor,
+          }),
+        ).rejects.toThrow(/not authorized for a managed-effect successor/i);
+        const replayedStart = await ledger.startManagedEffectSuccessor({
+          runId: handoff.authorization.target.runId,
+          fencingToken: 'successor-contract-fence',
+          expectedVersion: handoff.targetRun.version,
+          transitionId: 'start:successor-contract',
+          actor,
+        });
+        expect(replayedStart).toMatchObject({
+          applied: false,
+          dispatchAuthorized: false,
+          attempt: { attemptId: started.attempt.attemptId },
+          effect: { effectId: started.effect.effectId },
+        });
+        const target = await ledger.rebuildRun(
+          handoff.authorization.target.runId,
+        );
+        expect(target).toMatchObject({
+          events: [
+            expect.objectContaining({ type: 'effect-successor-run-created' }),
+            expect.objectContaining({ type: 'effect-successor-started' }),
+          ],
+        });
+        expect(target?.attempts).toHaveLength(1);
+        expect(target?.effects).toHaveLength(1);
+      } finally {
+        await db.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it('authorizes S1 -> S2 only after the first successor is permanently reconciled', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-effect-successor-chain-'),
+    );
+    const actor = {
+      kind: 'packaged-operator',
+      id: OPERATOR_REVISION_ID,
+    };
+    try {
+      const fixture = await seedApplicationStateRecoveryRun(root, {
+        effectStates: ['STARTED'],
+      });
+      const recovered = await recoverExecutionLedgerRun({
+        runId: fixture.runId,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!recovered) throw new Error('Expected uncertain source recovery.');
+      const sourceEffect = recovered.view.effects[0];
+      const sourceReconciled = await reconcileExecutionLedgerEffect({
+        runId: fixture.runId,
+        effectId: sourceEffect.effectId,
+        reconciliationId: 'successor-chain-source-not-applied',
+        actor,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!sourceReconciled) {
+        throw new Error('Expected not-applied source reconciliation.');
+      }
+
+      /** @type {Record<string, any> | undefined} */
+      let firstHandoff;
+      /** @type {Record<string, any> | null | undefined} */
+      let firstBlocked;
+      const { db, ledger } = createLmdbLedger(fixture.configuration);
+      const applicationDb = await createApplicationStateDBClient('lmdb', {
+        path: fixture.applicationStateConfiguration.storePath,
+      });
+      try {
+        const catalog = await createBuiltinManagedEffectCatalog({
+          db: applicationDb,
+          appId: fixture.appId,
+          adapterName: 'lmdb',
+        });
+        const handoff = await ledger.authorizeManagedEffectSuccessorRetry({
+          sourceRunId: fixture.runId,
+          sourceEffectId: sourceEffect.effectId,
+          successorId: 'successor-chain-one',
+          reason: { kind: 'successor-chain-test' },
+          actor,
+        });
+        firstHandoff = handoff;
+        let adapterCalls = 0;
+        const failingCatalog = {
+          ...catalog,
+          /** @param {Record<string, any>} frame */
+          resolve(frame) {
+            const adapter = catalog.resolve(frame);
+            return Object.freeze({
+              ...adapter,
+              async execute() {
+                adapterCalls += 1;
+                throw new Error('simulated first-successor adapter failure');
+              },
+            });
+          },
+        };
+        const firstExecution = await executeManagedEffectSuccessorRun({
+          ledger,
+          authorization: handoff.authorization,
+          request: handoff.request,
+          catalog: failingCatalog,
+          actor,
+          createFencingToken: () => 'successor-chain-one-fence',
+        });
+        expect(firstExecution.outcome).toMatchObject({
+          disposition: 'blocked',
+        });
+        expect(adapterCalls).toBe(1);
+        const blocked = await ledger.rebuildRun(
+          handoff.authorization.target.runId,
+        );
+        if (!blocked) {
+          throw new Error('Expected a blocked first managed-effect successor.');
+        }
+        firstBlocked = blocked;
+        expect(firstBlocked).toMatchObject({
+          run: { status: RunStatus.BLOCKED },
+          invocations: [
+            expect.objectContaining({ status: InvocationStatus.UNCERTAIN }),
+          ],
+          attempts: [
+            expect.objectContaining({ status: AttemptStatus.ABANDONED }),
+          ],
+          effects: [
+            expect.objectContaining({ status: EffectStatus.UNCERTAIN }),
+          ],
+        });
+      } finally {
+        await applicationDb.close();
+        await db.close();
+      }
+      if (!firstHandoff || !firstBlocked) {
+        throw new Error('Expected a blocked first managed-effect successor.');
+      }
+
+      const firstReconciled = await reconcileExecutionLedgerEffect({
+        runId: firstHandoff.authorization.target.runId,
+        effectId: firstHandoff.authorization.target.effectId,
+        reconciliationId: 'successor-chain-one-not-applied',
+        actor,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!firstReconciled) {
+        throw new Error('Expected first-successor destination reconciliation.');
+      }
+      expect(firstReconciled).toMatchObject({
+        reconciliation: { status: EffectStatus.NOT_APPLIED },
+        view: {
+          run: { status: RunStatus.FAILED },
+          invocations: [
+            expect.objectContaining({ status: InvocationStatus.FAILED }),
+          ],
+          attempts: [
+            expect.objectContaining({ status: AttemptStatus.ABANDONED }),
+          ],
+          effects: [
+            expect.objectContaining({ status: EffectStatus.NOT_APPLIED }),
+          ],
+        },
+      });
+
+      const second = await retryExecutionLedgerEffect({
+        runId: firstHandoff.authorization.target.runId,
+        effectId: firstHandoff.authorization.target.effectId,
+        successorId: 'successor-chain-two',
+        reason: 'second successor after permanent first not-applied decision',
+        actor,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!second) throw new Error('Expected second managed-effect successor.');
+      expect(second).toMatchObject({
+        successor: {
+          successorId: 'successor-chain-two',
+          authorizationApplied: true,
+          sourceEffectId: firstHandoff.authorization.target.effectId,
+          targetDisposition: 'completed',
+        },
+        sourceView: {
+          run: { status: RunStatus.FAILED },
+          attempts: [
+            expect.objectContaining({ status: AttemptStatus.ABANDONED }),
+          ],
+          effects: [
+            expect.objectContaining({ status: EffectStatus.NOT_APPLIED }),
+          ],
+        },
+        targetView: {
+          run: { status: RunStatus.COMPLETED },
+          invocations: [
+            expect.objectContaining({ status: InvocationStatus.COMPLETED }),
+          ],
+          effects: [
+            expect.objectContaining({ status: EffectStatus.COMPLETED }),
+          ],
+        },
+      });
+      expect(second.sourceView.attempts).toEqual(firstReconciled.view.attempts);
+      expect(second.sourceView.effects).toEqual(firstReconciled.view.effects);
+      expect(second.targetView.run.trigger).toMatchObject({
+        kind: 'effect-successor',
+        source: {
+          runId: firstHandoff.authorization.target.runId,
+          effectId: firstHandoff.authorization.target.effectId,
+          reconciliationId: 'successor-chain-one-not-applied',
+          disposition: EffectStatus.NOT_APPLIED,
+        },
+      });
+
+      const replay = await retryExecutionLedgerEffect({
+        runId: firstHandoff.authorization.target.runId,
+        effectId: firstHandoff.authorization.target.effectId,
+        successorId: 'successor-chain-two',
+        reason: 'second successor after permanent first not-applied decision',
+        actor,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      expect(replay).toMatchObject({
+        successor: {
+          successorId: 'successor-chain-two',
+          authorizationApplied: false,
+          targetDisposition: 'completed',
+        },
+        sourceView: second.sourceView,
+        targetView: second.targetView,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
   it('reconciles an uncertain effect from a late permanent receipt without resolving its attempt', async () => {
     const root = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-operator-effect-late-receipt-'),
@@ -1428,6 +2013,14 @@ describe('shared execution-ledger operator boundary', () => {
           configuration,
         }),
       ).rejects.toThrow(/requires the LMDB control adapter/i);
+      await expect(
+        retryExecutionLedgerEffect({
+          runId,
+          effectId: 'effect-1',
+          successorId: 'successor-1',
+          configuration,
+        }),
+      ).rejects.toThrow(/requires the LMDB local-owner protocol/i);
       expect(existsSync(root)).toBe(false);
     } finally {
       rmSync(parent, { recursive: true, force: true });

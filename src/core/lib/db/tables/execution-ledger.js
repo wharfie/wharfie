@@ -74,6 +74,14 @@ import {
   getExecutionLedgerRunDirectorySortKey,
   parseExecutionLedgerRunDirectorySortKey,
 } from '../../ledger/run-directory.js';
+import {
+  MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID,
+  assertInitialManagedEffectSuccessorRetryEligible,
+  assertManagedEffectSuccessorAuthorizationDerived,
+  createManagedEffectSuccessorAuthorization,
+  createManagedEffectSuccessorRequestDigest,
+  normalizeManagedEffectSuccessorAuthorization,
+} from '../../ledger/managed-effect-successor-contract.js';
 import { CONDITION_TYPE, KEY_TYPE } from '../base.js';
 import { comparePortablePageKeys } from '../utils.js';
 
@@ -98,26 +106,34 @@ export {
 };
 
 /**
- * The V8 ledger deliberately covers one manual, single-activity invocation
- * plus its explicitly managed effects. It is the only writable durable run
+ * The V9 ledger covers one single-activity invocation plus its explicitly
+ * managed effects. A run is either manual authored work or one causally linked
+ * host-managed effect successor. It is the only writable durable run
  * boundary. Its table write authority is a trusted control-plane boundary:
  * content IDs and request digests detect inconsistent records, but are not
  * signatures against a writer that can replace an entire semantically valid
  * history.
  */
-// V8 intentionally does not read v1-v7 records. Older durable records remain
+// V9 intentionally does not read v1-v8 records. Older durable records remain
 // isolated under their original sort-key and run-directory namespaces.
 
 const KEY_NAME = 'run_id';
 const SORT_KEY_NAME = 'sort_key';
 const RUN_DIRECTORY_RECORD_TYPE = 'execution_ledger_run_directory';
-const RUN_DIRECTORY_RUN_KIND = 'manual';
-const RUN_DIRECTORY_CURSOR_SCHEMA_VERSION = 6;
+const RUN_DIRECTORY_RUN_KINDS = new Set(['manual', 'effect-successor']);
+const RUN_DIRECTORY_CURSOR_SCHEMA_VERSION = 7;
 const RUN_DIRECTORY_DEFAULT_PAGE_SIZE = 50;
 const RUN_DIRECTORY_MAX_PAGE_SIZE = 100;
 const RUN_DIRECTORY_MAX_PAGE_RETRIES = 3;
+const SUCCESSOR_IDENTITY_SORT_KEY_PREFIX = 'successor-identity/v1/';
 const EVENT_TYPES = new Set([
   'manual-run-created',
+  'effect-successor-authorized',
+  'effect-successor-run-created',
+  'effect-successor-started',
+  'effect-successor-terminal',
+  'effect-successor-interrupted',
+  'effect-successor-reconciled',
   'manual-cancellation-requested',
   'attempt-claimed',
   'attempt-started',
@@ -295,22 +311,31 @@ function normalizeCancellationRequest(value, label) {
 }
 
 /**
- * @param {unknown} value - Candidate manual trigger.
- * @returns {{kind: 'manual'}} - Validated trigger.
+ * @param {unknown} value - Candidate run trigger.
+ * @returns {Record<string, any>} - Validated trigger.
  */
-function normalizeManualTrigger(value) {
+function normalizeRunTrigger(value) {
   const trigger = cloneBoundedJsonObject(
     value ?? { kind: 'manual' },
     EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
     'trigger',
   );
-  assertExactKeys(trigger, ['kind'], 'trigger');
-  if (trigger.kind !== 'manual') {
-    throw new TypeError(
-      "trigger.kind must be 'manual' in the first ledger slice.",
-    );
+  if (trigger.kind === 'manual') {
+    assertExactKeys(trigger, ['kind'], 'trigger');
+    return { kind: 'manual' };
   }
-  return { kind: 'manual' };
+  if (trigger.kind === 'effect-successor') {
+    return normalizeManagedEffectSuccessorAuthorization(trigger);
+  }
+  throw new TypeError("trigger.kind must be 'manual' or 'effect-successor'.");
+}
+
+/**
+ * @param {Record<string, any>} trigger - Verified run trigger.
+ * @returns {'manual'|'effect-successor'} - Redacted run-directory kind.
+ */
+function runKindFromTrigger(trigger) {
+  return trigger.kind === 'effect-successor' ? 'effect-successor' : 'manual';
 }
 
 /**
@@ -328,6 +353,48 @@ function normalizeManualRequestEnvelope(value, label) {
       `${label}.callerMetadata`,
     ),
   };
+}
+
+/**
+ * Validate the private input of one host-managed successor invocation. The
+ * raw effect ID is target-owned while the remaining logical request is the
+ * exact content copied from the verified source effect.
+ * @param {unknown} value - Candidate successor run input.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {{effectId: string, request: Record<string, any>}} - Exact target request.
+ */
+function normalizeManagedEffectSuccessorRunInput(value, label) {
+  const input = cloneReferencedPayloadObject(value, label);
+  assertExactKeys(input, ['effectRequest'], label);
+  const effectRequest = cloneReferencedPayloadObject(
+    input.effectRequest,
+    `${label}.effectRequest`,
+  );
+  assertExactKeys(
+    effectRequest,
+    [
+      'effectId',
+      'capability',
+      'operation',
+      'input',
+      'requestedReplayProperties',
+    ],
+    `${label}.effectRequest`,
+  );
+  const effectId = assertOpaqueId(
+    effectRequest.effectId,
+    `${label}.effectRequest.effectId`,
+  );
+  const request = normalizeManagedEffectRequest(
+    {
+      capability: effectRequest.capability,
+      operation: effectRequest.operation,
+      input: effectRequest.input,
+      requestedReplayProperties: effectRequest.requestedReplayProperties,
+    },
+    `${label}.effectRequest`,
+  );
+  return { effectId, request };
 }
 
 /**
@@ -396,7 +463,7 @@ function normalizeTerminalSummary(value, label) {
 
 /**
  * Normalize the immutable evidence-backed decision that resolves one retained
- * uncertain attempt. The verifier is deliberately fixed in V8: accepting a
+ * uncertain attempt. The verifier is deliberately fixed in V9: accepting a
  * caller-selected verifier would make the durable event claim semantics that
  * this ledger does not actually implement.
  * @param {unknown} value - Candidate reconciliation event payload.
@@ -673,13 +740,119 @@ function createRunDirectoryRecord(runId, data) {
     app_id: data.appId,
     ledger_run_id: runId,
     revision_id: data.revisionId,
-    run_kind: RUN_DIRECTORY_RUN_KIND,
+    run_kind: runKindFromTrigger(data.trigger),
     status: data.status,
     version: data.version,
     sequence: data.lastSequence,
     created_at: data.createdAt,
     updated_at: data.updatedAt,
   };
+}
+
+/**
+ * @param {string} successorId - Stable public successor identity.
+ * @returns {string} - App-directory-scoped immutable identity key.
+ */
+function getSuccessorIdentitySortKey(successorId) {
+  const normalized = assertOpaqueId(successorId, 'successorId');
+  return `${SUCCESSOR_IDENTITY_SORT_KEY_PREFIX}${createCanonicalJsonSha256Id({
+    domain: 'wharfie:managed-effect-successor-public-id:v1',
+    prefix: 'wsu',
+    value: normalized,
+    valuePath: 'managed effect successor public identity',
+  })}`;
+}
+
+/**
+ * @param {string} appId - Application scope.
+ * @param {Record<string, any>} authorization - Exact immutable authorization.
+ * @returns {Record<string, any>} - Global app-scoped successor identity row.
+ */
+function createSuccessorIdentityRecord(appId, authorization) {
+  const scope = createExecutionLedgerRunDirectoryScope({ appId });
+  const normalized =
+    normalizeManagedEffectSuccessorAuthorization(authorization);
+  return {
+    [KEY_NAME]: scope.directoryId,
+    [SORT_KEY_NAME]: getSuccessorIdentitySortKey(normalized.successorId),
+    record_type: 'execution_ledger_successor_identity',
+    schema_version: EXECUTION_LEDGER_SCHEMA_VERSION,
+    app_id: appId,
+    successor_id: normalized.successorId,
+    slot_id: normalized.slotId,
+    source_run_id: normalized.source.runId,
+    target_run_id: normalized.target.runId,
+    authorization_digest: createCanonicalJsonSha256Id({
+      domain: 'wharfie:managed-effect-successor-authorization:v1',
+      prefix: 'wsy',
+      value: normalized,
+      valuePath: 'managed effect successor authorization',
+    }),
+  };
+}
+
+/**
+ * @param {DBClient} db - Transactional control store.
+ * @param {string} tableName - Ledger table name.
+ * @param {string} appId - Application scope.
+ * @param {string} successorId - Stable public identity.
+ * @returns {Promise<Record<string, any> | null>} - Verified identity row.
+ */
+async function readSuccessorIdentityRecord(db, tableName, appId, successorId) {
+  const scope = createExecutionLedgerRunDirectoryScope({ appId });
+  const sortKey = getSuccessorIdentitySortKey(successorId);
+  const raw = await db.get({
+    tableName,
+    keyName: KEY_NAME,
+    keyValue: scope.directoryId,
+    sortKeyName: SORT_KEY_NAME,
+    sortKeyValue: sortKey,
+    consistentRead: true,
+  });
+  if (!raw) return null;
+  const record = cloneBoundedJsonObject(
+    raw,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    'successor identity record',
+  );
+  assertExactKeys(
+    record,
+    [
+      KEY_NAME,
+      SORT_KEY_NAME,
+      'record_type',
+      'schema_version',
+      'app_id',
+      'successor_id',
+      'slot_id',
+      'source_run_id',
+      'target_run_id',
+      'authorization_digest',
+    ],
+    'successor identity record',
+  );
+  if (
+    record[KEY_NAME] !== scope.directoryId ||
+    record[SORT_KEY_NAME] !== sortKey ||
+    record.record_type !== 'execution_ledger_successor_identity' ||
+    record.schema_version !== EXECUTION_LEDGER_SCHEMA_VERSION ||
+    record.app_id !== appId ||
+    record.successor_id !== successorId
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      record.target_run_id || successorId,
+      'invalid successor identity record',
+    );
+  }
+  for (const [field, label] of [
+    ['slot_id', 'successor identity slot'],
+    ['source_run_id', 'successor identity source run'],
+    ['target_run_id', 'successor identity target run'],
+    ['authorization_digest', 'successor identity authorization digest'],
+  ]) {
+    assertOpaqueId(record[field], label);
+  }
+  return record;
 }
 
 /**
@@ -731,7 +904,7 @@ function normalizeRunDirectoryRecord(raw, appId) {
     record.schema_version !== EXECUTION_LEDGER_SCHEMA_VERSION ||
     record.service_id !== scope.serviceId ||
     record.app_id !== appId ||
-    record.run_kind !== RUN_DIRECTORY_RUN_KIND
+    !RUN_DIRECTORY_RUN_KINDS.has(record.run_kind)
   ) {
     throw new ExecutionLedgerProjectionError(runId, 'invalid run directory');
   }
@@ -881,14 +1054,14 @@ function parseRunDirectoryCursor(cursor, scope) {
 
 /**
  * @param {Record<string, any>} directory - Verified directory row.
- * @returns {{runId: string, appId: string, revisionId: string, kind: 'manual', status: string, version: number, lastSequence: number, createdAt: number, updatedAt: number}} - Redacted page item.
+ * @returns {{runId: string, appId: string, revisionId: string, kind: 'manual'|'effect-successor', status: string, version: number, lastSequence: number, createdAt: number, updatedAt: number}} - Redacted page item.
  */
 function createRunDirectoryPageItem(directory) {
   return {
     runId: directory.ledger_run_id,
     appId: directory.app_id,
     revisionId: directory.revision_id,
-    kind: RUN_DIRECTORY_RUN_KIND,
+    kind: directory.run_kind,
     status: directory.status,
     version: directory.version,
     lastSequence: directory.sequence,
@@ -980,7 +1153,7 @@ function createEventId({
   payload,
 }) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v8',
+    domain: 'wharfie:execution-ledger-event:v9',
     prefix: 'wle',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -1174,7 +1347,7 @@ function normalizeRunSnapshot(run, runId) {
   assertPositiveSafeInteger(value.lastSequence, 'run projection sequence');
   normalizeObservedAt(value.createdAt, 'run projection createdAt');
   normalizeObservedAt(value.updatedAt, 'run projection updatedAt');
-  value.trigger = normalizeManualTrigger(value.trigger);
+  value.trigger = normalizeRunTrigger(value.trigger);
   value.requestRef = normalizePayloadReference(
     value.requestRef,
     MANUAL_REQUEST_PAYLOAD_SCHEMA,
@@ -2232,7 +2405,7 @@ function normalizeTransitionReceipt(value, runId) {
 /**
  * @param {Record<string, any>} event - Event being folded.
  * @param {string} runId - Expected run identity.
- * @returns {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>}} - Event projection snapshots.
+ * @returns {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} - Event projection snapshots.
  */
 function eventSnapshots(event, runId) {
   const payload = cloneBoundedJsonObject(
@@ -2240,7 +2413,16 @@ function eventSnapshots(event, runId) {
     EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
     'event payload',
   );
-  if (event.type === 'manual-cancellation-requested') {
+  if (
+    event.type === 'effect-successor-authorized' ||
+    event.type === 'effect-successor-run-created'
+  ) {
+    assertExactKeys(
+      payload,
+      ['run', 'invocation', 'authorization'],
+      'event payload',
+    );
+  } else if (event.type === 'manual-cancellation-requested') {
     assertSnapshotKeys(
       payload,
       ['run', 'invocation'],
@@ -2254,6 +2436,12 @@ function eventSnapshots(event, runId) {
       'event payload',
     );
   } else if (event.type === 'uncertain-effect-reconciled') {
+    assertExactKeys(
+      payload,
+      ['run', 'invocation', 'effect', 'reconciliation'],
+      'event payload',
+    );
+  } else if (event.type === 'effect-successor-reconciled') {
     assertExactKeys(
       payload,
       ['run', 'invocation', 'effect', 'reconciliation'],
@@ -2274,7 +2462,9 @@ function eventSnapshots(event, runId) {
   } else {
     assertExactKeys(
       payload,
-      event.type === 'manual-run-created'
+      ['manual-run-created', 'effect-successor-run-created'].includes(
+        event.type,
+      )
         ? ['run', 'invocation']
         : ['run', 'invocation', 'attempt'],
       'event payload',
@@ -2282,7 +2472,7 @@ function eventSnapshots(event, runId) {
   }
   const run = normalizeRunSnapshot(payload.run, runId);
   const invocation = normalizeInvocationSnapshot(payload.invocation, runId);
-  /** @type {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>}} */
+  /** @type {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} */
   const result = { run, invocation };
   if (Object.prototype.hasOwnProperty.call(payload, 'attempt')) {
     result.attempt = normalizeAttemptSnapshot(payload.attempt, runId);
@@ -2322,7 +2512,8 @@ function eventSnapshots(event, runId) {
   }
   if (Object.prototype.hasOwnProperty.call(payload, 'reconciliation')) {
     result.reconciliation =
-      event.type === 'uncertain-effect-reconciled'
+      event.type === 'uncertain-effect-reconciled' ||
+      event.type === 'effect-successor-reconciled'
         ? normalizeUncertainEffectReconciliation(
             payload.reconciliation,
             'event payload reconciliation',
@@ -2331,6 +2522,11 @@ function eventSnapshots(event, runId) {
             payload.reconciliation,
             'event payload reconciliation',
           );
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'authorization')) {
+    result.authorization = normalizeManagedEffectSuccessorAuthorization(
+      payload.authorization,
+    );
   }
   return result;
 }
@@ -2417,9 +2613,11 @@ function hasExactEffectUncertaintyEventLink(input) {
   } = input;
   if (
     !uncertaintyEvent ||
-    !['effect-became-uncertain', 'attempt-became-uncertain'].includes(
-      uncertaintyEvent.type,
-    ) ||
+    ![
+      'effect-became-uncertain',
+      'effect-successor-interrupted',
+      'attempt-became-uncertain',
+    ].includes(uncertaintyEvent.type) ||
     uncertaintyEvent.sequence !== reconciliation.uncertaintySequence ||
     uncertaintyEvent.event_id !== reconciliation.uncertaintyEventId ||
     uncertaintyEvent.fence.coordinatorEpoch !==
@@ -2463,6 +2661,115 @@ function hasExactEffectUncertaintyEventLink(input) {
     sameSnapshot(uncertaintyAttempt, attempt) &&
     sameSnapshot(uncertaintyEffect, effect)
   );
+}
+
+/**
+ * Classify one already-folded NOT_APPLIED effect as a legal immediate source
+ * for the finite successor policy.  The two cases are deliberately
+ * discriminated rather than accepting broad terminal/status combinations:
+ * ordinary work remains BLOCKED/UNCERTAIN after its effect reconciliation,
+ * while a framework successor terminalizes FAILED/FAILED when its sole
+ * effect is permanently proven NOT_APPLIED.  Both retain the exact abandoned
+ * physical attempt and immutable reconciliation evidence.
+ * @param {{run: Record<string, any>, invocation: Record<string, any> | undefined, attempt: Record<string, any> | undefined, effect: Record<string, any> | undefined, uncertaintyEvent: Record<string, any> | undefined, reconciliationEvent: Record<string, any> | undefined, runId: string}} input - Candidate retained retry source.
+ * @returns {'manual'|'effect-successor'|undefined} - Exact allowed source family.
+ */
+function classifyNotAppliedManagedEffectSuccessorSource(input) {
+  const {
+    run,
+    invocation,
+    attempt,
+    effect,
+    uncertaintyEvent,
+    reconciliationEvent,
+    runId,
+  } = input;
+  const reconciliation = effect?.reconciliation;
+  if (
+    !invocation ||
+    !attempt ||
+    !effect ||
+    !reconciliation ||
+    effect.status !== EffectStatus.NOT_APPLIED ||
+    reconciliation.resolutionStatus !== EffectStatus.NOT_APPLIED ||
+    attempt.status !== AttemptStatus.ABANDONED ||
+    effect.requestedBy?.attemptId !== attempt.attemptId ||
+    !uncertaintyEvent ||
+    !reconciliationEvent ||
+    reconciliationEvent.event_id === uncertaintyEvent.event_id ||
+    reconciliationEvent.sequence <= uncertaintyEvent.sequence ||
+    reconciliation.uncertaintyEventId !== uncertaintyEvent.event_id ||
+    reconciliation.uncertaintySequence !== uncertaintyEvent.sequence
+  ) {
+    return undefined;
+  }
+  let uncertaintySnapshots;
+  let reconciliationSnapshots;
+  try {
+    uncertaintySnapshots = eventSnapshots(uncertaintyEvent, runId);
+    reconciliationSnapshots = eventSnapshots(reconciliationEvent, runId);
+  } catch {
+    return undefined;
+  }
+  const uncertaintyEffects = [
+    ...(uncertaintySnapshots.effect ? [uncertaintySnapshots.effect] : []),
+    ...(uncertaintySnapshots.effects || []),
+  ].filter((candidate) => candidate.effectId === effect.effectId);
+  const uncertaintyEffect =
+    uncertaintyEffects.length === 1 ? uncertaintyEffects[0] : undefined;
+  const reconciledEffect = reconciliationSnapshots.effect;
+  const invalidSnapshots =
+    uncertaintySnapshots.attempt?.attemptId !== attempt.attemptId ||
+    uncertaintySnapshots.attempt?.status !== AttemptStatus.ABANDONED ||
+    !uncertaintyEffect ||
+    uncertaintyEffect.invocationId !== invocation.invocationId ||
+    uncertaintyEffect.status !== EffectStatus.UNCERTAIN ||
+    uncertaintyEffect.requestedBy?.attemptId !== attempt.attemptId ||
+    uncertaintyEffect.startedBy?.attemptId !== attempt.attemptId ||
+    reconciledEffect?.effectId !== effect.effectId ||
+    !reconciledEffect ||
+    !sameSnapshot(reconciledEffect, effect) ||
+    !hasSameCanonicalJson(
+      reconciliationSnapshots.reconciliation,
+      reconciliation,
+    );
+  if (invalidSnapshots) {
+    return undefined;
+  }
+  if (
+    run.trigger?.kind === 'manual' &&
+    run.status === RunStatus.BLOCKED &&
+    invocation.status === InvocationStatus.UNCERTAIN &&
+    reconciliationEvent.type === 'uncertain-effect-reconciled'
+  ) {
+    return 'manual';
+  }
+  if (
+    run.trigger?.kind !== 'effect-successor' ||
+    run.status !== RunStatus.FAILED ||
+    invocation.status !== InvocationStatus.FAILED ||
+    invocation.terminal?.type !== 'failed' ||
+    invocation.terminal?.attemptId !== attempt.attemptId ||
+    reconciliationEvent.type !== 'effect-successor-reconciled'
+  ) {
+    return undefined;
+  }
+  try {
+    const authorization = normalizeManagedEffectSuccessorAuthorization(
+      run.trigger,
+    );
+    if (
+      authorization.target.runId !== run.runId ||
+      authorization.target.invocationId !== invocation.invocationId ||
+      authorization.target.effectId !== effect.effectId ||
+      authorization.target.destinationEffectId !== effect.destinationEffectId
+    ) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  return 'effect-successor';
 }
 
 /**
@@ -2513,6 +2820,108 @@ function assertEventRequestDigest(
       activityId: invocation.activityId,
       requestRef: run.requestRef,
       trigger: run.trigger,
+    };
+  } else if (event.type === 'effect-successor-run-created') {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      transitionId: event.transition_id,
+      actor: event.actor,
+      coordinatorEpoch: event.fence.coordinatorEpoch,
+      appId: run.appId,
+      revisionId: run.revisionId,
+      activityId: invocation.activityId,
+      requestRef: run.requestRef,
+      trigger: run.trigger,
+      authorization: normalizeManagedEffectSuccessorAuthorization(
+        event.payload.authorization,
+      ),
+    };
+  } else if (event.type === 'effect-successor-authorized') {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      expectedVersion: currentRun?.version,
+      transitionId: event.transition_id,
+      authorization: normalizeManagedEffectSuccessorAuthorization(
+        event.payload.authorization,
+      ),
+      actor: event.actor,
+      coordinatorEpoch: event.fence.coordinatorEpoch,
+    };
+  } else if (event.type === 'effect-successor-started') {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      attemptId: attempt?.attemptId,
+      fencingToken: attempt?.fencingToken,
+      generation: attempt?.generation,
+      expectedVersion: currentRun?.version,
+      transitionId: event.transition_id,
+      effectId: effect?.effectId,
+      destinationEffectId: effect?.destinationEffectId,
+      requestRef: effect?.requestRef,
+      adapter: effect?.adapter,
+      destination: effect?.destination,
+      verifier: effect?.verifier,
+      requestedReplayProperties: effect?.requestedReplayProperties,
+      substantiatedReplayProperties: effect?.substantiatedReplayProperties,
+      actor: event.actor,
+      coordinatorEpoch: attempt?.coordinatorEpoch,
+    };
+  } else if (event.type === 'effect-successor-terminal') {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      attemptId: attempt?.attemptId,
+      fencingToken: attempt?.fencingToken,
+      generation: attempt?.generation,
+      expectedVersion: currentRun?.version,
+      expectedEffectVersion: currentEffect?.version,
+      transitionId: event.transition_id,
+      effectId: effect?.effectId,
+      outcomeRef: effect?.outcomeRef,
+      evidenceRef: attempt?.evidenceRef,
+      terminal: attempt?.terminal,
+      actor: event.actor,
+      coordinatorEpoch: attempt?.coordinatorEpoch,
+    };
+  } else if (event.type === 'effect-successor-interrupted') {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      attemptId: attempt?.attemptId,
+      fencingToken: attempt?.fencingToken,
+      generation: attempt?.generation,
+      expectedVersion: currentRun?.version,
+      expectedEffectVersion: currentEffect?.version,
+      transitionId: event.transition_id,
+      effectId: effect?.effectId,
+      reason: effect?.uncertainty,
+      actor: event.actor,
+      coordinatorEpoch: attempt?.coordinatorEpoch,
+    };
+  } else if (event.type === 'effect-successor-reconciled') {
+    value = {
+      runId,
+      invocationId: reconciliation?.invocationId,
+      attemptId: reconciliation?.attemptId,
+      effectId: reconciliation?.effectId,
+      fencingToken: reconciliation?.fencingToken,
+      generation: reconciliation?.generation,
+      expectedVersion: currentRun?.version,
+      expectedEffectVersion: currentEffect?.version,
+      transitionId: event.transition_id,
+      reconciliationId: reconciliation?.reconciliationId,
+      uncertaintyEventId: reconciliation?.uncertaintyEventId,
+      uncertaintySequence: reconciliation?.uncertaintySequence,
+      verifier: reconciliation?.verifier,
+      evidenceRef: reconciliation?.evidenceRef,
+      resolutionStatus: reconciliation?.resolutionStatus,
+      terminal: invocation.terminal,
+      reason: reconciliation?.reason,
+      actor: event.actor,
+      coordinatorEpoch: reconciliation?.coordinatorEpoch,
     };
   } else if (event.type === 'manual-cancellation-requested') {
     value = {
@@ -2917,7 +3326,16 @@ async function applyEvent(
           : 0,
     );
 
-  if (event.type === 'manual-run-created') {
+  if (
+    event.type === 'manual-run-created' ||
+    event.type === 'effect-successor-run-created'
+  ) {
+    const isSuccessor = event.type === 'effect-successor-run-created';
+    const authorization = isSuccessor
+      ? normalizeManagedEffectSuccessorAuthorization(
+          event.payload.authorization,
+        )
+      : undefined;
     if (
       currentRun ||
       currentInvocation ||
@@ -2938,11 +3356,65 @@ async function applyEvent(
       run.revisionId !== invocation.revisionId ||
       !hasSameCanonicalJson(run.requestRef, invocation.requestRef) ||
       event.fence.coordinatorEpoch !== 0 ||
-      event.fence.invocationGeneration !== 0
+      event.fence.invocationGeneration !== 0 ||
+      (isSuccessor
+        ? !authorization ||
+          run.runId !== authorization.target.runId ||
+          invocation.invocationId !== authorization.target.invocationId ||
+          run.revisionId !== authorization.target.revisionId ||
+          invocation.activityId !== MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID ||
+          !hasSameCanonicalJson(run.trigger, authorization) ||
+          authorization.source.runId === authorization.target.runId ||
+          authorization.source.effectId === authorization.target.effectId ||
+          authorization.target.destinationEffectId !==
+            createManagedEffectDestinationId({
+              appId: run.appId,
+              runId: run.runId,
+              invocationId: invocation.invocationId,
+              effectId: authorization.target.effectId,
+            })
+        : run.trigger.kind !== 'manual' ||
+          invocation.activityId === MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID)
     ) {
       throw new ExecutionLedgerProjectionError(runId, 'invalid run creation');
     }
-    await payloadReader.readManualRequest(run.requestRef);
+    const requestEnvelope = await payloadReader.readManualRequest(
+      run.requestRef,
+    );
+    if (authorization) {
+      const target = normalizeManagedEffectSuccessorRunInput(
+        requestEnvelope.input,
+        'effect successor run input',
+      );
+      let derivedAuthorization;
+      try {
+        derivedAuthorization = assertManagedEffectSuccessorAuthorizationDerived(
+          {
+            appId: run.appId,
+            revisionId: run.revisionId,
+            request: target.request,
+            authorization,
+          },
+        );
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'effect successor authorization derivation mismatch',
+        );
+      }
+      if (
+        Object.keys(requestEnvelope.callerMetadata).length !== 0 ||
+        target.effectId !== authorization.target.effectId ||
+        !hasSameCanonicalJson(derivedAuthorization, authorization) ||
+        createManagedEffectSuccessorRequestDigest(target.request) !==
+          authorization.target.requestDigest
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'effect successor target request mismatch',
+        );
+      }
+    }
     assertEventRequestDigest(
       event,
       undefined,
@@ -2968,7 +3440,10 @@ async function applyEvent(
     !currentInvocation ||
     (!attempt &&
       !reconciliation &&
-      event.type !== 'manual-cancellation-requested')
+      ![
+        'manual-cancellation-requested',
+        'effect-successor-authorized',
+      ].includes(event.type))
   ) {
     throw new ExecutionLedgerProjectionError(runId, 'event lacks prior state');
   }
@@ -2999,7 +3474,177 @@ async function applyEvent(
     }
   }
 
+  if (event.type === 'effect-successor-authorized') {
+    const authorization = normalizeManagedEffectSuccessorAuthorization(
+      event.payload.authorization,
+    );
+    const sourceEffect = state.effects.get(
+      effectMapKey(
+        authorization.source.invocationId,
+        authorization.source.effectId,
+      ),
+    );
+    const sourceAttempt = state.attempts.get(
+      attemptMapKey(
+        authorization.source.invocationId,
+        authorization.source.attemptId,
+      ),
+    );
+    const uncertaintyEvent = state.eventsById.get(
+      authorization.source.uncertaintyEventId,
+    );
+    const reconciliationEvent = state.eventsById.get(
+      authorization.source.reconciliationEventId,
+    );
+    const priorSlot = [...state.eventsBySequence.values()].find(
+      (candidate) =>
+        candidate.type === 'effect-successor-authorized' &&
+        normalizeManagedEffectSuccessorAuthorization(
+          candidate.payload.authorization,
+        ).slotId === authorization.slotId,
+    );
+    const sourceRequest = sourceEffect
+      ? await payloadReader.readManagedEffectRequest(sourceEffect.requestRef)
+      : undefined;
+    let derivedAuthorization;
+    try {
+      if (sourceEffect && sourceRequest) {
+        assertInitialManagedEffectSuccessorRetryEligible({
+          effect: sourceEffect,
+          request: sourceRequest,
+        });
+        derivedAuthorization = assertManagedEffectSuccessorAuthorizationDerived(
+          {
+            appId: currentRun.appId,
+            revisionId: currentRun.revisionId,
+            request: sourceRequest,
+            authorization,
+          },
+        );
+      }
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'effect successor policy or derivation mismatch',
+      );
+    }
+    const expectedRun = {
+      ...cloneJsonObject(currentRun, 'current successor source run'),
+      version: currentRun.version + 1,
+      lastSequence: event.sequence,
+      updatedAt: event.observed_at,
+    };
+    const expectedInvocation = {
+      ...cloneJsonObject(
+        currentInvocation,
+        'current successor source invocation',
+      ),
+      version: currentInvocation.version + 1,
+      lastSequence: event.sequence,
+      updatedAt: event.observed_at,
+    };
+    const reconciliationSnapshots = reconciliationEvent
+      ? eventSnapshots(reconciliationEvent, runId)
+      : undefined;
+    const sourceFamily = classifyNotAppliedManagedEffectSuccessorSource({
+      run: currentRun,
+      invocation: currentInvocation,
+      attempt: sourceAttempt,
+      effect: sourceEffect,
+      uncertaintyEvent,
+      reconciliationEvent,
+      runId,
+    });
+    if (
+      priorSlot ||
+      !sourceFamily ||
+      authorization.source.runId !== runId ||
+      authorization.source.invocationId !== currentInvocation.invocationId ||
+      authorization.target.runId === runId ||
+      authorization.target.revisionId !== currentRun.revisionId ||
+      !sourceEffect ||
+      sourceEffect.status !== EffectStatus.NOT_APPLIED ||
+      !sourceEffect.reconciliation ||
+      sourceEffect.reconciliation.resolutionStatus !==
+        EffectStatus.NOT_APPLIED ||
+      sourceEffect.reconciliation.reconciliationId !==
+        authorization.source.reconciliationId ||
+      sourceEffect.reconciliation.uncertaintyEventId !==
+        authorization.source.uncertaintyEventId ||
+      sourceEffect.reconciliation.uncertaintySequence !==
+        authorization.source.uncertaintySequence ||
+      sourceEffect.requestedBy.attemptId !== authorization.source.attemptId ||
+      !sourceAttempt ||
+      sourceAttempt.status !== AttemptStatus.ABANDONED ||
+      !uncertaintyEvent ||
+      uncertaintyEvent.sequence !== authorization.source.uncertaintySequence ||
+      !reconciliationEvent ||
+      !['uncertain-effect-reconciled', 'effect-successor-reconciled'].includes(
+        reconciliationEvent.type,
+      ) ||
+      reconciliationEvent.sequence !==
+        authorization.source.reconciliationSequence ||
+      reconciliationSnapshots?.effect?.effectId !== sourceEffect.effectId ||
+      reconciliationSnapshots?.reconciliation?.reconciliationId !==
+        authorization.source.reconciliationId ||
+      !hasSameCanonicalJson(
+        sourceEffect.adapter,
+        authorization.contract.adapter,
+      ) ||
+      !hasSameCanonicalJson(
+        sourceEffect.destination,
+        authorization.contract.destination,
+      ) ||
+      !hasSameCanonicalJson(
+        sourceEffect.verifier,
+        authorization.contract.verifier,
+      ) ||
+      !hasSameCanonicalJson(
+        sourceEffect.substantiatedReplayProperties,
+        authorization.contract.substantiatedReplayProperties,
+      ) ||
+      !sourceRequest ||
+      !derivedAuthorization ||
+      !hasSameCanonicalJson(derivedAuthorization, authorization) ||
+      createManagedEffectSuccessorRequestDigest(sourceRequest) !==
+        authorization.target.requestDigest ||
+      !hasSameCanonicalJson(run, expectedRun) ||
+      !hasSameCanonicalJson(invocation, expectedInvocation) ||
+      event.fence.coordinatorEpoch !== 0 ||
+      event.fence.invocationGeneration !== currentInvocation.generation
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid effect successor authorization',
+      );
+    }
+    assertEventRequestDigest(
+      event,
+      currentRun,
+      currentInvocation,
+      undefined,
+      undefined,
+      new Map(),
+      run,
+      invocation,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      runId,
+    );
+    state.run = run;
+    state.invocations.set(invocation.invocationId, invocation);
+    return;
+  }
+
   if (event.type === 'manual-cancellation-requested') {
+    if (currentRun.trigger?.kind === 'effect-successor') {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'effect successor cancellation is not authorized',
+      );
+    }
     const cancellationRequest = run.cancellationRequest;
     const matchingRequest =
       cancellationRequest &&
@@ -3104,7 +3749,385 @@ async function applyEvent(
         }
       }
     }
+  } else if (event.type === 'effect-successor-started') {
+    if (!attempt || !effect) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'effect successor start lacks attempt or effect state',
+      );
+    }
+    const authorization = normalizeManagedEffectSuccessorAuthorization(
+      currentRun.trigger,
+    );
+    const request = await payloadReader.readManagedEffectRequest(
+      effect.requestRef,
+    );
+    try {
+      assertManagedEffectSuccessorPlannedRequest({
+        run: currentRun,
+        invocation: currentInvocation,
+        effect,
+        request,
+        priorEffects: [...state.effects.values()],
+      });
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'effect successor start does not match its retained authority',
+      );
+    }
+    const exactFence =
+      attempt.attemptId === effect.requestedBy.attemptId &&
+      attempt.generation === effect.requestedBy.generation &&
+      attempt.coordinatorEpoch === effect.requestedBy.coordinatorEpoch &&
+      attempt.fencingToken === effect.requestedBy.fencingToken &&
+      effect.startedBy?.attemptId === attempt.attemptId &&
+      effect.startedBy?.generation === attempt.generation &&
+      effect.startedBy?.coordinatorEpoch === attempt.coordinatorEpoch &&
+      effect.startedBy?.fencingToken === attempt.fencingToken &&
+      event.fence.coordinatorEpoch === attempt.coordinatorEpoch &&
+      event.fence.invocationGeneration === attempt.generation;
+    if (
+      currentRun.trigger?.kind !== 'effect-successor' ||
+      currentRun.status !== RunStatus.RUNNING ||
+      run.status !== RunStatus.RUNNING ||
+      currentInvocation.status !== InvocationStatus.RUNNABLE ||
+      currentInvocation.generation !== 0 ||
+      invocation.status !== InvocationStatus.RUNNING ||
+      invocation.generation !== 1 ||
+      currentAttempt ||
+      currentEffect ||
+      currentEffectsForAttempt.size !== 0 ||
+      attempt.status !== AttemptStatus.STARTED ||
+      attempt.generation !== 1 ||
+      attempt.version !== 1 ||
+      attempt.lastSequence !== event.sequence ||
+      attempt.attemptId !==
+        createAttemptId(runId, invocation.invocationId, attempt.generation) ||
+      attempt.claimedAt !== event.observed_at ||
+      attempt.startedAt !== event.observed_at ||
+      attempt.updatedAt !== event.observed_at ||
+      Object.prototype.hasOwnProperty.call(attempt, 'terminal') ||
+      Object.prototype.hasOwnProperty.call(attempt, 'evidenceRef') ||
+      Object.prototype.hasOwnProperty.call(attempt, 'abandonment') ||
+      effect.status !== EffectStatus.STARTED ||
+      effect.version !== 1 ||
+      effect.lastSequence !== event.sequence ||
+      effect.createdAt !== event.observed_at ||
+      effect.updatedAt !== event.observed_at ||
+      effect.effectId !== authorization.target.effectId ||
+      effect.destinationEffectId !== authorization.target.destinationEffectId ||
+      effect.requestedBy.protocolSequence !== 1 ||
+      !exactFence ||
+      Object.prototype.hasOwnProperty.call(effect, 'terminal') ||
+      Object.prototype.hasOwnProperty.call(effect, 'outcomeRef') ||
+      Object.prototype.hasOwnProperty.call(effect, 'cancellation') ||
+      Object.prototype.hasOwnProperty.call(effect, 'uncertainty') ||
+      Object.prototype.hasOwnProperty.call(effect, 'reconciliation') ||
+      !hasSameOptionalFields(currentInvocation, invocation, [
+        'terminal',
+        'uncertainty',
+        'cancellationRequest',
+      ])
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid atomic effect successor start',
+      );
+    }
+    assertAttemptBelongsToInvocation(attempt, run, invocation, runId);
+    assertEffectBelongsToInvocation(effect, run, invocation, runId);
+    try {
+      assertStoppedAttemptClosureFits({
+        run,
+        invocation,
+        attempt,
+        effects: [effect],
+        label: 'folded effect successor start',
+      });
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'effect successor start exceeds stopped-attempt closure budget',
+      );
+    }
+  } else if (event.type === 'effect-successor-terminal') {
+    if (!attempt || !effect || !currentAttempt || !currentEffect) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'effect successor terminal lacks retained effect state',
+      );
+    }
+    const expectedStart = await createLedgerAttemptStart(
+      run,
+      invocation,
+      attempt,
+      payloadReader,
+    );
+    const verifiedEvidence = validateLedgerAttemptEvidence(
+      await payloadReader.readEvidence(attempt.evidenceRef),
+      expectedStart,
+      'persisted effect successor terminal evidence',
+    );
+    const terminal = verifiedEvidence.terminal;
+    const statuses = statusesForTerminal(terminal);
+    const request = await payloadReader.readManagedEffectRequest(
+      effect.requestRef,
+    );
+    const outcome = await payloadReader.readManagedEffectOutcome(
+      effect.outcomeRef,
+    );
+    const terminalEffects = new Map(state.effects);
+    terminalEffects.set(
+      effectMapKey(effect.invocationId, effect.effectId),
+      effect,
+    );
+    try {
+      verifyManagedEffectOutcome(
+        effectVerifierRegistry,
+        effect,
+        request,
+        outcome,
+        'persisted effect successor outcome',
+      );
+      await assertAttemptEvidenceMatchesManagedEffects(
+        verifiedEvidence.evidence,
+        attempt,
+        { effects: terminalEffects },
+        payloadReader,
+        effectVerifierRegistry,
+        runId,
+      );
+      await assertManagedEffectSuccessorTerminal({
+        run: currentRun,
+        invocation: currentInvocation,
+        terminal,
+        effects: terminalEffects,
+        payloadReader,
+      });
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'effect successor terminal evidence is invalid',
+      );
+    }
+    const expectedStatus = outcome.ok
+      ? EffectStatus.COMPLETED
+      : EffectStatus.FAILED;
+    if (
+      currentRun.trigger?.kind !== 'effect-successor' ||
+      !['completed', 'failed'].includes(terminal.type) ||
+      currentRun.status !== RunStatus.RUNNING ||
+      run.status !== statuses.run ||
+      currentInvocation.status !== InvocationStatus.RUNNING ||
+      invocation.status !== statuses.invocation ||
+      currentInvocation.generation !== currentAttempt.generation ||
+      invocation.generation !== currentInvocation.generation ||
+      currentAttempt.status !== AttemptStatus.STARTED ||
+      attempt.status !== statuses.attempt ||
+      attempt.startedAt !== currentAttempt.startedAt ||
+      terminal.attemptId !== attempt.attemptId ||
+      !hasSameCanonicalJson(
+        createTerminalSummary(terminal),
+        attempt.terminal,
+      ) ||
+      !hasSameCanonicalJson(invocation.terminal, attempt.terminal) ||
+      currentEffect.status !== EffectStatus.STARTED ||
+      effect.status !== expectedStatus ||
+      effect.terminal?.ok !== outcome.ok ||
+      outcome.ok !== (terminal.type === 'completed') ||
+      (outcome.ok === false &&
+        !hasSameCanonicalJson(terminal.error, outcome.error)) ||
+      Object.prototype.hasOwnProperty.call(effect, 'reconciliation') ||
+      !hasSameOptionalFields(currentInvocation, invocation, [
+        'cancellationRequest',
+      ]) ||
+      !hasSameOptionalFields(currentEffect, effect, ['startedBy'])
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid atomic effect successor terminal',
+      );
+    }
+    assertAttemptBelongsToInvocation(attempt, run, invocation, runId);
+    assertEffectBelongsToInvocation(effect, run, invocation, runId);
+    assertAttemptAdvance(currentAttempt, attempt, event, runId);
+    assertEffectAdvance(currentEffect, effect, event, runId);
+  } else if (event.type === 'effect-successor-interrupted') {
+    if (!attempt || !effect || !currentAttempt || !currentEffect) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'effect successor interruption lacks retained effect state',
+      );
+    }
+    const exactStartedFence =
+      effect.startedBy?.attemptId === attempt.attemptId &&
+      effect.startedBy?.generation === attempt.generation &&
+      effect.startedBy?.coordinatorEpoch === attempt.coordinatorEpoch &&
+      effect.startedBy?.fencingToken === attempt.fencingToken;
+    if (
+      currentRun.trigger?.kind !== 'effect-successor' ||
+      currentRun.status !== RunStatus.RUNNING ||
+      run.status !== RunStatus.BLOCKED ||
+      currentInvocation.status !== InvocationStatus.RUNNING ||
+      invocation.status !== InvocationStatus.UNCERTAIN ||
+      currentAttempt.status !== AttemptStatus.STARTED ||
+      attempt.status !== AttemptStatus.ABANDONED ||
+      attempt.startedAt !== currentAttempt.startedAt ||
+      currentEffect.status !== EffectStatus.STARTED ||
+      effect.status !== EffectStatus.UNCERTAIN ||
+      !exactStartedFence ||
+      !hasSameCanonicalJson(effect.uncertainty, attempt.abandonment) ||
+      !hasSameCanonicalJson(effect.uncertainty, invocation.uncertainty) ||
+      Object.prototype.hasOwnProperty.call(effect, 'terminal') ||
+      Object.prototype.hasOwnProperty.call(effect, 'outcomeRef') ||
+      Object.prototype.hasOwnProperty.call(effect, 'cancellation') ||
+      Object.prototype.hasOwnProperty.call(effect, 'reconciliation') ||
+      unresolvedCurrentEffects.length !== 1 ||
+      unresolvedCurrentEffects[0].effectId !== currentEffect.effectId
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid effect successor interruption',
+      );
+    }
+    assertAttemptBelongsToInvocation(attempt, run, invocation, runId);
+    assertEffectBelongsToInvocation(effect, run, invocation, runId);
+    assertAttemptAdvance(currentAttempt, attempt, event, runId);
+    assertEffectAdvance(currentEffect, effect, event, runId);
+  } else if (event.type === 'effect-successor-reconciled') {
+    if (!reconciliation || !currentAttempt || !currentEffect || !effect) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'effect successor reconciliation lacks retained state',
+      );
+    }
+    const uncertaintyBySequence = state.eventsBySequence.get(
+      reconciliation.uncertaintySequence,
+    );
+    const uncertaintyById = state.eventsById.get(
+      reconciliation.uncertaintyEventId,
+    );
+    const request = await payloadReader.readManagedEffectRequest(
+      effect.requestRef,
+    );
+    let outcome;
+    if (reconciliation.resolutionStatus === EffectStatus.NOT_APPLIED) {
+      const evidence =
+        await payloadReader.readManagedEffectReconciliationEvidence(
+          reconciliation.evidenceRef,
+        );
+      try {
+        verifyManagedEffectReconciliationEvidence(
+          effectVerifierRegistry,
+          effect,
+          request,
+          reconciliation.verifier,
+          evidence,
+          'persisted effect successor reconciliation evidence',
+        );
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'effect successor not-applied evidence is invalid',
+        );
+      }
+    } else {
+      if (
+        !hasSameCanonicalJson(reconciliation.verifier, effect.verifier) ||
+        !hasSameCanonicalJson(reconciliation.evidenceRef, effect.outcomeRef)
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'effect successor reconciled outcome authority mismatch',
+        );
+      }
+      outcome = await payloadReader.readManagedEffectOutcome(
+        reconciliation.evidenceRef,
+      );
+      try {
+        verifyManagedEffectOutcome(
+          effectVerifierRegistry,
+          effect,
+          request,
+          outcome,
+          'persisted effect successor reconciled outcome',
+        );
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'effect successor reconciled outcome evidence is invalid',
+        );
+      }
+    }
+    const terminalType =
+      reconciliation.resolutionStatus === EffectStatus.COMPLETED
+        ? 'completed'
+        : 'failed';
+    const expectedTerminal = {
+      type: terminalType,
+      attemptId: currentAttempt.attemptId,
+    };
+    if (
+      !uncertaintyBySequence ||
+      uncertaintyBySequence !== uncertaintyById ||
+      currentRun.trigger?.kind !== 'effect-successor' ||
+      currentRun.status !== RunStatus.BLOCKED ||
+      run.status !==
+        (terminalType === 'completed'
+          ? RunStatus.COMPLETED
+          : RunStatus.FAILED) ||
+      currentInvocation.status !== InvocationStatus.UNCERTAIN ||
+      invocation.status !==
+        (terminalType === 'completed'
+          ? InvocationStatus.COMPLETED
+          : InvocationStatus.FAILED) ||
+      invocation.generation !== currentInvocation.generation ||
+      !hasSameCanonicalJson(invocation.terminal, expectedTerminal) ||
+      Object.prototype.hasOwnProperty.call(invocation, 'uncertainty') ||
+      currentAttempt.status !== AttemptStatus.ABANDONED ||
+      currentEffect.status !== EffectStatus.UNCERTAIN ||
+      effect.status !== reconciliation.resolutionStatus ||
+      reconciliation.invocationId !== invocation.invocationId ||
+      reconciliation.attemptId !== currentAttempt.attemptId ||
+      reconciliation.effectId !== effect.effectId ||
+      reconciliation.generation !== currentAttempt.generation ||
+      reconciliation.coordinatorEpoch !== currentAttempt.coordinatorEpoch ||
+      reconciliation.fencingToken !== currentAttempt.fencingToken ||
+      event.fence.coordinatorEpoch !== reconciliation.coordinatorEpoch ||
+      event.fence.invocationGeneration !== reconciliation.generation ||
+      !hasExactEffectUncertaintyEventLink({
+        run: currentRun,
+        invocation: currentInvocation,
+        attempt: currentAttempt,
+        effect: currentEffect,
+        reconciliation,
+        uncertaintyEvent: uncertaintyBySequence,
+        runId,
+      }) ||
+      !hasSameCanonicalJson(effect.reconciliation, reconciliation) ||
+      !hasSameOptionalFields(currentInvocation, invocation, [
+        'cancellationRequest',
+      ]) ||
+      !hasSameOptionalFields(currentEffect, effect, ['startedBy']) ||
+      (outcome &&
+        (reconciliation.resolutionStatus === EffectStatus.COMPLETED) !==
+          (outcome.ok === true))
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid effect successor reconciliation',
+      );
+    }
+    assertEffectBelongsToInvocation(effect, run, invocation, runId);
+    assertEffectAdvance(currentEffect, effect, event, runId);
   } else if (event.type.startsWith('effect-')) {
+    if (currentRun.trigger?.kind === 'effect-successor') {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'ordinary managed-effect lifecycle is not authorized for a successor',
+      );
+    }
     if (!attempt || !effect || !currentAttempt) {
       throw new ExecutionLedgerProjectionError(
         runId,
@@ -3145,6 +4168,20 @@ async function applyEvent(
     }
 
     if (event.type === 'effect-requested') {
+      try {
+        assertManagedEffectSuccessorPlannedRequest({
+          run: currentRun,
+          invocation: currentInvocation,
+          effect,
+          request,
+          priorEffects: [...state.effects.values()],
+        });
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'effect successor requested an unauthorized effect',
+        );
+      }
       if (
         currentEffect ||
         unresolvedCurrentEffects.length >=
@@ -3358,6 +4395,12 @@ async function applyEvent(
       }
     }
   } else if (event.type === 'uncertain-effect-reconciled') {
+    if (currentRun.trigger?.kind === 'effect-successor') {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'ordinary managed-effect reconciliation is not authorized for a successor',
+      );
+    }
     if (!reconciliation || !currentAttempt || !currentEffect || !effect) {
       throw new ExecutionLedgerProjectionError(
         runId,
@@ -3474,6 +4517,12 @@ async function applyEvent(
       }
     }
   } else if (event.type === 'uncertain-attempt-reconciled') {
+    if (currentRun.trigger?.kind === 'effect-successor') {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'ordinary attempt reconciliation is not authorized for a successor',
+      );
+    }
     if (!reconciliation || !currentAttempt) {
       throw new ExecutionLedgerProjectionError(
         runId,
@@ -3506,6 +4555,20 @@ async function applyEvent(
       effectVerifierRegistry,
       runId,
     );
+    try {
+      await assertManagedEffectSuccessorTerminal({
+        run: currentRun,
+        invocation: currentInvocation,
+        terminal: verifiedEvidence.terminal,
+        effects: state.effects,
+        payloadReader,
+      });
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid reconciled effect successor terminal',
+      );
+    }
     try {
       assertSupportedManualTerminal(
         verifiedEvidence.terminal,
@@ -3562,6 +4625,12 @@ async function applyEvent(
       );
     }
   } else {
+    if (currentRun.trigger?.kind === 'effect-successor') {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'ordinary attempt lifecycle is not authorized for a successor',
+      );
+    }
     if (!attempt) {
       throw new ExecutionLedgerProjectionError(
         runId,
@@ -3644,6 +4713,20 @@ async function applyEvent(
         effectVerifierRegistry,
         runId,
       );
+      try {
+        await assertManagedEffectSuccessorTerminal({
+          run: currentRun,
+          invocation: currentInvocation,
+          terminal: verifiedEvidence.terminal,
+          effects: state.effects,
+          payloadReader,
+        });
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'invalid effect successor terminal',
+        );
+      }
       try {
         assertSupportedManualTerminal(
           verifiedEvidence.terminal,
@@ -3894,9 +4977,9 @@ async function readRunRecords(db, tableName, runId) {
   return await db.query({
     tableName,
     consistentRead: true,
-    // A custom V8 table may deliberately retain older or lifecycle rows in the
-    // same physical partition. Only the fresh V8 record namespace participates
-    // in replay; no old history is accidentally treated as a malformed V8 run.
+    // A custom V9 table may deliberately retain older or lifecycle rows in the
+    // same physical partition. Only the fresh V9 record namespace participates
+    // in replay; no old history is accidentally treated as a malformed V9 run.
     keyConditions: [
       pkEq(KEY_NAME, runId),
       skBegins(SORT_KEY_NAME, EXECUTION_LEDGER_SORT_KEY_PREFIX),
@@ -4392,7 +5475,7 @@ async function startedTransitionResult(result, runId, payloadStore) {
  */
 function createTransitionRequestDigest(type, value) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-transition:v8',
+    domain: 'wharfie:execution-ledger-transition:v9',
     prefix: 'wlt',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -4896,6 +5979,187 @@ async function assertAttemptEvidenceMatchesManagedEffects(
 }
 
 /**
+ * A successor authorization is authority for exactly one retained logical
+ * effect. Prove that an effect-request transition is that plan before either
+ * accepting a write or folding retained history.
+ * @param {{run: Record<string, any>, invocation: Record<string, any>, effect: Record<string, any>, request: Record<string, any>, priorEffects: Record<string, any>[]}} input - Candidate successor request boundary.
+ * @returns {void}
+ */
+function assertManagedEffectSuccessorPlannedRequest(input) {
+  if (input.run.trigger?.kind !== 'effect-successor') return;
+  const authorization = normalizeManagedEffectSuccessorAuthorization(
+    input.run.trigger,
+  );
+  if (
+    input.invocation.invocationId !== authorization.target.invocationId ||
+    input.invocation.activityId !== MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID ||
+    input.priorEffects.some(
+      (effect) => effect.invocationId === input.invocation.invocationId,
+    ) ||
+    input.effect.effectId !== authorization.target.effectId ||
+    input.effect.destinationEffectId !==
+      authorization.target.destinationEffectId ||
+    createManagedEffectSuccessorRequestDigest(input.request) !==
+      authorization.target.requestDigest ||
+    !hasSameCanonicalJson(
+      input.effect.adapter,
+      authorization.contract.adapter,
+    ) ||
+    !hasSameCanonicalJson(
+      input.effect.destination,
+      authorization.contract.destination,
+    ) ||
+    !hasSameCanonicalJson(
+      input.effect.verifier,
+      authorization.contract.verifier,
+    ) ||
+    !hasSameCanonicalJson(
+      input.effect.substantiatedReplayProperties,
+      authorization.contract.substantiatedReplayProperties,
+    )
+  ) {
+    throw new TypeError(
+      'effect-successor request must match its sole authorized effect plan.',
+    );
+  }
+}
+
+/**
+ * A normally completed or failed successor attempt must have executed the
+ * exact sole effect authorized by its trigger. This prevents a low-level
+ * caller from terminalizing an empty or alternate-effect successor run.
+ * @param {{run: Record<string, any>, invocation: Record<string, any>, terminal: Record<string, any>, effects: Map<string, Record<string, any>>, payloadReader: ReturnType<typeof createLedgerPayloadReader>}} input - Candidate terminal boundary.
+ * @returns {Promise<void>}
+ */
+async function assertManagedEffectSuccessorTerminal(input) {
+  if (input.run.trigger?.kind !== 'effect-successor') return;
+  const authorization = normalizeManagedEffectSuccessorAuthorization(
+    input.run.trigger,
+  );
+  const effects = [...input.effects.values()].filter(
+    (effect) => effect.invocationId === input.invocation.invocationId,
+  );
+  if (
+    input.invocation.invocationId !== authorization.target.invocationId ||
+    input.invocation.activityId !== MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID ||
+    effects.length !== 1 ||
+    effects[0].effectId !== authorization.target.effectId ||
+    effects[0].destinationEffectId !== authorization.target.destinationEffectId
+  ) {
+    throw new TypeError(
+      'effect-successor terminal requires its exact sole authorized effect.',
+    );
+  }
+  const [effect] = effects;
+  if (input.terminal.type === 'completed') {
+    if (effect.status !== EffectStatus.COMPLETED || !effect.outcomeRef) {
+      throw new TypeError(
+        'completed effect-successor terminal requires a completed authorized effect.',
+      );
+    }
+    const outcome = await input.payloadReader.readManagedEffectOutcome(
+      effect.outcomeRef,
+    );
+    if (
+      outcome.ok !== true ||
+      !hasSameCanonicalJson(input.terminal.result, outcome.result)
+    ) {
+      throw new TypeError(
+        'completed effect-successor terminal must return the authorized effect result.',
+      );
+    }
+  } else if (
+    input.terminal.type === 'failed' &&
+    effect.status !== EffectStatus.FAILED
+  ) {
+    throw new TypeError(
+      'failed effect-successor terminal requires a failed authorized effect.',
+    );
+  } else if (
+    input.terminal.type === 'cancelled' &&
+    effect.status !== EffectStatus.CANCELLED
+  ) {
+    throw new TypeError(
+      'cancelled effect-successor terminal requires a cancelled authorized effect.',
+    );
+  }
+}
+
+/**
+ * Construct the framework-owned transcript for the one-effect successor
+ * activity. Unlike an authored activity, this executor has no application
+ * frames to preserve: its complete protocol is the retained start, its one
+ * authorized request, the verifier-backed outcome, and the matching terminal.
+ * Building and revalidating it here keeps normal attempt evidence invariants
+ * without reopening the generic activity runner.
+ * @param {{start: Readonly<Record<string, any>>, attempt: Record<string, any>, effect: Record<string, any>, request: Record<string, any>, outcome: Record<string, any>}} input - Exact retained successor delivery and verified outcome.
+ * @returns {{terminal: Readonly<Record<string, any>>, evidence: Record<string, any>}} - Strict canonical terminal transcript.
+ */
+function createManagedEffectSuccessorTerminalEvidence(input) {
+  const requestFrame = validateActivityProtocolComponentFrame(
+    {
+      protocol: ACTIVITY_PROTOCOL_NAME,
+      protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+      type: 'effect-request',
+      attemptId: input.attempt.attemptId,
+      sequence: input.effect.requestedBy.protocolSequence,
+      effectId: input.effect.effectId,
+      capability: input.request.capability,
+      operation: input.request.operation,
+      input: input.request.input,
+      requestedReplayProperties: input.request.requestedReplayProperties,
+    },
+    'effect successor terminal effect request',
+  );
+  const resultFrame = validateActivityProtocolHostFrame(
+    {
+      protocol: ACTIVITY_PROTOCOL_NAME,
+      protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+      type: 'effect-result',
+      attemptId: input.attempt.attemptId,
+      effectId: input.effect.effectId,
+      ok: input.outcome.ok,
+      ...(input.outcome.ok
+        ? { result: input.outcome.result }
+        : { error: input.outcome.error }),
+      substantiatedReplayProperties:
+        input.outcome.substantiatedReplayProperties,
+      evidence: input.outcome.evidence,
+    },
+    'effect successor terminal effect result',
+  );
+  const terminal = validateActivityProtocolComponentFrame(
+    {
+      protocol: ACTIVITY_PROTOCOL_NAME,
+      protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+      type: input.outcome.ok ? 'completed' : 'failed',
+      attemptId: input.attempt.attemptId,
+      sequence: input.effect.requestedBy.protocolSequence + 1,
+      ...(input.outcome.ok
+        ? { result: input.outcome.result }
+        : { error: input.outcome.error }),
+    },
+    'effect successor terminal frame',
+  );
+  const transcript = new ActivityProtocolTranscriptValidator();
+  transcript.acceptHostFrame(input.start);
+  transcript.acceptComponentFrame(requestFrame);
+  transcript.acceptHostFrame(resultFrame);
+  transcript.acceptComponentFrame(terminal);
+  return validateLedgerAttemptEvidence(
+    {
+      status: terminal.type,
+      start: input.start,
+      terminal,
+      frames: [input.start, requestFrame, resultFrame, terminal],
+      transcript: transcript.snapshot(),
+    },
+    input.start,
+    'effect successor terminal evidence',
+  );
+}
+
+/**
  * @param {string} runId - Durable run identity.
  * @param {string} invocationId - Durable invocation identity.
  * @param {number} generation - Attempt generation scoped to the invocation.
@@ -4903,7 +6167,7 @@ async function assertAttemptEvidenceMatchesManagedEffects(
  */
 function createAttemptId(runId, invocationId, generation) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-attempt:v8',
+    domain: 'wharfie:execution-ledger-attempt:v9',
     prefix: 'wla',
     value: { runId, invocationId, generation },
     valuePath: 'execution ledger attempt identity',
@@ -4953,13 +6217,147 @@ export function createExecutionLedger({
    * @param {string} runId - Run identity.
    * @returns {Promise<ReturnType<typeof foldAndVerifyRun>>} - Verified run state.
    */
-  async function readVerifiedRun(runId) {
+  async function readFoldedRun(runId) {
     return await foldAndVerifyRun(
       await readRunRecords(db, resolvedTableName, runId),
       runId,
       payloadStore,
       effectVerifierRegistry,
     );
+  }
+
+  /**
+   * Verify the bounded cross-partition records created by one atomic successor
+   * handoff. Base folds intentionally do not recurse, so both source and target
+   * reads can validate their immediate edge without walking an ancestry chain.
+   * @param {Record<string, any>} state - Locally folded run state.
+   * @returns {Promise<void>}
+   */
+  async function verifyManagedEffectSuccessorLinks(state) {
+    /** @type {Record<string, any>[]} */
+    const authorizations = [];
+    if (state.run.trigger?.kind === 'effect-successor') {
+      authorizations.push(
+        normalizeManagedEffectSuccessorAuthorization(state.run.trigger),
+      );
+    }
+    for (const event of state.events) {
+      if (event.type === 'effect-successor-authorized') {
+        authorizations.push(
+          normalizeManagedEffectSuccessorAuthorization(
+            event.payload.authorization,
+          ),
+        );
+      }
+    }
+    for (const authorization of authorizations) {
+      const identity = await readSuccessorIdentityRecord(
+        db,
+        resolvedTableName,
+        state.run.appId,
+        authorization.successorId,
+      );
+      const expectedIdentity = createSuccessorIdentityRecord(
+        state.run.appId,
+        authorization,
+      );
+      if (!identity || !hasSameCanonicalJson(identity, expectedIdentity)) {
+        throw new ExecutionLedgerProjectionError(
+          state.run.runId,
+          'successor atomic identity link is unavailable',
+        );
+      }
+
+      const source =
+        state.run.runId === authorization.source.runId
+          ? state
+          : await readFoldedRun(authorization.source.runId);
+      const target =
+        state.run.runId === authorization.target.runId
+          ? state
+          : await readFoldedRun(authorization.target.runId);
+      const sourceEvent = source?.events.find(
+        (/** @type {Record<string, any>} */ event) =>
+          event.type === 'effect-successor-authorized' &&
+          hasSameCanonicalJson(event.payload.authorization, authorization),
+      );
+      const targetEvent = target?.events[0];
+      if (
+        !source ||
+        !target ||
+        source.run.appId !== state.run.appId ||
+        target.run.appId !== state.run.appId ||
+        target.run.revisionId !== authorization.target.revisionId ||
+        !sourceEvent ||
+        targetEvent?.type !== 'effect-successor-run-created' ||
+        !hasSameCanonicalJson(
+          targetEvent.payload.authorization,
+          authorization,
+        ) ||
+        !hasSameCanonicalJson(target.run.trigger, authorization)
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          state.run.runId,
+          'successor atomic source-target link is unavailable',
+        );
+      }
+    }
+  }
+
+  /**
+   * @param {string} runId - Run identity.
+   * @returns {Promise<ReturnType<typeof foldAndVerifyRun>>} - Fully verified run state.
+   */
+  async function readVerifiedRun(runId) {
+    const state = await readFoldedRun(runId);
+    if (state) await verifyManagedEffectSuccessorLinks(state);
+    return state;
+  }
+
+  /**
+   * Keep ordinary authored-activity transitions fail-closed. A successor has
+   * its own finite state machine; permitting an old generic entry point would
+   * recreate the unsafe STARTED-without-effect gap this ledger version removes.
+   * @param {Record<string, any>} state - Fresh verified durable state.
+   * @param {string} operation - Calling mutation name for diagnostics.
+   * @returns {void}
+   */
+  function assertOrdinaryLifecycleRun(state, operation) {
+    if (state.run.trigger?.kind === 'effect-successor') {
+      throw new ExecutionLedgerConflictError(
+        state.run.runId,
+        `${operation} is not authorized for a managed-effect successor`,
+      );
+    }
+  }
+
+  /**
+   * Resolve the only invocation a framework-owned successor may contain.
+   * @param {Record<string, any>} state - Fresh verified durable state.
+   * @returns {{authorization: Record<string, any>, invocation: Record<string, any>}} - Exact target authority and invocation.
+   */
+  function getManagedEffectSuccessorInvocation(state) {
+    if (state.run.trigger?.kind !== 'effect-successor') {
+      throw new ExecutionLedgerConflictError(
+        state.run.runId,
+        'run is not a managed-effect successor',
+      );
+    }
+    const authorization = normalizeManagedEffectSuccessorAuthorization(
+      state.run.trigger,
+    );
+    const invocation = state.invocations.get(authorization.target.invocationId);
+    if (
+      !invocation ||
+      invocation.activityId !== MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID ||
+      invocation.runId !== authorization.target.runId
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        'managed-effect successor target invocation is unavailable',
+      );
+    }
+    return { authorization, invocation };
   }
 
   /**
@@ -5302,6 +6700,11 @@ export function createExecutionLedger({
     );
     const activityId = value.activityId;
     assertLogicalId(activityId, 'createManualRun.activityId');
+    if (activityId === MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID) {
+      throw new TypeError(
+        'createManualRun cannot use the reserved managed-effect successor activity ID.',
+      );
+    }
     const input = cloneReferencedPayload(
       Object.prototype.hasOwnProperty.call(value, 'input') ? value.input : {},
       'createManualRun.input',
@@ -5312,7 +6715,12 @@ export function createExecutionLedger({
         : {},
       'createManualRun.callerMetadata',
     );
-    const trigger = normalizeManualTrigger(value.trigger);
+    const trigger = normalizeRunTrigger(value.trigger);
+    if (trigger.kind !== 'manual') {
+      throw new TypeError(
+        'createManualRun accepts only a manual trigger; effect successors require atomic authorization.',
+      );
+    }
     const transitionId = assertOpaqueId(
       value.transitionId,
       'createManualRun.transitionId',
@@ -5335,13 +6743,14 @@ export function createExecutionLedger({
         : now(),
       'createManualRun.observedAt',
     );
+    const manualTrigger = /** @type {{kind: 'manual'}} */ (trigger);
     const requested = {
       appId,
       revisionId,
       activityId,
       input,
       callerMetadata,
-      trigger,
+      trigger: manualTrigger,
     };
 
     const existing = await readVerifiedRun(runId);
@@ -5522,6 +6931,1652 @@ export function createExecutionLedger({
       );
     }
     return transitionResult(next, undefined, receipt, true, undefined);
+  }
+
+  /**
+   * Atomically authorize one exact destination-finalized managed-effect retry
+   * on its blocked source run and create the fresh effect-only target run. The
+   * source effect and abandoned attempt are never rewritten. One app-scoped
+   * public successor ID and one source reconciliation policy slot are both
+   * first-wins identities.
+   * @param {{sourceRunId: string, sourceEffectId: string, successorId: string, reason: Record<string, any>, actor?: {kind: string, id: string}, observedAt?: number}} options - Stable successor request.
+   * @returns {Promise<{applied: boolean, authorization: Record<string, any>, sourceRun: Record<string, any>, sourceInvocation: Record<string, any>, targetRun: Record<string, any>, targetInvocation: Record<string, any>, request: Record<string, any>}>} - Atomic authorization and target state.
+   */
+  async function authorizeManagedEffectSuccessorRetry(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+      'authorizeManagedEffectSuccessorRetry',
+    );
+    assertSupportedKeys(
+      value,
+      [
+        'sourceRunId',
+        'sourceEffectId',
+        'successorId',
+        'reason',
+        'actor',
+        'observedAt',
+      ],
+      'authorizeManagedEffectSuccessorRetry',
+    );
+    const sourceRunId = assertOpaqueId(
+      value.sourceRunId,
+      'authorizeManagedEffectSuccessorRetry.sourceRunId',
+    );
+    const sourceEffectId = assertOpaqueId(
+      value.sourceEffectId,
+      'authorizeManagedEffectSuccessorRetry.sourceEffectId',
+    );
+    const successorId = assertOpaqueId(
+      value.successorId,
+      'authorizeManagedEffectSuccessorRetry.successorId',
+    );
+    const reason = cloneInlinePayload(
+      value.reason,
+      'authorizeManagedEffectSuccessorRetry.reason',
+    );
+    const actor = normalizeActor(value.actor);
+    const observedAt = normalizeObservedAt(
+      Object.prototype.hasOwnProperty.call(value, 'observedAt')
+        ? value.observedAt
+        : now(),
+      'authorizeManagedEffectSuccessorRetry.observedAt',
+    );
+    const state = await readVerifiedRun(sourceRunId);
+    if (!state) throw new ExecutionLedgerNotFoundError(sourceRunId);
+    const sourceEffects = [...state.effects.values()].filter(
+      (candidate) => candidate.effectId === sourceEffectId,
+    );
+    if (sourceEffects.length !== 1) {
+      throw new ExecutionLedgerConflictError(
+        sourceRunId,
+        'reconciled source effect is unavailable or ambiguous',
+      );
+    }
+    const sourceEffect = sourceEffects[0];
+    const sourceInvocation = state.invocations.get(sourceEffect.invocationId);
+    const sourceAttempt = state.attempts.get(
+      attemptMapKey(
+        sourceEffect.invocationId,
+        sourceEffect.requestedBy.attemptId,
+      ),
+    );
+    const reconciliation = sourceEffect.reconciliation;
+    const reconciliationEvent = state.events.find((event) => {
+      if (
+        ![
+          'uncertain-effect-reconciled',
+          'effect-successor-reconciled',
+        ].includes(event.type)
+      ) {
+        return false;
+      }
+      const snapshots = eventSnapshots(event, sourceRunId);
+      return (
+        snapshots.effect?.effectId === sourceEffect.effectId &&
+        snapshots.reconciliation?.reconciliationId ===
+          reconciliation?.reconciliationId
+      );
+    });
+    const uncertaintyEvent = reconciliation
+      ? state.events[reconciliation.uncertaintySequence - 1]
+      : undefined;
+    const sourceFamily = classifyNotAppliedManagedEffectSuccessorSource({
+      run: state.run,
+      invocation: sourceInvocation,
+      attempt: sourceAttempt,
+      effect: sourceEffect,
+      uncertaintyEvent,
+      reconciliationEvent,
+      runId: sourceRunId,
+    });
+    if (
+      !sourceFamily ||
+      !reconciliation ||
+      !reconciliationEvent ||
+      !uncertaintyEvent ||
+      reconciliationEvent.event_id === uncertaintyEvent.event_id ||
+      uncertaintyEvent.event_id !== reconciliation.uncertaintyEventId ||
+      reconciliationEvent.sequence <= reconciliation.uncertaintySequence
+    ) {
+      throw new ExecutionLedgerConflictError(
+        sourceRunId,
+        'effect lacks an exact retained not-applied reconciliation',
+      );
+    }
+    const verifiedSourceInvocation = /** @type {Record<string, any>} */ (
+      sourceInvocation
+    );
+    const verifiedSourceAttempt = /** @type {Record<string, any>} */ (
+      sourceAttempt
+    );
+    const verifiedUncertaintyEvent = /** @type {Record<string, any>} */ (
+      uncertaintyEvent
+    );
+    const payloadReader = createLedgerPayloadReader(payloadStore, sourceRunId);
+    const request = await payloadReader.readManagedEffectRequest(
+      sourceEffect.requestRef,
+    );
+    assertInitialManagedEffectSuccessorRetryEligible({
+      effect: sourceEffect,
+      request,
+    });
+    const authorization = createManagedEffectSuccessorAuthorization({
+      appId: state.run.appId,
+      revisionId: state.run.revisionId,
+      successorId,
+      reason,
+      source: {
+        runId: sourceRunId,
+        invocationId: verifiedSourceInvocation.invocationId,
+        attemptId: verifiedSourceAttempt.attemptId,
+        effectId: sourceEffect.effectId,
+        uncertaintyEventId: verifiedUncertaintyEvent.event_id,
+        uncertaintySequence: verifiedUncertaintyEvent.sequence,
+        reconciliationEventId: reconciliationEvent.event_id,
+        reconciliationSequence: reconciliationEvent.sequence,
+        reconciliationId: reconciliation.reconciliationId,
+        disposition: EffectStatus.NOT_APPLIED,
+      },
+      contract: {
+        adapter: sourceEffect.adapter,
+        destination: sourceEffect.destination,
+        verifier: sourceEffect.verifier,
+        substantiatedReplayProperties:
+          sourceEffect.substantiatedReplayProperties,
+      },
+      request,
+    });
+    const sourceTransitionId = `successor:${authorization.slotId}`;
+    const targetTransitionId = 'create';
+    assertOpaqueId(sourceTransitionId, 'successor source transitionId');
+
+    /**
+     * Return an exact existing atomic handoff, or fail when either the public
+     * identity or causal slot already belongs to different work.
+     * @param {Record<string, any>} current - Fresh verified source state.
+     * @returns {Promise<null | {applied: false, authorization: Record<string, any>, sourceRun: Record<string, any>, sourceInvocation: Record<string, any>, targetRun: Record<string, any>, targetInvocation: Record<string, any>, request: Record<string, any>} >} - Existing handoff when exact.
+     */
+    const readExisting = async (current) => {
+      const identity = await readSuccessorIdentityRecord(
+        db,
+        resolvedTableName,
+        current.run.appId,
+        successorId,
+      );
+      const slotEvent = current.events.find(
+        (/** @type {Record<string, any>} */ event) =>
+          event.type === 'effect-successor-authorized' &&
+          normalizeManagedEffectSuccessorAuthorization(
+            event.payload.authorization,
+          ).slotId === authorization.slotId,
+      );
+      if (!slotEvent) {
+        if (!identity) return null;
+        if (
+          identity.source_run_id !== sourceRunId ||
+          identity.slot_id !== authorization.slotId
+        ) {
+          throw new ExecutionLedgerTransitionConflictError(
+            sourceRunId,
+            sourceTransitionId,
+          );
+        }
+        throw new ExecutionLedgerProjectionError(
+          sourceRunId,
+          'successor identity is missing its atomic source authorization',
+        );
+      }
+      const retained = normalizeManagedEffectSuccessorAuthorization(
+        slotEvent.payload.authorization,
+      );
+      if (retained.successorId !== successorId) {
+        throw new ExecutionLedgerTransitionConflictError(
+          sourceRunId,
+          sourceTransitionId,
+        );
+      }
+      if (!identity) {
+        throw new ExecutionLedgerProjectionError(
+          sourceRunId,
+          'source authorization is missing its atomic successor identity',
+        );
+      }
+      const expectedIdentity = createSuccessorIdentityRecord(
+        current.run.appId,
+        retained,
+      );
+      if (
+        !hasSameCanonicalJson(retained, authorization) ||
+        !hasSameCanonicalJson(identity, expectedIdentity) ||
+        !hasSameCanonicalJson(slotEvent.actor, actor)
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          sourceRunId,
+          sourceTransitionId,
+        );
+      }
+      const target = await readVerifiedRun(retained.target.runId);
+      const targetInvocation = target?.invocations.get(
+        retained.target.invocationId,
+      );
+      if (
+        !target ||
+        !targetInvocation ||
+        !hasSameCanonicalJson(target.run.trigger, retained)
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          retained.target.runId,
+          'authorized successor target is unavailable',
+        );
+      }
+      const durableSourceInvocation = current.invocations.get(
+        retained.source.invocationId,
+      );
+      if (!durableSourceInvocation) {
+        throw new ExecutionLedgerProjectionError(
+          sourceRunId,
+          'authorized successor source invocation is unavailable',
+        );
+      }
+      return {
+        applied: false,
+        authorization: retained,
+        sourceRun: cloneJsonObject(current.run, 'successor source run'),
+        sourceInvocation: cloneJsonObject(
+          durableSourceInvocation,
+          'successor source invocation',
+        ),
+        targetRun: cloneJsonObject(target.run, 'successor target run'),
+        targetInvocation: cloneJsonObject(
+          targetInvocation,
+          'successor target invocation',
+        ),
+        request: cloneJsonObject(request, 'successor request'),
+      };
+    };
+
+    const existing = await readExisting(state);
+    if (existing) return existing;
+    const publicIdentity = await readSuccessorIdentityRecord(
+      db,
+      resolvedTableName,
+      state.run.appId,
+      successorId,
+    );
+    if (publicIdentity) {
+      throw new ExecutionLedgerTransitionConflictError(
+        sourceRunId,
+        sourceTransitionId,
+      );
+    }
+
+    const targetRequestRef = await putVerifiedPayload(payloadStore, {
+      value: {
+        input: {
+          effectRequest: {
+            effectId: authorization.target.effectId,
+            ...cloneJsonObject(request, 'successor logical request'),
+          },
+        },
+        callerMetadata: {},
+      },
+      payloadSchema: MANUAL_REQUEST_PAYLOAD_SCHEMA,
+      label: 'authorizeManagedEffectSuccessorRetry.targetRequestRef',
+    });
+    const sourceSequence = state.head.sequence + 1;
+    const nextSourceRun = /** @type {Record<string, any>} */ ({
+      ...cloneJsonObject(state.run, 'current successor source run'),
+      version: state.run.version + 1,
+      lastSequence: sourceSequence,
+      updatedAt: observedAt,
+    });
+    const nextSourceInvocation = {
+      ...cloneJsonObject(
+        verifiedSourceInvocation,
+        'current successor source invocation',
+      ),
+      version: verifiedSourceInvocation.version + 1,
+      lastSequence: sourceSequence,
+      updatedAt: observedAt,
+    };
+    const sourceRequestDigest = createTransitionRequestDigest(
+      'effect-successor-authorized',
+      {
+        runId: sourceRunId,
+        invocationId: verifiedSourceInvocation.invocationId,
+        expectedVersion: state.run.version,
+        transitionId: sourceTransitionId,
+        authorization,
+        actor,
+        coordinatorEpoch: 0,
+      },
+    );
+    const sourceEvent = createEventRecord(
+      sourceRunId,
+      sourceSequence,
+      sourceTransitionId,
+      sourceRequestDigest,
+      'effect-successor-authorized',
+      observedAt,
+      actor,
+      {
+        coordinatorEpoch: 0,
+        invocationGeneration: verifiedSourceInvocation.generation,
+      },
+      {
+        run: nextSourceRun,
+        invocation: nextSourceInvocation,
+        authorization,
+      },
+    );
+    const targetRun = {
+      schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+      runId: authorization.target.runId,
+      appId: state.run.appId,
+      revisionId: state.run.revisionId,
+      trigger: authorization,
+      requestRef: targetRequestRef,
+      status: RunStatus.RUNNING,
+      version: 1,
+      lastSequence: 1,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    };
+    const targetInvocation = {
+      schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+      runId: authorization.target.runId,
+      invocationId: authorization.target.invocationId,
+      appId: state.run.appId,
+      revisionId: state.run.revisionId,
+      activityId: MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID,
+      requestRef: targetRequestRef,
+      status: InvocationStatus.RUNNABLE,
+      generation: 0,
+      version: 1,
+      lastSequence: 1,
+      createdAt: observedAt,
+      updatedAt: observedAt,
+    };
+    const targetRequestDigest = createTransitionRequestDigest(
+      'effect-successor-run-created',
+      {
+        runId: targetRun.runId,
+        invocationId: targetInvocation.invocationId,
+        transitionId: targetTransitionId,
+        actor,
+        coordinatorEpoch: 0,
+        appId: targetRun.appId,
+        revisionId: targetRun.revisionId,
+        activityId: targetInvocation.activityId,
+        requestRef: targetRequestRef,
+        trigger: authorization,
+        authorization,
+      },
+    );
+    const targetEvent = createEventRecord(
+      targetRun.runId,
+      1,
+      targetTransitionId,
+      targetRequestDigest,
+      'effect-successor-run-created',
+      observedAt,
+      actor,
+      { coordinatorEpoch: 0, invocationGeneration: 0 },
+      { run: targetRun, invocation: targetInvocation, authorization },
+    );
+    const sourceHead = createHeadRecord(
+      sourceRunId,
+      nextSourceRun.version,
+      nextSourceRun.lastSequence,
+      nextSourceRun.appId,
+      nextSourceRun.revisionId,
+    );
+    const targetHead = createHeadRecord(
+      targetRun.runId,
+      targetRun.version,
+      targetRun.lastSequence,
+      targetRun.appId,
+      targetRun.revisionId,
+    );
+    const putRequests = [
+      {
+        keyName: KEY_NAME,
+        sortKeyName: SORT_KEY_NAME,
+        record: sourceHead,
+        conditions: [
+          eq('version', state.head.version),
+          eq('sequence', state.head.sequence),
+          eq('revision_id', state.head.revision_id),
+        ],
+      },
+      {
+        keyName: KEY_NAME,
+        sortKeyName: SORT_KEY_NAME,
+        record: sourceEvent,
+        conditions: [notExists(SORT_KEY_NAME)],
+      },
+      {
+        keyName: KEY_NAME,
+        sortKeyName: SORT_KEY_NAME,
+        record: createTransitionRecord(
+          sourceRunId,
+          sourceTransitionId,
+          sourceRequestDigest,
+          sourceEvent,
+        ),
+        conditions: [notExists(SORT_KEY_NAME)],
+      },
+      {
+        keyName: KEY_NAME,
+        sortKeyName: SORT_KEY_NAME,
+        record: createRunProjectionRecord(sourceRunId, nextSourceRun),
+        conditions: replacementConditions(
+          createRunProjectionRecord(sourceRunId, state.run),
+        ),
+      },
+      {
+        keyName: KEY_NAME,
+        sortKeyName: SORT_KEY_NAME,
+        record: createRunDirectoryRecord(sourceRunId, nextSourceRun),
+        conditions: runDirectoryReplacementConditions(
+          createRunDirectoryRecord(sourceRunId, state.run),
+        ),
+      },
+      {
+        keyName: KEY_NAME,
+        sortKeyName: SORT_KEY_NAME,
+        record: createInvocationProjectionRecord(
+          sourceRunId,
+          nextSourceInvocation,
+        ),
+        conditions: replacementConditions(
+          createInvocationProjectionRecord(
+            sourceRunId,
+            verifiedSourceInvocation,
+          ),
+          [eq('generation', verifiedSourceInvocation.generation)],
+        ),
+      },
+      ...[
+        targetHead,
+        targetEvent,
+        createTransitionRecord(
+          targetRun.runId,
+          targetTransitionId,
+          targetRequestDigest,
+          targetEvent,
+        ),
+        createRunProjectionRecord(targetRun.runId, targetRun),
+        createRunDirectoryRecord(targetRun.runId, targetRun),
+        createInvocationProjectionRecord(targetRun.runId, targetInvocation),
+        createSuccessorIdentityRecord(targetRun.appId, authorization),
+      ].map((record) => ({
+        keyName: KEY_NAME,
+        sortKeyName: SORT_KEY_NAME,
+        record,
+        conditions: [notExists(SORT_KEY_NAME)],
+      })),
+    ];
+
+    try {
+      await db.transactionWrite({
+        tableName: resolvedTableName,
+        putRequests,
+      });
+    } catch (error) {
+      if (!isConditionalCheckFailed(error)) throw error;
+      const raced = await readVerifiedRun(sourceRunId);
+      if (!raced) throw new ExecutionLedgerConflictError(sourceRunId);
+      const winner = await readExisting(raced);
+      if (winner) return winner;
+      throw new ExecutionLedgerConflictError(
+        sourceRunId,
+        'successor authorization lost its atomic first-wins race',
+      );
+    }
+
+    const [acceptedSource, acceptedTarget] = await Promise.all([
+      readVerifiedRun(sourceRunId),
+      readVerifiedRun(targetRun.runId),
+    ]);
+    const acceptedSourceInvocation = acceptedSource?.invocations.get(
+      verifiedSourceInvocation.invocationId,
+    );
+    const acceptedTargetInvocation = acceptedTarget?.invocations.get(
+      targetInvocation.invocationId,
+    );
+    if (
+      !acceptedSource ||
+      !acceptedTarget ||
+      !acceptedSourceInvocation ||
+      !acceptedTargetInvocation
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        targetRun.runId,
+        'accepted atomic successor handoff is unavailable',
+      );
+    }
+    return {
+      applied: true,
+      authorization,
+      sourceRun: cloneJsonObject(
+        acceptedSource.run,
+        'accepted successor source run',
+      ),
+      sourceInvocation: cloneJsonObject(
+        acceptedSourceInvocation,
+        'accepted successor source invocation',
+      ),
+      targetRun: cloneJsonObject(
+        acceptedTarget.run,
+        'accepted successor target run',
+      ),
+      targetInvocation: cloneJsonObject(
+        acceptedTargetInvocation,
+        'accepted successor target invocation',
+      ),
+      request: cloneJsonObject(request, 'accepted successor request'),
+    };
+  }
+
+  /**
+   * Atomically cross the sole successor dispatch boundary. The new physical
+   * attempt and its one exact effect are born STARTED in one ledger event, so
+   * no crash can leave an apparently begun successor without durable effect
+   * authority. Only the writer of that event may enter the destination.
+   * @param {{runId: string, fencingToken: string, expectedVersion: number, transitionId: string, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Exact successor start request.
+   * @returns {Promise<{applied: boolean, dispatchAuthorized: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>}>} - Durable atomic start result.
+   */
+  async function startManagedEffectSuccessor(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+      'startManagedEffectSuccessor',
+    );
+    const common = normalizeTransitionOptions(
+      value,
+      [
+        'runId',
+        'fencingToken',
+        'expectedVersion',
+        'transitionId',
+        'actor',
+        'coordinatorEpoch',
+        'observedAt',
+      ],
+      'startManagedEffectSuccessor',
+      now,
+    );
+    const fencingToken = assertOpaqueId(
+      value.fencingToken,
+      'startManagedEffectSuccessor.fencingToken',
+    );
+    const state = await readVerifiedRun(common.runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    const { authorization, invocation } =
+      getManagedEffectSuccessorInvocation(state);
+    const payloadReader = createLedgerPayloadReader(payloadStore, common.runId);
+    const requestEnvelope = await payloadReader.readManualRequest(
+      invocation.requestRef,
+    );
+    const targetInput = normalizeManagedEffectSuccessorRunInput(
+      requestEnvelope.input,
+      'startManagedEffectSuccessor target input',
+    );
+    let derivedAuthorization;
+    try {
+      derivedAuthorization = assertManagedEffectSuccessorAuthorizationDerived({
+        appId: state.run.appId,
+        revisionId: state.run.revisionId,
+        request: targetInput.request,
+        authorization,
+      });
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        common.runId,
+        'managed-effect successor authorization derivation mismatch',
+      );
+    }
+    if (
+      targetInput.effectId !== authorization.target.effectId ||
+      !hasSameCanonicalJson(derivedAuthorization, authorization) ||
+      Object.keys(requestEnvelope.callerMetadata).length !== 0
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        common.runId,
+        'managed-effect successor target request is unavailable',
+      );
+    }
+    if (
+      !effectVerifierRegistry.has(
+        effectVerifierKey(authorization.contract.verifier),
+      )
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        common.runId,
+        'managed-effect successor verifier is unavailable',
+      );
+    }
+    const requestRef = await putVerifiedPayload(payloadStore, {
+      value: targetInput.request,
+      payloadSchema: MANAGED_EFFECT_REQUEST_PAYLOAD_SCHEMA,
+      label: 'startManagedEffectSuccessor.requestRef',
+    });
+    const generation = 1;
+    const attemptId = createAttemptId(
+      common.runId,
+      invocation.invocationId,
+      generation,
+    );
+    const requestDigest = createTransitionRequestDigest(
+      'effect-successor-started',
+      {
+        runId: common.runId,
+        invocationId: invocation.invocationId,
+        attemptId,
+        fencingToken,
+        generation,
+        expectedVersion: common.expectedVersion,
+        transitionId: common.transitionId,
+        effectId: authorization.target.effectId,
+        destinationEffectId: authorization.target.destinationEffectId,
+        requestRef,
+        adapter: authorization.contract.adapter,
+        destination: authorization.contract.destination,
+        verifier: authorization.contract.verifier,
+        requestedReplayProperties:
+          targetInput.request.requestedReplayProperties,
+        substantiatedReplayProperties:
+          authorization.contract.substantiatedReplayProperties,
+        actor: common.actor,
+        coordinatorEpoch: common.coordinatorEpoch,
+      },
+    );
+    const existing = assertMatchingReceipt(
+      state,
+      await getTransitionReceipt(
+        db,
+        resolvedTableName,
+        common.runId,
+        common.transitionId,
+      ),
+      requestDigest,
+    );
+    if (existing) {
+      if (
+        existing.type !== 'effect-successor-started' ||
+        existing.invocation_id !== invocation.invocationId ||
+        existing.attempt_id !== attemptId ||
+        existing.effect_id !== authorization.target.effectId
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      return {
+        ...(await existingTransitionResult(state, existing)),
+        dispatchAuthorized: false,
+      };
+    }
+    if (state.head.version !== common.expectedVersion) {
+      throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
+    }
+    if (
+      state.run.status !== RunStatus.RUNNING ||
+      invocation.status !== InvocationStatus.RUNNABLE ||
+      invocation.generation !== 0 ||
+      [...state.attempts.values()].some(
+        (attempt) => attempt.invocationId === invocation.invocationId,
+      ) ||
+      [...state.effects.values()].some(
+        (effect) => effect.invocationId === invocation.invocationId,
+      )
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'managed-effect successor is not runnable for atomic start',
+      );
+    }
+    const sequence = state.head.sequence + 1;
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current successor run'),
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextInvocation = /** @type {Record<string, any>} */ ({
+      ...cloneJsonObject(invocation, 'current successor invocation'),
+      status: InvocationStatus.RUNNING,
+      generation,
+      version: invocation.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    });
+    const nextAttempt = {
+      schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+      runId: common.runId,
+      invocationId: invocation.invocationId,
+      attemptId,
+      appId: state.run.appId,
+      revisionId: state.run.revisionId,
+      activityId: invocation.activityId,
+      status: AttemptStatus.STARTED,
+      generation,
+      version: 1,
+      coordinatorEpoch: common.coordinatorEpoch,
+      fencingToken,
+      claimedAt: common.observedAt,
+      startedAt: common.observedAt,
+      updatedAt: common.observedAt,
+      lastSequence: sequence,
+    };
+    const nextEffect = {
+      schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+      runId: common.runId,
+      invocationId: invocation.invocationId,
+      effectId: authorization.target.effectId,
+      appId: state.run.appId,
+      revisionId: state.run.revisionId,
+      activityId: invocation.activityId,
+      destinationEffectId: authorization.target.destinationEffectId,
+      adapter: authorization.contract.adapter,
+      destination: authorization.contract.destination,
+      verifier: authorization.contract.verifier,
+      requestRef,
+      requestedReplayProperties: targetInput.request.requestedReplayProperties,
+      substantiatedReplayProperties:
+        authorization.contract.substantiatedReplayProperties,
+      requestedBy: {
+        attemptId,
+        generation,
+        coordinatorEpoch: common.coordinatorEpoch,
+        fencingToken,
+        protocolSequence: 1,
+      },
+      status: EffectStatus.STARTED,
+      version: 1,
+      lastSequence: sequence,
+      createdAt: common.observedAt,
+      updatedAt: common.observedAt,
+      startedBy: {
+        attemptId,
+        generation,
+        coordinatorEpoch: common.coordinatorEpoch,
+        fencingToken,
+      },
+    };
+    try {
+      assertManagedEffectSuccessorPlannedRequest({
+        run: state.run,
+        invocation,
+        effect: nextEffect,
+        request: targetInput.request,
+        priorEffects: [...state.effects.values()],
+      });
+      assertStoppedAttemptClosureFits({
+        run: nextRun,
+        invocation: nextInvocation,
+        attempt: nextAttempt,
+        effects: [nextEffect],
+        label: 'startManagedEffectSuccessor',
+      });
+    } catch {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'managed-effect successor start violates its finite effect plan',
+      );
+    }
+    const event = createEventRecord(
+      common.runId,
+      sequence,
+      common.transitionId,
+      requestDigest,
+      'effect-successor-started',
+      common.observedAt,
+      common.actor,
+      {
+        coordinatorEpoch: common.coordinatorEpoch,
+        invocationGeneration: generation,
+      },
+      {
+        run: nextRun,
+        invocation: nextInvocation,
+        attempt: nextAttempt,
+        effect: nextEffect,
+      },
+    );
+    const result = await appendOrReplay({
+      state,
+      runId: common.runId,
+      transitionId: common.transitionId,
+      requestDigest,
+      event,
+      nextRun,
+      nextInvocation,
+      nextAttempt,
+      nextEffect,
+    });
+    return {
+      ...result,
+      dispatchAuthorized:
+        result.applied === true &&
+        result.run.status === RunStatus.RUNNING &&
+        result.invocation.status === InvocationStatus.RUNNING &&
+        result.attempt?.status === AttemptStatus.STARTED &&
+        result.effect?.status === EffectStatus.STARTED &&
+        result.attempt.attemptId === attemptId &&
+        result.effect.effectId === authorization.target.effectId,
+    };
+  }
+
+  /**
+   * Atomically close a started successor effect and its enclosing effect-only
+   * attempt. The destination outcome, framework transcript, effect terminal,
+   * attempt terminal, invocation terminal, and run terminal become visible in
+   * one transaction; no post-effect gap remains for a crash to strand.
+   * @param {{runId: string, fencingToken: string, generation: number, expectedVersion: number, expectedEffectVersion: number, transitionId: string, outcome: Record<string, any>, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Verified successor outcome request.
+   * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>}>} - Durable aggregate terminal result.
+   */
+  async function commitManagedEffectSuccessorOutcome(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+      'commitManagedEffectSuccessorOutcome',
+    );
+    const common = normalizeTransitionOptions(
+      value,
+      [
+        'runId',
+        'fencingToken',
+        'generation',
+        'expectedVersion',
+        'expectedEffectVersion',
+        'transitionId',
+        'outcome',
+        'actor',
+        'coordinatorEpoch',
+        'observedAt',
+      ],
+      'commitManagedEffectSuccessorOutcome',
+      now,
+    );
+    const fencingToken = assertOpaqueId(
+      value.fencingToken,
+      'commitManagedEffectSuccessorOutcome.fencingToken',
+    );
+    const generation = assertPositiveSafeInteger(
+      value.generation,
+      'commitManagedEffectSuccessorOutcome.generation',
+    );
+    const expectedEffectVersion = assertPositiveSafeInteger(
+      value.expectedEffectVersion,
+      'commitManagedEffectSuccessorOutcome.expectedEffectVersion',
+    );
+    const rawOutcome = cloneBoundedJsonObject(
+      value.outcome,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+      'commitManagedEffectSuccessorOutcome.outcome',
+    );
+    const state = await readVerifiedRun(common.runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    const { authorization, invocation } =
+      getManagedEffectSuccessorInvocation(state);
+    const effect = state.effects.get(
+      effectMapKey(invocation.invocationId, authorization.target.effectId),
+    );
+    const attempt = effect
+      ? state.attempts.get(
+          attemptMapKey(invocation.invocationId, effect.requestedBy.attemptId),
+        )
+      : undefined;
+    if (!effect || !attempt) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'managed-effect successor has no started effect to close',
+      );
+    }
+    const payloadReader = createLedgerPayloadReader(payloadStore, common.runId);
+    const request = await payloadReader.readManagedEffectRequest(
+      effect.requestRef,
+    );
+    const outcome = normalizeManagedEffectOutcome(
+      {
+        destinationEffectId: effect.destinationEffectId,
+        adapter: effect.adapter,
+        destination: effect.destination,
+        verifier: effect.verifier,
+        ok: rawOutcome.ok,
+        ...(rawOutcome.ok === true
+          ? { result: rawOutcome.result }
+          : { error: rawOutcome.error }),
+        substantiatedReplayProperties: effect.substantiatedReplayProperties,
+        evidence: rawOutcome.evidence,
+      },
+      'commitManagedEffectSuccessorOutcome.outcome',
+    );
+    verifyManagedEffectOutcome(
+      effectVerifierRegistry,
+      effect,
+      request,
+      outcome,
+      'commitManagedEffectSuccessorOutcome.outcome',
+    );
+    const outcomeRef = await putVerifiedPayload(payloadStore, {
+      value: outcome,
+      payloadSchema: MANAGED_EFFECT_OUTCOME_PAYLOAD_SCHEMA,
+      label: 'commitManagedEffectSuccessorOutcome.outcomeRef',
+    });
+    const start = await createLedgerAttemptStart(
+      state.run,
+      invocation,
+      attempt,
+      payloadReader,
+    );
+    const terminalEvidence = createManagedEffectSuccessorTerminalEvidence({
+      start,
+      attempt,
+      effect,
+      request,
+      outcome,
+    });
+    const evidenceRef = await putVerifiedPayload(payloadStore, {
+      value: terminalEvidence.evidence,
+      payloadSchema: ACTIVITY_EVIDENCE_PAYLOAD_SCHEMA,
+      label: 'commitManagedEffectSuccessorOutcome.evidenceRef',
+    });
+    const requestDigest = createTransitionRequestDigest(
+      'effect-successor-terminal',
+      {
+        runId: common.runId,
+        invocationId: invocation.invocationId,
+        attemptId: attempt.attemptId,
+        fencingToken,
+        generation,
+        expectedVersion: common.expectedVersion,
+        expectedEffectVersion,
+        transitionId: common.transitionId,
+        effectId: effect.effectId,
+        outcomeRef,
+        evidenceRef,
+        terminal: createTerminalSummary(terminalEvidence.terminal),
+        actor: common.actor,
+        coordinatorEpoch: common.coordinatorEpoch,
+      },
+    );
+    const existing = assertMatchingReceipt(
+      state,
+      await getTransitionReceipt(
+        db,
+        resolvedTableName,
+        common.runId,
+        common.transitionId,
+      ),
+      requestDigest,
+    );
+    if (existing) {
+      if (
+        existing.type !== 'effect-successor-terminal' ||
+        existing.invocation_id !== invocation.invocationId ||
+        existing.attempt_id !== attempt.attemptId ||
+        existing.effect_id !== effect.effectId
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      return await existingTransitionResult(state, existing);
+    }
+    if (state.head.version !== common.expectedVersion) {
+      throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
+    }
+    if (
+      state.run.status !== RunStatus.RUNNING ||
+      invocation.status !== InvocationStatus.RUNNING ||
+      invocation.generation !== generation ||
+      attempt.status !== AttemptStatus.STARTED ||
+      effect.status !== EffectStatus.STARTED ||
+      effect.version !== expectedEffectVersion ||
+      effect.effectId !== authorization.target.effectId ||
+      effect.destinationEffectId !== authorization.target.destinationEffectId
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'managed-effect successor is not started for terminal closure',
+      );
+    }
+    assertCurrentAttemptFence(
+      attempt,
+      { coordinatorEpoch: common.coordinatorEpoch, fencingToken, generation },
+      common.runId,
+    );
+    const sequence = state.head.sequence + 1;
+    const terminal = createTerminalSummary(terminalEvidence.terminal);
+    const statuses = statusesForTerminal(terminalEvidence.terminal);
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current successor run'),
+      status: statuses.run,
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextInvocation = {
+      ...cloneJsonObject(invocation, 'current successor invocation'),
+      status: statuses.invocation,
+      terminal,
+      version: invocation.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextAttempt = {
+      ...cloneJsonObject(attempt, 'current successor attempt'),
+      status: statuses.attempt,
+      terminal,
+      evidenceRef,
+      version: attempt.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextEffect = /** @type {Record<string, any>} */ ({
+      ...cloneJsonObject(effect, 'current successor effect'),
+      status: outcome.ok ? EffectStatus.COMPLETED : EffectStatus.FAILED,
+      terminal: { ok: outcome.ok },
+      outcomeRef,
+      version: effect.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    });
+    const event = createEventRecord(
+      common.runId,
+      sequence,
+      common.transitionId,
+      requestDigest,
+      'effect-successor-terminal',
+      common.observedAt,
+      common.actor,
+      {
+        coordinatorEpoch: common.coordinatorEpoch,
+        invocationGeneration: generation,
+      },
+      {
+        run: nextRun,
+        invocation: nextInvocation,
+        attempt: nextAttempt,
+        effect: nextEffect,
+      },
+    );
+    return await appendOrReplay({
+      state,
+      runId: common.runId,
+      transitionId: common.transitionId,
+      requestDigest,
+      event,
+      nextRun,
+      nextInvocation,
+      nextAttempt,
+      currentAttempt: attempt,
+      nextEffect,
+      currentEffect: effect,
+    });
+  }
+
+  /**
+   * Conservatively stop a successor after its atomic STARTED boundary. This
+   * never retries or replays the adapter: it records the exact physical
+   * attempt and its one effect as uncertain so destination truth can decide
+   * the target's later terminal state.
+   * @param {{runId: string, fencingToken: string, generation: number, expectedVersion: number, expectedEffectVersion: number, transitionId: string, reason: Record<string, any>, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Exact successor interruption request.
+   * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>}>} - Durable blocked target state.
+   */
+  async function interruptManagedEffectSuccessor(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+      'interruptManagedEffectSuccessor',
+    );
+    const common = normalizeTransitionOptions(
+      value,
+      [
+        'runId',
+        'fencingToken',
+        'generation',
+        'expectedVersion',
+        'expectedEffectVersion',
+        'transitionId',
+        'reason',
+        'actor',
+        'coordinatorEpoch',
+        'observedAt',
+      ],
+      'interruptManagedEffectSuccessor',
+      now,
+    );
+    const fencingToken = assertOpaqueId(
+      value.fencingToken,
+      'interruptManagedEffectSuccessor.fencingToken',
+    );
+    const generation = assertPositiveSafeInteger(
+      value.generation,
+      'interruptManagedEffectSuccessor.generation',
+    );
+    const expectedEffectVersion = assertPositiveSafeInteger(
+      value.expectedEffectVersion,
+      'interruptManagedEffectSuccessor.expectedEffectVersion',
+    );
+    const reason = cloneInlinePayload(
+      value.reason,
+      'interruptManagedEffectSuccessor.reason',
+    );
+    const state = await readVerifiedRun(common.runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    const { authorization, invocation } =
+      getManagedEffectSuccessorInvocation(state);
+    const effect = state.effects.get(
+      effectMapKey(invocation.invocationId, authorization.target.effectId),
+    );
+    const attempt = effect
+      ? state.attempts.get(
+          attemptMapKey(invocation.invocationId, effect.requestedBy.attemptId),
+        )
+      : undefined;
+    if (!effect || !attempt) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'managed-effect successor has no started effect to interrupt',
+      );
+    }
+    const requestDigest = createTransitionRequestDigest(
+      'effect-successor-interrupted',
+      {
+        runId: common.runId,
+        invocationId: invocation.invocationId,
+        attemptId: attempt.attemptId,
+        fencingToken,
+        generation,
+        expectedVersion: common.expectedVersion,
+        expectedEffectVersion,
+        transitionId: common.transitionId,
+        effectId: effect.effectId,
+        reason,
+        actor: common.actor,
+        coordinatorEpoch: common.coordinatorEpoch,
+      },
+    );
+    const existing = assertMatchingReceipt(
+      state,
+      await getTransitionReceipt(
+        db,
+        resolvedTableName,
+        common.runId,
+        common.transitionId,
+      ),
+      requestDigest,
+    );
+    if (existing) {
+      if (
+        existing.type !== 'effect-successor-interrupted' ||
+        existing.invocation_id !== invocation.invocationId ||
+        existing.attempt_id !== attempt.attemptId ||
+        existing.effect_id !== effect.effectId
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      return await existingTransitionResult(state, existing);
+    }
+    if (state.head.version !== common.expectedVersion) {
+      throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
+    }
+    if (
+      state.run.status !== RunStatus.RUNNING ||
+      invocation.status !== InvocationStatus.RUNNING ||
+      invocation.generation !== generation ||
+      attempt.status !== AttemptStatus.STARTED ||
+      effect.status !== EffectStatus.STARTED ||
+      effect.version !== expectedEffectVersion ||
+      effect.effectId !== authorization.target.effectId ||
+      effect.destinationEffectId !== authorization.target.destinationEffectId
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'managed-effect successor is not started for interruption',
+      );
+    }
+    assertCurrentAttemptFence(
+      attempt,
+      { coordinatorEpoch: common.coordinatorEpoch, fencingToken, generation },
+      common.runId,
+    );
+    const sequence = state.head.sequence + 1;
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current successor run'),
+      status: RunStatus.BLOCKED,
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextInvocation = {
+      ...cloneJsonObject(invocation, 'current successor invocation'),
+      status: InvocationStatus.UNCERTAIN,
+      uncertainty: reason,
+      version: invocation.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextAttempt = {
+      ...cloneJsonObject(attempt, 'current successor attempt'),
+      status: AttemptStatus.ABANDONED,
+      abandonment: reason,
+      version: attempt.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextEffect = {
+      ...cloneJsonObject(effect, 'current successor effect'),
+      status: EffectStatus.UNCERTAIN,
+      uncertainty: reason,
+      version: effect.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const event = createEventRecord(
+      common.runId,
+      sequence,
+      common.transitionId,
+      requestDigest,
+      'effect-successor-interrupted',
+      common.observedAt,
+      common.actor,
+      {
+        coordinatorEpoch: common.coordinatorEpoch,
+        invocationGeneration: generation,
+      },
+      {
+        run: nextRun,
+        invocation: nextInvocation,
+        attempt: nextAttempt,
+        effect: nextEffect,
+      },
+    );
+    return await appendOrReplay({
+      state,
+      runId: common.runId,
+      transitionId: common.transitionId,
+      requestDigest,
+      event,
+      nextRun,
+      nextInvocation,
+      nextAttempt,
+      currentAttempt: attempt,
+      nextEffect,
+      currentEffect: effect,
+    });
+  }
+
+  /**
+   * Resolve one interrupted successor from immutable destination evidence.
+   * Positive evidence closes the target successfully or failed; a permanent
+   * negative proof closes it FAILED with NOT_APPLIED preserved on the effect.
+   * The original abandoned physical attempt remains byte-identical.
+   * @param {{runId: string, fencingToken: string, generation: number, expectedVersion: number, expectedEffectVersion: number, uncertaintyEventId: string, uncertaintySequence: number, transitionId: string, reconciliationId: string, reason: Record<string, any>, resolution: {kind: 'outcome', outcome: Record<string, any>} | {kind: 'not-applied', verifier: {kind: string, version: number}, evidence: Record<string, any>}, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Exact successor reconciliation request.
+   * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>}>} - Durable target terminal state.
+   */
+  async function reconcileManagedEffectSuccessor(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+      'reconcileManagedEffectSuccessor',
+    );
+    const common = normalizeTransitionOptions(
+      value,
+      [
+        'runId',
+        'fencingToken',
+        'generation',
+        'expectedVersion',
+        'expectedEffectVersion',
+        'uncertaintyEventId',
+        'uncertaintySequence',
+        'transitionId',
+        'reconciliationId',
+        'reason',
+        'resolution',
+        'actor',
+        'coordinatorEpoch',
+        'observedAt',
+      ],
+      'reconcileManagedEffectSuccessor',
+      now,
+    );
+    const fencingToken = assertOpaqueId(
+      value.fencingToken,
+      'reconcileManagedEffectSuccessor.fencingToken',
+    );
+    const generation = assertPositiveSafeInteger(
+      value.generation,
+      'reconcileManagedEffectSuccessor.generation',
+    );
+    const expectedEffectVersion = assertPositiveSafeInteger(
+      value.expectedEffectVersion,
+      'reconcileManagedEffectSuccessor.expectedEffectVersion',
+    );
+    const uncertaintyEventId = assertOpaqueId(
+      value.uncertaintyEventId,
+      'reconcileManagedEffectSuccessor.uncertaintyEventId',
+    );
+    const uncertaintySequence = assertPositiveSafeInteger(
+      value.uncertaintySequence,
+      'reconcileManagedEffectSuccessor.uncertaintySequence',
+    );
+    const reconciliationId = assertOpaqueId(
+      value.reconciliationId,
+      'reconcileManagedEffectSuccessor.reconciliationId',
+    );
+    const reason = cloneInlinePayload(
+      value.reason,
+      'reconcileManagedEffectSuccessor.reason',
+    );
+    const resolution = cloneBoundedJsonObject(
+      value.resolution,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+      'reconcileManagedEffectSuccessor.resolution',
+    );
+    if (resolution.kind === 'outcome') {
+      assertExactKeys(
+        resolution,
+        ['kind', 'outcome'],
+        'reconcileManagedEffectSuccessor.resolution',
+      );
+    } else if (resolution.kind === 'not-applied') {
+      assertExactKeys(
+        resolution,
+        ['kind', 'verifier', 'evidence'],
+        'reconcileManagedEffectSuccessor.resolution',
+      );
+    } else {
+      throw new TypeError(
+        'reconcileManagedEffectSuccessor.resolution.kind is not supported.',
+      );
+    }
+    const state = await readVerifiedRun(common.runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    const { authorization, invocation } =
+      getManagedEffectSuccessorInvocation(state);
+    const effect = state.effects.get(
+      effectMapKey(invocation.invocationId, authorization.target.effectId),
+    );
+    const attempt = effect
+      ? state.attempts.get(
+          attemptMapKey(invocation.invocationId, effect.requestedBy.attemptId),
+        )
+      : undefined;
+    if (!effect || !attempt) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'managed-effect successor has no interrupted effect to reconcile',
+      );
+    }
+    const payloadReader = createLedgerPayloadReader(payloadStore, common.runId);
+    const request = await payloadReader.readManagedEffectRequest(
+      effect.requestRef,
+    );
+    /** @type {ReturnType<typeof normalizeManagedEffectOutcome> | undefined} */
+    let outcome;
+    /** @type {Record<string, any> | undefined} */
+    let negativeEvidence;
+    /** @type {{kind: string, version: number}} */
+    let verifier;
+    /** @type {string} */
+    let resolutionStatus;
+    if (resolution.kind === 'outcome') {
+      if (resolution.outcome?.ok === true) {
+        assertExactKeys(
+          resolution.outcome,
+          ['ok', 'result', 'evidence'],
+          'reconcileManagedEffectSuccessor.resolution.outcome',
+        );
+      } else if (resolution.outcome?.ok === false) {
+        assertExactKeys(
+          resolution.outcome,
+          ['ok', 'error', 'evidence'],
+          'reconcileManagedEffectSuccessor.resolution.outcome',
+        );
+      } else {
+        throw new TypeError(
+          'reconcileManagedEffectSuccessor.resolution.outcome.ok must be a boolean.',
+        );
+      }
+      outcome = normalizeManagedEffectOutcome(
+        {
+          destinationEffectId: effect.destinationEffectId,
+          adapter: effect.adapter,
+          destination: effect.destination,
+          verifier: effect.verifier,
+          ok: resolution.outcome.ok,
+          ...(resolution.outcome.ok
+            ? { result: resolution.outcome.result }
+            : { error: resolution.outcome.error }),
+          substantiatedReplayProperties: effect.substantiatedReplayProperties,
+          evidence: resolution.outcome.evidence,
+        },
+        'reconcileManagedEffectSuccessor.resolution.outcome',
+      );
+      verifyManagedEffectOutcome(
+        effectVerifierRegistry,
+        effect,
+        request,
+        outcome,
+        'reconcileManagedEffectSuccessor.resolution.outcome',
+      );
+      verifier = cloneInlinePayload(
+        effect.verifier,
+        'reconcileManagedEffectSuccessor outcome verifier',
+      );
+      resolutionStatus = outcome.ok
+        ? EffectStatus.COMPLETED
+        : EffectStatus.FAILED;
+    } else {
+      verifier = normalizeEffectVerifierDescriptor(
+        resolution.verifier,
+        'reconcileManagedEffectSuccessor.resolution.verifier',
+      );
+      negativeEvidence = cloneReferencedPayloadObject(
+        resolution.evidence,
+        'reconcileManagedEffectSuccessor.resolution.evidence',
+      );
+      verifyManagedEffectReconciliationEvidence(
+        effectVerifierRegistry,
+        effect,
+        request,
+        verifier,
+        negativeEvidence,
+        'reconcileManagedEffectSuccessor.resolution.evidence',
+      );
+      resolutionStatus = EffectStatus.NOT_APPLIED;
+    }
+    const evidenceRef = await putVerifiedPayload(payloadStore, {
+      value: negativeEvidence || outcome,
+      payloadSchema:
+        resolutionStatus === EffectStatus.NOT_APPLIED
+          ? MANAGED_EFFECT_RECONCILIATION_EVIDENCE_PAYLOAD_SCHEMA
+          : MANAGED_EFFECT_OUTCOME_PAYLOAD_SCHEMA,
+      label: 'reconcileManagedEffectSuccessor.evidenceRef',
+    });
+    const terminal = {
+      type:
+        resolutionStatus === EffectStatus.COMPLETED ? 'completed' : 'failed',
+      attemptId: attempt.attemptId,
+    };
+    const requestDigest = createTransitionRequestDigest(
+      'effect-successor-reconciled',
+      {
+        runId: common.runId,
+        invocationId: invocation.invocationId,
+        attemptId: attempt.attemptId,
+        effectId: effect.effectId,
+        fencingToken,
+        generation,
+        expectedVersion: common.expectedVersion,
+        expectedEffectVersion,
+        transitionId: common.transitionId,
+        reconciliationId,
+        uncertaintyEventId,
+        uncertaintySequence,
+        verifier,
+        evidenceRef,
+        resolutionStatus,
+        terminal,
+        reason,
+        actor: common.actor,
+        coordinatorEpoch: common.coordinatorEpoch,
+      },
+    );
+    const existing = assertMatchingReceipt(
+      state,
+      await getTransitionReceipt(
+        db,
+        resolvedTableName,
+        common.runId,
+        common.transitionId,
+      ),
+      requestDigest,
+    );
+    if (existing) {
+      if (
+        existing.type !== 'effect-successor-reconciled' ||
+        existing.invocation_id !== invocation.invocationId ||
+        existing.attempt_id !== attempt.attemptId ||
+        existing.effect_id !== effect.effectId
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      return await existingTransitionResult(state, existing);
+    }
+    if (state.head.version !== common.expectedVersion) {
+      throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
+    }
+    const uncertaintyEvent = state.events[uncertaintySequence - 1];
+    const reconciliationLink = {
+      invocationId: invocation.invocationId,
+      attemptId: attempt.attemptId,
+      effectId: effect.effectId,
+      generation,
+      coordinatorEpoch: common.coordinatorEpoch,
+      fencingToken,
+      uncertaintyEventId,
+      uncertaintySequence,
+    };
+    if (
+      state.run.status !== RunStatus.BLOCKED ||
+      invocation.status !== InvocationStatus.UNCERTAIN ||
+      invocation.generation !== generation ||
+      attempt.status !== AttemptStatus.ABANDONED ||
+      effect.status !== EffectStatus.UNCERTAIN ||
+      effect.version !== expectedEffectVersion ||
+      effect.effectId !== authorization.target.effectId ||
+      effect.destinationEffectId !== authorization.target.destinationEffectId ||
+      !hasExactEffectUncertaintyEventLink({
+        run: state.run,
+        invocation,
+        attempt,
+        effect,
+        reconciliation: reconciliationLink,
+        uncertaintyEvent,
+        runId: common.runId,
+      })
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'managed-effect successor is not the retained interrupted effect',
+      );
+    }
+    assertCurrentAttemptFence(
+      attempt,
+      { coordinatorEpoch: common.coordinatorEpoch, fencingToken, generation },
+      common.runId,
+    );
+    const reconciliation = {
+      reconciliationId,
+      ...reconciliationLink,
+      verifier,
+      evidenceRef,
+      resolutionStatus,
+      reason,
+    };
+    const sequence = state.head.sequence + 1;
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current successor run'),
+      status:
+        resolutionStatus === EffectStatus.COMPLETED
+          ? RunStatus.COMPLETED
+          : RunStatus.FAILED,
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextInvocation = /** @type {Record<string, any>} */ ({
+      ...cloneJsonObject(invocation, 'current successor invocation'),
+      status:
+        resolutionStatus === EffectStatus.COMPLETED
+          ? InvocationStatus.COMPLETED
+          : InvocationStatus.FAILED,
+      terminal,
+      version: invocation.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    });
+    delete nextInvocation.uncertainty;
+    const nextEffect = /** @type {Record<string, any>} */ ({
+      ...cloneJsonObject(effect, 'current successor effect'),
+      status: resolutionStatus,
+      reconciliation,
+      version: effect.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    });
+    delete nextEffect.uncertainty;
+    if (outcome) {
+      nextEffect.terminal = { ok: outcome.ok };
+      nextEffect.outcomeRef = evidenceRef;
+    }
+    const event = createEventRecord(
+      common.runId,
+      sequence,
+      common.transitionId,
+      requestDigest,
+      'effect-successor-reconciled',
+      common.observedAt,
+      common.actor,
+      {
+        coordinatorEpoch: common.coordinatorEpoch,
+        invocationGeneration: generation,
+      },
+      {
+        run: nextRun,
+        invocation: nextInvocation,
+        effect: nextEffect,
+        reconciliation,
+      },
+    );
+    return await appendOrReplay({
+      state,
+      runId: common.runId,
+      transitionId: common.transitionId,
+      requestDigest,
+      event,
+      nextRun,
+      nextInvocation,
+      nextEffect,
+      currentEffect: effect,
+    });
   }
 
   /**
@@ -5843,6 +8898,11 @@ export function createExecutionLedger({
 
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    if (state.run.trigger?.kind === 'effect-successor') {
+      throw new TypeError(
+        'requestManualRunCancellation cannot cancel a managed-effect successor.',
+      );
+    }
     const classified = await classifyDurableCancellation(state);
     if (classified.result) return classified.result;
     const invocation = classified.invocation;
@@ -6063,6 +9123,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    assertOrdinaryLifecycleRun(state, 'claimInvocation');
     const currentInvocation = state.invocations.get(invocationId);
     const attemptId = createAttemptId(
       common.runId,
@@ -6215,6 +9276,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    assertOrdinaryLifecycleRun(state, 'markAttemptStarted');
     const requestDigest = createTransitionRequestDigest('attempt-started', {
       runId: common.runId,
       invocationId,
@@ -6427,6 +9489,7 @@ export function createExecutionLedger({
     }
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    assertOrdinaryLifecycleRun(state, 'recordManagedEffectRequest');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     const key = effectMapKey(invocationId, effectId);
@@ -6580,6 +9643,13 @@ export function createExecutionLedger({
       createdAt: common.observedAt,
       updatedAt: common.observedAt,
     };
+    assertManagedEffectSuccessorPlannedRequest({
+      run: state.run,
+      invocation,
+      effect: prospectiveEffect,
+      request: logicalRequest,
+      priorEffects: [...state.effects.values()],
+    });
     cloneInlinePayload(
       prospectiveEffect,
       'recordManagedEffectRequest prospective effect',
@@ -6743,6 +9813,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    assertOrdinaryLifecycleRun(state, 'markManagedEffectStarted');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     const effect = state.effects.get(effectMapKey(invocationId, effectId));
@@ -6931,6 +10002,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    assertOrdinaryLifecycleRun(state, 'commitManagedEffectOutcome');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     const effect = state.effects.get(effectMapKey(invocationId, effectId));
@@ -7205,6 +10277,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    assertOrdinaryLifecycleRun(state, 'markManagedEffectUncertain');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     const effect = state.effects.get(effectMapKey(invocationId, effectId));
@@ -7462,6 +10535,7 @@ export function createExecutionLedger({
 
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    assertOrdinaryLifecycleRun(state, 'settleStoppedAttemptManagedEffects');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     if (!invocation || !attempt) {
@@ -7794,6 +10868,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    assertOrdinaryLifecycleRun(state, 'commitVerifiedAttemptTerminal');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     if (!invocation || !attempt) {
@@ -7823,6 +10898,13 @@ export function createExecutionLedger({
       effectVerifierRegistry,
       common.runId,
     );
+    await assertManagedEffectSuccessorTerminal({
+      run: state.run,
+      invocation,
+      terminal,
+      effects: state.effects,
+      payloadReader,
+    });
     if (
       !TERMINAL_TYPES.has(terminal.type) ||
       terminal.attemptId !== attemptId
@@ -8059,6 +11141,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    assertOrdinaryLifecycleRun(state, 'markAttemptUncertain');
     const requestDigest = createTransitionRequestDigest(
       'attempt-became-uncertain',
       {
@@ -8278,6 +11361,7 @@ export function createExecutionLedger({
 
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    assertOrdinaryLifecycleRun(state, 'reconcileUncertainManagedEffect');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     const effect = state.effects.get(effectMapKey(invocationId, effectId));
@@ -8658,6 +11742,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    assertOrdinaryLifecycleRun(state, 'reconcileUncertainManualAttempt');
     const invocation = state.invocations.get(invocationId);
     const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
     if (!invocation || !attempt) {
@@ -8687,6 +11772,13 @@ export function createExecutionLedger({
       effectVerifierRegistry,
       common.runId,
     );
+    await assertManagedEffectSuccessorTerminal({
+      run: state.run,
+      invocation,
+      terminal,
+      effects: state.effects,
+      payloadReader,
+    });
     if (
       !TERMINAL_TYPES.has(terminal.type) ||
       terminal.attemptId !== attemptId
@@ -8962,6 +12054,7 @@ export function createExecutionLedger({
     );
     const state = await readVerifiedRun(common.runId);
     if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    assertOrdinaryLifecycleRun(state, 'abandonUnstartedAttempt');
     const requestDigest = createTransitionRequestDigest(
       'attempt-abandoned-before-start',
       {
@@ -9389,7 +12482,9 @@ export function createExecutionLedger({
 
   return {
     abandonUnstartedAttempt,
+    authorizeManagedEffectSuccessorRetry,
     claimInvocation,
+    commitManagedEffectSuccessorOutcome,
     commitVerifiedAttemptTerminal,
     commitManagedEffectOutcome,
     createManualRun,
@@ -9403,19 +12498,27 @@ export function createExecutionLedger({
     markAttemptUncertain,
     markManagedEffectStarted,
     markManagedEffectUncertain,
+    interruptManagedEffectSuccessor,
     recordManagedEffectRequest,
     readManagedEffectDelivery,
     reconcileUncertainManagedEffect,
     reconcileUncertainManualAttempt,
+    reconcileManagedEffectSuccessor,
     rebuildRun,
     requestManualRunCancellation,
     settleStoppedAttemptManagedEffects,
+    startManagedEffectSuccessor,
   };
 }
 
 /**
  * @typedef ExecutionLedgerStore
  * @property {(...args: any[]) => Promise<any>} createManualRun - Creates one idempotent manual run.
+ * @property {(...args: any[]) => Promise<any>} authorizeManagedEffectSuccessorRetry - Atomically appends source authorization and creates one fresh effect-only retry run.
+ * @property {(...args: any[]) => Promise<any>} startManagedEffectSuccessor - Atomically starts a successor's sole retained effect and authorizes one physical dispatch.
+ * @property {(...args: any[]) => Promise<any>} commitManagedEffectSuccessorOutcome - Atomically closes a successor's sole started effect and aggregate terminal state.
+ * @property {(...args: any[]) => Promise<any>} interruptManagedEffectSuccessor - Atomically blocks a successor after a potentially begun destination delivery.
+ * @property {(...args: any[]) => Promise<any>} reconcileManagedEffectSuccessor - Resolves a blocked successor from destination evidence without rewriting its abandoned attempt.
  * @property {(...args: any[]) => Promise<any>} claimInvocation - Claims the next physical generation.
  * @property {(...args: any[]) => Promise<any>} markAttemptStarted - Persists the handler-start boundary.
  * @property {(...args: any[]) => Promise<any>} commitVerifiedAttemptTerminal - Commits validated terminal evidence.

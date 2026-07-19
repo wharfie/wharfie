@@ -123,7 +123,7 @@ export function createManualLedgerRunId(options) {
     'idempotencyKey',
   );
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:manual-ledger-run:v8',
+    domain: 'wharfie:manual-ledger-run:v9',
     prefix: 'wlm',
     value: { appId: options.appId, idempotencyKey },
     valuePath: 'manual ledger run identity',
@@ -1118,7 +1118,7 @@ function getRetainedUncertaintyEvent(view, invocation, attempt) {
  * race: the core transition owns the exact original uncertainty fence and
  * its stable receipt identity. A live LMDB runner must be excluded by the
  * caller's local ownership fence before this helper is entered.
- * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, reconciliationId: string, evidence: Record<string, any>, reason?: Record<string, any>, actor?: {kind: string, id: string}}} options - Exact source-independent reconciliation request.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, invocationId?: string, reconciliationId: string, evidence: Record<string, any>, reason?: Record<string, any>, actor?: {kind: string, id: string}}} options - Exact source-independent reconciliation request.
  * @returns {Promise<ManualLedgerReconciliationResult>} - Reconciliation result and verified readback.
  */
 export async function reconcileManualLedgerActivity(options) {
@@ -1150,6 +1150,10 @@ export async function reconcileManualLedgerActivity(options) {
 
   const ledger = options.ledger;
   const runId = assertLedgerOpaqueId(options.runId, 'runId');
+  const invocationId =
+    options.invocationId === undefined
+      ? MANUAL_LEDGER_INVOCATION_ID
+      : assertLedgerOpaqueId(options.invocationId, 'invocationId');
   const { reconciliationId, transitionId } =
     resolveManualReconciliationIdentity(options.reconciliationId);
   const actor = options.actor || DEFAULT_ACTOR;
@@ -1164,7 +1168,7 @@ export async function reconcileManualLedgerActivity(options) {
     return { found: false, changed: false };
   }
 
-  const invocation = getInvocation(view, MANUAL_LEDGER_INVOCATION_ID);
+  const invocation = getInvocation(view, invocationId);
   if (invocation.generation === 0) {
     throw new ExecutionLedgerConflictError(
       runId,
@@ -1231,7 +1235,7 @@ export async function reconcileManualLedgerActivity(options) {
  * append-only ledger. A normal repeat never steals a RUNNING attempt because
  * coordinator leases do not exist yet; recovery is a separate operator action
  * that never accepts or compiles current application source.
- * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, appId: string, revisionId: string, activityId: string, input?: any, callerMetadata?: Record<string, any>, actor?: {kind: string, id: string}, signal?: AbortSignal, ownerCancellation?: ManualLedgerOwnerCancellation, registerActiveAttemptCancellationPort?: ManualLedgerActiveAttemptCancellationPortRegistrar, createFencingToken?: () => string, executeAttempt?: (startFrame: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => Promise<Readonly<Record<string, any>>>, prepareAttemptDispatch?: (context: Readonly<ManualLedgerAttemptDispatchContext>) => ManualLedgerPreparedAttemptDispatch|Promise<ManualLedgerPreparedAttemptDispatch>}} options - Bound manual activity execution. Exactly one dispatch option is required.
+ * @param {{ledger: import('../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, appId: string, revisionId: string, activityId: string, input?: any, callerMetadata?: Record<string, any>, actor?: {kind: string, id: string}, signal?: AbortSignal, ownerCancellation?: ManualLedgerOwnerCancellation, registerActiveAttemptCancellationPort?: ManualLedgerActiveAttemptCancellationPortRegistrar, createFencingToken?: () => string, executeAttempt?: (startFrame: Readonly<Record<string, any>>, options: {signal: AbortSignal}) => Promise<Readonly<Record<string, any>>>, prepareAttemptDispatch?: (context: Readonly<ManualLedgerAttemptDispatchContext>) => ManualLedgerPreparedAttemptDispatch|Promise<ManualLedgerPreparedAttemptDispatch>}} options - Bound authored activity execution. Exactly one dispatch option is required.
  * @returns {Promise<ReturnType<typeof outcomeFromState>>} - Durable terminal, blocked, or in-progress result.
  */
 export async function runManualLedgerActivity(options) {
@@ -1265,6 +1269,11 @@ export async function runManualLedgerActivity(options) {
   if (Object.prototype.hasOwnProperty.call(options, 'recover')) {
     throw new TypeError(
       'runManualLedgerActivity.recover is not supported; use recoverManualLedgerActivity before a separate execution decision.',
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(options, 'existingSuccessor')) {
+    throw new TypeError(
+      'runManualLedgerActivity cannot execute a managed-effect successor; use the dedicated successor executor.',
     );
   }
   if (
@@ -1309,6 +1318,19 @@ export async function runManualLedgerActivity(options) {
     actor,
     coordinatorEpoch: 0,
   });
+
+  if (
+    created.run.runId !== runId ||
+    created.run.appId !== options.appId ||
+    created.run.revisionId !== options.revisionId ||
+    created.invocation.runId !== runId ||
+    created.invocation.invocationId !== invocationId ||
+    created.invocation.activityId !== options.activityId
+  ) {
+    throw new Error(
+      'runManualLedgerActivity existing run does not match its requested execution identity.',
+    );
+  }
 
   const current = await readCurrent(ledger, runId, invocationId);
   if (current.invocation.status === InvocationStatus.UNCERTAIN) {

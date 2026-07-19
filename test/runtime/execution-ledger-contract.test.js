@@ -30,8 +30,9 @@ describe('execution ledger contract facade', () => {
     }
   });
 
-  test('preserves the V8 destination-effect identity vector', () => {
-    expect(ledgerContract.EXECUTION_LEDGER_SCHEMA_VERSION).toBe(8);
+  test('preserves destination identity across the V9 ledger namespace', () => {
+    expect(ledgerContract.EXECUTION_LEDGER_SCHEMA_VERSION).toBe(9);
+    expect(ledgerContract.MANAGED_EFFECT_DESTINATION_IDENTITY_VERSION).toBe(8);
     expect(
       ledgerFacade.createManagedEffectDestinationId({
         appId: 'contract-app',

@@ -208,9 +208,53 @@ export function createExecutionLedgerEffectReconciliationOperatorView(
   };
 }
 
+/**
+ * Present a causally linked managed-effect successor without disclosing the
+ * retained request, destination binding, operator reason, or either run's
+ * fencing material. Both nested run views pass through the ordinary redaction
+ * boundary so this response does not create a more privileged inspection
+ * channel.
+ * @param {{successorId: string, intent: string, authorizationApplied: boolean, sourceEffectId: string, targetEffectId: string, targetDisposition: 'completed'|'failed'|'blocked'|'in-progress'}} successor - Safe successor result metadata.
+ * @param {Record<string, any>} sourceView - Verified rebuilt source run.
+ * @param {Record<string, any>} targetView - Verified rebuilt target run.
+ * @returns {Record<string, any>} - Redacted causal source/target response.
+ */
+export function createExecutionLedgerEffectSuccessorOperatorView(
+  successor,
+  sourceView,
+  targetView,
+) {
+  const source = createExecutionLedgerOperatorView(sourceView);
+  const target = createExecutionLedgerOperatorView(targetView);
+  return {
+    schemaVersion: EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION,
+    kind: 'wharfie.execution-ledger.effect-successor',
+    integrity: { verified: true },
+    effectSuccessor: {
+      successorId: successor.successorId,
+      intent: successor.intent,
+      authorizationApplied: successor.authorizationApplied,
+      source: {
+        runId: source.run.runId,
+        effectId: successor.sourceEffectId,
+        status: source.run.status,
+      },
+      target: {
+        runId: target.run.runId,
+        effectId: successor.targetEffectId,
+        status: target.run.status,
+        disposition: successor.targetDisposition,
+      },
+    },
+    source,
+    target,
+  };
+}
+
 export default {
   EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION,
   createExecutionLedgerEffectReconciliationOperatorView,
+  createExecutionLedgerEffectSuccessorOperatorView,
   createExecutionLedgerOperatorView,
   createExecutionLedgerReconciliationOperatorView,
   createExecutionLedgerRecoveryOperatorView,

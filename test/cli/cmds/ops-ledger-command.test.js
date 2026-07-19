@@ -777,6 +777,7 @@ describe('ledger-native operator commands', () => {
     expect(help.stdout).toContain('recover');
     expect(help.stdout).toContain('reconcile');
     expect(help.stdout).toContain('reconcile-effect');
+    expect(help.stdout).not.toContain('retry-effect');
     expect(help.stdout).toContain('cancel');
     expect(help.stdout).toContain('run');
     expect(help.stdout).not.toContain('list');
@@ -859,6 +860,10 @@ describe('ledger-native operator commands', () => {
     expect(reconcileEffect.stderr).not.toContain(
       'missing-run-effect-reconciliation',
     );
+
+    const retryEffect = runCli(['ops', 'retry-effect'], env, repoRoot);
+    expect(retryEffect.status).toBe(1);
+    expect(retryEffect.stderr).toMatch(/unknown command/i);
 
     const legacyRecovery = runCli(['ops', 'run', '--recover'], env, repoRoot);
     expect(legacyRecovery.status).toBe(1);
