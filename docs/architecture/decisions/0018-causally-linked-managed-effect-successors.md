@@ -197,6 +197,11 @@ lifecycle passes an internal source and Node-absent relocated-SEA crash/recovery
 matrix through a hidden test fixture. That is implementation proof, not public
 support; public mounts and public command parity remain pending.
 
+The fixture gate is an unsupported test-harness switch, not an authorization
+boundary: a trusted operator who controls the SEA environment can enable it.
+With the normal environment it is absent from the command tree, and it creates
+no public command contract.
+
 ### Forward compensation remains explicit future work
 
 There is no executable generic compensation policy in V9. Wharfie does not

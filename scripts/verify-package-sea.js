@@ -484,6 +484,7 @@ const SEA_SUCCESSOR_CRASH_CASES = Object.freeze([
       ],
     },
     destinationApplied: true,
+    preexistingBusiness: true,
     orphanPayloads: 0,
   },
 ]);
@@ -802,7 +803,7 @@ async function createInstalledLedgerLifecycleObserver(options) {
  * operator fixtures. The moved SEA still performs every operation under test;
  * this host helper only prepares independently verifiable durable state.
  * @param {{installedPackageRoot: string, controlPath: string, tableName: string, payloadPath: string, applicationStatePath: string, revisionId: string}} options - Installed-package fixture inputs.
- * @returns {Promise<{payloadStoreId: string, createDestinationEffectId: (appId: string, runId: string, effectId: string) => string, createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, payloadStoreId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, materializeApplicationStateReceipt: (appId: string, runId: string, effectId: string) => Promise<Readonly<Record<string, any>>>, readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readManagedEffectDelivery: (runId: string, effectId: string) => Promise<Record<string, any> | null>, readRawLedgerRunRows: (runId: string) => Promise<Record<string, any>[]>, listRunDirectory: (appId: string) => Promise<Record<string, any>[]>, readSuccessorIdentity: (appId: string, successorId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, createManagedEffectSuccessorAuthorization: (options: Record<string, any>) => Record<string, any>, encodeCanonicalJsonPayload: (value: unknown) => Buffer, createExecutionPayloadReference: (options: {bytes: Buffer, payloadSchema: string, storeId: string}) => Record<string, any>, ApplicationStateAdapterDescriptor: Record<string, any>, ApplicationStateReconciliationVerifierDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
+ * @returns {Promise<{payloadStoreId: string, createDestinationEffectId: (appId: string, runId: string, effectId: string) => string, createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, payloadStoreId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, materializeApplicationStateReceipt: (appId: string, runId: string, effectId: string) => Promise<Readonly<Record<string, any>>>, readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, writeApplicationStateExternalValue: (appId: string, logicalKey: string, value: Record<string, any>, suffix: string) => Promise<{destinationEffectId: string, value: Record<string, any>, outcome: Record<string, any>}>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readManagedEffectDelivery: (runId: string, effectId: string) => Promise<Record<string, any> | null>, readRawLedgerRunRows: (runId: string) => Promise<Record<string, any>[]>, listRunDirectory: (appId: string) => Promise<Record<string, any>[]>, readSuccessorIdentity: (appId: string, successorId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, createManagedEffectSuccessorAuthorization: (options: Record<string, any>) => Record<string, any>, encodeCanonicalJsonPayload: (value: unknown) => Buffer, createExecutionPayloadReference: (options: {bytes: Buffer, payloadSchema: string, storeId: string}) => Record<string, any>, ApplicationStateAdapterDescriptor: Record<string, any>, ApplicationStateReconciliationVerifierDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
  */
 async function createInstalledExecutionLedgerFixture(options) {
   const installedModule = async (/** @type {string} */ relativePath) =>
@@ -923,6 +924,64 @@ async function createInstalledExecutionLedgerFixture(options) {
         );
       }
       return receipts;
+    } finally {
+      await applicationDb.close();
+    }
+  };
+  const writeApplicationStateExternalValue = async (
+    /** @type {string} */ appId,
+    /** @type {string} */ logicalKey,
+    /** @type {Record<string, any>} */ value,
+    /** @type {string} */ suffix,
+  ) => {
+    const identity = {
+      runId: `sea-external-run-${suffix}`,
+      invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
+      attemptId: `sea-external-attempt-${suffix}`,
+      effectId: `sea-external-effect-${suffix}`,
+    };
+    const request = {
+      protocol: 'wharfie.activity',
+      protocolVersion: 1,
+      type: 'effect-request',
+      attemptId: identity.attemptId,
+      sequence: 1,
+      effectId: identity.effectId,
+      capability: 'application-state',
+      operation: 'put-if-absent',
+      input: { key: logicalKey, value },
+      requestedReplayProperties: ['idempotent', 'transactional'],
+    };
+    const applicationDb = await dbConfigModule.createApplicationStateDBClient(
+      'lmdb',
+      { path: options.applicationStatePath },
+    );
+    try {
+      const catalog =
+        await builtinCatalogModule.createBuiltinManagedEffectCatalog({
+          db: applicationDb,
+          appId,
+          adapterName: 'lmdb',
+        });
+      const adapter = catalog.resolve(request);
+      const destinationEffectId =
+        ledgerContractModule.createManagedEffectDestinationId({
+          appId,
+          runId: identity.runId,
+          invocationId: identity.invocationId,
+          effectId: identity.effectId,
+        });
+      const outcome = await adapter.execute({
+        destinationEffectId,
+        destination: adapter.destination,
+        identity,
+        request,
+      });
+      return {
+        destinationEffectId,
+        value: JSON.parse(JSON.stringify(value)),
+        outcome: JSON.parse(JSON.stringify(outcome)),
+      };
     } finally {
       await applicationDb.close();
     }
@@ -1219,6 +1278,7 @@ async function createInstalledExecutionLedgerFixture(options) {
       (await readApplicationStateReceipts(appId, [destinationEffectId])).get(
         destinationEffectId,
       ) || null,
+    writeApplicationStateExternalValue,
     materializeApplicationStateReceipt: async (appId, runId, effectId) => {
       const { db, ledger } = openLedger(true);
       let delivery;
@@ -2219,16 +2279,29 @@ async function assertManagedEffectReconciliationPayload(
       destination.receipt.business_record_digest,
       destination.business.record_digest,
     );
-    assert.equal(
-      destination.business.created_by_destination_effect_id,
-      effect.destinationEffectId,
-    );
-    assert.equal(
-      destination.business.contract_digest,
-      destination.receipt.contract_digest,
-    );
+    if (destination.receipt.inserted) {
+      assert.equal(
+        destination.business.created_by_destination_effect_id,
+        effect.destinationEffectId,
+      );
+      assert.equal(
+        destination.business.contract_digest,
+        destination.receipt.contract_digest,
+      );
+    } else {
+      assert.notEqual(
+        destination.business.created_by_destination_effect_id,
+        effect.destinationEffectId,
+      );
+      assert.notEqual(
+        destination.business.contract_digest,
+        destination.receipt.contract_digest,
+      );
+    }
     assert.equal(payload.ok, true);
-    assert.deepEqual(payload.result, { inserted: true });
+    assert.deepEqual(payload.result, {
+      inserted: destination.receipt.inserted,
+    });
     assert.deepEqual(payload.evidence, {
       kind: 'application-state-put-if-absent-receipt',
       version: 2,
@@ -5502,6 +5575,7 @@ async function assertSeaSuccessorTerminalOutcomeEvidence(
  * @param {Record<string, any>} sourceRequest - Exact logical source request.
  * @param {string} appId - Application namespace.
  * @param {true | false | 'not-applied'} expectedOutcome - Expected destination state.
+ * @param {{destinationEffectId: string, value: Record<string, any>} | null} [preexistingBusiness] - Independent writer that owns an already-present value.
  * @returns {void}
  */
 function assertSeaSuccessorDestination(
@@ -5510,6 +5584,7 @@ function assertSeaSuccessorDestination(
   sourceRequest,
   appId,
   expectedOutcome,
+  preexistingBusiness = null,
 ) {
   if (expectedOutcome === false) {
     assert.deepEqual(destination, {
@@ -5534,6 +5609,7 @@ function assertSeaSuccessorDestination(
     });
     return;
   }
+  const inserted = preexistingBusiness === null;
   assert.ok(destination.receipt);
   assert.ok(destination.business);
   assert.equal(destination.resolution, null);
@@ -5548,21 +5624,32 @@ function assertSeaSuccessorDestination(
     },
     {
       destinationEffectId: authorization.target.destinationEffectId,
-      outcomeCode: 'inserted',
-      inserted: true,
+      outcomeCode: inserted ? 'inserted' : 'already-present',
+      inserted,
       namespace: appId,
       logicalKey: sourceRequest.input.key,
-      createdBy: authorization.target.destinationEffectId,
+      createdBy: inserted
+        ? authorization.target.destinationEffectId
+        : preexistingBusiness.destinationEffectId,
     },
   );
   assert.deepEqual(
     destination.business.value,
-    JSON.parse(JSON.stringify(sourceRequest.input.value)),
+    inserted
+      ? JSON.parse(JSON.stringify(sourceRequest.input.value))
+      : preexistingBusiness.value,
   );
-  assert.equal(
-    destination.business.contract_digest,
-    destination.receipt.contract_digest,
-  );
+  if (inserted) {
+    assert.equal(
+      destination.business.contract_digest,
+      destination.receipt.contract_digest,
+    );
+  } else {
+    assert.notEqual(
+      destination.business.contract_digest,
+      destination.receipt.contract_digest,
+    );
+  }
   assert.equal(
     destination.business.record_digest,
     destination.receipt.business_record_digest,
@@ -5571,11 +5658,12 @@ function assertSeaSuccessorDestination(
 
 /**
  * Prove the internal successor executor preserves its dedicated lifecycle
- * across every durable publication and transaction boundary. A private
- * environment gate adds a hidden packaged-operator fixture alias; no normal
- * source or packaged CLI mounts a successor command. Every execution is the
- * relocated SEA with Node absent from PATH; host-side imports only seed and
- * independently read durable truth.
+ * across every durable publication and transaction boundary. A test-harness
+ * environment gate adds an unsupported hidden packaged-operator fixture alias;
+ * it is not an authorization boundary for a trusted operator who controls the
+ * SEA environment, and no normal source or packaged CLI mounts it. Every
+ * execution is the relocated SEA with Node absent from PATH; host-side imports
+ * only seed and independently read durable truth.
  * @param {{artifactPath: string, appId: string, cleanEnvironment: Record<string, string>, installedPackageRoot: string, revisionId: string, root: string}} options - Matrix inputs.
  * @returns {Promise<void>} - Resolves after all six crash/recovery cases pass.
  */
@@ -5799,6 +5887,22 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
         const directoryBeforeRetry = await fixture.listRunDirectory(
           options.appId,
         );
+        const preexistingBusiness = scenario.preexistingBusiness
+          ? await fixture.writeApplicationStateExternalValue(
+              options.appId,
+              sourceEffectFixture.requestKey,
+              {
+                writer: 'sea-external-writer',
+                credential: `sea-external-state-secret-${caseId}`,
+              },
+              caseId,
+            )
+          : null;
+        if (preexistingBusiness) {
+          assert.deepEqual(preexistingBusiness.outcome.result, {
+            inserted: true,
+          });
+        }
         assert.equal(await lifecycle.readOwnership(), null);
         assert.equal(existsSync(markerPath), false);
 
@@ -5952,6 +6056,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
             sourceRequest,
             options.appId,
             scenario.destinationApplied,
+            preexistingBusiness,
           );
         }
         const payloadAtBoundary = readPayloadStorageSnapshotForRuns(
@@ -6068,6 +6173,12 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
           targetReason,
           applicationStatePath,
           controlPath,
+          ...(preexistingBusiness
+            ? [
+                preexistingBusiness.destinationEffectId,
+                preexistingBusiness.value.credential,
+              ]
+            : []),
         ];
         let finalSource;
         let finalTarget;
@@ -6150,6 +6261,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
             sourceRequest,
             options.appId,
             true,
+            preexistingBusiness,
           );
           finalPayload = readPayloadStorageSnapshotForRuns(payloadPath, [
             finalSource,
@@ -6413,6 +6525,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
               sourceRequest,
               options.appId,
               completed ? true : 'not-applied',
+              preexistingBusiness,
             );
             finalPayload = readPayloadStorageSnapshotForRuns(payloadPath, [
               finalSource,
@@ -8260,7 +8373,7 @@ export default defineApp({
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary private-fixture relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with orphan payload reuse, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary hidden-fixture relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();

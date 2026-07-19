@@ -61,9 +61,11 @@ export function createProgram(options = {}) {
     .addCommand(cancelCommand);
 
   // The relocated-SEA verifier needs to reach the internal successor seam
-  // without claiming a supported public command. This private, hidden alias is
-  // absent unless the verifier explicitly opts in, and keeps its real command
+  // without claiming a supported public command. This hidden alias is absent
+  // unless the verifier explicitly opts in, and keeps its real command
   // parsing/redaction/identity behavior rather than duplicating it in an app.
+  // It is not an authorization boundary: a trusted operator controlling the
+  // SEA environment can enable it, but it is unsupported and undocumented.
   if (process.env.WHARFIE_TEST_SEA_SUCCESSOR_FIXTURE === '1') {
     program.addCommand(retryEffectCommand.name('__sea-successor-fixture'), {
       hidden: true,
