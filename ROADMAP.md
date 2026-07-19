@@ -192,11 +192,12 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       `STARTED` commit, the atomic destination business-and-receipt commit,
       outcome-payload publication, outcome-ledger commit, and the helper/host
       response before worker or user continuation. A separate mixed-set matrix
-      covers recovered-outcome publication, the compound settlement commit, and
-      the recovery-helper response. A relocated SEA with Node absent from
-      `PATH` additionally proves that packaged compound recovery remains
-      idempotent when its response is blocked, the process is killed after the
-      commit, and the operator is restarted.
+      covers recovered-outcome publication, the compound settlement commit,
+      and the recovery-helper return before operator readback. The same eight
+      single-effect and three mixed-set boundaries now run through the actual
+      relocated SEA with Node absent from `PATH`. A separate oversized-response
+      leg proves that committed packaged recovery remains idempotent when its
+      output is blocked and the operator is killed and restarted.
 - [ ] Implement destination-specific reconciliation and compensation for
       uncertain effects, plus actual retry policy for substantiated `pure`,
       `idempotent`, and `transactional` work. Begun in-process handlers remain
@@ -214,11 +215,15 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       completes one managed effect, proves worker/user continuation after
       delivery, and replays the exact key without changing its run, effect, or
       permanent receipt.
-- [ ] Repeat the complete activity crash matrix through the moved SEA with Node
-      absent from `PATH`. The shared host and non-crash packaged execution proof
-      are complete; request/start/destination/outcome/response crash parity and
-      the packaged mixed-set crash boundaries still require external `SIGKILL`
-      evidence from the actual artifact.
+- [x] Repeat the complete activity crash matrix through the moved SEA with Node
+      absent from `PATH`. Eight isolated single-effect cases cover request
+      payload, request transaction, start transaction, atomic destination
+      transaction, outcome payload, outcome transaction, host response, and
+      authored continuation. Three isolated mixed-set cases cover recovered
+      outcome payload, atomic aggregate settlement, and recovery-helper return.
+      Every case uses real OS `SIGKILL`, exact payload/destination/ownership
+      evidence, and guarded first/repeated packaged recovery with no adapter
+      dispatch or low-level application-state write.
 
 **Exit:** kill and restart the application at adversarial points; it reconstructs durable truth, never commits conflicting terminal outcomes, and exposes every ambiguous effect as blocked `uncertain` work.
 
@@ -269,17 +274,15 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 ## Immediate queue
 
-1. Repeat the complete
-   request/start/destination/outcome/aggregate-settlement/response crash matrix
-   through the actual moved SEA with Node absent from `PATH`. The source/core
-   and compound-recovery subprocess matrices are complete, and the relocated
-   SEA now originates and exactly replays a managed-effect durable activity
-   through the shared host; only the full packaged `SIGKILL` comparison remains.
-2. Design destination-specific reconciliation and compensation for blocked
-   uncertain effect sets before enabling automatic retries or making an
-   exactly-once claim beyond the one destination-backed operation.
+1. Implement destination-specific reconciliation and compensation for retained
+   `UNCERTAIN` effects. Start with typed destination evidence for the built-in
+   application-state capability and append-only, causally linked successor
+   work; never reopen V7 history or silently redispatch the abandoned attempt.
+2. Add durable workflow continuations, scheduling decisions, outputs, and a
+   truly persistent resident worker so a local CLI can remain useful after the
+   authoring session ends. Keep coordinator leases and mesh placement later.
 3. After explicit dependency approval, repair the clean-install parser
    declaration, make draft PR #125 green in GitHub Actions, and review the
    reset stack for merge.
 
-ADR [0016](docs/architecture/decisions/0016-atomic-stopped-attempt-effect-settlement.md) is the current authority for V7 atomic effect-set recovery. The current dated handoff is [llm/checkpoints/2026-07-18-shared-packaged-durable-run-host.md](llm/checkpoints/2026-07-18-shared-packaged-durable-run-host.md). The preceding [real-process managed-effect crash checkpoint](llm/checkpoints/2026-07-18-real-process-managed-effect-crash-matrix.md) records the source/core and compound-settlement crash matrices before packaged activity origination; the [V7 atomic effect-settlement checkpoint](llm/checkpoints/2026-07-18-v7-atomic-effect-settlement.md) records the compound-settlement state machine before real process-crash coverage; the [public application-state and receipt-recovery checkpoint](llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md) records the finite public effect and first singular recovery boundary; the [V5 managed-effect foundation checkpoint](llm/checkpoints/2026-07-18-v5-managed-effect-foundation.md), [evidence-backed reconciliation checkpoint](llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md), [authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md), [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md), [shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md), [resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md), [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.
+ADR [0016](docs/architecture/decisions/0016-atomic-stopped-attempt-effect-settlement.md) is the current authority for V7 atomic effect-set recovery. The current dated handoff is [llm/checkpoints/2026-07-18-relocated-sea-mixed-settlement-sigkill-matrix.md](llm/checkpoints/2026-07-18-relocated-sea-mixed-settlement-sigkill-matrix.md). Its parent [relocated-SEA managed-effect SIGKILL checkpoint](llm/checkpoints/2026-07-18-relocated-sea-managed-effect-sigkill-matrix.md) records the preceding eight packaged single-effect boundaries; the [shared packaged durable-run host checkpoint](llm/checkpoints/2026-07-18-shared-packaged-durable-run-host.md) records packaged activity origination; the [real-process managed-effect crash checkpoint](llm/checkpoints/2026-07-18-real-process-managed-effect-crash-matrix.md) records the source/core and compound-settlement crash matrices before packaged parity; the [V7 atomic effect-settlement checkpoint](llm/checkpoints/2026-07-18-v7-atomic-effect-settlement.md) records the compound-settlement state machine before real process-crash coverage; the [public application-state and receipt-recovery checkpoint](llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md) records the finite public effect and first singular recovery boundary; the [V5 managed-effect foundation checkpoint](llm/checkpoints/2026-07-18-v5-managed-effect-foundation.md), [evidence-backed reconciliation checkpoint](llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md), [authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md), [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md), [shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md), [resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md), [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.
