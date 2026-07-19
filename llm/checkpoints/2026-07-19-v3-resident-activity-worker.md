@@ -5,7 +5,7 @@
   validation are recorded below**
 - **Branch:** `agent/strict-manifest`
 - **Starting parent:** `98fc5809363128b2c7973d6c4155d8b3849bf07a`
-- **Implementation receipt:** `PENDING_FINAL_COMMIT`
+- **Implementation receipt:** `45003917de3ae505138c2538a2bd31466c276d92`
 - **Full validation receipt:** `npm run test:full` — exit 0 on 2026-07-19
 - **Parent checkpoint:** [v2 foundation
   stabilized](2026-07-19-v2-foundation-stabilized.md)
