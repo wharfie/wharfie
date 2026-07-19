@@ -1913,8 +1913,6 @@ describe('manual ledger activity runner', () => {
       join(tmpdir(), 'wharfie-manual-ledger-race-'),
     );
     const baseDb = createVanillaDB({ path: directory });
-    /** @type {import('../../src/core/lib/db/tables/execution-ledger.js').ExecutionLedgerStore} */
-    let ledger;
     let injectedRecovery = false;
     const db = {
       ...baseDb,
@@ -1943,7 +1941,7 @@ describe('manual ledger activity runner', () => {
         });
       },
     };
-    ledger = createExecutionLedger({
+    const ledger = createExecutionLedger({
       db,
       tableName: 'manual-ledger-race-test',
       payloadStore: createPayloadStore(directory),
@@ -1980,8 +1978,6 @@ describe('manual ledger activity runner', () => {
       join(tmpdir(), 'wharfie-manual-ledger-stale-start-'),
     );
     const baseDb = createVanillaDB({ path: directory });
-    /** @type {import('../../src/core/lib/db/tables/execution-ledger.js').ExecutionLedgerStore} */
-    let ledger;
     let replacedStaleClaim = false;
     const db = {
       ...baseDb,
@@ -2047,7 +2043,7 @@ describe('manual ledger activity runner', () => {
         await baseDb.transactionWrite(params);
       },
     };
-    ledger = createExecutionLedger({
+    const ledger = createExecutionLedger({
       db,
       tableName: 'manual-ledger-stale-start-test',
       payloadStore: createPayloadStore(directory),
@@ -2266,8 +2262,6 @@ describe('manual ledger activity runner', () => {
       join(tmpdir(), 'wharfie-manual-ledger-recovery-race-'),
     );
     const baseDb = createVanillaDB({ path: directory });
-    /** @type {import('../../src/core/lib/db/tables/execution-ledger.js').ExecutionLedgerStore} */
-    let ledger;
     let startedDuringRecovery = false;
     const db = {
       ...baseDb,
@@ -2309,7 +2303,7 @@ describe('manual ledger activity runner', () => {
         await baseDb.transactionWrite(params);
       },
     };
-    ledger = createExecutionLedger({
+    const ledger = createExecutionLedger({
       db,
       tableName: 'manual-ledger-recovery-race-test',
       payloadStore: createPayloadStore(directory),

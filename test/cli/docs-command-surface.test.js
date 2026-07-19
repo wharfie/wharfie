@@ -6,13 +6,15 @@ import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
+import appApi, { defineApp, invokeActivity } from '../../src/app.js';
+
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 
 const docsToCheck = [
-  'docs/src/assets/markdown/home.md',
-  'docs/src/assets/markdown/quickstart.md',
-  'docs/src/assets/markdown/installation.md',
-  'docs/src/assets/markdown/project-structure.md',
+  'docs/README.md',
+  'docs/guides/quickstart.md',
+  'docs/guides/installation.md',
+  'docs/guides/application-structure.md',
   'contributing/FAQ.md',
   'contributing/project.md',
 ];
@@ -30,7 +32,6 @@ const staleCommands = [
   'wharfie build-self',
   'wharfie ops list',
   'wharfie ops run --recover',
-  'retry-effect',
   '--operation-id',
 ];
 
@@ -41,6 +42,17 @@ const staleClaims = [
 ];
 
 describe('docs command surface', () => {
+  it('keeps the runtime app API aligned with its declared public exports', async () => {
+    const runtimeModule = await import('../../src/app.js');
+
+    expect(Object.keys(runtimeModule).sort()).toEqual([
+      'default',
+      'defineApp',
+      'invokeActivity',
+    ]);
+    expect(appApi).toEqual({ defineApp, invokeActivity });
+  });
+
   it('does not advertise unsupported command groups in public docs', async () => {
     const contents = await Promise.all(
       docsToCheck.map((relativePath) =>
@@ -60,7 +72,7 @@ describe('docs command surface', () => {
 
   it('documents the honest source-only installation path', async () => {
     const installationDoc = await fsp.readFile(
-      path.join(repoRoot, 'docs/src/assets/markdown/installation.md'),
+      path.join(repoRoot, 'docs/guides/installation.md'),
       'utf8',
     );
 
@@ -87,7 +99,6 @@ describe('docs command surface', () => {
 
     expect(packageJson.files).toContain('src/core/**');
     expect(packageJson.files).toContain('src/cli/**');
-    expect(packageJson.files).not.toContain('apps/wharfie-cli/**');
     expect(packageJson.files).not.toContain('src/');
     expect(
       packageJson.files.some((/** @type {string} */ entry) =>
@@ -103,14 +114,14 @@ describe('docs command surface', () => {
 
   it('documents working onboarding commands in the quickstart', async () => {
     const quickstart = await fsp.readFile(
-      path.join(repoRoot, 'docs/src/assets/markdown/quickstart.md'),
+      path.join(repoRoot, 'docs/guides/quickstart.md'),
       'utf8',
     );
 
     expect(quickstart).toContain('wharfie.app.js');
     expect(quickstart).toContain('wharfie app manifest ./path/to/app');
     expect(quickstart).toContain(
-      `wharfie app run <activity-id> --dir ./path/to/app --input '{\"who\":\"cli-user\"}'`,
+      `wharfie app run <activity-id> --dir ./path/to/app --input '{"who":"cli-user"}'`,
     );
     expect(quickstart).toContain(
       'wharfie ops run --activity <activity-id> --dir ./path/to/app',
@@ -138,16 +149,20 @@ describe('docs command surface', () => {
     expect(quickstart).toContain(
       '<app> wharfie reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped',
     );
-    expect(quickstart).not.toContain('retry-effect');
+    expect(quickstart).toContain(
+      'wharfie ops retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped',
+    );
+    expect(quickstart).toContain(
+      '<app> wharfie retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped',
+    );
     expect(quickstart).not.toContain('wharfie ops list');
     expect(quickstart).not.toContain('<app> wharfie ops cancel');
   });
 
   it('documents the trusted redacted effect-reconciliation contract', async () => {
     const documents = await Promise.all(
-      ['README.md', 'docs/src/assets/markdown/quickstart.md'].map(
-        (relativePath) =>
-          fsp.readFile(path.join(repoRoot, relativePath), 'utf8'),
+      ['README.md', 'docs/guides/quickstart.md'].map((relativePath) =>
+        fsp.readFile(path.join(repoRoot, relativePath), 'utf8'),
       ),
     );
 
@@ -164,29 +179,28 @@ describe('docs command surface', () => {
     }
   });
 
-  it('keeps managed-effect successor work internal pending public-surface review', async () => {
+  it('documents the finite public managed-effect successor contract', async () => {
     const documents = await Promise.all(
-      ['README.md', 'docs/src/assets/markdown/quickstart.md'].map(
-        (relativePath) =>
-          fsp.readFile(path.join(repoRoot, relativePath), 'utf8'),
+      ['README.md', 'docs/guides/quickstart.md'].map((relativePath) =>
+        fsp.readFile(path.join(repoRoot, relativePath), 'utf8'),
       ),
     );
 
     for (const document of documents) {
-      expect(document).not.toContain('retry-effect');
       expect(document).toContain(
-        'internal hidden-fixture relocated-SEA crash/recovery matrix',
+        'wharfie ops retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped',
       );
-      expect(document).toContain('passes in this\nV9 worktree');
-      expect(document).toContain('not a public support claim');
       expect(document).toContain(
-        'public command mounts and\nsource/package parity proof remain pending',
+        '<app> wharfie retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped',
       );
+      expect(document).toContain('after a lost response');
+      expect(document).toContain('one retained target');
+      expect(document).toContain('redacted `--json`');
       expect(document).toContain('dedicated effect-only lifecycle');
       expect(document).toMatch(
-        /never redispatches the\s+abandoned authored activity/,
+        /never\s+redispatches\s+the\s+abandoned authored activity/,
       );
-      expect(document).toMatch(/no public successor\s+operation is available/);
+      expect(document).toContain('not generic handler\nretry or compensation');
     }
   });
 });

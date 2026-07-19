@@ -302,7 +302,7 @@ export function resolveSourceMapAnchor(sourceMap, target) {
       index,
     }))
     .filter(
-      ({ source }) =>
+      (/** @type {{source: unknown, index: number}} */ { source }) =>
         typeof source === 'string' &&
         source.replaceAll('\\', '/').endsWith(normalizedSuffix),
     );
@@ -312,6 +312,9 @@ export function resolveSourceMapAnchor(sourceMap, target) {
     );
   }
   const selected = matchingSources[0];
+  if (typeof selected.source !== 'string') {
+    throw new Error('SEA source map selected a non-string source.');
+  }
   const content = sourceMap.sourcesContent?.[selected.index];
   if (typeof content !== 'string') {
     throw new Error(`SEA source map omitted content for ${selected.source}.`);
@@ -346,11 +349,17 @@ export function resolveSourceMapAnchor(sourceMap, target) {
     );
   }
   const originalLine = anchor.line;
-  const candidates = getDecodedSourceMapMappings(sourceMap).filter(
-    (position) =>
-      position.sourceIndex === selected.index &&
-      position.originalLine === originalLine,
-  );
+  const candidates =
+    /** @type {Array<{generatedLine: number, generatedColumn: number, sourceIndex: number, originalLine: number, originalColumn: number}>} */ (
+      getDecodedSourceMapMappings(sourceMap).filter(
+        (position) =>
+          position.sourceIndex !== null &&
+          position.originalLine !== null &&
+          position.originalColumn !== null &&
+          position.sourceIndex === selected.index &&
+          position.originalLine === originalLine,
+      )
+    );
   if (candidates.length === 0) {
     throw new Error(
       `SEA source map has no generated mapping for ${selected.source}:${originalLine + 1}.`,
@@ -684,15 +693,21 @@ export async function attachSeaInspector(processHandle, options = {}) {
           );
           continue;
         }
-        const reverse = getDecodedSourceMapMappings(bundle.sourceMap)
-          .filter(
-            (position) =>
-              position.generatedLine === actual.lineNumber &&
-              position.generatedColumn <= actual.columnNumber,
-          )
-          .sort(
-            (left, right) => right.generatedColumn - left.generatedColumn,
-          )[0];
+        const reverse =
+          /** @type {{generatedLine: number, generatedColumn: number, sourceIndex: number, originalLine: number, originalColumn: number} | undefined} */ (
+            getDecodedSourceMapMappings(bundle.sourceMap)
+              .filter(
+                (position) =>
+                  position.sourceIndex !== null &&
+                  position.originalLine !== null &&
+                  position.originalColumn !== null &&
+                  position.generatedLine === actual.lineNumber &&
+                  position.generatedColumn <= actual.columnNumber,
+              )
+              .sort(
+                (left, right) => right.generatedColumn - left.generatedColumn,
+              )[0]
+          );
         if (
           !reverse ||
           reverse.sourceIndex !== location.sourceIndex ||

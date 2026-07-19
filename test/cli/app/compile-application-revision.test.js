@@ -201,6 +201,147 @@ describe('compileApplicationRevision', () => {
     ).rejects.toThrow(/outside the immutable app snapshot/i);
   });
 
+  it.each([
+    {
+      name: 'dynamic import',
+      source:
+        "const modulePath = './dep.js';\nexport async function greet() { return import(modulePath); }\n",
+      expected: /runtime-computed import\(\) module specifier/i,
+    },
+    {
+      name: 'CommonJS require',
+      source:
+        "const modulePath = './dep.cjs';\nexport function greet() { return require(modulePath); }\n",
+      expected: /runtime-computed require\(\) module specifier/i,
+    },
+    {
+      name: 'CommonJS require alias',
+      source:
+        'const nativeRequire = require;\nexport function greet(input) { return nativeRequire(input.moduleName); }\n',
+      expected: /references Node's native require as a value/i,
+    },
+    {
+      name: 'assigned CommonJS require alias',
+      source:
+        'let nativeRequire;\nnativeRequire = require;\nexport function greet(input) { return nativeRequire(input.moduleName); }\n',
+      expected: /references Node's native require as a value/i,
+    },
+    {
+      name: 'require.resolve',
+      source:
+        "const modulePath = './dep.cjs';\nexport function greet() { return require.resolve(modulePath); }\n",
+      expected: /uses require\.resolve\(\)/i,
+    },
+    {
+      name: 'require.resolve alias',
+      source:
+        'const resolveModule = require.resolve;\nexport function greet(input) { return resolveModule(input.moduleName); }\n',
+      expected: /accesses require\.resolve/i,
+    },
+    {
+      name: 'module.require',
+      source:
+        "const modulePath = './dep.cjs';\nexport function greet() { return module.require(modulePath); }\n",
+      expected: /uses module\.require\(\)/i,
+    },
+    {
+      name: 'bound module.require alias',
+      source:
+        'const nativeRequire = module.require.bind(module);\nexport function greet(input) { return nativeRequire(input.moduleName); }\n',
+      expected: /accesses module\.require/i,
+    },
+    {
+      name: 'import.meta.resolve',
+      source:
+        "const modulePath = './dep.js';\nexport function greet() { return import.meta.resolve(modulePath); }\n",
+      expected: /uses import\.meta\.resolve\(\)/i,
+    },
+    {
+      name: 'createRequire',
+      source:
+        "import { createRequire as makeRequire } from 'node:module';\nconst nativeRequire = makeRequire(import.meta.url);\nexport function greet() { return nativeRequire('./dep.cjs'); }\n",
+      expected: /imports createRequire from 'node:module'/i,
+    },
+    {
+      name: 'destructured createRequire',
+      source:
+        "const { createRequire: makeRequire } = require('node:module');\nconst nativeRequire = makeRequire(import.meta.url);\nexport function greet() { return nativeRequire('./dep.cjs'); }\n",
+      expected: /extracts createRequire from 'node:module'/i,
+    },
+  ])('rejects opaque native module loading through $name', async (fixture) => {
+    const appDir = await makeAppFixture();
+    const runtimeRoot = await makeRuntimeFixture();
+    await Promise.all([
+      fsp.writeFile(
+        path.join(appDir, 'src', 'activity.js'),
+        "export { greet } from './transitive.js';\n",
+      ),
+      fsp.writeFile(path.join(appDir, 'src', 'transitive.js'), fixture.source),
+      fsp.writeFile(
+        path.join(appDir, 'src', 'dep.js'),
+        'export const value = "esm dependency";\n',
+      ),
+      fsp.writeFile(
+        path.join(appDir, 'src', 'dep.cjs'),
+        'module.exports = "CommonJS dependency";\n',
+      ),
+    ]);
+
+    await expect(
+      compileApplicationRevision({
+        appDir,
+        manifest: makeManifest(),
+        runtimeRoot,
+      }),
+    ).rejects.toThrow(
+      new RegExp(
+        `src/transitive\\.js:[12]:\\d+.*${fixture.expected.source}`,
+        'i',
+      ),
+    );
+  });
+
+  it('allows graph-visible literal imports and locally shadowed loader names', async () => {
+    const appDir = await makeAppFixture();
+    const runtimeRoot = await makeRuntimeFixture();
+    await Promise.all([
+      fsp.writeFile(
+        path.join(appDir, 'src', 'cli.js'),
+        "const dep = require('./dep.cjs');\nexport async function main() { return (await import('./dep.js')).value + dep; }\n",
+      ),
+      fsp.writeFile(
+        path.join(appDir, 'src', 'activity.js'),
+        `function require(value) { return value; }
+const module = { require(value) { return value; } };
+export function greet(input) {
+  const localRequire = require;
+  return localRequire(input.moduleName) + module.require(input.moduleName);
+}
+`,
+      ),
+      fsp.writeFile(
+        path.join(appDir, 'src', 'dep.js'),
+        'export const value = "esm dependency";\n',
+      ),
+      fsp.writeFile(
+        path.join(appDir, 'src', 'dep.cjs'),
+        'module.exports = "CommonJS dependency";\n',
+      ),
+    ]);
+
+    await expect(
+      compileApplicationRevision({
+        appDir,
+        manifest: makeManifest(),
+        runtimeRoot,
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        contract: expect.objectContaining({ app: { id: 'revision-demo' } }),
+      }),
+    );
+  });
+
   it('rejects declared entrypoints in revision-excluded directories', async () => {
     const appDir = await makeAppFixture();
     const runtimeRoot = await makeRuntimeFixture();

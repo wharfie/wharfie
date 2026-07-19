@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="./docs/src/assets/svgs/beanie.svg" alt="Wharfie Beanie Logo" width="200">
+  <img src="./docs/assets/beanie.svg" alt="Wharfie Beanie Logo" width="200">
   <br>
   Wharfie
   <br>
@@ -74,38 +74,34 @@ applies all sibling dispositions and blocks the arbitrary stopped activity
 attempt. Unsupported, missing, or corrupt destination evidence leaves the whole
 set unchanged. Recovery never reruns application or adapter code. Destination-
 finalized reconciliation can now resolve one retained `UNCERTAIN` built-in
-effect without resolving the abandoned activity. A narrow successor policy is
-implemented internally and remains gated pending final public-surface review: it may
-authorize one fresh application-state V2 `put-if-absent` target only after the
-exact source effect is permanently `NOT_APPLIED`. Its dedicated effect-only
-lifecycle starts fresh target identities.
+effect without resolving the abandoned activity. One narrow public successor
+policy can authorize a fresh application-state V2 `put-if-absent` target only
+after the exact source effect is permanently `NOT_APPLIED`. Its dedicated
+effect-only lifecycle starts fresh target identities and never redispatches the
+abandoned authored activity. The source stays `BLOCKED` / `UNCERTAIN`.
 
-Internally, it never redispatches the abandoned authored activity. The source
-stays `BLOCKED` / `UNCERTAIN`.
-
-The internal hidden-fixture relocated-SEA crash/recovery matrix passes in this
-V9 worktree. It is not a public support claim; public command mounts and
-source/package parity proof remain pending.
-
-For now, no public successor operation is available pending final surface
-review. Generic handler retries, compensation, persistent scheduling, and
-wider exactly-once claims remain unfinished. Earlier V8 real-child coverage
-exercises
-seven source/core durable-run `SIGKILL` boundaries and three mixed-set recovery
+The public packaged command's Node-absent relocated-SEA crash/recovery matrix
+passes across every successor publication and transaction boundary, including
+redaction and response-loss replay. Generic handler retries, compensation,
+persistent scheduling, and wider exactly-once claims remain unfinished.
+Earlier V8 real-child coverage exercises seven source/core durable-run
+`SIGKILL` boundaries and three mixed-set recovery
 boundaries. A relocated SEA with Node absent from `PATH` proves the complete
 eight-boundary managed-effect matrix, three-boundary mixed-settlement matrix,
 and four-disposition effect-reconciliation matrix, including exact orphan-
 payload reuse and LMDB owner recovery. Those paths never dispatch authored
-app/CLI/activity code or the normal adapter. Public run history/listing,
-scheduling, and release hardening still need focused review. The npm package
-remains deliberately private. It is not ready for production use.
+app/CLI/activity code or the normal adapter. Persistent scheduling, workflow
+continuations, resident-service lifecycle, and public run history/listing are
+the next durable-service work. The npm package remains deliberately private.
+It is not ready for production use.
 
 ## Start here
 
 - [Project charter](PROJECT.md) — the canonical problem, scope, public concepts, boundaries, and success test.
+- [Documentation](docs/README.md) — source-first installation, quickstart, application structure, design decisions, and project-reset history.
 - [Architecture decisions](docs/architecture/decisions/README.md) — accepted constraints on trusted nodes, coordination, provisioning, effects, and language boundaries.
 - [Roadmap](ROADMAP.md) — the live ordered cleanup and implementation plan.
-- [V9 managed-effect successor checkpoint](llm/checkpoints/2026-07-19-v9-managed-effect-successors.md) — the current draft restart point for the first causally linked fresh-identity retry policy, its recorded internal relocated-SEA proof, and pending public-surface review.
+- [V9 managed-effect successor checkpoint](llm/checkpoints/2026-07-19-v9-managed-effect-successors.md) — the historical pre-mount restart point for the first causally linked fresh-identity retry policy and its internal relocated-SEA proof.
 - [V8 destination-effect reconciliation checkpoint](llm/checkpoints/2026-07-18-v8-destination-effect-reconciliation.md) — the preceding restart point after destination-finalized uncertain-effect reconciliation and its relocated-SEA crash matrix.
 - [Relocated-SEA mixed-settlement checkpoint](llm/checkpoints/2026-07-18-relocated-sea-mixed-settlement-sigkill-matrix.md) — the preceding restart point after proving packaged stopped-attempt settlement across mixed sibling dispositions.
 - [Relocated-SEA managed-effect checkpoint](llm/checkpoints/2026-07-18-relocated-sea-managed-effect-sigkill-matrix.md) — the preceding restart point after repeating managed-effect crash recovery through the moved SEA.
@@ -129,7 +125,10 @@ remains deliberately private. It is not ready for production use.
 - [Obsolete runtime retirement checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md) — historical deletion boundary for the disconnected NodeAgent/systemd/private-gRPC runtime island.
 - [Atomic run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md) — historical hosted SEA evidence, verified V3 history index, and the cleanup boundary that preceded the runtime deletion.
 
-The charter and accepted decisions are authoritative; the roadmap is expected to evolve, and dated checkpoints are historical snapshots. Older material under `docs/` and `llm/design/` describes prior iterations and can be stale.
+The charter and accepted decisions are authoritative; the roadmap is expected
+to evolve, and dated checkpoints and project-reset records are historical
+snapshots. The repository-native guides under `docs/guides/` track the current
+public command surface. Older material under `llm/design/` can be stale.
 
 ## Current application contract
 
@@ -176,8 +175,8 @@ in this schema until their durable semantics are ready. Build credentials,
 signing material, and extra asset configuration are also outside the public
 manifest.
 
-See the [quickstart](docs/src/assets/markdown/quickstart.md) and [application
-structure](docs/src/assets/markdown/project-structure.md) for the complete
+See the [quickstart](docs/guides/quickstart.md) and [application
+structure](docs/guides/application-structure.md) for the complete
 authoring rules.
 
 ## Reconcile one uncertain managed effect
@@ -206,23 +205,33 @@ stable reconciliation/effect identities, resulting effect status, replay
 state, and safe lifecycle view, but not request values, destination/store
 details, receipts, finalizations, evidence, private reason text, or fences.
 
-## Managed-effect successor proof gate
+## Managed-effect successor retry
 
-The internal successor policy accepts only an exact retained application-state
-V2 effect after a verified permanent `NOT_APPLIED` decision. It creates fresh
-run, invocation, attempt, effect, destination, and fence identities through a
-dedicated effect-only lifecycle.
+After an exact application-state V2 effect has been verified permanently
+`NOT_APPLIED`, a trusted local operator can authorize and run its one finite
+causally linked successor:
 
-Internally, it never redispatches the abandoned authored activity. The source
-remains `BLOCKED` / `UNCERTAIN` even when the target completes.
+```sh
+wharfie ops retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped
+```
 
-The internal hidden-fixture relocated-SEA crash/recovery matrix passes in this
-V9 worktree, including redaction and response-loss replay. It is not a public
-support claim; public command mounts and source/package parity proof remain
-pending.
+The packaged equivalent is:
 
-For now, no public successor operation is available pending final surface
-review. This is not generic handler retry or compensation.
+```sh
+<app> wharfie retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped
+```
+
+Both forms accept an optional private `--reason <text>` and redacted `--json`
+output. Reuse the exact source run, effect, successor ID, actor, and reason
+after a lost response. Exact replay returns or advances the one retained target;
+it cannot authorize a sibling or enter an already-started adapter again.
+
+The successor receives fresh run, invocation, attempt, effect, destination,
+and fence identities through a dedicated effect-only lifecycle. It never
+redispatches the abandoned authored activity, and the source remains `BLOCKED`
+/ `UNCERTAIN` even when the target completes. This is only the finite
+application-state V2 `put-if-absent` retry policy; it is not generic handler
+retry or compensation.
 
 ## Current external dependency boundary
 
@@ -242,11 +251,12 @@ selection, musl Linux, and reproducible builds are not yet supported. Published 
 packages must already contain usable locked target bytes. Windows SEA targets
 are deliberately deferred until private runtime extraction has a tested ACL and
 reparse-point design. Moved Darwin SEAs and the clean hosted-Linux verifier
-exercise a real LMDB dependency with Node absent from `PATH`; the verifier's
-resident-service crash/recovery leg passed under Node 24 in [GitHub Actions run
-29621495162](https://github.com/wharfie/wharfie/actions/runs/29621495162). The
-overall workflow remains red only because a clean install lacks ESLint's direct
-`@typescript-eslint/parser` dependency.
+exercise a real LMDB dependency with Node absent from `PATH`.
+
+Prepared revisions also fail closed when reachable JavaScript or TypeScript
+uses a runtime-computed native module path or aliases a native loader. Portable
+code must use literal module specifiers so the frozen dependency closure and
+artifact provenance describe everything the application can load.
 
 ## Current development checks
 
@@ -259,15 +269,16 @@ npm ci
 npm run test:ci
 ```
 
-Known temporary limitation: after a clean `npm ci`, the lint portion of
-`npm run test:ci` currently fails because `@typescript-eslint/parser` is not a
-direct dependency. Correcting the package metadata and lockfile requires
-explicit approval; see the current checkpoint for the hosted SEA proof that
-still ran under `if: always()`.
+`npm run test:ci` covers lint, source and test type checks, the full unit and
+integration suite, package-tarball verification, and the production dependency
+audit. The parser used by the portable-module audit is a direct runtime
+dependency, and clean-install validation no longer relies on the unused
+TypeScript ESLint import preset or resolver. Native LMDB and generated-SEA
+proofs are available through `npm run test:native` and the SEA verifier.
 
 Current source is organized as follows:
 
 - `src/cli/` — the current developer and operator CLI implementation.
 - `src/core/` — activity runtime, durable ledger, provider, and packaging foundations.
-- `apps/` — buildable reference and dogfood applications.
+- `docs/` — the small repository-native guide and accepted architecture decisions.
 - `llm/` — design notes, prompt templates, and dated project checkpoints.

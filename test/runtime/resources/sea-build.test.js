@@ -988,7 +988,7 @@ describe('SeaBuild', () => {
     ['a malformed asset mapping', [], {}, /assets must be an object/i],
   ])(
     'rejects %s before reading asset bytes',
-    async (_label, assets, digests, error) => {
+    async (_label, invalidAssets, digests, error) => {
       const { default: SeaBuild } =
         await import('../../../src/core/resources/builds/sea-build.js');
       const tmpRoot = await fsp.mkdtemp(
@@ -1003,7 +1003,7 @@ describe('SeaBuild', () => {
           nodeVersion: process.versions.node,
           platform: process.platform,
           architecture: process.arch,
-          assets: /** @type {any} */ (assets),
+          assets: /** @type {any} */ (invalidAssets),
           assetDigests: /** @type {any} */ (digests),
         },
       });

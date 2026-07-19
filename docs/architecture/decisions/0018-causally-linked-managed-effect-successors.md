@@ -1,6 +1,6 @@
 # 0018 — Causally linked managed-effect successor work
 
-**Status:** Proposed · **Date:** 2026-07-19
+**Status:** Accepted · **Date:** 2026-07-19
 
 ## Context
 
@@ -98,11 +98,11 @@ independently inspectable run with its own lifecycle and terminal result. A
 target completion does not add `COMPENSATED`, change the source effect result,
 or terminalize the source invocation.
 
-This first vertical may authorize and execute the target through an internal
-operator seam. It does not turn the run directory into a ready-work queue,
-mount a public successor command before its final surface review, or claim a
-persistent resident scheduler. Later background execution requires a dedicated
-ready index, durable claims or leases, and recovery rules.
+This first vertical authorizes and executes the target through the shared
+source/packaged operator command. It does not turn the run directory into a
+ready-work queue or claim a persistent resident scheduler. Later background
+execution requires a dedicated ready index, durable claims or leases, and
+recovery rules.
 
 The shared recovery command understands the fresh successor invocation ID but
 never dispatches its adapter. A target that has crossed its atomic start boundary
@@ -155,9 +155,9 @@ Successor creation is authorization and durable target creation; it is not
 adapter execution. Adapter authority comes only from the target's dedicated
 atomic start transition and its resulting `dispatchAuthorized` result.
 
-### The exact public surface is proposed and gated
+### The exact public surface is finite and shared
 
-If accepted, source and packaged CLIs mount the same operation:
+Source and packaged CLIs mount the same operation:
 
 ```text
 wharfie ops retry-effect \
@@ -190,17 +190,11 @@ as a separate action.
 Human and JSON responses expose only redacted causal identities and
 source/target lifecycle state. They omit requests and values, destination/store
 identity, receipts and evidence, actor and private reason, paths, credentials,
-and fences. Defining this syntax does not accept the ADR, assert that both
-parents are mounted, or establish a production support claim. Acceptance still
-requires the source/packaged mounts and public command parity. The dedicated
-lifecycle passes an internal source and Node-absent relocated-SEA crash/recovery
-matrix through a hidden test fixture. That is implementation proof, not public
-support; public mounts and public command parity remain pending.
-
-The fixture gate is an unsupported test-harness switch, not an authorization
-boundary: a trusted operator who controls the SEA environment can enable it.
-With the normal environment it is absent from the command tree, and it creates
-no public command contract.
+and fences. The source and packaged mounts share the command implementation and
+option vocabulary. The dedicated lifecycle passes source tests and a
+Node-absent relocated-SEA crash/recovery matrix through the public packaged
+command, including response-loss replay at every durable publication and
+transaction boundary.
 
 ### Forward compensation remains explicit future work
 
@@ -230,9 +224,8 @@ append-only successor boundary, not that full coordinator-recovery contract.
 
 ## Consequences
 
-- If accepted after its public-surface review, a permanently not-applied application-state
-  effect can create useful new work without weakening or reopening source
-  history.
+- A permanently not-applied application-state effect can create useful new
+  work without weakening or reopening source history.
 - The implementation must prove that response loss cannot leave a committed
   source authorization without its target, or a target without its source
   authorization and application-scoped identity.
@@ -247,10 +240,9 @@ append-only successor boundary, not that full coordinator-recovery contract.
 - Required proof includes exact-replay and competing-ID races, source
   attempt/effect immutability, orphan payloads, transaction response loss,
   catalog mismatch, application/store isolation, redaction, generic-lifecycle
-  rejection, process crashes, and source/relocated-SEA parity. The hidden-
-  fixture internal Node-absent relocated-SEA successor matrix passes as an
-  implementation proof; public mounts and public command parity remain exit
-  criteria.
+  rejection, process crashes, and source/relocated-SEA parity. The public
+  command's Node-absent relocated-SEA successor matrix supplies the packaged
+  crash and response-loss proof.
 
 ## Rejected alternatives
 

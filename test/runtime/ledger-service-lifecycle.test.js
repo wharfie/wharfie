@@ -15,7 +15,6 @@ import {
   LedgerServiceLifecycleConflictError,
   LedgerServiceLifecycleStatus,
   LedgerServiceOwnerKind,
-  LedgerServiceOwnershipConflictError,
   createLedgerServiceId,
   createLedgerServiceLifecycle,
   createLedgerServiceOwnership,

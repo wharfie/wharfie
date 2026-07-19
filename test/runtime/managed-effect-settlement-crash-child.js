@@ -23,12 +23,12 @@ const Boundary = Object.freeze({
 
 /**
  * @typedef {Object} SettlementCrashFixture
- * @property {string} boundary
- * @property {string} runId
- * @property {string} appId
- * @property {string} markerPath
- * @property {{controlPath: string, tableName: string, payloadPath: string, payloadStoreId: string, sessionPath: string}} configuration
- * @property {{storePath: string, tableName: string}} applicationStateConfiguration
+ * @property {string} boundary - Crash boundary to exercise.
+ * @property {string} runId - Execution run identifier.
+ * @property {string} appId - Application identifier.
+ * @property {string} markerPath - Durable marker output path.
+ * @property {{controlPath: string, tableName: string, payloadPath: string, payloadStoreId: string, sessionPath: string}} configuration - Execution-ledger configuration.
+ * @property {{storePath: string, tableName: string}} applicationStateConfiguration - Application-state configuration.
  */
 
 function readFixture() {

@@ -1,4 +1,4 @@
-# Wharfie Application Structure
+# Wharfie Application Structure Guide
 
 A Wharfie application is a normal TypeScript or JavaScript CLI plus a small
 `wharfie.app.js` manifest. Wharfie does not impose a generated project tree.
@@ -78,6 +78,13 @@ externalPackages: [{ name: 'sharp', version: '0.34.4' }],
 
 External package entries use lowercase npm registry names and must be unique
 and sorted by name.
+
+Wharfie seals the complete module graph into the application revision. Static
+imports and exports plus `import('literal')` and `require('literal')` are
+supported. Runtime-computed specifiers, native `require` aliases,
+`require.resolve`, `module.require`, `import.meta.resolve`, and `createRequire`
+are rejected because they could load host files that are absent from the
+portable artifact. This is a portability rule, not a hostile-code sandbox.
 
 Activity exports use `(input, runtime)`, rather than the former `(event,
 context)` convention. `runtime.caller.metadata` carries caller-supplied JSON

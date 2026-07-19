@@ -173,6 +173,7 @@ describe.each([
   ],
 ])('%s', (_label, invoke) => {
   test('reports invalid WHARFIE_CONTROL_ADAPTER as a CLI failure', async () => {
+    expect.hasAssertions();
     process.env.WHARFIE_CONTROL_ADAPTER = 'not-a-real-adapter';
 
     await expectCliFailure(invoke, /WHARFIE_CONTROL_ADAPTER/i);
@@ -379,6 +380,7 @@ test('wharfie ops retry-effect reports a blocked target without claiming recover
 });
 
 test('wharfie ops run uses an isolated zero-config control store in tests', async () => {
+  expect.hasAssertions();
   const applicationStatePath = mkdtempSync(
     path.join(tmpdir(), 'wharfie-ops-run-app-state-'),
   );

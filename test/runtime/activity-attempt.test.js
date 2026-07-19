@@ -442,7 +442,7 @@ describe('Node Activity Protocol v1 attempt adapter', () => {
         return effectResultFrame(request.effectId, { retained: true });
       },
       handler: (_input, runtime) => {
-        void runtime.effects.request(effectRequest());
+        runtime.effects.request(effectRequest());
         return 'component-returned-before-effect';
       },
     });
@@ -468,7 +468,7 @@ describe('Node Activity Protocol v1 attempt adapter', () => {
           throw new Error('destination unavailable');
         },
         handler: (_input, runtime) => {
-          void runtime.effects.request(effectRequest());
+          runtime.effects.request(effectRequest());
           return 'component-ignored-rejection';
         },
       });

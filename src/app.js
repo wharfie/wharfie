@@ -8,6 +8,10 @@ const SOURCE_REVISION_COMPILER_PATH =
   './cli/app/compile-application-revision.js';
 
 /**
+ * @typedef {{kind: 'prepared-source', prepared: import('./cli/app/compile-application-revision.js').PreparedApplicationRevision} | {kind: 'embedded', manifest: any, embeddedRevision: import('./core/resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair}} RuntimeExecution
+ */
+
+/**
  * Preserve a manifest's literal TypeScript shape while checking it against the
  * public Wharfie application contract.
  * @template T
@@ -24,7 +28,7 @@ export function defineApp(definition) {
  * prevents packaging-only dependencies from entering the generated runtime's
  * eager module graph.
  * @param {string | undefined} dir - Source application directory.
- * @returns {Promise<{ execution: Record<string, any>, cleanup?: () => Promise<void> }>} - Loaded immutable runtime identity.
+ * @returns {Promise<{ execution: RuntimeExecution, cleanup?: () => Promise<void> }>} - Loaded immutable runtime identity.
  */
 async function loadRuntimeManifest(dir) {
   if (isSea()) {

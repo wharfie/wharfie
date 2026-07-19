@@ -4,8 +4,7 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { promises as fsp } from 'node:fs';
+import { existsSync, promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -302,6 +301,42 @@ afterEach(() => {
 });
 
 describe('packageLocalApp', () => {
+  it('rejects computed transitive module specifiers before packaging', async () => {
+    const dir = await fsp.mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-computed-module-package-'),
+    );
+    const outputDir = path.join(dir, 'dist');
+
+    try {
+      await writeTransactionalPackageApp(dir, 'computed-module-package-demo', [
+        currentTarget,
+      ]);
+      await Promise.all([
+        fsp.writeFile(
+          path.join(dir, 'src', 'cli.js'),
+          "export { default } from './transitive.js';\n",
+          'utf8',
+        ),
+        fsp.writeFile(
+          path.join(dir, 'src', 'transitive.js'),
+          "const modulePath = './dependency.js';\nexport default async function cli() { return import(modulePath); }\n",
+          'utf8',
+        ),
+        fsp.writeFile(
+          path.join(dir, 'src', 'dependency.js'),
+          'export const value = "sealed";\n',
+          'utf8',
+        ),
+      ]);
+
+      await expect(packageLocalApp({ dir, outputDir })).rejects.toThrow(
+        /src\/transitive\.js:2:\d+.*runtime-computed import\(\) module specifier/i,
+      );
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('packages a plain-object app through the v2 packaging path', async () => {
     const dir = await fsp.mkdtemp(
       path.join(os.tmpdir(), 'wharfie-plain-object-package-'),

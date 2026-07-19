@@ -34,9 +34,7 @@ describe('kitchen-sink native externals integration', () => {
           activityName: 'start',
           inputInput: JSON.stringify({
             who: 'native-externals',
-            iterations: 32,
             lmdbPath: nativeLmdbPath,
-            checkOptionalNativeExternals: true,
           }),
         });
 
@@ -49,32 +47,13 @@ describe('kitchen-sink native externals integration', () => {
           externalPackages: kitchenSinkExternalDependencies,
         });
         expect(result.ok).toBe(true);
-        expect(result.native.lmdbRecord).toMatchObject({
-          who: 'native-externals',
-          message: 'hello native-externals',
-          runId: result.runId,
+        expect(result.native).toEqual({
+          lmdbRecord: {
+            who: 'native-externals',
+            message: 'hello native-externals',
+            runId: result.runId,
+          },
         });
-        expect(result.native.optional).toEqual({
-          sharp: expect.objectContaining({
-            packageName: 'sharp',
-            status: expect.stringMatching(/^(OK|SKIPPED)$/),
-          }),
-          sodiumNative: expect.objectContaining({
-            packageName: 'sodium-native',
-            status: expect.stringMatching(/^(OK|SKIPPED)$/),
-          }),
-          usb: expect.objectContaining({
-            packageName: 'usb',
-            status: expect.stringMatching(/^(OK|SKIPPED)$/),
-          }),
-        });
-
-        for (const probe of Object.values(result.native.optional)) {
-          if (probe.status === 'SKIPPED') {
-            expect(typeof probe.reason).toBe('string');
-            expect(probe.reason.length).toBeGreaterThan(0);
-          }
-        }
       } finally {
         rmSync(nativeLmdbPath, { recursive: true, force: true });
       }

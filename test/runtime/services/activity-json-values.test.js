@@ -79,9 +79,6 @@ async function executeActivity(mode, start) {
 }
 
 class MockWharfieFunction {
-  /** @param {any} _options - Function options. */
-  constructor(_options) {}
-
   /**
    * @param {Readonly<Record<string, any>>} start - Start frame.
    * @returns {Promise<any>} - Activity evidence.

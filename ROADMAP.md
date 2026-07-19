@@ -1,6 +1,6 @@
 # Wharfie roadmap
 
-**Status:** project reset in progress · **Last updated:** 2026-07-19
+**Status:** v2 foundation stabilized; durable resident workflows next · **Last updated:** 2026-07-19
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -11,7 +11,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 - Prefer a narrow end-to-end path over parallel partial frameworks.
 - Treat Node SEA as the first packaging backend, not the permanent public abstraction.
 - Require explicit durable semantics at every network or side-effect boundary.
-- Pause for review before broad destructive GitHub cleanup or a major public-model rewrite.
+- Preserve repository checkpoints before a major public-model rewrite.
 
 ## Milestone 0 — preserve and reset
 
@@ -23,15 +23,15 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 - [x] Write the project charter and non-goals.
 - [x] Record the initial architecture decisions.
 - [x] Store a dated restart checkpoint in the repository.
-- [ ] Review and merge umbrella reset PR #125.
+- [x] Validate the reset implementation from a clean install and preserve its restart point.
 
 **Exit:** a fresh maintainer or coding session can explain what Wharfie is, what it is not, what state was preserved, and what work comes next.
 
 ## Milestone 1 — remove ambiguity and loose ends
 
-**Goal:** leave one honest codebase and one honest tracker.
+**Goal:** leave one honest codebase, package boundary, and validation path.
 
-### Repository and tracker
+### Repository cleanup
 
 - [x] Classify every legacy non-default branch and PR as keep, absorb, supersede, or delete; see the [cleanup inventory](docs/project-reset/2026-07-16-cleanup-inventory.md).
 - [x] Reconcile the three unpublished local `master` commits and `jvd/pr4` against the new charter.
@@ -40,25 +40,29 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 - [x] Create replacement issues #126–#132, assign roadmap milestones, and close the old issues with preservation/supersession notes. The post-V9 audit added the missing explicit roadmap items #133–#137 for dynamic module paths, clean-install/audit hygiene, a persistent durable workflow worker, recoverable trusted-mesh coordination, and retirement of the stale v1 documentation site.
 - [x] Verify every superseded branch against its archive tag, then remove all 16 staging and legacy branches from the live remote namespace.
 - [x] Confirm that no live project-board URL, configuration, or promise remains.
-- [ ] Retire or replace the stale v1 documentation site and its repository
-      wrapper ([#137](https://github.com/wharfie/wharfie/issues/137)).
-- [ ] Keep release automation honestly fail-closed while the package is
-      private, then make the eventual npm package and Wharfie SEA release one
-      validated artifact flow ([#130](https://github.com/wharfie/wharfie/issues/130)).
+- [x] Retire the stale v1 documentation site, deployer, generated assets, and
+      repository wrapper; retain only the repository-native v2 guides and ADRs.
+- [x] Remove release automation while the package is private rather than imply
+      that publishing is supported.
+- [ ] Make the eventual npm package and Wharfie SEA release one validated
+      artifact flow.
 
 ### Codebase
 
 - [x] Delete the v1 Athena/table application, legacy-only tests, documentation, dependencies, and compatibility paths.
-- [x] Keep npm publication disabled and retain v1 regression checks in the release gate.
+- [x] Keep npm publication disabled, remove the misleading post-release
+      publisher, and retain v1 regression checks in the package gate.
 - [x] Choose one app-manifest compiler and one canonical version 2 schema; delete the compatibility alternatives.
 - [x] Choose one persisted-run implementation and delete the alternatives.
 - [x] Make package metadata, version reporting, license metadata, tarball contents, release commands, environment names, and artifact names agree.
 - [x] Remove the abandoned direct dependency graph and test-only packages from the runtime package.
-- [ ] Resolve the current production audit findings and add an appropriate audit gate ([#134](https://github.com/wharfie/wharfie/issues/134)).
+- [x] Resolve the production dependency audit and make it a clean-install CI gate.
 - [x] Expand CI to validate the package tarball, build a real generated-app SEA, invoke its activity and embedded operator manifest from a clean directory, and prove Node is unavailable on `PATH`.
-- [ ] Make the remaining test, type-check, and lint exclusions explicit and temporary or remove them ([#134](https://github.com/wharfie/wharfie/issues/134)).
+- [x] Remove misleading lint exclusions and split source, application,
+      repository-tool, and test type-check boundaries explicitly.
 
-**Exit:** the README, shipped package, release workflow, CI, current source, and GitHub tracker all describe the same v2 product; no Athena/v1 surface remains.
+**Exit:** the README, shipped package, package gate, validation commands, and
+current source describe the same v2 product; no Athena/v1 surface remains.
 
 ## Milestone 2 — one portable application
 
@@ -77,7 +81,9 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 - [x] Define and harden the versioned activity protocol, including strict serialization, cancellation, deadline, ordered-log, structured-error, host-effect, termination, and delivery-uncertainty boundaries, without requiring a second language implementation yet.
 - [x] Route source and packaged SEA activity execution through that protocol with immutable revision identity, fresh local attempt identity, and revalidated bundle evidence. Both paths use a host-owned framed per-attempt worker transport with authenticated runner lifecycle messages, bounded cancellation/deadline termination, and late-frame rejection.
 - [x] Delete manifest resource declarations, Function/ActorSystem runtime-injection lifecycle, the generic worker `exec`/RPC bridge, the shared-resource registry, and orphan queue/object-storage adapter layers. Caller metadata is inert JSON; public durable capability and effect APIs remain explicit separate contracts.
-- [ ] Define an explicit declaration or rejection rule for runtime-computed module paths that cannot be proven by the static bundle graph ([#133](https://github.com/wharfie/wharfie/issues/133)).
+- [x] Reject runtime-computed native module paths and native-loader aliases at
+      the prepared-revision boundary when the static bundle graph cannot prove
+      their target.
 - [x] Build one executable example and an end-to-end test from authored TypeScript through a clean generated-SEA execution.
 - [x] Prove one real target-specific Node-API activity dependency from a moved Darwin SEA by opening, writing, and reading LMDB with Node absent from `PATH`; repeat the portable proof on hosted Linux above.
 - [ ] Add signed Windows and Developer-ID-signed, notarized macOS release targets after the Linux release path is stable.
@@ -170,7 +176,7 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       redispatch a retained `STARTED` effect, and attempt terminals cannot omit
       or invent effect state. V4 records and its V2 directory remain inert.
 - [ ] Extend the manual ledger to workflow continuations, scheduling decisions,
-      durable outputs, and the remaining operator actions ([#129](https://github.com/wharfie/wharfie/issues/129), [#135](https://github.com/wharfie/wharfie/issues/135)).
+      durable outputs, and the remaining operator actions.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, retry policy,
       broader recovery, and multi-host authenticated current-owner command
       routing.
@@ -243,11 +249,10 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
       `ab4e3ca6c2032a6207fb0b1f91cf07e8a0ba4ab8` and
       `a2a0618c05fefbc8968b0856cc176a2f47cb09c1`, including a separate-writer
       `already-present` receipt through terminal crash/replay.
-- [ ] Deliberately review and mount the proposed exact source
-      `wharfie ops retry-effect` and packaged `<app> wharfie retry-effect`
-      surface, then add public source/package command parity and response-loss
-      tests. Until that review, leave both normal CLI parents unmounted and do
-      not treat the unsupported SEA fixture as public support.
+- [x] Mount the exact source `wharfie ops retry-effect` and packaged
+      `<app> wharfie retry-effect` surface. Source/package parity,
+      response-loss replay, redaction, and the Node-absent relocated-SEA crash
+      matrix prove the finite application-state V2 successor policy publicly.
 - [ ] Decide the authority model for explicit, versioned forward-compensation
       plans—predeclared in an application revision only, or strict finite plans
       submitted after an incident by a trusted operator/LLM—before implementing
@@ -299,8 +304,6 @@ This roadmap orders work by the shortest path to the experience in [PROJECT.md](
 
 **Goal:** distribute work across trusted nodes without making one machine irreplaceable.
 
-Tracker: [#136](https://github.com/wharfie/wharfie/issues/136).
-
 - [ ] Define one-time enrollment, per-deployment authorization, authenticated/encrypted transport, replay protection, and node identity rotation/revocation.
 - [ ] Advertise node capabilities and implement explicit placement constraints.
 - [ ] Store coordination truth in a provider-backed linearizable durable store.
@@ -328,23 +331,17 @@ Tracker: [#136](https://github.com/wharfie/wharfie/issues/136).
 
 ## Immediate queue
 
-1. Review the post-V9 cleanup audit before broad deletion or public-surface
-   changes. The recommended M1 tranche retires the v1 docs wrapper, removes
-   dead runtime dependencies, repairs misleading validation exclusions, and
-   reframes release automation as a private-package preflight.
-2. Repair clean-install lint by removing the unused TypeScript import preset
-   and resolver rather than adding a parser for TypeScript files ESLint does
-   not currently check. Then validate PR #125 from a disposable `npm ci`.
-3. Reject runtime-computed native module specifiers at the prepared-revision
-   boundary so a portable revision cannot load undeclared host paths
-   ([#133](https://github.com/wharfie/wharfie/issues/133)).
-4. Review whether to mount the V9 application-state V2 successor command now
-   that its internal process/relocated-SEA crash proof passes. If mounted, add
-   public source/package parity and response-loss tests; otherwise retain the
-   internal gate. Do not rerun the authored source handler or claim generic
-   compensation.
-5. Add durable workflow continuations, scheduling decisions, outputs, and a
-   truly persistent resident worker so a local CLI can remain useful after the
-   authoring session ends. Keep coordinator leases and mesh placement later.
+1. Define and implement one minimal durable workflow state machine: explicit
+   continuations, persisted outputs, timers/signals, and revision-pinned resume.
+2. Run that workflow through a truly persistent single-node resident worker
+   with startup-on-boot installation, graceful shutdown, and restart recovery.
+3. Route manual and scheduled starts through that same execution path, then
+   expose resident status, run history, logs, cancellation, and recovery through
+   the reserved human/JSON operator surface.
+4. Prove the resident workflow under adversarial process and machine restarts,
+   including every managed-effect ambiguity boundary, before adding remote-node
+   placement or coordinator failover.
+5. Add the smallest provider-backed deployment path that can create, inspect,
+   update, and remove one durable node using the operator's credential chain.
 
-ADR [0018](docs/architecture/decisions/0018-causally-linked-managed-effect-successors.md) is the proposed authority for V9 causally linked managed-effect successor work. The published restart point is the [V9 managed-effect successor checkpoint](llm/checkpoints/2026-07-19-v9-managed-effect-successors.md), with its implementation and validation receipts preserved on draft PR #125 through `c5455d9`; only the deliberate public-command decision and parity proof remain pending. The preceding handoff is [V8 destination-finalized effect reconciliation](llm/checkpoints/2026-07-18-v8-destination-effect-reconciliation.md). Its parent [relocated-SEA mixed-settlement SIGKILL checkpoint](llm/checkpoints/2026-07-18-relocated-sea-mixed-settlement-sigkill-matrix.md) records the complete V7 packaged settlement crash surface; the [relocated-SEA managed-effect SIGKILL checkpoint](llm/checkpoints/2026-07-18-relocated-sea-managed-effect-sigkill-matrix.md) records the preceding eight packaged single-effect boundaries; the [shared packaged durable-run host checkpoint](llm/checkpoints/2026-07-18-shared-packaged-durable-run-host.md) records packaged activity origination; the [real-process managed-effect crash checkpoint](llm/checkpoints/2026-07-18-real-process-managed-effect-crash-matrix.md) records the source/core and compound-settlement crash matrices before packaged parity; the [V7 atomic effect-settlement checkpoint](llm/checkpoints/2026-07-18-v7-atomic-effect-settlement.md) records the historical compound-settlement state machine before real process-crash coverage; the [public application-state and receipt-recovery checkpoint](llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md) records the finite public effect and first singular recovery boundary; the [V5 managed-effect foundation checkpoint](llm/checkpoints/2026-07-18-v5-managed-effect-foundation.md), [evidence-backed reconciliation checkpoint](llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md), [authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md), [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md), [shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md), [resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md), [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.
+Accepted ADR [0018](docs/architecture/decisions/0018-causally-linked-managed-effect-successors.md) is the authority for the now-public V9 causally linked managed-effect successor. The [V9 managed-effect successor checkpoint](llm/checkpoints/2026-07-19-v9-managed-effect-successors.md) remains the historical pre-mount restart point. The preceding handoff is [V8 destination-finalized effect reconciliation](llm/checkpoints/2026-07-18-v8-destination-effect-reconciliation.md). Its parent [relocated-SEA mixed-settlement SIGKILL checkpoint](llm/checkpoints/2026-07-18-relocated-sea-mixed-settlement-sigkill-matrix.md) records the complete V7 packaged settlement crash surface; the [relocated-SEA managed-effect SIGKILL checkpoint](llm/checkpoints/2026-07-18-relocated-sea-managed-effect-sigkill-matrix.md) records the preceding eight packaged single-effect boundaries; the [shared packaged durable-run host checkpoint](llm/checkpoints/2026-07-18-shared-packaged-durable-run-host.md) records packaged activity origination; the [real-process managed-effect crash checkpoint](llm/checkpoints/2026-07-18-real-process-managed-effect-crash-matrix.md) records the source/core and compound-settlement crash matrices before packaged parity; the [V7 atomic effect-settlement checkpoint](llm/checkpoints/2026-07-18-v7-atomic-effect-settlement.md) records the historical compound-settlement state machine before real process-crash coverage; the [public application-state and receipt-recovery checkpoint](llm/checkpoints/2026-07-18-public-effects-and-receipt-recovery.md) records the finite public effect and first singular recovery boundary; the [V5 managed-effect foundation checkpoint](llm/checkpoints/2026-07-18-v5-managed-effect-foundation.md), [evidence-backed reconciliation checkpoint](llm/checkpoints/2026-07-18-evidence-backed-uncertain-reconciliation.md), [authenticated current-owner cancellation checkpoint](llm/checkpoints/2026-07-18-authenticated-current-owner-cancellation.md), [V4 durable-cancellation checkpoint](llm/checkpoints/2026-07-17-durable-cancellation-v4.md), [shared source/SEA ledger-operator checkpoint](llm/checkpoints/2026-07-17-shared-source-sea-ledger-operator.md), [resource-injection retirement checkpoint](llm/checkpoints/2026-07-17-resource-injection-retirement.md), [mutable Operation/Action retirement checkpoint](llm/checkpoints/2026-07-17-mutable-operation-retirement.md), [obsolete runtime checkpoint](llm/checkpoints/2026-07-17-obsolete-runtime-retirement.md), [V3 run-directory checkpoint](llm/checkpoints/2026-07-17-run-directory-index.md), [portable core control-store checkpoint](llm/checkpoints/2026-07-17-core-control-store-closure.md), [ledger-service lifecycle checkpoint](llm/checkpoints/2026-07-17-ledger-service-lifecycle.md), [ledger-v2 payload checkpoint](llm/checkpoints/2026-07-17-ledger-v2-payload-references.md), [source-independent operator checkpoint](llm/checkpoints/2026-07-17-source-independent-ledger-ops.md), [ledger-backed `ops run` handoff](llm/checkpoints/2026-07-17-ledger-backed-ops-run.md), and [hardening checkpoint](llm/checkpoints/2026-07-17-execution-ledger-hardening.md) record the work beneath it.

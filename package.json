@@ -18,9 +18,20 @@
   },
   "homepage": "https://github.com/wharfie/wharfie#readme",
   "packageManager": "npm@11.12.0",
-  "engineStrict": true,
   "engines": {
     "node": "24.13.1"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "24.13.1",
+      "onFail": "error"
+    },
+    "packageManager": {
+      "name": "npm",
+      "version": "11.12.0",
+      "onFail": "error"
+    }
   },
   "main": "./src/cli/entry.js",
   "exports": {
@@ -35,26 +46,29 @@
   "files": [
     "README.md",
     "bin/",
-    "scripts/**",
     "src/app.js",
     "src/app.d.ts",
     "src/core/**",
     "src/cli/**"
   ],
   "scripts": {
-    "typecheck": "tsc",
+    "typecheck": "npm run typecheck:source && npm run typecheck:app && npm run typecheck:test && npm run typecheck:sea-verifier",
+    "typecheck:source": "tsc -p tsconfig.json",
+    "typecheck:app": "tsc -p tsconfig.app-implementation.json",
+    "typecheck:test": "tsc -p tsconfig.test.json",
+    "typecheck:sea-verifier": "tsc -p tsconfig.sea-verifier.json",
     "test:js": "TZ=UTC node ./test/run-jest.js --silent --coverage",
     "test:update": "TZ=UTC node ./test/run-jest.js --silent --updateSnapshot",
     "test": "TZ=UTC node ./test/run-jest.js --silent --coverage",
-    "test:ci": "npm run lint && npm run typecheck && npm run test && npm run verify:package",
-    "lint:js": "eslint . && prettier --check \"{*,**/*}.{js,json}\"",
+    "test:ci": "npm run lint && npm run typecheck && npm run test && npm run verify:package && npm run audit:prod",
+    "test:native": "WHARFIE_RUN_NATIVE_EXTERNALS=1 TZ=UTC node ./test/run-jest.js --silent --runInBand test/cli/app/kitchen-sink-native-externals.test.js",
+    "test:full": "npm run test:ci && npm run test:native && npm run verify:package:sea",
+    "audit:prod": "npm audit --omit=dev --audit-level=moderate",
+    "lint:js": "eslint --max-warnings=0 . && prettier --check \"{*,**/*}.{js,json}\"",
     "lint": "npm run lint:js",
-    "lint:fix": "eslint --fix . && prettier --write \"{*,**/*}.{js,json}\"",
+    "lint:fix": "eslint --max-warnings=0 --fix . && prettier --write \"{*,**/*}.{js,json}\"",
     "verify:package": "node ./scripts/verify-package-contents.js",
-    "verify:package:sea": "node ./scripts/verify-package-sea.js",
-    "verify:release-ready": "node ./scripts/verify-release-ready.js",
-    "verify:release-version": "node ./scripts/verify-release-version.js",
-    "verify:release-unpublished": "node ./scripts/verify-release-unpublished.js"
+    "verify:package:sea": "node ./scripts/verify-package-sea.js"
   },
   "prettier": {
     "singleQuote": true,
@@ -62,19 +76,19 @@
   },
   "jest": {
     "collectCoverageFrom": [
-      "src/core/runtime/**/*.js",
-      "src/core/resources/builds/**/*.js",
-      "src/core/lib/code-execution/**/*.js"
+      "src/**/*.js"
     ],
+    "coverageThreshold": {
+      "global": {
+        "branches": 70,
+        "functions": 80,
+        "lines": 75,
+        "statements": 75
+      }
+    },
     "testEnvironment": "node",
-    "modulePathIgnorePatterns": [
-      "<rootDir>/mock/builds/"
-    ],
     "testMatch": [
-      "<rootDir>/test/cli/**/*.test.js",
-      "<rootDir>/test/runtime/**/*.test.js",
-      "<rootDir>/test/graph/**/*.test.js",
-      "<rootDir>/test/db/**/*.test.js"
+      "<rootDir>/test/**/*.test.js"
     ]
   },
   "eslintConfig": {
@@ -100,8 +114,6 @@
       "dist/",
       "tmp/",
       "docs/",
-      "src/cli/",
-      "test/",
       "scratch/",
       "coverage/"
     ],
@@ -114,11 +126,23 @@
           "jest"
         ],
         "extends": [
-          "plugin:jest/all"
+          "plugin:jest/recommended"
         ],
         "rules": {
           "jest/max-expects": 0,
-          "jest/no-conditional-in-test": 0
+          "jest/no-conditional-in-test": 0,
+          "jest/no-conditional-expect": 0,
+          "jest/no-standalone-expect": 0,
+          "import/namespace": 0,
+          "import/no-dynamic-require": 0,
+          "jsdoc/no-undefined-types": 0,
+          "jsdoc/require-jsdoc": 0,
+          "jsdoc/require-param": 0,
+          "jsdoc/require-param-description": 0,
+          "jsdoc/require-returns": 0,
+          "jsdoc/require-returns-description": 0,
+          "jsdoc/tag-lines": 0,
+          "n/no-process-exit": 0
         }
       }
     ],
@@ -126,7 +150,6 @@
       "plugin:jsdoc/recommended",
       "plugin:n/recommended",
       "plugin:import/recommended",
-      "plugin:import/typescript",
       "eslint-config-standard",
       "prettier"
     ],
@@ -135,9 +158,6 @@
         "mode": "typescript"
       },
       "import/resolver": {
-        "typescript": {
-          "project": "./tsconfig.json"
-        },
         "node": {
           "extensions": [
             ".js",
@@ -157,7 +177,8 @@
         {
           "definedTypes": [
             "Iterable",
-            "AsyncIterable"
+            "AsyncIterable",
+            "NodeJS"
           ]
         }
       ]
@@ -174,7 +195,6 @@
     "eslint": "^8.45.0",
     "eslint-config-prettier": "^8.8.0",
     "eslint-config-standard": "^17.1.0",
-    "eslint-import-resolver-typescript": "^4.4.4",
     "eslint-plugin-import": "^2.31.0",
     "eslint-plugin-jest": "^29.2.1",
     "eslint-plugin-jsdoc": "^44.0.0",
@@ -184,13 +204,11 @@
     "typescript": "^5.0.4"
   },
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.363.0",
-    "@aws-sdk/client-s3": "^3.363.0",
-    "@aws-sdk/client-sqs": "^3.363.0",
-    "@aws-sdk/credential-providers": "^3.363.0",
-    "@aws-sdk/lib-dynamodb": "^3.365.0",
-    "@grpc/grpc-js": "^1.14.3",
-    "@npmcli/arborist": "^9.1.4",
+    "@aws-sdk/client-dynamodb": "^3.1090.0",
+    "@aws-sdk/credential-providers": "^3.1090.0",
+    "@aws-sdk/lib-dynamodb": "^3.1090.0",
+    "@babel/parser": "^7.28.5",
+    "@npmcli/arborist": "^9.9.0",
     "@paralleldrive/cuid2": "^2.2.2",
     "@smithy/util-retry": "^3.0.3",
     "chalk": "^4.1.0",
@@ -201,11 +219,10 @@
     "esbuild": "0.25.1",
     "jszip": "^3.10.1",
     "lmdb": "^3.4.0",
-    "pacote": "^21.0.3",
+    "pacote": "^21.5.1",
     "postject": "^1.0.0-alpha.6",
     "semver": "^7.6.3",
     "source-map-support": "^0.5.21",
-    "tar": "^7.4.3",
-    "uuid": "^11.1.0"
+    "tar": "^7.5.20"
   }
 }

@@ -789,12 +789,14 @@ function runLocalDBContract(adapter) {
     });
 
     test('supports atomic conditional transactionWrite semantics', async () => {
+      expect.hasAssertions();
       tmpDir = makeTmpDir();
       db = await adapter.create(tmpDir);
       await expectTransactionWriteContract(db);
     });
 
     test('supports bounded lexical query pages', async () => {
+      expect.hasAssertions();
       tmpDir = makeTmpDir();
       db = await adapter.create(tmpDir);
       await expectQueryPageContract(db);
@@ -822,6 +824,7 @@ describe('dynamodb transactionWrite contract', () => {
   });
 
   test('supports bounded lexical query pages', async () => {
+    expect.hasAssertions();
     const { db } = await createMockedDynamoDB();
     try {
       await expectQueryPageContract(db);
@@ -831,6 +834,7 @@ describe('dynamodb transactionWrite contract', () => {
   });
 
   test('supports bounded pages for an explicitly configured non-default schema', async () => {
+    expect.hasAssertions();
     const { db } = await createMockedDynamoDB({
       tableSchemas: {
         'custom-paged-items': ['customer', 'timestamp'],

@@ -2,7 +2,7 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { describe, expect, it } from '@jest/globals';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -10,9 +10,13 @@ import { fileURLToPath } from 'node:url';
 
 import createLMDB from '../../../src/core/lib/db/adapters/lmdb.js';
 import createVanillaDB from '../../../src/core/lib/db/adapters/vanilla.js';
-import { resolveExecutionPayloadStoreId } from '../../../src/core/lib/config/db.js';
+import {
+  createApplicationStateDBClient,
+  resolveExecutionPayloadStoreId,
+} from '../../../src/core/lib/config/db.js';
 import {
   AttemptStatus,
+  EffectStatus,
   InvocationStatus,
   RunStatus,
   createExecutionLedger,
@@ -20,6 +24,14 @@ import {
 import { createLedgerServiceOwnership } from '../../../src/core/lib/db/tables/ledger-service-lifecycle.js';
 import { createLocalExecutionPayloadStore } from '../../../src/core/lib/payload-store/local.js';
 import { ActivityProtocolTranscriptValidator } from '../../../src/core/runtime/activity-protocol.js';
+import {
+  APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS,
+  APPLICATION_STATE_RECONCILIATION_VERIFIER_DESCRIPTOR,
+} from '../../../src/core/runtime/effects/application-state.js';
+import {
+  createBuiltinManagedEffectCatalog,
+  createBuiltinManagedEffectReconciliationCatalog,
+} from '../../../src/core/runtime/effects/builtin-catalog.js';
 import {
   MANUAL_LEDGER_INVOCATION_ID,
   createManualLedgerRunId,
@@ -30,6 +42,7 @@ const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
 const binPath = path.join(repoRoot, 'bin', 'wharfie');
 const REVISION_ID = `wrv1_${'A'.repeat(43)}`;
+const SOURCE_EFFECT_ID = 'remember-source-setting';
 
 /**
  * @param {string} dbPath - Shared local control-store root.
@@ -82,6 +95,196 @@ function completedEvidence(start, result) {
     frames: [acceptedStart, terminal],
     transcript: transcript.snapshot(),
   };
+}
+
+/**
+ * @param {string} attemptId - Durable source attempt ID.
+ * @returns {Record<string, any>} - The finite application-state V2 request eligible for successor retry.
+ */
+function applicationStateEffectRequest(attemptId) {
+  return {
+    protocol: 'wharfie.activity',
+    protocolVersion: 1,
+    type: 'effect-request',
+    attemptId,
+    sequence: 1,
+    effectId: SOURCE_EFFECT_ID,
+    capability: 'application-state',
+    operation: 'put-if-absent',
+    input: {
+      key: 'settings/source-cli-proof',
+      value: { credential: 'source-cli-state-secret' },
+    },
+    requestedReplayProperties: ['idempotent', 'transactional'],
+  };
+}
+
+/**
+ * Seed the exact retained NOT_APPLIED source state accepted by retry-effect.
+ * @param {string} dbPath - Durable LMDB control root.
+ * @param {string} applicationStatePath - Separate durable application-state root.
+ * @param {string} tableName - Execution-ledger table name.
+ * @returns {Promise<{appId: string, runId: string, effectId: string, destinationEffectId: string}>} - Retryable source identity.
+ */
+async function createRetryableApplicationStateEffect(
+  dbPath,
+  applicationStatePath,
+  tableName,
+) {
+  const appId = 'source-cli-effect-successor';
+  const runId = createManualLedgerRunId({
+    appId,
+    idempotencyKey: 'public-retry-effect-proof',
+  });
+  const actor = { kind: 'local', id: 'source-cli-fixture' };
+  const db = createLMDB({ path: dbPath });
+  const applicationDb = await createApplicationStateDBClient('lmdb', {
+    path: applicationStatePath,
+  });
+  const ledger = createExecutionLedger({
+    db,
+    tableName,
+    payloadStore: createPayloadStore(dbPath),
+    effectEvidenceVerifiers: [...APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS],
+  });
+  try {
+    const catalog = await createBuiltinManagedEffectCatalog({
+      db: applicationDb,
+      appId,
+      adapterName: 'lmdb',
+    });
+    const reconciliationCatalog =
+      await createBuiltinManagedEffectReconciliationCatalog({
+        db: applicationDb,
+        appId,
+        adapterName: 'lmdb',
+      });
+    const created = await ledger.createManualRun({
+      runId,
+      appId,
+      revisionId: REVISION_ID,
+      invocationId: MANUAL_LEDGER_INVOCATION_ID,
+      activityId: 'source-handler-must-not-replay',
+      input: { credential: 'source-cli-input-secret' },
+      callerMetadata: { credential: 'source-cli-caller-secret' },
+      transitionId: 'create',
+      actor,
+    });
+    const claimed = await ledger.claimInvocation({
+      runId,
+      invocationId: MANUAL_LEDGER_INVOCATION_ID,
+      fencingToken: 'source-cli-fence-secret',
+      expectedGeneration: 0,
+      expectedVersion: created.run.version,
+      transitionId: 'claim',
+      actor,
+    });
+    const started = await ledger.markAttemptStarted({
+      runId,
+      invocationId: MANUAL_LEDGER_INVOCATION_ID,
+      attemptId: claimed.attempt.attemptId,
+      fencingToken: claimed.attempt.fencingToken,
+      generation: claimed.attempt.generation,
+      expectedVersion: claimed.run.version,
+      transitionId: 'start',
+      actor,
+    });
+    const request = applicationStateEffectRequest(started.attempt.attemptId);
+    const adapter = catalog.resolve(request);
+    const requested = await ledger.recordManagedEffectRequest({
+      runId,
+      invocationId: MANUAL_LEDGER_INVOCATION_ID,
+      attemptId: started.attempt.attemptId,
+      fencingToken: started.attempt.fencingToken,
+      generation: started.attempt.generation,
+      expectedVersion: started.run.version,
+      transitionId: 'effect-request',
+      request,
+      adapter: adapter.descriptor,
+      destination: adapter.destination,
+      verifier: adapter.verifier,
+      substantiatedReplayProperties: adapter.substantiatedReplayProperties,
+      actor,
+    });
+    const effectStarted = await ledger.markManagedEffectStarted({
+      runId,
+      invocationId: MANUAL_LEDGER_INVOCATION_ID,
+      attemptId: started.attempt.attemptId,
+      effectId: SOURCE_EFFECT_ID,
+      fencingToken: started.attempt.fencingToken,
+      generation: started.attempt.generation,
+      expectedVersion: requested.run.version,
+      expectedEffectVersion: requested.effect.version,
+      transitionId: 'effect-start',
+      actor,
+    });
+    const uncertain = await ledger.markManagedEffectUncertain({
+      runId,
+      invocationId: MANUAL_LEDGER_INVOCATION_ID,
+      attemptId: started.attempt.attemptId,
+      effectId: SOURCE_EFFECT_ID,
+      fencingToken: started.attempt.fencingToken,
+      generation: started.attempt.generation,
+      expectedVersion: effectStarted.run.version,
+      expectedEffectVersion: effectStarted.effect.version,
+      transitionId: 'effect-uncertain',
+      reason: {
+        kind: 'source-cli-test-uncertain',
+        credential: 'source-cli-uncertainty-secret',
+      },
+      actor,
+    });
+    const destination = await reconciliationCatalog.reconcileEffect({
+      destinationEffectId: uncertain.effect.destinationEffectId,
+      destination: uncertain.effect.destination,
+      identity: {
+        runId,
+        invocationId: MANUAL_LEDGER_INVOCATION_ID,
+        effectId: SOURCE_EFFECT_ID,
+      },
+      request,
+    });
+    if (destination.kind !== 'not-applied') {
+      throw new Error('Expected a permanent not-applied source decision.');
+    }
+    const reconciled = await ledger.reconcileUncertainManagedEffect({
+      runId,
+      invocationId: MANUAL_LEDGER_INVOCATION_ID,
+      attemptId: uncertain.attempt.attemptId,
+      effectId: SOURCE_EFFECT_ID,
+      fencingToken: uncertain.attempt.fencingToken,
+      generation: uncertain.attempt.generation,
+      coordinatorEpoch: uncertain.attempt.coordinatorEpoch,
+      expectedVersion: uncertain.run.version,
+      expectedEffectVersion: uncertain.effect.version,
+      uncertaintyEventId: uncertain.receipt.event_id,
+      uncertaintySequence: uncertain.receipt.sequence,
+      transitionId: 'effect-not-applied',
+      reconciliationId: 'source-cli-not-applied',
+      reason: {
+        kind: 'source-cli-test-not-applied',
+        credential: 'source-cli-reconciliation-secret',
+      },
+      resolution: {
+        kind: 'not-applied',
+        verifier: APPLICATION_STATE_RECONCILIATION_VERIFIER_DESCRIPTOR,
+        evidence: destination.evidence,
+      },
+      actor,
+    });
+    if (reconciled.effect.status !== EffectStatus.NOT_APPLIED) {
+      throw new Error('Expected a retryable NOT_APPLIED source effect.');
+    }
+    return {
+      appId,
+      runId,
+      effectId: SOURCE_EFFECT_ID,
+      destinationEffectId: reconciled.effect.destinationEffectId,
+    };
+  } finally {
+    await applicationDb.close();
+    await db.close();
+  }
 }
 
 /**
@@ -197,6 +400,7 @@ async function readRun(dbPath, tableName, runId, createDB = createVanillaDB) {
       db,
       tableName,
       payloadStore: createPayloadStore(dbPath),
+      effectEvidenceVerifiers: [...APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS],
     }).rebuildRun(runId);
   } finally {
     await db.close();
@@ -769,7 +973,187 @@ describe('ledger-native operator commands', () => {
     }
   }, 20000);
 
-  it('removes legacy list while exposing the current-owner cancel command', () => {
+  it('executes public retry-effect from the source CLI and replays a lost response without executing again', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-ops-effect-successor-'),
+    );
+    const emptyDir = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-ops-effect-successor-no-manifest-'),
+    );
+    const dbPath = path.join(root, 'control');
+    const applicationStatePath = path.join(root, 'application-state');
+    const payloadPath = path.join(dbPath, 'execution-payloads');
+    const tableName = 'operator-source-cli-effect-successor';
+    const successorId = 'source-cli-successor-1';
+    const retryReason = 'source-cli-private-retry-reason';
+    const env = {
+      ...process.env,
+      NODE_ENV: 'development',
+      WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
+      WHARFIE_CONTROL_ADAPTER: 'lmdb',
+      WHARFIE_CONTROL_PATH: dbPath,
+      WHARFIE_EXECUTION_PAYLOAD_PATH: payloadPath,
+      WHARFIE_LEDGER_SERVICE_SESSION_PATH: path.join(root, 'sessions'),
+      WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
+      WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+    };
+
+    try {
+      const fixture = await createRetryableApplicationStateEffect(
+        dbPath,
+        applicationStatePath,
+        tableName,
+      );
+      await expect(
+        readRun(dbPath, tableName, fixture.runId, createLMDB),
+      ).resolves.toMatchObject({
+        run: { appId: fixture.appId, status: RunStatus.BLOCKED },
+        invocations: [
+          expect.objectContaining({ status: InvocationStatus.UNCERTAIN }),
+        ],
+        attempts: [
+          expect.objectContaining({ status: AttemptStatus.ABANDONED }),
+        ],
+        effects: [
+          expect.objectContaining({
+            effectId: fixture.effectId,
+            status: EffectStatus.NOT_APPLIED,
+          }),
+        ],
+      });
+
+      const retryArgs = [
+        'ops',
+        'retry-effect',
+        '--run-id',
+        fixture.runId,
+        '--effect-id',
+        fixture.effectId,
+        '--successor-id',
+        successorId,
+        '--confirm-runner-stopped',
+        '--reason',
+        retryReason,
+        '--json',
+      ];
+      const first = runCli(retryArgs, env, emptyDir);
+      expect(first.status).toBe(0);
+      expect(first.stderr).toBe('');
+      const firstView = JSON.parse(first.stdout);
+      expect(firstView).toMatchObject({
+        schemaVersion: 5,
+        kind: 'wharfie.execution-ledger.effect-successor',
+        integrity: { verified: true },
+        effectSuccessor: {
+          successorId,
+          intent: 'retry',
+          authorizationApplied: true,
+          source: {
+            runId: fixture.runId,
+            effectId: fixture.effectId,
+            status: RunStatus.BLOCKED,
+          },
+          target: {
+            runId: expect.any(String),
+            effectId: expect.any(String),
+            status: RunStatus.COMPLETED,
+            disposition: 'completed',
+          },
+        },
+        source: {
+          run: { runId: fixture.runId, status: RunStatus.BLOCKED },
+          effects: [
+            expect.objectContaining({ status: EffectStatus.NOT_APPLIED }),
+          ],
+          history: expect.arrayContaining([
+            expect.objectContaining({ type: 'effect-successor-authorized' }),
+          ]),
+        },
+        target: {
+          run: { status: RunStatus.COMPLETED },
+          invocations: [
+            expect.objectContaining({ status: InvocationStatus.COMPLETED }),
+          ],
+          attempts: [
+            expect.objectContaining({ status: AttemptStatus.COMPLETED }),
+          ],
+          effects: [
+            expect.objectContaining({ status: EffectStatus.COMPLETED }),
+          ],
+          history: [
+            expect.objectContaining({ type: 'effect-successor-run-created' }),
+            expect.objectContaining({ type: 'effect-successor-started' }),
+            expect.objectContaining({ type: 'effect-successor-terminal' }),
+          ],
+        },
+      });
+      expect(firstView.effectSuccessor.target.runId).not.toBe(fixture.runId);
+      expect(firstView.effectSuccessor.target.effectId).not.toBe(
+        fixture.effectId,
+      );
+      for (const secret of [
+        'source-cli-input-secret',
+        'source-cli-caller-secret',
+        'source-cli-fence-secret',
+        'source-cli-state-secret',
+        'source-cli-uncertainty-secret',
+        'source-cli-reconciliation-secret',
+        retryReason,
+        fixture.destinationEffectId,
+        applicationStatePath,
+        'destinationEffectId',
+        'fencingToken',
+        'requestDigest',
+        'evidenceRef',
+      ]) {
+        expect(first.stdout).not.toContain(secret);
+      }
+
+      const targetRunId = firstView.effectSuccessor.target.runId;
+      const durableSource = await readRun(
+        dbPath,
+        tableName,
+        fixture.runId,
+        createLMDB,
+      );
+      const durableTarget = await readRun(
+        dbPath,
+        tableName,
+        targetRunId,
+        createLMDB,
+      );
+      expect(durableSource).not.toBeNull();
+      expect(durableTarget).not.toBeNull();
+
+      // A response-loss replay of a terminal successor must be answered from
+      // retained control state. Removing the destination proves that the
+      // public source command neither reopens nor re-executes the effect.
+      rmSync(applicationStatePath, { recursive: true, force: true });
+      const replay = runCli(retryArgs, env, emptyDir);
+      expect(replay.status).toBe(0);
+      expect(replay.stderr).toBe('');
+      const replayView = JSON.parse(replay.stdout);
+      expect(replayView).toEqual({
+        ...firstView,
+        effectSuccessor: {
+          ...firstView.effectSuccessor,
+          authorizationApplied: false,
+        },
+      });
+      expect(existsSync(applicationStatePath)).toBe(false);
+      await expect(
+        readRun(dbPath, tableName, fixture.runId, createLMDB),
+      ).resolves.toEqual(durableSource);
+      await expect(
+        readRun(dbPath, tableName, targetRunId, createLMDB),
+      ).resolves.toEqual(durableTarget);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(emptyDir, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it('exposes the supported ledger operator surface and removes legacy list', () => {
     const env = { ...process.env, NODE_ENV: 'development' };
     const help = runCli(['ops', '--help'], env, repoRoot);
     expect(help.status).toBe(0);
@@ -777,7 +1161,7 @@ describe('ledger-native operator commands', () => {
     expect(help.stdout).toContain('recover');
     expect(help.stdout).toContain('reconcile');
     expect(help.stdout).toContain('reconcile-effect');
-    expect(help.stdout).not.toContain('retry-effect');
+    expect(help.stdout).toContain('retry-effect');
     expect(help.stdout).toContain('cancel');
     expect(help.stdout).toContain('run');
     expect(help.stdout).not.toContain('list');
@@ -791,6 +1175,17 @@ describe('ledger-native operator commands', () => {
     expect(reconcileEffectHelp.stdout).toContain('--effect-id');
     expect(reconcileEffectHelp.stdout).toContain('--reconciliation-id');
     expect(reconcileEffectHelp.stdout).toContain('--confirm-runner-stopped');
+
+    const retryEffectHelp = runCli(
+      ['ops', 'retry-effect', '--help'],
+      env,
+      repoRoot,
+    );
+    expect(retryEffectHelp.status).toBe(0);
+    expect(retryEffectHelp.stdout).toContain('--run-id');
+    expect(retryEffectHelp.stdout).toContain('--effect-id');
+    expect(retryEffectHelp.stdout).toContain('--successor-id');
+    expect(retryEffectHelp.stdout).toContain('--confirm-runner-stopped');
 
     const list = runCli(['ops', 'list'], env, repoRoot);
     expect(list.status).toBe(1);
@@ -861,9 +1256,24 @@ describe('ledger-native operator commands', () => {
       'missing-run-effect-reconciliation',
     );
 
-    const retryEffect = runCli(['ops', 'retry-effect'], env, repoRoot);
+    const retryEffect = runCli(
+      [
+        'ops',
+        'retry-effect',
+        '--run-id',
+        'private-confirmation-run',
+        '--effect-id',
+        'private-confirmation-effect',
+        '--successor-id',
+        'private-confirmation-successor',
+      ],
+      env,
+      repoRoot,
+    );
     expect(retryEffect.status).toBe(1);
-    expect(retryEffect.stderr).toMatch(/unknown command/i);
+    expect(retryEffect.stderr).toContain(
+      'retry-effect requires --confirm-runner-stopped',
+    );
 
     const legacyRecovery = runCli(['ops', 'run', '--recover'], env, repoRoot);
     expect(legacyRecovery.status).toBe(1);

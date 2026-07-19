@@ -47,6 +47,7 @@ export const ARTIFACT_PROVENANCE_BUILDER_NAME = '@wharfie/wharfie';
 
 const require = createRequire(import.meta.url);
 const TOOLCHAIN_PACKAGE_NAMES = Object.freeze([
+  '@babel/parser',
   '@npmcli/arborist',
   'esbuild',
   'pacote',
@@ -54,6 +55,35 @@ const TOOLCHAIN_PACKAGE_NAMES = Object.freeze([
   'semver',
   'tar',
 ]);
+
+/**
+ * Load one known package manifest through a literal specifier so the package
+ * and SEA dependency graph can prove every toolchain input.
+ * @param {string} packageName - Known toolchain package name.
+ * @returns {unknown} - Installed package manifest.
+ */
+function loadToolchainPackageManifest(packageName) {
+  switch (packageName) {
+    case '@babel/parser':
+      return require('@babel/parser/package.json');
+    case '@npmcli/arborist':
+      return require('@npmcli/arborist/package.json');
+    case 'esbuild':
+      return require('esbuild/package.json');
+    case 'pacote':
+      return require('pacote/package.json');
+    case 'postject':
+      return require('postject/package.json');
+    case 'semver':
+      return require('semver/package.json');
+    case 'tar':
+      return require('tar/package.json');
+    default:
+      throw new TypeError(
+        `Unknown artifact toolchain package '${packageName}'.`,
+      );
+  }
+}
 
 /**
  * @typedef DependencyClosureActivity
@@ -250,7 +280,7 @@ export function createArtifactToolchainDigest(builderVersion) {
       name: packageName,
       version: getInstalledPackageVersion(
         packageName,
-        require(`${packageName}/package.json`),
+        loadToolchainPackageManifest(packageName),
       ),
     })),
   ].sort((left, right) => compareCanonicalStrings(left.name, right.name));

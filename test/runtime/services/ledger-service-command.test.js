@@ -72,9 +72,9 @@ describe('hidden ledger-service runtime command', () => {
   });
 
   it('removes only its own signal listeners after the first graceful shutdown request', async () => {
-    const processRef = new EventEmitter();
+    const processRef = /** @type {NodeJS.Process} */ (new EventEmitter());
     const waiting = waitForLedgerServiceShutdown({
-      processRef: /** @type {NodeJS.Process} */ (processRef),
+      processRef,
     });
 
     processRef.emit('SIGTERM');
@@ -84,10 +84,10 @@ describe('hidden ledger-service runtime command', () => {
   });
 
   it('removes unneeded signal listeners when startup cleanup aborts the wait', async () => {
-    const processRef = new EventEmitter();
+    const processRef = /** @type {NodeJS.Process} */ (new EventEmitter());
     const controller = new AbortController();
     const waiting = waitForLedgerServiceShutdown({
-      processRef: /** @type {NodeJS.Process} */ (processRef),
+      processRef,
       signal: controller.signal,
     });
 

@@ -1,4 +1,3 @@
-import { v4 } from 'uuid';
 import { c } from 'tar';
 
 import BuildResource from './build-resource.js';
@@ -21,7 +20,7 @@ import { assertLogicalId } from '../../runtime/logical-id.js';
 
 import { dirname, join } from 'node:path';
 import { promises, existsSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { brotliCompressSync } from 'node:zlib';
 import { buffer as streamToBuffer } from 'node:stream/consumers';
@@ -341,7 +340,10 @@ class FunctionResource extends BuildResource {
     if (externals.length === 0) {
       return { externalsTar: '', receipt: null };
     }
-    const tmpBuildDir = join(FunctionResource.BUILD_DIR, `externals-${v4()}`);
+    const tmpBuildDir = join(
+      FunctionResource.BUILD_DIR,
+      `externals-${randomUUID()}`,
+    );
     await promises.mkdir(tmpBuildDir, { mode: 0o700, recursive: true });
     await promises.chmod(tmpBuildDir, 0o700);
     try {
@@ -489,7 +491,7 @@ class FunctionResource extends BuildResource {
     };
     const singleExecutableAssetPath = join(
       FunctionResource.TEMP_ASSET_PATH,
-      v4(),
+      randomUUID(),
     );
     await promises.writeFile(singleExecutableAssetPath, assetBytes, {
       flag: 'wx',

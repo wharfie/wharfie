@@ -1,4 +1,6 @@
-import { defineApp } from '@wharfie/wharfie/app';
+// This repository fixture loads the authoring helper from the checkout. Its
+// portable CLI and activity still use only package/public or snapshotted edges.
+import { defineApp } from '../../../../src/app.js';
 
 import {
   kitchenSinkDefaultTargets,

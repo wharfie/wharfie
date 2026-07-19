@@ -44,7 +44,7 @@ function waitForChildReady(child) {
     );
   }
 
-  return new Promise((resolvePromise, reject) => {
+  return new Promise((resolve, reject) => {
     let output = '';
     let errors = '';
     const cleanup = () => {
@@ -58,7 +58,7 @@ function waitForChildReady(child) {
       output += String(chunk);
       if (!output.includes('ready\n')) return;
       cleanup();
-      resolvePromise();
+      resolve();
     };
     /** @param {Buffer | string} chunk - Child standard-error chunk. */
     const onStderr = (chunk) => {

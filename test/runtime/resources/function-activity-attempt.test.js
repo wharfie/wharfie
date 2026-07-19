@@ -664,6 +664,8 @@ describe('Function Activity Protocol v1 attempt execution', () => {
         }),
         { signal: controller.signal, cancellationGraceMs: 50 },
       );
+      // This expectation starts before the sibling attempt and is awaited below.
+      // eslint-disable-next-line jest/valid-expect
       const blockedExpectation = expect(blocked).rejects.toBeInstanceOf(
         ActivityAttemptTransportError,
       );

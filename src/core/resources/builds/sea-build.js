@@ -1,6 +1,5 @@
-import { v4 } from 'uuid';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -660,7 +659,7 @@ class SeaBuild extends BaseResource {
     successfulBuildEvidence.delete(this);
     delete this.properties.binaryPath;
 
-    const buildId = v4();
+    const buildId = randomUUID();
     const distFile = `${this.name}-${buildId}`;
     const finalName =
       this.get('platform') === 'win32' ? `${distFile}.exe` : distFile;

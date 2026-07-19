@@ -16,8 +16,8 @@ export const kitchenSinkDefaultTargets = Object.freeze([
 ]);
 
 /**
- * Exact native package kept outside the activity bundle. Optional probes in
- * the handler are not portability claims and are deliberately not declared.
+ * Exact native package kept outside the activity bundle and sealed into each
+ * target-specific dependency closure.
  */
 export const kitchenSinkExternalDependencies = Object.freeze([
   Object.freeze({ name: 'lmdb', version: '3.4.4' }),

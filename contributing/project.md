@@ -5,5 +5,5 @@ developer-owned CLI and a `wharfie.app.js` manifest. The manifest identifies the
 CLI entrypoint, named activities, exact external-package pins, and package
 targets.
 
-See the current [Application Structure](../docs/src/assets/markdown/project-structure.md)
+See the current [Application Structure](../docs/guides/application-structure.md)
 guide for a minimal layout and commands that work against the shipped CLI.

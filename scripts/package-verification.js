@@ -55,8 +55,8 @@ export function runCommand(command, args, options = {}) {
   }
 
   return {
-    stdout: capture && result.stdout ? result.stdout : '',
-    stderr: capture && result.stderr ? result.stderr : '',
+    stdout: capture && result.stdout ? String(result.stdout) : '',
+    stderr: capture && result.stderr ? String(result.stderr) : '',
   };
 }
 
@@ -91,10 +91,6 @@ function listFiles(absoluteDirectory, relativeDirectory) {
 function requiredRuntimeFiles() {
   const coreFiles = listFiles(path.join(REPO_ROOT, 'src', 'core'), 'src/core');
   const cliFiles = listFiles(path.join(REPO_ROOT, 'src', 'cli'), 'src/cli');
-  const verificationFiles = listFiles(
-    path.join(REPO_ROOT, 'scripts'),
-    'scripts',
-  );
 
   return [
     'LICENSE',
@@ -103,7 +99,6 @@ function requiredRuntimeFiles() {
     'bin/wharfie',
     'src/app.js',
     'src/app.d.ts',
-    ...verificationFiles,
     ...coreFiles,
     ...cliFiles,
   ];
@@ -129,8 +124,10 @@ export function assertPackageContents(manifest) {
 
   for (const packedPath of packedFiles) {
     assert.ok(
-      !packedPath.startsWith('scratch/'),
-      `npm tarball includes scratch content: ${packedPath}`,
+      !['apps/', 'docs/', 'llm/', 'scratch/', 'scripts/', 'test/'].some(
+        (prefix) => packedPath.startsWith(prefix),
+      ),
+      `npm tarball includes repository-only content: ${packedPath}`,
     );
   }
 
@@ -144,11 +141,52 @@ export function assertPackageContents(manifest) {
   assert.equal(packageMetadata.exports?.['./app']?.types, './src/app.d.ts');
   assert.equal(packageMetadata.exports?.['./app']?.import, './src/app.js');
   assert.match(packageMetadata.packageManager, /^npm@\d+\.\d+\.\d+$/);
+  assert.deepEqual(packageMetadata.devEngines, {
+    runtime: {
+      name: 'node',
+      version: packageMetadata.engines.node,
+      onFail: 'error',
+    },
+    packageManager: {
+      name: 'npm',
+      version: packageMetadata.packageManager.slice('npm@'.length),
+      onFail: 'error',
+    },
+  });
   assert.equal(
     Object.hasOwn(packageMetadata.engines || {}, 'npm'),
     false,
     'npm is a contributor tool pin, not a runtime engine requirement',
   );
+
+  for (const relativePath of [
+    'apps/wharfie-v1',
+    'src/core/lib/aws/athena',
+    'src/core/lib/duckdb',
+    'src/core/resources/aws/athena-workgroup.js',
+    'test/legacy',
+  ]) {
+    assert.equal(
+      existsSync(path.join(REPO_ROOT, relativePath)),
+      false,
+      `abandoned v1 path still exists: ${relativePath}`,
+    );
+  }
+
+  for (const dependency of [
+    '@aws-sdk/client-athena',
+    '@duckdb/node-api',
+    'apache-arrow',
+    'hyparquet',
+    'hyparquet-compressors',
+    'node-sql-parser',
+  ]) {
+    assert.equal(
+      Object.hasOwn(packageMetadata.dependencies || {}, dependency),
+      false,
+      `abandoned v1 dependency still exists: ${dependency}`,
+    );
+  }
 }
 
 /**

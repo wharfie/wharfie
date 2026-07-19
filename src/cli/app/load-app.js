@@ -39,16 +39,18 @@ function isPlainObject(value) {
   return prototype === Object.prototype || prototype === null;
 }
 
+/* eslint-disable jsdoc/valid-types -- The JSDoc parser does not support TypeScript assertion signatures. */
 /**
  * @param {unknown} value - Candidate object.
  * @param {string} valuePath - Human-readable source path.
- * @returns {asserts value is Record<string, any>}
+ * @returns {asserts value is Record<string, any>} - Returns only when value is a plain object.
  */
 function assertPlainObject(value, valuePath) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${valuePath} must be a plain object.`);
   }
 }
+/* eslint-enable jsdoc/valid-types */
 
 /**
  * @param {Record<string, any>} value - Object to inspect.

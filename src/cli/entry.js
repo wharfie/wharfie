@@ -14,7 +14,7 @@ import appCommand from './cmds/app.js';
 /**
  * Build the Wharfie CLI commander program.
  * @param {CreateProgramOptions} [options] - Test hooks.
- * @returns {import('commander').Command}
+ * @returns {import('commander').Command} - Configured Wharfie command.
  */
 export function createProgram(options = {}) {
   const { pathsModule = paths } = options;
@@ -42,8 +42,8 @@ export function createProgram(options = {}) {
  *
  * NOTE: When running under a SeaBuild-produced binary, this function is bundled
  * and does not rely on repo-relative paths at runtime.
- *
  * @param {string[]} argv - process.argv
+ * @returns {Promise<void>} - Resolves after command handling completes.
  */
 export async function main(argv = process.argv) {
   const program = createProgram();

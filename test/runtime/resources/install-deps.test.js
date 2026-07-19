@@ -3,8 +3,7 @@
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { promises as fsp } from 'node:fs';
+import { existsSync, promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { create as createTar } from 'tar';

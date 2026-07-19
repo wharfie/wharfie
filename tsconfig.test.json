@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "skipLibCheck": true,
+    "types": ["jest", "node"]
+  },
+  "include": ["test/**/*.js", "test/types/**/*.ts", "types/**/*.d.ts"]
+}

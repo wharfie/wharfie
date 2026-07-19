@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="../images/beanie.png?as=webp" alt="Wharfie Beanie Logo" width="200">
+  <img src="./assets/beanie.svg" alt="Wharfie Beanie Logo" width="200">
   <br>
   Wharfie
 </h1>
@@ -33,8 +33,11 @@ wharfie app run <activity-id> --dir ./path/to/app --input '{"who":"cli-user"}'
 wharfie app package ./path/to/app
 ```
 
-The shipped top-level CLI contains `app` and `ops`. See the
-[Quickstart Guide](/quickstart), the
-[project charter](https://github.com/wharfie/wharfie/blob/master/PROJECT.md), and
-the [roadmap](https://github.com/wharfie/wharfie/blob/master/ROADMAP.md) for the
-current contract and delivery sequence.
+The shipped top-level CLI contains `app` and `ops`. Continue with the
+[installation guide](./guides/installation.md), [quickstart](./guides/quickstart.md),
+and [application structure guide](./guides/application-structure.md). The
+[project charter](../PROJECT.md), [roadmap](../ROADMAP.md), [architecture
+decisions](./architecture/decisions/README.md), and [project-reset
+record](./project-reset/2026-07-16-cleanup-inventory.md) remain the authoritative
+contract, delivery sequence, design constraints, and historical cleanup
+evidence.

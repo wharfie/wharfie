@@ -9,7 +9,6 @@ import { join } from 'node:path';
  * @typedef {import('../../src/core/lib/db/base.js').DBClient} DBClient
  */
 
-const PATHS_IMPORT = '../../src/core/lib/paths.js';
 const VANILLA_ADAPTER_IMPORT = '../../src/core/lib/db/adapters/vanilla.js';
 const LMDB_ADAPTER_IMPORT = '../../src/core/lib/db/adapters/lmdb.js';
 const DYNAMO_ADAPTER_IMPORT = '../../src/core/lib/db/adapters/dynamodb.js';

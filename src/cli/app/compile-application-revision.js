@@ -2,6 +2,8 @@ import { constants as fsConstants, promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { parse as parseJavaScript } from '@babel/parser';
+
 import {
   createApplicationRevision,
   DEPENDENCY_LOCK_INPUT_FORMAT,
@@ -47,6 +49,17 @@ const PACKAGE_DEPENDENCY_KEYS = [
 const SNAPSHOT_STATE_DIRECTORY = '.wharfie';
 const SNAPSHOT_PARENT_DIRECTORY = 'revision-snapshots';
 const WHARFIE_PACKAGE_NAME = '@wharfie/wharfie';
+const JAVASCRIPT_SOURCE_EXTENSIONS = new Set([
+  '.cjs',
+  '.cts',
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.mts',
+  '.ts',
+  '.tsx',
+]);
+const NODE_MODULE_SPECIFIERS = new Set(['module', 'node:module']);
 
 /**
  * @typedef Sha256Digest
@@ -439,6 +452,748 @@ async function copyBehaviorTree(sourceRoot, destinationRoot, excludedPaths) {
 }
 
 /**
+ * @typedef JavaScriptScope
+ * @property {JavaScriptScope | null} parent - Enclosing lexical scope.
+ * @property {'program'|'function'|'block'} kind - Scope kind.
+ * @property {Map<string, { kind: 'local'|'node-module-namespace'|'node-create-require'|'native-loader' }>} bindings - Declared bindings.
+ */
+
+/**
+ * @param {unknown} value - Candidate AST value.
+ * @returns {value is Record<string, any>} - Whether value is an AST node.
+ */
+function isJavaScriptAstNode(value) {
+  return Boolean(
+    value &&
+    typeof value === 'object' &&
+    typeof (/** @type {Record<string, any>} */ (value).type) === 'string',
+  );
+}
+
+/**
+ * @param {Record<string, any>} node - AST node.
+ * @param {(child: Record<string, any>) => void} visit - Child visitor.
+ */
+function forEachJavaScriptAstChild(node, visit) {
+  for (const [key, value] of Object.entries(node)) {
+    if (['comments', 'errors', 'loc', 'tokens'].includes(key)) continue;
+    if (isJavaScriptAstNode(value)) {
+      visit(value);
+      continue;
+    }
+    if (!Array.isArray(value)) continue;
+    for (const child of value) {
+      if (isJavaScriptAstNode(child)) visit(child);
+    }
+  }
+}
+
+/**
+ * @param {Record<string, any>} node - AST root.
+ * @param {(node: Record<string, any>, parent: Record<string, any> | null) => void} visit - Node visitor.
+ * @param {Record<string, any> | null} [parent] - Parent AST node.
+ */
+function walkJavaScriptAst(node, visit, parent = null) {
+  visit(node, parent);
+  forEachJavaScriptAstChild(node, (child) =>
+    walkJavaScriptAst(child, visit, node),
+  );
+}
+
+/**
+ * @param {JavaScriptScope | null} parent - Parent scope.
+ * @param {'program'|'function'|'block'} kind - Scope kind.
+ * @returns {JavaScriptScope} - Empty scope.
+ */
+function createJavaScriptScope(parent, kind) {
+  return { parent, kind, bindings: new Map() };
+}
+
+/**
+ * @param {JavaScriptScope} scope - Owning scope.
+ * @param {string} name - Binding name.
+ * @param {'local'|'node-module-namespace'|'node-create-require'|'native-loader'} [kind] - Binding classification.
+ * @returns {{ kind: 'local'|'node-module-namespace'|'node-create-require'|'native-loader' }} - Binding record.
+ */
+function addJavaScriptBinding(scope, name, kind = 'local') {
+  const current = scope.bindings.get(name);
+  if (current) {
+    if (current.kind === 'local' && kind !== 'local') current.kind = kind;
+    return current;
+  }
+  const binding = { kind };
+  scope.bindings.set(name, binding);
+  return binding;
+}
+
+/**
+ * @param {JavaScriptScope} scope - Starting scope.
+ * @param {string} name - Binding name.
+ * @returns {{ kind: 'local'|'node-module-namespace'|'node-create-require'|'native-loader' } | undefined} - Nearest binding.
+ */
+function resolveJavaScriptBinding(scope, name) {
+  /** @type {JavaScriptScope | null} */
+  let current = scope;
+  for (; current; current = current.parent) {
+    const binding = current.bindings.get(name);
+    if (binding) return binding;
+  }
+  return undefined;
+}
+
+/**
+ * @param {JavaScriptScope} scope - Starting scope.
+ * @returns {JavaScriptScope} - Nearest function or program scope.
+ */
+function getJavaScriptVarScope(scope) {
+  let current = scope;
+  while (current.parent && current.kind === 'block') current = current.parent;
+  return current;
+}
+
+/**
+ * @param {Record<string, any> | null | undefined} pattern - Binding pattern.
+ * @param {JavaScriptScope} scope - Owning scope.
+ * @param {'local'|'node-module-namespace'|'node-create-require'|'native-loader'} [kind] - Binding classification.
+ */
+function addJavaScriptPatternBindings(pattern, scope, kind = 'local') {
+  if (!pattern) return;
+  if (pattern.type === 'Identifier') {
+    addJavaScriptBinding(scope, pattern.name, kind);
+    return;
+  }
+  if (pattern.type === 'AssignmentPattern') {
+    addJavaScriptPatternBindings(pattern.left, scope, kind);
+    return;
+  }
+  if (pattern.type === 'RestElement') {
+    addJavaScriptPatternBindings(pattern.argument, scope, kind);
+    return;
+  }
+  if (pattern.type === 'ArrayPattern') {
+    for (const element of pattern.elements || []) {
+      addJavaScriptPatternBindings(element, scope, kind);
+    }
+    return;
+  }
+  if (pattern.type === 'ObjectPattern') {
+    for (const property of pattern.properties || []) {
+      if (property.type === 'RestElement') {
+        addJavaScriptPatternBindings(property.argument, scope, kind);
+      } else {
+        addJavaScriptPatternBindings(property.value, scope, kind);
+      }
+    }
+  }
+}
+
+const JAVASCRIPT_FUNCTION_NODE_TYPES = new Set([
+  'ArrowFunctionExpression',
+  'ClassMethod',
+  'ClassPrivateMethod',
+  'FunctionDeclaration',
+  'FunctionExpression',
+  'ObjectMethod',
+]);
+const JAVASCRIPT_BLOCK_SCOPE_NODE_TYPES = new Set([
+  'BlockStatement',
+  'CatchClause',
+  'ForInStatement',
+  'ForOfStatement',
+  'ForStatement',
+  'StaticBlock',
+  'SwitchStatement',
+]);
+
+/**
+ * Build enough lexical scope information to distinguish Node's unbound
+ * `require` and `module` bindings from application-defined functions with the
+ * same names. This is deliberately not a hostile-code sandbox; it identifies
+ * the native loading forms that the portable graph contract supports.
+ * @param {Record<string, any>} ast - Babel file AST.
+ * @returns {{ scopeByNode: WeakMap<Record<string, any>, JavaScriptScope>, rootScope: JavaScriptScope }} - Scope index.
+ */
+function indexJavaScriptScopes(ast) {
+  const rootScope = createJavaScriptScope(null, 'program');
+  const scopeByNode = new WeakMap();
+
+  /**
+   * @param {Record<string, any>} node - Current AST node.
+   * @param {JavaScriptScope} incomingScope - Enclosing scope.
+   */
+  function visit(node, incomingScope) {
+    let scope = incomingScope;
+    if (node.type === 'Program') {
+      scope = rootScope;
+    } else if (JAVASCRIPT_FUNCTION_NODE_TYPES.has(node.type)) {
+      if (node.type === 'FunctionDeclaration' && node.id?.name) {
+        addJavaScriptBinding(incomingScope, node.id.name);
+      }
+      scope = createJavaScriptScope(incomingScope, 'function');
+      if (node.type === 'FunctionExpression' && node.id?.name) {
+        addJavaScriptBinding(scope, node.id.name);
+      }
+      for (const parameter of node.params || []) {
+        addJavaScriptPatternBindings(parameter, scope);
+      }
+    } else if (JAVASCRIPT_BLOCK_SCOPE_NODE_TYPES.has(node.type)) {
+      scope = createJavaScriptScope(incomingScope, 'block');
+      if (node.type === 'CatchClause') {
+        addJavaScriptPatternBindings(node.param, scope);
+      }
+    } else if (
+      ['ClassDeclaration', 'TSEnumDeclaration'].includes(node.type) &&
+      node.id?.name
+    ) {
+      addJavaScriptBinding(scope, node.id.name);
+    }
+    scopeByNode.set(node, scope);
+
+    if (node.type === 'ImportDeclaration') {
+      const isNodeModule =
+        node.source?.type === 'StringLiteral' &&
+        NODE_MODULE_SPECIFIERS.has(node.source.value);
+      for (const specifier of node.specifiers || []) {
+        let kind =
+          /** @type {'local'|'node-module-namespace'|'node-create-require'} */ (
+            'local'
+          );
+        if (
+          isNodeModule &&
+          ['ImportDefaultSpecifier', 'ImportNamespaceSpecifier'].includes(
+            specifier.type,
+          )
+        ) {
+          kind = 'node-module-namespace';
+        } else if (
+          isNodeModule &&
+          specifier.type === 'ImportSpecifier' &&
+          (specifier.imported?.name === 'createRequire' ||
+            specifier.imported?.value === 'createRequire')
+        ) {
+          kind = 'node-create-require';
+        }
+        addJavaScriptBinding(scope, specifier.local.name, kind);
+      }
+    } else if (node.type === 'VariableDeclaration') {
+      const bindingScope =
+        node.kind === 'var' ? getJavaScriptVarScope(scope) : scope;
+      for (const declaration of node.declarations || []) {
+        addJavaScriptPatternBindings(declaration.id, bindingScope);
+      }
+    } else if (node.type === 'ClassDeclaration' && node.id?.name) {
+      addJavaScriptBinding(scope, node.id.name);
+    }
+
+    forEachJavaScriptAstChild(node, (child) => visit(child, scope));
+  }
+
+  visit(ast, rootScope);
+  return { rootScope, scopeByNode };
+}
+
+/**
+ * @param {Record<string, any> | null | undefined} node - Expression.
+ * @returns {Record<string, any> | null | undefined} - Expression without transparent wrappers.
+ */
+function unwrapJavaScriptExpression(node) {
+  let current = node;
+  while (
+    current &&
+    [
+      'ParenthesizedExpression',
+      'TSAsExpression',
+      'TSInstantiationExpression',
+      'TSNonNullExpression',
+      'TSSatisfiesExpression',
+      'TSTypeAssertion',
+      'TypeCastExpression',
+    ].includes(current.type)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+/**
+ * @param {Record<string, any> | null | undefined} node - Member expression.
+ * @returns {string | undefined} - Statically named property.
+ */
+function getStaticMemberPropertyName(node) {
+  if (
+    !node ||
+    !['MemberExpression', 'OptionalMemberExpression'].includes(node.type)
+  ) {
+    return undefined;
+  }
+  if (!node.computed && node.property?.type === 'Identifier') {
+    return node.property.name;
+  }
+  if (node.computed && node.property?.type === 'StringLiteral') {
+    return node.property.value;
+  }
+  return undefined;
+}
+
+/**
+ * @param {Record<string, any> | null | undefined} node - Expression.
+ * @returns {boolean} - Whether expression is `import.meta`.
+ */
+function isImportMetaExpression(node) {
+  const value = unwrapJavaScriptExpression(node);
+  return Boolean(
+    value?.type === 'MetaProperty' &&
+    value.meta?.name === 'import' &&
+    value.property?.name === 'meta',
+  );
+}
+
+/**
+ * @param {Record<string, any> | null | undefined} node - Call expression.
+ * @returns {Record<string, any> | undefined} - Dynamic import specifier.
+ */
+function getDynamicImportSpecifier(node) {
+  const value = unwrapJavaScriptExpression(node);
+  if (!value) return undefined;
+  if (value?.type === 'ImportExpression') return value.source;
+  if (
+    ['CallExpression', 'OptionalCallExpression'].includes(value?.type) &&
+    value.callee?.type === 'Import'
+  ) {
+    return value.arguments?.[0];
+  }
+  return undefined;
+}
+
+/**
+ * @param {Record<string, any> | undefined} node - Module specifier.
+ * @returns {node is Record<string, any>} - Whether it is a quoted string literal.
+ */
+function isLiteralModuleSpecifier(node) {
+  return node?.type === 'StringLiteral';
+}
+
+/**
+ * @param {Record<string, any> | null | undefined} node - Candidate identifier.
+ * @param {JavaScriptScope} scope - Current scope.
+ * @returns {boolean} - Whether expression is Node's native require function.
+ */
+function isNativeRequireIdentifier(node, scope) {
+  const value = unwrapJavaScriptExpression(node);
+  if (value?.type !== 'Identifier' || value.name !== 'require') return false;
+  const binding = resolveJavaScriptBinding(scope, value.name);
+  return !binding || binding.kind === 'native-loader';
+}
+
+/**
+ * @param {Record<string, any> | null | undefined} node - Candidate expression.
+ * @param {JavaScriptScope} scope - Current scope.
+ * @returns {'local'|'node-module-namespace'|'node-create-require'|'native-loader'|undefined} - Native binding kind.
+ */
+function getNativeModuleExpressionKind(node, scope) {
+  const value = unwrapJavaScriptExpression(node);
+  if (!value) return undefined;
+  if (value.type === 'AwaitExpression') {
+    return getNativeModuleExpressionKind(value.argument, scope);
+  }
+  if (value.type === 'Identifier') {
+    return resolveJavaScriptBinding(scope, value.name)?.kind;
+  }
+
+  const importSpecifier = getDynamicImportSpecifier(value);
+  if (
+    isLiteralModuleSpecifier(importSpecifier) &&
+    NODE_MODULE_SPECIFIERS.has(importSpecifier.value)
+  ) {
+    return 'node-module-namespace';
+  }
+
+  if (['CallExpression', 'OptionalCallExpression'].includes(value.type)) {
+    if (
+      isNativeRequireIdentifier(value.callee, scope) &&
+      isLiteralModuleSpecifier(value.arguments?.[0]) &&
+      NODE_MODULE_SPECIFIERS.has(value.arguments[0].value)
+    ) {
+      return 'node-module-namespace';
+    }
+    if (
+      getNativeModuleExpressionKind(value.callee, scope) ===
+      'node-create-require'
+    ) {
+      return 'native-loader';
+    }
+  }
+
+  if (
+    ['MemberExpression', 'OptionalMemberExpression'].includes(value.type) &&
+    getStaticMemberPropertyName(value) === 'createRequire' &&
+    getNativeModuleExpressionKind(value.object, scope) ===
+      'node-module-namespace'
+  ) {
+    return 'node-create-require';
+  }
+  return undefined;
+}
+
+/**
+ * Refine local binding records for common `node:module` namespace aliases and
+ * createRequire-derived loaders. Repeating reaches aliases declared before
+ * their source binding without requiring execution-order assumptions.
+ * @param {Record<string, any>} ast - Babel file AST.
+ * @param {WeakMap<Record<string, any>, JavaScriptScope>} scopeByNode - Scope index.
+ */
+function classifyNativeModuleBindings(ast, scopeByNode) {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    walkJavaScriptAst(ast, (node) => {
+      if (node.type !== 'VariableDeclarator' || !node.init) return;
+      const scope = scopeByNode.get(node);
+      if (!scope) return;
+      const initializerKind = getNativeModuleExpressionKind(node.init, scope);
+      if (node.id?.type === 'Identifier' && initializerKind) {
+        const binding = resolveJavaScriptBinding(scope, node.id.name);
+        if (binding && binding.kind !== initializerKind) {
+          binding.kind = initializerKind;
+          changed = true;
+        }
+        return;
+      }
+      if (
+        node.id?.type !== 'ObjectPattern' ||
+        initializerKind !== 'node-module-namespace'
+      ) {
+        return;
+      }
+      for (const property of node.id.properties || []) {
+        if (
+          property.type !== 'ObjectProperty' ||
+          (property.key?.name !== 'createRequire' &&
+            property.key?.value !== 'createRequire')
+        ) {
+          continue;
+        }
+        const localName =
+          property.value?.type === 'Identifier'
+            ? property.value.name
+            : property.value?.left?.name;
+        if (!localName) continue;
+        const binding = resolveJavaScriptBinding(scope, localName);
+        if (binding && binding.kind !== 'node-create-require') {
+          binding.kind = 'node-create-require';
+          changed = true;
+        }
+      }
+    });
+  }
+}
+
+/**
+ * @typedef NativeModuleViolation
+ * @property {Record<string, any>} node - Offending AST node.
+ * @property {string} message - Actionable explanation.
+ */
+
+/**
+ * @param {Record<string, any>} ast - Babel file AST.
+ * @returns {NativeModuleViolation | undefined} - First unsupported loader use.
+ */
+function findNativeModuleViolation(ast) {
+  const { scopeByNode } = indexJavaScriptScopes(ast);
+  classifyNativeModuleBindings(ast, scopeByNode);
+  /** @type {NativeModuleViolation[]} */
+  const violations = [];
+
+  walkJavaScriptAst(ast, (node, parent) => {
+    const scope = scopeByNode.get(node);
+    if (!scope) return;
+
+    if (node.type === 'ImportDeclaration') {
+      const isNodeModule =
+        node.source?.type === 'StringLiteral' &&
+        NODE_MODULE_SPECIFIERS.has(node.source.value);
+      if (!isNodeModule) return;
+      const createRequireSpecifier = (node.specifiers || []).find(
+        (/** @type {Record<string, any>} */ specifier) =>
+          specifier.type === 'ImportSpecifier' &&
+          (specifier.imported?.name === 'createRequire' ||
+            specifier.imported?.value === 'createRequire'),
+      );
+      if (createRequireSpecifier) {
+        violations.push({
+          node: createRequireSpecifier,
+          message:
+            "imports createRequire from 'node:module', which creates a loader outside Wharfie's statically audited module graph. Use direct import('literal') or require('literal') calls instead.",
+        });
+      }
+      return;
+    }
+
+    if (
+      node.type === 'VariableDeclarator' &&
+      node.id?.type === 'ObjectPattern'
+    ) {
+      if (
+        getNativeModuleExpressionKind(node.init, scope) !==
+        'node-module-namespace'
+      ) {
+        return;
+      }
+      const createRequireProperty = (node.id.properties || []).find(
+        (/** @type {Record<string, any>} */ property) =>
+          property.type === 'ObjectProperty' &&
+          (property.key?.name === 'createRequire' ||
+            property.key?.value === 'createRequire'),
+      );
+      if (createRequireProperty) {
+        violations.push({
+          node: createRequireProperty,
+          message:
+            "extracts createRequire from 'node:module', which creates a loader outside Wharfie's statically audited module graph. Use direct import('literal') or require('literal') calls instead.",
+        });
+      }
+      return;
+    }
+
+    const dynamicImportSpecifier = getDynamicImportSpecifier(node);
+    if (
+      dynamicImportSpecifier &&
+      !isLiteralModuleSpecifier(dynamicImportSpecifier)
+    ) {
+      violations.push({
+        node,
+        message:
+          'uses a runtime-computed import() module specifier. Use a quoted string literal so Wharfie can include the edge in the immutable module graph.',
+      });
+      return;
+    }
+
+    if (isNativeRequireIdentifier(node, scope)) {
+      const isDirectCall =
+        ['CallExpression', 'OptionalCallExpression'].includes(parent?.type) &&
+        unwrapJavaScriptExpression(parent?.callee) === node;
+      const isResolveObject =
+        ['MemberExpression', 'OptionalMemberExpression'].includes(
+          parent?.type,
+        ) &&
+        unwrapJavaScriptExpression(parent?.object) === node &&
+        getStaticMemberPropertyName(parent) === 'resolve';
+      if (!isDirectCall && !isResolveObject) {
+        violations.push({
+          node,
+          message:
+            "references Node's native require as a value, which could create a loader outside Wharfie's statically audited module graph. Call require('literal') directly instead.",
+        });
+        return;
+      }
+    }
+
+    if (!['CallExpression', 'OptionalCallExpression'].includes(node.type)) {
+      if (
+        !['MemberExpression', 'OptionalMemberExpression'].includes(node.type)
+      ) {
+        return;
+      }
+      const propertyName = getStaticMemberPropertyName(node);
+      const object = unwrapJavaScriptExpression(node.object);
+      if (
+        getNativeModuleExpressionKind(node, scope) === 'node-create-require'
+      ) {
+        violations.push({
+          node,
+          message:
+            "accesses createRequire from 'node:module', which creates a loader outside Wharfie's statically audited module graph. Use direct import('literal') or require('literal') calls instead.",
+        });
+        return;
+      }
+      if (
+        propertyName === 'resolve' &&
+        (isNativeRequireIdentifier(object, scope) ||
+          getNativeModuleExpressionKind(object, scope) === 'native-loader')
+      ) {
+        violations.push({
+          node,
+          message:
+            "accesses require.resolve, which is outside Wharfie's statically audited module graph. Import the module directly with import('literal') or require('literal').",
+        });
+        return;
+      }
+      if (
+        propertyName === 'require' &&
+        object?.type === 'Identifier' &&
+        object.name === 'module' &&
+        !resolveJavaScriptBinding(scope, object.name)
+      ) {
+        violations.push({
+          node,
+          message:
+            "accesses module.require, which is outside Wharfie's statically audited module graph. Import the module directly with import('literal') or require('literal').",
+        });
+        return;
+      }
+      if (propertyName === 'resolve' && isImportMetaExpression(object)) {
+        violations.push({
+          node,
+          message:
+            "accesses import.meta.resolve, which is outside Wharfie's statically audited module graph. Import the module directly with import('literal') or require('literal').",
+        });
+      }
+      return;
+    }
+
+    const callee = unwrapJavaScriptExpression(node.callee);
+    if (isNativeRequireIdentifier(callee, scope)) {
+      if (!isLiteralModuleSpecifier(node.arguments?.[0])) {
+        violations.push({
+          node,
+          message:
+            'uses a runtime-computed require() module specifier. Use a quoted string literal so Wharfie can include the edge in the immutable module graph.',
+        });
+      }
+      return;
+    }
+
+    if (
+      getNativeModuleExpressionKind(callee, scope) === 'node-create-require'
+    ) {
+      violations.push({
+        node,
+        message:
+          "calls createRequire from 'node:module', which creates a loader outside Wharfie's statically audited module graph. Use direct import('literal') or require('literal') calls instead.",
+      });
+      return;
+    }
+    if (getNativeModuleExpressionKind(callee, scope) === 'native-loader') {
+      violations.push({
+        node,
+        message:
+          "calls a createRequire loader outside Wharfie's statically audited module graph. Use direct import('literal') or require('literal') calls instead.",
+      });
+      return;
+    }
+
+    if (
+      !callee ||
+      !['MemberExpression', 'OptionalMemberExpression'].includes(callee.type)
+    ) {
+      return;
+    }
+    const propertyName = getStaticMemberPropertyName(callee);
+    const object = unwrapJavaScriptExpression(callee.object);
+    if (
+      propertyName === 'resolve' &&
+      (isNativeRequireIdentifier(object, scope) ||
+        getNativeModuleExpressionKind(object, scope) === 'native-loader')
+    ) {
+      violations.push({
+        node,
+        message:
+          "uses require.resolve(), which is outside Wharfie's statically audited module graph. Import the module directly with import('literal') or require('literal').",
+      });
+      return;
+    }
+    if (
+      propertyName === 'require' &&
+      object?.type === 'Identifier' &&
+      object.name === 'module' &&
+      !resolveJavaScriptBinding(scope, object.name)
+    ) {
+      violations.push({
+        node,
+        message:
+          "uses module.require(), which is outside Wharfie's statically audited module graph. Import the module directly with import('literal') or require('literal').",
+      });
+      return;
+    }
+    if (propertyName === 'resolve' && isImportMetaExpression(object)) {
+      violations.push({
+        node,
+        message:
+          "uses import.meta.resolve(), which is outside Wharfie's statically audited module graph. Import the module directly with import('literal') or require('literal').",
+      });
+    }
+  });
+
+  violations.sort(
+    (left, right) =>
+      Number(left.node.start || 0) - Number(right.node.start || 0),
+  );
+  return violations[0];
+}
+
+/**
+ * @param {string} logicalPath - Snapshot-relative source path.
+ * @returns {boolean} - Whether esbuild treats the input as JS/TS source.
+ */
+function isJavaScriptSourcePath(logicalPath) {
+  const extension = path.posix.extname(logicalPath).toLowerCase();
+  return extension === '' || JAVASCRIPT_SOURCE_EXTENSIONS.has(extension);
+}
+
+/**
+ * Reject native module loading forms that esbuild cannot represent in the
+ * immutable input graph.
+ * @param {string} absolutePath - Snapshotted source file.
+ * @param {string} logicalPath - Snapshot-relative source path.
+ * @returns {Promise<void>}
+ */
+async function auditPortableJavaScriptSource(absolutePath, logicalPath) {
+  if (!isJavaScriptSourcePath(logicalPath)) return;
+  const source = (
+    await readStableRegularFile(
+      absolutePath,
+      `Behavior source '${logicalPath}'`,
+    )
+  ).toString('utf8');
+  const extension = path.posix.extname(logicalPath).toLowerCase();
+  /** @type {import('@babel/parser').ParserPlugin[]} */
+  const plugins = [
+    'decoratorAutoAccessors',
+    'decorators',
+    'explicitResourceManagement',
+    'importAttributes',
+  ];
+  if (extension === '.jsx' || extension === '.tsx') plugins.push('jsx');
+  if (['.cts', '.mts', '.ts', '.tsx'].includes(extension)) {
+    plugins.push('typescript');
+  }
+  let ast;
+  try {
+    ast = parseJavaScript(source, {
+      allowAwaitOutsideFunction: true,
+      allowReturnOutsideFunction: true,
+      plugins,
+      sourceFilename: logicalPath,
+      sourceType: 'unambiguous',
+    });
+  } catch (error) {
+    const line = Number(
+      error && typeof error === 'object' && 'loc' in error
+        ? /** @type {{loc?: {line?: number}}} */ (error).loc?.line || 1
+        : 1,
+    );
+    const column =
+      Number(
+        error && typeof error === 'object' && 'loc' in error
+          ? /** @type {{loc?: {column?: number}}} */ (error).loc?.column || 0
+          : 0,
+      ) + 1;
+    const message = error instanceof Error ? error.message : String(error);
+    throw new TypeError(
+      `Behavior source '${logicalPath}:${line}:${column}' could not be parsed for portable module auditing: ${message}`,
+    );
+  }
+
+  const violation = findNativeModuleViolation(ast);
+  if (!violation) return;
+  const line = Number(violation.node.loc?.start?.line || 1);
+  const column = Number(violation.node.loc?.start?.column || 0) + 1;
+  throw new TypeError(
+    `Behavior source '${logicalPath}:${line}:${column}' ${violation.message}`,
+  );
+}
+
+/**
  * Audit the complete statically bundled module graph. Every bundled input must
  * come from the immutable app snapshot; Wharfie and declared target externals
  * remain external to this graph and are locked by other revision inputs.
@@ -447,6 +1202,7 @@ async function copyBehaviorTree(sourceRoot, destinationRoot, excludedPaths) {
  * @returns {Promise<void>}
  */
 async function auditBehaviorModuleGraph(snapshotAppDir, manifest) {
+  const auditedSourcePaths = new Set();
   for (const entrypoint of getBehaviorEntrypoints(manifest)) {
     let result;
     try {
@@ -473,7 +1229,10 @@ async function auditBehaviorModuleGraph(snapshotAppDir, manifest) {
         `${entrypoint.valuePath} module graph did not produce esbuild metadata.`,
       );
     }
-    for (const inputPath of Object.keys(result.metafile.inputs)) {
+    const inputPaths = Object.keys(result.metafile.inputs).sort((left, right) =>
+      compareCanonicalStrings(left, right),
+    );
+    for (const inputPath of inputPaths) {
       if (inputPath.startsWith('<')) continue;
       const absoluteInputPath = path.resolve(snapshotAppDir, inputPath);
       if (!isWithin(snapshotAppDir, absoluteInputPath)) {
@@ -481,6 +1240,12 @@ async function auditBehaviorModuleGraph(snapshotAppDir, manifest) {
           `${entrypoint.valuePath} bundles '${inputPath}' from outside the immutable app snapshot. Keep local modules inside the app, declare activity packages in externalPackages, and import Wharfie through '${WHARFIE_PACKAGE_NAME}/app'.`,
         );
       }
+      const logicalPath = toLogicalPath(
+        path.relative(snapshotAppDir, absoluteInputPath),
+      );
+      if (auditedSourcePaths.has(logicalPath)) continue;
+      auditedSourcePaths.add(logicalPath);
+      await auditPortableJavaScriptSource(absoluteInputPath, logicalPath);
     }
   }
 }

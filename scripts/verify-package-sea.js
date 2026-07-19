@@ -1423,7 +1423,7 @@ async function createInstalledExecutionLedgerFixture(options) {
  * Assert the effect/history surface has one exact public shape and contains no
  * retained destination or logical-request material.
  * @param {string} serialized - Exact CLI JSON output.
- * @param {{runId: string, storeId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}} fixture - Seeded retained effect set.
+ * @param {{runId: string, storeId: string, effects: {effectId: string, destinationEffectId: string, requestKey: string}[], secrets: string[]}} fixture - Seeded retained effect set.
  * @param {Record<string, any>} view - Parsed operator view.
  * @param {{adapter: Record<string, any>, statuses: Map<string, string>}} expected - Public effect rows.
  */
@@ -4068,7 +4068,8 @@ async function verifyRelocatedSeaEffectReconciliationCrashMatrix(options) {
     env: environment,
   });
   assert.equal(
-    unavailableNode.error?.code,
+    /** @type {NodeJS.ErrnoException | undefined} */ (unavailableNode.error)
+      ?.code,
     'ENOENT',
     'Effect reconciliation matrix unexpectedly exposes a Node executable',
   );
@@ -5657,11 +5658,8 @@ function assertSeaSuccessorDestination(
 }
 
 /**
- * Prove the internal successor executor preserves its dedicated lifecycle
- * across every durable publication and transaction boundary. A test-harness
- * environment gate adds an unsupported hidden packaged-operator fixture alias;
- * it is not an authorization boundary for a trusted operator who controls the
- * SEA environment, and no normal source or packaged CLI mounts it. Every
+ * Prove the public packaged successor command preserves its dedicated
+ * lifecycle across every durable publication and transaction boundary. Every
  * execution is the relocated SEA with Node absent from PATH; host-side imports
  * only seed and independently read durable truth.
  * @param {{artifactPath: string, appId: string, cleanEnvironment: Record<string, string>, installedPackageRoot: string, revisionId: string, root: string}} options - Matrix inputs.
@@ -5706,7 +5704,6 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
         WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
         WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
         WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
-        WHARFIE_TEST_SEA_SUCCESSOR_FIXTURE: '1',
       };
       const fixture = await createInstalledExecutionLedgerFixture({
         installedPackageRoot: options.installedPackageRoot,
@@ -5722,9 +5719,9 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
         tableName,
         appId: options.appId,
       });
-      // The hidden packaged-operator fixture uses the same source-free command
-      // body as the future public surface, so setup, execution, recovery, and
-      // reconciliation must never enter authored app CLI or activity dispatch.
+      // The packaged operator is source-free, so setup, execution, recovery,
+      // and reconciliation must never enter authored app CLI or activity
+      // dispatch.
       const operatorForbiddenTargets = [
         {
           name: 'authored-activity-dispatch',
@@ -5745,7 +5742,9 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
           env: environment,
         });
         assert.equal(
-          unavailableNode.error?.code,
+          /** @type {NodeJS.ErrnoException | undefined} */ (
+            unavailableNode.error
+          )?.code,
           'ENOENT',
           `${scenario.label} unexpectedly exposes Node on PATH`,
         );
@@ -5908,7 +5907,7 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
 
         const retryArgs = [
           'wharfie',
-          '__sea-successor-fixture',
+          'retry-effect',
           '--run-id',
           batch.runId,
           '--effect-id',
@@ -7122,7 +7121,8 @@ export default defineApp({
     env: cleanEnvironment,
   });
   assert.equal(
-    unavailableNode.error?.code,
+    /** @type {NodeJS.ErrnoException | undefined} */ (unavailableNode.error)
+      ?.code,
     'ENOENT',
     'Clean SEA smoke environment unexpectedly exposes a Node executable',
   );
@@ -7131,10 +7131,10 @@ export default defineApp({
     capture: true,
     env: cleanEnvironment,
   }).stdout;
-  assert.doesNotMatch(operatorHelp, /\bretry-effect\b/);
-  const hiddenSuccessorFixtureWithoutGate = spawnSync(
+  assert.match(operatorHelp, /\bretry-effect\b/);
+  const retryEffectHelp = spawnSync(
     cleanArtifactPath,
-    ['wharfie', '__sea-successor-fixture'],
+    ['wharfie', 'retry-effect', '--help'],
     {
       cwd: cleanRunDirectory,
       encoding: 'utf8',
@@ -7142,12 +7142,22 @@ export default defineApp({
       maxBuffer: 20 * 1024 * 1024,
     },
   );
-  if (hiddenSuccessorFixtureWithoutGate.error) {
-    throw hiddenSuccessorFixtureWithoutGate.error;
+  if (retryEffectHelp.error) {
+    throw retryEffectHelp.error;
   }
-  assert.equal(hiddenSuccessorFixtureWithoutGate.signal, null);
-  assert.equal(hiddenSuccessorFixtureWithoutGate.status, 1);
-  assert.match(hiddenSuccessorFixtureWithoutGate.stderr, /unknown command/i);
+  assert.equal(retryEffectHelp.signal, null);
+  assert.equal(retryEffectHelp.status, 0);
+  for (const option of [
+    '--run-id',
+    '--effect-id',
+    '--successor-id',
+    '--confirm-runner-stopped',
+  ]) {
+    assert.match(
+      retryEffectHelp.stdout,
+      new RegExp(`\\b${option.slice(2)}\\b`),
+    );
+  }
   const generatedResult = JSON.parse(
     runCommand(cleanArtifactPath, ['greet', 'packaged-user'], {
       cwd: cleanRunDirectory,
@@ -8373,7 +8383,7 @@ export default defineApp({
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary hidden-fixture relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();

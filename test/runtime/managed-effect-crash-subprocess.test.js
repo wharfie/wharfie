@@ -335,7 +335,7 @@ async function waitForChildExit(exitPromise, boundary) {
   try {
     return await Promise.race([
       exitPromise,
-      new Promise((_, reject) => {
+      new Promise((_resolve, reject) => {
         timer = setTimeout(() => {
           reject(
             new Error(

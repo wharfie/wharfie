@@ -24,7 +24,7 @@ manifest identifies the developer-owned CLI, named activities, and package
 targets. Its default export must be a plain object using the exact v2
 schema; unknown or malformed fields are errors. Wharfie does not require a
 generated project tree. See [Application
-Structure](./project-structure) for a minimal layout. The
+Structure](./application-structure.md) for a minimal layout. The
 `@wharfie/wharfie/app` subpath ships TypeScript declarations for the manifest
 helper and activity invocation API.
 
@@ -218,22 +218,31 @@ resulting status, and `changed` flag; requests, values, destinations, store
 identity, receipts, finalizations, evidence, private reason text, and fencing
 material remain hidden.
 
-The causally linked successor implementation remains internal pending final
-public-surface review. It accepts only an exact retained application-state V2
-effect after a verified permanent `NOT_APPLIED` decision, creates fresh run,
-invocation, attempt, effect, destination, and fence identities, and uses a
-dedicated effect-only lifecycle.
+After an exact application-state V2 effect has been verified permanently
+`NOT_APPLIED`, a trusted local operator can authorize and run its one finite
+causally linked successor:
 
-Internally, it never redispatches the abandoned authored activity. The source
-remains `BLOCKED` / `UNCERTAIN` even when the target completes.
+```sh
+wharfie ops retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped
+```
 
-The internal hidden-fixture relocated-SEA crash/recovery matrix passes in this
-V9 worktree. It is not a public support claim; public command mounts and
-source/package parity proof remain pending.
+The packaged equivalent is:
 
-For now, no public successor operation is available pending final surface
-review. The eventual finite destination policy is not generic handler retry or
-compensation.
+```sh
+<app> wharfie retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped
+```
+
+Both forms accept an optional private `--reason <text>` and redacted `--json`
+output. Reuse the exact source run, effect, successor ID, actor, and reason
+after a lost response. Exact replay returns or advances the one retained target;
+it cannot authorize a sibling or enter an already-started adapter again.
+
+The successor receives fresh run, invocation, attempt, effect, destination,
+and fence identities through a dedicated effect-only lifecycle. It never
+redispatches the abandoned authored activity, and the source remains `BLOCKED`
+/ `UNCERTAIN` even when the target completes. This is only the finite
+application-state V2 `put-if-absent` retry policy; it is not generic handler
+retry or compensation.
 
 Inspection opens existing control state read-only and never creates missing
 state. Recovery is deliberately explicit: use it only after confirming every

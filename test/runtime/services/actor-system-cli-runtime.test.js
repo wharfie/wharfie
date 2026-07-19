@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 const ACTOR_SYSTEM_CLI_IMPORT =
   '../../../src/core/resources/builds/actor-system-cli/index.js';
+const SOURCE_OPS_CLI_IMPORT = '../../../src/cli/cmds/ops.js';
 const PACKAGED_APP_ENTRY_IMPORT =
   '../../../src/core/resources/builds/packaged-app-entry.js';
 
@@ -16,7 +17,6 @@ function clearRuntimeEnvironment() {
   delete process.env.WHARFIE_BOOTSTRAP_ARGS;
   delete process.env.WHARFIE_RUNTIME_COMMAND;
   delete process.env.WHARFIE_RUNTIME_ARGS;
-  delete process.env.WHARFIE_TEST_SEA_SUCCESSOR_FIXTURE;
 }
 
 afterEach(() => {
@@ -72,7 +72,7 @@ describe('packaged application dispatch', () => {
     expect(help).toContain('recover');
     expect(help).toContain('reconcile');
     expect(help).toContain('reconcile-effect');
-    expect(help).not.toContain('retry-effect');
+    expect(help).toContain('retry-effect');
     expect(help).toContain('cancel');
     expect(help).not.toMatch(/\blist\b/);
     expect(help).not.toMatch(/\bfunc\b/);
@@ -80,41 +80,35 @@ describe('packaged application dispatch', () => {
     expect(help).not.toMatch(/\bctl\b/);
   });
 
-  it('keeps successor commands unmounted until their SEA proof gates pass', async () => {
+  it('mounts the same public retry-effect command in source and packaged parents', async () => {
     const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
-    for (const commandName of ['retry-effect', '__sea-successor-fixture']) {
-      /** @type {string[]} */
-      const errors = [];
-      const program = createProgram();
-      /** @param {string} message */
-      const writeErr = (message) => errors.push(message);
-      program.configureOutput({
-        writeErr,
-      });
-      program.exitOverride();
+    const { default: sourceOps } = await import(SOURCE_OPS_CLI_IMPORT);
+    const packaged = createProgram();
+    const sourceRetry = sourceOps.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'retry-effect',
+    );
+    const packagedRetry = packaged.commands.find(
+      /** @param {import('commander').Command} command */
+      (command) => command.name() === 'retry-effect',
+    );
 
-      await expect(
-        program.parseAsync(['node', 'wharfie-artifact', commandName], {
-          from: 'node',
-        }),
-      ).rejects.toMatchObject({ code: 'commander.unknownCommand' });
-      expect(errors.join('')).toMatch(/unknown command/i);
-    }
-  });
-
-  it('enables only a hidden SEA fixture alias when the verifier opts in', async () => {
-    const { createProgram } = await import(ACTOR_SYSTEM_CLI_IMPORT);
-    process.env.WHARFIE_TEST_SEA_SUCCESSOR_FIXTURE = '1';
-
-    const program = createProgram();
+    expect(sourceRetry).toBeDefined();
+    expect(packagedRetry).toBeDefined();
+    expect(packagedRetry?.description()).toBe(sourceRetry?.description());
     expect(
-      program.commands.map(
-        /** @param {import('commander').Command} command */
-        (command) => command.name(),
+      packagedRetry?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.flags,
       ),
-    ).toContain('__sea-successor-fixture');
-    expect(program.helpInformation()).not.toContain('__sea-successor-fixture');
-    expect(program.helpInformation()).not.toContain('retry-effect');
+    ).toEqual(
+      sourceRetry?.options.map(
+        /** @param {import('commander').Option} option */
+        (option) => option.flags,
+      ),
+    );
+    expect(sourceOps.helpInformation()).toContain('retry-effect');
+    expect(packaged.helpInformation()).toContain('retry-effect');
   });
 
   it('honors the private ledger-service runtime command and arguments', async () => {

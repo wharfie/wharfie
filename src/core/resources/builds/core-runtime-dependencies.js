@@ -1,10 +1,9 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { c } from 'tar';
-import { v4 } from 'uuid';
 import { buffer as streamToBuffer } from 'node:stream/consumers';
 
 import paths from '../../lib/paths.js';
@@ -145,7 +144,7 @@ class CoreRuntimeDependenciesResource extends BuildResource {
     );
     const assetDirectory = join(
       CoreRuntimeDependenciesResource.BUILD_DIR,
-      `core-runtime-dependencies-${v4()}`,
+      `core-runtime-dependencies-${randomUUID()}`,
     );
     await fsp.mkdir(assetDirectory, { recursive: true, mode: 0o700 });
     await fsp.chmod(assetDirectory, 0o700);

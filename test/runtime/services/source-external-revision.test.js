@@ -85,8 +85,6 @@ class MockFunctionResource {
 }
 
 class MockWharfieFunction {
-  constructor() {}
-
   /**
    * @param {string} name
    * @param {any} bundle

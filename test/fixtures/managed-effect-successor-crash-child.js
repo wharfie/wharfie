@@ -48,24 +48,36 @@ function parseOptions() {
   return options;
 }
 
+/**
+ * @param {unknown} message - IPC payload.
+ * @returns {Promise<void>} - Resolves after Node accepts the payload.
+ */
 async function send(message) {
   if (typeof process.send !== 'function') {
     throw new Error('Successor crash child requires a Node IPC channel.');
   }
   const ipcSend = process.send.bind(process);
-  await new Promise((resolve, reject) => {
+  /** @type {Promise<void>} */
+  const delivered = new Promise((resolve, reject) => {
     ipcSend(message, undefined, undefined, (error) => {
       if (error) reject(error);
       else resolve();
     });
   });
+  await delivered;
 }
 
+/** @returns {void} - Blocks until the process is killed. */
 function waitForever() {
   const word = new Int32Array(new SharedArrayBuffer(4));
   Atomics.wait(word, 0, 0);
 }
 
+/**
+ * @param {string} filePath - Durable marker file.
+ * @param {string} destinationEffectId - Entered destination identity.
+ * @returns {void} - Writes one durable marker.
+ */
 function recordAdapterEntry(filePath, destinationEffectId) {
   const handle = openSync(filePath, 'a', 0o600);
   try {
@@ -88,6 +100,7 @@ async function main() {
     sessionRoot: options.control.sessionPath,
   });
   let reached = false;
+  /** @type {(boundary: string, detail?: Record<string, unknown>) => Promise<void>} */
   const reach = async (boundary, detail = {}) => {
     if (boundary !== options.boundary || reached) return;
     reached = true;
@@ -122,6 +135,7 @@ async function main() {
     });
     const controlledLedger = {
       ...ledger,
+      /** @param {Parameters<typeof ledger.startManagedEffectSuccessor>[0]} input */
       async startManagedEffectSuccessor(input) {
         const result = await ledger.startManagedEffectSuccessor(input);
         await reach(Boundary.START, {
@@ -131,6 +145,7 @@ async function main() {
         });
         return result;
       },
+      /** @param {Parameters<typeof ledger.commitManagedEffectSuccessorOutcome>[0]} input */
       async commitManagedEffectSuccessorOutcome(input) {
         const result = await ledger.commitManagedEffectSuccessorOutcome(input);
         await reach(Boundary.TERMINAL, {
@@ -142,10 +157,12 @@ async function main() {
     };
     const controlledCatalog = {
       ...catalog,
+      /** @param {Parameters<typeof catalog.resolve>[0]} frame */
       resolve(frame) {
         const adapter = catalog.resolve(frame);
         return Object.freeze({
           ...adapter,
+          /** @param {Parameters<typeof adapter.execute>[0]} input */
           async execute(input) {
             const outcome = await adapter.execute(input);
             recordAdapterEntry(

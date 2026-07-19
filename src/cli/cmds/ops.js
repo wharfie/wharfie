@@ -8,6 +8,7 @@ const {
   recoverCommand,
   reconcileCommand,
   reconcileEffectCommand,
+  retryEffectCommand,
   cancelCommand,
 } = createExecutionLedgerOperatorCommands();
 
@@ -17,6 +18,7 @@ const opsCommand = new Command('ops')
   .addCommand(recoverCommand)
   .addCommand(reconcileCommand)
   .addCommand(reconcileEffectCommand)
+  .addCommand(retryEffectCommand)
   .addCommand(cancelCommand)
   .addCommand(runCommand);
 

@@ -27,7 +27,6 @@ import {
 import { createLocalExecutionPayloadStore } from '../../src/core/lib/payload-store/local.js';
 import {
   getAttemptProjectionSortKey,
-  getEffectProjectionSortKey,
   getEventSortKey,
   getInvocationProjectionSortKey,
   getRunProjectionSortKey,
