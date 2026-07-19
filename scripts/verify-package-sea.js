@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   chmodSync,
   copyFileSync,
@@ -7,6 +7,9 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
+  realpathSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -23,6 +26,10 @@ import {
   REPO_ROOT,
   runCommand,
 } from './package-verification.js';
+import {
+  attachSeaInspector,
+  spawnInspectorPausedProcess,
+} from './sea-inspector.js';
 
 const RESIDENT_SERVICE_TIMEOUT_MS = 20_000;
 const RESIDENT_SERVICE_POLL_INTERVAL_MS = 50;
@@ -30,6 +37,173 @@ const CRASH_RECOVERY_TIMEOUT_MS = 60_000;
 const CRASH_RECOVERY_POLL_INTERVAL_MS = 100;
 const CRASH_RECOVERY_MIN_RESPONSE_BYTES = 512 * 1024;
 const CRASH_RECOVERY_TERMINAL_PADDING_EFFECTS = 20;
+const SEA_CRASH_EFFECT_ID = 'persist-portable-state';
+const SEA_CRASH_ADAPTER_BREAKPOINT = Object.freeze({
+  sourceSuffix: 'src/core/runtime/effects/builtin-catalog.js',
+  anchor: 'assertOptionalAbortSignal(input.signal);',
+});
+const SEA_CRASH_CASES = Object.freeze([
+  {
+    boundary: 'request-payload-published',
+    label: 'managed-effect request payload publication',
+    breakpoint: {
+      sourceSuffix: 'src/core/lib/db/tables/execution-ledger.js',
+      anchor:
+        "const requestDigest = createTransitionRequestDigest('effect-requested', {",
+      occurrence: 2,
+    },
+    runVersion: 3,
+    effectBefore: null,
+    effectVersionBefore: null,
+    effectAfter: null,
+    effectVersionAfter: null,
+    recoveryAction: 'marked-started-uncertain',
+    managedAction: null,
+    adapterEntries: 0,
+    destinationState: false,
+    orphanPayloadsBefore: 1,
+    orphanPayloadsAfter: 1,
+    eventEffects: [],
+  },
+  {
+    boundary: 'request-transaction-committed',
+    label: 'managed-effect request transaction',
+    breakpoint: {
+      sourceSuffix: 'src/core/runtime/managed-effect.js',
+      anchor: 'delivery = delivery ?? (await readDelivery());',
+    },
+    runVersion: 4,
+    effectBefore: 'PENDING',
+    effectVersionBefore: 1,
+    effectAfter: 'CANCELLED',
+    effectVersionAfter: 2,
+    recoveryAction: 'settled-managed-effect-set',
+    managedAction: 'cancelled-before-start',
+    adapterEntries: 0,
+    destinationState: false,
+    orphanPayloadsBefore: 0,
+    orphanPayloadsAfter: 0,
+    eventEffects: [{ effectId: SEA_CRASH_EFFECT_ID, status: 'CANCELLED' }],
+  },
+  {
+    boundary: 'start-transaction-committed',
+    label: 'managed-effect start transaction',
+    breakpoint: {
+      sourceSuffix: 'src/core/runtime/managed-effect.js',
+      anchor: 'outcome = await adapter.execute({',
+    },
+    runVersion: 5,
+    effectBefore: 'STARTED',
+    effectVersionBefore: 2,
+    effectAfter: 'UNCERTAIN',
+    effectVersionAfter: 3,
+    recoveryAction: 'settled-managed-effect-set',
+    managedAction: 'outcome-uncertain',
+    adapterEntries: 0,
+    destinationState: false,
+    orphanPayloadsBefore: 0,
+    orphanPayloadsAfter: 0,
+    eventEffects: [{ effectId: SEA_CRASH_EFFECT_ID, status: 'UNCERTAIN' }],
+  },
+  {
+    boundary: 'destination-transaction-committed',
+    label: 'application-state destination transaction',
+    breakpoint: {
+      sourceSuffix: 'src/core/runtime/effects/builtin-catalog.js',
+      anchor: 'return createApplicationStateOutcomeFromReceipt(receipt);',
+    },
+    runVersion: 5,
+    effectBefore: 'STARTED',
+    effectVersionBefore: 2,
+    effectAfter: 'COMPLETED',
+    effectVersionAfter: 3,
+    recoveryAction: 'settled-managed-effect-set',
+    managedAction: 'outcome-recovered',
+    adapterEntries: 1,
+    destinationState: true,
+    orphanPayloadsBefore: 0,
+    orphanPayloadsAfter: 0,
+    eventEffects: [{ effectId: SEA_CRASH_EFFECT_ID, status: 'COMPLETED' }],
+  },
+  {
+    boundary: 'outcome-payload-published',
+    label: 'managed-effect outcome payload publication',
+    breakpoint: {
+      sourceSuffix: 'src/core/lib/db/tables/execution-ledger.js',
+      anchor: 'const eventType = candidateOutcome.ok',
+    },
+    runVersion: 5,
+    effectBefore: 'STARTED',
+    effectVersionBefore: 2,
+    effectAfter: 'COMPLETED',
+    effectVersionAfter: 3,
+    recoveryAction: 'settled-managed-effect-set',
+    managedAction: 'outcome-recovered',
+    adapterEntries: 1,
+    destinationState: true,
+    orphanPayloadsBefore: 1,
+    orphanPayloadsAfter: 0,
+    eventEffects: [{ effectId: SEA_CRASH_EFFECT_ID, status: 'COMPLETED' }],
+  },
+  {
+    boundary: 'outcome-ledger-committed',
+    label: 'managed-effect outcome transaction',
+    breakpoint: {
+      sourceSuffix: 'src/core/runtime/managed-effect.js',
+      anchor: 'const terminal = await readDelivery();',
+    },
+    runVersion: 6,
+    effectBefore: 'COMPLETED',
+    effectVersionBefore: 3,
+    effectAfter: 'COMPLETED',
+    effectVersionAfter: 3,
+    recoveryAction: 'marked-started-uncertain',
+    managedAction: null,
+    adapterEntries: 1,
+    destinationState: true,
+    orphanPayloadsBefore: 0,
+    orphanPayloadsAfter: 0,
+    eventEffects: [],
+  },
+  {
+    boundary: 'host-effect-response-accepted',
+    label: 'host effect response before worker delivery',
+    breakpoint: {
+      sourceSuffix: 'src/core/lib/code-execution/worker.js',
+      anchor: 'attempt.effectRequests.delete(effectId);',
+      occurrence: 1,
+    },
+    runVersion: 6,
+    effectBefore: 'COMPLETED',
+    effectVersionBefore: 3,
+    effectAfter: 'COMPLETED',
+    effectVersionAfter: 3,
+    recoveryAction: 'marked-started-uncertain',
+    managedAction: null,
+    adapterEntries: 1,
+    destinationState: true,
+    orphanPayloadsBefore: 0,
+    orphanPayloadsAfter: 0,
+    eventEffects: [],
+  },
+  {
+    boundary: 'user-continuation-fsynced',
+    label: 'authored user continuation after effect delivery',
+    breakpoint: null,
+    runVersion: 6,
+    effectBefore: 'COMPLETED',
+    effectVersionBefore: 3,
+    effectAfter: 'COMPLETED',
+    effectVersionAfter: 3,
+    recoveryAction: 'marked-started-uncertain',
+    managedAction: null,
+    adapterEntries: 1,
+    destinationState: true,
+    orphanPayloadsBefore: 0,
+    orphanPayloadsAfter: 0,
+    eventEffects: [],
+  },
+]);
 
 /** @typedef {{code: number | null, signal: string | null}} ResidentServiceExit */
 
@@ -345,7 +519,7 @@ async function createInstalledLedgerLifecycleObserver(options) {
  * operator fixtures. The moved SEA still performs every operation under test;
  * this host helper only prepares independently verifiable durable state.
  * @param {{installedPackageRoot: string, controlPath: string, tableName: string, payloadPath: string, applicationStatePath: string, revisionId: string}} options - Installed-package fixture inputs.
- * @returns {Promise<{createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readRun: (runId: string) => Promise<Record<string, any> | null>, ApplicationStateAdapterDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
+ * @returns {Promise<{createDestinationEffectId: (appId: string, runId: string, effectId: string) => string, createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, business: Record<string, any> | null}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readManagedEffectDelivery: (runId: string, effectId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, ApplicationStateAdapterDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
  */
 async function createInstalledExecutionLedgerFixture(options) {
   const installedModule = async (/** @type {string} */ relativePath) =>
@@ -358,6 +532,8 @@ async function createInstalledExecutionLedgerFixture(options) {
     payloadModule,
     manualModule,
     dbConfigModule,
+    applicationStateTableModule,
+    ledgerContractModule,
     applicationStateEffectModule,
     builtinCatalogModule,
   ] = await Promise.all([
@@ -366,6 +542,8 @@ async function createInstalledExecutionLedgerFixture(options) {
     installedModule('src/core/lib/payload-store/local.js'),
     installedModule('src/core/runtime/manual-ledger-run.js'),
     installedModule('src/core/lib/config/db.js'),
+    installedModule('src/core/lib/db/tables/application-state.js'),
+    installedModule('src/core/lib/ledger/execution-ledger-contract.js'),
     installedModule('src/core/runtime/effects/application-state.js'),
     installedModule('src/core/runtime/effects/builtin-catalog.js'),
   ]);
@@ -455,6 +633,13 @@ async function createInstalledExecutionLedgerFixture(options) {
     }
   };
   return {
+    createDestinationEffectId: (appId, runId, effectId) =>
+      ledgerContractModule.createManagedEffectDestinationId({
+        appId,
+        runId,
+        invocationId: manualModule.MANUAL_LEDGER_INVOCATION_ID,
+        effectId,
+      }),
     createRunId,
     createClaimedRun: async (appId, idempotencyKey) => {
       const { db, ledger } = openLedger(false);
@@ -653,9 +838,56 @@ async function createInstalledExecutionLedgerFixture(options) {
       (await readApplicationStateReceipts(appId, [destinationEffectId])).get(
         destinationEffectId,
       ) || null,
+    readApplicationStateDestination: async (
+      appId,
+      destinationEffectId,
+      logicalKey,
+    ) => {
+      const applicationDb = await dbConfigModule.createApplicationStateDBClient(
+        'lmdb',
+        { path: options.applicationStatePath, readOnly: true },
+      );
+      try {
+        const catalog =
+          await builtinCatalogModule.createBuiltinManagedEffectRecoveryCatalog({
+            db: applicationDb,
+            appId,
+            adapterName: 'lmdb',
+          });
+        const table = applicationStateTableModule.createApplicationStateTable({
+          db: applicationDb,
+          tableName: dbConfigModule.APPLICATION_STATE_TABLE_NAME,
+        });
+        const receipt = await catalog.readReceipt(destinationEffectId);
+        const businessKey =
+          applicationStateTableModule.createApplicationStateBusinessKey(
+            appId,
+            logicalKey,
+          );
+        const business = await table.readBusinessByPhysicalKey(
+          businessKey.resourceId,
+          businessKey.sortKey,
+        );
+        return { receipt, business };
+      } finally {
+        await applicationDb.close();
+      }
+    },
     readApplicationStateReceipts,
     readExecutionPayload: async (reference) =>
       await createPayloadStore().readJson(reference),
+    readManagedEffectDelivery: async (runId, effectId) => {
+      const { db, ledger } = openLedger(true);
+      try {
+        return await ledger.readManagedEffectDelivery(
+          runId,
+          manualModule.MANUAL_LEDGER_INVOCATION_ID,
+          effectId,
+        );
+      } finally {
+        await db.close();
+      }
+    },
     readRun: async (runId) => {
       const { db, ledger } = openLedger(true);
       try {
@@ -1040,6 +1272,866 @@ async function waitForResidentControlVolume(controlPath, service) {
   );
 }
 
+/**
+ * Enumerate the exact immutable payload files below one local store.
+ * @param {string} root - Payload-store root.
+ * @returns {string[]} - Sorted storage keys relative to the root.
+ */
+function readPhysicalPayloadKeys(root) {
+  if (!existsSync(root)) return [];
+  /** @type {string[]} */
+  const files = [];
+  const visit = (/** @type {string} */ directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const filePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(filePath);
+      } else if (entry.isFile()) {
+        files.push(path.relative(root, filePath).split(path.sep).join('/'));
+      } else {
+        throw new Error(
+          `Execution payload store contains a non-file entry: ${filePath}`,
+        );
+      }
+    }
+  };
+  visit(root);
+  return files.sort();
+}
+
+/**
+ * Collect local content-addressed storage keys reachable from a rebuilt run.
+ * @param {unknown} value - Candidate ledger projection node.
+ * @param {Set<string>} [found] - Recursive accumulator.
+ * @returns {Set<string>} - Reachable storage keys.
+ */
+function collectReachablePayloadKeys(value, found = new Set()) {
+  if (!value || typeof value !== 'object') return found;
+  if (Array.isArray(value)) {
+    for (const item of value) collectReachablePayloadKeys(item, found);
+    return found;
+  }
+  const record = /** @type {Record<string, any>} */ (value);
+  if (
+    record.storage?.kind === 'wharfie.local-content-addressed.v1' &&
+    typeof record.storage.key === 'string'
+  ) {
+    found.add(record.storage.key);
+  }
+  for (const item of Object.values(record)) {
+    collectReachablePayloadKeys(item, found);
+  }
+  return found;
+}
+
+/**
+ * Compare physical immutable files with the references retained by one run.
+ * @param {string} payloadPath - Local payload-store root.
+ * @param {Record<string, any>} run - Verified rebuilt run.
+ * @returns {{physical: string[], reachable: string[], orphans: string[]}} - Exact reachability snapshot.
+ */
+function readPayloadReachability(payloadPath, run) {
+  const physical = readPhysicalPayloadKeys(payloadPath);
+  const reachable = [...collectReachablePayloadKeys(run)].sort();
+  const reachableSet = new Set(reachable);
+  const orphans = physical.filter((key) => !reachableSet.has(key));
+  for (const key of reachable) {
+    assert.ok(
+      physical.includes(key),
+      `Execution ledger references a missing payload file: ${key}`,
+    );
+  }
+  return { physical, reachable, orphans };
+}
+
+/**
+ * Bind a breakpoint to the exact installed source bytes packaged into the SEA.
+ * @param {string} installedPackageRoot - Installed tarball root.
+ * @param {Record<string, any>} target - Original-source anchor.
+ * @returns {Record<string, any>} - Anchor with exact expected sourcesContent.
+ */
+function bindInstalledBreakpointSource(installedPackageRoot, target) {
+  return {
+    ...target,
+    expectedSourceContent: readFileSync(
+      path.join(installedPackageRoot, target.sourceSuffix),
+      'utf8',
+    ),
+  };
+}
+
+/**
+ * Require one pause to name only the expected source breakpoint.
+ * @param {Record<string, any>} pause - Debugger.paused params.
+ * @param {{breakpointId: string, breakpointIds?: string[], name: string}} breakpoint - Expected stop.
+ * @param {string} label - Crash phase label.
+ * @returns {void}
+ */
+function assertExactInspectorPause(pause, breakpoint, label) {
+  const expectedIds = new Set(
+    breakpoint.breakpointIds || [breakpoint.breakpointId],
+  );
+  const hitBreakpoints = pause.hitBreakpoints || [];
+  assert.ok(
+    hitBreakpoints.length > 0 &&
+      hitBreakpoints.every((breakpointId) => expectedIds.has(breakpointId)),
+    `${label} paused outside breakpoint ${breakpoint.name}: ${JSON.stringify(hitBreakpoints)}`,
+  );
+}
+
+/**
+ * Resume an inspected crash run through the adapter guard to its exact target.
+ * The user-continuation case has no target breakpoint; its fsynced authored
+ * marker is the boundary.
+ * @param {Record<string, any>} inspector - Attached inspector.
+ * @param {{getExit: () => ResidentServiceExit | null, getOutput: () => {stdout: string, stderr: string}}} service - Inspected moved SEA.
+ * @param {Record<string, any>} scenario - Crash case.
+ * @param {{breakpointId: string, breakpointIds?: string[], name: string}} adapterBreakpoint - Physical adapter-entry guard.
+ * @param {{breakpointId: string, breakpointIds?: string[], name: string} | null} targetBreakpoint - Exact crash target.
+ * @param {string} markerPath - Authored continuation marker.
+ * @returns {Promise<{adapterEntries: number, marker: Record<string, any> | null}>} - Boundary evidence.
+ */
+async function resumeToSeaCrashBoundary(
+  inspector,
+  service,
+  scenario,
+  adapterBreakpoint,
+  targetBreakpoint,
+  markerPath,
+) {
+  let adapterEntries = 0;
+  await inspector.resume();
+  if (targetBreakpoint) {
+    for (;;) {
+      let pause;
+      try {
+        pause = await inspector.waitForPause();
+      } catch (error) {
+        throw residentServiceError(
+          service,
+          `${scenario.label} did not reach ${JSON.stringify(targetBreakpoint)}; continuation marker present=${existsSync(markerPath)}; inspector error=${error instanceof Error ? error.message : String(error)}.`,
+        );
+      }
+      const hits = pause.hitBreakpoints || [];
+      const adapterIds = new Set(
+        adapterBreakpoint.breakpointIds || [adapterBreakpoint.breakpointId],
+      );
+      if (hits.some((breakpointId) => adapterIds.has(breakpointId))) {
+        assertExactInspectorPause(pause, adapterBreakpoint, scenario.label);
+        adapterEntries += 1;
+        assert.ok(
+          adapterEntries <= scenario.adapterEntries,
+          `${scenario.label} entered the destination adapter too often`,
+        );
+        await inspector.resume();
+        continue;
+      }
+      assertExactInspectorPause(pause, targetBreakpoint, scenario.label);
+      break;
+    }
+  } else {
+    while (adapterEntries < scenario.adapterEntries) {
+      const pause = await inspector.waitForPause();
+      assertExactInspectorPause(pause, adapterBreakpoint, scenario.label);
+      adapterEntries += 1;
+      await inspector.resume();
+    }
+  }
+  assert.equal(
+    adapterEntries,
+    scenario.adapterEntries,
+    `${scenario.label} reached the wrong number of destination adapter entries`,
+  );
+  assert.equal(
+    service.getExit(),
+    null,
+    `${scenario.label} moved SEA exited at its crash boundary`,
+  );
+
+  if (targetBreakpoint) return { adapterEntries, marker: null };
+  const deadline = Date.now() + CRASH_RECOVERY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (service.getExit()) {
+      throw residentServiceError(
+        service,
+        `${scenario.label} exited before its continuation marker was durable.`,
+      );
+    }
+    if (existsSync(markerPath)) {
+      try {
+        return {
+          adapterEntries,
+          marker: JSON.parse(readFileSync(markerPath, 'utf8')),
+        };
+      } catch {
+        // The authored activity fsyncs before returning; retry a partial read.
+      }
+    }
+    await delay(CRASH_RECOVERY_POLL_INTERVAL_MS);
+  }
+  throw residentServiceError(
+    service,
+    `${scenario.label} did not publish its durable continuation marker.`,
+  );
+}
+
+/**
+ * Run a normally terminating moved-SEA JSON command while a source-mapped
+ * breakpoint proves the physical destination adapter is never entered.
+ * @param {string} artifactPath - Relocated standalone SEA.
+ * @param {string[]} args - Packaged command arguments.
+ * @param {{cwd: string, env: Record<string, string>, installedPackageRoot: string, label: string}} options - Guard inputs.
+ * @returns {Promise<{serialized: string, value: Record<string, any>}>} - Exact command response.
+ */
+async function runInspectorGuardedSeaJson(artifactPath, args, options) {
+  const service = spawnInspectorPausedProcess(artifactPath, args, {
+    cwd: options.cwd,
+    env: options.env,
+    timeoutMs: CRASH_RECOVERY_TIMEOUT_MS,
+  });
+  /** @type {Record<string, any> | undefined} */
+  let inspector;
+  try {
+    inspector = await attachSeaInspector(service, {
+      timeoutMs: CRASH_RECOVERY_TIMEOUT_MS,
+    });
+    const adapterBreakpoint = await inspector.setSourceBreakpoint(
+      'destination-adapter-entry',
+      bindInstalledBreakpointSource(
+        options.installedPackageRoot,
+        SEA_CRASH_ADAPTER_BREAKPOINT,
+      ),
+    );
+    const pause = inspector.waitForPause().then(
+      (value) => ({ kind: 'pause', value }),
+      (error) => ({ kind: 'inspector-error', error }),
+    );
+    await inspector.resume();
+    const deadline = Date.now() + CRASH_RECOVERY_TIMEOUT_MS;
+    /** @type {Record<string, any> | undefined} */
+    let value;
+    /** @type {string | undefined} */
+    let serialized;
+    while (Date.now() < deadline) {
+      const next = await Promise.race([
+        pause,
+        delay(CRASH_RECOVERY_POLL_INTERVAL_MS).then(() => ({
+          kind: 'poll',
+        })),
+      ]);
+      if (next.kind === 'pause') {
+        assertExactInspectorPause(next.value, adapterBreakpoint, options.label);
+        throw residentServiceError(
+          service,
+          `${options.label} redispatched the destination adapter.`,
+        );
+      }
+      if (next.kind === 'inspector-error' && !service.getExit()) {
+        throw next.error;
+      }
+      const output = service.getOutput();
+      const candidate = output.stdout.trim();
+      if (candidate) {
+        try {
+          value = JSON.parse(candidate);
+          serialized = candidate;
+          break;
+        } catch {
+          // The complete one-line JSON response has not drained yet.
+        }
+      }
+      if (service.getExit()) {
+        await service.exited;
+        throw residentServiceError(
+          service,
+          `${options.label} exited before returning valid JSON.`,
+        );
+      }
+    }
+    if (!value || serialized === undefined) {
+      throw residentServiceError(
+        service,
+        `${options.label} returned no JSON within ${CRASH_RECOVERY_TIMEOUT_MS}ms.`,
+      );
+    }
+    inspector.close();
+    inspector = undefined;
+    const exited = await waitWithTimeout(
+      service.exited,
+      CRASH_RECOVERY_TIMEOUT_MS,
+      `${options.label} inspector-detached exit`,
+    );
+    assert.deepEqual(
+      exited,
+      { code: 0, signal: null },
+      residentServiceError(service, `${options.label} exited unsuccessfully.`)
+        .message,
+    );
+    return { serialized, value };
+  } finally {
+    inspector?.close();
+    await stopResidentServiceForCleanup(service);
+  }
+}
+
+/**
+ * @param {number} runVersion - Durable run version before recovery.
+ * @returns {string[]} - Exact crash-run event vocabulary.
+ */
+function seaCrashEventTypes(runVersion) {
+  const types = ['manual-run-created', 'attempt-claimed', 'attempt-started'];
+  if (runVersion >= 4) types.push('effect-requested');
+  if (runVersion >= 5) types.push('effect-started');
+  if (runVersion >= 6) types.push('effect-completed');
+  return types;
+}
+
+/**
+ * Project only terminal effect authority that recovery must preserve exactly.
+ * @param {Record<string, any> | null} delivery - Verified effect delivery.
+ * @returns {Record<string, any> | null} - Stable terminal authority.
+ */
+function terminalDeliveryAuthority(delivery) {
+  if (!delivery?.resultFrame) return null;
+  return {
+    effect: delivery.effect,
+    outcome: delivery.outcome,
+    resultFrame: delivery.resultFrame,
+  };
+}
+
+/**
+ * Assert the redacted packaged recovery response for one crash case.
+ * @param {string} serialized - Exact response bytes without trailing newline.
+ * @param {Record<string, any>} view - Parsed recovery response.
+ * @param {Record<string, any>} scenario - Crash case.
+ * @param {{runId: string, effectVersion: number | null, actor: Record<string, any>, secrets: string[]}} expected - Public truth.
+ * @returns {void}
+ */
+function assertSeaCrashRecoveryView(serialized, view, scenario, expected) {
+  assert.equal(view.schemaVersion, 4);
+  assert.equal(view.kind, 'wharfie.execution-ledger.recovery');
+  assert.deepEqual(view.integrity, { verified: true });
+  assert.equal(view.run.runId, expected.runId);
+  assert.equal(view.run.status, 'BLOCKED');
+  assert.equal(view.invocations.length, 1);
+  assert.equal(view.invocations[0].status, 'UNCERTAIN');
+  assert.equal(view.attempts.length, 1);
+  assert.equal(view.attempts[0].status, 'ABANDONED');
+  const expectedRecovery = {
+    action: scenario.recoveryAction,
+    changed: true,
+    ...(scenario.managedAction
+      ? {
+          managedEffects: [
+            {
+              effectId: SEA_CRASH_EFFECT_ID,
+              action: scenario.managedAction,
+              status: scenario.effectAfter,
+            },
+          ],
+        }
+      : {}),
+  };
+  assert.deepEqual(view.recovery, expectedRecovery);
+  assert.equal(view.effects.length, scenario.effectAfter === null ? 0 : 1);
+  if (scenario.effectAfter !== null) {
+    assert.equal(view.effects[0].effectId, SEA_CRASH_EFFECT_ID);
+    assert.equal(view.effects[0].status, scenario.effectAfter);
+    assert.equal(view.effects[0].version, expected.effectVersion);
+  }
+  assert.deepEqual(
+    view.history.map((/** @type {Record<string, any>} */ event) => event.type),
+    [...seaCrashEventTypes(scenario.runVersion), 'attempt-became-uncertain'],
+  );
+  assert.deepEqual(view.history.at(-1)?.actor, expected.actor);
+  for (const secret of expected.secrets) {
+    assert.equal(
+      serialized.includes(secret),
+      false,
+      `${scenario.label} recovery disclosed ${secret}`,
+    );
+  }
+}
+
+/**
+ * Assert one raw run at the exact paused pre-kill boundary.
+ * @param {Record<string, any>} run - Verified rebuilt run.
+ * @param {Record<string, any>} scenario - Crash case.
+ * @param {{runId: string, revisionId: string, destinationEffectId: string}} expected - Durable identities.
+ * @returns {void}
+ */
+function assertSeaCrashRunBeforeRecovery(run, scenario, expected) {
+  assert.equal(run.run.runId, expected.runId);
+  assert.equal(run.run.revisionId, expected.revisionId);
+  assert.equal(run.run.status, 'RUNNING');
+  assert.equal(run.run.version, scenario.runVersion);
+  assert.equal(run.invocations.length, 1);
+  assert.equal(run.invocations[0].status, 'RUNNING');
+  assert.equal(run.attempts.length, 1);
+  assert.equal(run.attempts[0].status, 'STARTED');
+  assert.equal(run.attempts[0].generation, 1);
+  assert.deepEqual(
+    run.events.map((/** @type {Record<string, any>} */ event) => event.type),
+    seaCrashEventTypes(scenario.runVersion),
+  );
+  const packagedActor = {
+    kind: 'packaged-operator',
+    id: expected.revisionId,
+  };
+  assert.deepEqual(
+    run.events.map((/** @type {Record<string, any>} */ event) => event.actor),
+    [
+      packagedActor,
+      packagedActor,
+      packagedActor,
+      ...Array.from({ length: scenario.runVersion - 3 }, () => ({
+        kind: 'runtime',
+        id: 'managed-effect',
+      })),
+    ],
+  );
+  assert.equal(run.effects.length, scenario.effectBefore === null ? 0 : 1);
+  if (scenario.effectBefore !== null) {
+    assert.equal(run.effects[0].effectId, SEA_CRASH_EFFECT_ID);
+    assert.equal(run.effects[0].status, scenario.effectBefore);
+    assert.equal(run.effects[0].version, scenario.effectVersionBefore);
+    assert.equal(
+      run.effects[0].destinationEffectId,
+      expected.destinationEffectId,
+    );
+  }
+}
+
+/**
+ * Assert raw post-recovery state and the one compound closure event.
+ * @param {Record<string, any>} before - Paused pre-kill run.
+ * @param {Record<string, any>} after - Recovered run.
+ * @param {Record<string, any>} scenario - Crash case.
+ * @param {Record<string, any>} actor - Expected packaged recovery actor.
+ * @returns {void}
+ */
+function assertSeaCrashRunAfterRecovery(before, after, scenario, actor) {
+  assert.equal(after.run.status, 'BLOCKED');
+  assert.equal(after.run.version, before.run.version + 1);
+  assert.equal(after.invocations[0].status, 'UNCERTAIN');
+  assert.equal(after.attempts[0].status, 'ABANDONED');
+  assert.equal(after.effects.length, scenario.effectAfter === null ? 0 : 1);
+  if (scenario.effectAfter !== null) {
+    assert.equal(after.effects[0].effectId, SEA_CRASH_EFFECT_ID);
+    assert.equal(after.effects[0].status, scenario.effectAfter);
+    assert.equal(after.effects[0].version, scenario.effectVersionAfter);
+  }
+  assert.equal(after.events.length, before.events.length + 1);
+  const closure = after.events.at(-1);
+  assert.equal(closure.type, 'attempt-became-uncertain');
+  assert.deepEqual(closure.actor, actor);
+  assert.deepEqual(
+    closure.payload.effects.map(
+      (/** @type {Record<string, any>} */ effect) => ({
+        effectId: effect.effectId,
+        status: effect.status,
+      }),
+    ),
+    scenario.eventEffects,
+  );
+}
+
+/**
+ * Exercise every managed-effect persistence boundary through the relocated
+ * SEA, real SIGKILL, packaged recovery, and packaged recovery replay.
+ * @param {{artifactPath: string, appId: string, cleanEnvironment: Record<string, string>, installedPackageRoot: string, revisionId: string, root: string}} options - Matrix inputs.
+ * @returns {Promise<void>} - Resolves after all crash cases recover exactly.
+ */
+async function verifyRelocatedSeaCrashMatrix(options) {
+  const recoveryActor = {
+    kind: 'packaged-operator',
+    id: options.revisionId,
+  };
+  for (const scenario of SEA_CRASH_CASES) {
+    const caseRoot = path.join(options.root, scenario.boundary);
+    const controlPath = path.join(caseRoot, 'control');
+    const payloadPath = path.join(controlPath, 'execution-payloads');
+    const sessionPath = path.join(caseRoot, 'sessions');
+    const applicationStatePath = path.join(caseRoot, 'application-state');
+    const markerPath = path.join(caseRoot, 'user-continuation.json');
+    const tableName = 'wharfie-package-sea-crash-matrix';
+    mkdirSync(caseRoot, { recursive: true, mode: 0o700 });
+    const environment = {
+      ...options.cleanEnvironment,
+      WHARFIE_CONTROL_ADAPTER: 'lmdb',
+      WHARFIE_CONTROL_PATH: controlPath,
+      WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
+      WHARFIE_EXECUTION_PAYLOAD_PATH: payloadPath,
+      WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
+      WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
+      WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+    };
+    const fixture = await createInstalledExecutionLedgerFixture({
+      installedPackageRoot: options.installedPackageRoot,
+      controlPath,
+      tableName,
+      payloadPath,
+      applicationStatePath,
+      revisionId: options.revisionId,
+    });
+    const lifecycle = await createInstalledLedgerLifecycleObserver({
+      installedPackageRoot: options.installedPackageRoot,
+      controlPath,
+      tableName,
+      appId: options.appId,
+    });
+    const nonce = randomUUID();
+    const idempotencyKey = `sea-crash-${scenario.boundary}`;
+    const runId = fixture.createRunId(options.appId, idempotencyKey);
+    const destinationEffectId = fixture.createDestinationEffectId(
+      options.appId,
+      runId,
+      SEA_CRASH_EFFECT_ID,
+    );
+    const logicalKey = `sea-crash-key-${scenario.boundary}`;
+    const inputValue = {
+      boundary: scenario.boundary,
+      nonce,
+      guarantee: 'destination-atomic-effect-id',
+    };
+    const callerRequestId = `sea-crash-request-${scenario.boundary}`;
+    const input = {
+      key: logicalKey,
+      value: inputValue,
+      crash: {
+        continuationMarkerPath: markerPath,
+        nonce,
+        pauseAfterEffect: true,
+      },
+    };
+    const runArgs = [
+      'wharfie',
+      'run',
+      '--activity',
+      'persist-once',
+      '--idempotency-key',
+      idempotencyKey,
+      '--input',
+      JSON.stringify(input),
+      '--caller-metadata',
+      JSON.stringify({
+        requestId: callerRequestId,
+        boundary: scenario.boundary,
+      }),
+      '--json',
+    ];
+    const recoveryArgs = [
+      'wharfie',
+      'recover',
+      '--run-id',
+      runId,
+      '--confirm-runner-stopped',
+      '--json',
+    ];
+    /** @type {ReturnType<typeof spawnInspectorPausedProcess> | undefined} */
+    let service;
+    /** @type {Record<string, any> | undefined} */
+    let inspector;
+    /** @type {string | undefined} */
+    let staleEndpoint;
+    try {
+      service = spawnInspectorPausedProcess(options.artifactPath, runArgs, {
+        cwd: caseRoot,
+        env: environment,
+        timeoutMs: CRASH_RECOVERY_TIMEOUT_MS,
+      });
+      inspector = await attachSeaInspector(service, {
+        timeoutMs: CRASH_RECOVERY_TIMEOUT_MS,
+      });
+      const adapterBreakpoint = await inspector.setSourceBreakpoint(
+        'destination-adapter-entry',
+        bindInstalledBreakpointSource(
+          options.installedPackageRoot,
+          SEA_CRASH_ADAPTER_BREAKPOINT,
+        ),
+      );
+      const targetBreakpoint = scenario.breakpoint
+        ? await inspector.setSourceBreakpoint(
+            scenario.boundary,
+            bindInstalledBreakpointSource(
+              options.installedPackageRoot,
+              scenario.breakpoint,
+            ),
+          )
+        : null;
+      const boundaryEvidence = await resumeToSeaCrashBoundary(
+        inspector,
+        service,
+        scenario,
+        adapterBreakpoint,
+        targetBreakpoint,
+        markerPath,
+      );
+      assert.equal(boundaryEvidence.adapterEntries, scenario.adapterEntries);
+      if (scenario.breakpoint) {
+        assert.equal(boundaryEvidence.marker, null);
+        assert.equal(
+          existsSync(markerPath),
+          false,
+          `${scenario.label} allowed authored user continuation before SIGKILL`,
+        );
+      } else {
+        assert.deepEqual(boundaryEvidence.marker, {
+          kind: 'packaged-activity-continuation',
+          nonce,
+          executable: realpathSync(options.artifactPath),
+          effect: { inserted: true },
+        });
+      }
+
+      const runBefore = await fixture.readRun(runId);
+      assert.ok(runBefore, `${scenario.label} retained no durable run`);
+      assertSeaCrashRunBeforeRecovery(runBefore, scenario, {
+        runId,
+        revisionId: options.revisionId,
+        destinationEffectId,
+      });
+      const deliveryBefore = await fixture.readManagedEffectDelivery(
+        runId,
+        SEA_CRASH_EFFECT_ID,
+      );
+      if (scenario.effectBefore === null) {
+        assert.equal(deliveryBefore, null);
+      } else {
+        assert.equal(deliveryBefore?.effect.status, scenario.effectBefore);
+        assert.equal(deliveryBefore?.request.input.key, logicalKey);
+        assert.deepEqual(deliveryBefore?.request.input.value, inputValue);
+      }
+      const terminalAuthorityBefore = terminalDeliveryAuthority(deliveryBefore);
+      if (scenario.effectBefore === 'COMPLETED') {
+        assert.ok(
+          terminalAuthorityBefore,
+          `${scenario.label} omitted terminal redelivery authority`,
+        );
+        assert.deepEqual(terminalAuthorityBefore.resultFrame.result, {
+          inserted: true,
+        });
+      } else {
+        assert.equal(terminalAuthorityBefore, null);
+      }
+
+      const destinationBefore = await fixture.readApplicationStateDestination(
+        options.appId,
+        destinationEffectId,
+        logicalKey,
+      );
+      assert.equal(
+        destinationBefore.receipt !== null,
+        scenario.destinationState,
+        `${scenario.label} has the wrong destination receipt state`,
+      );
+      assert.equal(
+        destinationBefore.business !== null,
+        scenario.destinationState,
+        `${scenario.label} has the wrong destination business state`,
+      );
+      if (scenario.destinationState) {
+        assert.deepEqual(
+          {
+            destinationEffectId:
+              destinationBefore.receipt.destination_effect_id,
+            outcomeCode: destinationBefore.receipt.outcome_code,
+            inserted: destinationBefore.receipt.inserted,
+            namespace: destinationBefore.business.namespace,
+            logicalKey: destinationBefore.business.logical_key,
+            value: destinationBefore.business.value,
+            createdBy:
+              destinationBefore.business.created_by_destination_effect_id,
+          },
+          {
+            destinationEffectId,
+            outcomeCode: 'inserted',
+            inserted: true,
+            namespace: options.appId,
+            logicalKey,
+            value: inputValue,
+            createdBy: destinationEffectId,
+          },
+        );
+      }
+      const payloadBefore = readPayloadReachability(payloadPath, runBefore);
+      assert.equal(
+        payloadBefore.orphans.length,
+        scenario.orphanPayloadsBefore,
+        `${scenario.label} has the wrong pre-recovery payload reachability`,
+      );
+      assert.equal(
+        payloadBefore.physical.length,
+        payloadBefore.reachable.length + scenario.orphanPayloadsBefore,
+      );
+
+      const ownershipBefore = await lifecycle.readOwnership();
+      assert.ok(ownershipBefore, `${scenario.label} has no mutation owner`);
+      assert.equal(ownershipBefore.appId, options.appId);
+      assert.equal(ownershipBefore.ownerKind, 'manual');
+      assert.equal(ownershipBefore.generation, 1);
+      staleEndpoint = lifecycle.getSessionEndpoint(
+        ownershipBefore.sessionId,
+        sessionPath,
+      );
+      assert.equal(
+        existsSync(staleEndpoint),
+        true,
+        `${scenario.label} owner endpoint was not held`,
+      );
+
+      const killed = await signalResidentService(service, 'SIGKILL');
+      assert.deepEqual(killed, { code: null, signal: 'SIGKILL' });
+      inspector.close();
+      inspector = undefined;
+      assert.deepEqual(
+        await lifecycle.readOwnership(),
+        ownershipBefore,
+        `${scenario.label} SIGKILL did not leave exact stale ownership`,
+      );
+      assert.equal(existsSync(staleEndpoint), true);
+
+      const recovery = await runInspectorGuardedSeaJson(
+        options.artifactPath,
+        recoveryArgs,
+        {
+          cwd: caseRoot,
+          env: environment,
+          installedPackageRoot: options.installedPackageRoot,
+          label: `${scenario.label} recovery`,
+        },
+      );
+      assertSeaCrashRecoveryView(
+        recovery.serialized,
+        recovery.value,
+        scenario,
+        {
+          runId,
+          effectVersion: scenario.effectVersionAfter,
+          actor: recoveryActor,
+          secrets: [
+            logicalKey,
+            nonce,
+            callerRequestId,
+            destinationEffectId,
+            markerPath,
+            'destinationEffectId',
+            'continuationMarkerPath',
+          ],
+        },
+      );
+      const runAfter = await fixture.readRun(runId);
+      assert.ok(runAfter, `${scenario.label} recovery lost the durable run`);
+      assertSeaCrashRunAfterRecovery(
+        runBefore,
+        runAfter,
+        scenario,
+        recoveryActor,
+      );
+      assert.equal(await lifecycle.readOwnership(), null);
+      assert.deepEqual(
+        await fixture.readApplicationStateDestination(
+          options.appId,
+          destinationEffectId,
+          logicalKey,
+        ),
+        destinationBefore,
+        `${scenario.label} recovery changed destination state`,
+      );
+      const deliveryAfter = await fixture.readManagedEffectDelivery(
+        runId,
+        SEA_CRASH_EFFECT_ID,
+      );
+      if (terminalAuthorityBefore) {
+        assert.deepEqual(
+          terminalDeliveryAuthority(deliveryAfter),
+          terminalAuthorityBefore,
+          `${scenario.label} recovery rewrote terminal delivery authority`,
+        );
+      } else if (scenario.effectAfter === 'COMPLETED') {
+        assert.deepEqual(deliveryAfter?.resultFrame.result, { inserted: true });
+        assert.equal(deliveryAfter?.outcome.ok, true);
+      } else {
+        assert.equal(deliveryAfter?.resultFrame, undefined);
+      }
+
+      const payloadAfter = readPayloadReachability(payloadPath, runAfter);
+      assert.equal(
+        payloadAfter.orphans.length,
+        scenario.orphanPayloadsAfter,
+        `${scenario.label} has the wrong recovered payload reachability`,
+      );
+      if (scenario.boundary === 'destination-transaction-committed') {
+        assert.equal(
+          payloadAfter.physical.length,
+          payloadBefore.physical.length + 1,
+        );
+      } else {
+        assert.deepEqual(
+          payloadAfter.physical,
+          payloadBefore.physical,
+          `${scenario.label} recovery changed immutable payload files`,
+        );
+      }
+      if (scenario.boundary === 'outcome-payload-published') {
+        assert.deepEqual(payloadBefore.orphans, [
+          runAfter.effects[0].outcomeRef.storage.key,
+        ]);
+      }
+      assert.equal(
+        existsSync(markerPath),
+        scenario.breakpoint === null,
+        `${scenario.label} changed authored continuation evidence`,
+      );
+      if (scenario.breakpoint === null) {
+        assert.deepEqual(
+          JSON.parse(readFileSync(markerPath, 'utf8')),
+          boundaryEvidence.marker,
+        );
+      }
+
+      const replay = await runInspectorGuardedSeaJson(
+        options.artifactPath,
+        recoveryArgs,
+        {
+          cwd: caseRoot,
+          env: environment,
+          installedPackageRoot: options.installedPackageRoot,
+          label: `${scenario.label} recovery replay`,
+        },
+      );
+      assert.deepEqual(replay.value.recovery, {
+        action: 'none',
+        changed: false,
+      });
+      const { recovery: _firstRecovery, ...firstStableView } = recovery.value;
+      const { recovery: _replayRecovery, ...replayStableView } = replay.value;
+      assert.deepEqual(replayStableView, firstStableView);
+      assert.deepEqual(await fixture.readRun(runId), runAfter);
+      assert.equal(await lifecycle.readOwnership(), null);
+      assert.deepEqual(
+        await fixture.readApplicationStateDestination(
+          options.appId,
+          destinationEffectId,
+          logicalKey,
+        ),
+        destinationBefore,
+      );
+      assert.deepEqual(
+        readPayloadReachability(payloadPath, runAfter),
+        payloadAfter,
+      );
+      assert.equal(existsSync(staleEndpoint), true);
+    } finally {
+      inspector?.close();
+      await stopResidentServiceForCleanup(service);
+      if (staleEndpoint) rmSync(staleEndpoint, { force: true });
+      rmSync(caseRoot, { recursive: true, force: true });
+    }
+  }
+}
+
 if (!['darwin', 'linux'].includes(process.platform)) {
   throw new Error('The real package SEA smoke test requires macOS or Linux');
 }
@@ -1165,11 +2257,21 @@ try {
   );
   writeFileSync(
     path.join(sourceDirectory, 'activity.ts'),
-    `import { open } from 'lmdb';
+    `import { closeSync, fsyncSync, openSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { open } from 'lmdb';
 
 type GreetInput = { name?: string };
 type GreetRuntime = { caller?: { metadata?: { requestId?: string } } };
-type PersistInput = { key?: string; value?: unknown };
+type PersistInput = {
+  key?: string;
+  value?: unknown;
+  crash?: {
+    continuationMarkerPath: string;
+    nonce: string;
+    pauseAfterEffect: boolean;
+  };
+};
 type PersistRuntime = {
   caller?: { metadata?: { requestId?: string } };
   effects: {
@@ -1182,6 +2284,27 @@ type PersistRuntime = {
     }): Promise<{ inserted: boolean }>;
   };
 };
+
+function writeDurableMarker(filePath: string, value: unknown) {
+  const handle = openSync(filePath, 'wx', 0o600);
+  try {
+    writeFileSync(handle, JSON.stringify(value) + '\\n');
+    fsyncSync(handle);
+  } finally {
+    closeSync(handle);
+  }
+  const directory = openSync(dirname(filePath), 'r');
+  try {
+    fsyncSync(directory);
+  } finally {
+    closeSync(directory);
+  }
+}
+
+function waitForever() {
+  const word = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(word, 0, 0);
+}
 
 export async function greet(
   input: GreetInput = {},
@@ -1220,6 +2343,15 @@ export async function persistOnce(
     },
     requestedReplayProperties: ['idempotent', 'transactional'],
   });
+  if (input.crash?.pauseAfterEffect) {
+    writeDurableMarker(input.crash.continuationMarkerPath, {
+      kind: 'packaged-activity-continuation',
+      nonce: input.crash.nonce,
+      executable: process.execPath,
+      effect,
+    });
+    waitForever();
+  }
   return {
     continuedAfterEffectDelivery: true,
     effect,
@@ -1721,6 +2853,26 @@ export default defineApp({
   const durableEvidence =
     await ledgerFixture.readExecutionPayload(durableEvidenceRef);
   assert.deepEqual(
+    durableEvidence.frames.map(
+      (/** @type {Record<string, any>} */ frame) => frame.type,
+    ),
+    ['start', 'effect-request', 'effect-result', 'completed'],
+  );
+  assert.equal(
+    durableEvidence.frames[1].attemptId,
+    durableEvidence.frames[0].attemptId,
+  );
+  assert.equal(
+    durableEvidence.frames[2].attemptId,
+    durableEvidence.frames[0].attemptId,
+  );
+  assert.equal(
+    durableEvidence.frames[3].attemptId,
+    durableEvidence.frames[0].attemptId,
+  );
+  assert.equal(durableEvidence.frames[1].effectId, SEA_CRASH_EFFECT_ID);
+  assert.equal(durableEvidence.frames[2].effectId, SEA_CRASH_EFFECT_ID);
+  assert.deepEqual(
     JSON.parse(JSON.stringify(durableEvidence.terminal.result)),
     {
       continuedAfterEffectDelivery: true,
@@ -1769,6 +2921,15 @@ export default defineApp({
     durableReceiptBeforeRetry,
     'repeated packaged durable run changed its destination receipt',
   );
+
+  await verifyRelocatedSeaCrashMatrix({
+    artifactPath: cleanArtifactPath,
+    appId: embeddedManifest.app.id,
+    cleanEnvironment,
+    installedPackageRoot,
+    revisionId: packagedArtifact.revisionId,
+    root: path.join(cleanRunDirectory, 'managed-effect-crash-matrix'),
+  });
 
   /** @type {ReturnType<typeof spawnResidentService> | undefined} */
   let firstResidentService;
@@ -2606,7 +3767,7 @@ export default defineApp({
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();

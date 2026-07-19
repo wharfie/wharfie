@@ -130,4 +130,53 @@ describe('framed activity runner edge cases', () => {
       await fsp.rm(tmpRoot, { recursive: true, force: true });
     }
   });
+
+  it('strips host bootstrap options without dropping ambient environment', async () => {
+    const activityId = makeName('worker-bootstrap-isolation');
+    const entrypointSymbol = getActivityAttemptProtocolSymbol(activityId);
+    const codeString = `
+      globalThis[Symbol.for(${JSON.stringify(entrypointSymbol)})] =
+        async ({ startFrame, transport }) => {
+          await transport.onComponentFrame({
+            protocol: 'wharfie.activity',
+            protocolVersion: 1,
+            type: 'completed',
+            attemptId: startFrame.attemptId,
+            sequence: 1,
+            result: {
+              nodeOptions: process.env.NODE_OPTIONS ?? null,
+              ambientEnvironment:
+                process.env.WHARFIE_WORKER_ENV_SENTINEL ?? null,
+              execArgv: process.execArgv,
+            },
+          });
+        };
+    `;
+    const previousNodeOptions = process.env.NODE_OPTIONS;
+    const previousSentinel = process.env.WHARFIE_WORKER_ENV_SENTINEL;
+    process.env.NODE_OPTIONS = '--require=wharfie-deliberately-missing-preload';
+    process.env.WHARFIE_WORKER_ENV_SENTINEL = 'preserved';
+
+    try {
+      const evidence = await sandboxWorker.runActivityAttemptInSandbox(
+        activityId,
+        codeString,
+        startFrame(activityId),
+        { entrypointSymbol },
+      );
+      expect(evidence.terminal.result).toEqual({
+        nodeOptions: null,
+        ambientEnvironment: 'preserved',
+        execArgv: [],
+      });
+    } finally {
+      if (previousNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = previousNodeOptions;
+      if (previousSentinel === undefined) {
+        delete process.env.WHARFIE_WORKER_ENV_SENTINEL;
+      } else {
+        process.env.WHARFIE_WORKER_ENV_SENTINEL = previousSentinel;
+      }
+    }
+  });
 });

@@ -1179,9 +1179,16 @@ function ensureWorker(name, codeString, sandbox) {
   const workerUrl = new URL(
     `data:text/javascript;base64,${Buffer.from(src, 'utf8').toString('base64')}`,
   );
+  const workerEnvironment = { ...process.env };
+  delete workerEnvironment.NODE_OPTIONS;
 
   // @ts-ignore
   const w = new Worker(workerUrl, {
+    // Activity isolates must not inherit host bootstrap/debug/preload flags.
+    // Their authority comes only from the sealed bundle, explicit env, and
+    // private Activity Protocol port passed below.
+    env: workerEnvironment,
+    execArgv: [],
     stdout: true,
     stderr: true,
   });
