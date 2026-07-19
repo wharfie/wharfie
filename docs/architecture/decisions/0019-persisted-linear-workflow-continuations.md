@@ -2,13 +2,14 @@
 
 **Status:** Accepted · **Date:** 2026-07-19
 
-**Implementation status (2026-07-19):** the V10 ledger now implements only the
-initial activity-headed `ACTIVITY_RUNNABLE` materialization described here. It
-atomically creates the immutable plan/start bindings, workflow cursor, first
-activity invocation, and cursor-bound ready-work V2 row. Workflow activity
-claim/start/terminal execution, cursor advancement and outputs, timers,
-signals, cancellation, resident dispatch, and public commands remain
-prospective parts of this decision.
+**Implementation status (2026-07-19):** the V10 ledger implements the initial
+activity-headed materialization plus cursor-guarded activity claim/start and a
+compound verified-success transition. It persists Activity Protocol results as
+immutable workflow outputs and atomically advances to one ordinary activity
+successor or terminal workflow state while maintaining ready-work V2. Timers,
+signals, workflow cancellation/recovery, managed effects in workflow attempts,
+resident dispatch, and public commands remain prospective parts of this
+decision.
 
 ## Context
 

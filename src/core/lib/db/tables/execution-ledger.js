@@ -94,15 +94,20 @@ import {
 import {
   WORKFLOW_ACTIVITY_REQUEST_PAYLOAD_SCHEMA as ACTIVITY_REQUEST_PAYLOAD_SCHEMA,
   WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION,
+  WORKFLOW_OUTPUT_PAYLOAD_KIND,
   WORKFLOW_PLAN_PAYLOAD_KIND,
   WORKFLOW_PLAN_PAYLOAD_SCHEMA,
+  WORKFLOW_OUTPUT_PAYLOAD_SCHEMA,
   WORKFLOW_START_PAYLOAD_KIND,
   WORKFLOW_START_PAYLOAD_SCHEMA,
   WorkflowCursorDisposition,
   assertWorkflowRunId,
   materializeFirstWorkflowActivity,
+  materializeWorkflowActivitySuccess,
+  materializeWorkflowCursorActivity,
   normalizeWorkflowActivityRequest,
   normalizeWorkflowCursor,
+  normalizeWorkflowOutputPayload,
   normalizeWorkflowPlanPayload,
   normalizeWorkflowStartPayload,
 } from '../../ledger/workflow-execution-contract.js';
@@ -162,6 +167,9 @@ const SUCCESSOR_IDENTITY_SORT_KEY_PREFIX = 'successor-identity/v1/';
 const EVENT_TYPES = new Set([
   'manual-run-created',
   'workflow-run-created',
+  'workflow-activity-claimed',
+  'workflow-activity-started',
+  'workflow-activity-succeeded',
   'effect-successor-authorized',
   'effect-successor-run-created',
   'effect-successor-started',
@@ -2380,6 +2388,38 @@ function assertRunAdvance(prior, next, sequence, runId) {
 }
 
 /**
+ * Verify the immutable workflow scope and one-step cursor CAS advance. The
+ * event-specific branch separately proves disposition, activation, and output
+ * evolution.
+ * @param {Record<string, any>} prior - Previous workflow cursor.
+ * @param {Record<string, any>} next - Candidate next workflow cursor.
+ * @param {Record<string, any>} event - Current event.
+ * @param {string} runId - Durable run identity.
+ * @returns {void}
+ */
+function assertWorkflowCursorAdvance(prior, next, event, runId) {
+  if (
+    next.schemaVersion !== prior.schemaVersion ||
+    next.runId !== prior.runId ||
+    next.appId !== prior.appId ||
+    next.revisionId !== prior.revisionId ||
+    next.workflowId !== prior.workflowId ||
+    next.planId !== prior.planId ||
+    !hasSameCanonicalJson(next.planRef, prior.planRef) ||
+    !hasSameCanonicalJson(next.startRef, prior.startRef) ||
+    next.createdAt !== prior.createdAt ||
+    next.version !== prior.version + 1 ||
+    next.lastSequence !== event.sequence ||
+    next.updatedAt !== event.observed_at
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'invalid workflow cursor transition',
+    );
+  }
+}
+
+/**
  * @param {Record<string, any>} prior - Previous invocation snapshot.
  * @param {Record<string, any>} next - Candidate next invocation snapshot.
  * @param {number} sequence - Event sequence.
@@ -2747,7 +2787,7 @@ function normalizeTransitionReceipt(value, runId) {
 /**
  * @param {Record<string, any>} event - Event being folded.
  * @param {string} runId - Expected run identity.
- * @returns {{run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} - Event projection snapshots.
+ * @returns {{run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} - Event projection snapshots.
  */
 function eventSnapshots(event, runId) {
   const payload = cloneBoundedJsonObject(
@@ -2759,6 +2799,22 @@ function eventSnapshots(event, runId) {
     assertExactKeys(
       payload,
       ['run', 'invocation', 'workflowCursor'],
+      'event payload',
+    );
+  } else if (
+    event.type === 'workflow-activity-claimed' ||
+    event.type === 'workflow-activity-started'
+  ) {
+    assertExactKeys(
+      payload,
+      ['run', 'invocation', 'workflowCursor', 'attempt'],
+      'event payload',
+    );
+  } else if (event.type === 'workflow-activity-succeeded') {
+    assertSnapshotKeys(
+      payload,
+      ['run', 'invocation', 'workflowCursor', 'attempt'],
+      ['nextInvocation'],
       'event payload',
     );
   } else if (
@@ -2822,11 +2878,17 @@ function eventSnapshots(event, runId) {
   }
   const run = normalizeRunSnapshot(payload.run, runId);
   const invocation = normalizeInvocationSnapshot(payload.invocation, runId);
-  /** @type {{run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} */
+  /** @type {{run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>, authorization?: Record<string, any>}} */
   const result = { run, invocation };
   if (Object.prototype.hasOwnProperty.call(payload, 'workflowCursor')) {
     result.workflowCursor = normalizeWorkflowCursorSnapshot(
       payload.workflowCursor,
+      runId,
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'nextInvocation')) {
+    result.nextInvocation = normalizeInvocationSnapshot(
+      payload.nextInvocation,
       runId,
     );
   }
@@ -3144,6 +3206,7 @@ function classifyNotAppliedManagedEffectSuccessorSource(input) {
  * @param {Record<string, any> | undefined} effect - Next effect snapshot.
  * @param {Record<string, any>[] | undefined} effects - Next compound effect snapshots.
  * @param {Record<string, any> | undefined} reconciliation - Reconciliation payload for an event that deliberately retains its attempt unchanged.
+ * @param {{currentCursor: Record<string, any>, nextCursor: Record<string, any>, nextInvocation?: Record<string, any>} | undefined} workflowContext - Exact workflow transition context.
  * @param {string} runId - Durable run identity.
  * @returns {void}
  */
@@ -3160,10 +3223,22 @@ function assertEventRequestDigest(
   effect,
   effects,
   reconciliation,
+  workflowContext,
   runId,
 ) {
   /** @type {Record<string, any>} */
   let value;
+  const currentWorkflowCursor = workflowContext?.currentCursor;
+  const nextWorkflowCursor = workflowContext?.nextCursor;
+  if (
+    event.type.startsWith('workflow-activity-') &&
+    (!currentWorkflowCursor || !nextWorkflowCursor)
+  ) {
+    throw new ExecutionLedgerProjectionError(
+      runId,
+      'workflow event request digest lacks cursor context',
+    );
+  }
   if (event.type === 'manual-run-created') {
     value = {
       runId,
@@ -3192,6 +3267,68 @@ function assertEventRequestDigest(
       startRef: run.requestRef,
       activityRequestRef: invocation.requestRef,
       trigger: run.trigger,
+    };
+  } else if (event.type === 'workflow-activity-claimed') {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      cursor: workflowCursorGuard(
+        /** @type {Record<string, any>} */ (currentWorkflowCursor),
+      ),
+      attemptId: attempt?.attemptId,
+      fencingToken: attempt?.fencingToken,
+      expectedGeneration: currentInvocation?.generation,
+      expectedVersion: currentRun?.version,
+      transitionId: event.transition_id,
+      actor: event.actor,
+      coordinatorEpoch: attempt?.coordinatorEpoch,
+    };
+  } else if (event.type === 'workflow-activity-started') {
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      cursor: workflowCursorGuard(
+        /** @type {Record<string, any>} */ (currentWorkflowCursor),
+      ),
+      attemptId: attempt?.attemptId,
+      fencingToken: attempt?.fencingToken,
+      generation: attempt?.generation,
+      expectedVersion: currentRun?.version,
+      transitionId: event.transition_id,
+      actor: event.actor,
+      coordinatorEpoch: attempt?.coordinatorEpoch,
+    };
+  } else if (event.type === 'workflow-activity-succeeded') {
+    const output = /** @type {Record<string, any>} */ (
+      nextWorkflowCursor
+    ).outputs.at(-1);
+    const nextInvocation = workflowContext?.nextInvocation;
+    value = {
+      runId,
+      invocationId: invocation.invocationId,
+      cursor: workflowCursorGuard(
+        /** @type {Record<string, any>} */ (currentWorkflowCursor),
+      ),
+      attemptId: attempt?.attemptId,
+      fencingToken: attempt?.fencingToken,
+      generation: attempt?.generation,
+      expectedVersion: currentRun?.version,
+      transitionId: event.transition_id,
+      terminal: attempt?.terminal,
+      evidenceRef: attempt?.evidenceRef,
+      outputRef: output?.outputRef,
+      successor: nextInvocation
+        ? {
+            continuationId: nextInvocation.workflow?.continuationId,
+            stepId: nextInvocation.workflow?.stepId,
+            stepIndex: nextInvocation.workflow?.stepIndex,
+            invocationId: nextInvocation.invocationId,
+            activityId: nextInvocation.activityId,
+            requestRef: nextInvocation.requestRef,
+          }
+        : null,
+      actor: event.actor,
+      coordinatorEpoch: attempt?.coordinatorEpoch,
     };
   } else if (event.type === 'effect-successor-run-created') {
     value = {
@@ -3540,7 +3677,7 @@ function assertEventRequestDigest(
  * authorizing another mutation.
  * @param {{readBytes: (reference: unknown) => Promise<unknown>}} payloadStore - Immutable payload store.
  * @param {string} runId - Durable run identity for safe diagnostics.
- * @returns {{readActivityRequest: (reference: unknown) => Promise<Record<string, any>>, readWorkflowPlan: (reference: unknown) => Promise<ReturnType<typeof normalizeWorkflowPlanPayload>>, readWorkflowStart: (reference: unknown) => Promise<ReturnType<typeof normalizeWorkflowStartPayload>>, readEvidence: (reference: unknown) => Promise<Record<string, any>>, readManagedEffectRequest: (reference: unknown) => Promise<ReturnType<typeof normalizeManagedEffectRequest>>, readManagedEffectOutcome: (reference: unknown) => Promise<ReturnType<typeof normalizeManagedEffectOutcome>>, readManagedEffectReconciliationEvidence: (reference: unknown) => Promise<Record<string, any>>}} - Verified payload reader.
+ * @returns {{readActivityRequest: (reference: unknown) => Promise<Record<string, any>>, readWorkflowPlan: (reference: unknown) => Promise<ReturnType<typeof normalizeWorkflowPlanPayload>>, readWorkflowStart: (reference: unknown) => Promise<ReturnType<typeof normalizeWorkflowStartPayload>>, readWorkflowOutput: (reference: unknown) => Promise<ReturnType<typeof normalizeWorkflowOutputPayload>>, readEvidence: (reference: unknown) => Promise<Record<string, any>>, readManagedEffectRequest: (reference: unknown) => Promise<ReturnType<typeof normalizeManagedEffectRequest>>, readManagedEffectOutcome: (reference: unknown) => Promise<ReturnType<typeof normalizeManagedEffectOutcome>>, readManagedEffectReconciliationEvidence: (reference: unknown) => Promise<Record<string, any>>}} - Verified payload reader.
  */
 function createLedgerPayloadReader(payloadStore, runId) {
   /** @type {Map<string, Promise<any>>} */
@@ -3613,6 +3750,16 @@ function createLedgerPayloadReader(payloadStore, runId) {
         'persisted workflow start',
       );
     },
+    async readWorkflowOutput(reference) {
+      return normalizeWorkflowOutputPayload(
+        await read(
+          reference,
+          WORKFLOW_OUTPUT_PAYLOAD_SCHEMA,
+          'persisted workflow output',
+        ),
+        'persisted workflow output',
+      );
+    },
     async readEvidence(reference) {
       return cloneReferencedPayloadObject(
         await read(
@@ -3657,9 +3804,68 @@ function createLedgerPayloadReader(payloadStore, runId) {
 }
 
 /**
+ * Rehash every output reachable from a cursor. A selector may read only one
+ * value, but every retained reference is part of the authoritative cursor and
+ * must remain available on every fold.
+ * @param {Record<string, any>} cursor - Verified workflow cursor.
+ * @param {{readWorkflowOutput: (reference: unknown) => Promise<Record<string, any>>}} payloadReader - Per-fold immutable reader.
+ * @returns {Promise<Array<{binding: Record<string, any>, payload: Record<string, any>}>>} - Ordered resolved outputs.
+ */
+async function readWorkflowCursorOutputs(cursor, payloadReader) {
+  return await Promise.all(
+    cursor.outputs.map(async (/** @type {Record<string, any>} */ binding) => ({
+      binding,
+      payload: await payloadReader.readWorkflowOutput(binding.outputRef),
+    })),
+  );
+}
+
+/**
+ * Select the one exact prior output named by an activity input selector.
+ * @param {Record<string, any>} step - Validated workflow activity step.
+ * @param {Array<{binding: Record<string, any>, payload: Record<string, any>}>} outputs - Rehashed output prefix.
+ * @param {string} label - Human-readable failure context.
+ * @returns {{binding: Record<string, any>, payload: Record<string, any>} | undefined} - Exact selected output.
+ */
+function selectWorkflowStepOutput(step, outputs, label) {
+  if (step.input.kind !== 'step-output') return undefined;
+  const selected = outputs.filter(
+    ({ binding }) => binding.stepId === step.input.step,
+  );
+  if (selected.length !== 1) {
+    throw new TypeError(
+      `${label} cannot resolve the exact persisted output for step '${step.input.step}'.`,
+    );
+  }
+  return selected[0];
+}
+
+/**
+ * This tranche can dispatch only ordinary activities whose immediate success
+ * is either terminal or another ordinary activity. Keeping the predicate in
+ * the fold makes that limitation part of durable history validity rather than
+ * a convenience check on one public entry point.
+ * @param {Record<string, any>} cursor - Exact active activity cursor.
+ * @param {Record<string, any>} planPayload - Rehashed workflow plan.
+ * @returns {boolean} - Whether physical dispatch has an implemented commit path.
+ */
+function isWorkflowActivityDispatchSupported(cursor, planPayload) {
+  const current = planPayload.definition.steps[cursor.stepIndex];
+  const next = planPayload.definition.steps[cursor.stepIndex + 1];
+  return Boolean(
+    current?.kind === 'activity' &&
+    current.activity !== MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID &&
+    (!next ||
+      (next.kind === 'activity' &&
+        next.activity !== MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID)),
+  );
+}
+
+/**
  * @param {Record<string, any>} run - Run snapshot.
  * @param {Record<string, any>} invocation - Invocation snapshot.
  * @param {Record<string, any> | undefined} workflowCursor - Workflow cursor snapshot.
+ * @param {Record<string, any> | undefined} nextInvocation - Newly materialized workflow successor invocation.
  * @param {Record<string, any> | undefined} attempt - Attempt snapshot.
  * @param {Record<string, any> | undefined} effect - Effect snapshot.
  * @param {Record<string, any>[] | undefined} effects - Compound effect snapshots.
@@ -3675,6 +3881,7 @@ async function applyEvent(
   run,
   invocation,
   workflowCursor,
+  nextInvocation,
   attempt,
   effect,
   effects,
@@ -3726,6 +3933,7 @@ async function applyEvent(
       currentInvocation ||
       state.workflowCursor ||
       !workflowCursor ||
+      nextInvocation ||
       attempt ||
       effect ||
       effects ||
@@ -3807,6 +4015,7 @@ async function applyEvent(
       materialized.planId !== run.trigger.planId ||
       materialized.invocationId !== invocation.invocationId ||
       materialized.activityId !== invocation.activityId ||
+      materialized.activityId === MANAGED_EFFECT_SUCCESSOR_ACTIVITY_ID ||
       !hasSameCanonicalJson(materialized.activityRequest, activityRequest) ||
       !hasSameCanonicalJson(materialized.cursor, workflowCursor)
     ) {
@@ -3824,6 +4033,7 @@ async function applyEvent(
       new Map(),
       run,
       invocation,
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -3851,6 +4061,7 @@ async function applyEvent(
       currentInvocation ||
       state.workflowCursor ||
       workflowCursor ||
+      nextInvocation ||
       attempt ||
       event.sequence !== 1 ||
       run.status !== RunStatus.RUNNING ||
@@ -3941,6 +4152,7 @@ async function applyEvent(
       undefined,
       undefined,
       undefined,
+      undefined,
       runId,
     );
     state.run = run;
@@ -3960,10 +4172,394 @@ async function applyEvent(
   ) {
     throw new ExecutionLedgerProjectionError(runId, 'event lacks prior state');
   }
+  if (
+    [
+      'workflow-activity-claimed',
+      'workflow-activity-started',
+      'workflow-activity-succeeded',
+    ].includes(event.type)
+  ) {
+    const currentCursor = state.workflowCursor;
+    if (
+      currentRun.trigger?.kind !== 'workflow' ||
+      !currentCursor ||
+      !workflowCursor ||
+      !attempt ||
+      effect ||
+      effects ||
+      reconciliation ||
+      (event.type === 'workflow-activity-succeeded'
+        ? false
+        : Boolean(nextInvocation)) ||
+      currentCursor.invocationId !== currentInvocation.invocationId ||
+      run.updatedAt !== event.observed_at ||
+      invocation.updatedAt !== event.observed_at ||
+      event.observed_at < currentRun.updatedAt ||
+      event.observed_at < currentCursor.updatedAt
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid workflow activity transition scope',
+      );
+    }
+    assertRunAdvance(currentRun, run, event.sequence, runId);
+    assertInvocationAdvance(
+      currentInvocation,
+      invocation,
+      event.sequence,
+      runId,
+    );
+    assertWorkflowCursorAdvance(currentCursor, workflowCursor, event, runId);
+    assertAttemptBelongsToInvocation(attempt, run, invocation, runId);
+
+    const planPayload = await payloadReader.readWorkflowPlan(
+      currentCursor.planRef,
+    );
+    const startPayload = await payloadReader.readWorkflowStart(
+      currentCursor.startRef,
+    );
+    const resolvedOutputs = await readWorkflowCursorOutputs(
+      currentCursor,
+      payloadReader,
+    );
+    const currentStep = planPayload.definition.steps[currentCursor.stepIndex];
+    let currentSelectedOutput;
+    let materializedCurrent;
+    try {
+      currentSelectedOutput = selectWorkflowStepOutput(
+        currentStep,
+        resolvedOutputs,
+        'persisted workflow activity',
+      );
+      materializedCurrent = materializeWorkflowCursorActivity({
+        cursor: currentCursor,
+        planPayload,
+        planRef: currentCursor.planRef,
+        startPayload,
+        startRef: currentCursor.startRef,
+        ...(currentSelectedOutput
+          ? { selectedOutput: currentSelectedOutput }
+          : {}),
+      });
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'workflow activity derivation mismatch',
+      );
+    }
+    const currentRequest = normalizeWorkflowActivityRequest(
+      await payloadReader.readActivityRequest(currentInvocation.requestRef),
+      'persisted workflow activity request',
+    );
+    if (
+      materializedCurrent.runId !== runId ||
+      materializedCurrent.planPayload.appId !== currentRun.appId ||
+      materializedCurrent.planPayload.revisionId !== currentRun.revisionId ||
+      materializedCurrent.planPayload.workflowId !==
+        currentRun.trigger.workflowId ||
+      materializedCurrent.planId !== currentRun.trigger.planId ||
+      materializedCurrent.invocationId !== currentInvocation.invocationId ||
+      materializedCurrent.activityId !== currentInvocation.activityId ||
+      !isWorkflowActivityDispatchSupported(currentCursor, planPayload) ||
+      !hasSameCanonicalJson(materializedCurrent.activityRequest, currentRequest)
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'workflow activity request mismatch',
+      );
+    }
+
+    const sequence = event.sequence;
+    const expectedRunBase = {
+      ...cloneJsonObject(currentRun, 'prior workflow run'),
+      version: currentRun.version + 1,
+      lastSequence: sequence,
+      updatedAt: event.observed_at,
+    };
+    const expectedInvocationBase = {
+      ...cloneJsonObject(currentInvocation, 'prior workflow invocation'),
+      version: currentInvocation.version + 1,
+      lastSequence: sequence,
+      updatedAt: event.observed_at,
+    };
+    const expectedCursorBase = {
+      ...cloneJsonObject(currentCursor, 'prior workflow cursor'),
+      version: currentCursor.version + 1,
+      lastSequence: sequence,
+      updatedAt: event.observed_at,
+    };
+
+    if (event.type === 'workflow-activity-claimed') {
+      const expectedAttempt = {
+        schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+        runId,
+        invocationId: currentInvocation.invocationId,
+        attemptId: createAttemptId(
+          runId,
+          currentInvocation.invocationId,
+          currentInvocation.generation + 1,
+        ),
+        appId: currentRun.appId,
+        revisionId: currentRun.revisionId,
+        activityId: currentInvocation.activityId,
+        status: AttemptStatus.CLAIMED,
+        generation: currentInvocation.generation + 1,
+        version: 1,
+        coordinatorEpoch: event.fence.coordinatorEpoch,
+        fencingToken: attempt.fencingToken,
+        claimedAt: event.observed_at,
+        updatedAt: event.observed_at,
+        lastSequence: sequence,
+      };
+      if (
+        currentCursor.disposition !==
+          WorkflowCursorDisposition.ACTIVITY_RUNNABLE ||
+        currentInvocation.status !== InvocationStatus.RUNNABLE ||
+        currentAttempt ||
+        event.fence.invocationGeneration !== expectedAttempt.generation ||
+        !hasSameCanonicalJson(run, expectedRunBase) ||
+        !hasSameCanonicalJson(invocation, {
+          ...expectedInvocationBase,
+          status: InvocationStatus.RUNNING,
+          generation: currentInvocation.generation + 1,
+        }) ||
+        !hasSameCanonicalJson(workflowCursor, {
+          ...expectedCursorBase,
+          disposition: WorkflowCursorDisposition.ACTIVITY_RUNNING,
+        }) ||
+        !hasSameCanonicalJson(attempt, expectedAttempt)
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'invalid workflow activity claim',
+        );
+      }
+    } else if (event.type === 'workflow-activity-started') {
+      if (!currentAttempt) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow activity start lacks its claimed attempt',
+        );
+      }
+      assertAttemptAdvance(currentAttempt, attempt, event, runId);
+      if (
+        currentCursor.disposition !==
+          WorkflowCursorDisposition.ACTIVITY_RUNNING ||
+        currentInvocation.status !== InvocationStatus.RUNNING ||
+        currentAttempt.status !== AttemptStatus.CLAIMED ||
+        !hasSameCanonicalJson(run, expectedRunBase) ||
+        !hasSameCanonicalJson(invocation, expectedInvocationBase) ||
+        !hasSameCanonicalJson(workflowCursor, expectedCursorBase) ||
+        !hasSameCanonicalJson(attempt, {
+          ...cloneJsonObject(currentAttempt, 'prior workflow attempt'),
+          status: AttemptStatus.STARTED,
+          version: currentAttempt.version + 1,
+          startedAt: event.observed_at,
+          updatedAt: event.observed_at,
+          lastSequence: sequence,
+        })
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'invalid workflow activity start',
+        );
+      }
+    } else {
+      if (!currentAttempt) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow activity success lacks its started attempt',
+        );
+      }
+      assertAttemptAdvance(currentAttempt, attempt, event, runId);
+      const verifiedEvidence = validateLedgerAttemptEvidence(
+        await payloadReader.readEvidence(attempt.evidenceRef),
+        await createLedgerAttemptStart(
+          currentRun,
+          currentInvocation,
+          currentAttempt,
+          payloadReader,
+        ),
+        'persisted workflow activity evidence',
+      );
+      await assertAttemptEvidenceMatchesManagedEffects(
+        verifiedEvidence.evidence,
+        currentAttempt,
+        state,
+        payloadReader,
+        effectVerifierRegistry,
+        runId,
+      );
+      const terminal = verifiedEvidence.terminal;
+      const terminalSummary = createTerminalSummary(terminal);
+      const outputBinding = workflowCursor.outputs.at(-1);
+      if (!outputBinding) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow activity success lacks its output binding',
+        );
+      }
+      const outputPayload = await payloadReader.readWorkflowOutput(
+        outputBinding.outputRef,
+      );
+      const nextStep =
+        planPayload.definition.steps[currentCursor.stepIndex + 1];
+      let nextSelectedOutput;
+      let materializedSuccess;
+      try {
+        nextSelectedOutput = nextStep
+          ? selectWorkflowStepOutput(
+              nextStep,
+              [
+                ...resolvedOutputs,
+                { binding: outputBinding, payload: outputPayload },
+              ],
+              'persisted workflow successor',
+            )
+          : undefined;
+        materializedSuccess = materializeWorkflowActivitySuccess({
+          currentCursor,
+          planPayload,
+          planRef: currentCursor.planRef,
+          startPayload,
+          startRef: currentCursor.startRef,
+          outputPayload,
+          outputRef: outputBinding.outputRef,
+          ...(nextSelectedOutput ? { selectedOutput: nextSelectedOutput } : {}),
+          sequence,
+          observedAt: event.observed_at,
+        });
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'workflow activity successor derivation mismatch',
+        );
+      }
+      if (
+        currentCursor.disposition !==
+          WorkflowCursorDisposition.ACTIVITY_RUNNING ||
+        currentInvocation.status !== InvocationStatus.RUNNING ||
+        currentAttempt.status !== AttemptStatus.STARTED ||
+        terminal.type !== 'completed' ||
+        terminal.attemptId !== currentAttempt.attemptId ||
+        !hasSameCanonicalJson(outputPayload.value, terminal.result) ||
+        !hasSameCanonicalJson(workflowCursor, materializedSuccess.cursor) ||
+        !hasSameCanonicalJson(attempt, {
+          ...cloneJsonObject(currentAttempt, 'prior workflow attempt'),
+          status: AttemptStatus.COMPLETED,
+          version: currentAttempt.version + 1,
+          lastSequence: sequence,
+          updatedAt: event.observed_at,
+          terminal: terminalSummary,
+          evidenceRef: attempt.evidenceRef,
+        }) ||
+        !hasSameCanonicalJson(invocation, {
+          ...expectedInvocationBase,
+          status: InvocationStatus.COMPLETED,
+          terminal: terminalSummary,
+        }) ||
+        !hasSameCanonicalJson(run, {
+          ...expectedRunBase,
+          status: materializedSuccess.completed
+            ? RunStatus.COMPLETED
+            : RunStatus.RUNNING,
+        })
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'invalid workflow activity success',
+        );
+      }
+      if (materializedSuccess.completed) {
+        if (nextInvocation) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'completed workflow retains a successor invocation',
+          );
+        }
+      } else {
+        const nextActivity = materializedSuccess.nextActivity;
+        if (!nextActivity || !nextInvocation) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'workflow successor invocation is unavailable',
+          );
+        }
+        const nextRequest = normalizeWorkflowActivityRequest(
+          await payloadReader.readActivityRequest(nextInvocation.requestRef),
+          'persisted workflow successor request',
+        );
+        const expectedNextInvocation = {
+          schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+          runId,
+          invocationId: nextActivity.invocationId,
+          appId: currentRun.appId,
+          revisionId: currentRun.revisionId,
+          activityId: nextActivity.activityId,
+          requestRef: nextInvocation.requestRef,
+          status: InvocationStatus.RUNNABLE,
+          generation: 0,
+          version: 1,
+          lastSequence: sequence,
+          createdAt: event.observed_at,
+          updatedAt: event.observed_at,
+          workflow: {
+            workflowId: currentCursor.workflowId,
+            planId: currentCursor.planId,
+            continuationId: nextActivity.continuationId,
+            stepId: nextActivity.stepId,
+            stepIndex: nextActivity.stepIndex,
+          },
+        };
+        if (
+          state.invocations.has(nextInvocation.invocationId) ||
+          !hasSameCanonicalJson(nextRequest, nextActivity.activityRequest) ||
+          !hasSameCanonicalJson(nextInvocation, expectedNextInvocation)
+        ) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'workflow successor invocation mismatch',
+          );
+        }
+      }
+    }
+
+    assertEventRequestDigest(
+      event,
+      currentRun,
+      currentInvocation,
+      currentAttempt,
+      undefined,
+      new Map(),
+      run,
+      invocation,
+      attempt,
+      undefined,
+      undefined,
+      undefined,
+      {
+        currentCursor,
+        nextCursor: workflowCursor,
+        ...(nextInvocation ? { nextInvocation } : {}),
+      },
+      runId,
+    );
+    state.run = run;
+    state.workflowCursor = workflowCursor;
+    state.invocations.set(invocation.invocationId, invocation);
+    state.attempts.set(
+      attemptMapKey(attempt.invocationId, attempt.attemptId),
+      attempt,
+    );
+    if (nextInvocation) {
+      state.invocations.set(nextInvocation.invocationId, nextInvocation);
+    }
+    return;
+  }
   if (currentRun.trigger?.kind === 'workflow') {
     throw new ExecutionLedgerProjectionError(
       runId,
-      'workflow transitions beyond creation are not implemented',
+      'workflow event type is not implemented',
     );
   }
   assertRunAdvance(currentRun, run, event.sequence, runId);
@@ -4146,6 +4742,7 @@ async function applyEvent(
       new Map(),
       run,
       invocation,
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -5464,6 +6061,7 @@ async function applyEvent(
     effect,
     effects,
     reconciliation,
+    undefined,
     runId,
   );
 
@@ -5807,6 +6405,7 @@ async function foldAndVerifyRun(
       snapshots.run,
       snapshots.invocation,
       snapshots.workflowCursor,
+      snapshots.nextInvocation,
       snapshots.attempt,
       snapshots.effect,
       snapshots.effects,
@@ -5918,7 +6517,7 @@ async function foldAndVerifyRun(
  * @param {boolean} applied - Whether this call appended the transition.
  * @param {Record<string, any> | undefined} effect - Current affected effect.
  * @param {Record<string, any>[] | undefined} effects - Current compound affected effects.
- * @returns {{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[]}} - Public transition view.
+ * @returns {{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, outputRef?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[]}} - Public transition view.
  */
 function transitionResult(
   state,
@@ -5928,14 +6527,66 @@ function transitionResult(
   effect = undefined,
   effects = undefined,
 ) {
-  const invocation = [...state.invocations.values()][0];
-  /** @type {{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[]}} */
+  const invocation =
+    (typeof receipt.invocation_id === 'string'
+      ? state.invocations.get(receipt.invocation_id)
+      : state.workflowCursor
+        ? state.invocations.get(state.workflowCursor.invocationId)
+        : state.invocations.size === 1
+          ? [...state.invocations.values()][0]
+          : undefined) || undefined;
+  if (!invocation) {
+    throw new ExecutionLedgerProjectionError(
+      state.run.runId,
+      'transition result invocation is unavailable',
+    );
+  }
+  /** @type {{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, workflowCursor?: Record<string, any>, nextInvocation?: Record<string, any>, outputRef?: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[]}} */
   const result = {
     applied,
     receipt: cloneJsonObject(receipt, 'transition receipt'),
     run: cloneJsonObject(state.run, 'run result'),
     invocation: cloneJsonObject(invocation, 'invocation result'),
   };
+  if (receipt.type.startsWith('workflow-activity-')) {
+    const event = state.events[receipt.sequence - 1];
+    if (!event || event.event_id !== receipt.event_id) {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        'workflow transition result event is unavailable',
+      );
+    }
+    const snapshots = eventSnapshots(event, state.run.runId);
+    if (!snapshots.workflowCursor) {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        'workflow transition result cursor is unavailable',
+      );
+    }
+    result.workflowCursor = cloneJsonObject(
+      snapshots.workflowCursor,
+      'workflow cursor result',
+    );
+    if (snapshots.nextInvocation) {
+      result.nextInvocation = cloneJsonObject(
+        snapshots.nextInvocation,
+        'workflow successor invocation result',
+      );
+    }
+    if (receipt.type === 'workflow-activity-succeeded') {
+      const output = snapshots.workflowCursor.outputs.at(-1);
+      if (!output) {
+        throw new ExecutionLedgerProjectionError(
+          state.run.runId,
+          'workflow success result output is unavailable',
+        );
+      }
+      result.outputRef = cloneJsonObject(
+        output.outputRef,
+        'workflow output reference result',
+      );
+    }
+  }
   if (attempt) result.attempt = cloneJsonObject(attempt, 'attempt result');
   if (effect) result.effect = cloneJsonObject(effect, 'effect result');
   if (effects) {
@@ -6086,6 +6737,55 @@ function normalizeTransitionOptions(options, allowed, label, now) {
         : 0,
       `${label}.coordinatorEpoch`,
     ),
+  };
+}
+
+/**
+ * Normalize the exact orchestration coordinates a workflow mutation observed.
+ * The run-head version and physical attempt fence remain separate authorities;
+ * neither can stand in for this cursor guard.
+ * @param {unknown} value - Candidate workflow cursor guard.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {{version: number, continuationId: string, stepId: string, stepIndex: number}} - Strict cursor guard.
+ */
+function normalizeWorkflowCursorGuard(value, label) {
+  const guard = cloneBoundedJsonObject(
+    value,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    label,
+  );
+  assertExactKeys(
+    guard,
+    ['version', 'continuationId', 'stepId', 'stepIndex'],
+    label,
+  );
+  return {
+    version: assertPositiveSafeInteger(guard.version, `${label}.version`),
+    continuationId: assertOpaqueId(
+      guard.continuationId,
+      `${label}.continuationId`,
+    ),
+    stepId: (() => {
+      assertLogicalId(guard.stepId, `${label}.stepId`);
+      return guard.stepId;
+    })(),
+    stepIndex: assertNonnegativeSafeInteger(
+      guard.stepIndex,
+      `${label}.stepIndex`,
+    ),
+  };
+}
+
+/**
+ * @param {Record<string, any>} cursor - Persisted workflow cursor.
+ * @returns {{version: number, continuationId: string, stepId: string, stepIndex: number}} - Public mutation guard.
+ */
+function workflowCursorGuard(cursor) {
+  return {
+    version: cursor.version,
+    continuationId: cursor.continuationId,
+    stepId: cursor.stepId,
+    stepIndex: cursor.stepIndex,
   };
 }
 
@@ -6760,8 +7460,8 @@ function createAttemptId(runId, invocationId, generation) {
 /**
  * Create a provider-neutral append-only execution ledger over one transactional
  * DB table. It intentionally does not provide leases, scheduling, or a general
- * workflow engine; only the first activity-headed workflow continuation is
- * admitted until later durable transition contracts land.
+ * workflow engine; it admits activity-headed workflows and atomically advances
+ * completed activities only to another activity or terminal state.
  * @param {{db: DBClient, tableName: string, payloadStore: {putJson: (input: {value: unknown, payloadSchema: string}) => Promise<unknown>, readBytes: (reference: unknown) => Promise<unknown>}, effectEvidenceVerifiers?: {kind: string, version: number, verify: (input: Record<string, any>) => boolean}[], now?: () => number}} options - Store dependencies.
  * @returns {ExecutionLedgerStore} - Durable ledger API.
  */
@@ -6917,6 +7617,154 @@ export function createExecutionLedger({
   }
 
   /**
+   * Resolve one exact workflow activity from both the persisted cursor and the
+   * immutable invocation binding. Cursorless or stale callers cannot enter a
+   * physical attempt transition even when they hold a current run version.
+   * @param {Record<string, any>} state - Fresh verified durable state.
+   * @param {string} invocationId - Expected active invocation.
+   * @param {{version: number, continuationId: string, stepId: string, stepIndex: number}} guard - Exact caller-observed cursor.
+   * @param {string} operation - Calling mutation name for diagnostics.
+   * @returns {{cursor: Record<string, any>, invocation: Record<string, any>}} - Exact active workflow authority.
+   */
+  function getWorkflowActivityAuthority(state, invocationId, guard, operation) {
+    if (state.run.trigger?.kind !== 'workflow' || !state.workflowCursor) {
+      throw new ExecutionLedgerConflictError(
+        state.run.runId,
+        `${operation} requires a workflow activity run`,
+      );
+    }
+    const cursor = state.workflowCursor;
+    const invocation = state.invocations.get(invocationId);
+    if (
+      !invocation ||
+      state.run.status !== RunStatus.RUNNING ||
+      cursor.invocationId !== invocationId ||
+      !hasSameCanonicalJson(workflowCursorGuard(cursor), guard) ||
+      !invocation.workflow ||
+      !hasSameCanonicalJson(invocation.workflow, {
+        workflowId: cursor.workflowId,
+        planId: cursor.planId,
+        continuationId: cursor.continuationId,
+        stepId: cursor.stepId,
+        stepIndex: cursor.stepIndex,
+      })
+    ) {
+      throw new ExecutionLedgerConflictError(
+        state.run.runId,
+        `${operation} cursor is not the current workflow activity`,
+      );
+    }
+    return { cursor, invocation };
+  }
+
+  /**
+   * Rehash and rederive the exact activity request selected by a workflow
+   * cursor. This runs before every physical lifecycle mutation, not only when
+   * the invocation was first materialized.
+   * @param {Record<string, any>} state - Fresh verified workflow state.
+   * @param {Record<string, any>} cursor - Exact current workflow cursor.
+   * @param {Record<string, any>} invocation - Cursor-bound invocation.
+   * @param {string} operation - Calling mutation name.
+   * @returns {Promise<{planPayload: Record<string, any>, startPayload: Record<string, any>, outputs: Array<{binding: Record<string, any>, payload: Record<string, any>}>, step: Record<string, any>, materialized: Record<string, any>, payloadReader: ReturnType<typeof createLedgerPayloadReader>}>} - Verified current activity materialization.
+   */
+  async function verifyWorkflowCursorActivity(
+    state,
+    cursor,
+    invocation,
+    operation,
+  ) {
+    const payloadReader = createLedgerPayloadReader(
+      payloadStore,
+      state.run.runId,
+    );
+    const planPayload = await payloadReader.readWorkflowPlan(cursor.planRef);
+    const startPayload = await payloadReader.readWorkflowStart(cursor.startRef);
+    const outputs = await readWorkflowCursorOutputs(cursor, payloadReader);
+    const step = planPayload.definition.steps[cursor.stepIndex];
+    if (!step || step.kind !== 'activity') {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        `${operation} cursor does not select an activity`,
+      );
+    }
+    let selectedOutput;
+    try {
+      selectedOutput = selectWorkflowStepOutput(step, outputs, operation);
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        `${operation} selected output is unavailable`,
+      );
+    }
+    let materialized;
+    try {
+      materialized = materializeWorkflowCursorActivity({
+        cursor,
+        planPayload,
+        planRef: cursor.planRef,
+        startPayload,
+        startRef: cursor.startRef,
+        ...(selectedOutput ? { selectedOutput } : {}),
+      });
+    } catch {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        `${operation} activity materialization mismatch`,
+      );
+    }
+    const request = normalizeWorkflowActivityRequest(
+      await payloadReader.readActivityRequest(invocation.requestRef),
+      `${operation} persisted activity request`,
+    );
+    if (
+      planPayload.appId !== state.run.appId ||
+      planPayload.revisionId !== state.run.revisionId ||
+      planPayload.workflowId !== state.run.trigger.workflowId ||
+      materialized.activityId !== invocation.activityId ||
+      materialized.invocationId !== invocation.invocationId ||
+      materialized.continuationId !== cursor.continuationId ||
+      !hasSameCanonicalJson(materialized.activityRequest, request)
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        state.run.runId,
+        `${operation} invocation does not match its workflow cursor`,
+      );
+    }
+    return {
+      planPayload,
+      startPayload,
+      outputs,
+      step,
+      materialized,
+      payloadReader,
+    };
+  }
+
+  /**
+   * Keep physical dispatch behind the continuation shapes this tranche can
+   * commit atomically. A worker must not begin user code if success would stop
+   * at an unimplemented timer or signal boundary.
+   * @param {Record<string, any>} state - Verified workflow state.
+   * @param {Record<string, any>} cursor - Current activity cursor.
+   * @param {Record<string, any>} planPayload - Rehashed immutable plan.
+   * @param {string} operation - Calling mutation name.
+   * @returns {void}
+   */
+  function assertWorkflowActivityDispatchSupported(
+    state,
+    cursor,
+    planPayload,
+    operation,
+  ) {
+    if (!isWorkflowActivityDispatchSupported(cursor, planPayload)) {
+      throw new ExecutionLedgerConflictError(
+        state.run.runId,
+        `${operation} cannot dispatch an activity whose continuation is not implemented`,
+      );
+    }
+  }
+
+  /**
    * Resolve the only invocation a framework-owned successor may contain.
    * @param {Record<string, any>} state - Fresh verified durable state.
    * @returns {{authorization: Record<string, any>, invocation: Record<string, any>}} - Exact target authority and invocation.
@@ -7025,6 +7873,12 @@ export function createExecutionLedger({
       );
     }
     const isWorkflow = run.trigger.kind === 'workflow';
+    const expectedWorkflowDisposition =
+      invocation.status === InvocationStatus.RUNNABLE
+        ? WorkflowCursorDisposition.ACTIVITY_RUNNABLE
+        : invocation.status === InvocationStatus.RUNNING
+          ? WorkflowCursorDisposition.ACTIVITY_RUNNING
+          : undefined;
     if (
       isWorkflow
         ? !workflowCursor ||
@@ -7034,8 +7888,8 @@ export function createExecutionLedger({
           workflowCursor.workflowId !== run.trigger.workflowId ||
           workflowCursor.planId !== run.trigger.planId ||
           workflowCursor.invocationId !== invocation.invocationId ||
-          workflowCursor.disposition !==
-            WorkflowCursorDisposition.ACTIVITY_RUNNABLE ||
+          !expectedWorkflowDisposition ||
+          workflowCursor.disposition !== expectedWorkflowDisposition ||
           !invocation.workflow ||
           !hasSameCanonicalJson(invocation.workflow, {
             workflowId: workflowCursor.workflowId,
@@ -7123,7 +7977,7 @@ export function createExecutionLedger({
    * the affected projections, including the current ready-work locator. The
    * caller supplies already-folded snapshots so the event remains sufficient
    * to reconstruct every authoritative projection.
-   * @param {{state: Record<string, any> | null, runId: string, transitionId: string, requestDigest: string, event: Record<string, any>, nextRun: Record<string, any>, nextInvocation: Record<string, any>, nextWorkflowCursor?: Record<string, any>, nextAttempt?: Record<string, any>, currentAttempt?: Record<string, any>, nextEffect?: Record<string, any>, currentEffect?: Record<string, any>, effectTransitions?: Array<{currentEffect?: Record<string, any>, nextEffect: Record<string, any>}>}} input - Fully validated transition.
+   * @param {{state: Record<string, any> | null, runId: string, transitionId: string, requestDigest: string, event: Record<string, any>, nextRun: Record<string, any>, nextInvocation: Record<string, any>, nextAdditionalInvocation?: Record<string, any>, nextWorkflowCursor?: Record<string, any>, nextAttempt?: Record<string, any>, currentAttempt?: Record<string, any>, nextEffect?: Record<string, any>, currentEffect?: Record<string, any>, effectTransitions?: Array<{currentEffect?: Record<string, any>, nextEffect: Record<string, any>}>}} input - Fully validated transition.
    * @returns {Promise<void>} - Resolves only after the durable transaction commits.
    */
   async function appendTransition(input) {
@@ -7160,10 +8014,6 @@ export function createExecutionLedger({
       input.runId,
       input.nextRun,
     );
-    const invocationRecord = createInvocationProjectionRecord(
-      input.runId,
-      input.nextInvocation,
-    );
     const receiptRecord = createTransitionRecord(
       input.runId,
       input.transitionId,
@@ -7172,6 +8022,16 @@ export function createExecutionLedger({
     );
     const currentWorkflowCursor = input.state?.workflowCursor;
     const nextWorkflowCursor = input.nextWorkflowCursor;
+    if (
+      input.nextRun.trigger?.kind === 'workflow'
+        ? !nextWorkflowCursor
+        : Boolean(currentWorkflowCursor || nextWorkflowCursor)
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        input.runId,
+        'transition workflow cursor presence mismatch',
+      );
+    }
     const currentInvocation = input.state
       ? input.state.invocations.get(input.nextInvocation.invocationId)
       : undefined;
@@ -7179,6 +8039,19 @@ export function createExecutionLedger({
       throw new ExecutionLedgerProjectionError(
         input.runId,
         'transition invocation missing',
+      );
+    }
+    const nextAdditionalInvocation = input.nextAdditionalInvocation;
+    if (
+      nextAdditionalInvocation &&
+      (!input.state ||
+        nextAdditionalInvocation.invocationId ===
+          input.nextInvocation.invocationId ||
+        input.state.invocations.has(nextAdditionalInvocation.invocationId))
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        input.runId,
+        'additional transition invocation conflicts with retained state',
       );
     }
     const persistedInvocation = /** @type {Record<string, any>} */ (
@@ -7192,16 +8065,20 @@ export function createExecutionLedger({
           currentWorkflowCursor,
         )
       : undefined;
+    const nextReadyInvocation =
+      nextAdditionalInvocation || input.nextInvocation;
     const nextReadyAttempt =
-      input.nextInvocation.status === InvocationStatus.RUNNING
-        ? input.nextAttempt ||
-          (input.state
-            ? getReadyWorkAttempt(input.state, persistedInvocation)
-            : undefined)
+      nextReadyInvocation.status === InvocationStatus.RUNNING
+        ? nextReadyInvocation.invocationId === input.nextInvocation.invocationId
+          ? input.nextAttempt ||
+            (input.state
+              ? getReadyWorkAttempt(input.state, persistedInvocation)
+              : undefined)
+          : undefined
         : undefined;
     const nextReadyWork = createLifecycleReadyWorkRecord(
       input.nextRun,
-      input.nextInvocation,
+      nextReadyInvocation,
       nextReadyAttempt,
       nextWorkflowCursor,
     );
@@ -7252,21 +8129,33 @@ export function createExecutionLedger({
             )
           : [notExists(SORT_KEY_NAME)],
       },
-      {
+    ];
+    const invocationRecord = createInvocationProjectionRecord(
+      input.runId,
+      input.nextInvocation,
+    );
+    putRequests.push({
+      keyName: KEY_NAME,
+      sortKeyName: SORT_KEY_NAME,
+      record: invocationRecord,
+      conditions: input.state
+        ? replacementConditions(
+            createInvocationProjectionRecord(input.runId, persistedInvocation),
+            [eq('generation', persistedInvocation.generation)],
+          )
+        : [notExists(SORT_KEY_NAME)],
+    });
+    if (nextAdditionalInvocation) {
+      putRequests.push({
         keyName: KEY_NAME,
         sortKeyName: SORT_KEY_NAME,
-        record: invocationRecord,
-        conditions: input.state
-          ? replacementConditions(
-              createInvocationProjectionRecord(
-                input.runId,
-                persistedInvocation,
-              ),
-              [eq('generation', persistedInvocation.generation)],
-            )
-          : [notExists(SORT_KEY_NAME)],
-      },
-    ];
+        record: createInvocationProjectionRecord(
+          input.runId,
+          nextAdditionalInvocation,
+        ),
+        conditions: [notExists(SORT_KEY_NAME)],
+      });
+    }
     if (input.nextAttempt) {
       const attemptRecord = createAttemptProjectionRecord(
         input.runId,
@@ -9836,7 +10725,7 @@ export function createExecutionLedger({
   }
 
   /**
-   * @param {{state: Record<string, any>, runId: string, transitionId: string, requestDigest: string, event: Record<string, any>, nextRun: Record<string, any>, nextInvocation: Record<string, any>, nextAttempt?: Record<string, any>, currentAttempt?: Record<string, any>, nextEffect?: Record<string, any>, currentEffect?: Record<string, any>, effectTransitions?: Array<{currentEffect?: Record<string, any>, nextEffect: Record<string, any>}>, resultEffectIds?: string[]}} input - Fully validated existing-run transition.
+   * @param {{state: Record<string, any>, runId: string, transitionId: string, requestDigest: string, event: Record<string, any>, nextRun: Record<string, any>, nextInvocation: Record<string, any>, nextAdditionalInvocation?: Record<string, any>, nextWorkflowCursor?: Record<string, any>, nextAttempt?: Record<string, any>, currentAttempt?: Record<string, any>, nextEffect?: Record<string, any>, currentEffect?: Record<string, any>, effectTransitions?: Array<{currentEffect?: Record<string, any>, nextEffect: Record<string, any>}>, resultEffectIds?: string[]}} input - Fully validated existing-run transition.
    * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>}>} - Accepted or idempotently replayed transition.
    */
   async function appendOrReplay(input) {
@@ -10330,6 +11219,875 @@ export function createExecutionLedger({
       ...result,
       outcome: /** @type {const} */ ('cancellation-requested'),
     };
+  }
+
+  /**
+   * Claim one exact runnable workflow activity under both the run head and
+   * orchestration cursor CAS. The returned attempt remains undispatchable
+   * until markWorkflowActivityStarted persists the irreversible boundary.
+   * @param {{runId: string, invocationId: string, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, fencingToken: string, expectedGeneration: number, expectedVersion: number, transitionId: string, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Cursor-guarded claim request.
+   * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, workflowCursor: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>}>} - Accepted or exactly replayed claim.
+   */
+  async function claimWorkflowActivity(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+      'claimWorkflowActivity',
+    );
+    const common = normalizeTransitionOptions(
+      value,
+      [
+        'runId',
+        'invocationId',
+        'cursor',
+        'fencingToken',
+        'expectedGeneration',
+        'expectedVersion',
+        'transitionId',
+        'actor',
+        'coordinatorEpoch',
+        'observedAt',
+      ],
+      'claimWorkflowActivity',
+      now,
+    );
+    const invocationId = assertOpaqueId(
+      value.invocationId,
+      'claimWorkflowActivity.invocationId',
+    );
+    const guard = normalizeWorkflowCursorGuard(
+      value.cursor,
+      'claimWorkflowActivity.cursor',
+    );
+    const fencingToken = assertOpaqueId(
+      value.fencingToken,
+      'claimWorkflowActivity.fencingToken',
+    );
+    const expectedGeneration = assertNonnegativeSafeInteger(
+      value.expectedGeneration,
+      'claimWorkflowActivity.expectedGeneration',
+    );
+    const attemptId = createAttemptId(
+      common.runId,
+      invocationId,
+      expectedGeneration + 1,
+    );
+    const requestDigest = createTransitionRequestDigest(
+      'workflow-activity-claimed',
+      {
+        runId: common.runId,
+        invocationId,
+        cursor: guard,
+        attemptId,
+        fencingToken,
+        expectedGeneration,
+        expectedVersion: common.expectedVersion,
+        transitionId: common.transitionId,
+        actor: common.actor,
+        coordinatorEpoch: common.coordinatorEpoch,
+      },
+    );
+    const state = await readVerifiedRun(common.runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    const existing = assertMatchingReceipt(
+      state,
+      await getTransitionReceipt(
+        db,
+        resolvedTableName,
+        common.runId,
+        common.transitionId,
+      ),
+      requestDigest,
+    );
+    if (existing) {
+      if (
+        existing.type !== 'workflow-activity-claimed' ||
+        existing.invocation_id !== invocationId ||
+        existing.attempt_id !== attemptId
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      return /** @type {any} */ (
+        await existingTransitionResult(state, existing)
+      );
+    }
+    if (state.head.version !== common.expectedVersion) {
+      throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
+    }
+    const authority = getWorkflowActivityAuthority(
+      state,
+      invocationId,
+      guard,
+      'claimWorkflowActivity',
+    );
+    const verified = await verifyWorkflowCursorActivity(
+      state,
+      authority.cursor,
+      authority.invocation,
+      'claimWorkflowActivity',
+    );
+    assertWorkflowActivityDispatchSupported(
+      state,
+      authority.cursor,
+      verified.planPayload,
+      'claimWorkflowActivity',
+    );
+    if (
+      authority.cursor.disposition !==
+        WorkflowCursorDisposition.ACTIVITY_RUNNABLE ||
+      authority.invocation.status !== InvocationStatus.RUNNABLE ||
+      authority.invocation.generation !== expectedGeneration ||
+      state.attempts.has(attemptMapKey(invocationId, attemptId))
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow activity is not currently runnable',
+      );
+    }
+    if (
+      common.observedAt < state.run.updatedAt ||
+      common.observedAt < authority.cursor.updatedAt
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow claim observation precedes durable state',
+      );
+    }
+
+    const sequence = state.head.sequence + 1;
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current workflow run'),
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextInvocation = {
+      ...cloneJsonObject(authority.invocation, 'current workflow invocation'),
+      status: InvocationStatus.RUNNING,
+      generation: expectedGeneration + 1,
+      version: authority.invocation.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextWorkflowCursor = normalizeWorkflowCursor(
+      {
+        ...cloneJsonObject(authority.cursor, 'current workflow cursor'),
+        disposition: WorkflowCursorDisposition.ACTIVITY_RUNNING,
+        version: authority.cursor.version + 1,
+        lastSequence: sequence,
+        updatedAt: common.observedAt,
+      },
+      'claimWorkflowActivity.nextCursor',
+    );
+    const attempt = {
+      schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+      runId: common.runId,
+      invocationId,
+      attemptId,
+      appId: state.run.appId,
+      revisionId: state.run.revisionId,
+      activityId: authority.invocation.activityId,
+      status: AttemptStatus.CLAIMED,
+      generation: nextInvocation.generation,
+      version: 1,
+      coordinatorEpoch: common.coordinatorEpoch,
+      fencingToken,
+      claimedAt: common.observedAt,
+      updatedAt: common.observedAt,
+      lastSequence: sequence,
+    };
+    const event = createEventRecord(
+      common.runId,
+      sequence,
+      common.transitionId,
+      requestDigest,
+      'workflow-activity-claimed',
+      common.observedAt,
+      common.actor,
+      {
+        coordinatorEpoch: common.coordinatorEpoch,
+        invocationGeneration: attempt.generation,
+      },
+      {
+        run: nextRun,
+        invocation: nextInvocation,
+        workflowCursor: nextWorkflowCursor,
+        attempt,
+      },
+    );
+    return /** @type {any} */ (
+      await appendOrReplay({
+        state,
+        runId: common.runId,
+        transitionId: common.transitionId,
+        requestDigest,
+        event,
+        nextRun,
+        nextInvocation,
+        nextWorkflowCursor,
+        nextAttempt: attempt,
+      })
+    );
+  }
+
+  /**
+   * Persist the irreversible dispatch boundary for one exact claimed workflow
+   * activity. Receipt replay deliberately never authorizes a second delivery.
+   * @param {{runId: string, invocationId: string, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, attemptId: string, fencingToken: string, generation: number, expectedVersion: number, transitionId: string, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Cursor-guarded start request.
+   * @returns {Promise<{applied: boolean, dispatchAuthorized: boolean, receipt: Record<string, any>, run: Record<string, any>, workflowCursor: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, startFrame: Readonly<Record<string, any>>}>} - Durable start outcome.
+   */
+  async function markWorkflowActivityStarted(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_EVENT_PAYLOAD_BYTES,
+      'markWorkflowActivityStarted',
+    );
+    const common = normalizeTransitionOptions(
+      value,
+      [
+        'runId',
+        'invocationId',
+        'cursor',
+        'attemptId',
+        'fencingToken',
+        'generation',
+        'expectedVersion',
+        'transitionId',
+        'actor',
+        'coordinatorEpoch',
+        'observedAt',
+      ],
+      'markWorkflowActivityStarted',
+      now,
+    );
+    const invocationId = assertOpaqueId(
+      value.invocationId,
+      'markWorkflowActivityStarted.invocationId',
+    );
+    const guard = normalizeWorkflowCursorGuard(
+      value.cursor,
+      'markWorkflowActivityStarted.cursor',
+    );
+    const attemptId = assertOpaqueId(
+      value.attemptId,
+      'markWorkflowActivityStarted.attemptId',
+    );
+    const fencingToken = assertOpaqueId(
+      value.fencingToken,
+      'markWorkflowActivityStarted.fencingToken',
+    );
+    const generation = assertPositiveSafeInteger(
+      value.generation,
+      'markWorkflowActivityStarted.generation',
+    );
+    const requestDigest = createTransitionRequestDigest(
+      'workflow-activity-started',
+      {
+        runId: common.runId,
+        invocationId,
+        cursor: guard,
+        attemptId,
+        fencingToken,
+        generation,
+        expectedVersion: common.expectedVersion,
+        transitionId: common.transitionId,
+        actor: common.actor,
+        coordinatorEpoch: common.coordinatorEpoch,
+      },
+    );
+    const state = await readVerifiedRun(common.runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    const existing = assertMatchingReceipt(
+      state,
+      await getTransitionReceipt(
+        db,
+        resolvedTableName,
+        common.runId,
+        common.transitionId,
+      ),
+      requestDigest,
+    );
+    if (existing) {
+      if (
+        existing.type !== 'workflow-activity-started' ||
+        existing.invocation_id !== invocationId ||
+        existing.attempt_id !== attemptId
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      return /** @type {any} */ (
+        await startedTransitionResult(
+          await existingTransitionResult(state, existing),
+          common.runId,
+          payloadStore,
+        )
+      );
+    }
+    if (state.head.version !== common.expectedVersion) {
+      throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
+    }
+    const authority = getWorkflowActivityAuthority(
+      state,
+      invocationId,
+      guard,
+      'markWorkflowActivityStarted',
+    );
+    const verified = await verifyWorkflowCursorActivity(
+      state,
+      authority.cursor,
+      authority.invocation,
+      'markWorkflowActivityStarted',
+    );
+    assertWorkflowActivityDispatchSupported(
+      state,
+      authority.cursor,
+      verified.planPayload,
+      'markWorkflowActivityStarted',
+    );
+    const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
+    if (
+      authority.cursor.disposition !==
+        WorkflowCursorDisposition.ACTIVITY_RUNNING ||
+      authority.invocation.status !== InvocationStatus.RUNNING ||
+      !attempt ||
+      attempt.status !== AttemptStatus.CLAIMED
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow attempt is not currently claimable for start',
+      );
+    }
+    assertCurrentAttemptFence(
+      attempt,
+      { coordinatorEpoch: common.coordinatorEpoch, fencingToken, generation },
+      common.runId,
+    );
+    if (
+      common.observedAt < state.run.updatedAt ||
+      common.observedAt < authority.cursor.updatedAt ||
+      common.observedAt < attempt.updatedAt
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow start observation precedes durable state',
+      );
+    }
+
+    const sequence = state.head.sequence + 1;
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current workflow run'),
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextInvocation = {
+      ...cloneJsonObject(authority.invocation, 'current workflow invocation'),
+      version: authority.invocation.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextWorkflowCursor = normalizeWorkflowCursor(
+      {
+        ...cloneJsonObject(authority.cursor, 'current workflow cursor'),
+        version: authority.cursor.version + 1,
+        lastSequence: sequence,
+        updatedAt: common.observedAt,
+      },
+      'markWorkflowActivityStarted.nextCursor',
+    );
+    const nextAttempt = {
+      ...cloneJsonObject(attempt, 'current workflow attempt'),
+      status: AttemptStatus.STARTED,
+      version: attempt.version + 1,
+      startedAt: common.observedAt,
+      updatedAt: common.observedAt,
+      lastSequence: sequence,
+    };
+    const event = createEventRecord(
+      common.runId,
+      sequence,
+      common.transitionId,
+      requestDigest,
+      'workflow-activity-started',
+      common.observedAt,
+      common.actor,
+      {
+        coordinatorEpoch: common.coordinatorEpoch,
+        invocationGeneration: generation,
+      },
+      {
+        run: nextRun,
+        invocation: nextInvocation,
+        workflowCursor: nextWorkflowCursor,
+        attempt: nextAttempt,
+      },
+    );
+    return /** @type {any} */ (
+      await startedTransitionResult(
+        await appendOrReplay({
+          state,
+          runId: common.runId,
+          transitionId: common.transitionId,
+          requestDigest,
+          event,
+          nextRun,
+          nextInvocation,
+          nextWorkflowCursor,
+          nextAttempt,
+          currentAttempt: attempt,
+        }),
+        common.runId,
+        payloadStore,
+      )
+    );
+  }
+
+  /**
+   * Commit a verified completed Activity Protocol transcript as one logical
+   * workflow step. The transaction terminalizes the physical attempt and its
+   * invocation while atomically installing either the next runnable activity
+   * or the terminal workflow cursor.
+   * @param {{runId: string, invocationId: string, cursor: {version: number, continuationId: string, stepId: string, stepIndex: number}, attemptId: string, fencingToken: string, generation: number, expectedVersion: number, transitionId: string, evidence: Record<string, any>, actor?: {kind: string, id: string}, coordinatorEpoch?: number, observedAt?: number}} options - Cursor-guarded verified success.
+   * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, workflowCursor: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, outputRef: Record<string, any>, nextInvocation?: Record<string, any>}>} - Compound success outcome.
+   */
+  async function commitVerifiedWorkflowActivitySuccess(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+      'commitVerifiedWorkflowActivitySuccess',
+    );
+    const common = normalizeTransitionOptions(
+      value,
+      [
+        'runId',
+        'invocationId',
+        'cursor',
+        'attemptId',
+        'fencingToken',
+        'generation',
+        'expectedVersion',
+        'transitionId',
+        'evidence',
+        'actor',
+        'coordinatorEpoch',
+        'observedAt',
+      ],
+      'commitVerifiedWorkflowActivitySuccess',
+      now,
+    );
+    const invocationId = assertOpaqueId(
+      value.invocationId,
+      'commitVerifiedWorkflowActivitySuccess.invocationId',
+    );
+    const guard = normalizeWorkflowCursorGuard(
+      value.cursor,
+      'commitVerifiedWorkflowActivitySuccess.cursor',
+    );
+    const attemptId = assertOpaqueId(
+      value.attemptId,
+      'commitVerifiedWorkflowActivitySuccess.attemptId',
+    );
+    const fencingToken = assertOpaqueId(
+      value.fencingToken,
+      'commitVerifiedWorkflowActivitySuccess.fencingToken',
+    );
+    const generation = assertPositiveSafeInteger(
+      value.generation,
+      'commitVerifiedWorkflowActivitySuccess.generation',
+    );
+    const state = await readVerifiedRun(common.runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    const existingReceipt = await getTransitionReceipt(
+      db,
+      resolvedTableName,
+      common.runId,
+      common.transitionId,
+    );
+    if (existingReceipt) {
+      const receiptState = await stateContainingTransitionReceipt(
+        state,
+        existingReceipt,
+      );
+      if (
+        existingReceipt.type !== 'workflow-activity-succeeded' ||
+        existingReceipt.invocation_id !== invocationId ||
+        existingReceipt.attempt_id !== attemptId
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      const existingEvent = receiptState.events[existingReceipt.sequence - 1];
+      const snapshots = existingEvent
+        ? eventSnapshots(existingEvent, common.runId)
+        : undefined;
+      const persistedAttempt = snapshots?.attempt;
+      const persistedCursor = snapshots?.workflowCursor;
+      const priorEvent = receiptState.events[existingReceipt.sequence - 2];
+      const priorCursor = priorEvent
+        ? eventSnapshots(priorEvent, common.runId).workflowCursor
+        : undefined;
+      if (
+        !existingEvent ||
+        existingEvent.event_id !== existingReceipt.event_id ||
+        !snapshots ||
+        !persistedAttempt ||
+        !persistedCursor ||
+        !priorCursor ||
+        !hasSameCanonicalJson(workflowCursorGuard(priorCursor), guard)
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          common.runId,
+          'workflow success receipt snapshots are unavailable',
+        );
+      }
+      const payloadReader = createLedgerPayloadReader(
+        payloadStore,
+        common.runId,
+      );
+      const verifiedEvidence = validateLedgerAttemptEvidence(
+        value.evidence,
+        await createLedgerAttemptStart(
+          snapshots.run,
+          snapshots.invocation,
+          persistedAttempt,
+          payloadReader,
+        ),
+        'commitVerifiedWorkflowActivitySuccess.evidence',
+      );
+      await assertAttemptEvidenceMatchesManagedEffects(
+        verifiedEvidence.evidence,
+        persistedAttempt,
+        /** @type {{effects: Map<string, Record<string, any>>}} */ (
+          receiptState
+        ),
+        payloadReader,
+        effectVerifierRegistry,
+        common.runId,
+      );
+      if (
+        verifiedEvidence.terminal.type !== 'completed' ||
+        verifiedEvidence.terminal.attemptId !== attemptId ||
+        !hasSameCanonicalJson(
+          await payloadReader.readEvidence(persistedAttempt.evidenceRef),
+          verifiedEvidence.evidence,
+        )
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      const output = persistedCursor.outputs.at(-1);
+      if (!output) {
+        throw new ExecutionLedgerProjectionError(
+          common.runId,
+          'workflow success receipt output is unavailable',
+        );
+      }
+      const outputPayload = await payloadReader.readWorkflowOutput(
+        output.outputRef,
+      );
+      if (
+        !hasSameCanonicalJson(
+          outputPayload.value,
+          verifiedEvidence.terminal.result,
+        )
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      const successor = snapshots.nextInvocation
+        ? {
+            continuationId: snapshots.nextInvocation.workflow?.continuationId,
+            stepId: snapshots.nextInvocation.workflow?.stepId,
+            stepIndex: snapshots.nextInvocation.workflow?.stepIndex,
+            invocationId: snapshots.nextInvocation.invocationId,
+            activityId: snapshots.nextInvocation.activityId,
+            requestRef: snapshots.nextInvocation.requestRef,
+          }
+        : null;
+      const requestDigest = createTransitionRequestDigest(
+        'workflow-activity-succeeded',
+        {
+          runId: common.runId,
+          invocationId,
+          cursor: guard,
+          attemptId,
+          fencingToken,
+          generation,
+          expectedVersion: common.expectedVersion,
+          transitionId: common.transitionId,
+          terminal: createTerminalSummary(verifiedEvidence.terminal),
+          evidenceRef: persistedAttempt.evidenceRef,
+          outputRef: output.outputRef,
+          successor,
+          actor: common.actor,
+          coordinatorEpoch: common.coordinatorEpoch,
+        },
+      );
+      const existing = assertMatchingReceipt(
+        receiptState,
+        existingReceipt,
+        requestDigest,
+      );
+      return /** @type {any} */ (
+        await existingTransitionResult(
+          receiptState,
+          /** @type {Record<string, any>} */ (existing),
+        )
+      );
+    }
+
+    if (state.head.version !== common.expectedVersion) {
+      throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
+    }
+    const authority = getWorkflowActivityAuthority(
+      state,
+      invocationId,
+      guard,
+      'commitVerifiedWorkflowActivitySuccess',
+    );
+    const verified = await verifyWorkflowCursorActivity(
+      state,
+      authority.cursor,
+      authority.invocation,
+      'commitVerifiedWorkflowActivitySuccess',
+    );
+    assertWorkflowActivityDispatchSupported(
+      state,
+      authority.cursor,
+      verified.planPayload,
+      'commitVerifiedWorkflowActivitySuccess',
+    );
+    const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
+    if (
+      authority.cursor.disposition !==
+        WorkflowCursorDisposition.ACTIVITY_RUNNING ||
+      authority.invocation.status !== InvocationStatus.RUNNING ||
+      !attempt ||
+      attempt.status !== AttemptStatus.STARTED
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow attempt cannot commit success in its current state',
+      );
+    }
+    assertCurrentAttemptFence(
+      attempt,
+      { coordinatorEpoch: common.coordinatorEpoch, fencingToken, generation },
+      common.runId,
+    );
+    if (
+      common.observedAt < state.run.updatedAt ||
+      common.observedAt < authority.cursor.updatedAt ||
+      common.observedAt < attempt.updatedAt
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'workflow success observation precedes durable state',
+      );
+    }
+    const payloadReader = createLedgerPayloadReader(payloadStore, common.runId);
+    const verifiedEvidence = validateLedgerAttemptEvidence(
+      value.evidence,
+      await createLedgerAttemptStart(
+        state.run,
+        authority.invocation,
+        attempt,
+        payloadReader,
+      ),
+      'commitVerifiedWorkflowActivitySuccess.evidence',
+    );
+    await assertAttemptEvidenceMatchesManagedEffects(
+      verifiedEvidence.evidence,
+      attempt,
+      state,
+      payloadReader,
+      effectVerifierRegistry,
+      common.runId,
+    );
+    const terminal = verifiedEvidence.terminal;
+    if (terminal.type !== 'completed' || terminal.attemptId !== attemptId) {
+      throw new TypeError(
+        'commitVerifiedWorkflowActivitySuccess.evidence must end with completed for the exact persisted attempt.',
+      );
+    }
+    const outputPayload = normalizeWorkflowOutputPayload(
+      {
+        schemaVersion: WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION,
+        kind: WORKFLOW_OUTPUT_PAYLOAD_KIND,
+        value: terminal.result,
+      },
+      'commitVerifiedWorkflowActivitySuccess.output',
+    );
+    const evidenceRef = await putVerifiedPayload(payloadStore, {
+      value: verifiedEvidence.evidence,
+      payloadSchema: ACTIVITY_EVIDENCE_PAYLOAD_SCHEMA,
+      label: 'commitVerifiedWorkflowActivitySuccess.evidenceRef',
+    });
+    const outputRef = await putVerifiedPayload(payloadStore, {
+      value: outputPayload,
+      payloadSchema: WORKFLOW_OUTPUT_PAYLOAD_SCHEMA,
+      label: 'commitVerifiedWorkflowActivitySuccess.outputRef',
+    });
+    const sequence = state.head.sequence + 1;
+    const nextStep =
+      verified.planPayload.definition.steps[authority.cursor.stepIndex + 1];
+    let selectedOutput;
+    if (
+      nextStep?.kind === 'activity' &&
+      nextStep.input.kind === 'step-output' &&
+      nextStep.input.step !== authority.cursor.stepId
+    ) {
+      selectedOutput = selectWorkflowStepOutput(
+        nextStep,
+        verified.outputs,
+        'commitVerifiedWorkflowActivitySuccess successor',
+      );
+    }
+    const materialized = materializeWorkflowActivitySuccess({
+      currentCursor: authority.cursor,
+      planPayload: verified.planPayload,
+      planRef: authority.cursor.planRef,
+      startPayload: verified.startPayload,
+      startRef: authority.cursor.startRef,
+      outputPayload,
+      outputRef,
+      ...(selectedOutput ? { selectedOutput } : {}),
+      sequence,
+      observedAt: common.observedAt,
+    });
+    let nextAdditionalInvocation;
+    if (materialized.nextActivity) {
+      const nextRequestRef = await putVerifiedPayload(payloadStore, {
+        value: materialized.nextActivity.activityRequest,
+        payloadSchema: ACTIVITY_REQUEST_PAYLOAD_SCHEMA,
+        label: 'commitVerifiedWorkflowActivitySuccess.nextRequestRef',
+      });
+      nextAdditionalInvocation = {
+        schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
+        runId: common.runId,
+        invocationId: materialized.nextActivity.invocationId,
+        appId: state.run.appId,
+        revisionId: state.run.revisionId,
+        activityId: materialized.nextActivity.activityId,
+        requestRef: nextRequestRef,
+        status: InvocationStatus.RUNNABLE,
+        generation: 0,
+        version: 1,
+        lastSequence: sequence,
+        createdAt: common.observedAt,
+        updatedAt: common.observedAt,
+        workflow: {
+          workflowId: authority.cursor.workflowId,
+          planId: authority.cursor.planId,
+          continuationId: materialized.nextActivity.continuationId,
+          stepId: materialized.nextActivity.stepId,
+          stepIndex: materialized.nextActivity.stepIndex,
+        },
+      };
+    }
+    const terminalSummary = createTerminalSummary(terminal);
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current workflow run'),
+      status: materialized.completed ? RunStatus.COMPLETED : RunStatus.RUNNING,
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextInvocation = {
+      ...cloneJsonObject(authority.invocation, 'current workflow invocation'),
+      status: InvocationStatus.COMPLETED,
+      version: authority.invocation.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+      terminal: terminalSummary,
+    };
+    const nextAttempt = {
+      ...cloneJsonObject(attempt, 'current workflow attempt'),
+      status: AttemptStatus.COMPLETED,
+      version: attempt.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+      terminal: terminalSummary,
+      evidenceRef,
+    };
+    const successor = nextAdditionalInvocation
+      ? {
+          continuationId: nextAdditionalInvocation.workflow.continuationId,
+          stepId: nextAdditionalInvocation.workflow.stepId,
+          stepIndex: nextAdditionalInvocation.workflow.stepIndex,
+          invocationId: nextAdditionalInvocation.invocationId,
+          activityId: nextAdditionalInvocation.activityId,
+          requestRef: nextAdditionalInvocation.requestRef,
+        }
+      : null;
+    const requestDigest = createTransitionRequestDigest(
+      'workflow-activity-succeeded',
+      {
+        runId: common.runId,
+        invocationId,
+        cursor: guard,
+        attemptId,
+        fencingToken,
+        generation,
+        expectedVersion: common.expectedVersion,
+        transitionId: common.transitionId,
+        terminal: terminalSummary,
+        evidenceRef,
+        outputRef,
+        successor,
+        actor: common.actor,
+        coordinatorEpoch: common.coordinatorEpoch,
+      },
+    );
+    const event = createEventRecord(
+      common.runId,
+      sequence,
+      common.transitionId,
+      requestDigest,
+      'workflow-activity-succeeded',
+      common.observedAt,
+      common.actor,
+      {
+        coordinatorEpoch: common.coordinatorEpoch,
+        invocationGeneration: generation,
+      },
+      {
+        run: nextRun,
+        invocation: nextInvocation,
+        workflowCursor: materialized.cursor,
+        attempt: nextAttempt,
+        ...(nextAdditionalInvocation
+          ? { nextInvocation: nextAdditionalInvocation }
+          : {}),
+      },
+    );
+    return /** @type {any} */ (
+      await appendOrReplay({
+        state,
+        runId: common.runId,
+        transitionId: common.transitionId,
+        requestDigest,
+        event,
+        nextRun,
+        nextInvocation,
+        nextAdditionalInvocation,
+        nextWorkflowCursor: materialized.cursor,
+        nextAttempt,
+        currentAttempt: attempt,
+      })
+    );
   }
 
   /**
@@ -14071,8 +15829,10 @@ export function createExecutionLedger({
     abandonUnstartedAttempt,
     authorizeManagedEffectSuccessorRetry,
     claimInvocation,
+    claimWorkflowActivity,
     commitManagedEffectSuccessorOutcome,
     commitVerifiedAttemptTerminal,
+    commitVerifiedWorkflowActivitySuccess,
     commitManagedEffectOutcome,
     createManualRun,
     createWorkflowRun,
@@ -14084,6 +15844,7 @@ export function createExecutionLedger({
     listReadyWork,
     listRuns,
     markAttemptStarted,
+    markWorkflowActivityStarted,
     markAttemptUncertain,
     markManagedEffectStarted,
     markManagedEffectUncertain,
@@ -14106,6 +15867,9 @@ export function createExecutionLedger({
  * @typedef ExecutionLedgerStore
  * @property {(...args: any[]) => Promise<any>} createManualRun - Creates one idempotent manual run.
  * @property {(...args: any[]) => Promise<any>} createWorkflowRun - Creates one idempotent activity-headed workflow run.
+ * @property {(...args: any[]) => Promise<any>} claimWorkflowActivity - Claims one exact cursor-bound workflow activity generation.
+ * @property {(...args: any[]) => Promise<any>} markWorkflowActivityStarted - Persists the dispatch boundary for one exact workflow activity attempt.
+ * @property {(...args: any[]) => Promise<any>} commitVerifiedWorkflowActivitySuccess - Atomically commits verified workflow output and its successor or terminal cursor.
  * @property {(...args: any[]) => Promise<any>} authorizeManagedEffectSuccessorRetry - Atomically appends source authorization and creates one fresh effect-only retry run.
  * @property {(...args: any[]) => Promise<any>} startManagedEffectSuccessor - Atomically starts a successor's sole retained effect and authorizes one physical dispatch.
  * @property {(...args: any[]) => Promise<any>} commitManagedEffectSuccessorOutcome - Atomically closes a successor's sole started effect and aggregate terminal state.

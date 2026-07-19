@@ -1,6 +1,6 @@
 # Wharfie roadmap
 
-**Status:** Activity-headed workflow start and ready-work V2 implemented; workflow activity lifecycle and continuations next · **Last updated:** 2026-07-19
+**Status:** Cursor-guarded workflow activities and atomic activity continuations implemented; timers, signals, and recovery next · **Last updated:** 2026-07-19
 
 This roadmap orders work by the shortest path to the experience in [PROJECT.md](PROJECT.md). It is intentionally willing to remove v1 behavior and break internal APIs. Each milestone should end in an executable proof, not only new abstractions.
 
@@ -184,6 +184,14 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       run, cursor, invocation, directory entry, and cursor-bound ready-work V2
       row. Exact replay, conflicting races, failed transactions, projection
       corruption, repair, and native LMDB reopen fail or converge explicitly.
+- [x] Add cursor-guarded workflow activity claim/start and one compound verified
+      success transition. A complete Activity Protocol transcript is the only
+      source of logical output; the V10 transaction terminalizes the current
+      attempt/invocation, advances the output-bearing cursor, and creates one
+      exact runnable activity successor or completes the run while replacing
+      or removing ready work. Replay is receipt-event anchored, and adapter
+      matrices prove stale authority, conditional races, payload/write failure,
+      ready-row corruption, output tampering, and real LMDB reopen behavior.
 - [x] Delete the superseded mutable Operation/Action graph, operation table,
       queue-run bridge, and second writable run model. Manual durable execution
       established the distinction between a caller idempotency key and the
@@ -228,8 +236,9 @@ current source describe the same v2 product; no Athena/v1 surface remains.
       verifiers run synchronously during every fold, response-loss retries never
       redispatch a retained `STARTED` effect, and attempt terminals cannot omit
       or invent effect state. V4 records and its V2 directory remain inert.
-- [ ] Extend the manual ledger to workflow continuations, scheduling decisions,
-      durable outputs, and the remaining operator actions.
+- [ ] Extend the workflow ledger from activity-only continuations to persisted
+      timer/signal decisions, cursor-aware cancellation and recovery, resident
+      dispatch, and the remaining operator actions.
 - [ ] Implement leases, monotonic fencing tokens, heartbeats, retry policy,
       broader recovery, and multi-host authenticated current-owner command
       routing.

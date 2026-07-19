@@ -38,8 +38,11 @@ import {
   createWorkflowSignalWaitId,
   createWorkflowTimerId,
   materializeFirstWorkflowActivity,
+  materializeWorkflowActivitySuccess,
+  materializeWorkflowCursorActivity,
   normalizeWorkflowActivityRequest,
   normalizeWorkflowCursor,
+  normalizeWorkflowOutputBinding,
   normalizeWorkflowOutputPayload,
   normalizeWorkflowPlanPayload,
   normalizeWorkflowStartPayload,
@@ -151,6 +154,90 @@ function materializationInput(overrides = {}) {
   });
 }
 
+/**
+ * @param {Record<string, any>[]} steps
+ * @returns {Record<string, any>}
+ */
+function planWithSteps(steps) {
+  return {
+    schemaVersion: 1,
+    kind: WORKFLOW_PLAN_PAYLOAD_KIND,
+    appId: APP_ID,
+    revisionId: REVISION_ID,
+    workflowId: WORKFLOW_ID,
+    definition: { steps },
+  };
+}
+
+/**
+ * @param {Record<string, any>[]} steps
+ * @param {Record<string, any>} [start]
+ * @returns {{input: ReturnType<typeof materializationInput>, first: ReturnType<typeof materializeFirstWorkflowActivity>}}
+ */
+function firstForSteps(steps, start = startPayload()) {
+  const plan = normalizeWorkflowPlanPayload(planWithSteps(steps));
+  const normalizedStart = normalizeWorkflowStartPayload(start);
+  const input = materializationInput({
+    planPayload: plan,
+    planRef: payloadReference(plan, WORKFLOW_PLAN_PAYLOAD_SCHEMA),
+    startPayload: normalizedStart,
+    startRef: payloadReference(normalizedStart, WORKFLOW_START_PAYLOAD_SCHEMA),
+  });
+  return { input, first: materializeFirstWorkflowActivity(input) };
+}
+
+/**
+ * @param {Record<string, any>} cursor
+ * @param {number} [sequence]
+ * @param {number} [observedAt]
+ * @returns {Record<string, any>}
+ */
+function runningCursor(
+  cursor,
+  sequence = cursor.lastSequence + 1,
+  observedAt = cursor.updatedAt + 1,
+) {
+  return normalizeWorkflowCursor({
+    ...clone(cursor),
+    disposition: WorkflowCursorDisposition.ACTIVITY_RUNNING,
+    version: cursor.version + 1,
+    lastSequence: sequence,
+    updatedAt: observedAt,
+  });
+}
+
+/**
+ * @param {any} value
+ * @returns {{payload: ReturnType<typeof normalizeWorkflowOutputPayload>, ref: Readonly<import('../../src/core/runtime/execution-payload.js').ExecutionPayloadReference>}}
+ */
+function output(value) {
+  const payload = normalizeWorkflowOutputPayload({
+    schemaVersion: 1,
+    kind: WORKFLOW_OUTPUT_PAYLOAD_KIND,
+    value,
+  });
+  return {
+    payload,
+    ref: payloadReference(payload, WORKFLOW_OUTPUT_PAYLOAD_SCHEMA),
+  };
+}
+
+/**
+ * @param {{stepId: string, stepIndex: number, value: any}} value
+ * @returns {{binding: ReturnType<typeof normalizeWorkflowOutputBinding>, payload: ReturnType<typeof normalizeWorkflowOutputPayload>}}
+ */
+function selectedOutput({ stepId, stepIndex, value }) {
+  const persisted = output(value);
+  return {
+    binding: normalizeWorkflowOutputBinding({
+      stepId,
+      stepIndex,
+      outputRef: persisted.ref,
+    }),
+    payload: persisted.payload,
+  };
+}
+
 describe('workflow execution contract', () => {
   it('publishes explicit payload schemas and byte ceilings', () => {
     expect(WORKFLOW_EXECUTION_PAYLOAD_SCHEMA_VERSION).toBe(1);
@@ -174,6 +261,8 @@ describe('workflow execution contract', () => {
     expect(WORKFLOW_ACTIVITY_REQUEST_MAX_BYTES).toBe(983_040);
     expect(WorkflowCursorDisposition).toEqual({
       ACTIVITY_RUNNABLE: 'ACTIVITY_RUNNABLE',
+      ACTIVITY_RUNNING: 'ACTIVITY_RUNNING',
+      COMPLETED: 'COMPLETED',
     });
     expect(Object.isFrozen(WorkflowCursorDisposition)).toBe(true);
   });
@@ -568,5 +657,502 @@ describe('workflow execution contract', () => {
     expect(() => normalizeWorkflowCursor(unknown)).toThrow(
       /must contain exactly/i,
     );
+  });
+
+  it('normalizes strict output bindings and canonical active or completed cursor prefixes', () => {
+    const steps = [
+      activityStep(),
+      {
+        id: 'format',
+        kind: 'activity',
+        activity: 'format',
+        input: { kind: 'step-output', step: 'greet' },
+      },
+    ];
+    const { input, first } = firstForSteps(steps);
+    const firstOutput = selectedOutput({
+      stepId: 'greet',
+      stepIndex: 0,
+      value: { greeting: 'hello' },
+    });
+    const continuationId = createWorkflowContinuationId({
+      runId: first.runId,
+      planId: first.planId,
+      stepId: 'format',
+      stepIndex: 1,
+    });
+    const invocationId = createWorkflowInvocationId({
+      runId: first.runId,
+      continuationId,
+      stepId: 'format',
+      stepIndex: 1,
+      activityId: 'format',
+    });
+    const active = normalizeWorkflowCursor({
+      ...clone(first.cursor),
+      stepId: 'format',
+      stepIndex: 1,
+      continuationId,
+      invocationId,
+      disposition: WorkflowCursorDisposition.ACTIVITY_RUNNING,
+      outputs: [firstOutput.binding],
+      version: 2,
+      lastSequence: 2,
+      updatedAt: input.observedAt + 1,
+    });
+    const secondOutput = selectedOutput({
+      stepId: 'format',
+      stepIndex: 1,
+      value: { formatted: true },
+    });
+    const completed = normalizeWorkflowCursor({
+      ...active,
+      disposition: WorkflowCursorDisposition.COMPLETED,
+      outputs: [firstOutput.binding, secondOutput.binding],
+      version: 3,
+      lastSequence: 3,
+      updatedAt: input.observedAt + 2,
+    });
+
+    expect(active.outputs).toEqual([firstOutput.binding]);
+    expect(completed.outputs).toEqual([
+      firstOutput.binding,
+      secondOutput.binding,
+    ]);
+    expect(normalizeWorkflowOutputBinding(firstOutput.binding)).toEqual(
+      firstOutput.binding,
+    );
+
+    const malformed = [
+      {
+        ...active,
+        outputs: [{ ...firstOutput.binding, retry: false }],
+      },
+      {
+        ...active,
+        outputs: [{ ...firstOutput.binding, stepIndex: 1 }],
+      },
+      {
+        ...active,
+        outputs: [
+          firstOutput.binding,
+          { ...secondOutput.binding, stepId: 'greet' },
+        ],
+      },
+      { ...active, outputs: [] },
+      { ...active, outputs: [secondOutput.binding] },
+      {
+        ...completed,
+        outputs: [firstOutput.binding],
+      },
+      {
+        ...completed,
+        outputs: [
+          firstOutput.binding,
+          { ...secondOutput.binding, stepId: 'x' },
+        ],
+      },
+      {
+        ...active,
+        outputs: [
+          {
+            ...firstOutput.binding,
+            outputRef: payloadReference(
+              firstOutput.payload,
+              WORKFLOW_START_PAYLOAD_SCHEMA,
+            ),
+          },
+        ],
+      },
+    ];
+    for (const cursor of malformed) {
+      expect(() => normalizeWorkflowCursor(cursor)).toThrow();
+    }
+  });
+
+  it.each([
+    ['workflow input', { kind: 'workflow-input' }, { name: 'Ada' }],
+    [
+      'literal',
+      { kind: 'literal', value: { authored: true } },
+      { authored: true },
+    ],
+  ])(
+    'materializes a cursor activity using %s',
+    (_name, selector, expectedInput) => {
+      const { input, first } = firstForSteps([activityStep(selector)]);
+      const materialized = materializeWorkflowCursorActivity({
+        planPayload: input.planPayload,
+        planRef: input.planRef,
+        startPayload: input.startPayload,
+        startRef: input.startRef,
+        cursor: first.cursor,
+      });
+
+      expect(materialized).toMatchObject({
+        runId: first.runId,
+        planId: first.planId,
+        stepId: 'greet',
+        stepIndex: 0,
+        continuationId: first.continuationId,
+        invocationId: first.invocationId,
+        activityId: 'greet',
+        activityRequest: {
+          input: expectedInput,
+          callerMetadata: { request: 'request-1' },
+        },
+      });
+      expect(materialized.cursor).toEqual(first.cursor);
+    },
+  );
+
+  it('requires and rehashes the exact prior output selected by a cursor activity', () => {
+    const steps = [
+      activityStep(),
+      {
+        id: 'format',
+        kind: 'activity',
+        activity: 'format',
+        input: { kind: 'step-output', step: 'greet' },
+      },
+    ];
+    const { input, first } = firstForSteps(steps);
+    const firstOutput = output({ greeting: 'hello' });
+    const success = materializeWorkflowActivitySuccess({
+      currentCursor: runningCursor(first.cursor),
+      planPayload: input.planPayload,
+      planRef: input.planRef,
+      startPayload: input.startPayload,
+      startRef: input.startRef,
+      outputPayload: firstOutput.payload,
+      outputRef: firstOutput.ref,
+      sequence: 3,
+      observedAt: input.observedAt + 2,
+    });
+    const selected = {
+      binding: success.outputBinding,
+      payload: firstOutput.payload,
+    };
+
+    expect(
+      materializeWorkflowCursorActivity({
+        planPayload: input.planPayload,
+        planRef: input.planRef,
+        startPayload: input.startPayload,
+        startRef: input.startRef,
+        cursor: success.cursor,
+        selectedOutput: selected,
+      }).activityRequest,
+    ).toEqual({
+      input: { greeting: 'hello' },
+      callerMetadata: { request: 'request-1' },
+    });
+    expect(() =>
+      materializeWorkflowCursorActivity({
+        planPayload: input.planPayload,
+        planRef: input.planRef,
+        startPayload: input.startPayload,
+        startRef: input.startRef,
+        cursor: success.cursor,
+      }),
+    ).toThrow(/selectedOutput must match/i);
+    expect(() =>
+      materializeWorkflowCursorActivity({
+        planPayload: input.planPayload,
+        planRef: input.planRef,
+        startPayload: input.startPayload,
+        startRef: input.startRef,
+        cursor: success.cursor,
+        selectedOutput: {
+          binding: success.outputBinding,
+          payload: output({ greeting: 'changed' }).payload,
+        },
+      }),
+    ).toThrow(/reference does not match its exact bytes/i);
+  });
+
+  it.each([
+    ['workflow input', { kind: 'workflow-input' }, { name: 'Ada' }],
+    [
+      'literal',
+      { kind: 'literal', value: { authored: true } },
+      { authored: true },
+    ],
+  ])(
+    'materializes one stable successor activity using %s',
+    (_name, selector, expectedInput) => {
+      const steps = [
+        activityStep(),
+        {
+          id: 'next',
+          kind: 'activity',
+          activity: 'next',
+          input: selector,
+        },
+      ];
+      const { input, first } = firstForSteps(steps);
+      const persistedOutput = output({ greeting: 'hello' });
+      const request = {
+        currentCursor: runningCursor(first.cursor),
+        planPayload: input.planPayload,
+        planRef: input.planRef,
+        startPayload: input.startPayload,
+        startRef: input.startRef,
+        outputPayload: persistedOutput.payload,
+        outputRef: persistedOutput.ref,
+        sequence: 3,
+        observedAt: input.observedAt + 2,
+      };
+      const success = materializeWorkflowActivitySuccess(request);
+      const replay = materializeWorkflowActivitySuccess(request);
+
+      expect(success).toEqual(replay);
+      expect(success.completed).toBe(false);
+      expect(success.outputBinding).toEqual({
+        stepId: 'greet',
+        stepIndex: 0,
+        outputRef: persistedOutput.ref,
+      });
+      expect(success.nextActivity).toEqual({
+        stepId: 'next',
+        stepIndex: 1,
+        continuationId: createWorkflowContinuationId({
+          runId: first.runId,
+          planId: first.planId,
+          stepId: 'next',
+          stepIndex: 1,
+        }),
+        invocationId: success.cursor.invocationId,
+        activityId: 'next',
+        activityRequest: {
+          input: expectedInput,
+          callerMetadata: { request: 'request-1' },
+        },
+      });
+      expect(success.nextActivity?.invocationId).toBe(
+        createWorkflowInvocationId({
+          runId: first.runId,
+          continuationId: success.cursor.continuationId,
+          stepId: 'next',
+          stepIndex: 1,
+          activityId: 'next',
+        }),
+      );
+      expect(success.cursor).toMatchObject({
+        stepId: 'next',
+        stepIndex: 1,
+        disposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+        outputs: [success.outputBinding],
+        version: 3,
+        lastSequence: 3,
+        createdAt: input.observedAt,
+        updatedAt: input.observedAt + 2,
+      });
+    },
+  );
+
+  it('selects the just-completed current output for the next activity', () => {
+    const { input, first } = firstForSteps([
+      activityStep(),
+      {
+        id: 'consume-current',
+        kind: 'activity',
+        activity: 'consume',
+        input: { kind: 'step-output', step: 'greet' },
+      },
+    ]);
+    const persistedOutput = output({ greeting: 'hello' });
+    const success = materializeWorkflowActivitySuccess({
+      currentCursor: runningCursor(first.cursor),
+      planPayload: input.planPayload,
+      planRef: input.planRef,
+      startPayload: input.startPayload,
+      startRef: input.startRef,
+      outputPayload: persistedOutput.payload,
+      outputRef: persistedOutput.ref,
+      sequence: 3,
+      observedAt: input.observedAt + 2,
+    });
+
+    expect(success.nextActivity?.activityRequest.input).toEqual({
+      greeting: 'hello',
+    });
+  });
+
+  it('selects an exact older output when a later successor names it', () => {
+    const { input, first } = firstForSteps([
+      activityStep(),
+      {
+        id: 'middle',
+        kind: 'activity',
+        activity: 'middle',
+        input: { kind: 'literal', value: { middle: true } },
+      },
+      {
+        id: 'consume-first',
+        kind: 'activity',
+        activity: 'consume',
+        input: { kind: 'step-output', step: 'greet' },
+      },
+    ]);
+    const firstOutput = output({ first: true });
+    const firstSuccess = materializeWorkflowActivitySuccess({
+      currentCursor: runningCursor(first.cursor),
+      planPayload: input.planPayload,
+      planRef: input.planRef,
+      startPayload: input.startPayload,
+      startRef: input.startRef,
+      outputPayload: firstOutput.payload,
+      outputRef: firstOutput.ref,
+      sequence: 3,
+      observedAt: input.observedAt + 2,
+    });
+    const middleOutput = output({ middle: 'done' });
+    const secondRequest = {
+      currentCursor: runningCursor(
+        firstSuccess.cursor,
+        4,
+        input.observedAt + 3,
+      ),
+      planPayload: input.planPayload,
+      planRef: input.planRef,
+      startPayload: input.startPayload,
+      startRef: input.startRef,
+      outputPayload: middleOutput.payload,
+      outputRef: middleOutput.ref,
+      sequence: 5,
+      observedAt: input.observedAt + 4,
+    };
+    expect(() => materializeWorkflowActivitySuccess(secondRequest)).toThrow(
+      /selectedOutput must match/i,
+    );
+    expect(() =>
+      materializeWorkflowActivitySuccess({
+        ...secondRequest,
+        selectedOutput: selectedOutput({
+          stepId: 'middle',
+          stepIndex: 1,
+          value: { middle: 'done' },
+        }),
+      }),
+    ).toThrow(/selectedOutput must match/i);
+    const secondSuccess = materializeWorkflowActivitySuccess({
+      ...secondRequest,
+      selectedOutput: {
+        binding: firstSuccess.outputBinding,
+        payload: firstOutput.payload,
+      },
+    });
+
+    expect(secondSuccess.nextActivity?.activityRequest.input).toEqual({
+      first: true,
+    });
+    expect(secondSuccess.cursor.outputs).toEqual([
+      firstSuccess.outputBinding,
+      secondSuccess.outputBinding,
+    ]);
+  });
+
+  it('materializes a final successful activity as one retained terminal cursor', () => {
+    const { input, first } = firstForSteps([activityStep()]);
+    const persistedOutput = output({ greeting: 'done' });
+    const success = materializeWorkflowActivitySuccess({
+      currentCursor: runningCursor(first.cursor),
+      planPayload: input.planPayload,
+      planRef: input.planRef,
+      startPayload: input.startPayload,
+      startRef: input.startRef,
+      outputPayload: persistedOutput.payload,
+      outputRef: persistedOutput.ref,
+      sequence: 3,
+      observedAt: input.observedAt + 2,
+    });
+
+    expect(success.completed).toBe(true);
+    expect(success).not.toHaveProperty('nextActivity');
+    expect(success.cursor).toEqual({
+      ...runningCursor(first.cursor),
+      disposition: WorkflowCursorDisposition.COMPLETED,
+      outputs: [success.outputBinding],
+      version: 3,
+      lastSequence: 3,
+      updatedAt: input.observedAt + 2,
+    });
+    expect(normalizeWorkflowCursor(success.cursor)).toEqual(success.cursor);
+  });
+
+  it.each([
+    ['timer', { id: 'pause', kind: 'timer', delayMs: 1_000 }],
+    ['signal', { id: 'approval', kind: 'signal' }],
+  ])('rejects a %s successor without advancing the cursor', (_name, next) => {
+    const { input, first } = firstForSteps([activityStep(), next]);
+    const persistedOutput = output({ greeting: 'done' });
+    expect(() =>
+      materializeWorkflowActivitySuccess({
+        currentCursor: runningCursor(first.cursor),
+        planPayload: input.planPayload,
+        planRef: input.planRef,
+        startPayload: input.startPayload,
+        startRef: input.startRef,
+        outputPayload: persistedOutput.payload,
+        outputRef: persistedOutput.ref,
+        sequence: 3,
+        observedAt: input.observedAt + 2,
+      }),
+    ).toThrow(/timer and signal successors are not implemented/i);
+  });
+
+  it('rejects stale or mismatched success materializations', () => {
+    const { input, first } = firstForSteps([
+      activityStep(),
+      {
+        id: 'next',
+        kind: 'activity',
+        activity: 'next',
+        input: { kind: 'workflow-input' },
+      },
+    ]);
+    const currentCursor = runningCursor(first.cursor);
+    const persistedOutput = output({ greeting: 'done' });
+    const base = {
+      currentCursor,
+      planPayload: input.planPayload,
+      planRef: input.planRef,
+      startPayload: input.startPayload,
+      startRef: input.startRef,
+      outputPayload: persistedOutput.payload,
+      outputRef: persistedOutput.ref,
+      sequence: 3,
+      observedAt: input.observedAt + 2,
+    };
+    const changedOutput = output({ greeting: 'changed' });
+    const otherPlan = normalizeWorkflowPlanPayload(
+      planWithSteps([
+        { ...activityStep(), id: 'other' },
+        input.planPayload.definition.steps[1],
+      ]),
+    );
+    const invalid = [
+      { ...base, sequence: 4 },
+      { ...base, observedAt: currentCursor.updatedAt - 1 },
+      { ...base, currentCursor: first.cursor },
+      { ...base, outputRef: changedOutput.ref },
+      {
+        ...base,
+        planPayload: otherPlan,
+        planRef: payloadReference(otherPlan, WORKFLOW_PLAN_PAYLOAD_SCHEMA),
+      },
+      {
+        ...base,
+        selectedOutput: selectedOutput({
+          stepId: 'greet',
+          stepIndex: 0,
+          value: { greeting: 'done' },
+        }),
+      },
+    ];
+    for (const candidate of invalid) {
+      expect(() => materializeWorkflowActivitySuccess(candidate)).toThrow();
+    }
   });
 });

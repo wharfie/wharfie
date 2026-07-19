@@ -26,6 +26,7 @@ import {
   assertExactKeys,
   assertNonnegativeSafeInteger,
   assertPositiveSafeInteger,
+  hasSameCanonicalJson,
   normalizePayloadReference,
 } from './execution-ledger-contract.js';
 import { assertLedgerOpaqueId } from './record-key.js';
@@ -72,6 +73,8 @@ export const WORKFLOW_SIGNAL_WAIT_ID_PREFIX = 'wfs';
 
 export const WorkflowCursorDisposition = Object.freeze({
   ACTIVITY_RUNNABLE: 'ACTIVITY_RUNNABLE',
+  ACTIVITY_RUNNING: 'ACTIVITY_RUNNING',
+  COMPLETED: 'COMPLETED',
 });
 
 const WORKFLOW_CURSOR_DISPOSITIONS = new Set(
@@ -88,6 +91,8 @@ const PLAN_PAYLOAD_KEYS = [
 const START_PAYLOAD_KEYS = ['schemaVersion', 'kind', 'input', 'callerMetadata'];
 const OUTPUT_PAYLOAD_KEYS = ['schemaVersion', 'kind', 'value'];
 const ACTIVITY_REQUEST_KEYS = ['input', 'callerMetadata'];
+const WORKFLOW_OUTPUT_BINDING_KEYS = ['stepId', 'stepIndex', 'outputRef'];
+const SELECTED_OUTPUT_KEYS = ['binding', 'payload'];
 const WORKFLOW_CURSOR_KEYS = [
   'schemaVersion',
   'runId',
@@ -268,6 +273,79 @@ export function normalizeWorkflowOutputPayload(
       label,
     )
   );
+}
+
+/**
+ * Normalize the cursor binding that makes one immutable output reachable from
+ * a workflow run. Array position remains authoritative for canonical order;
+ * the repeated ordinal and step ID make corruption fail closed.
+ * @param {unknown} value - Candidate output binding.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {{stepId: string, stepIndex: number, outputRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>}} - Strict output binding.
+ */
+export function normalizeWorkflowOutputBinding(
+  value,
+  label = 'workflow output binding',
+) {
+  const binding = cloneBoundedJsonObject(
+    value,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    label,
+  );
+  assertExactKeys(binding, WORKFLOW_OUTPUT_BINDING_KEYS, label);
+  assertLogicalId(binding.stepId, `${label}.stepId`);
+  const stepIndex = assertNonnegativeSafeInteger(
+    binding.stepIndex,
+    `${label}.stepIndex`,
+  );
+  if (stepIndex >= WORKFLOW_MAX_STEPS) {
+    throw new RangeError(
+      `${label}.stepIndex must be less than ${WORKFLOW_MAX_STEPS}.`,
+    );
+  }
+  return {
+    stepId: binding.stepId,
+    stepIndex,
+    outputRef: normalizePayloadReference(
+      binding.outputRef,
+      WORKFLOW_OUTPUT_PAYLOAD_SCHEMA,
+      `${label}.outputRef`,
+    ),
+  };
+}
+
+/**
+ * Rehash one selected output before its value can become an activity input.
+ * The cursor binding is checked by the selector boundary that consumes it.
+ * @param {unknown} value - Candidate binding and payload pair.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {{binding: ReturnType<typeof normalizeWorkflowOutputBinding>, payload: ReturnType<typeof normalizeWorkflowOutputPayload>}} - Verified selected output.
+ */
+function normalizeSelectedWorkflowOutput(value, label) {
+  const selected = cloneBoundedJsonObject(
+    value,
+    WORKFLOW_OUTPUT_PAYLOAD_MAX_BYTES +
+      EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    label,
+  );
+  assertExactKeys(selected, SELECTED_OUTPUT_KEYS, label);
+  const binding = normalizeWorkflowOutputBinding(
+    selected.binding,
+    `${label}.binding`,
+  );
+  const payload = normalizeWorkflowOutputPayload(
+    selected.payload,
+    `${label}.payload`,
+  );
+  const outputRef = verifyExecutionPayloadReference(
+    binding.outputRef,
+    encodeCanonicalJsonPayload(payload),
+    `${label}.payload`,
+  ).reference;
+  return {
+    binding: { ...binding, outputRef },
+    payload,
+  };
 }
 
 /**
@@ -544,9 +622,10 @@ export function createWorkflowSignalWaitId(value) {
 }
 
 /**
- * Normalize the initial persisted orchestration cursor. This first contract
- * admits only an activity-runnable cursor with no prior outputs; later cursor
- * dispositions must be added with their complete transition invariants.
+ * Normalize one persisted activity-or-terminal orchestration cursor. Outputs
+ * are a canonical contiguous prefix of the immutable plan: active cursors
+ * retain every prior output, while a terminal cursor also retains the final
+ * activity output.
  * @param {unknown} value - Candidate workflow cursor.
  * @param {string} [label] - Human-readable boundary label.
  * @returns {Record<string, any>} - Strict cursor projection.
@@ -606,11 +685,46 @@ export function normalizeWorkflowCursor(value, label = 'workflow cursor') {
   assertWorkflowInvocationId(cursor.invocationId, `${label}.invocationId`);
   if (!WORKFLOW_CURSOR_DISPOSITIONS.has(cursor.disposition)) {
     throw new TypeError(
-      `${label}.disposition must be '${WorkflowCursorDisposition.ACTIVITY_RUNNABLE}'.`,
+      `${label}.disposition must be one of ${[...WORKFLOW_CURSOR_DISPOSITIONS].join(', ')}.`,
     );
   }
-  if (!Array.isArray(cursor.outputs) || cursor.outputs.length !== 0) {
-    throw new TypeError(`${label}.outputs must be an empty array at start.`);
+  if (!Array.isArray(cursor.outputs)) {
+    throw new TypeError(`${label}.outputs must be an array.`);
+  }
+  const outputStepIds = new Set();
+  const outputs = cursor.outputs.map((candidate, index) => {
+    const binding = normalizeWorkflowOutputBinding(
+      candidate,
+      `${label}.outputs[${index}]`,
+    );
+    if (binding.stepIndex !== index) {
+      throw new TypeError(
+        `${label}.outputs must be contiguous and canonically ordered by stepIndex.`,
+      );
+    }
+    if (outputStepIds.has(binding.stepId)) {
+      throw new TypeError(`${label}.outputs step IDs must be unique.`);
+    }
+    outputStepIds.add(binding.stepId);
+    return binding;
+  });
+  const completed = cursor.disposition === WorkflowCursorDisposition.COMPLETED;
+  const expectedOutputCount = stepIndex + (completed ? 1 : 0);
+  if (outputs.length !== expectedOutputCount) {
+    throw new TypeError(
+      `${label}.outputs must contain exactly ${expectedOutputCount} contiguous step outputs for disposition ${cursor.disposition}.`,
+    );
+  }
+  if (
+    completed
+      ? outputs[stepIndex]?.stepId !== cursor.stepId
+      : outputStepIds.has(cursor.stepId)
+  ) {
+    throw new TypeError(
+      completed
+        ? `${label}.outputs final binding must match the completed cursor step.`
+        : `${label}.outputs cannot contain the active cursor step.`,
+    );
   }
   const version = assertPositiveSafeInteger(cursor.version, `${label}.version`);
   const lastSequence = assertPositiveSafeInteger(
@@ -642,11 +756,481 @@ export function normalizeWorkflowCursor(value, label = 'workflow cursor') {
     continuationId: cursor.continuationId,
     invocationId: cursor.invocationId,
     disposition: cursor.disposition,
-    outputs: [],
+    outputs,
     version,
     lastSequence,
     createdAt,
     updatedAt,
+  };
+}
+
+/**
+ * Normalize and rehash the immutable payload context shared by every cursor
+ * materialization. Payload references are data until their exact bytes have
+ * been verified here.
+ * @param {Record<string, any>} value - Candidate context fields.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {{planPayload: ReturnType<typeof normalizeWorkflowPlanPayload>, planRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, startPayload: ReturnType<typeof normalizeWorkflowStartPayload>, startRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, planId: string}} - Verified immutable context.
+ */
+function normalizeWorkflowPayloadContext(value, label) {
+  const planPayload = normalizeWorkflowPlanPayload(
+    value.planPayload,
+    `${label}.planPayload`,
+  );
+  const startPayload = normalizeWorkflowStartPayload(
+    value.startPayload,
+    `${label}.startPayload`,
+  );
+  const planRef = verifyExecutionPayloadReference(
+    normalizePayloadReference(
+      value.planRef,
+      WORKFLOW_PLAN_PAYLOAD_SCHEMA,
+      `${label}.planRef`,
+    ),
+    encodeCanonicalJsonPayload(planPayload),
+    `${label} plan`,
+  ).reference;
+  const startRef = verifyExecutionPayloadReference(
+    normalizePayloadReference(
+      value.startRef,
+      WORKFLOW_START_PAYLOAD_SCHEMA,
+      `${label}.startRef`,
+    ),
+    encodeCanonicalJsonPayload(startPayload),
+    `${label} start`,
+  ).reference;
+  return {
+    planPayload,
+    planRef,
+    startPayload,
+    startRef,
+    planId: createWorkflowPlanId(planPayload),
+  };
+}
+
+/**
+ * Prove a cursor belongs to one exact plan/start pair and that its retained
+ * output prefix names the corresponding immutable plan steps.
+ * @param {Record<string, any>} cursor - Strict normalized cursor.
+ * @param {ReturnType<typeof normalizeWorkflowPayloadContext>} context - Verified payload context.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {import('../../runtime/workflow-definition.js').WorkflowStep} - Exact current plan step.
+ */
+function assertWorkflowCursorContext(cursor, context, label) {
+  if (
+    cursor.appId !== context.planPayload.appId ||
+    cursor.revisionId !== context.planPayload.revisionId ||
+    cursor.workflowId !== context.planPayload.workflowId ||
+    cursor.planId !== context.planId ||
+    !hasSameCanonicalJson(cursor.planRef, context.planRef) ||
+    !hasSameCanonicalJson(cursor.startRef, context.startRef)
+  ) {
+    throw new TypeError(`${label} does not match its exact plan/start scope.`);
+  }
+  const currentStep = context.planPayload.definition.steps[cursor.stepIndex];
+  if (!currentStep || currentStep.id !== cursor.stepId) {
+    throw new TypeError(`${label} does not match its exact plan step.`);
+  }
+  for (const binding of cursor.outputs) {
+    if (
+      context.planPayload.definition.steps[binding.stepIndex]?.id !==
+      binding.stepId
+    ) {
+      throw new TypeError(
+        `${label}.outputs do not match the immutable plan prefix.`,
+      );
+    }
+  }
+  return currentStep;
+}
+
+/**
+ * Select one activity's exact JSON input. A step-output selector requires the
+ * caller to supply and rehash the named payload unless it is the output being
+ * appended by the same pure success materialization.
+ * @param {{step: import('../../runtime/workflow-definition.js').WorkflowStep, stepIndex: number, planPayload: ReturnType<typeof normalizeWorkflowPlanPayload>, startPayload: ReturnType<typeof normalizeWorkflowStartPayload>, outputs: Array<ReturnType<typeof normalizeWorkflowOutputBinding>>, selectedOutput?: ReturnType<typeof normalizeSelectedWorkflowOutput>, currentOutput?: ReturnType<typeof normalizeSelectedWorkflowOutput>, label: string}} value - Selection context.
+ * @returns {{input: any, callerMetadata: Record<string, any>}} - Exact normalized activity request.
+ */
+function selectWorkflowActivityRequest(value) {
+  if (value.step.kind !== 'activity') {
+    throw new TypeError(`${value.label} requires an activity plan step.`);
+  }
+  const inputSelector = value.step.input;
+  let selectedInput;
+  if (inputSelector.kind === 'workflow-input') {
+    if (value.selectedOutput) {
+      throw new TypeError(
+        `${value.label}.selectedOutput is supported only for a step-output selector.`,
+      );
+    }
+    selectedInput = value.startPayload.input;
+  } else if (inputSelector.kind === 'literal') {
+    if (value.selectedOutput) {
+      throw new TypeError(
+        `${value.label}.selectedOutput is supported only for a step-output selector.`,
+      );
+    }
+    selectedInput = inputSelector.value;
+  } else {
+    const selectedStepIndex = value.planPayload.definition.steps.findIndex(
+      (candidate) => candidate.id === inputSelector.step,
+    );
+    if (selectedStepIndex < 0 || selectedStepIndex >= value.stepIndex) {
+      throw new TypeError(
+        `${value.label} step-output selector does not name an earlier plan step.`,
+      );
+    }
+    const expectedBinding = value.outputs[selectedStepIndex];
+    if (
+      !expectedBinding ||
+      expectedBinding.stepId !== inputSelector.step ||
+      expectedBinding.stepIndex !== selectedStepIndex
+    ) {
+      throw new TypeError(
+        `${value.label} selected step output is unavailable from the cursor.`,
+      );
+    }
+    const selected =
+      value.currentOutput?.binding.stepId === inputSelector.step
+        ? value.currentOutput
+        : value.selectedOutput;
+    if (!selected || !hasSameCanonicalJson(selected.binding, expectedBinding)) {
+      throw new TypeError(
+        `${value.label}.selectedOutput must match the exact cursor output selected by the plan.`,
+      );
+    }
+    if (
+      value.selectedOutput &&
+      value.currentOutput?.binding.stepId === inputSelector.step &&
+      (!hasSameCanonicalJson(
+        value.selectedOutput.binding,
+        value.currentOutput.binding,
+      ) ||
+        !hasSameCanonicalJson(
+          value.selectedOutput.payload,
+          value.currentOutput.payload,
+        ))
+    ) {
+      throw new TypeError(
+        `${value.label}.selectedOutput conflicts with the current output.`,
+      );
+    }
+    selectedInput = selected.payload.value;
+  }
+  return normalizeWorkflowActivityRequest(
+    {
+      input: selectedInput,
+      callerMetadata: value.startPayload.callerMetadata,
+    },
+    `${value.label}.activityRequest`,
+  );
+}
+
+/**
+ * Materialize one activity from an already-normalized cursor and payload
+ * context. This is shared by public cursor validation and initial creation.
+ * @param {{context: ReturnType<typeof normalizeWorkflowPayloadContext>, cursor: Record<string, any>, selectedOutput?: ReturnType<typeof normalizeSelectedWorkflowOutput>, label: string}} value - Verified activity context.
+ * @returns {{runId: string, planPayload: ReturnType<typeof normalizeWorkflowPlanPayload>, planRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, startPayload: ReturnType<typeof normalizeWorkflowStartPayload>, startRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, planId: string, stepId: string, stepIndex: number, continuationId: string, invocationId: string, activityId: string, activityRequest: {input: any, callerMetadata: Record<string, any>}, cursor: Record<string, any>}} - Exact cursor activity.
+ */
+function materializeNormalizedWorkflowActivityAtCursor(value) {
+  if (
+    ![
+      WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+      WorkflowCursorDisposition.ACTIVITY_RUNNING,
+    ].includes(value.cursor.disposition)
+  ) {
+    throw new TypeError(`${value.label}.cursor is not an active activity.`);
+  }
+  const step = assertWorkflowCursorContext(
+    value.cursor,
+    value.context,
+    `${value.label}.cursor`,
+  );
+  if (step.kind !== 'activity') {
+    throw new TypeError(
+      `${value.label}.cursor does not name an activity step.`,
+    );
+  }
+  const expectedInvocationId = createWorkflowInvocationId({
+    runId: value.cursor.runId,
+    continuationId: value.cursor.continuationId,
+    stepId: value.cursor.stepId,
+    stepIndex: value.cursor.stepIndex,
+    activityId: step.activity,
+  });
+  if (value.cursor.invocationId !== expectedInvocationId) {
+    throw new TypeError(
+      `${value.label}.cursor invocationId does not match its exact activity activation.`,
+    );
+  }
+  const activityRequest = selectWorkflowActivityRequest({
+    step,
+    stepIndex: value.cursor.stepIndex,
+    planPayload: value.context.planPayload,
+    startPayload: value.context.startPayload,
+    outputs: value.cursor.outputs,
+    selectedOutput: value.selectedOutput,
+    label: value.label,
+  });
+  return {
+    runId: value.cursor.runId,
+    ...value.context,
+    stepId: value.cursor.stepId,
+    stepIndex: value.cursor.stepIndex,
+    continuationId: value.cursor.continuationId,
+    invocationId: value.cursor.invocationId,
+    activityId: step.activity,
+    activityRequest,
+    cursor: value.cursor,
+  };
+}
+
+/**
+ * Validate and materialize the activity selected by one exact active cursor.
+ * A step-output selector must carry the exact cursor binding and rehashed
+ * workflow-output payload; other selectors reject that extra input.
+ * @param {{planPayload: unknown, planRef: unknown, startPayload: unknown, startRef: unknown, cursor: unknown, selectedOutput?: {binding: unknown, payload: unknown}}} value - Cursor activity materialization.
+ * @returns {ReturnType<typeof materializeNormalizedWorkflowActivityAtCursor>} - Exact cursor activity.
+ */
+export function materializeWorkflowCursorActivity(value) {
+  const label = 'workflow activity cursor materialization';
+  const materialization = cloneBoundedJsonObject(
+    value,
+    WORKFLOW_PLAN_PAYLOAD_MAX_BYTES +
+      WORKFLOW_START_PAYLOAD_MAX_BYTES +
+      WORKFLOW_OUTPUT_PAYLOAD_MAX_BYTES +
+      EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES * 2,
+    label,
+  );
+  const hasSelectedOutput = Object.prototype.hasOwnProperty.call(
+    materialization,
+    'selectedOutput',
+  );
+  assertExactKeys(
+    materialization,
+    [
+      'planPayload',
+      'planRef',
+      'startPayload',
+      'startRef',
+      'cursor',
+      ...(hasSelectedOutput ? ['selectedOutput'] : []),
+    ],
+    label,
+  );
+  const context = normalizeWorkflowPayloadContext(materialization, label);
+  const cursor = normalizeWorkflowCursor(
+    materialization.cursor,
+    `${label}.cursor`,
+  );
+  const selectedOutput = hasSelectedOutput
+    ? normalizeSelectedWorkflowOutput(
+        materialization.selectedOutput,
+        `${label}.selectedOutput`,
+      )
+    : undefined;
+  return materializeNormalizedWorkflowActivityAtCursor({
+    context,
+    cursor,
+    selectedOutput,
+    label,
+  });
+}
+
+/**
+ * Materialize the logical success of the current running activity. The helper
+ * appends exactly one immutable output binding and either selects the next
+ * activity or returns a terminal cursor. Payload publication and ledger
+ * mutation remain the caller's separate atomicity boundary.
+ * @param {{currentCursor: unknown, planPayload: unknown, planRef: unknown, startPayload: unknown, startRef: unknown, outputPayload: unknown, outputRef: unknown, selectedOutput?: {binding: unknown, payload: unknown}, sequence: number, observedAt: number}} value - Completed activity materialization.
+ * @returns {{runId: string, planPayload: ReturnType<typeof normalizeWorkflowPlanPayload>, planRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, startPayload: ReturnType<typeof normalizeWorkflowStartPayload>, startRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, planId: string, outputPayload: ReturnType<typeof normalizeWorkflowOutputPayload>, outputRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, outputBinding: ReturnType<typeof normalizeWorkflowOutputBinding>, completed: boolean, cursor: Record<string, any>, nextActivity?: {stepId: string, stepIndex: number, continuationId: string, invocationId: string, activityId: string, activityRequest: {input: any, callerMetadata: Record<string, any>}}}} - Exact successor or terminal materialization.
+ */
+export function materializeWorkflowActivitySuccess(value) {
+  const label = 'completed workflow activity materialization';
+  const materialization = cloneBoundedJsonObject(
+    value,
+    WORKFLOW_PLAN_PAYLOAD_MAX_BYTES +
+      WORKFLOW_START_PAYLOAD_MAX_BYTES +
+      WORKFLOW_OUTPUT_PAYLOAD_MAX_BYTES * 2 +
+      EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES * 3,
+    label,
+  );
+  const hasSelectedOutput = Object.prototype.hasOwnProperty.call(
+    materialization,
+    'selectedOutput',
+  );
+  assertExactKeys(
+    materialization,
+    [
+      'currentCursor',
+      'planPayload',
+      'planRef',
+      'startPayload',
+      'startRef',
+      'outputPayload',
+      'outputRef',
+      ...(hasSelectedOutput ? ['selectedOutput'] : []),
+      'sequence',
+      'observedAt',
+    ],
+    label,
+  );
+  const context = normalizeWorkflowPayloadContext(materialization, label);
+  const currentCursor = normalizeWorkflowCursor(
+    materialization.currentCursor,
+    `${label}.currentCursor`,
+  );
+  if (
+    currentCursor.disposition !== WorkflowCursorDisposition.ACTIVITY_RUNNING
+  ) {
+    throw new TypeError(
+      `${label}.currentCursor must have disposition ${WorkflowCursorDisposition.ACTIVITY_RUNNING}.`,
+    );
+  }
+  const currentStep = assertWorkflowCursorContext(
+    currentCursor,
+    context,
+    `${label}.currentCursor`,
+  );
+  if (currentStep.kind !== 'activity') {
+    throw new TypeError(`${label}.currentCursor must name an activity step.`);
+  }
+  const expectedInvocationId = createWorkflowInvocationId({
+    runId: currentCursor.runId,
+    continuationId: currentCursor.continuationId,
+    stepId: currentCursor.stepId,
+    stepIndex: currentCursor.stepIndex,
+    activityId: currentStep.activity,
+  });
+  if (currentCursor.invocationId !== expectedInvocationId) {
+    throw new TypeError(
+      `${label}.currentCursor invocationId does not match its exact activity activation.`,
+    );
+  }
+  const sequence = assertPositiveSafeInteger(
+    materialization.sequence,
+    `${label}.sequence`,
+  );
+  if (sequence !== currentCursor.lastSequence + 1) {
+    throw new TypeError(
+      `${label}.sequence must immediately follow currentCursor.lastSequence.`,
+    );
+  }
+  const observedAt = assertPositiveSafeInteger(
+    materialization.observedAt,
+    `${label}.observedAt`,
+  );
+  if (observedAt < currentCursor.updatedAt) {
+    throw new TypeError(
+      `${label}.observedAt must not precede currentCursor.updatedAt.`,
+    );
+  }
+  const outputPayload = normalizeWorkflowOutputPayload(
+    materialization.outputPayload,
+    `${label}.outputPayload`,
+  );
+  const outputRef = verifyExecutionPayloadReference(
+    normalizePayloadReference(
+      materialization.outputRef,
+      WORKFLOW_OUTPUT_PAYLOAD_SCHEMA,
+      `${label}.outputRef`,
+    ),
+    encodeCanonicalJsonPayload(outputPayload),
+    `${label} output`,
+  ).reference;
+  const outputBinding = normalizeWorkflowOutputBinding(
+    {
+      stepId: currentCursor.stepId,
+      stepIndex: currentCursor.stepIndex,
+      outputRef,
+    },
+    `${label}.outputBinding`,
+  );
+  const outputs = [...currentCursor.outputs, outputBinding];
+  const selectedOutput = hasSelectedOutput
+    ? normalizeSelectedWorkflowOutput(
+        materialization.selectedOutput,
+        `${label}.selectedOutput`,
+      )
+    : undefined;
+  const nextStepIndex = currentCursor.stepIndex + 1;
+  const nextStep = context.planPayload.definition.steps[nextStepIndex];
+  const common = {
+    runId: currentCursor.runId,
+    ...context,
+    outputPayload,
+    outputRef,
+    outputBinding,
+  };
+  if (!nextStep) {
+    if (selectedOutput) {
+      throw new TypeError(
+        `${label}.selectedOutput is not supported when the workflow is complete.`,
+      );
+    }
+    const cursor = normalizeWorkflowCursor({
+      ...currentCursor,
+      disposition: WorkflowCursorDisposition.COMPLETED,
+      outputs,
+      version: currentCursor.version + 1,
+      lastSequence: sequence,
+      updatedAt: observedAt,
+    });
+    return { ...common, completed: true, cursor };
+  }
+  if (nextStep.kind !== 'activity') {
+    throw new TypeError(
+      `${label} supports only an activity successor or terminal workflow; timer and signal successors are not implemented.`,
+    );
+  }
+  const currentOutput = { binding: outputBinding, payload: outputPayload };
+  const activityRequest = selectWorkflowActivityRequest({
+    step: nextStep,
+    stepIndex: nextStepIndex,
+    planPayload: context.planPayload,
+    startPayload: context.startPayload,
+    outputs,
+    selectedOutput,
+    currentOutput,
+    label: `${label}.nextActivity`,
+  });
+  const continuationId = createWorkflowContinuationId({
+    runId: currentCursor.runId,
+    planId: context.planId,
+    stepId: nextStep.id,
+    stepIndex: nextStepIndex,
+  });
+  const invocationId = createWorkflowInvocationId({
+    runId: currentCursor.runId,
+    continuationId,
+    stepId: nextStep.id,
+    stepIndex: nextStepIndex,
+    activityId: nextStep.activity,
+  });
+  const cursor = normalizeWorkflowCursor({
+    ...currentCursor,
+    stepId: nextStep.id,
+    stepIndex: nextStepIndex,
+    continuationId,
+    invocationId,
+    disposition: WorkflowCursorDisposition.ACTIVITY_RUNNABLE,
+    outputs,
+    version: currentCursor.version + 1,
+    lastSequence: sequence,
+    updatedAt: observedAt,
+  });
+  return {
+    ...common,
+    completed: false,
+    cursor,
+    nextActivity: {
+      stepId: nextStep.id,
+      stepIndex: nextStepIndex,
+      continuationId,
+      invocationId,
+      activityId: nextStep.activity,
+      activityRequest,
+    },
   };
 }
 
@@ -659,12 +1243,13 @@ export function normalizeWorkflowCursor(value, label = 'workflow cursor') {
  * @returns {{runId: string, planPayload: ReturnType<typeof normalizeWorkflowPlanPayload>, planRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, startPayload: ReturnType<typeof normalizeWorkflowStartPayload>, startRef: Readonly<import('../../runtime/execution-payload.js').ExecutionPayloadReference>, planId: string, continuationId: string, invocationId: string, activityId: string, activityRequest: {input: any, callerMetadata: Record<string, any>}, cursor: Record<string, any>}} - Exact first activity materialization.
  */
 export function materializeFirstWorkflowActivity(value) {
+  const label = 'first workflow activity materialization';
   const materialization = cloneBoundedJsonObject(
     value,
     WORKFLOW_PLAN_PAYLOAD_MAX_BYTES +
       WORKFLOW_START_PAYLOAD_MAX_BYTES +
       EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
-    'first workflow activity materialization',
+    label,
   );
   assertExactKeys(
     materialization,
@@ -676,67 +1261,23 @@ export function materializeFirstWorkflowActivity(value) {
       'startRef',
       'observedAt',
     ],
-    'first workflow activity materialization',
+    label,
   );
-  assertWorkflowRunId(
-    materialization.runId,
-    'first workflow activity materialization.runId',
-  );
-  const planPayload = normalizeWorkflowPlanPayload(
-    materialization.planPayload,
-    'first workflow activity materialization.planPayload',
-  );
-  const startPayload = normalizeWorkflowStartPayload(
-    materialization.startPayload,
-    'first workflow activity materialization.startPayload',
-  );
-  const planRef = verifyExecutionPayloadReference(
-    normalizePayloadReference(
-      materialization.planRef,
-      WORKFLOW_PLAN_PAYLOAD_SCHEMA,
-      'first workflow activity materialization.planRef',
-    ),
-    encodeCanonicalJsonPayload(planPayload),
-    'first workflow activity materialization plan',
-  ).reference;
-  const startRef = verifyExecutionPayloadReference(
-    normalizePayloadReference(
-      materialization.startRef,
-      WORKFLOW_START_PAYLOAD_SCHEMA,
-      'first workflow activity materialization.startRef',
-    ),
-    encodeCanonicalJsonPayload(startPayload),
-    'first workflow activity materialization start',
-  ).reference;
+  assertWorkflowRunId(materialization.runId, `${label}.runId`);
+  const context = normalizeWorkflowPayloadContext(materialization, label);
   const observedAt = assertPositiveSafeInteger(
     materialization.observedAt,
-    'first workflow activity materialization.observedAt',
+    `${label}.observedAt`,
   );
-  const firstStep = planPayload.definition.steps[0];
+  const firstStep = context.planPayload.definition.steps[0];
   if (firstStep.kind !== 'activity') {
     throw new TypeError(
-      'first workflow activity materialization requires an activity-headed workflow; timer and signal first steps are not implemented.',
+      `${label} requires an activity-headed workflow; timer and signal first steps are not implemented.`,
     );
   }
-
-  let selectedInput;
-  if (firstStep.input.kind === 'workflow-input') {
-    selectedInput = startPayload.input;
-  } else if (firstStep.input.kind === 'literal') {
-    selectedInput = firstStep.input.value;
-  } else {
-    throw new TypeError(
-      'first workflow activity cannot select a prior step output.',
-    );
-  }
-  const activityRequest = normalizeWorkflowActivityRequest({
-    input: selectedInput,
-    callerMetadata: startPayload.callerMetadata,
-  });
-  const planId = createWorkflowPlanId(planPayload);
   const continuationId = createWorkflowContinuationId({
     runId: materialization.runId,
-    planId,
+    planId: context.planId,
     stepId: firstStep.id,
     stepIndex: 0,
   });
@@ -750,12 +1291,12 @@ export function materializeFirstWorkflowActivity(value) {
   const cursor = normalizeWorkflowCursor({
     schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
     runId: materialization.runId,
-    appId: planPayload.appId,
-    revisionId: planPayload.revisionId,
-    workflowId: planPayload.workflowId,
-    planId,
-    planRef,
-    startRef,
+    appId: context.planPayload.appId,
+    revisionId: context.planPayload.revisionId,
+    workflowId: context.planPayload.workflowId,
+    planId: context.planId,
+    planRef: context.planRef,
+    startRef: context.startRef,
     stepId: firstStep.id,
     stepIndex: 0,
     continuationId,
@@ -767,19 +1308,23 @@ export function materializeFirstWorkflowActivity(value) {
     createdAt: observedAt,
     updatedAt: observedAt,
   });
-
-  return {
-    runId: materialization.runId,
-    planPayload,
-    planRef,
-    startPayload,
-    startRef,
-    planId,
-    continuationId,
-    invocationId,
-    activityId: firstStep.activity,
-    activityRequest,
+  const selected = materializeNormalizedWorkflowActivityAtCursor({
+    context,
     cursor,
+    label,
+  });
+  return {
+    runId: selected.runId,
+    planPayload: selected.planPayload,
+    planRef: selected.planRef,
+    startPayload: selected.startPayload,
+    startRef: selected.startRef,
+    planId: selected.planId,
+    continuationId: selected.continuationId,
+    invocationId: selected.invocationId,
+    activityId: selected.activityId,
+    activityRequest: selected.activityRequest,
+    cursor: selected.cursor,
   };
 }
 
@@ -822,8 +1367,11 @@ export default {
   createWorkflowSignalWaitId,
   createWorkflowTimerId,
   materializeFirstWorkflowActivity,
+  materializeWorkflowActivitySuccess,
+  materializeWorkflowCursorActivity,
   normalizeWorkflowActivityRequest,
   normalizeWorkflowCursor,
+  normalizeWorkflowOutputBinding,
   normalizeWorkflowOutputPayload,
   normalizeWorkflowPlanPayload,
   normalizeWorkflowStartPayload,
