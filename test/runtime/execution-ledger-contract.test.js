@@ -30,7 +30,8 @@ describe('execution ledger contract facade', () => {
     }
   });
 
-  test('preserves the V7 destination-effect identity vector', () => {
+  test('preserves the V8 destination-effect identity vector', () => {
+    expect(ledgerContract.EXECUTION_LEDGER_SCHEMA_VERSION).toBe(8);
     expect(
       ledgerFacade.createManagedEffectDestinationId({
         appId: 'contract-app',
@@ -38,7 +39,7 @@ describe('execution ledger contract facade', () => {
         invocationId: 'contract-invocation',
         effectId: 'contract-effect',
       }),
-    ).toBe('wfx_hxhCj7CTX6fvvMcmG3TGEW_ZiG3vQfvGF7a4pArrfuc');
+    ).toBe('wfx_5y4LZtVgt_tExRKnCKEo5yAydwgrlHN0VLM3WG6RPwA');
   });
 
   test('normalizes an exact immutable destination binding shape', () => {

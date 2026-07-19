@@ -88,7 +88,7 @@ function localStorePathsMayAlias(left, right) {
  * Store identity is deliberately absent: the finite effect/table contract
  * owns logical destination identity and its persistence rules.
  * @param {unknown} value - Candidate configuration.
- * @returns {Readonly<{adapterName: import('../lib/config/db.js').DBAdapterName, storePath: string, tableName: 'wharfie-application-state-v1'}>} - Canonical immutable configuration.
+ * @returns {Readonly<{adapterName: import('../lib/config/db.js').DBAdapterName, storePath: string, tableName: 'wharfie-application-state-v2'}>} - Canonical immutable configuration.
  */
 export function validateApplicationStateStoreConfiguration(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -145,7 +145,7 @@ export function validateApplicationStateStoreConfiguration(value) {
 
 /**
  * Resolve every ambient application-state input once for one host operation.
- * @returns {Readonly<{adapterName: import('../lib/config/db.js').DBAdapterName, storePath: string, tableName: 'wharfie-application-state-v1'}>} - Immutable routing configuration.
+ * @returns {Readonly<{adapterName: import('../lib/config/db.js').DBAdapterName, storePath: string, tableName: 'wharfie-application-state-v2'}>} - Immutable routing configuration.
  */
 export function resolveApplicationStateStoreConfiguration() {
   return validateApplicationStateStoreConfiguration({
@@ -216,7 +216,7 @@ function resolveApplicationStateAccess(options) {
  * this lower-level form exists for durable runners that acquire resources
  * before STARTED and retain them through terminal/uncertain settlement.
  * @param {{configuration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, readOnly?: boolean}} [options] - Exact access options.
- * @returns {Promise<Readonly<{db: import('../lib/db/base.js').DBClient, context: Readonly<{adapterName: import('../lib/config/db.js').DBAdapterName, storePath: string, tableName: 'wharfie-application-state-v1', readOnly: boolean}>, close: () => Promise<void>}>>} - Owned store scope.
+ * @returns {Promise<Readonly<{db: import('../lib/db/base.js').DBClient, context: Readonly<{adapterName: import('../lib/config/db.js').DBAdapterName, storePath: string, tableName: 'wharfie-application-state-v2', readOnly: boolean}>, close: () => Promise<void>}>>} - Owned store scope.
  */
 export async function openApplicationStateDB(options = {}) {
   const { configuration, readOnly } = resolveApplicationStateAccess(options);
@@ -241,7 +241,7 @@ export async function openApplicationStateDB(options = {}) {
  * its client. The callback receives the fixed table separately from the DB
  * facade so catalog adapters cannot drift into the execution-ledger table.
  * @template T
- * @param {(db: import('../lib/db/base.js').DBClient, context: Readonly<{adapterName: import('../lib/config/db.js').DBAdapterName, storePath: string, tableName: 'wharfie-application-state-v1', readOnly: boolean}>) => Promise<T>|T} handler - Store operation.
+ * @param {(db: import('../lib/db/base.js').DBClient, context: Readonly<{adapterName: import('../lib/config/db.js').DBAdapterName, storePath: string, tableName: 'wharfie-application-state-v2', readOnly: boolean}>) => Promise<T>|T} handler - Store operation.
  * @param {{configuration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, readOnly?: boolean}} [options] - Exact access options.
  * @returns {Promise<T>} - Handler result.
  */

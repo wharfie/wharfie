@@ -123,7 +123,7 @@ export function createManualLedgerRunId(options) {
     'idempotencyKey',
   );
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:manual-ledger-run:v7',
+    domain: 'wharfie:manual-ledger-run:v8',
     prefix: 'wlm',
     value: { appId: options.appId, idempotencyKey },
     valuePath: 'manual ledger run identity',
@@ -1183,11 +1183,17 @@ export async function reconcileManualLedgerActivity(options) {
     invocation,
     attempt,
   );
-  const expectedVersion = uncertaintyEvent.payload?.run?.version;
+  const retainedReconciliationEvent = view.events.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.transition_id === transitionId,
+  );
+  const expectedVersion = retainedReconciliationEvent
+    ? retainedReconciliationEvent.payload?.run?.version - 1
+    : view.run.version;
   if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
     throw new ExecutionLedgerConflictError(
       runId,
-      'retained uncertainty transition has no valid run version',
+      'retained reconciliation boundary has no valid run version',
     );
   }
 

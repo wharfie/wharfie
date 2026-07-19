@@ -33,7 +33,7 @@ beforeEach(async () => {
     acquireLocalLedgerServiceSession,
   }));
   jest.unstable_mockModule(DB_CONFIG_IMPORT, () => ({
-    APPLICATION_STATE_TABLE_NAME: 'wharfie-application-state-v1',
+    APPLICATION_STATE_TABLE_NAME: 'wharfie-application-state-v2',
     createControlDBClient,
     resolveControlAdapterName: () => 'lmdb',
     resolveControlStorePath: () => '/control',

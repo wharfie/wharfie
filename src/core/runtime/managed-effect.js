@@ -451,6 +451,7 @@ const TERMINAL_EFFECT_STATUSES = new Set([
   EffectStatus.COMPLETED,
   EffectStatus.FAILED,
   EffectStatus.CANCELLED,
+  EffectStatus.NOT_APPLIED,
 ]);
 
 /**

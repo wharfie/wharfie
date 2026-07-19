@@ -357,7 +357,7 @@ function failedCancellationEvidenceForStart(
  */
 function eventIdFor(event) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v7',
+    domain: 'wharfie:execution-ledger-event:v8',
     prefix: 'wle',
     value: {
       schemaVersion: event.schema_version,
@@ -463,6 +463,10 @@ const TEST_EFFECT_VERIFIER = Object.freeze({
   kind: 'ledger-test-destination',
   version: 1,
 });
+const TEST_EFFECT_RECONCILIATION_VERIFIER = Object.freeze({
+  kind: 'ledger-test-destination-not-applied',
+  version: 1,
+});
 const TEST_EFFECT_DESTINATION = Object.freeze({
   kind: 'ledger-test-store',
   version: 1,
@@ -477,6 +481,20 @@ function effectVerifierRegistration() {
       input.outcome.evidence.destinationEffectId ===
         input.effect.destinationEffectId &&
       input.outcome.evidence.operation === input.request.operation,
+  };
+}
+
+function effectReconciliationVerifierRegistration() {
+  return {
+    ...TEST_EFFECT_RECONCILIATION_VERIFIER,
+    verify: (/** @type {Record<string, any>} */ input) =>
+      Object.isFrozen(input) &&
+      Object.isFrozen(input.effect) &&
+      Object.isFrozen(input.request) &&
+      Object.isFrozen(input.evidence) &&
+      input.evidence.destinationEffectId === input.effect.destinationEffectId &&
+      input.evidence.operation === input.request.operation &&
+      input.evidence.disposition === 'not-applied',
   };
 }
 
@@ -731,6 +749,535 @@ for (const adapter of getAdapterMatrix()) {
         await expect(ledger.getRun(RUN_ID)).rejects.toBeInstanceOf(
           ExecutionLedgerProjectionError,
         );
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('reconciles uncertain effect siblings independently from typed immutable evidence', async () => {
+      const { db, cleanup } = await adapter.create();
+      const counted = createCountingPayloadStore();
+      const tableName = 'execution-ledger-effect-reconciliation';
+      try {
+        const verifiers = [
+          effectVerifierRegistration(),
+          effectReconciliationVerifierRegistration(),
+        ];
+        const ledger = createProductionExecutionLedger({
+          db,
+          tableName,
+          payloadStore: counted.payloadStore,
+          effectEvidenceVerifiers: verifiers,
+          now: createClock(),
+        });
+        const started = await createStartedManagedAttempt(ledger);
+        const lateOutcome = await retainEffect(ledger, started, {
+          effectId: 'a-late-outcome',
+          sequence: 1,
+          status: EffectStatus.STARTED,
+        });
+        const notApplied = await retainEffect(ledger, started, {
+          effectId: 'b-not-applied',
+          sequence: 2,
+          status: EffectStatus.STARTED,
+        });
+        const lateFailure = await retainEffect(ledger, started, {
+          effectId: 'c-late-failure',
+          sequence: 3,
+          status: EffectStatus.STARTED,
+        });
+        const beforeSettlement = await ledger.getRun(RUN_ID);
+        if (!beforeSettlement) throw new Error('Expected managed-effect run.');
+        const settled = await ledger.settleStoppedAttemptManagedEffects({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId: started.attempt.attemptId,
+          fencingToken: 'effect-fence',
+          generation: 1,
+          expectedVersion: beforeSettlement.version,
+          transitionId: 'settle-reconciliation-siblings',
+          decisions: [
+            {
+              effectId: 'a-late-outcome',
+              expectedEffectVersion: lateOutcome.effect.version,
+              disposition: 'outcome-uncertain',
+            },
+            {
+              effectId: 'b-not-applied',
+              expectedEffectVersion: notApplied.effect.version,
+              disposition: 'outcome-uncertain',
+            },
+            {
+              effectId: 'c-late-failure',
+              expectedEffectVersion: lateFailure.effect.version,
+              disposition: 'outcome-uncertain',
+            },
+          ],
+          reason: { kind: 'stopped-with-uncertain-effects' },
+        });
+        const attemptAtUncertainty = structuredClone(settled.attempt);
+        const eventsAtUncertainty = await ledger.getEvents(RUN_ID);
+        const uncertaintyEvent =
+          eventsAtUncertainty[eventsAtUncertainty.length - 1];
+        if (!uncertaintyEvent) throw new Error('Expected uncertainty event.');
+        const uncertainNotApplied = settled.effects.find(
+          (/** @type {Record<string, any>} */ effect) =>
+            effect.effectId === 'b-not-applied',
+        );
+        const uncertainLateOutcome = settled.effects.find(
+          (/** @type {Record<string, any>} */ effect) =>
+            effect.effectId === 'a-late-outcome',
+        );
+        const uncertainLateFailure = settled.effects.find(
+          (/** @type {Record<string, any>} */ effect) =>
+            effect.effectId === 'c-late-failure',
+        );
+        if (
+          !uncertainNotApplied ||
+          !uncertainLateOutcome ||
+          !uncertainLateFailure
+        ) {
+          throw new Error('Expected all uncertain effects.');
+        }
+        const negativeEvidence = {
+          destinationEffectId: uncertainNotApplied.destinationEffectId,
+          operation: 'put',
+          disposition: 'not-applied',
+          adapter: adapter.name,
+        };
+        const negativeRequest = {
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId: started.attempt.attemptId,
+          effectId: 'b-not-applied',
+          fencingToken: 'effect-fence',
+          generation: 1,
+          coordinatorEpoch: 0,
+          expectedVersion: settled.run.version,
+          expectedEffectVersion: uncertainNotApplied.version,
+          uncertaintyEventId: uncertaintyEvent.event_id,
+          uncertaintySequence: uncertaintyEvent.sequence,
+          transitionId: 'reconcile-b-not-applied',
+          reconciliationId: 'reconcile-b-not-applied',
+          reason: { kind: 'destination-finalized-not-applied' },
+          resolution: {
+            kind: 'not-applied',
+            verifier: TEST_EFFECT_RECONCILIATION_VERIFIER,
+            evidence: negativeEvidence,
+          },
+        };
+        const writesBeforeRejectedEvidence = counted.writes.length;
+        await expect(
+          ledger.reconcileUncertainManagedEffect({
+            ...negativeRequest,
+            transitionId: 'reject-negative-evidence',
+            resolution: {
+              ...negativeRequest.resolution,
+              evidence: { ...negativeEvidence, disposition: 'unknown' },
+            },
+          }),
+        ).rejects.toThrow(/not substantiated/i);
+        await expect(
+          ledger.reconcileUncertainManagedEffect({
+            ...negativeRequest,
+            transitionId: 'reject-wrong-uncertainty-link',
+            reconciliationId: 'reject-wrong-uncertainty-link',
+            uncertaintyEventId: 'wrong-uncertainty-event',
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
+        expect(counted.writes).toHaveLength(writesBeforeRejectedEvidence);
+
+        const negative =
+          await ledger.reconcileUncertainManagedEffect(negativeRequest);
+        expect(negative).toMatchObject({
+          applied: true,
+          run: { status: RunStatus.BLOCKED },
+          invocation: { status: InvocationStatus.UNCERTAIN },
+          attempt: { status: AttemptStatus.ABANDONED },
+          effect: {
+            status: EffectStatus.NOT_APPLIED,
+            reconciliation: {
+              reconciliationId: 'reconcile-b-not-applied',
+              uncertaintyEventId: uncertaintyEvent.event_id,
+              uncertaintySequence: uncertaintyEvent.sequence,
+              verifier: TEST_EFFECT_RECONCILIATION_VERIFIER,
+              resolutionStatus: EffectStatus.NOT_APPLIED,
+            },
+          },
+        });
+        expect(negative.attempt).toEqual(attemptAtUncertainty);
+        expect(negative.effect).not.toHaveProperty('uncertainty');
+        expect(negative.effect).not.toHaveProperty('outcomeRef');
+        const writesAfterNegative = counted.writes.length;
+        await expect(
+          ledger.reconcileUncertainManagedEffect(negativeRequest),
+        ).resolves.toMatchObject({ applied: false });
+        expect(counted.writes).toHaveLength(writesAfterNegative);
+        await expect(
+          ledger.reconcileUncertainManagedEffect({
+            ...negativeRequest,
+            reason: { kind: 'conflicting-reconciliation' },
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerTransitionConflictError);
+        await expect(
+          ledger.readManagedEffectDelivery(
+            RUN_ID,
+            INVOCATION_ID,
+            'b-not-applied',
+          ),
+        ).resolves.toEqual(
+          expect.not.objectContaining({
+            outcome: expect.anything(),
+            resultFrame: expect.anything(),
+          }),
+        );
+
+        const positiveRequest = {
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId: started.attempt.attemptId,
+          effectId: 'a-late-outcome',
+          fencingToken: 'effect-fence',
+          generation: 1,
+          coordinatorEpoch: 0,
+          expectedVersion: negative.run.version,
+          expectedEffectVersion: uncertainLateOutcome.version,
+          uncertaintyEventId: uncertaintyEvent.event_id,
+          uncertaintySequence: uncertaintyEvent.sequence,
+          transitionId: 'reconcile-a-late-outcome',
+          reconciliationId: 'reconcile-a-late-outcome',
+          reason: { kind: 'late-destination-outcome' },
+          resolution: {
+            kind: 'outcome',
+            outcome: {
+              ok: true,
+              result: { recovered: true },
+              evidence: {
+                destinationEffectId: uncertainLateOutcome.destinationEffectId,
+                operation: 'put',
+              },
+            },
+          },
+        };
+        const writesBeforeRejectedOutcome = counted.writes.length;
+        await expect(
+          ledger.reconcileUncertainManagedEffect({
+            ...positiveRequest,
+            transitionId: 'reject-extra-outcome-field',
+            reconciliationId: 'reject-extra-outcome-field',
+            resolution: {
+              kind: 'outcome',
+              outcome: {
+                ...positiveRequest.resolution.outcome,
+                ignoredAlias: 'must-not-be-silently-discarded',
+              },
+            },
+          }),
+        ).rejects.toThrow(/resolution\.outcome/i);
+        expect(counted.writes).toHaveLength(writesBeforeRejectedOutcome);
+        await expect(
+          ledger.reconcileUncertainManagedEffect({
+            ...positiveRequest,
+            expectedVersion: settled.run.version,
+            transitionId: 'reject-stale-reconciliation-version',
+            reconciliationId: 'reject-stale-reconciliation-version',
+          }),
+        ).rejects.toBeInstanceOf(ExecutionLedgerConflictError);
+        const positive =
+          await ledger.reconcileUncertainManagedEffect(positiveRequest);
+        expect(positive).toMatchObject({
+          applied: true,
+          run: { status: RunStatus.BLOCKED },
+          invocation: { status: InvocationStatus.UNCERTAIN },
+          attempt: { status: AttemptStatus.ABANDONED },
+          effect: {
+            status: EffectStatus.COMPLETED,
+            terminal: { ok: true },
+            reconciliation: {
+              uncertaintyEventId: uncertaintyEvent.event_id,
+              uncertaintySequence: uncertaintyEvent.sequence,
+              resolutionStatus: EffectStatus.COMPLETED,
+            },
+          },
+        });
+        expect(positive.attempt).toEqual(attemptAtUncertainty);
+        const failed = await ledger.reconcileUncertainManagedEffect({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId: started.attempt.attemptId,
+          effectId: 'c-late-failure',
+          fencingToken: 'effect-fence',
+          generation: 1,
+          coordinatorEpoch: 0,
+          expectedVersion: positive.run.version,
+          expectedEffectVersion: uncertainLateFailure.version,
+          uncertaintyEventId: uncertaintyEvent.event_id,
+          uncertaintySequence: uncertaintyEvent.sequence,
+          transitionId: 'reconcile-c-late-failure',
+          reconciliationId: 'reconcile-c-late-failure',
+          reason: { kind: 'late-destination-failure' },
+          resolution: {
+            kind: 'outcome',
+            outcome: {
+              ok: false,
+              error: {
+                code: 'destination-rejected',
+                name: 'DestinationError',
+                message: 'The destination rejected the operation.',
+                details: {},
+              },
+              evidence: {
+                destinationEffectId: uncertainLateFailure.destinationEffectId,
+                operation: 'put',
+              },
+            },
+          },
+        });
+        expect(failed).toMatchObject({
+          run: { status: RunStatus.BLOCKED },
+          invocation: { status: InvocationStatus.UNCERTAIN },
+          attempt: attemptAtUncertainty,
+          effect: {
+            status: EffectStatus.FAILED,
+            terminal: { ok: false },
+            reconciliation: { resolutionStatus: EffectStatus.FAILED },
+          },
+        });
+        const rebuilt = await ledger.rebuildRun(RUN_ID);
+        expect(rebuilt).toMatchObject({
+          run: { status: RunStatus.BLOCKED },
+          invocations: [{ status: InvocationStatus.UNCERTAIN }],
+          attempts: [attemptAtUncertainty],
+          effects: [
+            { effectId: 'a-late-outcome', status: EffectStatus.COMPLETED },
+            { effectId: 'b-not-applied', status: EffectStatus.NOT_APPLIED },
+            { effectId: 'c-late-failure', status: EffectStatus.FAILED },
+          ],
+        });
+        expect(
+          rebuilt?.events
+            .slice(-3)
+            .map((/** @type {Record<string, any>} */ event) => event.type),
+        ).toEqual([
+          'uncertain-effect-reconciled',
+          'uncertain-effect-reconciled',
+          'uncertain-effect-reconciled',
+        ]);
+        await expect(
+          ledger.readManagedEffectDelivery(
+            RUN_ID,
+            INVOCATION_ID,
+            'a-late-outcome',
+          ),
+        ).resolves.toMatchObject({
+          outcome: { ok: true, result: { recovered: true } },
+          resultFrame: { type: 'effect-result', ok: true },
+        });
+        await expect(
+          ledger.readManagedEffectDelivery(
+            RUN_ID,
+            INVOCATION_ID,
+            'c-late-failure',
+          ),
+        ).resolves.toMatchObject({
+          outcome: { ok: false, error: { code: 'destination-rejected' } },
+          resultFrame: { type: 'effect-result', ok: false },
+        });
+
+        const successfulDelivery = await ledger.readManagedEffectDelivery(
+          RUN_ID,
+          INVOCATION_ID,
+          'a-late-outcome',
+        );
+        const failedDelivery = await ledger.readManagedEffectDelivery(
+          RUN_ID,
+          INVOCATION_ID,
+          'c-late-failure',
+        );
+        if (!successfulDelivery?.resultFrame || !failedDelivery?.resultFrame) {
+          throw new Error('Expected both reconciled managed-effect results.');
+        }
+        const transcript = new ActivityProtocolTranscriptValidator();
+        const acceptedStart = transcript.acceptHostFrame(started.startFrame);
+        const acceptedSuccessfulRequest = transcript.acceptComponentFrame(
+          effectRequestFrame(started.attempt.attemptId, 'a-late-outcome', 1),
+        );
+        const acceptedSuccessfulResult = transcript.acceptHostFrame(
+          successfulDelivery.resultFrame,
+        );
+        const acceptedNotAppliedRequest = transcript.acceptComponentFrame(
+          effectRequestFrame(started.attempt.attemptId, 'b-not-applied', 2),
+        );
+        const acceptedFailedRequest = transcript.acceptComponentFrame(
+          effectRequestFrame(started.attempt.attemptId, 'c-late-failure', 3),
+        );
+        const acceptedFailedResult = transcript.acceptHostFrame(
+          failedDelivery.resultFrame,
+        );
+        const acceptedTerminal = transcript.acceptComponentFrame({
+          protocol: 'wharfie.activity',
+          protocolVersion: 1,
+          type: 'failed',
+          attemptId: started.attempt.attemptId,
+          sequence: 4,
+          error: {
+            code: 'activity-failed-after-effect-loss',
+            name: 'ActivityError',
+            message:
+              'The activity failed after one destination response was lost.',
+            details: {},
+          },
+        });
+        const terminalRequest = {
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId: started.attempt.attemptId,
+          fencingToken: 'effect-fence',
+          generation: 1,
+          coordinatorEpoch: 0,
+          expectedVersion: failed.run.version,
+          uncertaintyEventId: uncertaintyEvent.event_id,
+          uncertaintySequence: uncertaintyEvent.sequence,
+          transitionId: 'reconcile-attempt-after-effect-reconciliations',
+          reconciliationId: 'reconcile-attempt-after-effect-reconciliations',
+          reason: { kind: 'retained-terminal-after-effect-reconciliation' },
+          evidence: {
+            status: acceptedTerminal.type,
+            start: acceptedStart,
+            terminal: acceptedTerminal,
+            frames: [
+              acceptedStart,
+              acceptedSuccessfulRequest,
+              acceptedSuccessfulResult,
+              acceptedNotAppliedRequest,
+              acceptedFailedRequest,
+              acceptedFailedResult,
+              acceptedTerminal,
+            ],
+            transcript: transcript.snapshot(),
+          },
+        };
+        const terminal =
+          await ledger.reconcileUncertainManualAttempt(terminalRequest);
+        expect(terminal).toMatchObject({
+          applied: true,
+          run: { status: RunStatus.FAILED },
+          invocation: { status: InvocationStatus.FAILED },
+          attempt: attemptAtUncertainty,
+        });
+        await expect(
+          ledger.reconcileUncertainManualAttempt(terminalRequest),
+        ).resolves.toMatchObject({
+          applied: false,
+          run: { status: RunStatus.FAILED },
+          invocation: { status: InvocationStatus.FAILED },
+          attempt: attemptAtUncertainty,
+        });
+
+        const withoutNegativeVerifier = createProductionExecutionLedger({
+          db,
+          tableName,
+          payloadStore: counted.payloadStore,
+          effectEvidenceVerifiers: [effectVerifierRegistration()],
+          now: createClock(),
+        });
+        await expect(
+          withoutNegativeVerifier.getRun(RUN_ID),
+        ).rejects.toBeInstanceOf(ExecutionLedgerProjectionError);
+        const negativeEvidenceRef =
+          negative.effect?.reconciliation?.evidenceRef;
+        if (!negativeEvidenceRef) {
+          throw new Error(
+            'Expected retained negative reconciliation evidence.',
+          );
+        }
+        writeFileSync(
+          PAYLOAD_STORE.getPath(negativeEvidenceRef),
+          '{"tampered":true}',
+          'utf8',
+        );
+        await expect(ledger.rebuildRun(RUN_ID)).rejects.toBeInstanceOf(
+          ExecutionLedgerProjectionError,
+        );
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('links effect reconciliation to a singular uncertainty event', async () => {
+      const { db, cleanup } = await adapter.create();
+      try {
+        const ledger = createExecutionLedger({
+          db,
+          tableName: 'execution-ledger-singular-effect-reconciliation',
+          effectEvidenceVerifiers: [
+            effectVerifierRegistration(),
+            effectReconciliationVerifierRegistration(),
+          ],
+          now: createClock(),
+        });
+        const started = await createStartedManagedAttempt(ledger);
+        const retained = await retainEffect(ledger, started, {
+          effectId: 'singular-uncertain-effect',
+          sequence: 1,
+          status: EffectStatus.STARTED,
+        });
+        const uncertain = await ledger.markManagedEffectUncertain({
+          runId: RUN_ID,
+          invocationId: INVOCATION_ID,
+          attemptId: started.attempt.attemptId,
+          effectId: 'singular-uncertain-effect',
+          fencingToken: 'effect-fence',
+          generation: 1,
+          expectedVersion: retained.run.version,
+          expectedEffectVersion: retained.effect.version,
+          transitionId: 'singular-effect-uncertain',
+          reason: { kind: 'singular-effect-outcome-unknown' },
+        });
+        const uncertaintyEvent = (await ledger.getEvents(RUN_ID)).find(
+          (event) => event.type === 'effect-became-uncertain',
+        );
+        if (!uncertaintyEvent) {
+          throw new Error('Expected singular managed-effect uncertainty.');
+        }
+        await expect(
+          ledger.reconcileUncertainManagedEffect({
+            runId: RUN_ID,
+            invocationId: INVOCATION_ID,
+            attemptId: started.attempt.attemptId,
+            effectId: 'singular-uncertain-effect',
+            fencingToken: 'effect-fence',
+            generation: 1,
+            coordinatorEpoch: 0,
+            expectedVersion: uncertain.run.version,
+            expectedEffectVersion: uncertain.effect.version,
+            uncertaintyEventId: uncertaintyEvent.event_id,
+            uncertaintySequence: uncertaintyEvent.sequence,
+            transitionId: 'reconcile-singular-effect',
+            reconciliationId: 'reconcile-singular-effect',
+            reason: { kind: 'singular-effect-finalized' },
+            resolution: {
+              kind: 'not-applied',
+              verifier: TEST_EFFECT_RECONCILIATION_VERIFIER,
+              evidence: {
+                destinationEffectId: uncertain.effect.destinationEffectId,
+                operation: 'put',
+                disposition: 'not-applied',
+              },
+            },
+          }),
+        ).resolves.toMatchObject({
+          run: { status: RunStatus.BLOCKED },
+          invocation: { status: InvocationStatus.UNCERTAIN },
+          attempt: { status: AttemptStatus.ABANDONED },
+          effect: {
+            status: EffectStatus.NOT_APPLIED,
+            reconciliation: {
+              uncertaintyEventId: uncertaintyEvent.event_id,
+              uncertaintySequence: uncertaintyEvent.sequence,
+            },
+          },
+        });
       } finally {
         await cleanup();
       }
@@ -3858,11 +4405,11 @@ for (const adapter of getAdapterMatrix()) {
         ).rejects.toThrow(/cursor.*scope/i);
         const malformedCursor = Buffer.from(
           JSON.stringify({
-            schemaVersion: 5,
+            schemaVersion: 6,
             appId,
             serviceId: scope.serviceId,
             directoryId: scope.directoryId,
-            startAfter: 'ledger-directory/v5/run/0000000000000000/not-base64!',
+            startAfter: 'ledger-directory/v6/run/0000000000000000/not-base64!',
           }),
           'utf8',
         ).toString('base64url');
@@ -3871,7 +4418,7 @@ for (const adapter of getAdapterMatrix()) {
         ).rejects.toThrow(/cursor.*scope/i);
         const missingBoundaryCursor = Buffer.from(
           JSON.stringify({
-            schemaVersion: 5,
+            schemaVersion: 6,
             appId,
             serviceId: scope.serviceId,
             directoryId: scope.directoryId,
@@ -3914,7 +4461,7 @@ for (const adapter of getAdapterMatrix()) {
         expect(tieSecond.nextCursor).toBeUndefined();
 
         // A user-controlled run ID can equal another app's internal directory
-        // partition. V7 replay is scoped to ledger/v7/, so that co-location
+        // partition. V8 replay is scoped to ledger/v8/, so that co-location
         // remains harmless instead of treating the directory row as a run row.
         const aliasTargetAppId = 'directory-alias-target';
         const aliasRunId = createExecutionLedgerRunDirectoryScope({
@@ -4003,7 +4550,7 @@ for (const adapter of getAdapterMatrix()) {
       }
     });
 
-    test('keeps V6 records and its V4 directory inert when V7 deliberately shares a custom table', async () => {
+    test('keeps V7 records and its V5 directory inert when V8 deliberately shares a custom table', async () => {
       const { db, cleanup } = await adapter.create();
       try {
         const tableName = 'operator-selected-shared-ledger-table';
@@ -4011,15 +4558,15 @@ for (const adapter of getAdapterMatrix()) {
           appId: 'legacy-app',
         });
         const legacyDirectoryId = createCanonicalJsonSha256Id({
-          domain: 'wharfie:execution-ledger-run-directory:v4',
+          domain: 'wharfie:execution-ledger-run-directory:v5',
           prefix: 'wld',
           value: {
-            schemaVersion: 4,
+            schemaVersion: 5,
             serviceId: legacyScope.serviceId,
           },
           valuePath: 'legacy execution ledger run directory partition',
         });
-        const legacyDirectorySortKey = `ledger-directory/v4/run/${String(
+        const legacyDirectorySortKey = `ledger-directory/v5/run/${String(
           Number.MAX_SAFE_INTEGER - 399,
         ).padStart(
           16,
@@ -4028,9 +4575,9 @@ for (const adapter of getAdapterMatrix()) {
         const legacyRecords = [
           {
             run_id: 'legacy-run',
-            sort_key: 'ledger/v6/head',
+            sort_key: 'ledger/v7/head',
             record_type: 'execution_ledger_head',
-            schema_version: 6,
+            schema_version: 7,
             version: 1,
             sequence: 1,
             app_id: 'legacy-app',
@@ -4038,21 +4585,21 @@ for (const adapter of getAdapterMatrix()) {
           },
           {
             run_id: 'legacy-run',
-            sort_key: 'ledger/v6/projection/run',
+            sort_key: 'ledger/v7/projection/run',
             record_type: 'execution_ledger_run_projection',
-            schema_version: 6,
+            schema_version: 7,
             status: RunStatus.RUNNING,
             version: 1,
             sequence: 1,
             app_id: 'legacy-app',
             revision_id: REVISION_ID,
-            data: { schemaVersion: 6, runId: 'legacy-run' },
+            data: { schemaVersion: 7, runId: 'legacy-run' },
           },
           {
             run_id: legacyDirectoryId,
             sort_key: legacyDirectorySortKey,
             record_type: 'execution_ledger_run_directory',
-            schema_version: 6,
+            schema_version: 7,
             service_id: legacyScope.serviceId,
             ledger_run_id: 'legacy-run',
             app_id: 'legacy-app',
@@ -4078,7 +4625,7 @@ for (const adapter of getAdapterMatrix()) {
           keyName: 'run_id',
           keyValue: 'legacy-run',
           sortKeyName: 'sort_key',
-          sortKeyValue: 'ledger/v6/head',
+          sortKeyValue: 'ledger/v7/head',
           consistentRead: true,
         });
         const legacyDirectoryBefore = await db.get({
@@ -4101,17 +4648,17 @@ for (const adapter of getAdapterMatrix()) {
         );
         await ledger.createManualRun({
           // Reuse the exact physical partition to prove the fresh sort-key
-          // namespace coexists without reinterpreting its V6 records.
+          // namespace coexists without reinterpreting its V7 records.
           runId: 'legacy-run',
           appId: 'legacy-app',
           revisionId: REVISION_ID,
           invocationId: INVOCATION_ID,
           activityId: ACTIVITY_ID,
-          transitionId: 'create-v7-legacy-run',
+          transitionId: 'create-v8-legacy-run',
           observedAt: 400,
         });
         await expect(ledger.getRun('legacy-run')).resolves.toMatchObject({
-          schemaVersion: 7,
+          schemaVersion: 8,
           appId: 'legacy-app',
         });
         await expect(
@@ -4125,7 +4672,7 @@ for (const adapter of getAdapterMatrix()) {
             keyName: 'run_id',
             keyValue: 'legacy-run',
             sortKeyName: 'sort_key',
-            sortKeyValue: 'ledger/v6/head',
+            sortKeyValue: 'ledger/v7/head',
             consistentRead: true,
           }),
         ).resolves.toEqual(legacyBefore);

@@ -1,10 +1,10 @@
 /**
  * The operator view deliberately exposes lifecycle identity and integrity
  * information, but not author inputs, caller metadata, terminal results,
- * evidence, fencing tokens, or event payloads. Those need an explicit future
+ * evidence, fencing material, or event payloads. Those need an explicit future
  * disclosure and authorization policy.
  */
-export const EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION = 4;
+export const EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION = 5;
 
 /**
  * Expose cancellation identity and ordering without disclosing its operator
@@ -62,7 +62,6 @@ export function createExecutionLedgerOperatorView(view) {
         status: attempt.status,
         generation: attempt.generation,
         version: attempt.version,
-        coordinatorEpoch: attempt.coordinatorEpoch,
         claimedAt: attempt.claimedAt,
         ...(attempt.startedAt === undefined
           ? {}
@@ -91,7 +90,6 @@ export function createExecutionLedgerOperatorView(view) {
       type: event.type,
       observedAt: event.observed_at,
       actor: event.actor,
-      fence: event.fence,
     })),
   };
 }
@@ -186,8 +184,33 @@ export function createExecutionLedgerReconciliationOperatorView(
   };
 }
 
+/**
+ * Expose only the stable effect reconciliation identity and resulting
+ * lifecycle state. Destination evidence, payload references, operator prose,
+ * and attempt fencing material remain inside the verified ledger boundary.
+ * @param {{reconciliationId: string, effectId: string, status: string, changed: boolean}} reconciliation - Safe effect reconciliation result.
+ * @param {Record<string, any>} view - Verified rebuilt execution-ledger view.
+ * @returns {Record<string, any>} - Redacted effect reconciliation response.
+ */
+export function createExecutionLedgerEffectReconciliationOperatorView(
+  reconciliation,
+  view,
+) {
+  return {
+    ...createExecutionLedgerOperatorView(view),
+    kind: 'wharfie.execution-ledger.effect-reconciliation',
+    effectReconciliation: {
+      reconciliationId: reconciliation.reconciliationId,
+      effectId: reconciliation.effectId,
+      status: reconciliation.status,
+      changed: reconciliation.changed,
+    },
+  };
+}
+
 export default {
   EXECUTION_LEDGER_OPERATOR_VIEW_SCHEMA_VERSION,
+  createExecutionLedgerEffectReconciliationOperatorView,
   createExecutionLedgerOperatorView,
   createExecutionLedgerReconciliationOperatorView,
   createExecutionLedgerRecoveryOperatorView,

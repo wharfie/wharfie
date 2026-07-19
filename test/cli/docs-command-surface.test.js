@@ -126,7 +126,34 @@ describe('docs command surface', () => {
     expect(quickstart).toContain(
       '<app> wharfie cancel --run-id <run-id> --request-id <stable-request-id>',
     );
+    expect(quickstart).toContain(
+      'wharfie ops reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped',
+    );
+    expect(quickstart).toContain(
+      '<app> wharfie reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped',
+    );
     expect(quickstart).not.toContain('wharfie ops list');
     expect(quickstart).not.toContain('<app> wharfie ops cancel');
+  });
+
+  it('documents the trusted redacted effect-reconciliation contract', async () => {
+    const documents = await Promise.all(
+      ['README.md', 'docs/src/assets/markdown/quickstart.md'].map(
+        (relativePath) =>
+          fsp.readFile(path.join(repoRoot, relativePath), 'utf8'),
+      ),
+    );
+
+    for (const document of documents) {
+      expect(document).toContain(
+        'wharfie ops reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped',
+      );
+      expect(document).toContain(
+        '<app> wharfie reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped',
+      );
+      expect(document).toContain('app-scoped LMDB local-owner protocol');
+      expect(document).toContain('after a lost response');
+      expect(document).toContain('redacted');
+    }
   });
 });

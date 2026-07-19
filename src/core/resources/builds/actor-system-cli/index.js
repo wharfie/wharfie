@@ -22,11 +22,16 @@ export function createProgram(options = {}) {
         revisionId: pair.runtime.revisionId,
       };
     });
-  const { inspectCommand, recoverCommand, reconcileCommand, cancelCommand } =
-    createExecutionLedgerOperatorCommands({
-      resolveExpectedIdentity,
-      requireLocalOwnership: true,
-    });
+  const {
+    inspectCommand,
+    recoverCommand,
+    reconcileCommand,
+    reconcileEffectCommand,
+    cancelCommand,
+  } = createExecutionLedgerOperatorCommands({
+    resolveExpectedIdentity,
+    requireLocalOwnership: true,
+  });
   const runCommand = createPackagedDurableRunCommand({
     ...(options.loadDurableRunExecution === undefined
       ? {}
@@ -51,6 +56,7 @@ export function createProgram(options = {}) {
     .addCommand(inspectCommand)
     .addCommand(recoverCommand)
     .addCommand(reconcileCommand)
+    .addCommand(reconcileEffectCommand)
     .addCommand(cancelCommand);
 }
 

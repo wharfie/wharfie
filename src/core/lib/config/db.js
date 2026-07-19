@@ -150,14 +150,14 @@ export function resolveApplicationStateStorePath() {
   return join(paths.data, 'application-state');
 }
 
-/** The sole physical table owned by the v1 application-state contract. */
-export const APPLICATION_STATE_TABLE_NAME = 'wharfie-application-state-v1';
+/** The sole physical table owned by the v2 application-state contract. */
+export const APPLICATION_STATE_TABLE_NAME = 'wharfie-application-state-v2';
 
 /**
  * Resolve the fixed application-state table. It intentionally has no
  * environment override: destination routing belongs to Wharfie's finite
  * host-owned catalog, not component input or ambient process configuration.
- * @returns {'wharfie-application-state-v1'} - Fixed table name.
+ * @returns {'wharfie-application-state-v2'} - Fixed table name.
  */
 export function resolveApplicationStateTableName() {
   return APPLICATION_STATE_TABLE_NAME;
@@ -172,11 +172,11 @@ export function resolveApplicationStateTableName() {
 export function resolveExecutionLedgerTableName() {
   const name = process.env.WHARFIE_EXECUTION_LEDGER_TABLE;
   if (name && String(name).trim()) return String(name).trim();
-  return 'wharfie-execution-ledger-v7';
+  return 'wharfie-execution-ledger-v8';
 }
 
 /**
- * Resolve the immutable local execution-payload root. The v7 ledger writes
+ * Resolve the immutable local execution-payload root. The v8 ledger writes
  * content before it appends a reference to the control store, so the default
  * lives beside that local control store when one is configured.  A future
  * shared payload provider can keep the same reference contract without

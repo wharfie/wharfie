@@ -2,6 +2,7 @@ coverage/
 mock/
 test-db/
 tmp/
+.wharfie/
 node_modules/
 *.pyc
 __pycache__

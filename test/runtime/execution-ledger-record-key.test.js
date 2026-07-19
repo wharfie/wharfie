@@ -17,6 +17,12 @@ import {
   getRunProjectionSortKey,
   getTransitionSortKey,
 } from '../../src/core/lib/ledger/record-key.js';
+import {
+  EXECUTION_LEDGER_RUN_DIRECTORY_PARTITION_DOMAIN,
+  EXECUTION_LEDGER_RUN_DIRECTORY_SCHEMA_VERSION,
+  EXECUTION_LEDGER_RUN_DIRECTORY_SORT_KEY_PREFIX,
+  getExecutionLedgerRunDirectorySortKey,
+} from '../../src/core/lib/ledger/run-directory.js';
 
 describe('execution ledger record key codec', () => {
   test('creates typed collision-safe keys for opaque IDs', () => {
@@ -25,23 +31,23 @@ describe('execution ledger record key codec', () => {
     const effectId = 'effect/#/海';
     const transitionId = 'transition/#/雪';
 
-    expect(EXECUTION_LEDGER_SORT_KEY_PREFIX).toBe('ledger/v7/');
+    expect(EXECUTION_LEDGER_SORT_KEY_PREFIX).toBe('ledger/v8/');
     expect(encodeLedgerKeySegment(invocationId)).toBe(
       Buffer.from(invocationId, 'utf8').toString('base64url'),
     );
-    expect(getRunHeadSortKey()).toBe('ledger/v7/head');
-    expect(getRunProjectionSortKey()).toBe('ledger/v7/projection/run');
+    expect(getRunHeadSortKey()).toBe('ledger/v8/head');
+    expect(getRunProjectionSortKey()).toBe('ledger/v8/projection/run');
     expect(getInvocationProjectionSortKey(invocationId)).toBe(
-      `ledger/v7/projection/invocation/${Buffer.from(invocationId, 'utf8').toString('base64url')}`,
+      `ledger/v8/projection/invocation/${Buffer.from(invocationId, 'utf8').toString('base64url')}`,
     );
     expect(getAttemptProjectionSortKey(attemptId)).toBe(
-      `ledger/v7/projection/attempt/${Buffer.from(attemptId, 'utf8').toString('base64url')}`,
+      `ledger/v8/projection/attempt/${Buffer.from(attemptId, 'utf8').toString('base64url')}`,
     );
     expect(getEffectProjectionSortKey(invocationId, effectId)).toMatch(
-      /^ledger\/v7\/projection\/effect\/wfk_[A-Za-z0-9_-]{43}$/,
+      /^ledger\/v8\/projection\/effect\/wfk_[A-Za-z0-9_-]{43}$/,
     );
     expect(getTransitionSortKey(transitionId)).toBe(
-      `ledger/v7/transition/${Buffer.from(transitionId, 'utf8').toString('base64url')}`,
+      `ledger/v8/transition/${Buffer.from(transitionId, 'utf8').toString('base64url')}`,
     );
 
     expect(getInvocationProjectionSortKey('a/b')).not.toBe(
@@ -69,9 +75,9 @@ describe('execution ledger record key codec', () => {
 
   test('uses lexically ordered fixed-width event sequences', () => {
     expect(EXECUTION_LEDGER_EVENT_SEQUENCE_WIDTH).toBe(16);
-    expect(getEventSortKey(1)).toBe('ledger/v7/event/0000000000000001');
+    expect(getEventSortKey(1)).toBe('ledger/v8/event/0000000000000001');
     expect(getEventSortKey(Number.MAX_SAFE_INTEGER)).toBe(
-      'ledger/v7/event/9007199254740991',
+      'ledger/v8/event/9007199254740991',
     );
 
     const keys = [100, 2, 10, 1].map(getEventSortKey).sort();
@@ -82,6 +88,22 @@ describe('execution ledger record key codec', () => {
     expect(() => getEventSortKey(Number.MAX_SAFE_INTEGER + 1)).toThrow(
       /positive safe integer/i,
     );
+  });
+
+  test('pairs the V8 ledger with a fresh V6 run-directory namespace', () => {
+    expect(EXECUTION_LEDGER_RUN_DIRECTORY_SCHEMA_VERSION).toBe(6);
+    expect(EXECUTION_LEDGER_RUN_DIRECTORY_PARTITION_DOMAIN).toBe(
+      'wharfie:execution-ledger-run-directory:v6',
+    );
+    expect(EXECUTION_LEDGER_RUN_DIRECTORY_SORT_KEY_PREFIX).toBe(
+      'ledger-directory/v6/run/',
+    );
+    expect(
+      getExecutionLedgerRunDirectorySortKey({
+        createdAt: 1,
+        runId: 'run-1',
+      }),
+    ).toBe('ledger-directory/v6/run/9007199254740990/cnVuLTE');
   });
 
   test('rejects malformed or oversized raw and encoded identities', () => {

@@ -3,7 +3,9 @@
 import {
   createApplicationStateBusinessKey,
   createApplicationStateBusinessRecord,
+  createApplicationStateNotAppliedResolutionRecord,
   createApplicationStateReceiptRecord,
+  validateApplicationStateNotAppliedResolutionRecord,
 } from '../../lib/db/tables/application-state.js';
 import { APPLICATION_STATE_TABLE_NAME } from '../../lib/config/db.js';
 import { createManagedEffectDestinationId } from '../../lib/ledger/execution-ledger-contract.js';
@@ -24,19 +26,27 @@ export const APPLICATION_STATE_MAX_KEY_BYTES = 512;
 
 export const APPLICATION_STATE_ADAPTER_DESCRIPTOR = Object.freeze({
   id: 'application-state-put-if-absent',
-  version: 1,
+  version: 2,
 });
 export const APPLICATION_STATE_VERIFIER_DESCRIPTOR = Object.freeze({
   kind: 'application-state-put-if-absent-receipt',
-  version: 1,
+  version: 2,
 });
+export const APPLICATION_STATE_RECONCILIATION_VERIFIER_DESCRIPTOR =
+  Object.freeze({
+    kind: 'application-state-put-if-absent-not-applied',
+    version: 2,
+  });
 export const APPLICATION_STATE_SUBSTANTIATED_REPLAY_PROPERTIES = Object.freeze([
   'idempotent',
   'transactional',
 ]);
 
 const EVIDENCE_KIND = 'application-state-put-if-absent-receipt';
-const EVIDENCE_VERSION = 1;
+const EVIDENCE_VERSION = 2;
+const NOT_APPLIED_EVIDENCE_KIND =
+  APPLICATION_STATE_RECONCILIATION_VERIFIER_DESCRIPTOR.kind;
+const NOT_APPLIED_DISPOSITION = 'not-applied';
 
 /** @param {Record<string, any>} value - Candidate exact object. @param {string[]} expected - Exact keys. @param {string} label - Boundary label. */
 function assertExactKeys(value, expected, label) {
@@ -65,7 +75,7 @@ function deepFreezeJson(value) {
 function hasSameCanonicalJson(left, right) {
   const digest = (/** @type {unknown} */ value) =>
     createCanonicalJsonSha256Id({
-      domain: 'wharfie:application-state:comparison:v1',
+      domain: 'wharfie:application-state:comparison:v2',
       prefix: 'wax',
       value,
       valuePath: 'application-state comparison',
@@ -127,7 +137,7 @@ export function normalizeApplicationStatePutIfAbsentRequest(
 /**
  * Validate the credential-free host-owned destination retained in the ledger.
  * @param {unknown} value - Candidate destination.
- * @returns {Readonly<{kind: 'application-state', version: 1, bindingId: 'primary', configuration: {provider: 'lmdb'|'vanilla', storeId: string, tableName: 'wharfie-application-state-v1', namespace: string}}>} - Exact destination.
+ * @returns {Readonly<{kind: 'application-state', version: 2, bindingId: 'primary', configuration: {provider: 'lmdb'|'vanilla', storeId: string, tableName: 'wharfie-application-state-v2', namespace: string}}>} - Exact destination.
  */
 export function normalizeApplicationStateDestination(value) {
   const destination = cloneJsonObject(value, 'application-state destination');
@@ -147,7 +157,7 @@ export function normalizeApplicationStateDestination(value) {
   );
   if (
     destination.kind !== APPLICATION_STATE_CAPABILITY ||
-    destination.version !== 1 ||
+    destination.version !== 2 ||
     destination.bindingId !== APPLICATION_STATE_BINDING_ID ||
     (configuration.provider !== 'lmdb' &&
       configuration.provider !== 'vanilla') ||
@@ -166,7 +176,7 @@ export function normalizeApplicationStateDestination(value) {
   );
   return deepFreezeJson({
     kind: APPLICATION_STATE_CAPABILITY,
-    version: 1,
+    version: 2,
     bindingId: APPLICATION_STATE_BINDING_ID,
     configuration,
   });
@@ -232,10 +242,10 @@ export function createApplicationStateEffectContractDigest(options) {
     );
   }
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:application-state:effect-contract:v1',
+    domain: 'wharfie:application-state:effect-contract:v2',
     prefix: 'wac',
     value: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       destinationEffectId,
       identity,
       adapter: APPLICATION_STATE_ADAPTER_DESCRIPTOR,
@@ -268,6 +278,21 @@ export function createApplicationStateOutcomeFromReceipt(receipt) {
       businessRecordDigest: receipt.business_record_digest,
       disposition: receipt.outcome_code,
     },
+  });
+}
+
+/** @param {Readonly<Record<string, any>>} resolution - Verified physical resolution. @returns {Readonly<Record<string, any>>} - Ledger reconciliation evidence. */
+export function createApplicationStateNotAppliedEvidence(resolution) {
+  const verified =
+    validateApplicationStateNotAppliedResolutionRecord(resolution);
+  return deepFreezeJson({
+    kind: NOT_APPLIED_EVIDENCE_KIND,
+    version: EVIDENCE_VERSION,
+    destinationEffectId: verified.destination_effect_id,
+    contractDigest: verified.contract_digest,
+    resolutionDigest: verified.resolution_digest,
+    businessObservation: verified.business_observation,
+    disposition: NOT_APPLIED_DISPOSITION,
   });
 }
 
@@ -367,6 +392,7 @@ export function verifyApplicationStatePutIfAbsentOutcome(input) {
     );
     if (outcome.result.inserted) {
       const expectedBusiness = createApplicationStateBusinessRecord({
+        storeId: destination.configuration.storeId,
         namespace: destination.configuration.namespace,
         key: normalizedRequest.input.key,
         value: normalizedRequest.input.value,
@@ -383,11 +409,114 @@ export function verifyApplicationStatePutIfAbsentOutcome(input) {
       businessRecord: {
         resource_id: businessKey.resourceId,
         sort_key: businessKey.sortKey,
+        store_id: destination.configuration.storeId,
         record_digest: evidence.businessRecordDigest,
       },
       inserted: outcome.result.inserted,
     });
     return evidence.receiptDigest === expectedReceipt.receipt_digest;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pure synchronous verifier for one permanent destination-side not-applied
+ * resolution. It binds the evidence to the same immutable effect, request,
+ * and physical destination contract used by normal execution.
+ * @param {Record<string, any>} input - Frozen reconciliation verifier input.
+ * @returns {boolean} - Whether exact evidence substantiates not-applied.
+ */
+export function verifyApplicationStatePutIfAbsentNotAppliedEvidence(input) {
+  try {
+    const effect = cloneJsonObject(input.effect, 'reconciliation effect');
+    const evidence = cloneJsonObject(input.evidence, 'reconciliation evidence');
+    const normalizedRequest = normalizeApplicationStatePutIfAbsentRequest({
+      protocol: 'wharfie.activity',
+      protocolVersion: 1,
+      type: 'effect-request',
+      attemptId: 'application-state-reconciliation-verifier',
+      sequence: 1,
+      effectId: effect.effectId,
+      capability: input.request?.capability,
+      operation: input.request?.operation,
+      input: input.request?.input,
+      requestedReplayProperties: input.request?.requestedReplayProperties,
+    });
+    const destination = normalizeApplicationStateDestination(
+      effect.destination,
+    );
+    if (
+      !hasSameCanonicalJson(
+        effect.adapter,
+        APPLICATION_STATE_ADAPTER_DESCRIPTOR,
+      ) ||
+      !hasSameCanonicalJson(
+        effect.verifier,
+        APPLICATION_STATE_VERIFIER_DESCRIPTOR,
+      ) ||
+      !hasSameCanonicalJson(
+        effect.substantiatedReplayProperties,
+        APPLICATION_STATE_SUBSTANTIATED_REPLAY_PROPERTIES,
+      )
+    ) {
+      return false;
+    }
+    assertExactKeys(
+      evidence,
+      [
+        'kind',
+        'version',
+        'destinationEffectId',
+        'contractDigest',
+        'resolutionDigest',
+        'businessObservation',
+        'disposition',
+      ],
+      'reconciliation evidence',
+    );
+    if (
+      evidence.kind !== NOT_APPLIED_EVIDENCE_KIND ||
+      evidence.version !== EVIDENCE_VERSION ||
+      evidence.destinationEffectId !== effect.destinationEffectId ||
+      evidence.disposition !== NOT_APPLIED_DISPOSITION
+    ) {
+      return false;
+    }
+    assertDomainSeparatedSha256Id(
+      evidence.contractDigest,
+      'wac',
+      'reconciliation contractDigest',
+    );
+    assertDomainSeparatedSha256Id(
+      evidence.resolutionDigest,
+      'waf',
+      'reconciliation resolutionDigest',
+    );
+    const contractDigest = createApplicationStateEffectContractDigest({
+      destinationEffectId: effect.destinationEffectId,
+      identity: {
+        runId: effect.runId,
+        invocationId: effect.invocationId,
+        effectId: effect.effectId,
+      },
+      destination,
+      request: normalizedRequest.frame,
+    });
+    if (evidence.contractDigest !== contractDigest) return false;
+    const expectedResolution = createApplicationStateNotAppliedResolutionRecord(
+      {
+        storeId: destination.configuration.storeId,
+        destinationEffectId: effect.destinationEffectId,
+        contractDigest,
+        businessKey: createApplicationStateBusinessKey(
+          destination.configuration.namespace,
+          normalizedRequest.input.key,
+        ),
+        businessObservation: evidence.businessObservation,
+      },
+    );
+    return evidence.resolutionDigest === expectedResolution.resolution_digest;
   } catch {
     return false;
   }
@@ -399,6 +528,11 @@ export const APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS = Object.freeze([
     version: APPLICATION_STATE_VERIFIER_DESCRIPTOR.version,
     verify: verifyApplicationStatePutIfAbsentOutcome,
   }),
+  Object.freeze({
+    kind: APPLICATION_STATE_RECONCILIATION_VERIFIER_DESCRIPTOR.kind,
+    version: APPLICATION_STATE_RECONCILIATION_VERIFIER_DESCRIPTOR.version,
+    verify: verifyApplicationStatePutIfAbsentNotAppliedEvidence,
+  }),
 ]);
 
 export default {
@@ -409,11 +543,14 @@ export default {
   APPLICATION_STATE_MAX_INPUT_BYTES,
   APPLICATION_STATE_MAX_KEY_BYTES,
   APPLICATION_STATE_PUT_IF_ABSENT_OPERATION,
+  APPLICATION_STATE_RECONCILIATION_VERIFIER_DESCRIPTOR,
   APPLICATION_STATE_SUBSTANTIATED_REPLAY_PROPERTIES,
   APPLICATION_STATE_VERIFIER_DESCRIPTOR,
   createApplicationStateEffectContractDigest,
+  createApplicationStateNotAppliedEvidence,
   createApplicationStateOutcomeFromReceipt,
   normalizeApplicationStateDestination,
   normalizeApplicationStatePutIfAbsentRequest,
   verifyApplicationStatePutIfAbsentOutcome,
+  verifyApplicationStatePutIfAbsentNotAppliedEvidence,
 };

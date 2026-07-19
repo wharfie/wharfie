@@ -56,7 +56,7 @@ describe('application-state store boundary', () => {
         expect(first).toEqual({
           adapterName: 'vanilla',
           storePath: expect.stringContaining('wharfie-application-state-'),
-          tableName: 'wharfie-application-state-v1',
+          tableName: 'wharfie-application-state-v2',
         });
         expect(Object.isFrozen(first)).toBe(true);
         expect(second.storePath).not.toBe(first.storePath);
@@ -292,9 +292,9 @@ describe('application-state store boundary', () => {
       validateApplicationStateStoreConfiguration({
         adapterName: 'vanilla',
         storePath: '/tmp/application-state',
-        tableName: 'wharfie-execution-ledger-v7',
+        tableName: 'wharfie-execution-ledger-v8',
       }),
-    ).toThrow(/tableName must be 'wharfie-application-state-v1'/i);
+    ).toThrow(/tableName must be 'wharfie-application-state-v2'/i);
     expect(() =>
       validateApplicationStateStoreConfiguration({
         adapterName: 'vanilla',

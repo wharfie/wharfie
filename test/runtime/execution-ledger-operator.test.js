@@ -31,21 +31,29 @@ import {
   APPLICATION_STATE_ADAPTER_DESCRIPTOR,
   APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS,
 } from '../../src/core/runtime/effects/application-state.js';
-import { createBuiltinManagedEffectCatalog } from '../../src/core/runtime/effects/builtin-catalog.js';
+import {
+  createBuiltinManagedEffectCatalog,
+  createBuiltinManagedEffectReconciliationCatalog,
+} from '../../src/core/runtime/effects/builtin-catalog.js';
 import {
   MANUAL_LEDGER_INVOCATION_ID,
   createManualLedgerRunId,
+  reconcileManualLedgerActivity,
 } from '../../src/core/runtime/manual-ledger-run.js';
+import { ActivityProtocolTranscriptValidator } from '../../src/core/runtime/activity-protocol.js';
 import {
   ExecutionLedgerOperatorScopeError,
   EXECUTION_LEDGER_RECONCILIATION_EVIDENCE_FILE_MAX_BYTES,
   inspectExecutionLedgerRun,
   readExecutionLedgerReconciliationEvidenceFile,
+  reconcileExecutionLedgerEffect,
   reconcileExecutionLedgerRun,
+  reconcileUncertainManagedEffectAtOperatorBoundary,
   recoverExecutionLedgerRun,
   recoverStoppedManagedEffectsAtOperatorBoundary,
 } from '../../src/core/runtime/operator/execution-ledger-operator.js';
 import {
+  createExecutionLedgerEffectReconciliationOperatorView,
   createExecutionLedgerOperatorView,
   createExecutionLedgerRecoveryOperatorView,
 } from '../../src/core/runtime/operator/execution-ledger-view.js';
@@ -428,7 +436,7 @@ describe('shared execution-ledger operator boundary', () => {
     });
 
     expect(view).toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       run: {
         cancellationRequest: {
           requestId: 'cancel-request-1',
@@ -436,6 +444,12 @@ describe('shared execution-ledger operator boundary', () => {
         },
       },
       history: [{ type: 'manual-cancellation-requested' }],
+    });
+    expect(view.history[0]).toEqual({
+      sequence: 4,
+      type: 'manual-cancellation-requested',
+      observedAt: requestedAt,
+      actor: { kind: 'local', id: 'operator' },
     });
     expect(JSON.stringify(view)).not.toContain('reason-secret');
     expect(JSON.stringify(view)).not.toContain('reason-details-secret');
@@ -784,7 +798,7 @@ describe('shared execution-ledger operator boundary', () => {
         result.view,
       );
       expect(operatorView).toMatchObject({
-        schemaVersion: 4,
+        schemaVersion: 5,
         recovery: {
           action: 'settled-managed-effect-set',
           changed: true,
@@ -800,7 +814,7 @@ describe('shared execution-ledger operator boundary', () => {
           ][index],
           adapter: {
             id: APPLICATION_STATE_ADAPTER_DESCRIPTOR.id,
-            version: 1,
+            version: APPLICATION_STATE_ADAPTER_DESCRIPTOR.version,
           },
         })),
       });
@@ -818,6 +832,442 @@ describe('shared execution-ledger operator boundary', () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 20000);
+
+  it('replays a destination not-applied resolution after the ledger append is lost', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-effect-resolution-loss-'),
+    );
+    const reconciliationId = 'not-applied-after-ledger-loss';
+    try {
+      const fixture = await seedApplicationStateRecoveryRun(root, {
+        effectStates: ['STARTED'],
+      });
+      const recovered = await recoverExecutionLedgerRun({
+        runId: fixture.runId,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!recovered) throw new Error('Expected uncertain recovery result.');
+      const before = recovered.view;
+      const targetEffect = before.effects[0];
+      const targetAttempt = before.attempts[0];
+      expect(targetEffect.status).toBe(EffectStatus.UNCERTAIN);
+
+      const { db, ledger } = createLmdbLedger(fixture.configuration);
+      const applicationDb = await createApplicationStateDBClient('lmdb', {
+        path: fixture.applicationStateConfiguration.storePath,
+      });
+      try {
+        const catalog = await createBuiltinManagedEffectReconciliationCatalog({
+          db: applicationDb,
+          appId: fixture.appId,
+          adapterName: 'lmdb',
+        });
+        const failedLedger = {
+          ...ledger,
+          async reconcileUncertainManagedEffect() {
+            throw new Error('simulated control-ledger append loss');
+          },
+        };
+        await expect(
+          reconcileUncertainManagedEffectAtOperatorBoundary({
+            ledger: /** @type {any} */ (failedLedger),
+            runId: fixture.runId,
+            effectId: targetEffect.effectId,
+            reconciliationId,
+            reconcileEffect: catalog.reconcileEffect,
+            actor: { kind: 'local', id: 'test' },
+            reason: {
+              kind: 'operator-managed-effect-reconciliation',
+              reconciliationId,
+            },
+          }),
+        ).rejects.toThrow('simulated control-ledger append loss');
+        await expect(ledger.rebuildRun(fixture.runId)).resolves.toEqual(before);
+
+        const delivery = await ledger.readManagedEffectDelivery(
+          fixture.runId,
+          targetEffect.invocationId,
+          targetEffect.effectId,
+        );
+        if (!delivery) throw new Error('Expected retained effect delivery.');
+        const request = applicationStateEffectRequest(
+          targetAttempt.attemptId,
+          targetEffect.effectId,
+          targetEffect.requestedBy.protocolSequence,
+        );
+        await expect(
+          catalog.reconcileEffect({
+            destinationEffectId: targetEffect.destinationEffectId,
+            destination: targetEffect.destination,
+            identity: {
+              runId: fixture.runId,
+              invocationId: targetEffect.invocationId,
+              effectId: targetEffect.effectId,
+            },
+            request,
+          }),
+        ).resolves.toMatchObject({ kind: 'not-applied' });
+      } finally {
+        await applicationDb.close();
+        await db.close();
+      }
+
+      const result = await reconcileExecutionLedgerEffect({
+        runId: fixture.runId,
+        effectId: targetEffect.effectId,
+        reconciliationId,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!result) throw new Error('Expected effect reconciliation result.');
+      expect(result.reconciliation).toEqual({
+        reconciliationId,
+        effectId: targetEffect.effectId,
+        status: EffectStatus.NOT_APPLIED,
+        changed: true,
+      });
+      expect(result.view.run).toMatchObject({
+        status: RunStatus.BLOCKED,
+        version: before.run.version + 1,
+        lastSequence: before.run.lastSequence + 1,
+      });
+      expect(result.view.invocations[0]).toMatchObject({
+        status: InvocationStatus.UNCERTAIN,
+        version: before.invocations[0].version + 1,
+        lastSequence: before.run.lastSequence + 1,
+      });
+      expect(result.view.attempts).toEqual(before.attempts);
+      expect(result.view.effects[0]).toMatchObject({
+        status: EffectStatus.NOT_APPLIED,
+        version: targetEffect.version + 1,
+        lastSequence: before.run.lastSequence + 1,
+      });
+      expect(result.view.events.at(-1)).toMatchObject({
+        type: 'uncertain-effect-reconciled',
+        payload: {
+          reconciliation: {
+            reconciliationId,
+            resolutionStatus: EffectStatus.NOT_APPLIED,
+          },
+        },
+      });
+
+      const replayStorePath = path.join(root, 'replay-must-remain-absent');
+      const replayApplicationStateConfiguration = Object.freeze({
+        ...fixture.applicationStateConfiguration,
+        storePath: replayStorePath,
+      });
+      const repeated = await reconcileExecutionLedgerEffect({
+        runId: fixture.runId,
+        effectId: targetEffect.effectId,
+        reconciliationId,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: replayApplicationStateConfiguration,
+      });
+      expect(repeated).toEqual({
+        reconciliation: {
+          reconciliationId,
+          effectId: targetEffect.effectId,
+          status: EffectStatus.NOT_APPLIED,
+          changed: false,
+        },
+        view: result.view,
+      });
+      expect(existsSync(replayStorePath)).toBe(false);
+      await expect(
+        reconcileExecutionLedgerEffect({
+          runId: fixture.runId,
+          effectId: targetEffect.effectId,
+          reconciliationId: 'different-reconciliation-id',
+          expectedAppId: fixture.appId,
+          configuration: fixture.configuration,
+          applicationStateConfiguration: replayApplicationStateConfiguration,
+        }),
+      ).rejects.toThrow(/already reconciled.*reuse that reconciliation ID/i);
+      await expect(
+        reconcileExecutionLedgerEffect({
+          runId: fixture.runId,
+          effectId: targetEffect.effectId,
+          reconciliationId,
+          reason: 'changed replay reason',
+          expectedAppId: fixture.appId,
+          configuration: fixture.configuration,
+          applicationStateConfiguration: replayApplicationStateConfiguration,
+        }),
+      ).rejects.toThrow(/does not match its retained durable request/i);
+      expect(existsSync(replayStorePath)).toBe(false);
+      await expect(
+        readLmdbRun(fixture.configuration, fixture.runId),
+      ).resolves.toEqual(result.view);
+
+      const transcript = new ActivityProtocolTranscriptValidator();
+      const acceptedStart = transcript.acceptHostFrame({
+        protocol: 'wharfie.activity',
+        protocolVersion: 1,
+        type: 'start',
+        revisionId: RUN_REVISION_ID,
+        activityId: 'work',
+        runId: fixture.runId,
+        invocationId: MANUAL_LEDGER_INVOCATION_ID,
+        attemptId: targetAttempt.attemptId,
+        fencingToken: targetAttempt.fencingToken,
+        input: { credential: 'input-secret' },
+        caller: { metadata: { credential: 'caller-secret' } },
+      });
+      const acceptedRequest = transcript.acceptComponentFrame(
+        applicationStateEffectRequest(
+          targetAttempt.attemptId,
+          targetEffect.effectId,
+          targetEffect.requestedBy.protocolSequence,
+        ),
+      );
+      const acceptedTerminal = transcript.acceptComponentFrame({
+        protocol: 'wharfie.activity',
+        protocolVersion: 1,
+        type: 'failed',
+        attemptId: targetAttempt.attemptId,
+        sequence: 2,
+        error: {
+          code: 'activity-failed-after-effect-loss',
+          name: 'ActivityError',
+          message: 'The activity failed after its effect response was lost.',
+          details: {},
+        },
+      });
+      const { db: terminalDb, ledger: terminalLedger } = createLmdbLedger(
+        fixture.configuration,
+      );
+      let terminalized;
+      try {
+        terminalized = await reconcileManualLedgerActivity({
+          ledger: terminalLedger,
+          runId: fixture.runId,
+          reconciliationId: 'terminal-after-effect-reconciliation',
+          evidence: {
+            status: acceptedTerminal.type,
+            start: acceptedStart,
+            terminal: acceptedTerminal,
+            frames: [acceptedStart, acceptedRequest, acceptedTerminal],
+            transcript: transcript.snapshot(),
+          },
+        });
+      } finally {
+        await terminalDb.close();
+      }
+      expect(terminalized).toMatchObject({
+        found: true,
+        changed: true,
+        view: {
+          run: { status: RunStatus.FAILED },
+          invocations: [{ status: InvocationStatus.FAILED }],
+          attempts: [targetAttempt],
+          effects: [
+            expect.objectContaining({ status: EffectStatus.NOT_APPLIED }),
+          ],
+        },
+      });
+
+      const replayAfterTerminal = await reconcileExecutionLedgerEffect({
+        runId: fixture.runId,
+        effectId: targetEffect.effectId,
+        reconciliationId,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: replayApplicationStateConfiguration,
+      });
+      expect(replayAfterTerminal).toEqual({
+        reconciliation: {
+          reconciliationId,
+          effectId: targetEffect.effectId,
+          status: EffectStatus.NOT_APPLIED,
+          changed: false,
+        },
+        view: terminalized.view,
+      });
+      expect(existsSync(replayStorePath)).toBe(false);
+
+      const verifyApplicationDb = await createApplicationStateDBClient('lmdb', {
+        path: fixture.applicationStateConfiguration.storePath,
+      });
+      const { db: verifyDb, ledger: verifyLedger } = createLmdbLedger(
+        fixture.configuration,
+        {
+          readOnly: true,
+        },
+      );
+      try {
+        const catalog = await createBuiltinManagedEffectCatalog({
+          db: verifyApplicationDb,
+          appId: fixture.appId,
+          adapterName: 'lmdb',
+        });
+        const delivery = await verifyLedger.readManagedEffectDelivery(
+          fixture.runId,
+          targetEffect.invocationId,
+          targetEffect.effectId,
+        );
+        if (!delivery) throw new Error('Expected reconciled effect delivery.');
+        const request = applicationStateEffectRequest(
+          targetAttempt.attemptId,
+          targetEffect.effectId,
+          targetEffect.requestedBy.protocolSequence,
+        );
+        await expect(
+          catalog.resolve(request).execute({
+            destinationEffectId: targetEffect.destinationEffectId,
+            destination: targetEffect.destination,
+            identity: {
+              runId: fixture.runId,
+              invocationId: targetEffect.invocationId,
+              attemptId: targetAttempt.attemptId,
+              effectId: targetEffect.effectId,
+            },
+            request,
+          }),
+        ).rejects.toThrow(/permanently resolved as not applied/i);
+      } finally {
+        await verifyDb.close();
+        await verifyApplicationDb.close();
+      }
+
+      const operatorView =
+        createExecutionLedgerEffectReconciliationOperatorView(
+          result.reconciliation,
+          result.view,
+        );
+      expect(operatorView).toMatchObject({
+        schemaVersion: 5,
+        kind: 'wharfie.execution-ledger.effect-reconciliation',
+        effectReconciliation: result.reconciliation,
+        run: { status: RunStatus.BLOCKED },
+        effects: [
+          expect.objectContaining({ status: EffectStatus.NOT_APPLIED }),
+        ],
+      });
+      const serialized = JSON.stringify(operatorView);
+      expect(operatorView.attempts[0]).not.toHaveProperty('coordinatorEpoch');
+      for (const event of operatorView.history) {
+        expect(event).not.toHaveProperty('fence');
+      }
+      for (const secret of [
+        fixture.storeId,
+        'state-secret',
+        'recovery-fence-secret',
+        'coordinatorEpoch',
+        'fencingToken',
+        'resolutionDigest',
+        'businessObservation',
+        'evidenceRef',
+      ]) {
+        expect(serialized).not.toContain(secret);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it('reconciles an uncertain effect from a late permanent receipt without resolving its attempt', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-effect-late-receipt-'),
+    );
+    const reconciliationId = 'late-receipt-reconciliation';
+    try {
+      const fixture = await seedApplicationStateRecoveryRun(root, {
+        effectStates: ['STARTED'],
+      });
+      const recovered = await recoverExecutionLedgerRun({
+        runId: fixture.runId,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!recovered) throw new Error('Expected uncertain recovery result.');
+      const before = recovered.view;
+      const effect = before.effects[0];
+      const attempt = before.attempts[0];
+
+      const { db, ledger } = createLmdbLedger(fixture.configuration, {
+        readOnly: true,
+      });
+      const applicationDb = await createApplicationStateDBClient('lmdb', {
+        path: fixture.applicationStateConfiguration.storePath,
+      });
+      try {
+        const delivery = await ledger.readManagedEffectDelivery(
+          fixture.runId,
+          effect.invocationId,
+          effect.effectId,
+        );
+        if (!delivery) throw new Error('Expected uncertain effect delivery.');
+        const request = applicationStateEffectRequest(
+          attempt.attemptId,
+          effect.effectId,
+          effect.requestedBy.protocolSequence,
+        );
+        const catalog = await createBuiltinManagedEffectCatalog({
+          db: applicationDb,
+          appId: fixture.appId,
+          adapterName: 'lmdb',
+        });
+        await expect(
+          catalog.resolve(request).execute({
+            destinationEffectId: effect.destinationEffectId,
+            destination: effect.destination,
+            identity: {
+              runId: fixture.runId,
+              invocationId: effect.invocationId,
+              attemptId: attempt.attemptId,
+              effectId: effect.effectId,
+            },
+            request,
+          }),
+        ).resolves.toMatchObject({ ok: true, result: { inserted: true } });
+      } finally {
+        await db.close();
+        await applicationDb.close();
+      }
+
+      const result = await reconcileExecutionLedgerEffect({
+        runId: fixture.runId,
+        effectId: effect.effectId,
+        reconciliationId,
+        actor: { kind: 'packaged-operator', id: OPERATOR_REVISION_ID },
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!result) throw new Error('Expected late-receipt reconciliation.');
+      expect(result.reconciliation).toEqual({
+        reconciliationId,
+        effectId: effect.effectId,
+        status: EffectStatus.COMPLETED,
+        changed: true,
+      });
+      expect(result.view.run.status).toBe(RunStatus.BLOCKED);
+      expect(result.view.invocations[0].status).toBe(
+        InvocationStatus.UNCERTAIN,
+      );
+      expect(result.view.attempts).toEqual(before.attempts);
+      expect(result.view.effects[0]).toMatchObject({
+        status: EffectStatus.COMPLETED,
+        terminal: { ok: true },
+        reconciliation: {
+          reconciliationId,
+          resolutionStatus: EffectStatus.COMPLETED,
+        },
+      });
+      expect(result.view.events.at(-1)).toMatchObject({
+        type: 'uncertain-effect-reconciled',
+        actor: { kind: 'packaged-operator', id: OPERATOR_REVISION_ID },
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
 
   it('refuses an unsupported STARTED effect during read-only preflight', async () => {
     const root = mkdtempSync(
@@ -863,6 +1313,47 @@ describe('shared execution-ledger operator boundary', () => {
       await expect(
         recoverExecutionLedgerRun({
           runId: fixture.runId,
+          configuration: fixture.configuration,
+          applicationStateConfiguration: Object.freeze({
+            ...fixture.applicationStateConfiguration,
+            storePath: missingStorePath,
+          }),
+        }),
+      ).rejects.toThrow(/read-only local volume does not exist/i);
+      expect(existsSync(missingStorePath)).toBe(false);
+      await expect(
+        readLmdbRun(fixture.configuration, fixture.runId),
+      ).resolves.toEqual(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  it('does not materialize a missing application-state store while reconciling an uncertain effect', async () => {
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-operator-reconcile-missing-store-'),
+    );
+    try {
+      const fixture = await seedApplicationStateRecoveryRun(root, {
+        effectStates: ['STARTED'],
+      });
+      const recovered = await recoverExecutionLedgerRun({
+        runId: fixture.runId,
+        expectedAppId: fixture.appId,
+        configuration: fixture.configuration,
+        applicationStateConfiguration: fixture.applicationStateConfiguration,
+      });
+      if (!recovered) throw new Error('Expected uncertain recovery result.');
+      expect(recovered.view.effects[0].status).toBe(EffectStatus.UNCERTAIN);
+
+      const missingStorePath = path.join(root, 'missing-reconciliation-store');
+      const before = await readLmdbRun(fixture.configuration, fixture.runId);
+      await expect(
+        reconcileExecutionLedgerEffect({
+          runId: fixture.runId,
+          effectId: recovered.view.effects[0].effectId,
+          reconciliationId: 'missing-store-reconciliation',
+          expectedAppId: fixture.appId,
           configuration: fixture.configuration,
           applicationStateConfiguration: Object.freeze({
             ...fixture.applicationStateConfiguration,

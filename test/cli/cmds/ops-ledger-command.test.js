@@ -383,7 +383,7 @@ describe('ledger-native operator commands', () => {
       expect(inspected.stderr).toBe('');
       const inspection = JSON.parse(inspected.stdout);
       expect(inspection).toMatchObject({
-        schemaVersion: 4,
+        schemaVersion: 5,
         kind: 'wharfie.execution-ledger.run',
         integrity: { verified: true },
         run: { runId, appId, status: RunStatus.RUNNING },
@@ -431,7 +431,7 @@ describe('ledger-native operator commands', () => {
       expect(recovered.status).toBe(0);
       expect(recovered.stderr).toBe('');
       expect(JSON.parse(recovered.stdout)).toMatchObject({
-        schemaVersion: 4,
+        schemaVersion: 5,
         kind: 'wharfie.execution-ledger.recovery',
         recovery: { action: 'released-unstarted-claim', changed: true },
         run: { runId, status: RunStatus.RUNNING },
@@ -660,7 +660,7 @@ describe('ledger-native operator commands', () => {
       expect(first.stderr).toBe('');
       const firstView = JSON.parse(first.stdout);
       expect(firstView).toMatchObject({
-        schemaVersion: 4,
+        schemaVersion: 5,
         kind: 'wharfie.execution-ledger.reconciliation',
         reconciliation: {
           reconciliationId: 'source-free-reconciliation-1',
@@ -754,7 +754,9 @@ describe('ledger-native operator commands', () => {
         emptyDir,
       );
       expect(competing.status).toBe(1);
-      expect(competing.stderr).toMatch(/conflict|stale run version/i);
+      expect(competing.stderr).toMatch(
+        /conflict|stale run version|not the retained uncertain attempt/i,
+      );
       await expect(readRun(dbPath, tableName, runId)).resolves.toMatchObject({
         run: { status: RunStatus.COMPLETED },
         events: expect.arrayContaining([
@@ -774,9 +776,20 @@ describe('ledger-native operator commands', () => {
     expect(help.stdout).toContain('inspect');
     expect(help.stdout).toContain('recover');
     expect(help.stdout).toContain('reconcile');
+    expect(help.stdout).toContain('reconcile-effect');
     expect(help.stdout).toContain('cancel');
     expect(help.stdout).toContain('run');
     expect(help.stdout).not.toContain('list');
+
+    const reconcileEffectHelp = runCli(
+      ['ops', 'reconcile-effect', '--help'],
+      env,
+      repoRoot,
+    );
+    expect(reconcileEffectHelp.status).toBe(0);
+    expect(reconcileEffectHelp.stdout).toContain('--effect-id');
+    expect(reconcileEffectHelp.stdout).toContain('--reconciliation-id');
+    expect(reconcileEffectHelp.stdout).toContain('--confirm-runner-stopped');
 
     const list = runCli(['ops', 'list'], env, repoRoot);
     expect(list.status).toBe(1);
@@ -805,6 +818,47 @@ describe('ledger-native operator commands', () => {
     );
     expect(reconcile.status).toBe(1);
     expect(reconcile.stderr).toMatch(/reconcile requires --run-id/i);
+
+    const missingEffectConfirmation = runCli(
+      [
+        'ops',
+        'reconcile-effect',
+        '--run-id',
+        'private-confirmation-run',
+        '--effect-id',
+        'private-confirmation-effect',
+        '--reconciliation-id',
+        'private-confirmation-reconciliation',
+      ],
+      env,
+      repoRoot,
+    );
+    expect(missingEffectConfirmation.status).toBe(1);
+    expect(missingEffectConfirmation.stderr).toContain(
+      'reconcile-effect requires --confirm-runner-stopped',
+    );
+
+    const reconcileEffect = runCli(
+      [
+        'ops',
+        'reconcile-effect',
+        '--effect-id',
+        'missing-effect',
+        '--reconciliation-id',
+        'missing-run-effect-reconciliation',
+        '--confirm-runner-stopped',
+      ],
+      env,
+      repoRoot,
+    );
+    expect(reconcileEffect.status).toBe(1);
+    expect(reconcileEffect.stderr).toMatch(
+      /reconcile-effect requires --run-id/i,
+    );
+    expect(reconcileEffect.stderr).not.toContain('missing-effect');
+    expect(reconcileEffect.stderr).not.toContain(
+      'missing-run-effect-reconciliation',
+    );
 
     const legacyRecovery = runCli(['ops', 'run', '--recover'], env, repoRoot);
     expect(legacyRecovery.status).toBe(1);
@@ -869,6 +923,36 @@ describe('ledger-native operator commands', () => {
       expect(cancellation.stderr).toContain(
         'cancellation refuses to create work',
       );
+
+      const privateEffectId = 'private-missing-run-effect';
+      const privateReconciliationId =
+        'private-missing-run-effect-reconciliation';
+      const effectReconciliation = runCli(
+        [
+          'ops',
+          'reconcile-effect',
+          '--run-id',
+          missingRunId,
+          '--effect-id',
+          privateEffectId,
+          '--reconciliation-id',
+          privateReconciliationId,
+          '--confirm-runner-stopped',
+        ],
+        env,
+        emptyDir,
+      );
+      expect(effectReconciliation.status).toBe(1);
+      expect(effectReconciliation.stderr).toContain(
+        'Managed-effect reconciliation could not report a safe result.',
+      );
+      for (const privateIdentifier of [
+        missingRunId,
+        privateEffectId,
+        privateReconciliationId,
+      ]) {
+        expect(effectReconciliation.stderr).not.toContain(privateIdentifier);
+      }
       expect(
         await readRun(dbPath, tableName, missingRunId, createLMDB),
       ).toBeNull();

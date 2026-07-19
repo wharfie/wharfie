@@ -57,7 +57,7 @@ const TABLE_NAME = 'managed-effect-crash-matrix';
 
 /**
  * @typedef {Readonly<{adapterName: 'lmdb', controlPath: string, tableName: string, payloadPath: string, payloadStoreId: string, sessionPath: string}>} ControlConfiguration
- * @typedef {Readonly<{adapterName: 'lmdb', storePath: string, tableName: 'wharfie-application-state-v1'}>} ApplicationStateConfiguration
+ * @typedef {Readonly<{adapterName: 'lmdb', storePath: string, tableName: 'wharfie-application-state-v2'}>} ApplicationStateConfiguration
  * @typedef {Readonly<{root: string, boundary: string, runId: string, configuration: ControlConfiguration, applicationStateConfiguration: ApplicationStateConfiguration, adapterMarkerPath: string}>} CrashFixture
  * @typedef {{code: number | null, signal: NodeJS.Signals | null}} ChildExit
  */

@@ -18,10 +18,14 @@ import {
   APPLICATION_STATE_STORE_SORT_KEY,
   ApplicationStateCorruptionError,
   ApplicationStateEffectConflictError,
+  ApplicationStateEffectNotAppliedError,
   ApplicationStateStoreIdentityError,
   createApplicationStateBusinessKey,
   createApplicationStateBusinessRecord,
+  createApplicationStateNotAppliedResolutionRecord,
   createApplicationStateReceiptRecord,
+  createApplicationStateTable,
+  validateApplicationStateNotAppliedResolutionRecord,
 } from '../../src/core/lib/db/tables/application-state.js';
 import {
   createExecutionLedger,
@@ -36,15 +40,19 @@ import {
   APPLICATION_STATE_MAX_INPUT_BYTES,
   APPLICATION_STATE_MAX_KEY_BYTES,
   APPLICATION_STATE_PUT_IF_ABSENT_OPERATION,
+  APPLICATION_STATE_RECONCILIATION_VERIFIER_DESCRIPTOR,
   APPLICATION_STATE_SUBSTANTIATED_REPLAY_PROPERTIES,
   APPLICATION_STATE_VERIFIER_DESCRIPTOR,
+  createApplicationStateEffectContractDigest,
   normalizeApplicationStateDestination,
   normalizeApplicationStatePutIfAbsentRequest,
   verifyApplicationStatePutIfAbsentOutcome,
+  verifyApplicationStatePutIfAbsentNotAppliedEvidence,
 } from '../../src/core/runtime/effects/application-state.js';
 import {
   createBuiltinManagedEffectCatalog,
   createBuiltinManagedEffectHandler,
+  createBuiltinManagedEffectReconciliationCatalog,
   createBuiltinManagedEffectRecoveryCatalog,
 } from '../../src/core/runtime/effects/builtin-catalog.js';
 import { withExecutionLedger } from '../../src/core/runtime/operator/execution-ledger-store.js';
@@ -66,7 +74,7 @@ function createId(prefix, domain, value) {
   });
 }
 
-const STORE_ID = createId('was', 'wharfie:test:application-state-store:v1', {
+const STORE_ID = createId('was', 'wharfie:test:application-state-store:v2', {
   fixture: 'primary',
 });
 
@@ -141,11 +149,18 @@ async function createCatalogHarness(options = {}) {
     allowTestAdapter: true,
     createStoreId: options.createStoreId ?? (() => STORE_ID),
   });
+  const reconciliation = await createBuiltinManagedEffectReconciliationCatalog({
+    db,
+    appId: options.appId ?? APP_ID,
+    adapterName: 'vanilla',
+    allowTestAdapter: true,
+  });
   return {
     root,
     baseDb,
     db,
     catalog,
+    reconciliation,
     async cleanup() {
       await baseDb.close();
       rmSync(root, { recursive: true, force: true });
@@ -168,6 +183,24 @@ async function executeCatalogEffect(catalog, options = {}) {
     destinationEffectId: destinationEffectId(effectId),
     destination: catalog.destination,
     identity: effectIdentity(effectId),
+    request,
+  });
+}
+
+/**
+ * @param {Record<string, any>} catalog
+ * @param {{effectId?: string, requestOverrides?: Record<string, any>}} [options]
+ */
+async function reconcileCatalogEffect(catalog, options = {}) {
+  const effectId = options.effectId ?? EFFECT_ID;
+  const request = effectRequest('application-state-attempt', {
+    effectId,
+    ...(options.requestOverrides ?? {}),
+  });
+  return await catalog.reconcileEffect({
+    destinationEffectId: destinationEffectId(effectId),
+    destination: catalog.destination,
+    identity: contractIdentity(effectId),
     request,
   });
 }
@@ -202,6 +235,21 @@ function verifierInput(catalog, request, outcome, effectId = EFFECT_ID) {
     },
     request: logicalRequest(request),
     outcome,
+  };
+}
+
+/** @param {Record<string, any>} catalog @param {Record<string, any>} request @param {Record<string, any>} evidence @param {string} [effectId] */
+function reconciliationVerifierInput(
+  catalog,
+  request,
+  evidence,
+  effectId = EFFECT_ID,
+) {
+  const { effect } = verifierInput(catalog, request, {}, effectId);
+  return {
+    effect,
+    request: logicalRequest(request),
+    evidence,
   };
 }
 
@@ -304,7 +352,7 @@ describe('application-state effect request and catalog boundary', () => {
       expect(harness.catalog.storeId).toBe(STORE_ID);
       expect(harness.catalog.destination).toEqual({
         kind: APPLICATION_STATE_CAPABILITY,
-        version: 1,
+        version: 2,
         bindingId: 'primary',
         configuration: {
           provider: 'vanilla',
@@ -481,6 +529,14 @@ describe('application-state effect request and catalog boundary', () => {
           allowTestAdapter: true,
         }),
       ).rejects.toBeInstanceOf(ApplicationStateStoreIdentityError);
+      await expect(
+        createBuiltinManagedEffectReconciliationCatalog({
+          db: recoveryDb,
+          appId: APP_ID,
+          adapterName: 'vanilla',
+          allowTestAdapter: true,
+        }),
+      ).rejects.toBeInstanceOf(ApplicationStateStoreIdentityError);
       expect(transactionWrite).not.toHaveBeenCalled();
       await expect(
         baseDb.get({
@@ -512,9 +568,56 @@ describe('application-state effect request and catalog boundary', () => {
 });
 
 describe('application-state put-if-absent destination semantics', () => {
+  test('isolates V2 execution from retained V1 bytes', async () => {
+    const harness = await createCatalogHarness();
+    const legacy = {
+      resource_id: `application-state/v1/effect/${destinationEffectId()}`,
+      sort_key: 'receipt/v1',
+      record_kind: 'application-state-effect-receipt',
+      schema_version: 1,
+      opaque_legacy_bytes: { retained: true },
+    };
+    try {
+      await harness.baseDb.put({
+        tableName: 'wharfie-application-state-v1',
+        keyName: APPLICATION_STATE_KEY_NAME,
+        sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+        record: legacy,
+      });
+      await expect(
+        harness.catalog.readReceipt(destinationEffectId()),
+      ).resolves.toBeNull();
+      await expect(
+        executeCatalogEffect(harness.catalog),
+      ).resolves.toMatchObject({ result: { inserted: true } });
+      await expect(
+        harness.baseDb.get({
+          tableName: 'wharfie-application-state-v1',
+          keyName: APPLICATION_STATE_KEY_NAME,
+          keyValue: legacy.resource_id,
+          sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+          sortKeyValue: legacy.sort_key,
+          consistentRead: true,
+        }),
+      ).resolves.toEqual(legacy);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
   test('atomically inserts one value and permanent verifier-backed receipt', async () => {
     const harness = await createCatalogHarness();
     try {
+      expect(Object.keys(harness.reconciliation)).toEqual([
+        'storeId',
+        'destination',
+        'effectEvidenceVerifiers',
+        'reconcileEffect',
+        'readReceipt',
+      ]);
+      expect(harness.reconciliation).not.toHaveProperty('resolve');
+      expect(harness.reconciliation).not.toHaveProperty('recoverOutcome');
+      expect(harness.catalog).not.toHaveProperty('reconcileEffect');
       const request = effectRequest('application-state-attempt');
       const outcome = await executeCatalogEffect(harness.catalog);
       expect(outcome).toMatchObject({
@@ -766,6 +869,85 @@ describe('application-state put-if-absent destination semantics', () => {
     }
   });
 
+  test('returns a concurrent receipt winner after a stale post-error business read', async () => {
+    const businessKey = createApplicationStateBusinessKey(APP_ID, 'answer');
+    let failNextInsert = false;
+    let gateBusinessRead = false;
+    let announceBusinessRead = () => {};
+    /** @type {Promise<void>} */
+    const businessReadStarted = new Promise((resolve) => {
+      announceBusinessRead = resolve;
+    });
+    let releaseBusinessRead = () => {};
+    /** @type {Promise<void>} */
+    const businessReadGate = new Promise((resolve) => {
+      releaseBusinessRead = resolve;
+    });
+    const harness = await createCatalogHarness({
+      wrapDb(
+        /** @type {import('../../src/core/lib/db/base.js').DBClient} */ baseDb,
+      ) {
+        return {
+          ...baseDb,
+          async get(
+            /** @type {import('../../src/core/lib/db/base.js').GetParams} */ params,
+          ) {
+            if (
+              gateBusinessRead &&
+              params.keyValue === businessKey.resourceId &&
+              params.sortKeyValue === businessKey.sortKey
+            ) {
+              gateBusinessRead = false;
+              announceBusinessRead();
+              await businessReadGate;
+            }
+            return await baseDb.get(params);
+          },
+          async transactionWrite(
+            /** @type {import('../../src/core/lib/db/base.js').TransactionWriteParams} */ params,
+          ) {
+            const recordKinds = new Set(
+              (params.putRequests || []).map(
+                (request) => request.record.record_kind,
+              ),
+            );
+            if (
+              failNextInsert &&
+              recordKinds.has('application-state-value') &&
+              recordKinds.has('application-state-effect-receipt')
+            ) {
+              failNextInsert = false;
+              throw new Error('simulated pre-commit application failure');
+            }
+            return await baseDb.transactionWrite(params);
+          },
+        };
+      },
+    });
+    try {
+      failNextInsert = true;
+      gateBusinessRead = true;
+      const first = executeCatalogEffect(harness.catalog);
+      await businessReadStarted;
+      const winner = await executeCatalogEffect(harness.catalog);
+      releaseBusinessRead();
+      await expect(first).resolves.toEqual(winner);
+      await expect(
+        harness.catalog.readReceipt(destinationEffectId()),
+      ).resolves.toMatchObject({ inserted: true });
+      const table = createApplicationStateTable({
+        db: harness.baseDb,
+        tableName: APPLICATION_STATE_TABLE_NAME,
+      });
+      await expect(
+        table.readNotAppliedResolution(destinationEffectId()),
+      ).resolves.toBeNull();
+    } finally {
+      releaseBusinessRead();
+      await harness.cleanup();
+    }
+  });
+
   test('rolls back the business value when the atomic transaction never commits', async () => {
     const harness = await createCatalogHarness({
       wrapDb(
@@ -881,6 +1063,7 @@ describe('application-state put-if-absent destination semantics', () => {
       if (!originalReceipt)
         throw new Error('Expected application-state receipt');
       const forgedBusiness = createApplicationStateBusinessRecord({
+        storeId: harness.catalog.storeId,
         namespace: APP_ID,
         key: 'answer',
         value: { value: 'forged-but-self-consistent' },
@@ -947,7 +1130,7 @@ describe('application-state put-if-absent destination semantics', () => {
     const original = await createCatalogHarness();
     const replacementStoreId = createId(
       'was',
-      'wharfie:test:replacement-store:v1',
+      'wharfie:test:replacement-store:v2',
       { fixture: 'replacement' },
     );
     const replacement = await createCatalogHarness({
@@ -979,6 +1162,485 @@ describe('application-state put-if-absent destination semantics', () => {
       await original.cleanup();
       await replacement.cleanup();
     }
+  });
+
+  test('rejects V2 rows retained across store identity recreation', async () => {
+    const harness = await createCatalogHarness();
+    const replacementStoreId = createId(
+      'was',
+      'wharfie:test:in-place-replacement-store:v2',
+      { fixture: 'replacement' },
+    );
+    try {
+      await executeCatalogEffect(harness.catalog);
+      await harness.baseDb.remove({
+        tableName: APPLICATION_STATE_TABLE_NAME,
+        keyName: APPLICATION_STATE_KEY_NAME,
+        keyValue: APPLICATION_STATE_STORE_RESOURCE_ID,
+        sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+        sortKeyValue: APPLICATION_STATE_STORE_SORT_KEY,
+      });
+      const replacementTable = createApplicationStateTable({
+        db: harness.baseDb,
+        tableName: APPLICATION_STATE_TABLE_NAME,
+        createStoreId: () => replacementStoreId,
+      });
+      await expect(
+        replacementTable.ensureStoreIdentity(),
+      ).resolves.toMatchObject({ store_id: replacementStoreId });
+      const rebound = await createBuiltinManagedEffectCatalog({
+        db: harness.baseDb,
+        appId: APP_ID,
+        adapterName: 'vanilla',
+        allowTestAdapter: true,
+      });
+      await expect(
+        rebound.recoverOutcome({
+          destinationEffectId: destinationEffectId(),
+          destination: rebound.destination,
+          identity: contractIdentity(),
+          request: effectRequest('application-state-attempt'),
+        }),
+      ).rejects.toBeInstanceOf(ApplicationStateEffectConflictError);
+      await expect(
+        executeCatalogEffect(rebound, { effectId: 'post-recreation-effect' }),
+      ).rejects.toBeInstanceOf(ApplicationStateStoreIdentityError);
+      await expect(
+        rebound.readReceipt(destinationEffectId('post-recreation-effect')),
+      ).resolves.toBeNull();
+    } finally {
+      await harness.cleanup();
+    }
+  });
+});
+
+describe('application-state not-applied reconciliation', () => {
+  test('permanently resolves absence, verifies its evidence, and fences later execution', async () => {
+    const harness = await createCatalogHarness();
+    try {
+      const request = effectRequest('application-state-attempt');
+      const first = await reconcileCatalogEffect(harness.reconciliation);
+      expect(first).toMatchObject({
+        kind: 'not-applied',
+        evidence: {
+          kind: APPLICATION_STATE_RECONCILIATION_VERIFIER_DESCRIPTOR.kind,
+          version: 2,
+          destinationEffectId: destinationEffectId(),
+          disposition: 'not-applied',
+          businessObservation: { kind: 'absent' },
+        },
+      });
+      if (first.kind !== 'not-applied') {
+        throw new Error('Expected a not-applied reconciliation');
+      }
+      const verifier = reconciliationVerifierInput(
+        harness.catalog,
+        request,
+        first.evidence,
+      );
+      expect(
+        verifyApplicationStatePutIfAbsentNotAppliedEvidence(verifier),
+      ).toBe(true);
+      expect(
+        APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS.find(
+          ({ kind }) =>
+            kind === APPLICATION_STATE_RECONCILIATION_VERIFIER_DESCRIPTOR.kind,
+        )?.verify(verifier),
+      ).toBe(true);
+      await expect(
+        reconcileCatalogEffect(harness.reconciliation),
+      ).resolves.toEqual(first);
+      await expect(
+        executeCatalogEffect(harness.catalog),
+      ).rejects.toBeInstanceOf(ApplicationStateEffectNotAppliedError);
+      await expect(
+        harness.catalog.recoverOutcome({
+          destinationEffectId: destinationEffectId(),
+          destination: harness.catalog.destination,
+          identity: contractIdentity(),
+          request,
+        }),
+      ).resolves.toBeNull();
+      const transactionWrite = jest.fn(async () => {
+        throw new Error(
+          'ordinary recovery must never resolve application state',
+        );
+      });
+      const recovery = await createBuiltinManagedEffectRecoveryCatalog({
+        db: { ...harness.baseDb, transactionWrite },
+        appId: APP_ID,
+        adapterName: 'vanilla',
+        allowTestAdapter: true,
+      });
+      expect(recovery).not.toHaveProperty('reconcileEffect');
+      await expect(
+        recovery.recoverOutcome({
+          destinationEffectId: destinationEffectId(),
+          destination: harness.catalog.destination,
+          identity: contractIdentity(),
+          request,
+        }),
+      ).resolves.toBeNull();
+      await expect(
+        recovery.recoverOutcome({
+          destinationEffectId: destinationEffectId(),
+          destination: harness.catalog.destination,
+          identity: contractIdentity(),
+          request: effectRequest('application-state-attempt', {
+            input: { key: 'answer', value: { value: 99 } },
+          }),
+        }),
+      ).rejects.toBeInstanceOf(ApplicationStateEffectConflictError);
+      expect(transactionWrite).not.toHaveBeenCalled();
+      await expect(readBusiness(harness.baseDb)).resolves.toBeUndefined();
+      await expect(
+        harness.catalog.readReceipt(destinationEffectId()),
+      ).resolves.toBeNull();
+
+      const table = createApplicationStateTable({
+        db: harness.baseDb,
+        tableName: APPLICATION_STATE_TABLE_NAME,
+      });
+      const resolution = await table.readNotAppliedResolution(
+        destinationEffectId(),
+      );
+      expect(resolution).toMatchObject({
+        schema_version: 2,
+        disposition: 'not-applied',
+        business_observation: { kind: 'absent' },
+        resolution_digest: first.evidence.resolutionDigest,
+      });
+      expect(
+        validateApplicationStateNotAppliedResolutionRecord(resolution),
+      ).toEqual(resolution);
+      expect(() =>
+        validateApplicationStateNotAppliedResolutionRecord({
+          ...resolution,
+          resolution_digest: first.evidence.contractDigest,
+        }),
+      ).toThrow(ApplicationStateCorruptionError);
+      expect(() =>
+        validateApplicationStateNotAppliedResolutionRecord({
+          ...resolution,
+          unexpected: true,
+        }),
+      ).toThrow(ApplicationStateCorruptionError);
+      await expect(
+        executeCatalogEffect(harness.catalog, {
+          effectId: 'different-effect-after-resolution',
+        }),
+      ).resolves.toMatchObject({ result: { inserted: true } });
+      await expect(
+        reconcileCatalogEffect(harness.reconciliation),
+      ).resolves.toEqual(first);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  test('returns the positive receipt when execution already won', async () => {
+    const harness = await createCatalogHarness();
+    try {
+      const outcome = await executeCatalogEffect(harness.catalog);
+      await expect(
+        reconcileCatalogEffect(harness.reconciliation),
+      ).resolves.toEqual({ kind: 'outcome', outcome });
+      const table = createApplicationStateTable({
+        db: harness.baseDb,
+        tableName: APPLICATION_STATE_TABLE_NAME,
+      });
+      await expect(
+        table.readNotAppliedResolution(destinationEffectId()),
+      ).resolves.toBeNull();
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  test('arbitrates concurrent execution and reconciliation as one permanent winner', async () => {
+    const harness = await createCatalogHarness();
+    const effectId = 'concurrent-resolution';
+    try {
+      await executeCatalogEffect(harness.catalog, {
+        effectId: 'concurrent-existing-business',
+      });
+      const [execution, reconciliation] = await Promise.allSettled([
+        executeCatalogEffect(harness.catalog, { effectId }),
+        reconcileCatalogEffect(harness.reconciliation, { effectId }),
+      ]);
+      expect(reconciliation.status).toBe('fulfilled');
+      if (reconciliation.status !== 'fulfilled') {
+        throw reconciliation.reason;
+      }
+      const repeated = await reconcileCatalogEffect(harness.reconciliation, {
+        effectId,
+      });
+      expect(repeated).toEqual(reconciliation.value);
+      const table = createApplicationStateTable({
+        db: harness.baseDb,
+        tableName: APPLICATION_STATE_TABLE_NAME,
+      });
+      const receipt = await harness.catalog.readReceipt(
+        destinationEffectId(effectId),
+      );
+      const resolution = await table.readNotAppliedResolution(
+        destinationEffectId(effectId),
+      );
+      if (reconciliation.value.kind === 'outcome') {
+        expect(execution.status).toBe('fulfilled');
+        if (execution.status === 'fulfilled') {
+          expect(execution.value).toMatchObject({
+            result: { inserted: false },
+          });
+        }
+        expect(receipt).not.toBeNull();
+        expect(resolution).toBeNull();
+      } else {
+        expect(execution.status).toBe('rejected');
+        if (execution.status !== 'rejected') {
+          throw new Error('Expected execution to lose to reconciliation');
+        }
+        expect(execution.reason).toBeInstanceOf(
+          ApplicationStateEffectNotAppliedError,
+        );
+        expect(receipt).toBeNull();
+        expect(resolution).not.toBeNull();
+      }
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  test('returns a concurrently committed receipt after a stale finalizer disposition read', async () => {
+    const businessKey = createApplicationStateBusinessKey(APP_ID, 'answer');
+    let gateBusinessRead = false;
+    let announceBusinessRead = () => {};
+    /** @type {Promise<void>} */
+    const businessReadStarted = new Promise((resolve) => {
+      announceBusinessRead = resolve;
+    });
+    let releaseBusinessRead = () => {};
+    /** @type {Promise<void>} */
+    const businessReadGate = new Promise((resolve) => {
+      releaseBusinessRead = resolve;
+    });
+    const harness = await createCatalogHarness({
+      wrapDb(
+        /** @type {import('../../src/core/lib/db/base.js').DBClient} */ baseDb,
+      ) {
+        return {
+          ...baseDb,
+          async get(
+            /** @type {import('../../src/core/lib/db/base.js').GetParams} */ params,
+          ) {
+            if (
+              gateBusinessRead &&
+              params.keyValue === businessKey.resourceId &&
+              params.sortKeyValue === businessKey.sortKey
+            ) {
+              gateBusinessRead = false;
+              announceBusinessRead();
+              await businessReadGate;
+            }
+            return await baseDb.get(params);
+          },
+        };
+      },
+    });
+    try {
+      gateBusinessRead = true;
+      const reconciling = reconcileCatalogEffect(harness.reconciliation);
+      await businessReadStarted;
+      const outcome = await executeCatalogEffect(harness.catalog);
+      releaseBusinessRead();
+      await expect(reconciling).resolves.toEqual({
+        kind: 'outcome',
+        outcome,
+      });
+      const table = createApplicationStateTable({
+        db: harness.baseDb,
+        tableName: APPLICATION_STATE_TABLE_NAME,
+      });
+      await expect(
+        table.readNotAppliedResolution(destinationEffectId()),
+      ).resolves.toBeNull();
+    } finally {
+      releaseBusinessRead();
+      await harness.cleanup();
+    }
+  });
+
+  test('retains an exact present-other observation and rejects altered evidence or contract', async () => {
+    const harness = await createCatalogHarness();
+    const effectId = 'not-applied-after-other-writer';
+    try {
+      await executeCatalogEffect(harness.catalog, {
+        effectId: 'existing-business-writer',
+      });
+      const decision = await reconcileCatalogEffect(harness.reconciliation, {
+        effectId,
+      });
+      if (decision.kind !== 'not-applied') {
+        throw new Error('Expected a not-applied reconciliation');
+      }
+      expect(decision.evidence.businessObservation).toMatchObject({
+        kind: 'present-other',
+        createdByDestinationEffectId: destinationEffectId(
+          'existing-business-writer',
+        ),
+      });
+      const request = effectRequest('application-state-attempt', { effectId });
+      const valid = reconciliationVerifierInput(
+        harness.catalog,
+        request,
+        decision.evidence,
+        effectId,
+      );
+      expect(verifyApplicationStatePutIfAbsentNotAppliedEvidence(valid)).toBe(
+        true,
+      );
+      expect(
+        verifyApplicationStatePutIfAbsentNotAppliedEvidence({
+          ...valid,
+          evidence: {
+            ...valid.evidence,
+            businessObservation: { kind: 'absent' },
+          },
+        }),
+      ).toBe(false);
+      expect(
+        verifyApplicationStatePutIfAbsentNotAppliedEvidence({
+          ...valid,
+          request: {
+            ...valid.request,
+            input: { key: 'different', value: { value: 42 } },
+          },
+        }),
+      ).toBe(false);
+      await expect(
+        reconcileCatalogEffect(harness.reconciliation, {
+          effectId,
+          requestOverrides: {
+            input: { key: 'answer', value: { value: 99 } },
+          },
+        }),
+      ).rejects.toBeInstanceOf(ApplicationStateEffectConflictError);
+      const businessKey = createApplicationStateBusinessKey(APP_ID, 'answer');
+      await harness.baseDb.remove({
+        tableName: APPLICATION_STATE_TABLE_NAME,
+        keyName: APPLICATION_STATE_KEY_NAME,
+        keyValue: businessKey.resourceId,
+        sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+        sortKeyValue: businessKey.sortKey,
+      });
+      await expect(
+        reconcileCatalogEffect(harness.reconciliation, { effectId }),
+      ).rejects.toBeInstanceOf(ApplicationStateCorruptionError);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  test('rejects impossible same-effect business state without recording absence', async () => {
+    const harness = await createCatalogHarness();
+    const effectId = 'orphaned-business-writer';
+    try {
+      const request = effectRequest('application-state-attempt', { effectId });
+      const contractDigest = createApplicationStateEffectContractDigest({
+        destinationEffectId: destinationEffectId(effectId),
+        identity: contractIdentity(effectId),
+        destination: harness.catalog.destination,
+        request,
+      });
+      const business = createApplicationStateBusinessRecord({
+        storeId: harness.catalog.storeId,
+        namespace: APP_ID,
+        key: request.input.key,
+        value: request.input.value,
+        destinationEffectId: destinationEffectId(effectId),
+        contractDigest,
+      });
+      await harness.baseDb.put({
+        tableName: APPLICATION_STATE_TABLE_NAME,
+        keyName: APPLICATION_STATE_KEY_NAME,
+        sortKeyName: APPLICATION_STATE_SORT_KEY_NAME,
+        record: business,
+      });
+      await expect(
+        reconcileCatalogEffect(harness.reconciliation, { effectId }),
+      ).rejects.toBeInstanceOf(ApplicationStateCorruptionError);
+      const table = createApplicationStateTable({
+        db: harness.baseDb,
+        tableName: APPLICATION_STATE_TABLE_NAME,
+      });
+      await expect(
+        table.readNotAppliedResolution(destinationEffectId(effectId)),
+      ).resolves.toBeNull();
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  test('recovers a committed not-applied resolution after its response is lost', async () => {
+    let loseResponse = true;
+    const harness = await createCatalogHarness({
+      wrapDb(
+        /** @type {import('../../src/core/lib/db/base.js').DBClient} */ baseDb,
+      ) {
+        return {
+          ...baseDb,
+          async transactionWrite(
+            /** @type {import('../../src/core/lib/db/base.js').TransactionWriteParams} */ params,
+          ) {
+            const result = await baseDb.transactionWrite(params);
+            if (
+              loseResponse &&
+              params.putRequests?.[0]?.record?.record_kind ===
+                'application-state-effect-resolution'
+            ) {
+              loseResponse = false;
+              throw new Error('simulated resolution response loss');
+            }
+            return result;
+          },
+        };
+      },
+    });
+    try {
+      const decision = await reconcileCatalogEffect(harness.reconciliation);
+      expect(decision).toMatchObject({ kind: 'not-applied' });
+      expect(loseResponse).toBe(false);
+      await expect(
+        reconcileCatalogEffect(harness.reconciliation),
+      ).resolves.toEqual(decision);
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
+  test('rejects a self-effect present observation at the record constructor', () => {
+    const businessKey = createApplicationStateBusinessKey(APP_ID, 'answer');
+    expect(() =>
+      createApplicationStateNotAppliedResolutionRecord({
+        storeId: STORE_ID,
+        destinationEffectId: destinationEffectId(),
+        contractDigest: createId(
+          'wac',
+          'wharfie:test:application-state-contract:v2',
+          { fixture: 'constructor-corruption' },
+        ),
+        businessKey,
+        businessObservation: {
+          kind: 'present-other',
+          recordDigest: createId(
+            'war',
+            'wharfie:test:application-state-business:v2',
+            { fixture: 'constructor-corruption' },
+          ),
+          createdByDestinationEffectId: destinationEffectId(),
+        },
+      }),
+    ).toThrow(ApplicationStateCorruptionError);
   });
 });
 
@@ -1109,6 +1771,53 @@ describe('application-state production storage', () => {
       ).resolves.toEqual(outcome);
     } finally {
       await db?.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('retains a not-applied resolution and execution fence after a true LMDB reopen', async () => {
+    const root = makeRoot('application-state-lmdb-resolution-reopen');
+    /** @type {import('../../src/core/lib/db/base.js').DBClient | undefined} */
+    let db;
+    try {
+      db = await createApplicationStateDBClient('lmdb', { path: root });
+      await createBuiltinManagedEffectCatalog({
+        db,
+        appId: APP_ID,
+        adapterName: 'lmdb',
+        createStoreId: () => STORE_ID,
+      });
+      const reconciliation =
+        await createBuiltinManagedEffectReconciliationCatalog({
+          db,
+          appId: APP_ID,
+          adapterName: 'lmdb',
+        });
+      const decision = await reconcileCatalogEffect(reconciliation);
+      expect(decision).toMatchObject({ kind: 'not-applied' });
+      await db.close();
+      db = undefined;
+
+      db = await createApplicationStateDBClient('lmdb', { path: root });
+      const reopenedReconciliation =
+        await createBuiltinManagedEffectReconciliationCatalog({
+          db,
+          appId: APP_ID,
+          adapterName: 'lmdb',
+        });
+      await expect(
+        reconcileCatalogEffect(reopenedReconciliation),
+      ).resolves.toEqual(decision);
+      const reopenedExecution = await createBuiltinManagedEffectCatalog({
+        db,
+        appId: APP_ID,
+        adapterName: 'lmdb',
+      });
+      await expect(
+        executeCatalogEffect(reopenedExecution),
+      ).rejects.toBeInstanceOf(ApplicationStateEffectNotAppliedError);
+    } finally {
+      if (db) await db.close();
       rmSync(root, { recursive: true, force: true });
     }
   });

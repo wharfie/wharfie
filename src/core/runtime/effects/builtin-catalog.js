@@ -17,6 +17,7 @@ import {
   APPLICATION_STATE_SUBSTANTIATED_REPLAY_PROPERTIES,
   APPLICATION_STATE_VERIFIER_DESCRIPTOR,
   createApplicationStateEffectContractDigest,
+  createApplicationStateNotAppliedEvidence,
   createApplicationStateOutcomeFromReceipt,
   normalizeApplicationStateDestination,
   normalizeApplicationStatePutIfAbsentRequest,
@@ -37,6 +38,7 @@ const RECOVERY_CATALOG_OPTION_KEYS = new Set([
   'tableName',
   'allowTestAdapter',
 ]);
+const RECONCILIATION_CATALOG_OPTION_KEYS = RECOVERY_CATALOG_OPTION_KEYS;
 const FROZEN_REPLAY_PROPERTIES = [
   ...APPLICATION_STATE_SUBSTANTIATED_REPLAY_PROPERTIES,
 ];
@@ -67,6 +69,15 @@ Object.freeze(FROZEN_REPLAY_PROPERTIES);
  * @property {Readonly<Record<string, any>>} destination - Credential-free retained destination.
  * @property {typeof APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS} effectEvidenceVerifiers - Pure ledger registrations.
  * @property {(input: {destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}) => Promise<Readonly<Record<string, any>> | null>} recoverOutcome - Receipt recovery probe.
+ * @property {(destinationEffectId: string) => Promise<Readonly<Record<string, any>> | null>} readReceipt - Direct verified receipt lookup.
+ */
+
+/**
+ * @typedef BuiltinManagedEffectReconciliationCatalog
+ * @property {string} storeId - Existing physical application-state store identity.
+ * @property {Readonly<Record<string, any>>} destination - Credential-free retained destination.
+ * @property {typeof APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS} effectEvidenceVerifiers - Pure ledger registrations.
+ * @property {(input: {destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}) => Promise<Readonly<{kind: 'outcome', outcome: Readonly<Record<string, any>>} | {kind: 'not-applied', evidence: Readonly<Record<string, any>>}>>} reconcileEffect - Mutating destination resolution probe.
  * @property {(destinationEffectId: string) => Promise<Readonly<Record<string, any>> | null>} readReceipt - Direct verified receipt lookup.
  */
 
@@ -161,7 +172,7 @@ function assertSameDestination(left, right) {
 function createApplicationStateDestination(options) {
   return normalizeApplicationStateDestination({
     kind: APPLICATION_STATE_CAPABILITY,
-    version: 1,
+    version: 2,
     bindingId: APPLICATION_STATE_BINDING_ID,
     configuration: {
       provider: options.adapterName,
@@ -174,7 +185,7 @@ function createApplicationStateDestination(options) {
 
 /**
  * Create the read-only recovery methods shared by the executable catalog and
- * the deliberately execution-free operator catalog.
+ * the deliberately execution-free recovery catalog.
  * @param {{table: ReturnType<typeof createApplicationStateTable>, storeId: string, appId: string, destination: Readonly<Record<string, any>>}} options - Existing store binding.
  * @returns {{recoverOutcome: BuiltinManagedEffectRecoveryCatalog['recoverOutcome'], readReceipt: BuiltinManagedEffectRecoveryCatalog['readReceipt']}} - Exact recovery surface.
  */
@@ -210,6 +221,71 @@ function createApplicationStateRecoverySurface(options) {
 
   return Object.freeze({
     recoverOutcome,
+    readReceipt: options.table.readReceipt,
+  });
+}
+
+/**
+ * Create the deliberately writable destination-resolution method.
+ * @param {{table: ReturnType<typeof createApplicationStateTable>, storeId: string, appId: string, destination: Readonly<Record<string, any>>}} options - Existing store binding.
+ * @returns {{reconcileEffect: BuiltinManagedEffectReconciliationCatalog['reconcileEffect'], readReceipt: BuiltinManagedEffectReconciliationCatalog['readReceipt']}} - Exact reconciliation surface.
+ */
+function createApplicationStateReconciliationSurface(options) {
+  /** @param {{destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}} input - Retained delivery. @returns {Promise<Readonly<{kind: 'outcome', outcome: Readonly<Record<string, any>>} | {kind: 'not-applied', evidence: Readonly<Record<string, any>>}>>} - Permanent destination disposition. */
+  async function reconcileEffect(input) {
+    assertExactObject(
+      input,
+      ['destinationEffectId', 'destination', 'identity', 'request'],
+      [],
+      'Application-state reconciliation input',
+    );
+    assertSameDestination(input.destination, options.destination);
+    const normalized = normalizeApplicationStatePutIfAbsentRequest(
+      input.request,
+    );
+    const contractDigest = createApplicationStateEffectContractDigest({
+      destinationEffectId: input.destinationEffectId,
+      identity: input.identity,
+      destination: options.destination,
+      request: normalized.frame,
+    });
+    const receipt = await options.table.recoverPutIfAbsent({
+      storeId: options.storeId,
+      namespace: options.appId,
+      key: normalized.input.key,
+      value: normalized.input.value,
+      destinationEffectId: input.destinationEffectId,
+      contractDigest,
+    });
+    if (receipt) {
+      return Object.freeze({
+        kind: 'outcome',
+        outcome: createApplicationStateOutcomeFromReceipt(receipt),
+      });
+    }
+    const resolved = await options.table.resolvePutIfAbsentNotApplied({
+      storeId: options.storeId,
+      namespace: options.appId,
+      key: normalized.input.key,
+      value: normalized.input.value,
+      destinationEffectId: input.destinationEffectId,
+      contractDigest,
+    });
+    return resolved.kind === 'outcome'
+      ? Object.freeze({
+          kind: 'outcome',
+          outcome: createApplicationStateOutcomeFromReceipt(resolved.receipt),
+        })
+      : Object.freeze({
+          kind: 'not-applied',
+          evidence: createApplicationStateNotAppliedEvidence(
+            resolved.resolution,
+          ),
+        });
+  }
+
+  return Object.freeze({
+    reconcileEffect,
     readReceipt: options.table.readReceipt,
   });
 }
@@ -427,6 +503,84 @@ export async function createBuiltinManagedEffectRecoveryCatalog(options) {
     destination,
     effectEvidenceVerifiers: APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS,
     ...recovery,
+  });
+}
+
+/**
+ * Open only the explicitly writable destination-reconciliation surface over
+ * an existing application-state store. It never initializes a missing store
+ * and exposes neither normal execution nor the read-only recovery probe.
+ * @param {{db: import('../../lib/db/base.js').DBClient, appId: string, adapterName: import('../../lib/config/db.js').DBAdapterName, tableName?: string, allowTestAdapter?: boolean}} options - Trusted host reconciliation configuration.
+ * @returns {Promise<Readonly<BuiltinManagedEffectReconciliationCatalog>>} - Reconciliation-only catalog.
+ */
+export async function createBuiltinManagedEffectReconciliationCatalog(options) {
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new TypeError(
+      'Built-in managed-effect reconciliation catalog requires options.',
+    );
+  }
+  for (const key of Object.keys(options)) {
+    if (!RECONCILIATION_CATALOG_OPTION_KEYS.has(key)) {
+      throw new TypeError(
+        `Built-in managed-effect reconciliation catalog.${key} is unsupported.`,
+      );
+    }
+  }
+  const db = options.db;
+  const appId = options.appId;
+  const adapterName = options.adapterName;
+  const tableName = options.tableName ?? APPLICATION_STATE_TABLE_NAME;
+  const allowTestAdapter = options.allowTestAdapter;
+  if (!db || typeof db.transactionWrite !== 'function') {
+    throw new TypeError(
+      'Built-in managed-effect reconciliation catalog requires a transactional DB client.',
+    );
+  }
+  assertLogicalId(
+    appId,
+    'built-in managed-effect reconciliation catalog appId',
+  );
+  if (tableName !== APPLICATION_STATE_TABLE_NAME) {
+    throw new TypeError(
+      `Built-in managed-effect reconciliation catalog tableName must be ${APPLICATION_STATE_TABLE_NAME}.`,
+    );
+  }
+  if (allowTestAdapter !== undefined && typeof allowTestAdapter !== 'boolean') {
+    throw new TypeError('allowTestAdapter must be a boolean when provided.');
+  }
+  if (
+    adapterName !== 'lmdb' &&
+    !(allowTestAdapter === true && adapterName === 'vanilla')
+  ) {
+    throw new TypeError(
+      'Built-in application-state effect reconciliation requires LMDB; vanilla is available only through allowTestAdapter for semantic tests.',
+    );
+  }
+  assertDBClientAdapterIdentity(db, adapterName);
+  const table = createApplicationStateTable({ db, tableName });
+  const identity = await table.readStoreIdentity();
+  if (!identity) {
+    throw new ApplicationStateStoreIdentityError(
+      'Application-state reconciliation requires an existing verified store identity.',
+    );
+  }
+  const storeId = identity.store_id;
+  const destination = createApplicationStateDestination({
+    adapterName,
+    storeId,
+    tableName,
+    appId,
+  });
+  return Object.freeze({
+    storeId,
+    destination,
+    effectEvidenceVerifiers: APPLICATION_STATE_EFFECT_EVIDENCE_VERIFIERS,
+    ...createApplicationStateReconciliationSurface({
+      table,
+      storeId,
+      appId,
+      destination,
+    }),
   });
 }
 

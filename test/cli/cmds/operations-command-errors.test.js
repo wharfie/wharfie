@@ -179,6 +179,50 @@ describe.each([
   });
 });
 
+test('wharfie ops reconcile-effect requires runner confirmation before resolving packaged identity', async () => {
+  const resolveExpectedIdentity = jest.fn(async () => {
+    throw new Error('identity resolution must remain unreachable');
+  });
+  const failure = jest.fn();
+  const json = jest.fn();
+  const table = jest.fn();
+  const success = jest.fn();
+  const { reconcileEffectCommand } = createExecutionLedgerOperatorCommands({
+    resolveExpectedIdentity,
+    output: { failure, json, table, success },
+  });
+
+  await reconcileEffectCommand.parseAsync(
+    [
+      'node',
+      'reconcile-effect',
+      '--run-id',
+      'private-confirmation-run',
+      '--effect-id',
+      'private-confirmation-effect',
+      '--reconciliation-id',
+      'private-confirmation-reconciliation',
+    ],
+    { from: 'node' },
+  );
+
+  expect(process.exitCode).toBe(1);
+  expect(resolveExpectedIdentity).not.toHaveBeenCalled();
+  expect(failure).toHaveBeenCalledTimes(1);
+  const reported = failure.mock.calls[0][0];
+  expect(reported).toBeInstanceOf(Error);
+  if (!(reported instanceof Error)) {
+    throw new TypeError('Expected the command to report an Error.');
+  }
+  expect(reported.message).toBe(
+    'reconcile-effect requires --confirm-runner-stopped before it can change durable state.',
+  );
+  expect(json).not.toHaveBeenCalled();
+  expect(table).not.toHaveBeenCalled();
+  expect(success).not.toHaveBeenCalled();
+  process.exitCode = undefined;
+});
+
 test('wharfie ops run uses an isolated zero-config control store in tests', async () => {
   const applicationStatePath = mkdtempSync(
     path.join(tmpdir(), 'wharfie-ops-run-app-state-'),

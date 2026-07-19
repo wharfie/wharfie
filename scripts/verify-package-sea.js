@@ -45,6 +45,32 @@ const SEA_CRASH_ADAPTER_BREAKPOINT = Object.freeze({
 const SEA_CRASH_DESTINATION_WRITE_BREAKPOINT = Object.freeze({
   sourceSuffix: 'src/core/lib/db/tables/application-state.js',
   anchor: 'const identity = await assertStoreIdentity(input.storeId);',
+  occurrence: 1,
+});
+const SEA_ACTIVITY_DISPATCH_BREAKPOINT = Object.freeze({
+  sourceSuffix: 'src/core/runtime/durable-activity-host.js',
+  anchor: 'return await invokeManifestActivityAttemptWithStart({',
+});
+const SEA_APP_CLI_DISPATCH_BREAKPOINT = Object.freeze({
+  sourceSuffix: 'src/core/resources/builds/packaged-app-entry.js',
+  anchor: 'await runDeveloperCli(developerCliModule, {',
+});
+const SEA_EFFECT_RESOLUTION_WRITE_BREAKPOINT = Object.freeze({
+  sourceSuffix: 'src/core/lib/db/tables/application-state.js',
+  anchor: 'receiptAbsentCondition(input.destinationEffectId),',
+});
+const SEA_EFFECT_DESTINATION_RESOLVED_BREAKPOINT = Object.freeze({
+  sourceSuffix: 'src/core/runtime/operator/execution-ledger-operator.js',
+  anchor: 'let resolution;',
+});
+const SEA_EFFECT_EVIDENCE_PUBLISHED_BREAKPOINT = Object.freeze({
+  sourceSuffix: 'src/core/lib/db/tables/execution-ledger.js',
+  anchor: 'const reconciliation = {',
+  occurrence: 1,
+});
+const SEA_EFFECT_LEDGER_RECONCILED_BREAKPOINT = Object.freeze({
+  sourceSuffix: 'src/core/runtime/operator/execution-ledger-operator.js',
+  anchor: 'const current = await options.ledger.rebuildRun(options.runId);',
 });
 const SEA_RECOVERY_CANCELLATION_REASON = Object.freeze({
   kind: 'managed-effect-cancelled-before-start',
@@ -271,6 +297,48 @@ const SEA_MIXED_SETTLEMENT_CRASH_CASES = Object.freeze([
       anchor: 'const view = await ledger.rebuildRun(options.runId);',
     },
     settledAtBoundary: true,
+  },
+]);
+const SEA_EFFECT_RECONCILIATION_SPECS = Object.freeze([
+  {
+    effectId: '01-late-receipt',
+    state: /** @type {const} */ ('STARTED_ABSENT'),
+  },
+  {
+    effectId: '02-resolution-before-ledger',
+    state: /** @type {const} */ ('STARTED_ABSENT'),
+  },
+  {
+    effectId: '03-payload-before-ledger',
+    state: /** @type {const} */ ('STARTED_ABSENT'),
+  },
+  {
+    effectId: '04-ledger-before-response',
+    state: /** @type {const} */ ('STARTED_ABSENT'),
+  },
+]);
+const SEA_EFFECT_RECONCILIATION_CRASH_CASES = Object.freeze([
+  {
+    effectId: '02-resolution-before-ledger',
+    reconciliationId: 'sea-resolution-before-ledger',
+    label: 'effect destination resolution before ledger reconciliation',
+    breakpoint: SEA_EFFECT_DESTINATION_RESOLVED_BREAKPOINT,
+    ledgerCommittedAtBoundary: false,
+  },
+  {
+    effectId: '03-payload-before-ledger',
+    reconciliationId: 'sea-payload-before-ledger',
+    label: 'effect evidence payload publication before ledger append',
+    breakpoint: SEA_EFFECT_EVIDENCE_PUBLISHED_BREAKPOINT,
+    payloadPublishedAtBoundary: true,
+    ledgerCommittedAtBoundary: false,
+  },
+  {
+    effectId: '04-ledger-before-response',
+    reconciliationId: 'sea-ledger-before-response',
+    label: 'effect ledger reconciliation before operator response',
+    breakpoint: SEA_EFFECT_LEDGER_RECONCILED_BREAKPOINT,
+    ledgerCommittedAtBoundary: true,
   },
 ]);
 
@@ -588,7 +656,7 @@ async function createInstalledLedgerLifecycleObserver(options) {
  * operator fixtures. The moved SEA still performs every operation under test;
  * this host helper only prepares independently verifiable durable state.
  * @param {{installedPackageRoot: string, controlPath: string, tableName: string, payloadPath: string, applicationStatePath: string, revisionId: string}} options - Installed-package fixture inputs.
- * @returns {Promise<{createDestinationEffectId: (appId: string, runId: string, effectId: string) => string, createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, payloadStoreId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, business: Record<string, any> | null}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readManagedEffectDelivery: (runId: string, effectId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, ApplicationStateAdapterDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
+ * @returns {Promise<{payloadStoreId: string, createDestinationEffectId: (appId: string, runId: string, effectId: string) => string, createRunId: (appId: string, idempotencyKey: string) => string, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, payloadStoreId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, materializeApplicationStateReceipt: (appId: string, runId: string, effectId: string) => Promise<Readonly<Record<string, any>>>, readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readManagedEffectDelivery: (runId: string, effectId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, ApplicationStateAdapterDescriptor: Record<string, any>, ApplicationStateReconciliationVerifierDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
  */
 async function createInstalledExecutionLedgerFixture(options) {
   const installedModule = async (/** @type {string} */ relativePath) =>
@@ -702,6 +770,7 @@ async function createInstalledExecutionLedgerFixture(options) {
     }
   };
   return {
+    payloadStoreId,
     createDestinationEffectId: (appId, runId, effectId) =>
       ledgerContractModule.createManagedEffectDestinationId({
         appId,
@@ -908,6 +977,66 @@ async function createInstalledExecutionLedgerFixture(options) {
       (await readApplicationStateReceipts(appId, [destinationEffectId])).get(
         destinationEffectId,
       ) || null,
+    materializeApplicationStateReceipt: async (appId, runId, effectId) => {
+      const { db, ledger } = openLedger(true);
+      let delivery;
+      try {
+        delivery = await ledger.readManagedEffectDelivery(
+          runId,
+          manualModule.MANUAL_LEDGER_INVOCATION_ID,
+          effectId,
+        );
+      } finally {
+        await db.close();
+      }
+      if (
+        !delivery ||
+        delivery.effect.status !== ledgerModule.EffectStatus.UNCERTAIN
+      ) {
+        throw new Error(
+          `Late application-state receipt requires one retained UNCERTAIN effect: ${effectId}.`,
+        );
+      }
+      const request = {
+        protocol: 'wharfie.activity',
+        protocolVersion: 1,
+        type: 'effect-request',
+        attemptId: delivery.effect.requestedBy.attemptId,
+        sequence: delivery.effect.requestedBy.protocolSequence,
+        effectId: delivery.effect.effectId,
+        capability: delivery.request.capability,
+        operation: delivery.request.operation,
+        input: delivery.request.input,
+        requestedReplayProperties: delivery.request.requestedReplayProperties,
+      };
+      const applicationDb = await dbConfigModule.createApplicationStateDBClient(
+        'lmdb',
+        { path: options.applicationStatePath },
+      );
+      try {
+        const catalog =
+          await builtinCatalogModule.createBuiltinManagedEffectCatalog({
+            db: applicationDb,
+            appId,
+            adapterName: 'lmdb',
+          });
+        const adapter = catalog.resolve(request);
+        assert.deepEqual(adapter.destination, delivery.effect.destination);
+        return await adapter.execute({
+          destinationEffectId: delivery.effect.destinationEffectId,
+          destination: delivery.effect.destination,
+          identity: {
+            runId,
+            invocationId: delivery.effect.invocationId,
+            attemptId: delivery.effect.startedBy.attemptId,
+            effectId,
+          },
+          request,
+        });
+      } finally {
+        await applicationDb.close();
+      }
+    },
     readApplicationStateDestination: async (
       appId,
       destinationEffectId,
@@ -938,7 +1067,9 @@ async function createInstalledExecutionLedgerFixture(options) {
           businessKey.resourceId,
           businessKey.sortKey,
         );
-        return { receipt, business };
+        const resolution =
+          await table.readNotAppliedResolution(destinationEffectId);
+        return { receipt, resolution, business };
       } finally {
         await applicationDb.close();
       }
@@ -968,6 +1099,8 @@ async function createInstalledExecutionLedgerFixture(options) {
     },
     ApplicationStateAdapterDescriptor:
       applicationStateEffectModule.APPLICATION_STATE_ADAPTER_DESCRIPTOR,
+    ApplicationStateReconciliationVerifierDescriptor:
+      applicationStateEffectModule.APPLICATION_STATE_RECONCILIATION_VERIFIER_DESCRIPTOR,
     AttemptStatus: ledgerModule.AttemptStatus,
     EffectStatus: ledgerModule.EffectStatus,
     InvocationStatus: ledgerModule.InvocationStatus,
@@ -989,6 +1122,19 @@ function assertManagedEffectOperatorRedaction(
   view,
   expected,
 ) {
+  for (const attempt of view.attempts) {
+    assert.deepEqual(Object.keys(attempt).sort(), [
+      'attemptId',
+      'claimedAt',
+      'generation',
+      'invocationId',
+      'lastSequence',
+      'startedAt',
+      'status',
+      'updatedAt',
+      'version',
+    ]);
+  }
   assert.equal(view.effects.length, fixture.effects.length);
   const rowsByEffectId = new Map(
     view.effects.map((/** @type {Record<string, any>} */ effect) => [
@@ -1015,7 +1161,6 @@ function assertManagedEffectOperatorRedaction(
   for (const event of view.history) {
     assert.deepEqual(Object.keys(event).sort(), [
       'actor',
-      'fence',
       'observedAt',
       'sequence',
       'type',
@@ -1031,6 +1176,9 @@ function assertManagedEffectOperatorRedaction(
     'destinationEffectId',
     'destination',
     'evidence',
+    'coordinatorEpoch',
+    'invocationGeneration',
+    '"fence"',
     'fencingToken',
   ]) {
     assert.equal(
@@ -1081,7 +1229,7 @@ function assertManagedEffectBatchInspectionView(serialized, fixture, adapter) {
     'run',
     'schemaVersion',
   ]);
-  assert.equal(view.schemaVersion, 4);
+  assert.equal(view.schemaVersion, 5);
   assert.equal(view.kind, 'wharfie.execution-ledger.run');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, fixture.runId);
@@ -1132,7 +1280,7 @@ function assertManagedEffectBatchRecoveryView(serialized, fixture, expected) {
     'run',
     'schemaVersion',
   ]);
-  assert.equal(view.schemaVersion, 4);
+  assert.equal(view.schemaVersion, 5);
   assert.equal(view.kind, 'wharfie.execution-ledger.recovery');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, fixture.runId);
@@ -1370,7 +1518,7 @@ function assertSettledManagedEffectBatchRun(
 
 /**
  * Read exact receipt and business authority for every batch member.
- * @param {{readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, business: Record<string, any> | null}>}} ledgerFixture - Installed fixture reader.
+ * @param {{readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}>}} ledgerFixture - Installed fixture reader.
  * @param {string} appId - Packaged application identity.
  * @param {{effects: {effectId: string, destinationEffectId: string, requestKey: string}[]}} batch - Seeded batch.
  * @returns {Promise<Record<string, any>>} - Stable destination snapshots by effect.
@@ -1408,6 +1556,26 @@ async function readManagedEffectBatchDeliveries(ledgerFixture, batch) {
       ]),
     ),
   );
+}
+
+/**
+ * Prove one sibling's effect/request/attempt authority is unchanged while the
+ * enclosing run and invocation legitimately advance for another effect.
+ * @param {Record<string, any>} before - Delivery before aggregate advance.
+ * @param {Record<string, any>} after - Delivery after aggregate advance.
+ * @param {string} label - Assertion context.
+ * @returns {void}
+ */
+function assertManagedEffectSiblingDeliveryStable(before, after, label) {
+  assert.ok(before, `${label} has no prior delivery`);
+  assert.ok(after, `${label} has no current delivery`);
+  const beforeStable = { ...before };
+  const afterStable = { ...after };
+  delete beforeStable.run;
+  delete beforeStable.invocation;
+  delete afterStable.run;
+  delete afterStable.invocation;
+  assert.deepEqual(afterStable, beforeStable, label);
 }
 
 /**
@@ -1478,6 +1646,371 @@ async function assertSettledManagedEffectBatchDeliveries(
     terminalDeliveryAuthority(before['04-terminal']),
     'settlement rewrote existing terminal delivery authority',
   );
+}
+
+/**
+ * Assert the singular V8 event advances only one uncertain effect while the
+ * enclosing stopped attempt and every sibling remain exact retained history.
+ * @param {Record<string, any>} before - Verified run immediately before reconciliation.
+ * @param {Record<string, any>} after - Verified run immediately after reconciliation.
+ * @param {{effects: {effectId: string}[]}} batch - Shared stopped-effect batch.
+ * @param {{effectId: string, reconciliationId: string, status: 'COMPLETED'|'NOT_APPLIED', actor: Record<string, any>, reason: string, verifier: Record<string, any>}} expected - Exact reconciliation authority.
+ * @returns {{event: Record<string, any>, effect: Record<string, any>, reconciliation: Record<string, any>}} - Verified appended authority.
+ */
+function assertUncertainManagedEffectReconciliationRun(
+  before,
+  after,
+  batch,
+  expected,
+) {
+  assert.deepEqual(Object.keys(after).sort(), Object.keys(before).sort());
+  assert.equal(before.run.status, 'BLOCKED');
+  assert.equal(after.run.status, 'BLOCKED');
+  assert.equal(before.invocations.length, 1);
+  assert.equal(after.invocations.length, 1);
+  assert.equal(before.attempts.length, 1);
+  assert.equal(after.attempts.length, 1);
+  assert.equal(before.effects.length, batch.effects.length);
+  assert.equal(after.effects.length, batch.effects.length);
+  assert.deepEqual(after.events.slice(0, before.events.length), before.events);
+  assert.equal(after.events.length, before.events.length + 1);
+
+  const event = after.events.at(-1);
+  assert.equal(event.type, 'uncertain-effect-reconciled');
+  assert.equal(
+    event.transition_id,
+    `reconcile-effect:${expected.reconciliationId}`,
+  );
+  assert.equal(event.sequence, before.head.sequence + 1);
+  assert.deepEqual(event.actor, expected.actor);
+  assert.deepEqual(after.head, {
+    ...before.head,
+    version: before.head.version + 1,
+    sequence: event.sequence,
+  });
+
+  const expectedRun = {
+    ...before.run,
+    version: before.run.version + 1,
+    lastSequence: event.sequence,
+    updatedAt: event.observed_at,
+  };
+  const expectedInvocation = {
+    ...before.invocations[0],
+    version: before.invocations[0].version + 1,
+    lastSequence: event.sequence,
+    updatedAt: event.observed_at,
+  };
+  assert.deepEqual(after.run, expectedRun);
+  assert.deepEqual(after.invocations[0], expectedInvocation);
+  assert.deepEqual(
+    after.attempts[0],
+    before.attempts[0],
+    `${expected.effectId} reconciliation rewrote its abandoned physical attempt`,
+  );
+
+  const beforeById = new Map(
+    before.effects.map((/** @type {Record<string, any>} */ effect) => [
+      effect.effectId,
+      effect,
+    ]),
+  );
+  const afterById = new Map(
+    after.effects.map((/** @type {Record<string, any>} */ effect) => [
+      effect.effectId,
+      effect,
+    ]),
+  );
+  assert.deepEqual(
+    [...afterById.keys()],
+    [...beforeById.keys()],
+    `${expected.effectId} reconciliation reordered effect projections`,
+  );
+  for (const effect of batch.effects) {
+    if (effect.effectId === expected.effectId) continue;
+    assert.deepEqual(
+      afterById.get(effect.effectId),
+      beforeById.get(effect.effectId),
+      `${expected.effectId} reconciliation rewrote sibling ${effect.effectId}`,
+    );
+  }
+
+  const priorEffect = beforeById.get(expected.effectId);
+  const effect = afterById.get(expected.effectId);
+  assert.ok(priorEffect, `missing pre-reconciliation ${expected.effectId}`);
+  assert.ok(effect, `missing reconciled ${expected.effectId}`);
+  assert.equal(priorEffect.status, 'UNCERTAIN');
+  const uncertaintyEvent = before.events.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.sequence === priorEffect.lastSequence,
+  );
+  assert.ok(
+    uncertaintyEvent &&
+      ['effect-became-uncertain', 'attempt-became-uncertain'].includes(
+        uncertaintyEvent.type,
+      ),
+    `${expected.effectId} has no retained uncertainty event`,
+  );
+
+  const reconciliation = effect.reconciliation;
+  assert.ok(reconciliation, `${expected.effectId} omitted reconciliation`);
+  assert.deepEqual(Object.keys(reconciliation).sort(), [
+    'attemptId',
+    'coordinatorEpoch',
+    'effectId',
+    'evidenceRef',
+    'fencingToken',
+    'generation',
+    'invocationId',
+    'reason',
+    'reconciliationId',
+    'resolutionStatus',
+    'uncertaintyEventId',
+    'uncertaintySequence',
+    'verifier',
+  ]);
+  assert.deepEqual(reconciliation, {
+    reconciliationId: expected.reconciliationId,
+    invocationId: priorEffect.invocationId,
+    attemptId: before.attempts[0].attemptId,
+    effectId: expected.effectId,
+    generation: before.attempts[0].generation,
+    coordinatorEpoch: before.attempts[0].coordinatorEpoch,
+    fencingToken: before.attempts[0].fencingToken,
+    uncertaintyEventId: uncertaintyEvent.event_id,
+    uncertaintySequence: uncertaintyEvent.sequence,
+    verifier: expected.verifier,
+    evidenceRef: reconciliation.evidenceRef,
+    resolutionStatus: expected.status,
+    reason: {
+      kind: 'operator-managed-effect-reconciliation',
+      reconciliationId: expected.reconciliationId,
+      message: expected.reason,
+    },
+  });
+  assert.deepEqual(Object.keys(reconciliation.evidenceRef).sort(), [
+    'digest',
+    'kind',
+    'mediaType',
+    'payloadId',
+    'payloadSchema',
+    'schemaVersion',
+    'size',
+    'storage',
+  ]);
+  assert.equal(reconciliation.evidenceRef.schemaVersion, 1);
+  assert.equal(reconciliation.evidenceRef.kind, 'executionPayloadReference');
+  assert.equal(reconciliation.evidenceRef.mediaType, 'application/json');
+  assert.equal(
+    reconciliation.evidenceRef.payloadSchema,
+    expected.status === 'COMPLETED'
+      ? 'wharfie.execution.managed-effect-outcome.v2'
+      : 'wharfie.execution.managed-effect-reconciliation-evidence.v1',
+  );
+
+  const intendedEffect = {
+    ...priorEffect,
+    status: expected.status,
+    reconciliation,
+    ...(expected.status === 'COMPLETED'
+      ? {
+          terminal: { ok: true },
+          outcomeRef: reconciliation.evidenceRef,
+        }
+      : {}),
+    version: priorEffect.version + 1,
+    lastSequence: event.sequence,
+    updatedAt: event.observed_at,
+  };
+  delete intendedEffect.uncertainty;
+  assert.deepEqual(effect, intendedEffect);
+  assert.deepEqual(event.fence, {
+    coordinatorEpoch: before.attempts[0].coordinatorEpoch,
+    invocationGeneration: before.attempts[0].generation,
+  });
+  assert.deepEqual(event.payload, {
+    run: expectedRun,
+    invocation: expectedInvocation,
+    effect: intendedEffect,
+    reconciliation,
+  });
+  return { event, effect, reconciliation };
+}
+
+/**
+ * Assert the public response contains the exact safe effect disposition and
+ * mirrors the verified raw event stream without exposing destination truth.
+ * @param {string} serialized - Exact one-line packaged JSON response.
+ * @param {{runId: string, storeId: string, effects: {effectId: string, destinationEffectId: string, requestKey: string}[], secrets: string[]}} batch - Shared retained batch.
+ * @param {Record<string, any>} raw - Verified rebuilt run behind the response.
+ * @param {{effectId: string, reconciliationId: string, status: string, changed: boolean, privateReason: string, adapter: Record<string, any>, extraSecrets?: string[]}} expected - Public and private authority.
+ * @returns {Record<string, any>} - Parsed redacted view.
+ */
+function assertManagedEffectReconciliationView(
+  serialized,
+  batch,
+  raw,
+  expected,
+) {
+  const view = JSON.parse(serialized);
+  assert.deepEqual(Object.keys(view).sort(), [
+    'attempts',
+    'effectReconciliation',
+    'effects',
+    'history',
+    'integrity',
+    'invocations',
+    'kind',
+    'run',
+    'schemaVersion',
+  ]);
+  assert.equal(view.schemaVersion, 5);
+  assert.equal(view.kind, 'wharfie.execution-ledger.effect-reconciliation');
+  assert.deepEqual(view.integrity, { verified: true });
+  assert.equal(view.run.runId, batch.runId);
+  assert.equal(view.run.status, 'BLOCKED');
+  assert.equal(view.invocations.length, 1);
+  assert.equal(view.invocations[0].status, 'UNCERTAIN');
+  assert.equal(view.attempts.length, 1);
+  assert.equal(view.attempts[0].status, 'ABANDONED');
+  assert.deepEqual(view.effectReconciliation, {
+    reconciliationId: expected.reconciliationId,
+    effectId: expected.effectId,
+    status: expected.status,
+    changed: expected.changed,
+  });
+  assertManagedEffectOperatorRedaction(serialized, batch, view, {
+    adapter: expected.adapter,
+    statuses: new Map(
+      raw.effects.map((effect) => [effect.effectId, effect.status]),
+    ),
+  });
+  assert.deepEqual(
+    view.history,
+    raw.events.map((/** @type {Record<string, any>} */ event) => ({
+      sequence: event.sequence,
+      type: event.type,
+      observedAt: event.observed_at,
+      actor: event.actor,
+    })),
+  );
+  for (const secret of [
+    expected.privateReason,
+    'resolutionDigest',
+    'businessObservation',
+    'contractDigest',
+    'receiptDigest',
+    'outcomeRef',
+    'evidenceRef',
+    'coordinatorEpoch',
+    'invocationGeneration',
+    '"fence"',
+    ...(expected.extraSecrets || []),
+  ]) {
+    assert.equal(
+      serialized.includes(secret),
+      false,
+      `${expected.effectId} reconciliation disclosed ${secret}`,
+    );
+  }
+  return view;
+}
+
+/**
+ * Bind one reconciliation reference to its exact immutable payload file and
+ * destination record without relying on the redacted operator response.
+ * @param {{readExecutionPayload: (reference: Record<string, any>) => Promise<any>, payloadStoreId: string}} fixture - Installed fixture payload reader.
+ * @param {Record<string, any>} effect - Reconciled effect projection.
+ * @param {{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}} destination - Exact physical destination snapshot.
+ * @param {{files: {key: string, size: number, sha256: string}[]}} payloadStorage - Physical immutable payload snapshot.
+ * @returns {Promise<Record<string, any>>} - Verified referenced payload.
+ */
+async function assertManagedEffectReconciliationPayload(
+  fixture,
+  effect,
+  destination,
+  payloadStorage,
+) {
+  const reference = effect.reconciliation.evidenceRef;
+  const file = payloadStorage.files.find(
+    (candidate) => candidate.key === reference.storage.key,
+  );
+  assert.ok(file, `${effect.effectId} reconciliation payload is not physical`);
+  assert.deepEqual(reference.storage, {
+    kind: 'wharfie.local-content-addressed.v1',
+    storeId: fixture.payloadStoreId,
+    key: file.key,
+  });
+  assert.equal(reference.size, file.size);
+  assert.deepEqual(reference.digest, {
+    algorithm: 'sha256',
+    value: Buffer.from(file.sha256, 'hex').toString('base64url'),
+  });
+  const payload = JSON.parse(
+    JSON.stringify(await fixture.readExecutionPayload(reference)),
+  );
+  const destinationStoreId = effect.destination.configuration.storeId;
+  if (effect.status === 'COMPLETED') {
+    assert.ok(destination.receipt);
+    assert.ok(destination.business);
+    assert.equal(destination.resolution, null);
+    assert.equal(destination.receipt.store_id, destinationStoreId);
+    assert.equal(destination.business.store_id, destinationStoreId);
+    assert.equal(
+      destination.receipt.business_resource_id,
+      destination.business.resource_id,
+    );
+    assert.equal(
+      destination.receipt.business_sort_key,
+      destination.business.sort_key,
+    );
+    assert.equal(
+      destination.receipt.business_record_digest,
+      destination.business.record_digest,
+    );
+    assert.equal(
+      destination.business.created_by_destination_effect_id,
+      effect.destinationEffectId,
+    );
+    assert.equal(
+      destination.business.contract_digest,
+      destination.receipt.contract_digest,
+    );
+    assert.equal(payload.ok, true);
+    assert.deepEqual(payload.result, { inserted: true });
+    assert.deepEqual(payload.evidence, {
+      kind: 'application-state-put-if-absent-receipt',
+      version: 2,
+      destinationEffectId: effect.destinationEffectId,
+      contractDigest: destination.receipt.contract_digest,
+      receiptDigest: destination.receipt.receipt_digest,
+      businessRecordDigest: destination.receipt.business_record_digest,
+      disposition: destination.receipt.outcome_code,
+    });
+  } else {
+    assert.equal(effect.status, 'NOT_APPLIED');
+    assert.equal(destination.receipt, null);
+    assert.equal(destination.business, null);
+    assert.ok(destination.resolution);
+    assert.equal(destination.resolution.store_id, destinationStoreId);
+    assert.equal(
+      destination.resolution.destination_effect_id,
+      effect.destinationEffectId,
+    );
+    assert.deepEqual(destination.resolution.business_observation, {
+      kind: 'absent',
+    });
+    assert.deepEqual(payload, {
+      kind: 'application-state-put-if-absent-not-applied',
+      version: 2,
+      destinationEffectId: effect.destinationEffectId,
+      contractDigest: destination.resolution.contract_digest,
+      resolutionDigest: destination.resolution.resolution_digest,
+      businessObservation: destination.resolution.business_observation,
+      disposition: 'not-applied',
+    });
+  }
+  return payload;
 }
 
 /**
@@ -1882,7 +2415,7 @@ async function resumeToSeaCrashBoundary(
  * entry are never entered.
  * @param {string} artifactPath - Relocated standalone SEA.
  * @param {string[]} args - Packaged command arguments.
- * @param {{cwd: string, env: Record<string, string>, installedPackageRoot: string, label: string}} options - Guard inputs.
+ * @param {{cwd: string, env: Record<string, string>, installedPackageRoot: string, label: string, forbiddenTargets?: Array<{name: string, target: Record<string, any>}>}} options - Guard inputs.
  * @returns {Promise<{serialized: string, value: Record<string, any>}>} - Exact command response.
  */
 async function runInspectorGuardedSeaJson(artifactPath, args, options) {
@@ -1911,7 +2444,20 @@ async function runInspectorGuardedSeaJson(artifactPath, args, options) {
         SEA_CRASH_DESTINATION_WRITE_BREAKPOINT,
       ),
     );
-    const forbiddenBreakpoints = [adapterBreakpoint, writeBreakpoint];
+    const additionalForbiddenBreakpoints = await Promise.all(
+      (options.forbiddenTargets || []).map(
+        async ({ name, target }) =>
+          await inspector.setSourceBreakpoint(
+            name,
+            bindInstalledBreakpointSource(options.installedPackageRoot, target),
+          ),
+      ),
+    );
+    const forbiddenBreakpoints = [
+      adapterBreakpoint,
+      writeBreakpoint,
+      ...additionalForbiddenBreakpoints,
+    ];
     const pause = inspector.waitForPause().then(
       (value) => ({ kind: 'pause', value }),
       (error) => ({ kind: 'inspector-error', error }),
@@ -2030,7 +2576,7 @@ function terminalDeliveryAuthority(delivery) {
  * @returns {void}
  */
 function assertSeaCrashRecoveryView(serialized, view, scenario, expected) {
-  assert.equal(view.schemaVersion, 4);
+  assert.equal(view.schemaVersion, 5);
   assert.equal(view.kind, 'wharfie.execution-ledger.recovery');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, expected.runId);
@@ -2952,6 +3498,940 @@ async function verifyRelocatedSeaMixedSettlementCrashMatrix(options) {
   }
 }
 
+/**
+ * Exercise destination-backed reconciliation through one relocated SEA and
+ * one shared stopped attempt. Four uncertain siblings prove the late-receipt
+ * terminal plus destination-resolution, payload-publication, and ledger-
+ * response crashes without dispatching authored activity or a normal adapter.
+ * @param {{artifactPath: string, appId: string, cleanEnvironment: Record<string, string>, installedPackageRoot: string, revisionId: string, root: string}} options - Matrix inputs.
+ * @returns {Promise<void>} - Resolves after every disposition and replay is exact.
+ */
+async function verifyRelocatedSeaEffectReconciliationCrashMatrix(options) {
+  const caseRoot = options.root;
+  const controlPath = path.join(caseRoot, 'control');
+  const payloadPath = path.join(controlPath, 'execution-payloads');
+  const sessionPath = path.join(caseRoot, 'sessions');
+  const applicationStatePath = path.join(caseRoot, 'application-state');
+  const markerPath = path.join(caseRoot, 'authored-activity-must-not-run.json');
+  const tableName = 'wharfie-package-sea-effect-reconciliation-crash-matrix';
+  const packagedActor = {
+    kind: 'packaged-operator',
+    id: options.revisionId,
+  };
+  const staleEndpoints = new Set();
+  mkdirSync(caseRoot, { recursive: true, mode: 0o700 });
+  const environment = {
+    ...options.cleanEnvironment,
+    WHARFIE_CONTROL_ADAPTER: 'lmdb',
+    WHARFIE_CONTROL_PATH: controlPath,
+    WHARFIE_EXECUTION_LEDGER_TABLE: tableName,
+    WHARFIE_EXECUTION_PAYLOAD_PATH: payloadPath,
+    WHARFIE_LEDGER_SERVICE_SESSION_PATH: sessionPath,
+    WHARFIE_APPLICATION_STATE_ADAPTER: 'lmdb',
+    WHARFIE_APPLICATION_STATE_PATH: applicationStatePath,
+  };
+  const fixture = await createInstalledExecutionLedgerFixture({
+    installedPackageRoot: options.installedPackageRoot,
+    controlPath,
+    tableName,
+    payloadPath,
+    applicationStatePath,
+    revisionId: options.revisionId,
+  });
+  const lifecycle = await createInstalledLedgerLifecycleObserver({
+    installedPackageRoot: options.installedPackageRoot,
+    controlPath,
+    tableName,
+    appId: options.appId,
+  });
+  const forbiddenActivityTarget = {
+    name: 'authored-activity-dispatch',
+    target: SEA_ACTIVITY_DISPATCH_BREAKPOINT,
+  };
+  const forbiddenAppCliTarget = {
+    name: 'authored-app-cli-dispatch',
+    target: SEA_APP_CLI_DISPATCH_BREAKPOINT,
+  };
+  const forbiddenResolutionWriteTarget = {
+    name: 'application-state-resolution-write',
+    target: SEA_EFFECT_RESOLUTION_WRITE_BREAKPOINT,
+  };
+  const unavailableNode = spawnSync('node', ['--version'], {
+    encoding: 'utf8',
+    env: environment,
+  });
+  assert.equal(
+    unavailableNode.error?.code,
+    'ENOENT',
+    'Effect reconciliation matrix unexpectedly exposes a Node executable',
+  );
+
+  try {
+    const batch = await fixture.createApplicationStateRecoveryBatchRun(
+      options.appId,
+      'sea-effect-reconciliation-crash-matrix',
+      [...SEA_EFFECT_RECONCILIATION_SPECS],
+    );
+    const seededRun = await fixture.readRun(batch.runId);
+    assert.ok(seededRun, 'effect reconciliation matrix retained no seeded run');
+    assert.equal(seededRun.run.status, 'RUNNING');
+    assert.equal(seededRun.invocations[0].status, 'RUNNING');
+    assert.equal(seededRun.attempts[0].status, 'STARTED');
+    assert.deepEqual(
+      seededRun.effects.map((effect) => effect.status),
+      Array.from({ length: batch.effects.length }, () => 'STARTED'),
+    );
+    const seededPayload = readPayloadStorageSnapshot(payloadPath, seededRun);
+    const seededDestinations = await readManagedEffectBatchDestinations(
+      fixture,
+      options.appId,
+      batch,
+    );
+    for (const effect of batch.effects) {
+      assert.deepEqual(seededDestinations[effect.effectId], {
+        receipt: null,
+        resolution: null,
+        business: null,
+      });
+    }
+
+    const recoveryArgs = [
+      'wharfie',
+      'recover',
+      '--run-id',
+      batch.runId,
+      '--confirm-runner-stopped',
+      '--json',
+    ];
+    const recovery = await runInspectorGuardedSeaJson(
+      options.artifactPath,
+      recoveryArgs,
+      {
+        cwd: caseRoot,
+        env: environment,
+        installedPackageRoot: options.installedPackageRoot,
+        label: 'effect reconciliation stopped-attempt setup',
+        forbiddenTargets: [
+          forbiddenActivityTarget,
+          forbiddenAppCliTarget,
+          forbiddenResolutionWriteTarget,
+        ],
+      },
+    );
+    assertManagedEffectBatchRecoveryView(recovery.serialized, batch, {
+      adapter: fixture.ApplicationStateAdapterDescriptor,
+      actor: packagedActor,
+    });
+    const stoppedRun = await fixture.readRun(batch.runId);
+    assert.ok(stoppedRun, 'effect reconciliation recovery lost its run');
+    assertSettledManagedEffectBatchRun(
+      seededRun,
+      stoppedRun,
+      batch,
+      packagedActor,
+      /** @type {any} */ ({}),
+    );
+    assert.equal(stoppedRun.run.status, 'BLOCKED');
+    assert.equal(stoppedRun.invocations[0].status, 'UNCERTAIN');
+    assert.equal(stoppedRun.attempts[0].status, 'ABANDONED');
+    assert.deepEqual(
+      stoppedRun.effects.map((effect) => effect.status),
+      Array.from({ length: batch.effects.length }, () => 'UNCERTAIN'),
+    );
+    assert.deepEqual(
+      readPayloadStorageSnapshot(payloadPath, stoppedRun),
+      seededPayload,
+      'absence-only stopped recovery changed immutable payload storage',
+    );
+    assert.deepEqual(
+      await readManagedEffectBatchDestinations(fixture, options.appId, batch),
+      seededDestinations,
+      'absence-only stopped recovery changed application state',
+    );
+    assert.equal(await lifecycle.readOwnership(), null);
+    assert.equal(existsSync(markerPath), false);
+
+    const lateReceiptEffectId = SEA_EFFECT_RECONCILIATION_SPECS[0].effectId;
+    const beforeLateReceiptRun = await fixture.readRun(batch.runId);
+    assert.ok(beforeLateReceiptRun, 'late receipt setup lost its durable run');
+    const beforeLateReceiptPayload = readPayloadStorageSnapshot(
+      payloadPath,
+      beforeLateReceiptRun,
+    );
+    const lateOutcome = await fixture.materializeApplicationStateReceipt(
+      options.appId,
+      batch.runId,
+      lateReceiptEffectId,
+    );
+    assert.deepEqual(lateOutcome.result, { inserted: true });
+    assert.deepEqual(
+      await fixture.readRun(batch.runId),
+      beforeLateReceiptRun,
+      'late destination receipt rewrote control-ledger uncertainty',
+    );
+    assert.deepEqual(
+      readPayloadStorageSnapshot(payloadPath, beforeLateReceiptRun),
+      beforeLateReceiptPayload,
+      'late destination receipt changed execution payload storage',
+    );
+    const destinationsAfterLateReceipt =
+      await readManagedEffectBatchDestinations(fixture, options.appId, batch);
+    assert.ok(destinationsAfterLateReceipt[lateReceiptEffectId].receipt);
+    assert.ok(destinationsAfterLateReceipt[lateReceiptEffectId].business);
+    assert.equal(
+      destinationsAfterLateReceipt[lateReceiptEffectId].resolution,
+      null,
+    );
+    for (const effect of batch.effects.slice(1)) {
+      assert.deepEqual(
+        destinationsAfterLateReceipt[effect.effectId],
+        seededDestinations[effect.effectId],
+      );
+    }
+
+    const lateReconciliationId = 'sea-late-receipt-reconciliation';
+    const latePrivateReason = `sea-private-late-receipt-${randomUUID()}`;
+    const lateArgs = [
+      'wharfie',
+      'reconcile-effect',
+      '--run-id',
+      batch.runId,
+      '--effect-id',
+      lateReceiptEffectId,
+      '--reconciliation-id',
+      lateReconciliationId,
+      '--confirm-runner-stopped',
+      '--reason',
+      latePrivateReason,
+      '--json',
+    ];
+    const lateBefore = await fixture.readRun(batch.runId);
+    assert.ok(lateBefore, 'late receipt reconciliation lost its durable run');
+    const latePayloadBefore = readPayloadStorageSnapshot(
+      payloadPath,
+      lateBefore,
+    );
+    const lateDeliveriesBefore = await readManagedEffectBatchDeliveries(
+      fixture,
+      batch,
+    );
+    const lateDeliveryBefore = lateDeliveriesBefore[lateReceiptEffectId];
+    assert.ok(lateDeliveryBefore, 'late receipt reconciliation lost delivery');
+    const lateResponse = await runInspectorGuardedSeaJson(
+      options.artifactPath,
+      lateArgs,
+      {
+        cwd: caseRoot,
+        env: environment,
+        installedPackageRoot: options.installedPackageRoot,
+        label: 'receipt-backed effect reconciliation',
+        forbiddenTargets: [
+          forbiddenActivityTarget,
+          forbiddenAppCliTarget,
+          forbiddenResolutionWriteTarget,
+        ],
+      },
+    );
+    const lateAfter = await fixture.readRun(batch.runId);
+    assert.ok(lateAfter, 'receipt-backed reconciliation lost its run');
+    const lateTargetBefore = lateBefore.effects.find(
+      (effect) => effect.effectId === lateReceiptEffectId,
+    );
+    assert.ok(lateTargetBefore, 'late receipt target is not retained');
+    const lateAuthority = assertUncertainManagedEffectReconciliationRun(
+      lateBefore,
+      lateAfter,
+      batch,
+      {
+        effectId: lateReceiptEffectId,
+        reconciliationId: lateReconciliationId,
+        status: 'COMPLETED',
+        actor: packagedActor,
+        reason: latePrivateReason,
+        verifier: lateTargetBefore.verifier,
+      },
+    );
+    const latePayloadAfter = readPayloadStorageSnapshot(payloadPath, lateAfter);
+    assert.equal(
+      latePayloadAfter.physical.length,
+      latePayloadBefore.physical.length + 1,
+    );
+    assert.equal(
+      latePayloadAfter.reachable.length,
+      latePayloadBefore.reachable.length + 1,
+    );
+    assert.deepEqual(latePayloadAfter.orphans, []);
+    assert.deepEqual(
+      latePayloadAfter.physical.filter(
+        (key) => !latePayloadBefore.physical.includes(key),
+      ),
+      [lateAuthority.reconciliation.evidenceRef.storage.key],
+    );
+    const lateDestinations = await readManagedEffectBatchDestinations(
+      fixture,
+      options.appId,
+      batch,
+    );
+    assert.deepEqual(lateDestinations, destinationsAfterLateReceipt);
+    await assertManagedEffectReconciliationPayload(
+      fixture,
+      lateAuthority.effect,
+      lateDestinations[lateReceiptEffectId],
+      latePayloadAfter,
+    );
+    assertManagedEffectReconciliationView(
+      lateResponse.serialized,
+      batch,
+      lateAfter,
+      {
+        effectId: lateReceiptEffectId,
+        reconciliationId: lateReconciliationId,
+        status: 'COMPLETED',
+        changed: true,
+        privateReason: latePrivateReason,
+        adapter: fixture.ApplicationStateAdapterDescriptor,
+        extraSecrets: [
+          applicationStatePath,
+          controlPath,
+          lateDestinations[lateReceiptEffectId].receipt.contract_digest,
+          lateDestinations[lateReceiptEffectId].receipt.receipt_digest,
+          lateDestinations[lateReceiptEffectId].business.record_digest,
+        ],
+      },
+    );
+    const lateDeliveriesAfter = await readManagedEffectBatchDeliveries(
+      fixture,
+      batch,
+    );
+    const lateDeliveryAfter = lateDeliveriesAfter[lateReceiptEffectId];
+    assert.ok(lateDeliveryAfter, 'late receipt reconciliation lost delivery');
+    assert.deepEqual(lateDeliveryAfter.request, lateDeliveryBefore.request);
+    assert.equal(lateDeliveryAfter.effect.status, 'COMPLETED');
+    assert.deepEqual(lateDeliveryAfter.resultFrame.result, { inserted: true });
+    assert.deepEqual(lateDeliveryAfter.outcomeRef, undefined);
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(lateDeliveryAfter.outcome)),
+      JSON.parse(
+        JSON.stringify(
+          await fixture.readExecutionPayload(
+            lateAuthority.reconciliation.evidenceRef,
+          ),
+        ),
+      ),
+    );
+    for (const effect of batch.effects.slice(1)) {
+      assertManagedEffectSiblingDeliveryStable(
+        lateDeliveriesBefore[effect.effectId],
+        lateDeliveriesAfter[effect.effectId],
+        `late receipt reconciliation rewrote sibling delivery ${effect.effectId}`,
+      );
+    }
+    assert.equal(await lifecycle.readOwnership(), null);
+    assert.equal(existsSync(markerPath), false);
+
+    const lateReplay = await runInspectorGuardedSeaJson(
+      options.artifactPath,
+      lateArgs,
+      {
+        cwd: caseRoot,
+        env: environment,
+        installedPackageRoot: options.installedPackageRoot,
+        label: 'receipt-backed effect reconciliation replay',
+        forbiddenTargets: [
+          forbiddenActivityTarget,
+          forbiddenAppCliTarget,
+          forbiddenResolutionWriteTarget,
+        ],
+      },
+    );
+    assertManagedEffectReconciliationView(
+      lateReplay.serialized,
+      batch,
+      lateAfter,
+      {
+        effectId: lateReceiptEffectId,
+        reconciliationId: lateReconciliationId,
+        status: 'COMPLETED',
+        changed: false,
+        privateReason: latePrivateReason,
+        adapter: fixture.ApplicationStateAdapterDescriptor,
+        extraSecrets: [
+          applicationStatePath,
+          controlPath,
+          lateDestinations[lateReceiptEffectId].receipt.contract_digest,
+          lateDestinations[lateReceiptEffectId].receipt.receipt_digest,
+          lateDestinations[lateReceiptEffectId].business.record_digest,
+        ],
+      },
+    );
+    assert.deepEqual(await fixture.readRun(batch.runId), lateAfter);
+    assert.deepEqual(
+      readPayloadStorageSnapshot(payloadPath, lateAfter),
+      latePayloadAfter,
+    );
+    assert.deepEqual(
+      await readManagedEffectBatchDestinations(fixture, options.appId, batch),
+      lateDestinations,
+    );
+    assert.deepEqual(
+      await readManagedEffectBatchDeliveries(fixture, batch),
+      lateDeliveriesAfter,
+    );
+
+    let currentRun = lateAfter;
+    let currentPayload = latePayloadAfter;
+    let currentDestinations = lateDestinations;
+    for (const scenario of SEA_EFFECT_RECONCILIATION_CRASH_CASES) {
+      const privateReason = `sea-private-${scenario.effectId}-${randomUUID()}`;
+      const reconciliationArgs = [
+        'wharfie',
+        'reconcile-effect',
+        '--run-id',
+        batch.runId,
+        '--effect-id',
+        scenario.effectId,
+        '--reconciliation-id',
+        scenario.reconciliationId,
+        '--confirm-runner-stopped',
+        '--reason',
+        privateReason,
+        '--json',
+      ];
+      const beforeRun = currentRun;
+      const beforePayload = currentPayload;
+      const beforeDestinations = currentDestinations;
+      const beforeDeliveries = await readManagedEffectBatchDeliveries(
+        fixture,
+        batch,
+      );
+      const beforeTarget = beforeRun.effects.find(
+        (effect) => effect.effectId === scenario.effectId,
+      );
+      assert.ok(beforeTarget);
+      assert.equal(beforeTarget.status, 'UNCERTAIN');
+      /** @type {ReturnType<typeof spawnInspectorPausedProcess> | undefined} */
+      let service;
+      /** @type {Record<string, any> | undefined} */
+      let inspector;
+      /** @type {string | undefined} */
+      let staleEndpoint;
+      try {
+        service = spawnInspectorPausedProcess(
+          options.artifactPath,
+          reconciliationArgs,
+          {
+            cwd: caseRoot,
+            env: environment,
+            timeoutMs: CRASH_RECOVERY_TIMEOUT_MS,
+          },
+        );
+        inspector = await attachSeaInspector(service, {
+          timeoutMs: CRASH_RECOVERY_TIMEOUT_MS,
+        });
+        const resolutionWriteBreakpoint = await inspector.setSourceBreakpoint(
+          'application-state-resolution-write',
+          bindInstalledBreakpointSource(
+            options.installedPackageRoot,
+            SEA_EFFECT_RESOLUTION_WRITE_BREAKPOINT,
+          ),
+        );
+        const targetBreakpoint = await inspector.setSourceBreakpoint(
+          scenario.effectId,
+          bindInstalledBreakpointSource(
+            options.installedPackageRoot,
+            scenario.breakpoint,
+          ),
+        );
+        const normalAdapterBreakpoint = await inspector.setSourceBreakpoint(
+          'forbidden-normal-effect-adapter',
+          bindInstalledBreakpointSource(
+            options.installedPackageRoot,
+            SEA_CRASH_ADAPTER_BREAKPOINT,
+          ),
+        );
+        const normalWriteBreakpoint = await inspector.setSourceBreakpoint(
+          'forbidden-normal-application-state-write',
+          bindInstalledBreakpointSource(
+            options.installedPackageRoot,
+            SEA_CRASH_DESTINATION_WRITE_BREAKPOINT,
+          ),
+        );
+        const activityBreakpoint = await inspector.setSourceBreakpoint(
+          'forbidden-authored-activity-dispatch',
+          bindInstalledBreakpointSource(
+            options.installedPackageRoot,
+            SEA_ACTIVITY_DISPATCH_BREAKPOINT,
+          ),
+        );
+        const appCliBreakpoint = await inspector.setSourceBreakpoint(
+          'forbidden-authored-app-cli-dispatch',
+          bindInstalledBreakpointSource(
+            options.installedPackageRoot,
+            SEA_APP_CLI_DISPATCH_BREAKPOINT,
+          ),
+        );
+        const boundaryEvidence = await resumeToSeaCrashBoundary(
+          inspector,
+          service,
+          {
+            ...scenario,
+            adapterEntries: 1,
+          },
+          resolutionWriteBreakpoint,
+          targetBreakpoint,
+          markerPath,
+          [
+            normalAdapterBreakpoint,
+            normalWriteBreakpoint,
+            activityBreakpoint,
+            appCliBreakpoint,
+          ],
+        );
+        assert.deepEqual(boundaryEvidence, {
+          adapterEntries: 1,
+          marker: null,
+        });
+        assert.equal(
+          service.getOutput().stdout,
+          '',
+          `${scenario.label} returned output before its crash boundary`,
+        );
+        assert.equal(existsSync(markerPath), false);
+
+        const destinationsAtBoundary = await readManagedEffectBatchDestinations(
+          fixture,
+          options.appId,
+          batch,
+        );
+        const targetDestination = destinationsAtBoundary[scenario.effectId];
+        assert.equal(targetDestination.receipt, null);
+        assert.equal(targetDestination.business, null);
+        assert.ok(targetDestination.resolution);
+        assert.deepEqual(
+          {
+            schemaVersion: targetDestination.resolution.schema_version,
+            destinationEffectId:
+              targetDestination.resolution.destination_effect_id,
+            disposition: targetDestination.resolution.disposition,
+            businessObservation:
+              targetDestination.resolution.business_observation,
+          },
+          {
+            schemaVersion: 2,
+            destinationEffectId: beforeTarget.destinationEffectId,
+            disposition: 'not-applied',
+            businessObservation: { kind: 'absent' },
+          },
+        );
+        for (const effect of batch.effects) {
+          if (effect.effectId === scenario.effectId) continue;
+          assert.deepEqual(
+            destinationsAtBoundary[effect.effectId],
+            beforeDestinations[effect.effectId],
+            `${scenario.label} changed sibling destination ${effect.effectId}`,
+          );
+        }
+
+        const runAtBoundary = await fixture.readRun(batch.runId);
+        assert.ok(runAtBoundary, `${scenario.label} lost its durable run`);
+        let authorityAtBoundary;
+        if (scenario.ledgerCommittedAtBoundary) {
+          authorityAtBoundary = assertUncertainManagedEffectReconciliationRun(
+            beforeRun,
+            runAtBoundary,
+            batch,
+            {
+              effectId: scenario.effectId,
+              reconciliationId: scenario.reconciliationId,
+              status: 'NOT_APPLIED',
+              actor: packagedActor,
+              reason: privateReason,
+              verifier:
+                fixture.ApplicationStateReconciliationVerifierDescriptor,
+            },
+          );
+        } else {
+          assert.deepEqual(
+            runAtBoundary,
+            beforeRun,
+            `${scenario.label} changed ledger truth before reconciliation`,
+          );
+        }
+        const payloadAtBoundary = readPayloadStorageSnapshot(
+          payloadPath,
+          runAtBoundary,
+        );
+        if (scenario.ledgerCommittedAtBoundary) {
+          assert.equal(
+            payloadAtBoundary.physical.length,
+            beforePayload.physical.length + 1,
+          );
+          assert.equal(
+            payloadAtBoundary.reachable.length,
+            beforePayload.reachable.length + 1,
+          );
+          assert.deepEqual(payloadAtBoundary.orphans, []);
+          assert.deepEqual(
+            payloadAtBoundary.physical.filter(
+              (key) => !beforePayload.physical.includes(key),
+            ),
+            [authorityAtBoundary.reconciliation.evidenceRef.storage.key],
+          );
+          await assertManagedEffectReconciliationPayload(
+            fixture,
+            authorityAtBoundary.effect,
+            targetDestination,
+            payloadAtBoundary,
+          );
+        } else if (scenario.payloadPublishedAtBoundary) {
+          const publishedKeys = payloadAtBoundary.physical.filter(
+            (key) => !beforePayload.physical.includes(key),
+          );
+          assert.equal(
+            payloadAtBoundary.physical.length,
+            beforePayload.physical.length + 1,
+          );
+          assert.deepEqual(
+            payloadAtBoundary.reachable,
+            beforePayload.reachable,
+          );
+          assert.deepEqual(payloadAtBoundary.orphans, publishedKeys);
+          assert.equal(publishedKeys.length, 1);
+          assert.deepEqual(
+            payloadAtBoundary.files.filter((file) =>
+              publishedKeys.includes(file.key),
+            ).length,
+            1,
+          );
+        } else {
+          assert.deepEqual(
+            payloadAtBoundary,
+            beforePayload,
+            `${scenario.label} published ledger evidence before its boundary`,
+          );
+        }
+        const deliveriesAtBoundary = await readManagedEffectBatchDeliveries(
+          fixture,
+          batch,
+        );
+        if (scenario.ledgerCommittedAtBoundary) {
+          assert.equal(
+            deliveriesAtBoundary[scenario.effectId].effect.status,
+            'NOT_APPLIED',
+          );
+          assert.deepEqual(
+            deliveriesAtBoundary[scenario.effectId].request,
+            beforeDeliveries[scenario.effectId].request,
+          );
+          assert.equal(
+            deliveriesAtBoundary[scenario.effectId].outcome,
+            undefined,
+          );
+          assert.equal(
+            deliveriesAtBoundary[scenario.effectId].resultFrame,
+            undefined,
+          );
+          for (const effect of batch.effects) {
+            if (effect.effectId === scenario.effectId) continue;
+            assertManagedEffectSiblingDeliveryStable(
+              beforeDeliveries[effect.effectId],
+              deliveriesAtBoundary[effect.effectId],
+              `${scenario.label} rewrote sibling delivery ${effect.effectId}`,
+            );
+          }
+        } else {
+          assert.deepEqual(deliveriesAtBoundary, beforeDeliveries);
+        }
+
+        const ownershipBeforeKill = await lifecycle.readOwnership();
+        assert.ok(
+          ownershipBeforeKill,
+          `${scenario.label} has no mutation owner`,
+        );
+        assert.equal(ownershipBeforeKill.appId, options.appId);
+        assert.equal(ownershipBeforeKill.ownerKind, 'manual');
+        staleEndpoint = lifecycle.getSessionEndpoint(
+          ownershipBeforeKill.sessionId,
+          sessionPath,
+        );
+        staleEndpoints.add(staleEndpoint);
+        assert.equal(existsSync(staleEndpoint), true);
+
+        const killed = await signalResidentService(service, 'SIGKILL');
+        assert.deepEqual(killed, { code: null, signal: 'SIGKILL' });
+        inspector.close();
+        inspector = undefined;
+        assert.deepEqual(await lifecycle.readOwnership(), ownershipBeforeKill);
+        assert.deepEqual(await fixture.readRun(batch.runId), runAtBoundary);
+        assert.deepEqual(
+          readPayloadStorageSnapshot(payloadPath, runAtBoundary),
+          payloadAtBoundary,
+        );
+        assert.deepEqual(
+          await readManagedEffectBatchDestinations(
+            fixture,
+            options.appId,
+            batch,
+          ),
+          destinationsAtBoundary,
+        );
+
+        const replay = await runInspectorGuardedSeaJson(
+          options.artifactPath,
+          reconciliationArgs,
+          {
+            cwd: caseRoot,
+            env: environment,
+            installedPackageRoot: options.installedPackageRoot,
+            label: `${scenario.label} restart`,
+            forbiddenTargets: [
+              forbiddenActivityTarget,
+              forbiddenAppCliTarget,
+              forbiddenResolutionWriteTarget,
+            ],
+          },
+        );
+        const runAfterReplay = await fixture.readRun(batch.runId);
+        assert.ok(runAfterReplay, `${scenario.label} replay lost its run`);
+        let finalAuthority;
+        if (scenario.ledgerCommittedAtBoundary) {
+          assert.deepEqual(
+            runAfterReplay,
+            runAtBoundary,
+            `${scenario.label} replay duplicated ledger reconciliation`,
+          );
+          finalAuthority = authorityAtBoundary;
+        } else {
+          finalAuthority = assertUncertainManagedEffectReconciliationRun(
+            beforeRun,
+            runAfterReplay,
+            batch,
+            {
+              effectId: scenario.effectId,
+              reconciliationId: scenario.reconciliationId,
+              status: 'NOT_APPLIED',
+              actor: packagedActor,
+              reason: privateReason,
+              verifier:
+                fixture.ApplicationStateReconciliationVerifierDescriptor,
+            },
+          );
+        }
+        const payloadAfterReplay = readPayloadStorageSnapshot(
+          payloadPath,
+          runAfterReplay,
+        );
+        if (scenario.ledgerCommittedAtBoundary) {
+          assert.deepEqual(payloadAfterReplay, payloadAtBoundary);
+        } else if (scenario.payloadPublishedAtBoundary) {
+          assert.deepEqual(
+            payloadAfterReplay.physical,
+            payloadAtBoundary.physical,
+          );
+          assert.equal(
+            payloadAfterReplay.reachable.length,
+            payloadAtBoundary.reachable.length + 1,
+          );
+          assert.deepEqual(payloadAfterReplay.orphans, []);
+          assert.deepEqual(payloadAtBoundary.orphans, [
+            finalAuthority.reconciliation.evidenceRef.storage.key,
+          ]);
+          assert.deepEqual(payloadAfterReplay.files, payloadAtBoundary.files);
+        } else {
+          assert.equal(
+            payloadAfterReplay.physical.length,
+            payloadAtBoundary.physical.length + 1,
+          );
+          assert.equal(
+            payloadAfterReplay.reachable.length,
+            payloadAtBoundary.reachable.length + 1,
+          );
+          assert.deepEqual(payloadAfterReplay.orphans, []);
+          assert.deepEqual(
+            payloadAfterReplay.physical.filter(
+              (key) => !payloadAtBoundary.physical.includes(key),
+            ),
+            [finalAuthority.reconciliation.evidenceRef.storage.key],
+          );
+        }
+        const destinationsAfterReplay =
+          await readManagedEffectBatchDestinations(
+            fixture,
+            options.appId,
+            batch,
+          );
+        assert.deepEqual(destinationsAfterReplay, destinationsAtBoundary);
+        await assertManagedEffectReconciliationPayload(
+          fixture,
+          finalAuthority.effect,
+          destinationsAfterReplay[scenario.effectId],
+          payloadAfterReplay,
+        );
+        assertManagedEffectReconciliationView(
+          replay.serialized,
+          batch,
+          runAfterReplay,
+          {
+            effectId: scenario.effectId,
+            reconciliationId: scenario.reconciliationId,
+            status: 'NOT_APPLIED',
+            changed: !scenario.ledgerCommittedAtBoundary,
+            privateReason,
+            adapter: fixture.ApplicationStateAdapterDescriptor,
+            extraSecrets: [
+              applicationStatePath,
+              controlPath,
+              destinationsAfterReplay[scenario.effectId].resolution
+                .contract_digest,
+              destinationsAfterReplay[scenario.effectId].resolution
+                .resolution_digest,
+            ],
+          },
+        );
+        const deliveriesAfterReplay = await readManagedEffectBatchDeliveries(
+          fixture,
+          batch,
+        );
+        assert.deepEqual(
+          deliveriesAfterReplay[scenario.effectId].request,
+          beforeDeliveries[scenario.effectId].request,
+        );
+        assert.equal(
+          deliveriesAfterReplay[scenario.effectId].effect.status,
+          'NOT_APPLIED',
+        );
+        assert.equal(
+          deliveriesAfterReplay[scenario.effectId].outcome,
+          undefined,
+        );
+        assert.equal(
+          deliveriesAfterReplay[scenario.effectId].resultFrame,
+          undefined,
+        );
+        for (const effect of batch.effects) {
+          if (effect.effectId === scenario.effectId) continue;
+          assertManagedEffectSiblingDeliveryStable(
+            beforeDeliveries[effect.effectId],
+            deliveriesAfterReplay[effect.effectId],
+            `${scenario.label} replay rewrote sibling delivery ${effect.effectId}`,
+          );
+        }
+        assert.equal(await lifecycle.readOwnership(), null);
+        assert.equal(existsSync(staleEndpoint), true);
+        assert.equal(existsSync(markerPath), false);
+
+        if (!scenario.ledgerCommittedAtBoundary) {
+          const idempotentReplay = await runInspectorGuardedSeaJson(
+            options.artifactPath,
+            reconciliationArgs,
+            {
+              cwd: caseRoot,
+              env: environment,
+              installedPackageRoot: options.installedPackageRoot,
+              label: `${scenario.label} idempotent replay`,
+              forbiddenTargets: [
+                forbiddenActivityTarget,
+                forbiddenAppCliTarget,
+                forbiddenResolutionWriteTarget,
+              ],
+            },
+          );
+          assertManagedEffectReconciliationView(
+            idempotentReplay.serialized,
+            batch,
+            runAfterReplay,
+            {
+              effectId: scenario.effectId,
+              reconciliationId: scenario.reconciliationId,
+              status: 'NOT_APPLIED',
+              changed: false,
+              privateReason,
+              adapter: fixture.ApplicationStateAdapterDescriptor,
+              extraSecrets: [
+                applicationStatePath,
+                controlPath,
+                destinationsAfterReplay[scenario.effectId].resolution
+                  .contract_digest,
+                destinationsAfterReplay[scenario.effectId].resolution
+                  .resolution_digest,
+              ],
+            },
+          );
+          assert.deepEqual(await fixture.readRun(batch.runId), runAfterReplay);
+          assert.deepEqual(
+            readPayloadStorageSnapshot(payloadPath, runAfterReplay),
+            payloadAfterReplay,
+          );
+          assert.deepEqual(
+            await readManagedEffectBatchDestinations(
+              fixture,
+              options.appId,
+              batch,
+            ),
+            destinationsAfterReplay,
+          );
+          assert.deepEqual(
+            await readManagedEffectBatchDeliveries(fixture, batch),
+            deliveriesAfterReplay,
+          );
+        }
+
+        currentRun = runAfterReplay;
+        currentPayload = payloadAfterReplay;
+        currentDestinations = destinationsAfterReplay;
+      } finally {
+        inspector?.close();
+        await stopResidentServiceForCleanup(service);
+      }
+    }
+
+    assert.deepEqual(
+      currentRun.effects.map((effect) => ({
+        effectId: effect.effectId,
+        status: effect.status,
+      })),
+      [
+        { effectId: '01-late-receipt', status: 'COMPLETED' },
+        { effectId: '02-resolution-before-ledger', status: 'NOT_APPLIED' },
+        { effectId: '03-payload-before-ledger', status: 'NOT_APPLIED' },
+        { effectId: '04-ledger-before-response', status: 'NOT_APPLIED' },
+      ],
+    );
+    assert.equal(currentRun.run.status, 'BLOCKED');
+    assert.equal(currentRun.invocations[0].status, 'UNCERTAIN');
+    assert.deepEqual(currentRun.attempts[0], stoppedRun.attempts[0]);
+    assert.deepEqual(
+      currentRun.events.slice(-4).map((event) => event.type),
+      Array.from({ length: 4 }, () => 'uncertain-effect-reconciled'),
+    );
+    assert.ok(currentDestinations['01-late-receipt'].receipt);
+    assert.ok(currentDestinations['01-late-receipt'].business);
+    assert.equal(currentDestinations['01-late-receipt'].resolution, null);
+    for (const effectId of [
+      '02-resolution-before-ledger',
+      '03-payload-before-ledger',
+      '04-ledger-before-response',
+    ]) {
+      assert.equal(currentDestinations[effectId].receipt, null);
+      assert.equal(currentDestinations[effectId].business, null);
+      assert.equal(
+        currentDestinations[effectId].resolution.disposition,
+        'not-applied',
+      );
+      assert.deepEqual(
+        currentDestinations[effectId].resolution.business_observation,
+        { kind: 'absent' },
+      );
+    }
+    assert.deepEqual(currentPayload.orphans, []);
+    assert.equal(existsSync(markerPath), false);
+    assert.equal(await lifecycle.readOwnership(), null);
+  } finally {
+    for (const endpoint of staleEndpoints) rmSync(endpoint, { force: true });
+    rmSync(caseRoot, { recursive: true, force: true });
+  }
+}
+
 if (!['darwin', 'linux'].includes(process.platform)) {
   throw new Error('The real package SEA smoke test requires macOS or Linux');
 }
@@ -3757,6 +5237,14 @@ export default defineApp({
     installedPackageRoot,
     revisionId: packagedArtifact.revisionId,
     root: path.join(cleanRunDirectory, 'mixed-settlement-crash-matrix'),
+  });
+  await verifyRelocatedSeaEffectReconciliationCrashMatrix({
+    artifactPath: cleanArtifactPath,
+    appId: embeddedManifest.app.id,
+    cleanEnvironment,
+    installedPackageRoot,
+    revisionId: packagedArtifact.revisionId,
+    root: path.join(cleanRunDirectory, 'effect-reconciliation-crash-matrix'),
   });
 
   /** @type {ReturnType<typeof spawnResidentService> | undefined} */
@@ -4595,7 +6083,7 @@ export default defineApp({
 
   const artifactSize = statSync(cleanArtifactPath).size;
   process.stdout.write(
-    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
+    `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, relocated-SEA compound-recovery response-loss SIGKILL/restart, and durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH (${artifactSize} bytes)\n`,
   );
 } finally {
   packaged.cleanup();

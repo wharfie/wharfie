@@ -30,6 +30,7 @@ import {
   ExecutionLedgerTransitionConflictError,
   InvocationStatus,
   MANAGED_EFFECT_OUTCOME_PAYLOAD_SCHEMA,
+  MANAGED_EFFECT_RECONCILIATION_EVIDENCE_PAYLOAD_SCHEMA,
   MANAGED_EFFECT_REQUEST_PAYLOAD_SCHEMA,
   RunStatus,
   assertExactKeys,
@@ -54,6 +55,7 @@ import {
   normalizePayloadReference,
   normalizeReplayProperties,
   verifyManagedEffectOutcome,
+  verifyManagedEffectReconciliationEvidence,
   verifyPayloadBytes,
 } from '../../ledger/execution-ledger-contract.js';
 import {
@@ -96,21 +98,21 @@ export {
 };
 
 /**
- * The V7 ledger deliberately covers one manual, single-activity invocation
+ * The V8 ledger deliberately covers one manual, single-activity invocation
  * plus its explicitly managed effects. It is the only writable durable run
  * boundary. Its table write authority is a trusted control-plane boundary:
  * content IDs and request digests detect inconsistent records, but are not
  * signatures against a writer that can replace an entire semantically valid
  * history.
  */
-// V7 intentionally does not read v1-v6 records. V7 compound stopped-attempt
-// settlement and CANCELLED effects cannot be interpreted by singular V6 folds.
+// V8 intentionally does not read v1-v7 records. Older durable records remain
+// isolated under their original sort-key and run-directory namespaces.
 
 const KEY_NAME = 'run_id';
 const SORT_KEY_NAME = 'sort_key';
 const RUN_DIRECTORY_RECORD_TYPE = 'execution_ledger_run_directory';
 const RUN_DIRECTORY_RUN_KIND = 'manual';
-const RUN_DIRECTORY_CURSOR_SCHEMA_VERSION = 5;
+const RUN_DIRECTORY_CURSOR_SCHEMA_VERSION = 6;
 const RUN_DIRECTORY_DEFAULT_PAGE_SIZE = 50;
 const RUN_DIRECTORY_MAX_PAGE_SIZE = 100;
 const RUN_DIRECTORY_MAX_PAGE_RETRIES = 3;
@@ -128,6 +130,7 @@ const EVENT_TYPES = new Set([
   'effect-completed',
   'effect-failed',
   'effect-became-uncertain',
+  'uncertain-effect-reconciled',
 ]);
 const TERMINAL_TYPES = new Set(ACTIVITY_PROTOCOL_TERMINAL_TYPES);
 const SUPPORTED_MANUAL_TERMINAL_TYPES = new Set([
@@ -393,7 +396,7 @@ function normalizeTerminalSummary(value, label) {
 
 /**
  * Normalize the immutable evidence-backed decision that resolves one retained
- * uncertain attempt. The verifier is deliberately fixed in V7: accepting a
+ * uncertain attempt. The verifier is deliberately fixed in V8: accepting a
  * caller-selected verifier would make the durable event claim semantics that
  * this ledger does not actually implement.
  * @param {unknown} value - Candidate reconciliation event payload.
@@ -489,6 +492,96 @@ function normalizeUncertainAttemptReconciliation(value, label) {
       `${label}.evidenceRef`,
     ),
     terminal,
+    reason: cloneInlinePayload(reconciliation.reason, `${label}.reason`),
+  };
+}
+
+/**
+ * Normalize the immutable evidence-backed decision that resolves one managed
+ * effect while deliberately retaining its stopped physical attempt and
+ * blocked aggregate. The original uncertainty event remains the causal link;
+ * this record only adds a verifier-backed disposition.
+ * @param {unknown} value - Candidate effect reconciliation payload.
+ * @param {string} label - Human-readable value path.
+ * @returns {{reconciliationId: string, invocationId: string, attemptId: string, effectId: string, generation: number, coordinatorEpoch: number, fencingToken: string, uncertaintyEventId: string, uncertaintySequence: number, verifier: {kind: string, version: number}, evidenceRef: Readonly<import('../../../runtime/execution-payload.js').ExecutionPayloadReference>, resolutionStatus: string, reason: any}} - Strict reconciliation proof reference.
+ */
+function normalizeUncertainEffectReconciliation(value, label) {
+  const reconciliation = cloneBoundedJsonObject(
+    value,
+    EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES,
+    label,
+  );
+  assertExactKeys(
+    reconciliation,
+    [
+      'reconciliationId',
+      'invocationId',
+      'attemptId',
+      'effectId',
+      'generation',
+      'coordinatorEpoch',
+      'fencingToken',
+      'uncertaintyEventId',
+      'uncertaintySequence',
+      'verifier',
+      'evidenceRef',
+      'resolutionStatus',
+      'reason',
+    ],
+    label,
+  );
+  if (
+    ![
+      EffectStatus.COMPLETED,
+      EffectStatus.FAILED,
+      EffectStatus.NOT_APPLIED,
+    ].includes(reconciliation.resolutionStatus)
+  ) {
+    throw new TypeError(`${label}.resolutionStatus is not supported.`);
+  }
+  return {
+    reconciliationId: assertOpaqueId(
+      reconciliation.reconciliationId,
+      `${label}.reconciliationId`,
+    ),
+    invocationId: assertOpaqueId(
+      reconciliation.invocationId,
+      `${label}.invocationId`,
+    ),
+    attemptId: assertOpaqueId(reconciliation.attemptId, `${label}.attemptId`),
+    effectId: assertOpaqueId(reconciliation.effectId, `${label}.effectId`),
+    generation: assertPositiveSafeInteger(
+      reconciliation.generation,
+      `${label}.generation`,
+    ),
+    coordinatorEpoch: assertNonnegativeSafeInteger(
+      reconciliation.coordinatorEpoch,
+      `${label}.coordinatorEpoch`,
+    ),
+    fencingToken: assertOpaqueId(
+      reconciliation.fencingToken,
+      `${label}.fencingToken`,
+    ),
+    uncertaintyEventId: assertOpaqueId(
+      reconciliation.uncertaintyEventId,
+      `${label}.uncertaintyEventId`,
+    ),
+    uncertaintySequence: assertPositiveSafeInteger(
+      reconciliation.uncertaintySequence,
+      `${label}.uncertaintySequence`,
+    ),
+    verifier: normalizeEffectVerifierDescriptor(
+      reconciliation.verifier,
+      `${label}.verifier`,
+    ),
+    evidenceRef: normalizePayloadReference(
+      reconciliation.evidenceRef,
+      reconciliation.resolutionStatus === EffectStatus.NOT_APPLIED
+        ? MANAGED_EFFECT_RECONCILIATION_EVIDENCE_PAYLOAD_SCHEMA
+        : MANAGED_EFFECT_OUTCOME_PAYLOAD_SCHEMA,
+      `${label}.evidenceRef`,
+    ),
+    resolutionStatus: reconciliation.resolutionStatus,
     reason: cloneInlinePayload(reconciliation.reason, `${label}.reason`),
   };
 }
@@ -887,7 +980,7 @@ function createEventId({
   payload,
 }) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v7',
+    domain: 'wharfie:execution-ledger-event:v8',
     prefix: 'wle',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -1459,7 +1552,14 @@ function normalizeEffectSnapshot(effect, runId) {
       'createdAt',
       'updatedAt',
     ],
-    ['startedBy', 'terminal', 'outcomeRef', 'cancellation', 'uncertainty'],
+    [
+      'startedBy',
+      'terminal',
+      'outcomeRef',
+      'cancellation',
+      'uncertainty',
+      'reconciliation',
+    ],
     'effect snapshot',
   );
   if (value.schemaVersion !== EXECUTION_LEDGER_SCHEMA_VERSION) {
@@ -1557,19 +1657,25 @@ function normalizeEffectSnapshot(effect, runId) {
     value,
     'cancellation',
   );
+  const hasReconciliation = Object.prototype.hasOwnProperty.call(
+    value,
+    'reconciliation',
+  );
   if (
     (value.status === EffectStatus.PENDING &&
       (hasStartedBy ||
         hasTerminal ||
         hasOutcomeRef ||
         hasCancellation ||
-        hasUncertainty)) ||
+        hasUncertainty ||
+        hasReconciliation)) ||
     (value.status === EffectStatus.STARTED &&
       (!hasStartedBy ||
         hasTerminal ||
         hasOutcomeRef ||
         hasCancellation ||
-        hasUncertainty)) ||
+        hasUncertainty ||
+        hasReconciliation)) ||
     ([EffectStatus.COMPLETED, EffectStatus.FAILED].includes(value.status) &&
       (!hasStartedBy ||
         !hasTerminal ||
@@ -1581,13 +1687,22 @@ function normalizeEffectSnapshot(effect, runId) {
         hasTerminal ||
         hasOutcomeRef ||
         !hasCancellation ||
-        hasUncertainty)) ||
+        hasUncertainty ||
+        hasReconciliation)) ||
     (value.status === EffectStatus.UNCERTAIN &&
       (!hasStartedBy ||
         hasTerminal ||
         hasOutcomeRef ||
         hasCancellation ||
-        !hasUncertainty))
+        !hasUncertainty ||
+        hasReconciliation)) ||
+    (value.status === EffectStatus.NOT_APPLIED &&
+      (!hasStartedBy ||
+        hasTerminal ||
+        hasOutcomeRef ||
+        hasCancellation ||
+        hasUncertainty ||
+        !hasReconciliation))
   ) {
     throw new ExecutionLedgerProjectionError(
       runId,
@@ -1634,6 +1749,28 @@ function normalizeEffectSnapshot(effect, runId) {
       value.uncertainty,
       'effect projection uncertainty',
     );
+  }
+  if (hasReconciliation) {
+    value.reconciliation = normalizeUncertainEffectReconciliation(
+      value.reconciliation,
+      'effect projection reconciliation',
+    );
+    if (
+      value.reconciliation.invocationId !== value.invocationId ||
+      value.reconciliation.effectId !== value.effectId ||
+      value.reconciliation.attemptId !== value.requestedBy.attemptId ||
+      value.reconciliation.resolutionStatus !== value.status ||
+      (value.status !== EffectStatus.NOT_APPLIED &&
+        !hasSameCanonicalJson(
+          value.reconciliation.evidenceRef,
+          value.outcomeRef,
+        ))
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'effect reconciliation does not match projection',
+      );
+    }
   }
   return value;
 }
@@ -2095,7 +2232,7 @@ function normalizeTransitionReceipt(value, runId) {
 /**
  * @param {Record<string, any>} event - Event being folded.
  * @param {string} runId - Expected run identity.
- * @returns {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: ReturnType<typeof normalizeUncertainAttemptReconciliation>}} - Event projection snapshots.
+ * @returns {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>}} - Event projection snapshots.
  */
 function eventSnapshots(event, runId) {
   const payload = cloneBoundedJsonObject(
@@ -2114,6 +2251,12 @@ function eventSnapshots(event, runId) {
     assertExactKeys(
       payload,
       ['run', 'invocation', 'reconciliation'],
+      'event payload',
+    );
+  } else if (event.type === 'uncertain-effect-reconciled') {
+    assertExactKeys(
+      payload,
+      ['run', 'invocation', 'effect', 'reconciliation'],
       'event payload',
     );
   } else if (event.type === 'attempt-became-uncertain') {
@@ -2139,7 +2282,7 @@ function eventSnapshots(event, runId) {
   }
   const run = normalizeRunSnapshot(payload.run, runId);
   const invocation = normalizeInvocationSnapshot(payload.invocation, runId);
-  /** @type {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: ReturnType<typeof normalizeUncertainAttemptReconciliation>}} */
+  /** @type {{run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>, effects?: Record<string, any>[], reconciliation?: Record<string, any>}} */
   const result = { run, invocation };
   if (Object.prototype.hasOwnProperty.call(payload, 'attempt')) {
     result.attempt = normalizeAttemptSnapshot(payload.attempt, runId);
@@ -2178,10 +2321,16 @@ function eventSnapshots(event, runId) {
     }
   }
   if (Object.prototype.hasOwnProperty.call(payload, 'reconciliation')) {
-    result.reconciliation = normalizeUncertainAttemptReconciliation(
-      payload.reconciliation,
-      'event payload reconciliation',
-    );
+    result.reconciliation =
+      event.type === 'uncertain-effect-reconciled'
+        ? normalizeUncertainEffectReconciliation(
+            payload.reconciliation,
+            'event payload reconciliation',
+          )
+        : normalizeUncertainAttemptReconciliation(
+            payload.reconciliation,
+            'event payload reconciliation',
+          );
   }
   return result;
 }
@@ -2191,7 +2340,7 @@ function eventSnapshots(event, runId) {
  * this exact attempt. A later terminal may only resolve the current blocked
  * state; it cannot cite an arbitrary historical abandonment or relabel a
  * different physical attempt.
- * @param {{run: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, reconciliation: {invocationId: string, attemptId: string, generation: number, coordinatorEpoch: number, fencingToken: string, uncertaintyEventId: string, uncertaintySequence: number}, uncertaintyEvent?: Record<string, any>, runId: string}} input - Current state and claimed uncertainty evidence.
+ * @param {{run: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, reconciliation: Record<string, any>, uncertaintyEvent?: Record<string, any>, runId: string}} input - Current state and claimed uncertainty evidence.
  * @returns {boolean} - Whether the retained uncertainty event is exact.
  */
 function hasExactUncertaintyEventLink(input) {
@@ -2202,7 +2351,6 @@ function hasExactUncertaintyEventLink(input) {
     uncertaintyEvent.type !== 'attempt-became-uncertain' ||
     uncertaintyEvent.sequence !== reconciliation.uncertaintySequence ||
     uncertaintyEvent.event_id !== reconciliation.uncertaintyEventId ||
-    uncertaintyEvent.sequence !== run.lastSequence ||
     uncertaintyEvent.fence.coordinatorEpoch !==
       reconciliation.coordinatorEpoch ||
     uncertaintyEvent.fence.invocationGeneration !== reconciliation.generation
@@ -2212,7 +2360,14 @@ function hasExactUncertaintyEventLink(input) {
   const snapshots = eventSnapshots(uncertaintyEvent, runId);
   const uncertaintyAttempt = snapshots.attempt;
   if (!uncertaintyAttempt) return false;
+  const runAdvance = run.lastSequence - reconciliation.uncertaintySequence;
+  const invocationAdvance =
+    invocation.lastSequence - reconciliation.uncertaintySequence;
   return (
+    run.status === RunStatus.BLOCKED &&
+    invocation.status === InvocationStatus.UNCERTAIN &&
+    invocation.generation === reconciliation.generation &&
+    attempt.status === AttemptStatus.ABANDONED &&
     snapshots.run.status === RunStatus.BLOCKED &&
     snapshots.invocation.status === InvocationStatus.UNCERTAIN &&
     uncertaintyAttempt.status === AttemptStatus.ABANDONED &&
@@ -2226,10 +2381,87 @@ function hasExactUncertaintyEventLink(input) {
       snapshots.invocation.uncertainty,
       uncertaintyAttempt.abandonment,
     ) &&
+    hasSameCanonicalJson(
+      snapshots.invocation.uncertainty,
+      invocation.uncertainty,
+    ) &&
     hasSameCanonicalJson(invocation.uncertainty, attempt.abandonment) &&
-    sameSnapshot(snapshots.run, run) &&
-    sameSnapshot(snapshots.invocation, invocation) &&
+    hasSameCancellationRequest(snapshots.run, run) &&
+    hasSameCancellationRequest(snapshots.invocation, invocation) &&
+    runAdvance >= 0 &&
+    invocationAdvance === runAdvance &&
+    run.version - snapshots.run.version === runAdvance &&
+    invocation.version - snapshots.invocation.version === runAdvance &&
     sameSnapshot(uncertaintyAttempt, attempt)
+  );
+}
+
+/**
+ * Prove that one effect reconciliation cites the exact event which first made
+ * that effect uncertain. Other uncertain siblings may already have acquired
+ * their own dispositions, so the aggregate head is allowed to have advanced;
+ * the target effect and stopped physical attempt must still match the cited
+ * event byte-for-byte.
+ * @param {{run: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, effect: Record<string, any>, reconciliation: Record<string, any>, uncertaintyEvent?: Record<string, any>, runId: string}} input - Current state and claimed effect uncertainty evidence.
+ * @returns {boolean} - Whether the retained effect uncertainty link is exact.
+ */
+function hasExactEffectUncertaintyEventLink(input) {
+  const {
+    run,
+    invocation,
+    attempt,
+    effect,
+    reconciliation,
+    uncertaintyEvent,
+    runId,
+  } = input;
+  if (
+    !uncertaintyEvent ||
+    !['effect-became-uncertain', 'attempt-became-uncertain'].includes(
+      uncertaintyEvent.type,
+    ) ||
+    uncertaintyEvent.sequence !== reconciliation.uncertaintySequence ||
+    uncertaintyEvent.event_id !== reconciliation.uncertaintyEventId ||
+    uncertaintyEvent.fence.coordinatorEpoch !==
+      reconciliation.coordinatorEpoch ||
+    uncertaintyEvent.fence.invocationGeneration !== reconciliation.generation
+  ) {
+    return false;
+  }
+  const snapshots = eventSnapshots(uncertaintyEvent, runId);
+  const uncertaintyAttempt = snapshots.attempt;
+  const uncertaintyEffect =
+    snapshots.effect ||
+    snapshots.effects?.find(
+      (candidate) => candidate.effectId === reconciliation.effectId,
+    );
+  if (!uncertaintyAttempt || !uncertaintyEffect) return false;
+  return (
+    run.status === RunStatus.BLOCKED &&
+    invocation.status === InvocationStatus.UNCERTAIN &&
+    attempt.status === AttemptStatus.ABANDONED &&
+    effect.status === EffectStatus.UNCERTAIN &&
+    snapshots.run.status === RunStatus.BLOCKED &&
+    snapshots.invocation.status === InvocationStatus.UNCERTAIN &&
+    uncertaintyAttempt.status === AttemptStatus.ABANDONED &&
+    uncertaintyEffect.status === EffectStatus.UNCERTAIN &&
+    snapshots.invocation.invocationId === reconciliation.invocationId &&
+    uncertaintyAttempt.invocationId === reconciliation.invocationId &&
+    uncertaintyAttempt.attemptId === reconciliation.attemptId &&
+    uncertaintyAttempt.generation === reconciliation.generation &&
+    uncertaintyAttempt.coordinatorEpoch === reconciliation.coordinatorEpoch &&
+    uncertaintyAttempt.fencingToken === reconciliation.fencingToken &&
+    uncertaintyEffect.invocationId === reconciliation.invocationId &&
+    uncertaintyEffect.effectId === reconciliation.effectId &&
+    uncertaintyEffect.requestedBy.attemptId === reconciliation.attemptId &&
+    uncertaintyEffect.startedBy?.attemptId === reconciliation.attemptId &&
+    hasSameCanonicalJson(
+      snapshots.invocation.uncertainty,
+      uncertaintyAttempt.abandonment,
+    ) &&
+    hasSameCanonicalJson(invocation.uncertainty, attempt.abandonment) &&
+    sameSnapshot(uncertaintyAttempt, attempt) &&
+    sameSnapshot(uncertaintyEffect, effect)
   );
 }
 
@@ -2248,7 +2480,7 @@ function hasExactUncertaintyEventLink(input) {
  * @param {Record<string, any> | undefined} attempt - Next attempt snapshot.
  * @param {Record<string, any> | undefined} effect - Next effect snapshot.
  * @param {Record<string, any>[] | undefined} effects - Next compound effect snapshots.
- * @param {ReturnType<typeof normalizeUncertainAttemptReconciliation> | undefined} reconciliation - Reconciliation payload for an event that deliberately retains its attempt unchanged.
+ * @param {Record<string, any> | undefined} reconciliation - Reconciliation payload for an event that deliberately retains its attempt unchanged.
  * @param {string} runId - Durable run identity.
  * @returns {void}
  */
@@ -2480,6 +2712,27 @@ function assertEventRequestDigest(
       actor: event.actor,
       coordinatorEpoch: reconciliation?.coordinatorEpoch,
     };
+  } else if (event.type === 'uncertain-effect-reconciled') {
+    value = {
+      runId,
+      invocationId: reconciliation?.invocationId,
+      attemptId: reconciliation?.attemptId,
+      effectId: reconciliation?.effectId,
+      fencingToken: reconciliation?.fencingToken,
+      generation: reconciliation?.generation,
+      expectedVersion: currentRun?.version,
+      expectedEffectVersion: currentEffect?.version,
+      transitionId: event.transition_id,
+      reconciliationId: reconciliation?.reconciliationId,
+      uncertaintyEventId: reconciliation?.uncertaintyEventId,
+      uncertaintySequence: reconciliation?.uncertaintySequence,
+      verifier: reconciliation?.verifier,
+      evidenceRef: reconciliation?.evidenceRef,
+      resolutionStatus: reconciliation?.resolutionStatus,
+      reason: reconciliation?.reason,
+      actor: event.actor,
+      coordinatorEpoch: reconciliation?.coordinatorEpoch,
+    };
   } else {
     value = {
       runId,
@@ -2506,7 +2759,7 @@ function assertEventRequestDigest(
  * authorizing another mutation.
  * @param {{readBytes: (reference: unknown) => Promise<unknown>}} payloadStore - Immutable payload store.
  * @param {string} runId - Durable run identity for safe diagnostics.
- * @returns {{readManualRequest: (reference: unknown) => Promise<Record<string, any>>, readEvidence: (reference: unknown) => Promise<Record<string, any>>, readManagedEffectRequest: (reference: unknown) => Promise<ReturnType<typeof normalizeManagedEffectRequest>>, readManagedEffectOutcome: (reference: unknown) => Promise<ReturnType<typeof normalizeManagedEffectOutcome>>}} - Verified payload reader.
+ * @returns {{readManualRequest: (reference: unknown) => Promise<Record<string, any>>, readEvidence: (reference: unknown) => Promise<Record<string, any>>, readManagedEffectRequest: (reference: unknown) => Promise<ReturnType<typeof normalizeManagedEffectRequest>>, readManagedEffectOutcome: (reference: unknown) => Promise<ReturnType<typeof normalizeManagedEffectOutcome>>, readManagedEffectReconciliationEvidence: (reference: unknown) => Promise<Record<string, any>>}} - Verified payload reader.
  */
 function createLedgerPayloadReader(payloadStore, runId) {
   /** @type {Map<string, Promise<any>>} */
@@ -2589,6 +2842,16 @@ function createLedgerPayloadReader(payloadStore, runId) {
         'persisted managed-effect outcome',
       );
     },
+    async readManagedEffectReconciliationEvidence(reference) {
+      return cloneReferencedPayloadObject(
+        await read(
+          reference,
+          MANAGED_EFFECT_RECONCILIATION_EVIDENCE_PAYLOAD_SCHEMA,
+          'persisted managed-effect reconciliation evidence',
+        ),
+        'persisted managed-effect reconciliation evidence',
+      );
+    },
   };
 }
 
@@ -2598,7 +2861,7 @@ function createLedgerPayloadReader(payloadStore, runId) {
  * @param {Record<string, any> | undefined} attempt - Attempt snapshot.
  * @param {Record<string, any> | undefined} effect - Effect snapshot.
  * @param {Record<string, any>[] | undefined} effects - Compound effect snapshots.
- * @param {ReturnType<typeof normalizeUncertainAttemptReconciliation> | undefined} reconciliation - Reconciliation payload when the retained attempt is deliberately unchanged.
+ * @param {Record<string, any> | undefined} reconciliation - Reconciliation payload when the retained attempt is deliberately unchanged.
  * @param {Record<string, any>} event - Event being folded.
  * @param {{run?: Record<string, any>, invocations: Map<string, Record<string, any>>, attempts: Map<string, Record<string, any>>, effects: Map<string, Record<string, any>>, eventsBySequence: Map<number, Record<string, any>>, eventsById: Map<string, Record<string, any>>}} state - Mutable fold state.
  * @param {string} runId - Run identity.
@@ -2902,6 +3165,7 @@ async function applyEvent(
         Object.prototype.hasOwnProperty.call(effect, 'outcomeRef') ||
         Object.prototype.hasOwnProperty.call(effect, 'cancellation') ||
         Object.prototype.hasOwnProperty.call(effect, 'uncertainty') ||
+        Object.prototype.hasOwnProperty.call(effect, 'reconciliation') ||
         !hasSameOptionalFields(currentInvocation, invocation, [
           'terminal',
           'uncertainty',
@@ -2965,6 +3229,7 @@ async function applyEvent(
           Object.prototype.hasOwnProperty.call(effect, 'outcomeRef') ||
           Object.prototype.hasOwnProperty.call(effect, 'cancellation') ||
           Object.prototype.hasOwnProperty.call(effect, 'uncertainty') ||
+          Object.prototype.hasOwnProperty.call(effect, 'reconciliation') ||
           !hasSameOptionalFields(currentInvocation, invocation, [
             'terminal',
             'uncertainty',
@@ -3020,6 +3285,7 @@ async function applyEvent(
           effect.status !== expectedStatus ||
           !exactStartedFence ||
           effect.terminal?.ok !== expectedOk ||
+          Object.prototype.hasOwnProperty.call(effect, 'reconciliation') ||
           !hasSameOptionalFields(currentInvocation, invocation, [
             'terminal',
             'uncertainty',
@@ -3079,6 +3345,7 @@ async function applyEvent(
           Object.prototype.hasOwnProperty.call(effect, 'terminal') ||
           Object.prototype.hasOwnProperty.call(effect, 'outcomeRef') ||
           Object.prototype.hasOwnProperty.call(effect, 'cancellation') ||
+          Object.prototype.hasOwnProperty.call(effect, 'reconciliation') ||
           unresolvedCurrentEffects.length !== 1 ||
           unresolvedCurrentEffects[0].effectId !== currentEffect.effectId
         ) {
@@ -3088,6 +3355,122 @@ async function applyEvent(
           );
         }
         assertAttemptAdvance(currentAttempt, attempt, event, runId);
+      }
+    }
+  } else if (event.type === 'uncertain-effect-reconciled') {
+    if (!reconciliation || !currentAttempt || !currentEffect || !effect) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'effect reconciliation lacks retained state',
+      );
+    }
+    const uncertaintyBySequence = state.eventsBySequence.get(
+      reconciliation.uncertaintySequence,
+    );
+    const uncertaintyById = state.eventsById.get(
+      reconciliation.uncertaintyEventId,
+    );
+    assertEffectBelongsToInvocation(effect, run, invocation, runId);
+    assertEffectAdvance(currentEffect, effect, event, runId);
+    const request = await payloadReader.readManagedEffectRequest(
+      effect.requestRef,
+    );
+    if (
+      !uncertaintyBySequence ||
+      uncertaintyBySequence !== uncertaintyById ||
+      currentRun.status !== RunStatus.BLOCKED ||
+      run.status !== RunStatus.BLOCKED ||
+      currentInvocation.status !== InvocationStatus.UNCERTAIN ||
+      invocation.status !== InvocationStatus.UNCERTAIN ||
+      invocation.generation !== currentInvocation.generation ||
+      currentAttempt.status !== AttemptStatus.ABANDONED ||
+      currentEffect.status !== EffectStatus.UNCERTAIN ||
+      effect.status !== reconciliation.resolutionStatus ||
+      reconciliation.invocationId !== invocation.invocationId ||
+      reconciliation.attemptId !== currentAttempt.attemptId ||
+      reconciliation.effectId !== effect.effectId ||
+      reconciliation.generation !== currentAttempt.generation ||
+      reconciliation.coordinatorEpoch !== currentAttempt.coordinatorEpoch ||
+      reconciliation.fencingToken !== currentAttempt.fencingToken ||
+      event.fence.coordinatorEpoch !== reconciliation.coordinatorEpoch ||
+      event.fence.invocationGeneration !== reconciliation.generation ||
+      !hasExactEffectUncertaintyEventLink({
+        run: currentRun,
+        invocation: currentInvocation,
+        attempt: currentAttempt,
+        effect: currentEffect,
+        reconciliation,
+        uncertaintyEvent: uncertaintyBySequence,
+        runId,
+      }) ||
+      !hasSameCanonicalJson(effect.reconciliation, reconciliation) ||
+      !hasSameOptionalFields(currentInvocation, invocation, [
+        'terminal',
+        'uncertainty',
+        'cancellationRequest',
+      ]) ||
+      !hasSameOptionalFields(currentEffect, effect, ['startedBy'])
+    ) {
+      throw new ExecutionLedgerProjectionError(
+        runId,
+        'invalid uncertain managed-effect reconciliation',
+      );
+    }
+    if (reconciliation.resolutionStatus === EffectStatus.NOT_APPLIED) {
+      const evidence =
+        await payloadReader.readManagedEffectReconciliationEvidence(
+          reconciliation.evidenceRef,
+        );
+      try {
+        verifyManagedEffectReconciliationEvidence(
+          effectVerifierRegistry,
+          effect,
+          request,
+          reconciliation.verifier,
+          evidence,
+          'persisted managed-effect reconciliation evidence',
+        );
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'managed-effect reconciliation evidence is invalid',
+        );
+      }
+    } else {
+      if (
+        !hasSameCanonicalJson(reconciliation.verifier, effect.verifier) ||
+        !hasSameCanonicalJson(reconciliation.evidenceRef, effect.outcomeRef)
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'managed-effect reconciled outcome authority mismatch',
+        );
+      }
+      const outcome = await payloadReader.readManagedEffectOutcome(
+        reconciliation.evidenceRef,
+      );
+      try {
+        verifyManagedEffectOutcome(
+          effectVerifierRegistry,
+          effect,
+          request,
+          outcome,
+          'persisted reconciled managed-effect outcome',
+        );
+      } catch {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'reconciled managed-effect outcome evidence is invalid',
+        );
+      }
+      if (
+        (reconciliation.resolutionStatus === EffectStatus.COMPLETED) !==
+        (outcome.ok === true)
+      ) {
+        throw new ExecutionLedgerProjectionError(
+          runId,
+          'reconciled managed-effect outcome status mismatch',
+        );
       }
     }
   } else if (event.type === 'uncertain-attempt-reconciled') {
@@ -3363,6 +3746,14 @@ async function applyEvent(
         assertEffectBelongsToInvocation(nextEffect, run, invocation, runId);
         assertEffectAdvance(priorEffect, nextEffect, event, runId);
         if (
+          Object.prototype.hasOwnProperty.call(nextEffect, 'reconciliation')
+        ) {
+          throw new ExecutionLedgerProjectionError(
+            runId,
+            'stopped managed-effect settlement manufactured reconciliation',
+          );
+        }
+        if (
           !effectVerifierRegistry.has(effectVerifierKey(nextEffect.verifier))
         ) {
           throw new ExecutionLedgerProjectionError(
@@ -3503,9 +3894,9 @@ async function readRunRecords(db, tableName, runId) {
   return await db.query({
     tableName,
     consistentRead: true,
-    // A custom V7 table may deliberately retain older or lifecycle rows in the
-    // same physical partition. Only the fresh V7 record namespace participates
-    // in replay; no old history is accidentally treated as a malformed V7 run.
+    // A custom V8 table may deliberately retain older or lifecycle rows in the
+    // same physical partition. Only the fresh V8 record namespace participates
+    // in replay; no old history is accidentally treated as a malformed V8 run.
     keyConditions: [
       pkEq(KEY_NAME, runId),
       skBegins(SORT_KEY_NAME, EXECUTION_LEDGER_SORT_KEY_PREFIX),
@@ -4001,7 +4392,7 @@ async function startedTransitionResult(result, runId, payloadStore) {
  */
 function createTransitionRequestDigest(type, value) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-transition:v7',
+    domain: 'wharfie:execution-ledger-transition:v8',
     prefix: 'wlt',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -4479,7 +4870,11 @@ async function assertAttemptEvidenceMatchesManagedEffects(
   }
   if (
     effects.some((effect) => {
-      if (effect.status === EffectStatus.CANCELLED) {
+      if (
+        [EffectStatus.CANCELLED, EffectStatus.NOT_APPLIED].includes(
+          effect.status,
+        )
+      ) {
         return (
           !permitsCancelledWithoutResult ||
           !seenRequests.has(effect.effectId) ||
@@ -4508,7 +4903,7 @@ async function assertAttemptEvidenceMatchesManagedEffects(
  */
 function createAttemptId(runId, invocationId, generation) {
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-attempt:v7',
+    domain: 'wharfie:execution-ledger-attempt:v8',
     prefix: 'wla',
     value: { runId, invocationId, generation },
     valuePath: 'execution ledger attempt identity',
@@ -7782,6 +8177,418 @@ export function createExecutionLedger({
   }
 
   /**
+   * Resolve one uncertain managed effect from immutable destination evidence.
+   * The stopped attempt remains byte-identical ABANDONED and the aggregate
+   * remains BLOCKED/UNCERTAIN; only the effect acquires a durable disposition.
+   * @param {{runId: string, invocationId: string, attemptId: string, effectId: string, fencingToken: string, generation: number, coordinatorEpoch: number, expectedVersion: number, expectedEffectVersion: number, uncertaintyEventId: string, uncertaintySequence: number, transitionId: string, reconciliationId: string, actor?: {kind: string, id: string}, reason: Record<string, any>, resolution: {kind: 'outcome', outcome: Record<string, any>} | {kind: 'not-applied', verifier: {kind: string, version: number}, evidence: Record<string, any>}, observedAt?: number}} options - Evidence-backed uncertain-effect reconciliation request.
+   * @returns {Promise<{applied: boolean, receipt: Record<string, any>, run: Record<string, any>, invocation: Record<string, any>, attempt?: Record<string, any>, effect?: Record<string, any>}>} - Reconciliation outcome.
+   */
+  async function reconcileUncertainManagedEffect(options) {
+    const value = cloneBoundedJsonObject(
+      options,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+      'reconcileUncertainManagedEffect',
+    );
+    const common = normalizeTransitionOptions(
+      value,
+      [
+        'runId',
+        'invocationId',
+        'attemptId',
+        'effectId',
+        'fencingToken',
+        'generation',
+        'coordinatorEpoch',
+        'expectedVersion',
+        'expectedEffectVersion',
+        'uncertaintyEventId',
+        'uncertaintySequence',
+        'transitionId',
+        'reconciliationId',
+        'actor',
+        'reason',
+        'resolution',
+        'observedAt',
+      ],
+      'reconcileUncertainManagedEffect',
+      now,
+    );
+    const invocationId = assertOpaqueId(
+      value.invocationId,
+      'reconcileUncertainManagedEffect.invocationId',
+    );
+    const attemptId = assertOpaqueId(
+      value.attemptId,
+      'reconcileUncertainManagedEffect.attemptId',
+    );
+    const effectId = assertOpaqueId(
+      value.effectId,
+      'reconcileUncertainManagedEffect.effectId',
+    );
+    const fencingToken = assertOpaqueId(
+      value.fencingToken,
+      'reconcileUncertainManagedEffect.fencingToken',
+    );
+    const generation = assertPositiveSafeInteger(
+      value.generation,
+      'reconcileUncertainManagedEffect.generation',
+    );
+    const expectedEffectVersion = assertPositiveSafeInteger(
+      value.expectedEffectVersion,
+      'reconcileUncertainManagedEffect.expectedEffectVersion',
+    );
+    const reconciliationId = assertOpaqueId(
+      value.reconciliationId,
+      'reconcileUncertainManagedEffect.reconciliationId',
+    );
+    const uncertaintyEventId = assertOpaqueId(
+      value.uncertaintyEventId,
+      'reconcileUncertainManagedEffect.uncertaintyEventId',
+    );
+    const uncertaintySequence = assertPositiveSafeInteger(
+      value.uncertaintySequence,
+      'reconcileUncertainManagedEffect.uncertaintySequence',
+    );
+    const reason = cloneInlinePayload(
+      value.reason,
+      'reconcileUncertainManagedEffect.reason',
+    );
+    const resolution = cloneBoundedJsonObject(
+      value.resolution,
+      EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
+      'reconcileUncertainManagedEffect.resolution',
+    );
+    if (resolution.kind === 'outcome') {
+      assertExactKeys(
+        resolution,
+        ['kind', 'outcome'],
+        'reconcileUncertainManagedEffect.resolution',
+      );
+    } else if (resolution.kind === 'not-applied') {
+      assertExactKeys(
+        resolution,
+        ['kind', 'verifier', 'evidence'],
+        'reconcileUncertainManagedEffect.resolution',
+      );
+    } else {
+      throw new TypeError(
+        'reconcileUncertainManagedEffect.resolution.kind is not supported.',
+      );
+    }
+
+    const state = await readVerifiedRun(common.runId);
+    if (!state) throw new ExecutionLedgerNotFoundError(common.runId);
+    const invocation = state.invocations.get(invocationId);
+    const attempt = state.attempts.get(attemptMapKey(invocationId, attemptId));
+    const effect = state.effects.get(effectMapKey(invocationId, effectId));
+    if (!invocation || !attempt || !effect) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'managed effect does not belong to this stopped attempt',
+      );
+    }
+    const payloadReader = createLedgerPayloadReader(payloadStore, common.runId);
+    const request = await payloadReader.readManagedEffectRequest(
+      effect.requestRef,
+    );
+    /** @type {ReturnType<typeof normalizeManagedEffectOutcome> | undefined} */
+    let outcome;
+    /** @type {Record<string, any> | undefined} */
+    let negativeEvidence;
+    /** @type {{kind: string, version: number}} */
+    let verifier;
+    /** @type {string} */
+    let resolutionStatus;
+    if (resolution.kind === 'outcome') {
+      if (resolution.outcome?.ok === true) {
+        assertExactKeys(
+          resolution.outcome,
+          ['ok', 'result', 'evidence'],
+          'reconcileUncertainManagedEffect.resolution.outcome',
+        );
+      } else if (resolution.outcome?.ok === false) {
+        assertExactKeys(
+          resolution.outcome,
+          ['ok', 'error', 'evidence'],
+          'reconcileUncertainManagedEffect.resolution.outcome',
+        );
+      } else {
+        throw new TypeError(
+          'reconcileUncertainManagedEffect.resolution.outcome.ok must be a boolean.',
+        );
+      }
+      outcome = normalizeManagedEffectOutcome(
+        {
+          destinationEffectId: effect.destinationEffectId,
+          adapter: effect.adapter,
+          destination: effect.destination,
+          verifier: effect.verifier,
+          ok: resolution.outcome?.ok,
+          ...(resolution.outcome?.ok === true
+            ? { result: resolution.outcome.result }
+            : { error: resolution.outcome?.error }),
+          substantiatedReplayProperties: effect.substantiatedReplayProperties,
+          evidence: resolution.outcome?.evidence,
+        },
+        'reconcileUncertainManagedEffect.resolution.outcome',
+      );
+      verifyManagedEffectOutcome(
+        effectVerifierRegistry,
+        effect,
+        request,
+        outcome,
+        'reconcileUncertainManagedEffect.resolution.outcome',
+      );
+      verifier = cloneInlinePayload(
+        effect.verifier,
+        'reconcileUncertainManagedEffect outcome verifier',
+      );
+      resolutionStatus = outcome.ok
+        ? EffectStatus.COMPLETED
+        : EffectStatus.FAILED;
+    } else {
+      verifier = normalizeEffectVerifierDescriptor(
+        resolution.verifier,
+        'reconcileUncertainManagedEffect.resolution.verifier',
+      );
+      negativeEvidence = cloneReferencedPayloadObject(
+        resolution.evidence,
+        'reconcileUncertainManagedEffect.resolution.evidence',
+      );
+      verifyManagedEffectReconciliationEvidence(
+        effectVerifierRegistry,
+        effect,
+        request,
+        verifier,
+        negativeEvidence,
+        'reconcileUncertainManagedEffect.resolution.evidence',
+      );
+      resolutionStatus = EffectStatus.NOT_APPLIED;
+    }
+
+    const retainedReceipt = await getTransitionReceipt(
+      db,
+      resolvedTableName,
+      common.runId,
+      common.transitionId,
+    );
+    if (retainedReceipt) {
+      const receiptState = await stateContainingTransitionReceipt(
+        state,
+        retainedReceipt,
+      );
+      if (
+        retainedReceipt.type !== 'uncertain-effect-reconciled' ||
+        retainedReceipt.invocation_id !== invocationId ||
+        retainedReceipt.attempt_id !== attemptId ||
+        retainedReceipt.effect_id !== effectId
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      const existingEvent = receiptState.events[retainedReceipt.sequence - 1];
+      const existingReconciliation = existingEvent
+        ? eventSnapshots(existingEvent, common.runId).reconciliation
+        : undefined;
+      if (
+        !existingReconciliation ||
+        existingReconciliation.resolutionStatus !== resolutionStatus ||
+        !hasSameCanonicalJson(existingReconciliation.verifier, verifier)
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      const existingEvidence =
+        resolutionStatus === EffectStatus.NOT_APPLIED
+          ? await payloadReader.readManagedEffectReconciliationEvidence(
+              existingReconciliation.evidenceRef,
+            )
+          : await payloadReader.readManagedEffectOutcome(
+              existingReconciliation.evidenceRef,
+            );
+      if (
+        !hasSameCanonicalJson(existingEvidence, negativeEvidence || outcome)
+      ) {
+        throw new ExecutionLedgerTransitionConflictError(
+          common.runId,
+          common.transitionId,
+        );
+      }
+      const requestDigest = createTransitionRequestDigest(
+        'uncertain-effect-reconciled',
+        {
+          runId: common.runId,
+          invocationId,
+          attemptId,
+          effectId,
+          fencingToken,
+          generation,
+          expectedVersion: common.expectedVersion,
+          expectedEffectVersion,
+          transitionId: common.transitionId,
+          reconciliationId,
+          uncertaintyEventId,
+          uncertaintySequence,
+          verifier,
+          evidenceRef: existingReconciliation.evidenceRef,
+          resolutionStatus,
+          reason,
+          actor: common.actor,
+          coordinatorEpoch: common.coordinatorEpoch,
+        },
+      );
+      const existing = assertMatchingReceipt(
+        receiptState,
+        retainedReceipt,
+        requestDigest,
+      );
+      return await existingTransitionResult(
+        receiptState,
+        /** @type {Record<string, any>} */ (existing),
+      );
+    }
+
+    if (state.head.version !== common.expectedVersion) {
+      throw new ExecutionLedgerConflictError(common.runId, 'stale run version');
+    }
+    const uncertaintyEvent = state.events[uncertaintySequence - 1];
+    const effectReconciliationLink = {
+      invocationId,
+      attemptId,
+      effectId,
+      generation,
+      coordinatorEpoch: common.coordinatorEpoch,
+      fencingToken,
+      uncertaintyEventId,
+      uncertaintySequence,
+    };
+    if (
+      state.run.status !== RunStatus.BLOCKED ||
+      invocation.status !== InvocationStatus.UNCERTAIN ||
+      invocation.generation !== generation ||
+      attempt.status !== AttemptStatus.ABANDONED ||
+      effect.status !== EffectStatus.UNCERTAIN ||
+      effect.version !== expectedEffectVersion ||
+      !hasExactEffectUncertaintyEventLink({
+        run: state.run,
+        invocation,
+        attempt,
+        effect,
+        reconciliation: effectReconciliationLink,
+        uncertaintyEvent,
+        runId: common.runId,
+      })
+    ) {
+      throw new ExecutionLedgerConflictError(
+        common.runId,
+        'effect is not the retained uncertain managed effect',
+      );
+    }
+    assertCurrentAttemptFence(
+      attempt,
+      { coordinatorEpoch: common.coordinatorEpoch, fencingToken, generation },
+      common.runId,
+    );
+    const evidenceRef = await putVerifiedPayload(payloadStore, {
+      value: negativeEvidence || outcome,
+      payloadSchema:
+        resolutionStatus === EffectStatus.NOT_APPLIED
+          ? MANAGED_EFFECT_RECONCILIATION_EVIDENCE_PAYLOAD_SCHEMA
+          : MANAGED_EFFECT_OUTCOME_PAYLOAD_SCHEMA,
+      label: 'reconcileUncertainManagedEffect.evidenceRef',
+    });
+    const reconciliation = {
+      reconciliationId,
+      ...effectReconciliationLink,
+      verifier,
+      evidenceRef,
+      resolutionStatus,
+      reason,
+    };
+    const requestDigest = createTransitionRequestDigest(
+      'uncertain-effect-reconciled',
+      {
+        runId: common.runId,
+        invocationId,
+        attemptId,
+        effectId,
+        fencingToken,
+        generation,
+        expectedVersion: common.expectedVersion,
+        expectedEffectVersion,
+        transitionId: common.transitionId,
+        reconciliationId,
+        uncertaintyEventId,
+        uncertaintySequence,
+        verifier,
+        evidenceRef,
+        resolutionStatus,
+        reason,
+        actor: common.actor,
+        coordinatorEpoch: common.coordinatorEpoch,
+      },
+    );
+    const sequence = state.head.sequence + 1;
+    const nextRun = {
+      ...cloneJsonObject(state.run, 'current run'),
+      version: state.run.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextInvocation = {
+      ...cloneJsonObject(invocation, 'current invocation'),
+      version: invocation.version + 1,
+      lastSequence: sequence,
+      updatedAt: common.observedAt,
+    };
+    const nextEffect = cloneJsonObject(effect, 'current effect');
+    delete nextEffect.uncertainty;
+    nextEffect.status = resolutionStatus;
+    nextEffect.reconciliation = reconciliation;
+    if (outcome) {
+      nextEffect.terminal = { ok: outcome.ok };
+      nextEffect.outcomeRef = evidenceRef;
+    }
+    nextEffect.version = effect.version + 1;
+    nextEffect.lastSequence = sequence;
+    nextEffect.updatedAt = common.observedAt;
+    const event = createEventRecord(
+      common.runId,
+      sequence,
+      common.transitionId,
+      requestDigest,
+      'uncertain-effect-reconciled',
+      common.observedAt,
+      common.actor,
+      {
+        coordinatorEpoch: common.coordinatorEpoch,
+        invocationGeneration: generation,
+      },
+      {
+        run: nextRun,
+        invocation: nextInvocation,
+        effect: nextEffect,
+        reconciliation,
+      },
+    );
+    return await appendOrReplay({
+      state,
+      runId: common.runId,
+      transitionId: common.transitionId,
+      requestDigest,
+      event,
+      nextRun,
+      nextInvocation,
+      nextEffect,
+      currentEffect: effect,
+    });
+  }
+
+  /**
    * Resolve one retained uncertain physical attempt from a complete, exact
    * Activity Protocol transcript. The physical attempt remains ABANDONED: this
    * transition only gives the previously blocked invocation and run their one
@@ -8598,6 +9405,7 @@ export function createExecutionLedger({
     markManagedEffectUncertain,
     recordManagedEffectRequest,
     readManagedEffectDelivery,
+    reconcileUncertainManagedEffect,
     reconcileUncertainManualAttempt,
     rebuildRun,
     requestManualRunCancellation,
@@ -8617,6 +9425,7 @@ export function createExecutionLedger({
  * @property {(...args: any[]) => Promise<any>} markManagedEffectUncertain - Blocks an aggregate on an ambiguous begun effect.
  * @property {(...args: any[]) => Promise<any>} settleStoppedAttemptManagedEffects - Atomically closes every unresolved effect for a stopped attempt.
  * @property {(...args: any[]) => Promise<any>} markAttemptUncertain - Blocks a begun ambiguous attempt.
+ * @property {(...args: any[]) => Promise<any>} reconcileUncertainManagedEffect - Resolves one uncertain managed effect from immutable destination evidence.
  * @property {(...args: any[]) => Promise<any>} reconcileUncertainManualAttempt - Resolves one retained uncertain attempt from exact durable evidence.
  * @property {(...args: any[]) => Promise<any>} abandonUnstartedAttempt - Safely releases an unstarted claim.
  * @property {(...args: any[]) => Promise<any>} requestManualRunCancellation - Persists the first cancellation request or returns authoritative terminal/uncertain state.

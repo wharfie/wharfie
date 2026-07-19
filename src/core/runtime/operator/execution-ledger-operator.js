@@ -4,6 +4,11 @@ import { TextDecoder } from 'node:util';
 
 import { assertApplicationRevisionId } from '../application-revision.js';
 import {
+  ACTIVITY_PROTOCOL_NAME,
+  ACTIVITY_PROTOCOL_VERSION,
+  validateActivityProtocolComponentFrame,
+} from '../activity-protocol.js';
+import {
   AttemptStatus,
   EXECUTION_LEDGER_MAX_REFERENCED_PAYLOAD_BYTES,
   EXECUTION_LEDGER_MAX_UNRESOLVED_MANAGED_EFFECTS,
@@ -20,6 +25,7 @@ import {
   MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES,
   assertLedgerOpaqueId,
 } from '../../lib/ledger/record-key.js';
+import { hasSameCanonicalJson } from '../../lib/ledger/execution-ledger-contract.js';
 import { assertLogicalId } from '../logical-id.js';
 import {
   ManualLedgerRecoveryAction,
@@ -30,15 +36,20 @@ import {
   assertApplicationStateStoreIsolation,
   openApplicationStateDB,
   resolveApplicationStateStoreConfiguration,
+  withApplicationStateDB,
 } from '../application-state-store.js';
 import { createCanonicalJsonSha256Id } from '../content-id.js';
 import {
   APPLICATION_STATE_ADAPTER_DESCRIPTOR,
+  APPLICATION_STATE_RECONCILIATION_VERIFIER_DESCRIPTOR,
   APPLICATION_STATE_SUBSTANTIATED_REPLAY_PROPERTIES,
   APPLICATION_STATE_VERIFIER_DESCRIPTOR,
   normalizeApplicationStateDestination,
 } from '../effects/application-state.js';
-import { createBuiltinManagedEffectRecoveryCatalog } from '../effects/builtin-catalog.js';
+import {
+  createBuiltinManagedEffectReconciliationCatalog,
+  createBuiltinManagedEffectRecoveryCatalog,
+} from '../effects/builtin-catalog.js';
 import { recoverStoppedManagedEffects } from '../managed-effect.js';
 import {
   getLocalServiceSessionPrincipalId,
@@ -51,6 +62,7 @@ import {
 } from './execution-ledger-store.js';
 import { sendLocalOwnerCommand } from './local-owner-command.js';
 import {
+  createExecutionLedgerEffectReconciliationOperatorView,
   createExecutionLedgerOperatorView,
   createExecutionLedgerReconciliationOperatorView,
   createExecutionLedgerRecoveryOperatorView,
@@ -68,6 +80,7 @@ export const EXECUTION_LEDGER_RECONCILIATION_EVIDENCE_FILE_MAX_BYTES =
 export const EXECUTION_LEDGER_RECONCILIATION_REASON_MAX_BYTES = 4096;
 
 const RECONCILIATION_TRANSITION_PREFIX = 'reconcile:';
+const EFFECT_RECONCILIATION_TRANSITION_PREFIX = 'reconcile-effect:';
 const DEFAULT_RECOVERY_OPERATOR_ACTOR = Object.freeze({
   kind: 'local',
   id: 'cli',
@@ -123,7 +136,7 @@ export class ExecutionLedgerOperatorScopeError extends Error {
 
 /**
  * @param {unknown} value - Candidate durable run ID.
- * @param {'inspect'|'recover'|'reconcile'|'cancel'} command - Operator command.
+ * @param {'inspect'|'recover'|'reconcile'|'reconcile-effect'|'cancel'} command - Operator command.
  * @returns {string} - Exact requested run ID.
  */
 function requireRunId(value, command) {
@@ -131,6 +144,17 @@ function requireRunId(value, command) {
     throw new Error(`${command} requires --run-id <runId>.`);
   }
   return value;
+}
+
+/**
+ * @param {unknown} value - Candidate exact managed-effect identity.
+ * @returns {string} - Validated effect identity.
+ */
+function requireEffectId(value) {
+  if (value === undefined) {
+    throw new Error('reconcile-effect requires --effect-id <effectId>.');
+  }
+  return assertLedgerOpaqueId(value, 'reconcile-effect effectId');
 }
 
 /**
@@ -161,24 +185,55 @@ function resolveReconciliationId(value) {
 }
 
 /**
+ * Validate a stable identity in the distinct managed-effect transition
+ * namespace. Keeping the namespace separate prevents a caller from making an
+ * attempt transcript reconciliation alias an effect reconciliation receipt.
+ * @param {unknown} value - Candidate stable operator reconciliation identity.
+ * @returns {string} - Validated stable caller identity.
+ */
+function resolveEffectReconciliationId(value) {
+  if (value === undefined) {
+    throw new Error(
+      'reconcile-effect requires --reconciliation-id <reconciliationId>; reuse the same value after a lost response.',
+    );
+  }
+  const reconciliationId = assertLedgerOpaqueId(
+    value,
+    'reconcile-effect reconciliationId',
+  );
+  if (
+    Buffer.byteLength(
+      `${EFFECT_RECONCILIATION_TRANSITION_PREFIX}${reconciliationId}`,
+      'utf8',
+    ) > MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES
+  ) {
+    throw new RangeError(
+      `reconcile-effect --reconciliation-id must leave room for the ${EFFECT_RECONCILIATION_TRANSITION_PREFIX} transition namespace.`,
+    );
+  }
+  return reconciliationId;
+}
+
+/**
  * @param {unknown} value - Candidate optional operator explanation.
+ * @param {'reconcile'|'reconcile-effect'} [command] - Operator command label.
  * @returns {string | undefined} - Bounded well-formed explanation.
  */
-function resolveReconciliationReasonText(value) {
+function resolveReconciliationReasonText(value, command = 'reconcile') {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || value.length === 0) {
-    throw new TypeError('reconcile --reason must be a nonempty string.');
+    throw new TypeError(`${command} --reason must be a nonempty string.`);
   }
   const isWellFormed = /** @type {any} */ (String.prototype).isWellFormed;
   if (typeof isWellFormed === 'function' && !isWellFormed.call(value)) {
-    throw new TypeError('reconcile --reason must be well-formed Unicode.');
+    throw new TypeError(`${command} --reason must be well-formed Unicode.`);
   }
   if (
     Buffer.byteLength(value, 'utf8') >
     EXECUTION_LEDGER_RECONCILIATION_REASON_MAX_BYTES
   ) {
     throw new RangeError(
-      `reconcile --reason must not exceed ${EXECUTION_LEDGER_RECONCILIATION_REASON_MAX_BYTES} UTF-8 bytes.`,
+      `${command} --reason must not exceed ${EXECUTION_LEDGER_RECONCILIATION_REASON_MAX_BYTES} UTF-8 bytes.`,
     );
   }
   return value;
@@ -189,12 +244,19 @@ function resolveReconciliationReasonText(value) {
  * the optional prose in any operator response.
  * @param {string} reconciliationId - Stable caller reconciliation identity.
  * @param {unknown} reasonText - Optional operator explanation.
+ * @param {'operator-evidence-reconciliation'|'operator-managed-effect-reconciliation'} [kind] - Durable reason kind.
+ * @param {'reconcile'|'reconcile-effect'} [command] - Operator command label.
  * @returns {Record<string, any>} - Bounded durable reason.
  */
-function createReconciliationReason(reconciliationId, reasonText) {
-  const message = resolveReconciliationReasonText(reasonText);
+function createReconciliationReason(
+  reconciliationId,
+  reasonText,
+  kind = 'operator-evidence-reconciliation',
+  command = 'reconcile',
+) {
+  const message = resolveReconciliationReasonText(reasonText, command);
   return {
-    kind: 'operator-evidence-reconciliation',
+    kind,
     reconciliationId,
     ...(message === undefined ? {} : { message }),
   };
@@ -487,6 +549,7 @@ function getStoppedEffectRecoveryTarget(view) {
         EffectStatus.COMPLETED,
         EffectStatus.FAILED,
         EffectStatus.CANCELLED,
+        EffectStatus.NOT_APPLIED,
       ].includes(effect.status),
   );
   if (unresolved.length === 0) return undefined;
@@ -557,6 +620,329 @@ function getStoppedEffectRecoveryTarget(view) {
         effect.status === EffectStatus.STARTED,
     ),
     fingerprint,
+  };
+}
+
+/**
+ * Locate the exact uncertainty event retained by one managed effect. A new
+ * reconciliation advances the aggregate head; an idempotent retry instead
+ * recovers the original expected versions from the effect's reconciliation
+ * event. The abandoned attempt itself never advances in either case.
+ * @param {Record<string, any>} view - Fresh verified run projection.
+ * @param {string} effectId - Exact logical managed-effect identity.
+ * @param {string} reconciliationId - Stable caller reconciliation identity.
+ * @param {{kind: string, id: string}} actor - Exact durable operator actor.
+ * @param {Record<string, any>} reason - Exact durable reconciliation reason.
+ * @returns {{effect: Record<string, any>, invocation: Record<string, any>, attempt: Record<string, any>, uncertaintyEvent: Record<string, any>, expectedVersion: number, expectedEffectVersion: number, reconciled: boolean}} - Exact retained target and original request versions.
+ */
+function getUncertainEffectReconciliationTarget(
+  view,
+  effectId,
+  reconciliationId,
+  actor,
+  reason,
+) {
+  const matches = (view.effects || []).filter(
+    (/** @type {Record<string, any>} */ effect) => effect.effectId === effectId,
+  );
+  if (matches.length !== 1) {
+    throw new Error(
+      matches.length === 0
+        ? `Durable run ${view.run.runId} has no managed effect ${effectId}.`
+        : `Durable run ${view.run.runId} has more than one managed effect named ${effectId}; reconciliation requires an unambiguous effect identity.`,
+    );
+  }
+  const effect = matches[0];
+  assertRecoverableApplicationStateEffect(effect, view.run.appId);
+  const invocation = view.invocations.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.invocationId === effect.invocationId,
+  );
+  const attempt = view.attempts.find(
+    (/** @type {Record<string, any>} */ candidate) =>
+      candidate.invocationId === effect.invocationId &&
+      candidate.attemptId === effect.requestedBy?.attemptId,
+  );
+  if (
+    attempt?.status !== AttemptStatus.ABANDONED ||
+    invocation.generation !== attempt.generation ||
+    effect.requestedBy?.generation !== attempt.generation ||
+    effect.requestedBy?.coordinatorEpoch !== attempt.coordinatorEpoch ||
+    effect.requestedBy?.fencingToken !== attempt.fencingToken ||
+    effect.startedBy?.attemptId !== attempt.attemptId ||
+    effect.startedBy?.generation !== attempt.generation ||
+    effect.startedBy?.coordinatorEpoch !== attempt.coordinatorEpoch ||
+    effect.startedBy?.fencingToken !== attempt.fencingToken
+  ) {
+    throw new Error(
+      `Managed effect ${effectId} is not bound to its retained abandoned attempt.`,
+    );
+  }
+
+  const isUncertain = effect.status === EffectStatus.UNCERTAIN;
+  const isReconciled =
+    [
+      EffectStatus.COMPLETED,
+      EffectStatus.FAILED,
+      EffectStatus.NOT_APPLIED,
+    ].includes(effect.status) && Boolean(effect.reconciliation);
+  if (!isUncertain && !isReconciled) {
+    throw new Error(
+      `Managed effect ${effectId} is ${effect.status}; it has no retained uncertain disposition to reconcile.`,
+    );
+  }
+  if (
+    isUncertain &&
+    (view.run.status !== RunStatus.BLOCKED ||
+      invocation.status !== InvocationStatus.UNCERTAIN)
+  ) {
+    throw new Error(
+      `Managed effect ${effectId} is not in a blocked uncertain aggregate.`,
+    );
+  }
+  if (
+    isReconciled &&
+    effect.reconciliation.reconciliationId !== reconciliationId
+  ) {
+    throw new Error(
+      `Managed effect ${effectId} was already reconciled by ${effect.reconciliation.reconciliationId}; reuse that reconciliation ID after a lost response.`,
+    );
+  }
+
+  const transitionId = `${EFFECT_RECONCILIATION_TRANSITION_PREFIX}${reconciliationId}`;
+  const retainedTransitionEvents = (view.events || []).filter(
+    (/** @type {Record<string, any>} */ event) =>
+      event.transition_id === transitionId,
+  );
+  if (retainedTransitionEvents.length > 1) {
+    throw new Error(
+      `Managed-effect reconciliation transition ${transitionId} is not unique.`,
+    );
+  }
+  const retainedTransitionEvent = retainedTransitionEvents[0];
+  if (isUncertain && retainedTransitionEvent) {
+    throw new Error(
+      `Managed-effect reconciliation transition ${transitionId} is already owned by another durable event.`,
+    );
+  }
+
+  const uncertaintySequence = isUncertain
+    ? effect.lastSequence
+    : effect.reconciliation.uncertaintySequence;
+  const uncertaintyEventId = isUncertain
+    ? undefined
+    : effect.reconciliation.uncertaintyEventId;
+  const uncertaintyEvent = view.events.find(
+    (/** @type {Record<string, any>} */ event) =>
+      event.sequence === uncertaintySequence &&
+      (uncertaintyEventId === undefined ||
+        event.event_id === uncertaintyEventId) &&
+      (event.type === 'effect-became-uncertain' ||
+        event.type === 'attempt-became-uncertain'),
+  );
+  const uncertaintyEffect =
+    uncertaintyEvent?.type === 'effect-became-uncertain'
+      ? uncertaintyEvent.payload?.effect
+      : uncertaintyEvent?.payload?.effects?.find(
+          (/** @type {Record<string, any>} */ candidate) =>
+            candidate.effectId === effectId,
+        );
+  if (
+    !uncertaintyEvent ||
+    uncertaintyEvent.fence?.coordinatorEpoch !== attempt.coordinatorEpoch ||
+    uncertaintyEvent.fence?.invocationGeneration !== attempt.generation ||
+    uncertaintyEvent.payload?.run?.status !== RunStatus.BLOCKED ||
+    uncertaintyEvent.payload?.invocation?.status !==
+      InvocationStatus.UNCERTAIN ||
+    uncertaintyEffect?.status !== EffectStatus.UNCERTAIN ||
+    uncertaintyEffect?.invocationId !== invocation.invocationId ||
+    uncertaintyEffect?.effectId !== effect.effectId ||
+    uncertaintyEffect?.requestedBy?.attemptId !== attempt.attemptId ||
+    !Number.isSafeInteger(uncertaintyEffect?.version) ||
+    uncertaintyEffect.version < 1
+  ) {
+    throw new Error(
+      `Managed effect ${effectId} has no exact retained uncertainty event.`,
+    );
+  }
+
+  let expectedVersion;
+  let expectedEffectVersion;
+  let reconciliationEvent;
+  if (isUncertain) {
+    expectedVersion = view.run.version;
+    expectedEffectVersion = effect.version;
+  } else {
+    reconciliationEvent = view.events.find(
+      (/** @type {Record<string, any>} */ event) =>
+        event.sequence === effect.lastSequence &&
+        event.type === 'uncertain-effect-reconciled' &&
+        event.payload?.effect?.effectId === effect.effectId &&
+        event.payload?.reconciliation?.reconciliationId ===
+          effect.reconciliation.reconciliationId,
+    );
+    expectedVersion = reconciliationEvent?.payload?.run?.version - 1;
+    expectedEffectVersion = reconciliationEvent?.payload?.effect?.version - 1;
+  }
+  if (
+    !Number.isSafeInteger(expectedVersion) ||
+    expectedVersion < 1 ||
+    !Number.isSafeInteger(expectedEffectVersion) ||
+    expectedEffectVersion < 1
+  ) {
+    throw new Error(
+      `Managed effect ${effectId} has no valid retained reconciliation versions.`,
+    );
+  }
+  if (
+    isReconciled &&
+    (retainedTransitionEvent !== reconciliationEvent ||
+      reconciliationEvent?.transition_id !== transitionId ||
+      !hasSameCanonicalJson(reconciliationEvent.actor, actor) ||
+      !hasSameCanonicalJson(
+        reconciliationEvent.payload?.reconciliation?.reason,
+        reason,
+      ))
+  ) {
+    throw new Error(
+      `Managed-effect reconciliation ${reconciliationId} does not match its retained durable request.`,
+    );
+  }
+  return {
+    effect,
+    invocation,
+    attempt,
+    uncertaintyEvent,
+    expectedVersion,
+    expectedEffectVersion,
+    reconciled: isReconciled,
+  };
+}
+
+/**
+ * Rebuild the original component frame from the immutable ledger request and
+ * retained protocol ordering. The ledger payload intentionally stores only
+ * semantic request fields; destination catalogs accept the full component
+ * boundary that was originally validated before STARTED.
+ * @param {Record<string, any>} delivery - Verified managed-effect delivery.
+ * @returns {Readonly<Record<string, any>>} - Exact retained component frame.
+ */
+function reconstructOperatorManagedEffectRequest(delivery) {
+  return validateActivityProtocolComponentFrame(
+    {
+      protocol: ACTIVITY_PROTOCOL_NAME,
+      protocolVersion: ACTIVITY_PROTOCOL_VERSION,
+      type: 'effect-request',
+      attemptId: delivery.effect.requestedBy.attemptId,
+      sequence: delivery.effect.requestedBy.protocolSequence,
+      effectId: delivery.effect.effectId,
+      capability: delivery.request.capability,
+      operation: delivery.request.operation,
+      input: delivery.request.input,
+      requestedReplayProperties: delivery.request.requestedReplayProperties,
+    },
+    'reconcile-effect retained request',
+  );
+}
+
+/**
+ * Finalize one retained destination effect and append its matching ledger
+ * disposition. The caller must hold the local mutation owner before entering
+ * this boundary. It never resolves or dispatches application code.
+ * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, runId: string, effectId: string, reconciliationId: string, reconcileEffect: (input: {destinationEffectId: string, destination: Record<string, any>, identity: {runId: string, invocationId: string, effectId: string}, request: Record<string, any>}) => Promise<{kind: 'outcome', outcome: Record<string, any>}|{kind: 'not-applied', evidence: Record<string, any>}>, actor: {kind: string, id: string}, reason: Record<string, any>}} options - Exact operator reconciliation inputs.
+ * @returns {Promise<{reconciliationId: string, effectId: string, status: string, changed: boolean, view: Record<string, any>} | null>} - Redacted metadata plus verified readback.
+ */
+export async function reconcileUncertainManagedEffectAtOperatorBoundary(
+  options,
+) {
+  const view = await options.ledger.rebuildRun(options.runId);
+  if (!view) return null;
+  const target = getUncertainEffectReconciliationTarget(
+    view,
+    options.effectId,
+    options.reconciliationId,
+    options.actor,
+    options.reason,
+  );
+  if (target.reconciled) {
+    return {
+      reconciliationId: options.reconciliationId,
+      effectId: target.effect.effectId,
+      status: target.effect.status,
+      changed: false,
+      view,
+    };
+  }
+  const delivery = await options.ledger.readManagedEffectDelivery(
+    options.runId,
+    target.invocation.invocationId,
+    target.effect.effectId,
+  );
+  if (
+    !delivery ||
+    !hasSameCanonicalJson(delivery.run, view.run) ||
+    !hasSameCanonicalJson(delivery.invocation, target.invocation) ||
+    !hasSameCanonicalJson(delivery.attempt, target.attempt) ||
+    !hasSameCanonicalJson(delivery.effect, target.effect)
+  ) {
+    throw new Error(
+      `Managed effect ${target.effect.effectId} changed before reconciliation.`,
+    );
+  }
+  const destination = await options.reconcileEffect({
+    destinationEffectId: target.effect.destinationEffectId,
+    destination: target.effect.destination,
+    identity: {
+      runId: options.runId,
+      invocationId: target.invocation.invocationId,
+      effectId: target.effect.effectId,
+    },
+    request: reconstructOperatorManagedEffectRequest(delivery),
+  });
+  let resolution;
+  if (destination?.kind === 'outcome') {
+    resolution = { kind: 'outcome', outcome: destination.outcome };
+  } else if (destination?.kind === 'not-applied') {
+    resolution = {
+      kind: 'not-applied',
+      verifier: APPLICATION_STATE_RECONCILIATION_VERIFIER_DESCRIPTOR,
+      evidence: destination.evidence,
+    };
+  } else {
+    throw new TypeError(
+      'Application-state reconciliation returned an unsupported destination disposition.',
+    );
+  }
+  const result = await options.ledger.reconcileUncertainManagedEffect({
+    runId: options.runId,
+    invocationId: target.invocation.invocationId,
+    attemptId: target.attempt.attemptId,
+    effectId: target.effect.effectId,
+    fencingToken: target.attempt.fencingToken,
+    generation: target.attempt.generation,
+    coordinatorEpoch: target.attempt.coordinatorEpoch,
+    expectedVersion: target.expectedVersion,
+    expectedEffectVersion: target.expectedEffectVersion,
+    uncertaintyEventId: target.uncertaintyEvent.event_id,
+    uncertaintySequence: target.uncertaintyEvent.sequence,
+    transitionId: `${EFFECT_RECONCILIATION_TRANSITION_PREFIX}${options.reconciliationId}`,
+    reconciliationId: options.reconciliationId,
+    actor: options.actor,
+    reason: options.reason,
+    resolution,
+  });
+  const current = await options.ledger.rebuildRun(options.runId);
+  if (!current || !result.effect) {
+    throw new Error(
+      `Managed effect ${target.effect.effectId} reconciliation committed without a verified readback.`,
+    );
+  }
+  return {
+    reconciliationId: options.reconciliationId,
+    effectId: target.effect.effectId,
+    status: result.effect.status,
+    changed: result.applied,
+    view: current,
   };
 }
 
@@ -1246,6 +1632,196 @@ export async function reconcileExecutionLedgerRun(options) {
 }
 
 /**
+ * Permanently reconcile one retained uncertain built-in managed effect. The
+ * destination is resolved first under the same held local mutation owner; a
+ * crash before the ledger append leaves a replayable receipt or not-applied
+ * resolution rather than an unfenced read-time absence claim.
+ * @param {{runId: string, effectId: string, reconciliationId: string, reason?: string, expectedAppId?: string, actor?: {kind: string, id: string}, requireLocalOwnership?: boolean, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>}} options - Exact destination-backed reconciliation request.
+ * @returns {Promise<{reconciliation: {reconciliationId: string, effectId: string, status: string, changed: boolean}, view: Record<string, any>} | null>} - Redacted metadata and verified readback, or null.
+ */
+export async function reconcileExecutionLedgerEffect(options) {
+  const configuration =
+    options.configuration || resolveExecutionLedgerStoreConfiguration();
+  if (
+    options.requireLocalOwnership === true &&
+    configuration.adapterName !== 'lmdb'
+  ) {
+    throw new Error(
+      `Packaged effect reconciliation requires the LMDB control adapter until '${configuration.adapterName}' has a coordinator ownership contract.`,
+    );
+  }
+  const effectId = requireEffectId(options.effectId);
+  const reconciliationId = resolveEffectReconciliationId(
+    options.reconciliationId,
+  );
+  const actor = resolveRecoveryOperatorActor(options.actor);
+  const reason = createReconciliationReason(
+    reconciliationId,
+    options.reason,
+    'operator-managed-effect-reconciliation',
+    'reconcile-effect',
+  );
+  const preflight = await inspectExecutionLedgerRun({
+    runId: options.runId,
+    expectedAppId: options.expectedAppId,
+    configuration,
+  });
+  if (!preflight) return null;
+  getUncertainEffectReconciliationTarget(
+    preflight,
+    effectId,
+    reconciliationId,
+    actor,
+    reason,
+  );
+
+  return await withExecutionLedger(
+    async (ledger, context) =>
+      await withLocalLedgerServiceMutationOwnership({
+        appId: options.expectedAppId || preflight.run.appId,
+        context,
+        handler: async (localOwner) => {
+          const current = await ledger.rebuildRun(options.runId);
+          if (!current) return null;
+          assertExpectedApp(current, options.expectedAppId);
+          const target = getUncertainEffectReconciliationTarget(
+            current,
+            effectId,
+            reconciliationId,
+            actor,
+            reason,
+          );
+          if (!localOwner || context.adapterName !== 'lmdb') {
+            throw new Error(
+              'Application-state effect reconciliation requires the held LMDB local-owner protocol.',
+            );
+          }
+          if (target.reconciled) {
+            return {
+              reconciliation: {
+                reconciliationId,
+                effectId: target.effect.effectId,
+                status: target.effect.status,
+                changed: false,
+              },
+              view: current,
+            };
+          }
+          const applicationStateConfiguration =
+            options.applicationStateConfiguration ||
+            resolveApplicationStateStoreConfiguration();
+          if (applicationStateConfiguration.adapterName !== 'lmdb') {
+            throw new Error(
+              'Application-state effect reconciliation requires the LMDB application-state adapter.',
+            );
+          }
+          assertApplicationStateStoreIsolation(
+            applicationStateConfiguration,
+            context,
+          );
+
+          /** @type {Record<string, any> | undefined} */
+          let applicationState;
+          /** @type {Record<string, any> | null | undefined} */
+          let reconciliation;
+          /** @type {unknown} */
+          let operationError;
+          let operationFailed = false;
+          try {
+            await withApplicationStateDB(
+              async (db, readOnlyContext) => {
+                assertApplicationStateStoreIsolation(readOnlyContext, context);
+                const catalog =
+                  await createBuiltinManagedEffectReconciliationCatalog({
+                    db,
+                    appId: current.run.appId,
+                    adapterName: readOnlyContext.adapterName,
+                    tableName: readOnlyContext.tableName,
+                  });
+                if (
+                  !hasSameCanonicalJson(
+                    catalog.destination,
+                    target.effect.destination,
+                  )
+                ) {
+                  throw new Error(
+                    'Application-state reconciliation store does not match the retained destination.',
+                  );
+                }
+              },
+              {
+                configuration: applicationStateConfiguration,
+                readOnly: true,
+              },
+            );
+            applicationState = await openApplicationStateDB({
+              configuration: applicationStateConfiguration,
+              readOnly: false,
+            });
+            assertApplicationStateStoreIsolation(
+              applicationState.context,
+              context,
+            );
+            const catalog =
+              await createBuiltinManagedEffectReconciliationCatalog({
+                db: applicationState.db,
+                appId: current.run.appId,
+                adapterName: applicationState.context.adapterName,
+                tableName: applicationState.context.tableName,
+              });
+            reconciliation =
+              await reconcileUncertainManagedEffectAtOperatorBoundary({
+                ledger,
+                runId: options.runId,
+                effectId,
+                reconciliationId,
+                reconcileEffect: catalog.reconcileEffect,
+                actor,
+                reason,
+              });
+          } catch (error) {
+            operationFailed = true;
+            operationError = error;
+          }
+
+          /** @type {unknown} */
+          let closeError;
+          let closeFailed = false;
+          try {
+            await applicationState?.close();
+          } catch (error) {
+            closeFailed = true;
+            closeError = error;
+          }
+          if (operationFailed && closeFailed) {
+            throw new AggregateError(
+              [operationError, closeError],
+              'Effect reconciliation and application-state cleanup both failed.',
+            );
+          }
+          if (operationFailed) throw operationError;
+          if (closeFailed) throw closeError;
+          if (!reconciliation) {
+            throw new Error(
+              'Managed-effect reconciliation returned no result.',
+            );
+          }
+          return {
+            reconciliation: {
+              reconciliationId: reconciliation.reconciliationId,
+              effectId: reconciliation.effectId,
+              status: reconciliation.status,
+              changed: reconciliation.changed,
+            },
+            view: reconciliation.view,
+          };
+        },
+      }),
+    { configuration },
+  );
+}
+
+/**
  * @param {string | Record<string, any>} action - Named recovery action or combined managed-effect recovery.
  * @returns {string} - Human-readable completed recovery message.
  */
@@ -1282,6 +1858,30 @@ function reconciliationMessage(reconciliation) {
     return `Reconciliation ${reconciliation.reconciliationId} was durably applied from verified evidence.`;
   }
   return `Reconciliation ${reconciliation.reconciliationId} was already durably applied.`;
+}
+
+/**
+ * @param {{reconciliationId: string, effectId: string, status: string, changed: boolean}} reconciliation - Safe effect reconciliation result.
+ * @returns {string} - Human-readable destination-backed result.
+ */
+function effectReconciliationMessage(reconciliation) {
+  if (reconciliation.changed) {
+    return `Managed effect ${reconciliation.effectId} was durably reconciled as ${reconciliation.status} by ${reconciliation.reconciliationId}. The abandoned activity attempt remains blocked.`;
+  }
+  return `Managed-effect reconciliation ${reconciliation.reconciliationId} was already durable with status ${reconciliation.status}. The abandoned activity attempt remains blocked.`;
+}
+
+/**
+ * Keep destination identifiers, physical store identity, retained evidence,
+ * and private operator prose out of the public command failure channel. The
+ * programmatic boundary still throws the original error to trusted callers.
+ * @param {unknown} _error - Private reconciliation failure.
+ * @returns {Error} - Stable public failure without private details.
+ */
+export function redactExecutionLedgerEffectReconciliationError(_error) {
+  return new Error(
+    'Managed-effect reconciliation could not report a safe result. No destination details are shown; retry with the same reconciliation ID after inspecting trusted local diagnostics.',
+  );
 }
 
 /**
@@ -1387,7 +1987,7 @@ function resolveOutput(provided) {
  * Create fresh exact-run leaf commands. Source and packaged parents must never
  * share Commander instances because addCommand reparents its child.
  * @param {CreateExecutionLedgerOperatorCommandsOptions} [options] - Host behavior.
- * @returns {{inspectCommand: Command, recoverCommand: Command, reconcileCommand: Command, cancelCommand: Command}} - Fresh commands.
+ * @returns {{inspectCommand: Command, recoverCommand: Command, reconcileCommand: Command, reconcileEffectCommand: Command, cancelCommand: Command}} - Fresh commands.
  */
 export function createExecutionLedgerOperatorCommands(options = {}) {
   const output = resolveOutput(options.output);
@@ -1577,6 +2177,97 @@ export function createExecutionLedgerOperatorCommands(options = {}) {
       }
     });
 
+  const reconcileEffectCommand = new Command('reconcile-effect')
+    .description(
+      'Resolve one uncertain managed effect from a permanent destination decision without loading app source',
+    )
+    .option('--run-id <runId>', 'Persisted execution-ledger run ID')
+    .requiredOption(
+      '--effect-id <effectId>',
+      'Exact retained managed-effect ID within the run',
+    )
+    .requiredOption(
+      '--reconciliation-id <reconciliationId>',
+      'Required stable reconciliation ID; reuse it when retrying a lost response',
+    )
+    .option(
+      '--confirm-runner-stopped',
+      'Confirm that every prior runner for this run has stopped',
+    )
+    .option('--reason <text>', 'Optional private durable operator explanation')
+    .option(
+      '--json',
+      'Write a redacted machine-readable effect reconciliation view',
+    )
+    .action(async (commandOptions) => {
+      if (commandOptions.confirmRunnerStopped !== true) {
+        output.failure(
+          new Error(
+            'reconcile-effect requires --confirm-runner-stopped before it can change durable state.',
+          ),
+        );
+        process.exitCode = 1;
+        return;
+      }
+      let runId;
+      let effectId;
+      let reconciliationId;
+      let reasonText;
+      try {
+        runId = requireRunId(commandOptions.runId, 'reconcile-effect');
+        effectId = requireEffectId(commandOptions.effectId);
+        reconciliationId = resolveEffectReconciliationId(
+          commandOptions.reconciliationId,
+        );
+        reasonText = resolveReconciliationReasonText(
+          commandOptions.reason,
+          'reconcile-effect',
+        );
+      } catch (error) {
+        output.failure(error);
+        process.exitCode = 1;
+        return;
+      }
+      try {
+        const identity = await resolveIdentity();
+        const result = await reconcileExecutionLedgerEffect({
+          runId,
+          effectId,
+          reconciliationId,
+          ...(reasonText === undefined ? {} : { reason: reasonText }),
+          expectedAppId: identity?.appId,
+          requireLocalOwnership: options.requireLocalOwnership === true,
+          ...(identity?.revisionId
+            ? {
+                actor: {
+                  kind: 'packaged-operator',
+                  id: identity.revisionId,
+                },
+              }
+            : {}),
+        });
+        if (!result) {
+          throw new Error(
+            `No durable execution-ledger run exists; effect reconciliation refuses to create work: ${runId}`,
+          );
+        }
+        if (commandOptions.json === true) {
+          output.json(
+            createExecutionLedgerEffectReconciliationOperatorView(
+              result.reconciliation,
+              result.view,
+            ),
+          );
+          return;
+        }
+        output.table(formatExecutionLedgerOperatorRows(result.view));
+        output.success(effectReconciliationMessage(result.reconciliation));
+      } catch (error) {
+        output.failure(redactExecutionLedgerEffectReconciliationError(error));
+        process.exitCode = 1;
+      }
+    });
+
   const cancelCommand = new Command('cancel')
     .description(
       'Ask the current local owner to durably cancel one exact active ledger run',
@@ -1617,7 +2308,13 @@ export function createExecutionLedgerOperatorCommands(options = {}) {
       }
     });
 
-  return { inspectCommand, recoverCommand, reconcileCommand, cancelCommand };
+  return {
+    inspectCommand,
+    recoverCommand,
+    reconcileCommand,
+    reconcileEffectCommand,
+    cancelCommand,
+  };
 }
 
 export default createExecutionLedgerOperatorCommands;

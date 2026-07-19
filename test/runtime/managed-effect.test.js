@@ -351,7 +351,7 @@ async function rewriteEffectEvent(input) {
   });
   if (!event) throw new Error('Expected effect event to rewrite');
   const eventId = createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-event:v7',
+    domain: 'wharfie:execution-ledger-event:v8',
     prefix: 'wle',
     value: {
       schemaVersion: event.schema_version,

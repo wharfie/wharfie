@@ -250,12 +250,12 @@ function runOptions(ledger, overrides = {}) {
 }
 
 describe('manual ledger activity runner', () => {
-  it('derives manual run identity from the v7 idempotency-key contract', () => {
+  it('derives manual run identity from the v8 idempotency-key contract', () => {
     const appId = 'manual-demo';
     const idempotencyKey = 'operator-run-1';
     expect(createManualLedgerRunId({ appId, idempotencyKey })).toBe(
       createCanonicalJsonSha256Id({
-        domain: 'wharfie:manual-ledger-run:v7',
+        domain: 'wharfie:manual-ledger-run:v8',
         prefix: 'wlm',
         value: { appId, idempotencyKey },
         valuePath: 'manual ledger run identity',

@@ -19,7 +19,7 @@ import {
   assertLedgerOpaqueId,
 } from './record-key.js';
 
-export const EXECUTION_LEDGER_SCHEMA_VERSION = 7;
+export const EXECUTION_LEDGER_SCHEMA_VERSION = 8;
 export const EXECUTION_LEDGER_MAX_OPAQUE_ID_BYTES =
   MAX_EXECUTION_LEDGER_OPAQUE_ID_BYTES;
 export const EXECUTION_LEDGER_MAX_INLINE_PAYLOAD_BYTES = 64 * 1024;
@@ -71,12 +71,15 @@ export const EffectStatus = Object.freeze({
   FAILED: 'FAILED',
   CANCELLED: 'CANCELLED',
   UNCERTAIN: 'UNCERTAIN',
+  NOT_APPLIED: 'NOT_APPLIED',
 });
 
 export const MANAGED_EFFECT_REQUEST_PAYLOAD_SCHEMA =
   'wharfie.execution.managed-effect-request.v1';
 export const MANAGED_EFFECT_OUTCOME_PAYLOAD_SCHEMA =
   'wharfie.execution.managed-effect-outcome.v2';
+export const MANAGED_EFFECT_RECONCILIATION_EVIDENCE_PAYLOAD_SCHEMA =
+  'wharfie.execution.managed-effect-reconciliation-evidence.v1';
 const EFFECT_REPLAY_PROPERTIES = Object.freeze([
   'pure',
   'idempotent',
@@ -605,7 +608,7 @@ export function createManagedEffectDestinationId(input) {
   );
   const effectId = assertOpaqueId(input.effectId, 'managed effect effectId');
   return createCanonicalJsonSha256Id({
-    domain: 'wharfie:execution-ledger-destination-effect:v7',
+    domain: 'wharfie:execution-ledger-destination-effect:v8',
     prefix: 'wfx',
     value: {
       schemaVersion: EXECUTION_LEDGER_SCHEMA_VERSION,
@@ -740,6 +743,66 @@ export function verifyManagedEffectOutcome(
         },
         request,
         outcome,
+      },
+      `${label} verifier input`,
+    ),
+  );
+  const verified = registration.verify(verifierInput);
+  if (
+    verified !== true ||
+    (verified && typeof verified === 'object' && 'then' in verified)
+  ) {
+    throw new TypeError(`${label} was not substantiated by its verifier.`);
+  }
+}
+
+/**
+ * Require a registered deterministic verifier to substantiate typed negative
+ * evidence for an uncertain destination effect. The verifier descriptor is
+ * independent from the effect's positive outcome verifier because proving a
+ * permanent negative disposition is a distinct destination capability.
+ * @param {Map<string, {descriptor: {kind: string, version: number}, verify: (input: Record<string, any>) => boolean}>} registry - Versioned verifier registry.
+ * @param {Record<string, any>} effect - Strict effect projection.
+ * @param {ReturnType<typeof normalizeManagedEffectRequest>} request - Rehashed logical request.
+ * @param {{kind: string, version: number}} verifier - Negative evidence verifier descriptor.
+ * @param {Record<string, any>} evidence - Rehashed immutable negative evidence.
+ * @param {string} label - Human-readable boundary label.
+ * @returns {void}
+ */
+export function verifyManagedEffectReconciliationEvidence(
+  registry,
+  effect,
+  request,
+  verifier,
+  evidence,
+  label,
+) {
+  const descriptor = normalizeEffectVerifierDescriptor(
+    verifier,
+    `${label} verifier`,
+  );
+  const registration = registry.get(effectVerifierKey(descriptor));
+  if (!registration) {
+    throw new TypeError(
+      `${label} requires unavailable verifier ${descriptor.kind}@${descriptor.version}.`,
+    );
+  }
+  const verifierInput = deepFreezeJson(
+    cloneReferencedPayloadObject(
+      {
+        effect: {
+          runId: effect.runId,
+          invocationId: effect.invocationId,
+          effectId: effect.effectId,
+          destinationEffectId: effect.destinationEffectId,
+          adapter: effect.adapter,
+          destination: effect.destination,
+          verifier: effect.verifier,
+          requestedReplayProperties: effect.requestedReplayProperties,
+          substantiatedReplayProperties: effect.substantiatedReplayProperties,
+        },
+        request,
+        evidence,
       },
       `${label} verifier input`,
     ),
